@@ -27,6 +27,27 @@ export function formatStamp(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? iso : STAMP_FMT.format(d);
 }
 
+/// The day and the minute, `Sun, Sep 28 @ 08:59`, for a picker that
+/// lists many stamps under one relative label: "3 days ago" six times
+/// over tells the entries apart only with this beside it.
+const SHORT_DAY_FMT = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+});
+const SHORT_TIME_FMT = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+export function formatShortStamp(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${SHORT_DAY_FMT.format(d)} @ ${SHORT_TIME_FMT.format(d)}`;
+}
+
 /// The whole stamp to the millisecond, `2026-09-22 14:07:47.190`, in the
 /// viewer's own zone: a step's own tracing lines are stamped in UTC and
 /// the runner's in local time, and showing the digits as written would

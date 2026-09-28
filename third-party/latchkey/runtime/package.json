@@ -8,7 +8,7 @@
     "latchkey": "3.15.0"
   },
   "pnpm": {
-    "//": "EMPTY ON PURPOSE, and load-bearing here in a way it is not for qmd. This tree is 7 packages, and one of them is `playwright`, whose postinstall downloads ~400 MB of browser binaries that appear in no lockfile. datalib never invokes the browser-login flows that would use them (`latchkey auth browser`), and latchkey degrades gracefully when the import fails — the same way its own bun-compiled release binaries do, which mark playwright external.",
+    "//": "EMPTY ON PURPOSE, and load-bearing here in a way it is not for qmd. This tree is 7 packages, and one of them is `playwright`, whose postinstall downloads ~400 MB of browser binaries that appear in no lockfile. The playwright package itself ships (the wizard's browser login imports it); the browsers do not. `ensure-browser` picks the system's Chrome instead, and a download stays something a person runs by hand.",
     "onlyBuiltDependencies": []
   }
 }

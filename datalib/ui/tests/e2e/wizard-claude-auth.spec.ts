@@ -128,6 +128,37 @@ test("a new source writes no account at all", async ({ page }) => {
   await expect(wizard(page).locator(".wiz-review pre")).not.toContainText("latchkey_settings");
 });
 
+/// An expired sign-in shows up as a failed Test connection, and the
+/// probe's own recipe names a terminal command. The button beside it is
+/// the fix, so the failure says so — and a login that then succeeds
+/// clears the failure it answered rather than leaving it on screen.
+test("a failed Test connection points back at the login button", async ({ page }) => {
+  await openClaude(page, WITH_BROWSER);
+  await page.route("**/api/probe", (route) =>
+    route.fulfill({
+      status: 502,
+      json: {
+        error:
+          "error: claude.ai credentials are not set up: GET /api/organizations -> HTTP 401\n" +
+          "The credential is the `sessionKey` cookie.",
+      },
+    }),
+  );
+  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  const failed = wizard(page).locator(".wiz-probe-failed");
+  await expect(failed).toContainText("press Latchkey auth to sign in again");
+
+  await page.route("**/api/latchkey/claude-ai/connect", (route) =>
+    route.fulfill({ json: { id: "a1", status: "running", output: "" } }),
+  );
+  await page.route("**/api/latchkey/connect/a1/status", (route) =>
+    route.fulfill({ json: { id: "a1", status: "ok", account: null, output: "" } }),
+  );
+  await wizard(page).getByRole("button", { name: "Latchkey auth" }).click();
+  await expect(wizard(page)).toContainText("Connected.");
+  await expect(failed).toHaveCount(0);
+});
+
 /// Behind a latchkey gateway (`LATCHKEY_GATEWAY` set — how minds runs
 /// datalib) the `latchkey` the backend spawns refuses every command the
 /// button would run, and the browser that could sign in is on the

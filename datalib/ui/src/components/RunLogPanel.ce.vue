@@ -58,7 +58,12 @@ import {
 } from "./runLogSource";
 import { page as thisPage } from "@/telemetry";
 import { changed, subscribeLive } from "@/live";
-import { compareStamps, formatDateTime, formatRelative } from "@/config/timeFormat";
+import {
+  compareStamps,
+  formatDateTime,
+  formatRelative,
+  formatShortStamp,
+} from "@/config/timeFormat";
 
 const { fetchLog, fetchProcesses, fetchRuns, healthSnapshot } = useApi();
 
@@ -541,10 +546,16 @@ function processEnd(p: ProcessInfo): string {
   return "finished";
 }
 
+/// A picker entry's start: relative for "how stale", then the day and
+/// minute, since a dozen runs are all "3 days ago".
+function pickerWhen(iso: string): string {
+  return `${formatRelative(iso, Date.now())} · ${formatShortStamp(iso)}`;
+}
+
 /// How a launch reads: when it started, and whether it is the server
 /// serving this page.
 function launchLabel(l: ProcessInfo): string {
-  const when = formatRelative(l.started_at_utc, Date.now());
+  const when = pickerWhen(l.started_at_utc);
   const state = l.finished_at_utc == null ? "running" : "ended";
   const mine = l.process_id === healthSnapshot()?.process_id ? " · this server" : "";
   return `server started ${when} · ${state}${mine}`;
@@ -553,7 +564,7 @@ function launchLabel(l: ProcessInfo): string {
 /// How a page reads: when it opened, whether it is still open, and
 /// whether it is the one this panel is on.
 function pageLabel(p: ProcessInfo): string {
-  const when = formatRelative(p.started_at_utc, Date.now());
+  const when = pickerWhen(p.started_at_utc);
   const state = p.finished_at_utc == null ? "open" : "closed";
   const mine = p.process_id === thisPage.process_id ? " · this page" : "";
   return `page opened ${when} · ${state}${mine}`;
@@ -569,7 +580,7 @@ function shortRunId(id: string): string {
 /// How a run reads in the picker: when it started, and whether it is
 /// still going — the id itself is in the header for whoever needs it.
 function runLabel(r: RunInfo): string {
-  const when = formatRelative(r.started_at_utc, Date.now());
+  const when = pickerWhen(r.started_at_utc);
   return r.finished_at_utc == null ? `${when} · running` : when;
 }
 
