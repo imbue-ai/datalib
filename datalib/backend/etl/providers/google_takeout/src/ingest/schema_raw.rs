@@ -4,9 +4,8 @@ use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
 use uuid::Uuid;
 
-/// Entity tables — each gets a paired `<table>_bookkeeping` sidecar.
-/// CAS edge tables (`chat_attachments`, `gemini_attachments`) live in
-/// [`EDGE_TABLES`] so reset can wipe their bookkeeping the same way.
+/// Entity tables. [`full_ddl`] gives each of these, and each of
+/// [`EDGE_TABLES`], a paired `<table>_bookkeeping` sidecar.
 pub const DATA_TABLES: &[&str] = &[
     "maps_reviews",
     "maps_saved_places",
@@ -23,8 +22,7 @@ pub const DATA_TABLES: &[&str] = &[
     "voice_greetings",
 ];
 
-/// Per-provider CAS edge tables. Wiped by reset alongside
-/// [`DATA_TABLES`].
+/// Per-provider CAS edge tables.
 pub const EDGE_TABLES: &[&str] = &[
     "chat_attachments",
     "gemini_attachments",
