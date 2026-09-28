@@ -450,8 +450,10 @@ the binaries, which is what gives the log card's source links their
 commit (`logging.md` § "Every line has an author").
 
 The three runs' NDJSON event streams sit beside it in `run-<millis>/`.
-Semantic search is empty there: the golden config carries no `qmd_index`
-step, by design.
+Free-text search works there: the golden config keyword-indexes every
+source and embeds two small ones (whatsapp, google_calendar_window), so
+semantic search reaches those two alone. The qmd index is not
+snapshotted.
 
 This test was ported from the pre-DAG `frankweiler/backend/sync` crate, which
 was deleted in e905d252. The normalization machinery — roughly fifty volatile
