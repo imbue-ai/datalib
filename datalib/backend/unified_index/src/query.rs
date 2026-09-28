@@ -196,8 +196,8 @@ fn field<C: Column>(key: &str, value: &str) -> Result<Field<C>, String> {
                 )
             }),
         _ => table::key::<C::Table>(key)
-            .map(Field::Column)
-            .ok_or_else(|| {
+            .map(|k| within_vocabulary(key, k, value).map(|()| Field::Column(k)))
+            .unwrap_or_else(|| {
                 let mut known: Vec<&str> = <C::Table as SearchTable>::KEYS
                     .iter()
                     .map(|k| k.key)
@@ -208,12 +208,26 @@ fn field<C: Column>(key: &str, value: &str) -> Result<Field<C>, String> {
                 if !t().is_empty() {
                     known.push("is");
                 }
-                format!(
+                Err(format!(
                     "`{key}:` is not something the search can filter on; try one of {}",
                     known.join(", ")
-                )
+                ))
             }),
     }
+}
+
+/// A closed key takes one of its words, or `*`.
+fn within_vocabulary<C>(typed: &str, key: &SearchKey<C>, value: &str) -> Result<(), String> {
+    let Some(words) = key.vocabulary.map(|words| words()) else {
+        return Ok(());
+    };
+    if value == crate::db::ANY_VALUE || words.contains(&value) {
+        return Ok(());
+    }
+    Err(format!(
+        "`{typed}:` takes one of {}, not `{value}`",
+        words.join(", ")
+    ))
 }
 
 /// The grid's query: `grid_rows`, its keys, and qmd for free text.

@@ -9,10 +9,12 @@ use datalib_schema::problems::{
 use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
 use datalib_unified_index::dolt_repo::{listing_sql, DoltRepo};
-use datalib_unified_index::grid_columns::grid_order;
+use datalib_unified_index::grid_columns::GridColumn;
+use datalib_unified_index::problems::ProblemsQuery;
 use datalib_unified_index::query::parse_query;
 use datalib_unified_index::repo::IndexRepo;
 use datalib_unified_index::sort::Sort;
+use datalib_unified_index::view;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -94,7 +96,7 @@ fn chat_row_at(uuid: &str, qmd_path: &str, created_at: &str) -> GridRow {
 }
 
 fn order(spelled: &str) -> Vec<Sort> {
-    grid_order(spelled).unwrap()
+    view::order::<GridColumn>(spelled).unwrap()
 }
 
 fn unique_db_path() -> PathBuf {
@@ -725,10 +727,11 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
         .unwrap();
     commit(&writer, "problems").await;
 
-    let all = repo
-        .problems(&datalib_unified_index::problems::parse(""), 10)
+    let listing = repo
+        .problem_keys(&ProblemsQuery::parse(""), &[], &[])
         .await
         .unwrap();
+    let all = repo.problems_by_keys(&listing.uuids).await.unwrap();
     assert_eq!(all, vec![row.clone()]);
     assert_eq!(repo.document_problems("md-1").await.unwrap(), vec![row]);
     assert!(repo.document_problems("md-2").await.unwrap().is_empty());
