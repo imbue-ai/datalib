@@ -372,6 +372,56 @@ test("grouped by a column, the lines fold under group rows", async ({ page }) =>
   await expect(dialog.locator(".slick-group-toggle-all")).toContainText("Expand / collapse all");
 });
 
+/// A line that lands after a scroll up but before the grid hears it must
+/// leave the reader where they went. The grid hears a scroll a frame
+/// late, later on a busy page; the panel used to decide whether to follow
+/// the tail from the last scroll it heard, and on a full e2e run, where
+/// every spec's requests are lines in this log, it pulled the grouped
+/// test above back to the end, past its group rows. The scroll event is
+/// held back here so that the line lands first every time.
+test("a line landing before a scroll up is heard leaves the reader there", async ({
+  page,
+  request,
+}) => {
+  // Opened at the end, where the tail is followed.
+  const dialog = await openServerLog(page);
+  const viewport = dialog.locator(".rl-grid .slick-viewport").first();
+  // Within a couple of rows of the end, as the panel itself judges it.
+  const atEnd = () =>
+    viewport.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 50);
+  await expect
+    .poll(() => viewport.evaluate((el) => el.scrollHeight > 2 * el.clientHeight), {
+      message: "the log is not longer than the grid, so its end is its top",
+    })
+    .toBe(true);
+  await expect.poll(atEnd).toBe(true);
+
+  await viewport.evaluate((el) => {
+    const hold = (e: Event) => {
+      if (e.target === el) e.stopPropagation();
+    };
+    (el as unknown as { hold: EventListener }).hold = hold;
+    el.parentElement!.addEventListener("scroll", hold, true);
+    el.scrollTop = 0;
+  });
+  const before = await lineCount(page);
+  // A request is a line in this server's log.
+  expect((await request.get("/api/health")).ok()).toBe(true);
+  await expect.poll(() => lineCount(page)).toBeGreaterThan(before);
+  await viewport.evaluate((el) => {
+    el.parentElement!.removeEventListener(
+      "scroll",
+      (el as unknown as { hold: EventListener }).hold,
+      true,
+    );
+    el.dispatchEvent(new Event("scroll"));
+  });
+  // Older lines may load above and keep the top line where it is; the
+  // reader is not taken back to the end either way.
+  await expect(dialog.locator(ROWS).first()).toBeVisible();
+  await expect.poll(atEnd, { message: "the new line took the reader back to the end" }).toBe(false);
+});
+
 test("a dragged column width outlives the panel resizing", async ({ page }) => {
   const dialog = await openServerLog(page);
   const level = dialog.locator('.rl-grid .slick-header-column[col-id="level"]');
