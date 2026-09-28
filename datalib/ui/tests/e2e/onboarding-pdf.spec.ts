@@ -131,25 +131,30 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(page.locator(TABLE_ROWS)).toHaveCount(2);
     await expect(row(page, "system")).toContainText("System");
     await expandGroup(page, "unified_index");
-    for (const id of ["unified_index/grid_index", "unified_index/qmd_index", "unified_index"]) {
+    for (const id of [
+      "unified_index/grid_index",
+      "unified_index/qmd_aggregator",
+      "unified_index",
+    ]) {
       await expect(row(page, id)).toHaveCount(1);
     }
     // The two index steps are labelled by their function, not by the
     // generic "Index" the label map falls through to when a key is
     // stale — which is what happened when the functions were renamed.
     await expect(row(page, "unified_index/grid_index")).toContainText("Grid index");
-    await expect(row(page, "unified_index/qmd_index")).toContainText("QMD index");
+    await expect(row(page, "unified_index/qmd_aggregator")).toContainText("QMD aggregator");
 
-    // The qmd index step, removed before anything can queue it. See the
-    // header: it is real work this test cannot afford, and the delete
-    // action is the honest way to not run it.
+    // The qmd aggregator, removed before the source is added: without it
+    // the wizard writes no qmd steps, whose embedding is real work this
+    // test cannot afford, and the delete action is the honest way to not
+    // run it.
     const remove = await rowMenuEntry(
       page,
-      row(page, "unified_index/qmd_index"),
+      row(page, "unified_index/qmd_aggregator"),
       /^Remove from config$/,
     ).open();
     await remove.click();
-    await expect(row(page, "unified_index/qmd_index")).toHaveCount(0);
+    await expect(row(page, "unified_index/qmd_aggregator")).toHaveCount(0);
 
     // ── 4-6. the wizard ──────────────────────────────────────────────
     await page.getByRole("button", { name: "+ Data Source" }).click();

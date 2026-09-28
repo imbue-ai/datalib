@@ -222,19 +222,19 @@ mod tests {
     fn pipeline_order_keeps_config_order_between_steps_that_do_not_read_each_other() {
         let out = pipeline_order(&[
             step("u/grid_index", &["a/render_markdown"]),
-            step("u/qmd_index", &["a/render_markdown"]),
+            step("u/qmd_aggregator", &["a/render_markdown"]),
         ]);
-        assert_eq!(ids(&out), ["u/grid_index", "u/qmd_index"]);
+        assert_eq!(ids(&out), ["u/grid_index", "u/qmd_aggregator"]);
     }
 
     #[test]
     fn pipeline_order_trails_the_applets_which_are_never_scheduled() {
         let out = pipeline_order(&[
             applet("u"),
-            step("u/qmd_index", &[]),
+            step("u/qmd_aggregator", &[]),
             step("u/grid_index", &[]),
         ]);
-        assert_eq!(ids(&out), ["u/qmd_index", "u/grid_index", "u"]);
+        assert_eq!(ids(&out), ["u/qmd_aggregator", "u/grid_index", "u"]);
     }
 
     #[test]
@@ -314,11 +314,11 @@ mod tests {
     fn group_status_reads_the_last_step_not_a_trailing_applet() {
         let got = group_status(&[
             child("u/grid_index", "succeeded", Step, None),
-            child("u/qmd_index", "skipped_up_to_date", Step, None),
+            child("u/qmd_aggregator", "skipped_up_to_date", Step, None),
             child("u", "succeeded", Applet, None),
         ])
         .unwrap();
-        assert_eq!(got.1, "u/qmd_index");
+        assert_eq!(got.1, "u/qmd_aggregator");
     }
 
     #[test]

@@ -14,8 +14,7 @@ import {
   renameGroup,
   replaceSteps,
   sourceStepsOf,
-  fanInNames,
-  readersOf,
+  removedWith,
   setQmdSteps,
   unwireFromFanIns,
   wireIntoFanIns,
@@ -1027,8 +1026,7 @@ async function openEdit(groupId: string) {
   const entry = groupEntry(group, steps);
   if (!entry) return;
   const qmdIndexed = steps.render
-    ? fanInNames(sources.value, "qmd_index", steps.render.id) ||
-      sources.value.some((s) => s.id === `${group.id}/keyword_index`)
+    ? sources.value.some((s) => s.id === `${group.id}/keyword_index`)
     : true;
   editing.value = { group, entry, steps, qmdIndexed };
   wizardKey.value++;
@@ -1178,10 +1176,10 @@ async function deleteSource(id: string) {
   // exists, which the loader refuses outright — a whole config broken
   // by a partial delete.
   const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
-  const readers = readersOf([step.id], sources.value).filter((r) => r.id !== sibling?.id);
+  const readers = removedWith([step.id], sources.value).filter((r) => r.id !== sibling?.id);
   const doomed = [step, ...(sibling ? [sibling] : []), ...readers];
   const alsoGone = readers.length
-    ? `\n\nThe steps that read it go too: ${readers.map((r) => `"${r.name}"`).join(", ")}.`
+    ? `\n\nThese go with it: ${readers.map((r) => `"${r.name}"`).join(", ")}.`
     : "";
 
   // A group with nothing left under it goes too: the loader would only
@@ -1232,7 +1230,7 @@ async function deleteGroup(id: string) {
   const inGroup = sources.value.filter((s) => s.group === id);
   const members = [
     ...inGroup,
-    ...readersOf(
+    ...removedWith(
       inGroup.map((m) => m.id),
       sources.value,
     ),
@@ -1283,7 +1281,7 @@ async function deleteRows(targets: Row[]) {
       if (sibling) doomed.set(sibling.id, sibling);
     }
   }
-  for (const r of readersOf([...doomed.keys()], sources.value)) doomed.set(r.id, r);
+  for (const r of removedWith([...doomed.keys()], sources.value)) doomed.set(r.id, r);
   // A group with nothing left under it goes too, as in `deleteSource`.
   for (const g of configGroups.value) {
     if (groups.has(g.id)) continue;

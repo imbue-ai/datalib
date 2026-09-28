@@ -3,7 +3,7 @@ load("//tools:insta.bzl", "insta_update")
 
 # `datalib-step` — the built-in step program for the DAG runner
 # (//datalib/backend/dag:datalib_dag_bin). Reads its function (ingest /
-# render_markdown / grid_index / qmd_index / embedding_map) and its
+# render_markdown / grid_index / qmd_aggregator / embedding_map) and its
 # group's type from the environment the runner sets, and honors the DAG
 # step contract (NDJSON events on stdout, final outcome line).
 #

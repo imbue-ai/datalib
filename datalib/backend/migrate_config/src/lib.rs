@@ -11,8 +11,8 @@
 //! What the rewrite covers today is the header of `convert.rs` — the
 //! `datalib-step download <type>` command lines, the `_api` / `_backup`
 //! type words, and the `sync` / `common.input_path` / `common.raw_path`
-//! params — and, after it, `qmd_steps.rs`: a source the qmd fan-in names
-//! gets its own `keyword_index` and `embed` steps.
+//! params — and, after it, `qmd_steps.rs`: the `qmd_index` fan-in becomes
+//! `qmd_aggregator`, downstream of each source's own qmd steps.
 
 pub mod convert;
 pub mod qmd_steps;
@@ -37,14 +37,14 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
         return Ok(shape);
     }
     if qmd_steps::is_retired(text)? {
-        return Ok(LegacyFormat::SharedQmdIndex);
+        return Ok(LegacyFormat::QmdIndex);
     }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
 pub fn convert(text: &str) -> Result<String> {
     let out = match detect(text)? {
-        LegacyFormat::SharedQmdIndex => text.to_string(),
+        LegacyFormat::QmdIndex => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = qmd_steps::rewrite(&out)?;
@@ -498,7 +498,7 @@ inputs = ["slack/render_markdown"]
             !out.contains("\"raw\"") && !out.contains("rendered_md"),
             "{out}"
         );
-        assert!(out.contains("function = \"qmd_index\""), "{out}");
+        assert!(out.contains("function = \"qmd_aggregator\""), "{out}");
         assert!(
             out.contains("inputs = [\"slack/render_markdown\"]"),
             "{out}"

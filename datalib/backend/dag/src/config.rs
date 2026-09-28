@@ -1088,13 +1088,9 @@ fn accept_steps(
     let mut accepted: Vec<(StepEntry, StepSpec)> = Vec::with_capacity(candidates.len());
     let mut diags = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    let declared: BTreeSet<&str> = candidates.iter().map(|c| c.entry.id.as_str()).collect();
-    let unindexed: Vec<Vec<String>> = candidates
-        .iter()
-        .map(|c| registered_but_never_indexed(&c.entry, &declared))
-        .collect();
+    let aggregated = aggregated_ids(&candidates);
 
-    for (c, unindexed) in candidates.into_iter().zip(unindexed) {
+    for c in candidates {
         let id = c.entry.id.clone();
         let mut group_type: Option<&str> = None;
         let mut source_group: Option<(&str, &str)> = None;
@@ -1311,25 +1307,34 @@ fn accept_steps(
             );
             continue;
         }
-        if !unindexed.is_empty() {
+        if is_builtin(&c.entry, "qmd_index") {
+            diags.push(
+                c.diag(
+                    Severity::Rejected,
+                    text,
+                    Some("function"),
+                    "`qmd_index` is the shape from before `qmd_aggregator`, which reads each \
+                     source's `keyword_index` and `embed` rather than feeding them",
+                )
+                .with_help("rewrite the file once: `datalib-migrate-config <data root> --force`"),
+            );
+            continue;
+        }
+        if is_builtin(&c.entry, "keyword_index")
+            && aggregated.as_ref().is_some_and(|a| !a.contains(&id))
+        {
             diags.push(
                 c.diag(
                     Severity::Warning,
                     text,
-                    Some("inputs"),
-                    format!(
-                        "registers a qmd collection for {} and nothing fills it: no \
-                         `keyword_index` step reads it, so free-text search does not reach \
-                         that source",
-                        unindexed.join(", ")
-                    ),
+                    None,
+                    "`qmd_aggregator` does not read this step, so every aggregation retires \
+                     this source's qmd collection and this step registers it again",
                 )
-                .with_help(
-                    "each source searched has `keyword_index` and `embed` steps in its own \
-                     group; `datalib-migrate-config <data root> --force` adds them for every \
-                     source this step names. Or drop the source from `inputs` to leave it out \
-                     of search.",
-                ),
+                .with_help(format!(
+                    "add {id:?} to `qmd_aggregator`'s `inputs`, or remove this step to leave \
+                     the source out of search"
+                )),
             );
         }
         if c.entry.group.is_some() && c.entry.name.is_some() {
@@ -1402,20 +1407,24 @@ fn retired_subcommand(command: &str) -> Option<&str> {
         .filter(|w| matches!(*w, "download" | "render" | "grid_index" | "qmd_index"))
 }
 
-/// The groups a built-in `qmd_index` registers a collection for with no
-/// `<group>/keyword_index` in the config to fill it: the shape from
-/// before the keyword index and the embedding were per source, when the
-/// fan-in did both itself.
-fn registered_but_never_indexed(e: &StepEntry, declared: &BTreeSet<&str>) -> Vec<String> {
-    if e.command.is_some() || e.function.as_deref() != Some("qmd_index") {
-        return Vec::new();
-    }
-    e.inputs
+fn is_builtin(e: &StepEntry, function: &str) -> bool {
+    e.command.is_none() && e.function.as_deref() == Some(function)
+}
+
+/// Every step a built-in `qmd_aggregator` reads, or `None` in a config
+/// with none. The aggregator retires the collection of any source whose
+/// steps it does not read.
+fn aggregated_ids(candidates: &[Candidate<StepEntry>]) -> Option<BTreeSet<String>> {
+    let mut aggregators = candidates
         .iter()
-        .filter_map(|i| i.strip_suffix("/render_markdown"))
-        .filter(|g| !declared.contains(format!("{g}/keyword_index").as_str()))
-        .map(str::to_string)
-        .collect()
+        .filter(|c| is_builtin(&c.entry, "qmd_aggregator"))
+        .peekable();
+    aggregators.peek()?;
+    Some(
+        aggregators
+            .flat_map(|c| c.entry.inputs.iter().cloned())
+            .collect(),
+    )
 }
 
 fn nests_with(a: &str, b: &str) -> bool {
@@ -1452,7 +1461,7 @@ const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
 /// budget would not keep it safe: the qmd steps all write one index file,
 /// which the runner cannot see as shared.
 const BUILTIN_LOCKS: &[(&str, &str)] = &[
-    ("qmd_index", crate::supervisor::locks::QMD_KEYWORD),
+    ("qmd_aggregator", crate::supervisor::locks::QMD_KEYWORD),
     ("keyword_index", crate::supervisor::locks::QMD_KEYWORD),
     ("embed", crate::supervisor::locks::QMD_EMBED),
 ];
@@ -2311,7 +2320,7 @@ mod tests {
             [[steps]]
             group = "mail"
             function = "keyword_index"
-            inputs = ["mail/render_markdown", "unified_index/qmd_index"]
+            inputs = ["mail/render_markdown"]
 
             [[steps]]
             group = "mail"
@@ -2325,13 +2334,13 @@ mod tests {
 
             [[steps]]
             group = "unified_index"
-            function = "qmd_index"
-            inputs = ["iliad/render_markdown", "mail/render_markdown"]
+            function = "qmd_aggregator"
+            inputs = ["mail/keyword_index", "mail/embed"]
 
             [[steps]]
             group = "unified_index"
             function = "embedding_map"
-            inputs = ["mail/embed"]
+            inputs = ["unified_index/qmd_aggregator"]
 
             [[steps]]
             id = "custom/qmd"
@@ -3010,7 +3019,7 @@ function = "grid_index"
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
+function = "qmd_aggregator"
 
 [[applets]]
 group = "unified_index"
@@ -3751,20 +3760,20 @@ group = "mail"
 function = "render_markdown"
 
 [[steps]]
-group = "unified_index"
-function = "qmd_index"
-inputs = ["mail/render_markdown"]
-
-[[steps]]
 group = "mail"
 function = "keyword_index"
-inputs = ["mail/render_markdown", "unified_index/qmd_index"]
+inputs = ["mail/render_markdown"]
 
 [[steps]]
 group = "mail"
 function = "embed"
 inputs = ["mail/keyword_index"]
 locks = ["cpu"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_aggregator"
+inputs = ["mail/keyword_index", "mail/embed"]
 
 [[steps]]
 id = "custom/embed"
@@ -3780,7 +3789,7 @@ inputs = ["mail/keyword_index"]
                 .map(|(name, _)| name)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(held("unified_index/qmd_index"), ["qmd_keyword"]);
+        assert_eq!(held("unified_index/qmd_aggregator"), ["qmd_keyword"]);
         assert_eq!(held("mail/keyword_index"), ["qmd_keyword"]);
         assert_eq!(held("mail/embed"), ["cpu"], "named locks win");
         assert_eq!(
@@ -3792,11 +3801,50 @@ inputs = ["mail/keyword_index"]
         assert_eq!(slots(&check, "qmd_embed"), Some(1));
     }
 
-    /// The shape from before a source's qmd steps were its own: the fan-in
-    /// registers a collection nothing fills. Loaded, so search keeps its
-    /// old index, and warned about, naming the tool that adds the steps.
+    /// `qmd_index` fed the per-source steps; `qmd_aggregator` reads them.
+    /// A config still naming the old step is refused, naming the tool that
+    /// rewrites it, and loses that entry alone.
     #[test]
-    fn a_qmd_index_naming_a_source_with_no_keyword_index_warns() {
+    fn a_qmd_index_step_is_refused_and_names_the_migrator() {
+        let check = check_text(
+            r#"
+[[groups]]
+id = "mail"
+type = "email"
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "mail"
+function = "render_markdown"
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
+inputs = ["mail/render_markdown"]
+"#,
+        );
+        let refused: Vec<&Diagnostic> = check
+            .diagnostics
+            .iter()
+            .filter(|d| d.id() == Some("unified_index/qmd_index"))
+            .collect();
+        assert_eq!(refused.len(), 1, "{:?}", check.diagnostics);
+        assert_eq!(refused[0].severity, Severity::Rejected);
+        assert!(refused[0].describe().contains("datalib-migrate-config"));
+        assert!(check
+            .graph
+            .steps
+            .iter()
+            .any(|s| s.id == "mail/render_markdown"));
+    }
+
+    /// The aggregator keeps the collection set to the sources it reads,
+    /// so a keyword index it does not read is retired every run and
+    /// registered again. Loaded, and warned about.
+    #[test]
+    fn a_keyword_index_the_aggregator_does_not_read_warns() {
         let check = check_text(
             r#"
 [[groups]]
@@ -3819,31 +3867,34 @@ group = "notes"
 function = "render_markdown"
 
 [[steps]]
+group = "mail"
+function = "keyword_index"
+inputs = ["mail/render_markdown"]
+
+[[steps]]
 group = "notes"
 function = "keyword_index"
-inputs = ["notes/render_markdown", "unified_index/qmd_index"]
+inputs = ["notes/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["mail/render_markdown", "notes/render_markdown"]
+function = "qmd_aggregator"
+inputs = ["mail/keyword_index"]
 "#,
         );
         let warned: Vec<&Diagnostic> = check
             .diagnostics
             .iter()
-            .filter(|d| d.id() == Some("unified_index/qmd_index"))
+            .filter(|d| d.severity == Severity::Warning)
             .collect();
         assert_eq!(warned.len(), 1, "{:?}", check.diagnostics);
-        assert_eq!(warned[0].severity, Severity::Warning);
-        let text = warned[0].describe();
-        assert!(text.contains("mail") && !text.contains("notes,"), "{text}");
-        assert!(text.contains("datalib-migrate-config"), "{text}");
-        assert!(check
-            .graph
-            .steps
-            .iter()
-            .any(|s| s.id == "unified_index/qmd_index"));
+        assert_eq!(warned[0].id(), Some("notes/keyword_index"));
+        assert!(
+            warned[0].describe().contains("retires"),
+            "{}",
+            warned[0].describe()
+        );
+        assert_eq!(check.graph.steps.len(), 5, "a warning drops nothing");
     }
 
     /// A comparison is searched like any source, so its group may carry
@@ -3869,19 +3920,19 @@ group = "slack-diff"
 function = "render_markdown"
 
 [[steps]]
-group = "unified_index"
-function = "qmd_index"
-inputs = ["slack-diff/render_markdown"]
-
-[[steps]]
 group = "slack-diff"
 function = "keyword_index"
-inputs = ["slack-diff/render_markdown", "unified_index/qmd_index"]
+inputs = ["slack-diff/render_markdown"]
 
 [[steps]]
 group = "slack-diff"
 function = "embed"
 inputs = ["slack-diff/keyword_index"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_aggregator"
+inputs = ["slack-diff/keyword_index", "slack-diff/embed"]
 "#,
         );
         let dropped: Vec<_> = check

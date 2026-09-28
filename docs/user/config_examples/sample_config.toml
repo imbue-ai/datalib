@@ -13,8 +13,9 @@
 # belongs to that table.
 data_root = "~/datalib"
 
-# Shared fan-in steps: the SQL index behind the grid UI and the qmd
-# semantic-search index, each fed by every source's rendered markdown.
+# Shared fan-in steps: the SQL index behind the grid UI, fed by every
+# source's rendered markdown, and the qmd aggregator, which runs after
+# every source's own search steps.
 [[groups]]
 id = "unified_index"
 
@@ -25,8 +26,8 @@ inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
+function = "qmd_aggregator"
+inputs = ["gmail-takeout/keyword_index", "gmail-takeout/embed", "slack/keyword_index", "slack/embed", "claude-api/keyword_index", "claude-api/embed"]
 
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
 # the email provider in file-backed mode, reading the file at its
@@ -50,7 +51,7 @@ inputs = ["gmail-takeout/ingest"]
 [[steps]]
 group = "gmail-takeout"
 function = "keyword_index"
-inputs = ["gmail-takeout/render_markdown", "unified_index/qmd_index"]
+inputs = ["gmail-takeout/render_markdown"]
 
 [[steps]]
 group = "gmail-takeout"
@@ -100,7 +101,7 @@ inputs = ["slack/ingest"]
 [[steps]]
 group = "slack"
 function = "keyword_index"
-inputs = ["slack/render_markdown", "unified_index/qmd_index"]
+inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "slack"
@@ -133,7 +134,7 @@ inputs = ["claude-api/ingest"]
 [[steps]]
 group = "claude-api"
 function = "keyword_index"
-inputs = ["claude-api/render_markdown", "unified_index/qmd_index"]
+inputs = ["claude-api/render_markdown"]
 
 [[steps]]
 group = "claude-api"

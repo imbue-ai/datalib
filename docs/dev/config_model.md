@@ -94,14 +94,15 @@ same id and definition would read as up to date and write nothing.
   be two writers on one doltlite file.
 - The built-in functions are the directory names: `ingest`,
   `render_markdown`, `keyword_index`, `embed`, `grid_index`,
-  `qmd_index`, `embedding_map` (`datalib_step/src/function.rs`, tested
-  against the layout constants the render and index crates use). The
-  index steps write `unified_index/grid_index`, `unified_index/qmd_index`
-  and `unified_index/embedding_map` and nothing else, because the applet
+  `qmd_aggregator`, `embedding_map` (`datalib_step/src/function.rs`,
+  tested against the layout constants the render and index crates use).
+  `grid_index` and `embedding_map` write `unified_index/grid_index` and
+  `unified_index/embedding_map` and nothing else, because the applet
   that reads them finds them from the data root alone.
-- A source's `keyword_index` and `embed` are the exception to "a step
-  writes its own tree": both write into the one qmd index file in
-  `unified_index/qmd_index`, each to its own group's collection. The
+- The qmd steps are the exception to "a step writes its own tree": a
+  source's `keyword_index` and `embed`, and `qmd_aggregator`, all write
+  the one qmd index file in `unified_index/qmd_index` (a directory no
+  step is named for), each source's steps to its own collection. The
   runner cannot see that file as shared, so they hold one-slot locks
   instead (below).
 - A group's `type` names the thing mirrored, never the way it is
@@ -187,13 +188,14 @@ file runs.
 | the entry | is dropped when |
 |---|---|
 | a group | its id is not one segment, is `system`, or is a duplicate; it is a `diff` group with no `source`, or whose `source` names no group, a typeless group or another `diff` group; it carries `source` without being a `diff` group |
-| a step | its function is not one segment; its group is undeclared; it has no `command` and no group; its `command` is the retired `datalib-step download\|render\|grid_index\|qmd_index …` shape; its id is under `system`, duplicated, or nested with another; an input names itself; under a `diff` group it is not `render_markdown`, `keyword_index` or `embed`, or it is the render and has inputs and the first is not `<source>/ingest` |
+| a step | its function is not one segment; its group is undeclared; it has no `command` and no group; its `command` is the retired `datalib-step download\|render\|grid_index\|qmd_index …` shape; it is a built-in `qmd_index`, the shape from before `qmd_aggregator` (the message names `datalib-migrate-config`); its id is under `system`, duplicated, or nested with another; an input names itself; under a `diff` group it is not `render_markdown`, `keyword_index` or `embed`, or it is the render and has inputs and the first is not `<source>/ingest` |
 | a step (blocked: fix elsewhere) | its group or an input was itself dropped; an input names no step; it sits on a cycle |
 | an applet | its id is not a JS identifier, is `user`, or is a duplicate |
 
 Warnings: a group with nothing filed under it; a `name` on a grouped
 step (the label comes from the group and the function); an applet
-filed under an undeclared group.
+filed under an undeclared group; a `keyword_index` that `qmd_aggregator`
+does not read, in a config that has one.
 
 ## What the runner forwards and what `datalib-step` refuses
 
@@ -214,7 +216,7 @@ fingerprint, so changing it re-runs the group.
 - params still carrying `sync`, `common.input_path`, `common.raw_path`,
   `gmail_api` or a top-level `fetch_photos`, likewise naming the tool;
 - an `ingest` step whose params hold none of its type's methods;
-- `grid_index`, `qmd_index` or `embedding_map` under any group but
+- `grid_index`, `qmd_aggregator` or `embedding_map` under any group but
   `unified_index`.
 
 A render reads its raw store from its first input; one that declares
@@ -229,7 +231,7 @@ the ones it holds (`["q"]` takes one slot, `{ q = "exclusive" }` all of
 them), and one that names none holds `network`, `cpu` or `index`, the
 three budgets every config has — or, for the built-in qmd steps, one of
 the two one-slot locks every config has too: `qmd_keyword`, held by
-`qmd_index` and every `keyword_index`, and `qmd_embed`, held by every
+`qmd_aggregator` and every `keyword_index`, and `qmd_embed`, held by every
 `embed`. qmd lets a keyword update run beside an embed, but not two of
 either (`docs/dev/qmd_behaviour.md`, findings 4, 5 and 12). `reads = "files"` says a step reads its inputs
 off disk, so no writer of them runs beside it. None of these is in the
@@ -238,29 +240,33 @@ fingerprint. The rules are the dag README's "What keeps steps apart";
 
 ## The fan-ins read exactly their `inputs`
 
-`grid_index` and `qmd_index` take the groups they index from the
-`inputs` they declare — each is `<group>/render_markdown`, and the
-group is its first segment (`qmd_index::groups_from_inputs`, shared by
-`grid_index.rs`). Nothing scans the root. A source removed from the
-config stops being indexed on the next run even while its rendered
-tree is still on disk, and `qmd_index` retires the collections no
-group claims.
+`grid_index` and `qmd_aggregator` take the groups they index from the
+`inputs` they declare — `<group>/render_markdown` for the grid,
+`<group>/keyword_index` and `<group>/embed` for the aggregator — and
+the group is each input's first segment (`qmd_index::groups_from_inputs`,
+shared by `grid_index.rs`). Nothing scans the root. A source removed
+from the config stops being indexed on the next run even while its
+rendered tree is still on disk, and `qmd_aggregator` retires the
+collections no group claims.
 
-`qmd_index` only registers a collection per group and retires the rest;
-the group's own `keyword_index` (inputs: its render and `qmd_index`)
-fills it with the keyword index, and its `embed` (input: the
-`keyword_index`) with vectors. The runner does not hold a step back for
-an input that is itself still waiting on something upstream — a fan-in
-would wait for its slowest source — so `keyword_index` can run before
-`qmd_index` has: it registers its own collection first, and `embed`
-provisions the models itself. It still names `qmd_index`, so that a
-config without one blocks it: removing `qmd_index` turns free-text
-search off for the whole root. Each reports what it read as its version and lets qmd skip what
-it already has, and `qmd_index` reports its collection set, so one
-source re-rendering reruns that source's two steps and nobody else's.
-A `qmd_index` naming a group with no `keyword_index` is the shape from
-before these were per source, when it did both itself; the loader warns
-and names `datalib-migrate-config`, which adds the pair.
+A source's `keyword_index` (input: its render) registers its own
+collection and fills it with the keyword index; its `embed` (input: the
+`keyword_index`) fetches the embedding model and fills the vectors.
+`qmd_aggregator` reads every source's pair, so it runs after all of
+them: it retires the collections of sources it does not name and
+reports each collection's counts. Nothing of a source's reads the
+aggregator, and that is what lets each source's steps finish on their
+own: the runner holds a step's finish back while anything upstream of
+it is still running, so a step downstream of a fan-in would finish
+only when the slowest source did. Each per-source step reports what it
+read as its version and lets qmd skip what it already has, so one source
+re-rendering reruns that source's two steps and nobody else's. A
+`keyword_index` the aggregator does not name is warned about: each
+aggregation retires what it indexed. Removing the aggregator turns
+free-text search off; the Manage screen takes every source's qmd steps
+with it. A `qmd_index` step is the shape from before the aggregator,
+when that fan-in fed the per-source steps or did their work itself; the
+loader refuses it and names `datalib-migrate-config`, which rewrites it.
 
 So the lists are what decides which indexes a source reaches. A render
 step named by neither fan-in renders and reaches nothing. Named by
@@ -275,9 +281,9 @@ The wizard maintains all of it (`ui/src/config/sourceSteps.ts`):
 `wireIntoFanIns` on create, `unwireFromFanIns` on delete and when a
 render step is removed, and `setQmdSteps` for the Rendering section's
 "Index the markdown for free-text search" tickbox, which adds or
-removes the source's two steps, its render in `qmd_index` and its
-`embed` in the map. Removing any step takes every step that reads it
-(`readersOf`). A hand edit has to remember, and the Manage screen flags
+removes the source's two steps and their edges into `qmd_aggregator`.
+Removing any step takes every step that reads it, and removing the
+aggregator every source's qmd steps (`removedWith`). A hand edit has to remember, and the Manage screen flags
 a render step nothing consumes.
 
 ## What the Manage screen and the wizard make of it

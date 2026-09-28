@@ -44,7 +44,7 @@ fn validate_config(name: &str, path: &std::path::Path) {
             Some(Function::RenderMarkdown) => Phase::Render,
             Some(
                 Function::GridIndex
-                | Function::QmdIndex
+                | Function::QmdAggregator
                 | Function::KeywordIndex
                 | Function::Embed
                 | Function::EmbeddingMap,

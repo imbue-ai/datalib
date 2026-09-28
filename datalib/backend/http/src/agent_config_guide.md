@@ -33,15 +33,14 @@ kinds of entry. `[[groups]]` is what a person sees as one thing: an
 composed as `<group>/<function>` — the one tree it writes — and is
 never written. A step with no `command` is a built-in one (the
 functions `ingest`, `render_markdown`, `keyword_index`, `embed`,
-`grid_index`, `qmd_index` and `embedding_map`, run by `datalib-step`); a custom step names a shell `command`. `[[applets]]` is the app surface —
+`grid_index`, `qmd_aggregator` and `embedding_map`, run by `datalib-step`); a custom step names a shell `command`. `[[applets]]` is the app surface —
 long-lived servers that contribute card components and the endpoints
 behind them, filed under a group but declaring no inputs because they
 read what steps wrote. This guide is about groups and steps; for
 applets see `docs/dev/applets.md`. Edges are the declared `inputs`,
 which name steps by composed id — file order does not matter. A step
 with no `inputs` is a **source step** (where a sync normally starts); every
-source's rendered markdown feeds the two fan-in steps under the
-`unified_index` group:
+source feeds the two fan-in steps under the `unified_index` group:
 
 ```toml
 # One source = a group with a `type`, plus an ingest step and a
@@ -69,20 +68,22 @@ function = "render_markdown"
 inputs = ["slack/ingest"]
 
 # The source's own part of free-text search: its keyword index, then
-# its embeddings (the slow one). Leave both out, and the source out of
-# `qmd_index` below, to keep it out of search.
+# its embeddings (the slow one). Leave both out, here and in
+# `qmd_aggregator` below, to keep it out of search.
 [[steps]]
 group = "slack"
 function = "keyword_index"
-inputs = ["slack/render_markdown", "unified_index/qmd_index"]
+inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "slack"
 function = "embed"
 inputs = ["slack/keyword_index"]
 
-# The shared fan-in steps every source's rendered markdown feeds. Add a
-# source's render step id to both `inputs` lists.
+# The shared fan-in steps. Add a source's render step id to
+# `grid_index`'s inputs, and its `keyword_index` and `embed` to
+# `qmd_aggregator`'s, which runs after them and drops from search any
+# source it does not name.
 [[groups]]
 id = "unified_index"
 
@@ -93,8 +94,8 @@ inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["slack/render_markdown"]
+function = "qmd_aggregator"
+inputs = ["slack/keyword_index", "slack/embed"]
 ```
 
 Any top-level keys (`data_root`, `binary_dir`) must be written *above*

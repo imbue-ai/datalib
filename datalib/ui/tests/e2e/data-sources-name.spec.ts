@@ -270,7 +270,7 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   await expect(editor).toHaveValue(/rows-only\/render_markdown/);
   const added = await editor.inputValue();
   expect(fanInInputs(added, "grid_index")).toContain("rows-only/render_markdown");
-  expect(fanInInputs(added, "qmd_index")).not.toContain("rows-only/render_markdown");
+  expect(fanInInputs(added, "qmd_aggregator")).not.toContain("rows-only/keyword_index");
   expect(added).not.toContain("rows-only/keyword_index");
 
   // Reopening reads the answer back off the config, not off a default.
@@ -288,16 +288,18 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Rows Only.")).toBeVisible();
   const saved = await editor.inputValue();
-  expect(fanInInputs(saved, "qmd_index")).toContain("rows-only/render_markdown");
+  expect(fanInInputs(saved, "qmd_aggregator")).toEqual(
+    expect.arrayContaining(["rows-only/keyword_index", "rows-only/embed"]),
+  );
   expect(saved).toContain(
-    'group = "rows-only"\nfunction = "keyword_index"\ninputs = ["rows-only/render_markdown", "unified_index/qmd_index"]',
+    'group = "rows-only"\nfunction = "keyword_index"\ninputs = ["rows-only/render_markdown"]',
   );
   expect(saved).toContain(
     'group = "rows-only"\nfunction = "embed"\ninputs = ["rows-only/keyword_index"]',
   );
-  // Added once, however many times the source is saved: in both fan-ins
-  // and as the keyword index's input.
-  expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(3);
+  // Added once, however many times the source is saved: in the grid
+  // index and as the keyword index's input.
+  expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(2);
 });
 
 test("a provider with render options writes them on the render step, from the one form", async ({

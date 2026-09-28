@@ -1387,8 +1387,8 @@ fn rewrite_config(text: &str) -> String {
         };
         let function = m.get("function").and_then(|v| v.as_str()).unwrap_or("");
         assert!(
-            function != "qmd_index",
-            "config declares a qmd_index step; the golden test deliberately \
+            function != "qmd_aggregator",
+            "config declares a qmd_aggregator step; the golden test deliberately \
              excludes qmd (non-deterministic status text) — drop the step"
         );
         let group = m.get("group").and_then(|v| v.as_str()).unwrap_or("");

@@ -252,7 +252,7 @@ pub(crate) async fn run_subprocess(
     }
     // Its own process group, so a signal aimed at the step reaches what
     // the step spawned. A step is often a wrapper around something else
-    // — `qmd_index` runs `node qmd embed` — and a `kill(pid)` the step
+    // — `embed` runs qmd's embedding under node — and a `kill(pid)` the step
     // does not forward leaves that grandchild running after the runner
     // is gone. The cost is that a terminal's Ctrl-C no longer reaches
     // steps directly, which changes nothing: `interrupt_children` is
