@@ -59,7 +59,7 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await openManager(page);
   await expandGroup(page, "unified_index");
   const grid = pipelineRow(page, "unified_index/grid_index");
-  const qmd = pipelineRow(page, "unified_index/qmd_index");
+  const qmd = pipelineRow(page, "unified_index/qmd_aggregator");
   await expect(grid).toBeVisible();
   await grid.locator('[col-id="status"]').click();
   await qmd.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
@@ -72,7 +72,7 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expect(history).toHaveClass(MENU_DISABLED);
   await expect(history.locator(".slick-menu-content")).toHaveAttribute(
     "title",
-    /QMD index: The QMD index keeps no doltlite store/,
+    /QMD aggregator: The QMD index keeps no doltlite store/,
   );
   await page.keyboard.press("Escape");
 

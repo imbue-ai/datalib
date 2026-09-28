@@ -10,7 +10,9 @@ the backend reads it with one query.
 
 The index holds one more table the grid does not read: `problems`,
 every source's render-store `problems` copied in whole by `grid_index`
-and served by the applet at `/problems` — see
+and served by the applet at `/problems`, which filters, sorts, groups
+(`/problems/groups`) and pages the way `/search` does, through the keys
+declared on `ProblemRow` — see
 [`plans/problem_visibility.md`](plans/problem_visibility.md).
 
 ## Why a union table
@@ -72,6 +74,13 @@ issues a single SELECT against `grid_rows`, newest first: by
 the same moment. The row mapper translates each row into a `SearchRow`
 for the HTTP API, with `preview` as its Contents cell.
 
+The keys the search bar takes are declared on `GridRow`'s own columns
+(`#[col(…, search = "convo", uuid)]`, and `search(order = …, range = …,
+qmd)` on the struct), and the derive turns them into a `SearchTable`
+(`datalib_query::table`) that the `WHERE`, the order and the grouping
+are all built from. The grid's own column ids (`source_ref`, `snippet`)
+map onto `grid_rows` columns in `unified_index/src/grid_columns.rs`.
+
 Every read happens inside one read transaction on a read-only
 connection (`DoltRepo::pinned`), so a request sees one commit and the
 plain table's indexes serve it. `grid_rows` carries one index for the
@@ -96,15 +105,21 @@ index, a free-text search answers with an error, not a weaker search.
 2. Add the column to each per-provider `render/grid_rows.rs`
    `GridRow` builder.
 3. Update `unified_index/src/dolt_repo.rs` — both the
-   `SEARCH_ROW_COLUMNS` constant and `search_row_from` — and `SearchRow`
-   in `unified_index/src/search.rs` if the column should reach the API.
+   `SEARCH_ROW_COLUMNS` list and `search_row_from`, which name columns
+   by `GridRowColumn` — and `SearchRow` in `unified_index/src/search.rs`
+   if the column should reach the API.
 4. If it should be a grid column, add it to the `SearchRow` type in
    `datalib/ui/src/api.ts` and declare it in `columns()` in
    `datalib/backend/applets/src/unified_index/columns.rs`, with its type
    from `datalib_columns`. The applet declares the columns and the grid
    draws them by type (`cards/typedColumns.ts`, over the renderers in
    `cards/cellRenderers.ts`); a width or a hover the type cannot know
-   goes in `GridCard`'s `columnOverrides`.
+   goes in `GridCard`'s `columnOverrides`. Map its id to the
+   `grid_rows` column it sorts and filters by in `GridColumn::backing`
+   (`unified_index/src/grid_columns.rs`), and give that column `search`
+   on its `#[col]` so Keep only, Exclude and dropping it on the search
+   bar work; `every_filter_key_is_served_by_an_index` then asks for an
+   index or a place in its `SCANS` list.
 5. Set the new DDL hashes in `BUILTIN_STORE_SHAPES`
    (`datalib/backend/dag/src/config.rs`). The test
    `builtin_store_shapes_are_the_ddl_the_step_writes` in `datalib_step`
@@ -130,9 +145,9 @@ shape, and the grid index rebuilds itself from the stores.
    `datalib/backend/datalib_step` and to the dispatch table in
    `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
    ingest/render step pair in the config and name the render step in
-   the two fan-ins' `inputs` (the wizard does this for a source it
-   adds); `grid_index` and `qmd_index` read exactly the stores their
-   inputs name.
+   `grid_index`'s `inputs` (the wizard does this for a source it adds,
+   with the source's qmd steps); `grid_index` reads exactly the stores
+   its inputs name.
 3. Add the source label to the consuming bits as needed (icon
    resolution, etc.) — but the query path itself does not change.
 

@@ -525,7 +525,7 @@ emit({"event": "outcome",
 The built-in step types are one binary implementing this protocol,
 run with no arguments of its own. It reads `DATALIB_DAG_FUNCTION` to
 learn what to do — `ingest`, `render_markdown`, `keyword_index`,
-`embed`, `grid_index`, `qmd_index` or `embedding_map`; anything else is
+`embed`, `grid_index`, `qmd_aggregator` or `embedding_map`; anything else is
 refused with the list — and `DATALIB_DAG_GROUP_TYPE` to learn which
 provider to run, which `ingest` and `render_markdown` require and the
 rest ignore. It
@@ -543,7 +543,8 @@ reference implementation.
 
 The index functions have one reader, the `unified_index` applet,
 which finds them from the data root alone; so their ids are fixed at
-`unified_index/grid_index`, `unified_index/qmd_index` and
+`unified_index/grid_index`, `unified_index/qmd_aggregator` and
 `unified_index/embedding_map`, and `datalib-step` refuses to run them
-under any other. A source's `keyword_index` and `embed` write into
-`qmd_index`'s file, to the collection named for their group.
+under any other. The qmd steps all write the one index file under
+`unified_index/qmd_index/`, a source's `keyword_index` and `embed` to
+the collection named for their group.

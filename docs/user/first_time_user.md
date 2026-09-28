@@ -257,7 +257,7 @@ inputs = ["claude/ingest"]
 [[steps]]
 group = "claude"
 function = "keyword_index"
-inputs = ["claude/render_markdown", "unified_index/qmd_index"]
+inputs = ["claude/render_markdown"]
 
 [[steps]]
 group = "claude"
@@ -274,8 +274,8 @@ inputs = ["claude/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["claude/render_markdown"]
+function = "qmd_aggregator"
+inputs = ["claude/keyword_index", "claude/embed"]
 
 [[applets]]
 group = "unified_index"
@@ -325,12 +325,12 @@ datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml
 ```
 
 It keeps the original beside the result as `config.toml.orig`. Comments
-from the old file don't carry over, so review the result. A config from
-before each source had its own search steps needs none of this: the app
-adds them the first time it reads the file, and keeps the old one as
-`config.toml.bak`. A much older
-root with only a `config.yaml` is not convertible any more: set it up
-again from the app.
+from the old file don't carry over, so review the result. A config whose
+search is still one shared `qmd_index` step needs none of this: the app
+gives each source its own search steps the first time it reads the
+file, and keeps the old one as `config.toml.bak`. A much older root with
+only a `config.yaml` is not convertible any more: set it up again from
+the app.
 
 Credentials are never in the config — sources that need them ask
 `latchkey` at run time.
@@ -389,15 +389,17 @@ faster.
   rendered into readable markdown, attachments included.
 - The `grid_index` step: one row per message or document written into
   the SQL store at `<data_root>/unified_index/grid_index/db.doltlite_db`.
-- The `qmd_index` step: sets up the search index, one part per source,
-  after a one-time download of the models.
 - A `keyword_index` and an `embed` step per source: that source's part
   of free-text search — its words, then its embeddings, which let a
-  search match on meaning. **The first embed is slow** — roughly 5–10
+  search match on meaning. The first `embed` downloads its model once.
+  **The first embed is slow** — roughly 5–10
   minutes per thousand chunks on CPU. It's resumable, so Ctrl-C and
   re-run is safe, and one source's `embed` can be turned off on the
   Manage screen without touching the others. Re-runs after the backlog
   drains take seconds.
+- The `qmd_aggregator` step, once every source's search steps are
+  done: it drops any source no longer in the config from the search
+  index and reports what the index holds.
 
 **On disk afterwards** (with `data_root = "~/datalib"`):
 

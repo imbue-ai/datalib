@@ -45,6 +45,8 @@ rust_test(
     size = "small",
     crate = ":datalib_unified_index",
     edition = "2021",
+    # A table of the tests' own, searched with `LIKE` (db.rs).
+    proc_macro_deps = ["//datalib/backend/etl/macros:datalib_etl_macros"],
     deps = [
         "@datalib_crates//:tempfile",
     ],
@@ -81,6 +83,7 @@ rust_test(
     deps = [
         ":qmd_fixture",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/query:datalib_query",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",
         ":datalib_unified_index",

@@ -1,7 +1,8 @@
-//! A config in the shape from before each source had its own qmd steps is
-//! rewritten in place as soon as the server sees it: at boot, and whenever
-//! the file changes. The text it replaced is kept as `config.toml.bak`.
-//! The rewrite itself is `datalib_migrate_config::upgrade_qmd_steps`.
+//! A config that still has a `qmd_index` step, from before
+//! `qmd_aggregator`, is rewritten in place as soon as the server sees it:
+//! at boot, and whenever the file changes. The text it replaced is kept as
+//! `config.toml.bak`. The rewrite itself is
+//! `datalib_migrate_config::upgrade_qmd_steps`.
 
 use std::path::{Path, PathBuf};
 
@@ -19,9 +20,8 @@ pub fn upgrade(root: &Path) -> Option<PathBuf> {
         Ok(None) => return None,
         Err(e) => {
             tracing::error!(
-                "config: {} is in the shape from before each source had its own qmd \
-                 steps, and was left as it is: {e:#}. `datalib-migrate-config {} --force` \
-                 shows the rewrite.",
+                "config: {} still has a `qmd_index` step, and was left as it is: {e:#}. \
+                 `datalib-migrate-config {} --force` shows the rewrite.",
                 path.display(),
                 root.display()
             );
@@ -36,8 +36,8 @@ pub fn upgrade(root: &Path) -> Option<PathBuf> {
         return None;
     }
     tracing::warn!(
-        "config: migrated {}: each source the qmd index names now has its own \
-         keyword_index and embed steps. The previous file is {}.",
+        "config: migrated {}: `qmd_index` is now `qmd_aggregator`, reading each \
+         source's own keyword_index and embed steps. The previous file is {}.",
         path.display(),
         bak.display()
     );

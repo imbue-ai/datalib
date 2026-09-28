@@ -290,6 +290,74 @@ so the default budget made `bazelisk test //...` flaky in a way that
 pointed at nothing. Bazel enforces the ceiling but does not wait for it,
 so the larger budget costs nothing.
 
+### Writing a spec that does not flake
+
+The page under test keeps changing on its own. The Manage grid is drawn
+again after every remount, whenever the loop's record moves, and on a
+clock, and a real `datalib-dag` runs the syncs. A month of CI
+(September 2026) had about a hundred flaky e2e failures, and nearly all
+of them were one of two mistakes: the test looked at the page between
+two drawings, or it expected to catch a state the backend was free to
+leave. The rules below are how to avoid both.
+
+**Assert with a retrying expectation.** `await expect(locator).toHaveText(…)`,
+`toBeVisible()` and `toHaveAttribute()` keep retrying until they match or
+time out, and so does `expect.poll(fn)`. `expect(await locator.textContent())`
+reads the page once. Keep the one-shot form for values that cannot move
+under you: an API response, a number the test computed, or a reading a
+helper has already waited for.
+
+**Read a Manage row through the row helpers.** `statusOf`, `stampOf`,
+`lastSuccessOf` and `readRow` in
+[`grid-helpers.ts`](/datalib/ui/tests/e2e/grid-helpers.ts) wait for the
+row to be drawn, then return what that one drawing showed. A `null` from
+`stampOf` therefore means the step never ran, and never that the row was
+not drawn yet. They used to return `null` for both. A read right after
+`settleRunner`'s reload then failed when the test expected a value, and
+*passed without looking at anything* when it expected `null`. Inside a
+poll that has to keep going through a redraw, use `sampleRow`, which
+returns `null` for "not drawn". A step under a closed group is never
+drawn, so call `expandGroup` first; `readRow` says so when it gives up.
+The rule for any new helper: **a reader must not return the same value
+for "absent" and "not there yet".**
+
+**Take related values from one drawing.** Two separate reads can
+straddle a redraw. For example, the status from before a sync can sit
+beside the stamp that sync just wrote, which reads as the sync having
+stopped. `sampleRow` reads every cell in one pass. Likewise, once a poll
+has matched, use the value the poll saw rather than reading again:
+`readRow` and `settleRow` both do this.
+
+**Hold a state before asserting it.** `Running`, `Queued` and a toast are
+states the page passes through, and a fast step on a fast runner can
+finish between two samples. CI failed about two dozen times on "expected
+Running, got Succeeded". Either hold the step in that state until the
+test lets go — the taped sources replay recorded HTTP, and `hold()` /
+`release()` in the `data-sources-*` specs park every replayed request
+behind a file — or assert the end state instead.
+
+**Drive the app, not a gesture, when the gesture is not what is under
+test.** A hand-driven header drag failed 23 times in one day until the
+run-log spec grouped through the panel's API instead (`bb3e9904`). When
+a click is the subject, retry the click and its visible effect as a pair
+(`pickRowMenu`, `run-log.spec.ts`'s `rightClick`), because the row the
+click landed on can be replaced by a redraw.
+
+**Compare like with like.** The run log's line counter counts the lines
+*loaded*, not the lines in the log: after a load it holds the newest
+page plus whatever has arrived since. Two counts taken either side of a
+reload therefore compared how long each had been open, and failed as
+538 < 569 once the log outgrew a page (#835). Before comparing a reading
+from before an action with one from after it, check that both measure
+the same thing.
+
+The suite runs with no retries (`playwright.config.ts` sets none), on
+purpose: a flake turns the run red and gets fixed rather than hidden. To
+hunt one, repeat the spec (§"Running one spec, and running it several
+times") or `bazelisk test //datalib/ui:e2e_test --runs_per_test=N
+--local_test_jobs=1`. `scripts/flaky_tests.py` lists the targets that
+went red and then green on the same commit.
+
 ## Watching a sync stream
 
 [`data-sources-streaming.spec.ts`](/datalib/ui/tests/e2e/data-sources-streaming.spec.ts)
@@ -450,8 +518,10 @@ the binaries, which is what gives the log card's source links their
 commit (`logging.md` § "Every line has an author").
 
 The three runs' NDJSON event streams sit beside it in `run-<millis>/`.
-Semantic search is empty there: the golden config carries no `qmd_index`
-step, by design.
+Free-text search works there: the golden config keyword-indexes every
+source and embeds two small ones (whatsapp, google_calendar_window), so
+semantic search reaches those two alone. The qmd index is not
+snapshotted.
 
 This test was ported from the pre-DAG `frankweiler/backend/sync` crate, which
 was deleted in e905d252. The normalization machinery — roughly fifty volatile

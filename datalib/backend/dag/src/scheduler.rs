@@ -2010,6 +2010,109 @@ mod tests {
         );
     }
 
+    /// A step that writes one versioned file into its own tree.
+    fn quick(id: &str, inputs: &[&str]) -> StepSpec {
+        let version = format!("{id}-v1");
+        let mut spec = StepSpec::new(
+            id,
+            StepRun::in_process(move |ctx: StepCtx| {
+                let version = version.clone();
+                async move {
+                    let dir = ctx.path_str(&ctx.step_id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("out.txt"), &version).unwrap();
+                    let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                    Ok(StepOutcome {
+                        outputs: vec![ArtifactState::versioned(&pat, version)],
+                        exit: None,
+                    })
+                }
+            }),
+        );
+        for i in inputs {
+            spec = spec.input(i);
+        }
+        spec
+    }
+
+    /// A source's own steps finish while another source is still running,
+    /// and the fan-in that reads them all finishes last. The qmd steps had
+    /// a fan-in upstream of them, and every source's search steps read
+    /// Running until the slowest source in the sync was done.
+    #[tokio::test]
+    async fn a_sources_steps_finish_before_a_slower_source_and_the_fan_in_after() {
+        let root = tempfile::tempdir().unwrap();
+        let rec = Arc::new(Recorder::default());
+        let finished = |rec: &Recorder, id: &str| {
+            rec.0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, Event::StepFinish { step, .. } if step == id))
+        };
+        let saw_fast_finish = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let slow = {
+            let (rec, saw) = (rec.clone(), saw_fast_finish.clone());
+            StepSpec::new(
+                "slow/render",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (rec, saw) = (rec.clone(), saw.clone());
+                    async move {
+                        // Bounded, so a regression fails rather than hangs.
+                        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                        while !finished(&rec, "fast/keyword")
+                            && std::time::Instant::now() < deadline
+                        {
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        }
+                        saw.store(finished(&rec, "fast/keyword"), Ordering::SeqCst);
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
+                            exit: None,
+                        })
+                    }
+                }),
+            )
+        };
+        let graph = Graph::build(vec![
+            quick("fast/render", &[]),
+            quick("fast/keyword", &["fast/render"]),
+            slow,
+            quick("slow/keyword", &["slow/render"]),
+            quick("unified_index/qmd", &["fast/keyword", "slow/keyword"]),
+        ])
+        .unwrap();
+
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = r.run(&graph).await.unwrap();
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(
+            saw_fast_finish.load(Ordering::SeqCst),
+            "fast/keyword had not finished when the slow source did: a source's own \
+             steps waited on another source"
+        );
+        let finishes: Vec<String> = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                Event::StepFinish { step, .. } => Some(step.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            finishes.last().map(String::as_str),
+            Some("unified_index/qmd"),
+            "{finishes:?}"
+        );
+    }
+
     /// A second run where nothing moved must not run the fan-in at all.
     ///
     /// This is the steady-state case, and it is the one streaming can

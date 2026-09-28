@@ -52,7 +52,7 @@ describe("rowMenu", () => {
     expect(entry(menu, "history").disabled).toBe("An applet writes no store");
     expect(entry(menu, "log").disabled).toBe("An applet runs no step");
     expect(
-      entry(rowMenu([target({ kind: "step", func: "qmd_index" })], opts), "history").disabled,
+      entry(rowMenu([target({ kind: "step", func: "qmd_aggregator" })], opts), "history").disabled,
     ).toBe("The QMD index keeps no doltlite store");
     expect(
       entry(rowMenu([target({ runBlocked: "Not in the pipeline" })], opts), "sync").disabled,
@@ -92,10 +92,10 @@ describe("rowMenu", () => {
       "Only the download step keeps attachments",
     );
     const qmd = target({
-      id: "unified_index/qmd_index",
+      id: "unified_index/qmd_aggregator",
       kind: "step",
       type: null,
-      func: "qmd_index",
+      func: "qmd_aggregator",
     });
     expect(entry(rowMenu([qmd], opts), "reset").disabled).toBe(
       "Reset a source; the index follows it",

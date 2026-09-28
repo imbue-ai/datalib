@@ -805,10 +805,11 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     await expect(btn).toBeEnabled();
     await expect(btn).toHaveAttribute("title", /^Out of date.*sync pdfs\/ingest/);
     const before = await stampsBefore(page, ["pdfs/ingest", render]);
+    expect(before["pdfs/ingest"], "the download ran above").not.toBeNull();
     await btn.click();
     await settleRow(page, render, before[render]);
     await settleRunner(page);
-    expect(await lastSyncedOf(page, "pdfs/ingest"), "the download did not run").toBe(
+    expect(await lastSyncedOf(page, "pdfs/ingest"), "the download ran too").toBe(
       before["pdfs/ingest"],
     );
     await expect(btn).toBeDisabled();

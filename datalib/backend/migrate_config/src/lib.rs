@@ -11,9 +11,10 @@
 //! What the rewrite covers today is the header of `convert.rs` — the
 //! `datalib-step download <type>` command lines, the `_api` / `_backup`
 //! type words, and the `sync` / `common.input_path` / `common.raw_path`
-//! params — and, after it, `qmd_steps.rs`: a source the qmd fan-in names
-//! gets its own `keyword_index` and `embed` steps. That second rewrite is
-//! also the one `datalib-http` makes by itself (`upgrade_qmd_steps`).
+//! params — and, after it, `qmd_steps.rs`: the `qmd_index` fan-in becomes
+//! `qmd_aggregator`, downstream of each source's own qmd steps. That second
+//! rewrite is also the one `datalib-http` makes by itself
+//! (`upgrade_qmd_steps`).
 
 pub mod convert;
 pub mod qmd_steps;
@@ -38,14 +39,14 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
         return Ok(shape);
     }
     if qmd_steps::is_retired(text)? {
-        return Ok(LegacyFormat::SharedQmdIndex);
+        return Ok(LegacyFormat::QmdIndex);
     }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
 pub fn convert(text: &str) -> Result<String> {
     let out = match detect(text)? {
-        LegacyFormat::SharedQmdIndex => text.to_string(),
+        LegacyFormat::QmdIndex => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = qmd_steps::rewrite(&out)?;
@@ -56,8 +57,8 @@ pub fn convert(text: &str) -> Result<String> {
     Ok(out)
 }
 
-/// The rewrite `datalib-http` makes unattended, to a config in the shape
-/// from before each source had its own qmd steps. `None` when there is
+/// The rewrite `datalib-http` makes unattended, to a config that still has
+/// a `qmd_index` step, in either earlier shape. `None` when there is
 /// nothing to do, including text that is not TOML: the loader reports
 /// that. Refused when the result would drop an entry the original ran,
 /// since nobody reviews this rewrite before it lands.
@@ -520,7 +521,7 @@ inputs = ["slack/render_markdown"]
             !out.contains("\"raw\"") && !out.contains("rendered_md"),
             "{out}"
         );
-        assert!(out.contains("function = \"qmd_index\""), "{out}");
+        assert!(out.contains("function = \"qmd_aggregator\""), "{out}");
         assert!(
             out.contains("inputs = [\"slack/render_markdown\"]"),
             "{out}"

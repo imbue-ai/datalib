@@ -59,7 +59,7 @@ merge conflict waiting to happen.
 
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
 - [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell.
-- [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md).
+- [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md). Writing or fixing a Playwright spec: read its §"Writing a spec that does not flake" first.
 - [`docs/dev/ci.md`](docs/dev/ci.md) — CI, its caches and BuildBuddy, and reading a run.
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — how a release is assembled, and testing its steps from a mac.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md), [`runtime_fetch.md`](docs/dev/runtime_fetch.md), [`docker.md`](docs/dev/docker.md) — what ships beside the binaries: the Chrome-impersonating curl, the Node runtime, the container image.
@@ -231,15 +231,16 @@ tree it writes; `inputs` name steps by that id and are the edges; an
 `[[applets]]` entry is a server the gateway spawns. A built-in step has
 no `command` and runs `datalib-step`.
 
-Each source has an `ingest` step and a `render_markdown` step, and two
-fan-in steps under `unified_index` read every render tree their
-`inputs` name: `grid_index` (the SQL index the grid reads) and
-`qmd_index` (free-text search: it registers one qmd collection per
-group). A searched source fills its own collection with two more steps
-of its own, `keyword_index` and then `embed`, so the slow embedding can
-be turned off or run by hand per source. `embedding_map` reads every
-`embed` and lays the embeddings out on a plane for the map card
-(`datalib/backend/embedding_map/README.md`). All of it is read by the
+Each source has an `ingest` step and a `render_markdown` step, and
+`grid_index` under `unified_index` reads every render tree its `inputs`
+name into the SQL index the grid reads. A searched source fills its own
+collection of the qmd index (free-text search) with two more steps of
+its own, `keyword_index` and then `embed`, so the slow embedding can be
+turned off or run by hand per source. `qmd_aggregator` reads every
+source's pair: it retires the collection of any source it does not name
+and reports on the whole, and removing it turns search off.
+`embedding_map` reads the aggregator and lays the embeddings out on a
+plane for the map card (`datalib/backend/embedding_map/README.md`). All of it is read by the
 `unified_index` applet; `datalib-http` never opens them. A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
@@ -470,7 +471,9 @@ sleep that is long enough on a warm mac is short on a loaded CI runner
 (the one on `2cbcc398` was), and a sleep that is long enough on CI
 makes every local run slower than it needs to be. Poll the row, the
 file, the endpoint — with a deadline, so a hang is a failure that
-names what never arrived rather than a timeout with no message.
+names what never arrived rather than a timeout with no message. In the
+Playwright suite, where most of our flakes have been, the rules are in
+[`testing.md`](docs/dev/testing.md) §"Writing a spec that does not flake".
 
 Three neighbours of the same mistake:
 

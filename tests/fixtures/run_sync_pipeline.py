@@ -486,6 +486,10 @@ params = {params}
         # The fan-in names its inputs; there is no glob to stand in for
         # "every render step".
         rendered_list = ", ".join(rendered)
+        groups = [r.strip('"').split("/")[0] for r in rendered]
+        qmd_list = ", ".join(
+            f'"{g}/{f}"' for g in groups for f in ("keyword_index", "embed")
+        )
         blocks.append(
             f"""[[groups]]
 id = "unified_index"
@@ -513,16 +517,15 @@ inputs = [{rendered_list}]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = [{rendered_list}]"""
+function = "qmd_aggregator"
+inputs = [{qmd_list}]"""
         )
         # Each source fills its own qmd collection: a keyword index and
         # its embeddings. The index arrives pre-built here too.
-        for rendered_id in rendered:
-            group = rendered_id.strip('"').split("/")[0]
+        for group in groups:
             root_blocks.append(
                 f'[[steps]]\ngroup = "{group}"\nfunction = "keyword_index"\n'
-                f'inputs = ["{group}/render_markdown", "unified_index/qmd_index"]\n\n'
+                f'inputs = ["{group}/render_markdown"]\n\n'
                 f'[[steps]]\ngroup = "{group}"\nfunction = "embed"\n'
                 f'inputs = ["{group}/keyword_index"]'
             )

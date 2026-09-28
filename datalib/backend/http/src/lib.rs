@@ -1399,7 +1399,8 @@ fn scaffold_toml() -> String {
     "\
 # ── the unified index ──────────────────────────────────────────────────
 # A group is one thing on the Manage screen; its steps are what run.
-# Every source's rendered markdown feeds these two: a step's id is
+# Every source feeds these two — the grid reads its rendered markdown,
+# the qmd aggregator its search steps. A step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
 # steps it reads by that id. A step with no `command` is one of
 # datalib's own.
@@ -1415,7 +1416,7 @@ inputs = []
 
 [[steps]]
 group = \"unified_index\"
-function = \"qmd_index\"
+function = \"qmd_aggregator\"
 inputs = []
 
 # The applet that serves the grid: the app has no search, no document
@@ -2100,7 +2101,7 @@ mod tests {
         // nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),
-            ["unified_index/grid_index", "unified_index/qmd_index"]
+            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
         );
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on.
@@ -2120,7 +2121,7 @@ mod tests {
         let fringe = fringe_of(&scaffold_toml());
         assert_eq!(
             fringe,
-            ["unified_index/grid_index", "unified_index/qmd_index"]
+            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
         );
         assert_eq!(configured_source_count(&fringe), 0);
     }

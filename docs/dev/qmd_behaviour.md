@@ -5,7 +5,7 @@ What was measured about `qmd` 2.8.3 (the pin in
 embedding on PR #456, and extended on #679 once the embed pass started
 driving qmd's SDK rather than its CLI. Eleven facts, each measured on a
 mac against the TNG fixture's rendered tree (one qmd collection per
-group, exactly as the shipped `qmd_index` step registers them), with
+group, exactly as the shipped qmd steps register them), with
 the recipe at the end so they can be re-measured after a qmd bump, and
 a twelfth read from qmd's code and not measured. The first nine were
 measured when the fixture held 16 groups and 79 documents; findings 1
@@ -166,7 +166,7 @@ does not carry over to `createStore()` without being re-measured.
     and syncs nothing. `register` and `update` pass the file, because
     they are its writers and register their collections as they open;
     a file deleted by hand costs the other collections' registration
-    until `qmd_index` next runs, never their documents.
+    until `qmd_aggregator` next runs, never their documents.
 
 11. **The SDK reports progress the CLI keeps to itself.** `embed`'s
     `onProgress` fires per batch with chunks embedded, bytes processed
@@ -190,8 +190,8 @@ does not carry over to `createStore()` without being re-measured.
     and since the next update finds its hash unchanged, nothing repairs
     it. Scoped updates on different collections still share the
     `content` table, so scoping does not help. The per-source steps
-    therefore hold the runner's one-slot `qmd_keyword` lock, which the
-    `qmd_index` step that registers collections holds too: registering
+    therefore hold the runner's one-slot `qmd_keyword` lock, and so does
+    `qmd_aggregator`, which registers collections too: registering
     through the SDK rewrites `index.yml` whole, and two of those at once
     would lose one's collection.
 
@@ -235,8 +235,9 @@ them in hand:
   `lock`. That asymmetry is the argument for #468's option B over its
   option A, and it is new.
 
-What landed is #468's option A on these findings: `qmd_index` registers
-one collection per source and indexes nothing, and each source has a
+What landed is #468's option A on these findings: `qmd_aggregator`
+keeps the collection set to the sources it reads and indexes nothing,
+and each source has a
 `keyword_index` step (registers its own collection, then
 `update({collections:[g]})`, finding 1) and an `embed` step (`embed`
 scoped to `g`), both driven through

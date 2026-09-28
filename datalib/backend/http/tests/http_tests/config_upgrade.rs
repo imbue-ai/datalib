@@ -1,5 +1,5 @@
-//! A config in the shape from before each source had its own qmd steps is
-//! rewritten by the server itself, at boot and on a hand edit, with the old
+//! A config that still has a `qmd_index` step is rewritten by the server
+//! itself, at boot and on a hand edit, with the old
 //! text kept as `config.toml.bak`.
 
 use datalib_http::ApiToken;
@@ -43,7 +43,10 @@ async fn boot(root: &Path) -> datalib_http::AppState {
 }
 
 fn is_upgraded(text: &str) -> bool {
-    text.contains("function = \"keyword_index\"") && text.contains("function = \"embed\"")
+    text.contains("function = \"qmd_aggregator\"")
+        && text.contains("function = \"keyword_index\"")
+        && text.contains("function = \"embed\"")
+        && !text.contains("function = \"qmd_index\"")
 }
 
 #[tokio::test]

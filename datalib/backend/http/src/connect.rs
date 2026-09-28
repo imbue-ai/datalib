@@ -368,7 +368,7 @@ pub async fn start_connect(
 /// only diagnosable afterwards if something durable says what latchkey
 /// printed. The output is latchkey's, so it is scrubbed first.
 fn fail(slot: &Arc<Mutex<ConnectStatus>>, service: &str, output: String) {
-    tracing::warn!("latchkey login for {service} failed: {}", scrub(&output));
+    tracing::error!(service, "latchkey login failed: {}", scrub(&output));
     let mut slot = slot.lock().expect("connect slot mutex");
     slot.status = ConnectState::Failed;
     slot.output = output;
@@ -381,8 +381,8 @@ fn succeed(
     output: String,
 ) {
     match &account {
-        Some(a) => tracing::info!("latchkey login for {service}: stored under account {a:?}"),
-        None => tracing::info!("latchkey login for {service}: stored"),
+        Some(a) => tracing::info!(service, account = %a, "latchkey login stored a credential"),
+        None => tracing::info!(service, "latchkey login stored a credential"),
     }
     let mut slot = slot.lock().expect("connect slot mutex");
     slot.status = ConnectState::Ok;
@@ -431,7 +431,8 @@ fn clear_args(service: &str, account: &str) -> Vec<String> {
 /// long silent stall behind a spinner is the worst way to deliver it.
 /// These three sources configure an existing browser or fail fast; the
 /// download stays a thing someone chooses, by running the command
-/// themselves.
+/// themselves. `datalib/tauri/check-app.sh` runs the same sources
+/// against every built .app.
 fn ensure_browser_args() -> Vec<String> {
     vec![
         "ensure-browser".to_string(),
@@ -561,8 +562,9 @@ pub async fn probe(
         // useful message ("Gmail users.getProfile: HTTP 401 …"), so
         // pass it through rather than replacing it with our own.
         let stderr = String::from_utf8_lossy(&out.stderr);
-        tracing::warn!(
-            "probe {source_type} failed: {}",
+        tracing::error!(
+            source_type = %source_type,
+            "probe failed: {}",
             scrub(&error_chain(&stderr))
         );
         return Err(err(StatusCode::BAD_GATEWAY, &tail(&stderr)));

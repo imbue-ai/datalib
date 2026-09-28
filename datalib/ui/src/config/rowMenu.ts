@@ -18,7 +18,7 @@ export type MenuTarget = {
   kind: MenuKind;
   /// The source type, or null for the index group and its steps.
   type: string | null;
-  /// The step's function (`ingest`, `qmd_index`, …); null off a step.
+  /// The step's function (`ingest`, `qmd_aggregator`, …); null off a step.
   func: string | null;
   runBlocked: string | null;
   editBlocked: string | null;
@@ -109,7 +109,7 @@ export function notComparableReason(t: MenuTarget): string | null {
 export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
   if (t.kind === "system") return "The run log is plain SQLite, with no commit history";
-  if (t.func === "qmd_index" || t.func === "keyword_index" || t.func === "embed") {
+  if (t.func === "qmd_aggregator" || t.func === "keyword_index" || t.func === "embed") {
     return "The QMD index keeps no doltlite store";
   }
   if (t.func === "embedding_map") return "The embedding map keeps no doltlite store";
@@ -130,7 +130,7 @@ export function notResettableReason(t: MenuTarget): string | null {
   if (
     !t.type ||
     t.func === "grid_index" ||
-    t.func === "qmd_index" ||
+    t.func === "qmd_aggregator" ||
     t.func === "keyword_index" ||
     t.func === "embed"
   ) {

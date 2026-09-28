@@ -349,7 +349,7 @@ fn alive(pid: i32) -> bool {
 }
 
 /// A step that will not stop: it ignores its SIGINT, spawns a child of
-/// its own — the shape of `qmd_index` running `node qmd embed` — and
+/// its own — the shape of `embed` running qmd under node — and
 /// otherwise runs forever.
 const DEAF: &str = r#"
     trap '' INT

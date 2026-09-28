@@ -102,7 +102,7 @@ const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   ingest: "ingest",
   render_markdown: "render",
   grid_index: "index",
-  qmd_index: "index",
+  qmd_aggregator: "index",
   keyword_index: "index",
   embed: "index",
   embedding_map: "index",
@@ -119,7 +119,7 @@ function phaseOfFunction(fn: string | null): StepPhase {
 /// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
   "unified_index/grid_index": "Unified Index (table)",
-  "unified_index/qmd_index": "Unified Index (QMD)",
+  "unified_index/qmd_aggregator": "Unified Index (QMD)",
   "unified_index/embedding_map": "Unified Index (map)",
   unified_index: "Unified Index (Applet)",
 };
@@ -840,17 +840,14 @@ function setGroupLine(text: string, groupId: string, key: string, line: string |
   return text.slice(0, group.start) + edited + text.slice(group.end);
 }
 
-/// The fan-in steps, by function: the two that consume rendered markdown
-/// — the SQL index the grid reads, and the qmd index free-text search
-/// reads — and the map, which reads each source's embeddings. A source
-/// can be in one and not another.
-export type FanInFunction = "grid_index" | "qmd_index" | "embedding_map";
+/// The fan-in steps, by function: the SQL index the grid reads, which
+/// consumes rendered markdown; the qmd aggregator, which runs after each
+/// source's own qmd steps; and the map, which reads the aggregator. A
+/// source can be in one and not another.
+export type FanInFunction = "grid_index" | "qmd_aggregator" | "embedding_map";
 
 /// The fan-ins a render step feeds.
-const RENDER_FAN_INS: FanInFunction[] = ["grid_index", "qmd_index"];
-
-/// The qmd index's registry step, which a source's own qmd steps read.
-export const QMD_INDEX_ID = "unified_index/qmd_index";
+const RENDER_FAN_INS: FanInFunction[] = ["grid_index"];
 
 /// One `[[steps]]` table and its body: up to the next line opening a
 /// table — its own `[steps.params…]` sub-table, or the next entry.
@@ -928,19 +925,15 @@ export function fanInFunctionOf(step: ConfiguredStep): string | null {
 }
 
 /// A source's own qmd steps, as `[[steps]]` blocks: its keyword index,
-/// which reads its render and the qmd index (without which it is blocked,
-/// so removing the qmd index turns search off), and its embeddings,
-/// which read the keyword index.
+/// which reads its render, and its embeddings, which read the keyword
+/// index.
 export function buildQmdSteps(group: string): { id: string; body: string }[] {
   const keywordId = `${group}/keyword_index`;
   const block = (fn: string, inputs: string[]) => ({
     id: `${group}/${fn}`,
     body: `[[steps]]\ngroup = ${quote(group)}\nfunction = ${quote(fn)}\ninputs = [${inputs.map(quote).join(", ")}]`,
   });
-  return [
-    block("keyword_index", [stepIdFor(group, "render"), QMD_INDEX_ID]),
-    block("embed", [keywordId]),
-  ];
+  return [block("keyword_index", [stepIdFor(group, "render")]), block("embed", [keywordId])];
 }
 
 /// How far into qmd a source's markdown goes: not at all, a keyword
@@ -955,28 +948,48 @@ export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexi
   return has("embed") ? "embedded" : "keyword";
 }
 
-/// Give a source the qmd steps `indexing` asks for — those it lacks —
-/// and its embeddings a place on the map, and take away the ones it does
-/// not ask for, with every step that reads them. Only where the config has
-/// a qmd index for the steps to read: without one, they would only be
-/// dropped by the loader.
+/// Give a source the qmd steps `indexing` asks for — those it lacks — and
+/// a place in the aggregator's inputs, and take away the ones it does not
+/// ask for, with every step that reads them. Only where the config has the
+/// aggregator: search is off without one, and the aggregator is what
+/// retires a source's collection once it goes.
 export function setQmdSteps(text: string, group: string, indexing: QmdIndexing): string {
   const [keyword, embed] = buildQmdSteps(group);
   const all = listSteps(text);
-  const hasIndex = all.some((s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_index");
+  const aggregated = all.some((s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator");
   const wanted =
-    !hasIndex || indexing === "none" ? [] : indexing === "keyword" ? [keyword] : [keyword, embed];
+    !aggregated || indexing === "none" ? [] : indexing === "keyword" ? [keyword] : [keyword, embed];
   const unwanted = [keyword, embed].filter((b) => !wanted.includes(b)).map((b) => b.id);
   const gone = [...all.filter((s) => unwanted.includes(s.id)), ...readersOf(unwanted, all)];
   let next = gone.length ? removeSteps(text, gone) : text;
   const missing = wanted.filter((b) => !all.some((s) => s.id === b.id));
   if (missing.length) next = appendSource(next, missing.map((b) => b.body).join("\n\n"));
-  next = wanted.includes(embed)
-    ? wireIntoFanIns(next, embed.id, "embedding_map")
-    : unwireFromFanIns(next, embed.id, "embedding_map");
-  return wanted.includes(keyword)
-    ? next
-    : unwireFromFanIns(next, stepIdFor(group, "render"), "qmd_index");
+  for (const b of [keyword, embed]) {
+    next = wanted.includes(b)
+      ? wireIntoFanIns(next, b.id, "qmd_aggregator")
+      : unwireFromFanIns(next, b.id, "qmd_aggregator");
+  }
+  return next;
+}
+
+/// What has to leave the config with `ids`: every step that reads one of
+/// them ([`readersOf`]), and, when the qmd aggregator is among them, every
+/// source's own qmd steps — search is off without it, and nothing would
+/// retire what they index.
+export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
+  const aggregatorGoes = all.some(
+    (s) => ids.includes(s.id) && s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator",
+  );
+  const qmdSteps = aggregatorGoes
+    ? all.filter(
+        (s) =>
+          s.kind === "step" &&
+          !ids.includes(s.id) &&
+          (s.function === "keyword_index" || s.function === "embed"),
+      )
+    : [];
+  const readers = readersOf([...ids, ...qmdSteps.map((s) => s.id)], all);
+  return [...qmdSteps, ...readers];
 }
 
 /// Every step that reads one of `ids`, directly or through another, other

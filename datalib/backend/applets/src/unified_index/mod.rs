@@ -26,17 +26,20 @@ mod results;
 mod serve_tests;
 
 use datalib_columns::Identity;
+use datalib_schema::grid_rows::GridRowColumn;
 use datalib_unified_index::db::datalib_source_id;
+use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::group::Within;
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport, SummaryCache};
 use datalib_unified_index::qmd::{
     display_snippet, CollectionScope, GridIndex, QmdDaemon, QmdDaemonConfig, QmdIndexReader,
     QmdIndexSummary, QueryMode,
 };
-use datalib_unified_index::query::{parse_query, FreeTextMode, ParsedQuery};
+use datalib_unified_index::query::{parse_query, Field, FreeTextMode, ParsedQuery};
 use datalib_unified_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
 use datalib_unified_index::search::SearchRow;
 use datalib_unified_index::sort::Sort;
+use datalib_unified_index::view;
 use serde::{Deserialize, Serialize};
 
 /// The step protocol's data-root variable, which the gateway sets for every
@@ -105,6 +108,7 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/embedding_map", get(map::handler))
             .route("/embedding_map/matches", get(map::matches_handler))
             .route("/problems", get(problems::handler))
+            .route("/problems/groups", get(problems::groups_handler))
             .route("/chat/{markdown_uuid}", get(chat))
             .route("/asset/{markdown_uuid}/{*rel}", get(asset))
             .route(
@@ -313,7 +317,7 @@ async fn search_handler(
     }
     let limit = p.limit.unwrap_or(200).min(results::MAX_PAGE);
     let mut errors: Vec<String> = Vec::new();
-    let sort = match p.sort.as_deref().map(Sort::parse_order).transpose() {
+    let sort = match p.sort.as_deref().map(view::order::<GridColumn>).transpose() {
         Ok(sort) => sort.unwrap_or_default(),
         Err(e) => {
             errors.push(format!("{e}; showing the default order"));
@@ -326,7 +330,12 @@ async fn search_handler(
     let mut qmd_error: Option<String> = None;
     let offset = p.offset.unwrap_or(0);
     let through = p.through.as_deref();
-    let within = match p.within.as_deref().map(grouping::parse_within).transpose() {
+    let within = match p
+        .within
+        .as_deref()
+        .map(grouping::parse_within::<GridColumn>)
+        .transpose()
+    {
         Ok(within) => within.unwrap_or_default(),
         Err(e) => {
             errors.push(e);
@@ -368,10 +377,6 @@ async fn search_handler(
                 FreeTextMode::Hybrid => "hybrid",
                 FreeTextMode::Vsearch => "vsearch",
             },
-            "documents": parsed.documents,
-            "filters": parsed.filters.iter()
-                .map(|(k, v)| (k.key().to_string(), v.clone()))
-                .collect::<Vec<_>>(),
             "qmd_error": qmd_error,
         }),
         rows,
@@ -424,7 +429,7 @@ async fn groups_handler(
         out.errors.push(why);
         return Json(out);
     }
-    let by = match grouping::parse_by(&p.by) {
+    let by = match grouping::parse_by::<GridColumn>(&p.by) {
         Ok(by) => by,
         Err(e) => {
             out.errors.push(e);
@@ -462,7 +467,7 @@ async fn group_list(
     s: &Index,
     q: &str,
     parsed: &ParsedQuery,
-    by: &[&'static str],
+    by: &[GridRowColumn],
 ) -> Result<datalib_unified_index::group::Grouping, SearchFailure> {
     let among = if parsed.free_text.is_empty() {
         None
@@ -689,7 +694,7 @@ async fn qmd_ranking(
     // visible. (ERROR level; this file logs via eprintln!.)
     // An `is:document` search wants the document a hit is in, not the
     // message it landed on — which the SQL filter would then drop.
-    let ranked = idx.ranked_rows_one_per_doc(&hits, parsed.documents == Some(true), |h| {
+    let ranked = idx.ranked_rows_one_per_doc(&hits, parsed.documents() == Some(true), |h| {
         eprintln!(
             "ERROR search: qmd hit resolved to no grid rows: path={:?} score={}",
             h.path, h.score
@@ -745,7 +750,9 @@ fn collection_scope(parsed: &ParsedQuery) -> CollectionScope {
     let names: Vec<String> = parsed
         .terms
         .iter()
-        .filter(|t| t.field.key() == "source_id" && !t.negate)
+        .filter(|t| {
+            matches!(t.field, Field::Column(k) if k.column == GridRowColumn::SourceId) && !t.negate
+        })
         .filter(|t| t.value != datalib_source_id())
         .map(|t| t.value.clone())
         .collect();

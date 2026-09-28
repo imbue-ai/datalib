@@ -71,7 +71,7 @@ impl Phase {
             Some("ingest") => Phase::Ingest,
             Some("render_markdown") => Phase::Render,
             Some("grid_index")
-            | Some("qmd_index")
+            | Some("qmd_aggregator")
             | Some("keyword_index")
             | Some("embed")
             | Some("embedding_map") => Phase::Index,
@@ -389,7 +389,7 @@ impl Child for Entry<'_> {
 fn default_name(id: &str) -> String {
     match id {
         "unified_index/grid_index" => "Unified Index (table)",
-        "unified_index/qmd_index" => "Unified Index (QMD)",
+        "unified_index/qmd_aggregator" => "Unified Index (QMD)",
         "unified_index/embedding_map" => "Unified Index (map)",
         "unified_index" => "Unified Index (Applet)",
         other => other,
@@ -421,7 +421,7 @@ fn child_label(step: &WrittenStep) -> String {
         Some("ingest") => "Ingest",
         Some("render_markdown") => "Render markdown",
         Some("grid_index") => "Grid index",
-        Some("qmd_index") => "QMD index",
+        Some("qmd_aggregator") => "QMD aggregator",
         Some("keyword_index") => "Keyword index",
         Some("embed") => "Embeddings",
         Some("embedding_map") => "Embedding map",

@@ -8,13 +8,14 @@ use async_trait::async_trait;
 
 use crate::db::ChatMeta;
 use crate::group::{Grouping, Within};
+use crate::problems::ProblemsQuery;
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
 use crate::sort::Sort;
 use datalib_core::repo::RepoError;
 use datalib_schema::edges::EdgeRow;
-use datalib_schema::problems::ProblemRow;
+use datalib_schema::problems::{ProblemRow, ProblemRowColumn};
 
 /// Which rows a search holds, in order, and the commit they were read at
 /// (`None` for a root with no index yet).
@@ -58,7 +59,7 @@ pub trait IndexRepo: Send + Sync {
     async fn group_counts(
         &self,
         query: &ParsedQuery,
-        by: &[&'static str],
+        by: &[datalib_schema::grid_rows::GridRowColumn],
         among: Option<&[String]>,
     ) -> Result<Grouping, RepoError>;
 
@@ -134,15 +135,31 @@ pub trait IndexRepo: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// The index's `problems` matching a parsed query, newest last-seen
-    /// first. Empty for a root with no index, or an index built before
-    /// the table existed.
-    async fn problems(
+    /// Every problem `query` matches, in the group `within` names, as
+    /// their ids in `sort`'s order, or the table's own (last seen first).
+    /// Empty for a root with no index, or an index without the table.
+    async fn problem_keys(
         &self,
-        _query: &crate::problems::ProblemsQuery,
-        _limit: usize,
-    ) -> Result<Vec<ProblemRow>, RepoError> {
+        _query: &ProblemsQuery,
+        _sort: &[Sort<ProblemRowColumn>],
+        _within: &[Within<ProblemRowColumn>],
+    ) -> Result<Listing, RepoError> {
+        Ok(Listing::default())
+    }
+
+    /// The problems `keys` name, in that order; one the index no longer
+    /// has is left out.
+    async fn problems_by_keys(&self, _keys: &[String]) -> Result<Vec<ProblemRow>, RepoError> {
         Ok(Vec::new())
+    }
+
+    /// The groups the problems `query` matches fall into, by `by`.
+    async fn problem_groups(
+        &self,
+        _query: &ProblemsQuery,
+        _by: &[ProblemRowColumn],
+    ) -> Result<Grouping<ProblemRow>, RepoError> {
+        Ok(Grouping::default())
     }
 
     /// The problems on one document: the markdown-scoped rows keyed on
