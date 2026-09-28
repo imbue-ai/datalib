@@ -1,7 +1,7 @@
 //! The raw store's events into [`NormalizedEvent`]s, handed to the
 //! shared calendar renderer.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -151,6 +151,8 @@ fn source_label(account: Option<&LoadedAccount>) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use datalib_etl_calendar::ical;
     use datalib_etl_calendar::ingest::db::{LoadedCalendar, LoadedIcsObject};
