@@ -181,7 +181,7 @@ pub struct Response {
     pub rows: Vec<ProblemView>,
     pub total: usize,
     /// Filters the grammar refused, and anything the read could not
-    /// do. The viewer shows them; the rows are what the rest matched.
+    /// do. The viewer shows them; a refused filter leaves no rows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
 }
@@ -190,13 +190,19 @@ pub async fn handler(State(s): State<Index>, Query(p): Query<Params>) -> Json<Re
     let query: ProblemsQuery = parse(p.q.as_deref().unwrap_or(""));
     let limit = p.limit.unwrap_or(1_000).min(100_000);
     let mut errors = query.errors.clone();
-    let rows = match s.repo.problems(&query, limit).await {
-        Ok(rows) => rows,
-        Err(e) => {
-            let msg = format!("problems: {e}");
-            eprintln!("{msg}");
-            errors.push(msg);
-            Vec::new()
+    // A term the search cannot read is the answer, not dropped: the rest
+    // of the query alone would match more than was asked for.
+    let rows = if !errors.is_empty() {
+        Vec::new()
+    } else {
+        match s.repo.problems(&query, limit).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                let msg = format!("problems: {e}");
+                eprintln!("{msg}");
+                errors.push(msg);
+                Vec::new()
+            }
         }
     };
     let sources = Sources::read(&s.root);
@@ -217,6 +223,74 @@ pub async fn handler(State(s): State<Index>, Query(p): Query<Params>) -> Json<Re
 mod tests {
     use super::*;
     use datalib_problems::{Problem, Reason, Scope, Stage};
+
+    /// One problem, committed to the root's grid index. The step copies
+    /// a source's problems in from its render store; this writes the row
+    /// that copy would.
+    async fn index_one_problem(root: &std::path::Path) {
+        use datalib_table::BulkUpsertable;
+
+        let pool = datalib_etl_render::grid_index::open_index(
+            &datalib_runtime::layout::grid_index_db(root),
+        )
+        .await
+        .unwrap();
+        let problem = ProblemRow::new(
+            "enterprise",
+            Stage::GridRow,
+            Scope::Markdown("log-1"),
+            Some("log-1"),
+            Outcome::Nulled,
+            Problem::field("created_at", Reason::CoercionFailed, "stardate 41153.7"),
+            None,
+        );
+        let columns: Vec<&str> = std::iter::once(ProblemRow::ID_COLUMN)
+            .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
+            .collect();
+        let placeholders = vec!["?"; columns.len()].join(", ");
+        let sql = format!(
+            "INSERT INTO problems ({}) VALUES ({placeholders})",
+            columns.join(", ")
+        );
+        problem
+            .bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+            .execute(&pool)
+            .await
+            .unwrap();
+        datalib_etl::doltlite_raw::commit_run(&pool, "one problem")
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    /// A term the problems search cannot read is refused with no rows,
+    /// not dropped: the rest of the query alone matches more than was
+    /// asked for, and the table would read as the answer.
+    #[tokio::test]
+    async fn a_term_the_search_cannot_read_is_refused_not_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        index_one_problem(tmp.path()).await;
+        let s = super::super::tests::index_over(tmp.path()).await;
+        let ask = |q: &str| {
+            let params = Params {
+                q: Some(q.to_string()),
+                limit: None,
+            };
+            handler(State(s.clone()), Query(params))
+        };
+
+        let all = ask("").await.0;
+        assert_eq!(all.rows.len(), 1, "{:?}", all.errors);
+        for q in [
+            "nonsense:x",
+            "severity:catastrophic",
+            "source_id:enterprise nonsense:x",
+        ] {
+            let r = ask(q).await.0;
+            assert!(r.rows.is_empty(), "{q}: {} rows", r.rows.len());
+            assert_eq!(r.errors.len(), 1, "{q}: {:?}", r.errors);
+        }
+    }
 
     /// Every spec names a key the row serializes, and every serialized
     /// key has a spec: a renamed field would otherwise draw an empty

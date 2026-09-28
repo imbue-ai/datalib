@@ -61,6 +61,7 @@ rust_test(
         "//datalib/backend/unified_index:qmd_fixture",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/table:datalib_table",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:tempfile",
     ],
