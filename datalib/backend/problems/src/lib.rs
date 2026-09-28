@@ -111,7 +111,8 @@ closed_vocabulary! {
         FetchFailed,
         /// The download declined to fetch this record, because a limit
         /// in the config said not to. → nothing went wrong; the record
-        /// is absent on purpose, and raising the limit picks it up.
+        /// is absent on purpose, and a provider that retries its skips
+        /// fetches it once the limit allows.
         OverSizeLimit,
         /// A configured entry — a label, a channel, a conversation id —
         /// that upstream does not have. → that entry is not mirrored;

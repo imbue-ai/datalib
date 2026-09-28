@@ -39,7 +39,6 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
         "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
@@ -69,6 +68,7 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_slack",
     edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
 )
 
 # Every hermetic Slack test in one binary; `tests/slack_tests/main.rs`
@@ -101,6 +101,7 @@ rust_test(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:insta",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],

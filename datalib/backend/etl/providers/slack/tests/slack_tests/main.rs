@@ -4,6 +4,7 @@
 //! points at its own fixture tree.
 
 mod account_state;
+mod attachment_retry;
 mod config_change_backfill;
 mod dm_ingest;
 mod history_prune;

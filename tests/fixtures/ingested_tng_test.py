@@ -129,14 +129,14 @@ POISONED_PROBLEM = (
 )
 CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "7e0bd203-7160-5b88-9b5a-40f601984129"
-    "|warning|fetch|entity"
+    "|error|fetch|entity"
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
     "|||fetch_failed|no bytes"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
     "22997b9d-2f29-5ffc-a555-7ab9b876a337"
-    "|warning|fetch|entity"
+    "|error|fetch|entity"
     "|media_blobs:459de207-00ca-5ade-a05e-095a6835da4d"
     "#your_facebook_activity/posts/media/videos/600000000000001.mp4"
     "|||fetch_failed|media file not in the export"

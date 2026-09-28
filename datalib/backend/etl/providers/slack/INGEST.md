@@ -35,7 +35,8 @@ tables and nothing else (see "The account's own state" below).
 File bytes live on `https://files.slack.com/`, which the `slack`
 service's `baseApiUrls` covers. No extra service registration is
 needed: the same `slack` credential signs both `slack.com/api/` and
-`files.slack.com/` requests.
+`files.slack.com/` requests, and both go through the same transport, so
+a file download is retried, rate-limited and replayed like an API call.
 
 ## API surface used
 
@@ -183,8 +184,8 @@ time somebody posts in that thread, and not before.
   that claims there is more without supplying one leaves us holding part
   of a range. We keep everything: a range we only partly read looks
   exactly like a range whose messages were all deleted.
-- **`force_full_walk`** — the re-walk triggered by turning `media` on or
-  raising the attachment size cap (see the next section). It re-reads
+- **`force_full_walk`** — the re-walk triggered by turning `media` on
+  (see the next section). It re-reads
   everything and would be an ideal moment to reconcile, but it skips the
   refresh-window pass as redundant, and that pass is where the comparison
   lives. A missed detection rather than a wrong one.
@@ -217,8 +218,10 @@ participates in the resume decision.
 | `since` earlier | Walk `[since, min(ts)]` per channel — the window below what's mirrored. The forward resume cursor is untouched. Runs before the reply pass so backfilled thread roots get their replies. |
 | `since` later | No-op |
 | `media` off → on | Re-walk from `since`, including already-mirrored threads: attachment rows only exist for messages walked while the knob was on, and reply attachments are fetched only inside `paginate_replies`. |
-| `common.blob_size_limit_bytes` raised/lifted, with `media` on | Same re-walk, same reason |
-| `common.blob_size_limit_bytes` relaxed, with `media` off | No-op — no blobs are fetched either way |
+
+`common.blob_size_limit_bytes` is not recorded: a file skipped for its
+size is judged against the limit again on every run (see
+[Attachments](#attachments)), so raising the limit needs no re-walk.
 
 Only widenings do work; a narrowed knob leaves an on-disk superset and
 nothing in the pipeline deletes. `channels` and `refresh_window_days` are
@@ -243,6 +246,32 @@ Two rules worth knowing when reading the code:
     having covered everything; recording anyway would drop a scheduled
     backfill permanently, since — unlike the resume cursor — bookkeeping
     doesn't self-heal from stored rows.
+
+## Attachments
+
+A message's files are fetched while the walk lists that message, when
+`media` is on. The bytes go into the blob CAS, and each (message, file)
+pair is a `slack_attachments` row. A file whose bytes we already hold is
+never fetched again.
+
+A file that does not land — the fetch failed, or it is over
+`common.blob_size_limit_bytes` — keeps its row with `last_error` set on
+`slack_attachments_bookkeeping` and a `problems` row keyed
+`slack_attachments:<row id>`: `fetch_failed` (an error — the file is
+missing) for a failure, `over_size_limit` (info) for a skip.
+
+The resume cursor passes a message once, so the walk alone would never
+come back to that file. After the walk, every run tries again each such
+attachment in the conversations it mirrors, from the file object its
+stored message carries. A transient failure recovers; a size skip is
+judged against today's limit; either way the `problems` row is rewritten
+or cleared. One the walk already tried this run is not tried twice.
+
+The stored `url_private_download` does not expire: it has no signature
+in it, and the credential signs each request. Checked against the live
+API: files from 2024 still answered 200 by their stored URL. A file that
+is gone, or that the account cannot see, answers 302 (to a 404), which
+is recorded as a failure.
 
 ## The account's own state
 
