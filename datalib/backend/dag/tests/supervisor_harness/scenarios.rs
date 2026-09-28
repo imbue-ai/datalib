@@ -762,6 +762,75 @@ async fn stopping_every_sync_a_fan_in_serves_stops_it() {
     h.finish().await;
 }
 
+/// What the loop committed, as heard, from `id`'s stop to its close.
+async fn stop_to_close(h: &mut Harness, id: &str) -> Vec<String> {
+    let closed = format!("request closed {id}");
+    h.wait(&format!("{closed:?} to be heard"), |s| {
+        matches!(s, Seen::Heard(l) if *l == closed).then_some(())
+    })
+    .await;
+    let heard = h.heard();
+    let asked = format!("stop asked {id}");
+    let from = heard
+        .iter()
+        .position(|l| *l == asked)
+        .expect("the stop was heard");
+    let to = heard.iter().position(|l| *l == closed).expect("just heard");
+    heard[from..=to].to_vec()
+}
+
+/// A stopped sync closes only after the loop has saved a record in which
+/// no step names it, so a reader that sees it closed never finds a step
+/// still serving it. The loop used to close it the moment it read the
+/// stop, and let go of it on the save after.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopped_sync_is_let_go_of_before_it_closes() {
+    let mut h = Harness::new(&[source("a")]).await;
+    let sync = h.sync(&["a"]).await;
+    h.started("a").await;
+    // Deaf, so it is still running, and could still name the sync, after.
+    h.run("a", "on_stop ignore").await;
+    h.until("a to serve the sync", |s| {
+        (served(s, "a") == [sync.as_str()]).then_some(())
+    })
+    .await;
+    h.stop(&sync).await;
+    let committed = stop_to_close(&mut h, &sync).await;
+    assert!(
+        committed.iter().any(|l| l == "record saved"),
+        "closed before any save let go of it: {committed:?}"
+    );
+    let state = h.state().await;
+    assert!(served(&state, "a").is_empty(), "{:?}", served(&state, "a"));
+    h.run("a", "fail cancelled").await;
+    assert_eq!(h.ended("a", 1).await.outcome, "stopped");
+    h.finish().await;
+}
+
+/// The same for a sync the loop set aside, whose step its config lacks:
+/// the record names it on that step until a save lets go of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopped_sync_set_aside_is_let_go_of_before_it_closes() {
+    let mut h = Harness::new(&[source("a")]).await;
+    let sync = h.sync(&["a"]).await;
+    h.started("a").await;
+    let aside = h.sync(&["x"]).await;
+    h.until("x to wait on the sync set aside", |s| {
+        (served(s, "x") == [aside.as_str()]).then_some(())
+    })
+    .await;
+    h.stop(&aside).await;
+    let committed = stop_to_close(&mut h, &aside).await;
+    assert!(
+        committed.iter().any(|l| l == "record saved"),
+        "closed before any save let go of it: {committed:?}"
+    );
+    assert!(served(&h.state().await, "x").is_empty());
+    h.run("a", "ok v1").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    h.finish().await;
+}
+
 /// A fan-in turned off waits out a burst of seals and runs once turned on,
 /// on the newest of each input.
 #[tokio::test(flavor = "multi_thread")]

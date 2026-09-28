@@ -37,6 +37,7 @@ rust_test(
     size = "small",
     crate = ":datalib_runs",
     edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
 )
 
 # One writer of the store, as its own process, for the test below; its

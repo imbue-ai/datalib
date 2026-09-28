@@ -84,7 +84,7 @@ fn options(path: &Path, create: bool) -> SqliteConnectOptions {
         // waits out a writer's commit (`BUSY_TIMEOUT`).
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
         // Nothing here is load-bearing, so nothing is worth an fsync. A
-        // file torn by a power cut is deleted and remade on the next
+        // file torn by a power cut is emptied and remade on the next
         // open (see `open_or_recreate`).
         .synchronous(sqlx::sqlite::SqliteSynchronous::Off)
         .busy_timeout(BUSY_TIMEOUT)
@@ -113,16 +113,8 @@ pub(crate) async fn open_existing(path: &Path) -> Result<SqlitePool, sqlx::Error
         .await
 }
 
-fn remove_with_sidecars(path: &Path) {
-    for suffix in ["", "-wal", "-shm", "-journal"] {
-        let mut p = path.as_os_str().to_os_string();
-        p.push(suffix);
-        let _ = std::fs::remove_file(PathBuf::from(p));
-    }
-}
-
 /// Where the claim on *deciding about* the store lives. Not one of the
-/// store's own sidecars, so remaking the store leaves it alone.
+/// store's own sidecars.
 fn open_lock_path(path: &Path) -> PathBuf {
     let mut p = path.as_os_str().to_os_string();
     p.push(".open-lock");
@@ -130,11 +122,10 @@ fn open_lock_path(path: &Path) -> PathBuf {
 }
 
 /// Hold the right to decide what happens to the file, for as long as
-/// the returned lock lives. [`open_or_recreate`] can delete the store
-/// and remake it, and doing that under another process's open leaves
-/// that process writing to an inode nobody will ever read — silently,
-/// until one of its statements fails with "database disk image is
-/// malformed".
+/// the returned lock lives. [`open_or_recreate`] reads the file and then
+/// may empty it; two processes doing that at once would each find the
+/// old version, and the second would empty the store the first had
+/// already remade and begun writing.
 ///
 /// A lock that cannot be taken is not worth failing an open over: the
 /// store is not load-bearing, and the window it guards is one process
@@ -156,8 +147,8 @@ async fn hold_open_lock(path: &Path) -> Option<FileLock> {
     }
 }
 
-/// Open the store and make sure its schema is there, replacing a file
-/// that will not open or was written by another schema version.
+/// Open the store and make sure its schema is there, emptying a file
+/// that will not read or was written by another schema version.
 /// `synchronous=Off` means an OS crash can leave an unreadable file
 /// behind, and losing old logs is a better outcome than a run that
 /// refuses to start.
@@ -180,16 +171,116 @@ async fn open_or_recreate(path: &Path) -> Result<SqlitePool, sqlx::Error> {
         },
         Err(e) => e.to_string(),
     };
-    tracing::warn!(
-        path = %path.display(),
-        why,
-        "run store: replacing the file"
-    );
-    remove_with_sidecars(path);
+    tracing::warn!(path = %path.display(), why, "run store: emptying the file");
+    empty_in_place(path).await?;
     let pool = open_or_create(path).await?;
     install_schema(&pool).await?;
     write_meta(&pool).await?;
     Ok(pool)
+}
+
+/// How a file this build will not use is emptied. Never by deleting
+/// it: a reader that opened it first — `datalib-http`'s reads take no
+/// lock — stays on the old inode, where nobody holds a lock, so it
+/// reads the new file's journal as a crashed writer's, rolls it back
+/// and deletes it, and the new writer's commit fails.
+#[derive(Debug, PartialEq, Eq)]
+enum Emptying {
+    /// SQLite's own reset (`SQLITE_DBCONFIG_RESET_DATABASE`, then
+    /// `VACUUM`), which takes the file's lock like any write and works
+    /// on a corrupt page.
+    Reset,
+    /// Cut the file to nothing, and its journal with it. Doltlite reads
+    /// a file without SQLite's header as its own format and refuses the
+    /// reset, and it refuses every other connection's use of the file
+    /// the same way, so none can be reading or writing it.
+    Truncate,
+}
+
+fn emptying_for(head: &[u8]) -> Emptying {
+    if head.starts_with(b"SQLite format 3\0") {
+        Emptying::Reset
+    } else {
+        Emptying::Truncate
+    }
+}
+
+async fn empty_in_place(path: &Path) -> Result<(), sqlx::Error> {
+    let mut head = Vec::with_capacity(16);
+    {
+        use std::io::Read;
+        std::fs::File::open(path)
+            .and_then(|f| f.take(16).read_to_end(&mut head))
+            .map_err(sqlx::Error::Io)?;
+    }
+    match emptying_for(&head) {
+        Emptying::Reset => reset(path).await,
+        Emptying::Truncate => {
+            let mut journal = path.as_os_str().to_os_string();
+            journal.push("-journal");
+            match std::fs::remove_file(journal) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(sqlx::Error::Io(e))
+                }
+                _ => {}
+            }
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .and_then(|f| f.set_len(0))
+                .map_err(sqlx::Error::Io)
+        }
+    }
+}
+
+/// A connection of its own, without [`options`]' pragmas: setting the
+/// journal mode reads the header, so a file too broken to read would
+/// refuse the connection that is meant to empty it.
+async fn reset(path: &Path) -> Result<(), sqlx::Error> {
+    use sqlx::Connection;
+
+    let bare = SqliteConnectOptions::new()
+        .filename(connect_string(path))
+        .busy_timeout(BUSY_TIMEOUT);
+    let mut conn = sqlx::sqlite::SqliteConnection::connect_with(&bare).await?;
+    set_reset_database(&mut conn, true).await?;
+    let vacuumed = sqlx::raw_sql("VACUUM").execute(&mut conn).await;
+    conn.close().await?;
+    vacuumed.map(|_| ())
+}
+
+/// Doltlite is the SQLite API; the entry point is declared here, as
+/// `etl/src/doltlite_raw.rs` does, because `libsqlite3-sys` is not a
+/// direct dependency.
+async fn set_reset_database(
+    conn: &mut sqlx::sqlite::SqliteConnection,
+    on: bool,
+) -> Result<(), sqlx::Error> {
+    use std::ffi::{c_int, c_void};
+
+    extern "C" {
+        fn sqlite3_db_config(db: *mut c_void, op: c_int, ...) -> c_int;
+    }
+    const SQLITE_DBCONFIG_RESET_DATABASE: c_int = 1009;
+
+    let mut handle = conn.lock_handle().await?;
+    let db = handle.as_raw_handle().as_ptr() as *mut c_void;
+    // Safety: `db` is the live connection sqlx just handed us, and this
+    // op takes an int and an `int*` (which may be null).
+    let rc = unsafe {
+        sqlite3_db_config(
+            db,
+            SQLITE_DBCONFIG_RESET_DATABASE,
+            c_int::from(on),
+            std::ptr::null_mut::<c_int>(),
+        )
+    };
+    if rc != 0 {
+        return Err(sqlx::Error::Protocol(format!(
+            "SQLITE_DBCONFIG_RESET_DATABASE {on}: sqlite rc {rc}"
+        )));
+    }
+    Ok(())
 }
 
 /// Which build wrote this file, beside its tables. The ladder position
@@ -794,18 +885,38 @@ struct Writer {
 }
 
 impl Writer {
+    /// Waits for the thread to open the store, so a store that will not
+    /// open is `None` here — where the caller says nothing will be
+    /// recorded — rather than a writer that takes every line and keeps
+    /// none of them.
     fn start(data_root: &Path, scope: Scope) -> Option<Self> {
         let path = runs_path(data_root);
         let process_id = scope.process.process_id.clone();
         let pending: Shared = Default::default();
         let (tx, rx) = mpsc::channel();
+        let (opened_tx, opened) = mpsc::sync_channel(1);
         let handle = std::thread::Builder::new()
             .name("run-store".into())
             .spawn({
                 let pending = pending.clone();
-                move || writer_loop(path, scope, pending, rx)
+                let path = path.clone();
+                move || writer_loop(path, scope, pending, rx, opened_tx)
             })
             .ok()?;
+        let failed = match opened.recv() {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(e),
+            Err(_) => Some("the writer thread ended before opening it".to_string()),
+        };
+        if let Some(error) = failed {
+            let _ = handle.join();
+            tracing::error!(
+                path = %path.display(),
+                error,
+                "run store: could not open it; nothing will be recorded"
+            );
+            return None;
+        }
         Some(Self {
             process_id,
             pending,
@@ -826,8 +937,8 @@ impl Writer {
             .expect("run store flush mutex")
             .as_ref()
             .is_some_and(|tx| tx.send(ack).is_ok());
-        // A thread that has gone — it could not open the store — drops
-        // the ack, which ends the wait as surely as an answer.
+        // A thread that has gone drops the ack, which ends the wait as
+        // surely as an answer.
         if sent {
             let _ = flushed.await;
         }
@@ -1052,20 +1163,31 @@ struct SeriesState {
     current: MetricRow,
 }
 
-fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, flushes: mpsc::Receiver<FlushAck>) {
-    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+fn writer_loop(
+    path: PathBuf,
+    scope: Scope,
+    pending: Shared,
+    flushes: mpsc::Receiver<FlushAck>,
+    opened: mpsc::SyncSender<Result<(), String>>,
+) {
+    let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-    else {
-        return;
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            let _ = opened.send(Err(format!("build its runtime: {e}")));
+            return;
+        }
     };
     let pool = match rt.block_on(open_or_recreate(&path)) {
         Ok(pool) => pool,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "run store: open failed; nothing recorded");
+            let _ = opened.send(Err(e.to_string()));
             return;
         }
     };
+    let _ = opened.send(Ok(()));
     if let Err(e) = rt.block_on(begin(&pool, &scope)) {
         tracing::warn!(error = %e, "run store: could not record the start");
     }
@@ -1682,4 +1804,70 @@ async fn insert_sample(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A store from another schema version, with a reader that opened
+    /// it before a writer remade it — `datalib-http`'s reads take no
+    /// lock. When the remake unlinked the file, the reader stayed on
+    /// the old inode, took the new file's journal for a crashed
+    /// writer's, rolled it back and deleted it, and the writer's commit
+    /// failed with 5898 (`SQLITE_IOERR_DELETE_NOENT`). CI run
+    /// 36441513702 lost a whole writer's lines this way.
+    #[tokio::test]
+    async fn a_reader_open_across_the_remake_leaves_the_writers_journal_alone() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("runs.sqlite");
+        let planted = open_or_create(&path).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE ancient (x TEXT); PRAGMA user_version = 1")
+            .execute(&planted)
+            .await
+            .unwrap();
+        planted.close().await;
+
+        let reader = open_existing(&path).await.unwrap();
+        let tables = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'";
+        sqlx::query_scalar::<_, i64>(tables)
+            .fetch_one(&reader)
+            .await
+            .unwrap();
+
+        let writer = open_or_recreate(&path).await.unwrap();
+        let mut tx = writer.begin().await.unwrap();
+        sqlx::query(
+            "INSERT INTO log (process_id, attempt, ts_utc, level, msg) \
+             VALUES ('p', 0, 't', 'info', 'kept')",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::query_scalar::<_, i64>(tables)
+            .fetch_one(&reader)
+            .await
+            .unwrap();
+        tx.commit()
+            .await
+            .expect("the writer's commit, after a reader read mid-transaction");
+
+        let kept: Vec<String> = sqlx::query_scalar("SELECT msg FROM log")
+            .fetch_all(&reader)
+            .await
+            .unwrap();
+        assert_eq!(kept, ["kept"], "the reader sees the remade store");
+        reader.close().await;
+        writer.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_file_that_is_not_a_database_is_emptied_and_opens() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("runs.sqlite");
+        std::fs::write(&path, b"this is not a database, sqlite or otherwise").unwrap();
+        let pool = open_or_recreate(&path).await.expect("open the store");
+        assert!(schema_matches(&pool).await.unwrap());
+        pool.close().await;
+    }
 }

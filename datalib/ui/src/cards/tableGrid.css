@@ -21,9 +21,7 @@
 .tg-none { color: var(--datalib-muted); opacity: 0.55; }
 
 .tg-identity { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
-/* The label is what the eye lands on: the id beside it gives way first. */
 .tg-identity > .tg-label { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 4ch; }
-.tg-identity > .tg-id { flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* The tree cell: indent, chevron, then the column's own drawing, which
    gives way before the chevron does. One flex row, so the cell's own
    ellipsis never swallows the lot — an overflowing inline-block is
@@ -39,7 +37,6 @@
   color: var(--datalib-muted);
   flex: 0 0 auto;
 }
-.tg-id { color: var(--datalib-muted); font-size: 12px; }
 /* Counts after a name: a red and a yellow bubble, the number alone. */
 .tg-badges { display: inline-flex; gap: 3px; flex: 0 0 auto; cursor: default; }
 .tg-badge {

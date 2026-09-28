@@ -841,9 +841,8 @@ def _source_config(
         # the whole workspace, which in playback is the fixture tree.
         source["api"] = {"roots": [notion_seed]} if notion_seed else {}
     elif type_str == "slack":
-        # Disable media so extract doesn't fall back to the direct
-        # `latchkey curl -v` path for file downloads (not on PATH in
-        # the bazel sandbox, and the fixtures don't exercise media).
+        # Disable media: the synthesizer writes no playback fixture for
+        # a file's bytes, so every file would be a failed fetch.
         #
         # `dms` is ON here even though it is off by default, because
         # this is the pipeline that exercises the real download step

@@ -5,7 +5,7 @@ pub mod db;
 pub mod schema_raw;
 pub mod shapes;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -21,7 +21,7 @@ use datalib_etl::progress::RunBar;
 use datalib_etl::scope_config;
 pub use db::{
     block_on_load_all, db_path_for, FetchTarget, LoadedMessage, LoadedRaw, MessageInput, RawDb,
-    TsBounds, UserDirectoryEntry,
+    TsBounds, UnfetchedAttachment, UserDirectoryEntry,
 };
 use shapes::{
     M_AUTH_TEST, M_BOOKMARKS, M_CHANNELS, M_COUNTS, M_HISTORY, M_REPLIES, M_SAVED, M_USERS,
@@ -608,7 +608,6 @@ const SCOPE_CONFIG_KEY: &str = "slack:download";
 /// failure this machinery exists to eliminate.
 const K_SINCE: &str = "since";
 const K_MEDIA: &str = "media";
-const K_BLOB_CAP: &str = "blob_size_limit_bytes";
 
 /// The subset of [`FetchOptions`] that decides *which data lands on
 /// disk*, recorded after a successful run so the next one can spot a
@@ -621,7 +620,6 @@ const K_BLOB_CAP: &str = "blob_size_limit_bytes";
 struct ScopeInputs {
     since: String,
     media: bool,
-    blob_size_limit_bytes: Option<u64>,
 }
 
 impl FetchOptions {
@@ -629,7 +627,6 @@ impl FetchOptions {
         ScopeInputs {
             since: self.since.clone(),
             media: self.media,
-            blob_size_limit_bytes: self.blob_size_limit_bytes,
         }
     }
 }
@@ -638,7 +635,6 @@ fn scope_config_blob(inputs: &ScopeInputs) -> Value {
     json!({
         K_SINCE: inputs.since,
         K_MEDIA: inputs.media,
-        K_BLOB_CAP: inputs.blob_size_limit_bytes,
     })
 }
 
@@ -650,12 +646,11 @@ struct Adjustments {
     /// each channel that already has history. The forward resume cursor is
     /// untouched — this only fills in below the floor.
     backfill_below_oldest: bool,
-    /// A blob knob was relaxed (`media` off→on, or a raised/lifted size
-    /// cap): re-walk each channel from `since_ts` instead of resuming
-    /// at its resume cursor. Attachment rows only exist for messages walked
-    /// while the knob was on, so there is nothing to backfill in place —
-    /// the messages have to come past `download_files_for_messages`
-    /// again.
+    /// `media` turned on: re-walk each channel from `since_ts` instead of
+    /// resuming at its resume cursor. Attachment rows only exist for
+    /// messages walked while the knob was on, so there is nothing to
+    /// backfill in place — the messages have to come past
+    /// `download_files_for_messages` again.
     force_full_walk: bool,
 }
 
@@ -717,28 +712,113 @@ impl Adjustments {
             );
         }
 
-        // Gated on `media`: the cap is only consulted inside
-        // `download_files_for_messages`, which the whole walk skips when
-        // blobs are off. Re-walking every channel (and re-paginating
-        // every mirrored thread) against a rate-limited API to download
-        // exactly zero bytes is pure cost.
-        if inputs.media
-            && scope_config::limit_relaxed(Some(prev), K_BLOB_CAP, inputs.blob_size_limit_bytes)
-        {
-            out.force_full_walk = true;
-            info!(
-                event = "slack_blob_limit_relaxed",
-                limit = inputs.blob_size_limit_bytes,
-                "re-walking history so previously-oversize attachments get fetched",
-            );
-        }
-
         out
+    }
+}
+
+// Attachment retry.
+//
+// The walk only reaches a message's files while it lists that message,
+// and the resume cursor passes a message once. So after the walk, every
+// attachment that has not landed — a failed fetch, or a file over the
+// size limit — goes through the download again from the file object its
+// stored message carries. The stored `url_private_download` stays good:
+// it carries no signature, and the session credential signs the request.
+
+#[derive(Debug, PartialEq)]
+struct Retry {
+    channel_id: String,
+    message_uuid: String,
+    file: Value,
+}
+
+/// Not one the walk already tried this run — its attempt count has moved
+/// since `attempts_before` — and not one outside the conversations this
+/// run mirrors. One whose message, or whose file on it, is gone has
+/// nothing to fetch from.
+fn attachments_to_retry(
+    attempts_before: &HashMap<String, i64>,
+    unfetched: Vec<UnfetchedAttachment>,
+    in_scope: &HashSet<&str>,
+) -> Vec<Retry> {
+    unfetched
+        .into_iter()
+        .filter(|a| attempts_before.get(&a.id) == Some(&a.attempts))
+        .filter_map(|a| {
+            let channel_id = a.channel_id.filter(|c| in_scope.contains(c.as_str()))?;
+            let file = a
+                .message?
+                .get("files")?
+                .as_array()?
+                .iter()
+                .find(|f| f.get("id").and_then(Value::as_str) == Some(a.file_id.as_str()))?
+                .clone();
+            Some(Retry {
+                channel_id,
+                message_uuid: a.message_uuid,
+                file,
+            })
+        })
+        .collect()
+}
+
+/// One flush per conversation, as the walk does. An error ends the pass,
+/// not the run: what did not land is still there for the next one.
+async fn retry_attachments(
+    db: &RawDb,
+    retries: &[Retry],
+    blake3_by_file: &mut HashMap<String, String>,
+    opts: &FetchOptions,
+    bar: &RunBar,
+    media: &mut BTreeMap<String, usize>,
+) {
+    if retries.is_empty() {
+        return;
+    }
+    info!(
+        event = "slack_attachment_retry",
+        attachments = retries.len(),
+        "trying again the attachments earlier runs did not land"
+    );
+    bar.expect(retries.len() as u64);
+    bar.doing("retrying attachments");
+    for group in retries.chunk_by(|a, b| a.channel_id == b.channel_id) {
+        let files: Vec<(&str, &Value)> = group
+            .iter()
+            .map(|r| (r.message_uuid.as_str(), &r.file))
+            .collect();
+        let tried = api::retry_files(
+            db,
+            &files,
+            blake3_by_file,
+            opts.blob_size_limit_bytes,
+            &opts.latchkey,
+        )
+        .await;
+        bar.did(group.len() as u64);
+        match tried {
+            Ok(counts) => {
+                for (k, v) in counts {
+                    *media.entry(k).or_insert(0) += v;
+                }
+                if let Some(sealer) = opts.sealer.as_ref() {
+                    sealer.wrote(group.len() as u64).await;
+                }
+            }
+            Err(e) => {
+                warn!(event = "slack_attachment_retry_failed", channel = %group[0].channel_id, error = %e, "the attachment retry stopped");
+                return;
+            }
+        }
     }
 }
 
 // Per-channel history + threads.
 
+/// Every (message, file) the walk met is written when it ends, whether
+/// or not it ended well: the messages it stored are behind the resume
+/// cursor, so a file left out here would have no row for the retry pass
+/// to find.
 #[allow(clippy::too_many_arguments)]
 async fn export_channel(
     db: &RawDb,
@@ -758,12 +838,53 @@ async fn export_channel(
     bar: &RunBar,
     latchkey: &LatchkeySettings,
 ) -> Result<()> {
-    // Per-channel attachment accumulator: every (message, file)
-    // reference is appended, the BlobBundle carries one byte set per
-    // file_id, and the end-of-channel flush writes both the CAS
-    // (via put_many) and `slack_attachments` (via bulk_upsert_in_tx).
     let mut attach = CasEdgeAccumulator::new();
+    let walked = walk_channel(
+        db,
+        team_id,
+        channel_id,
+        since_ts,
+        refresh_window_days,
+        channel_latest_ts,
+        channel_oldest_ts,
+        adjust,
+        latest_reply_by_thread,
+        now,
+        download_blobs,
+        blob_size_limit_bytes,
+        totals,
+        blake3_by_file,
+        bar,
+        latchkey,
+        &mut attach,
+    )
+    .await;
+    if let Err(e) = api::flush_channel_attachments(db, &attach).await {
+        warn!(event = "slack_attachment_flush_err", channel = %channel_id, error = %e, "a channel's attachments could not be written");
+    }
+    walked
+}
 
+#[allow(clippy::too_many_arguments)]
+async fn walk_channel(
+    db: &RawDb,
+    team_id: &str,
+    channel_id: &str,
+    since_ts: &str,
+    refresh_window_days: i64,
+    channel_latest_ts: Option<&str>,
+    channel_oldest_ts: Option<&str>,
+    adjust: &Adjustments,
+    latest_reply_by_thread: &std::collections::HashMap<(String, String), String>,
+    now: &DateTime<Utc>,
+    download_blobs: bool,
+    blob_size_limit_bytes: Option<u64>,
+    totals: &mut ChannelTotals,
+    blake3_by_file: &mut std::collections::HashMap<String, String>,
+    bar: &RunBar,
+    latchkey: &LatchkeySettings,
+    attach: &mut CasEdgeAccumulator,
+) -> Result<()> {
     // Pass A: list every history page, upsert top-level messages, and
     // download per-page media (preserves the existing commit-as-we-go
     // semantics for Ctrl-C safety). Thread replies are deferred so
@@ -771,8 +892,8 @@ async fn export_channel(
     // the long-tail fetch.
     let mut collected: Vec<Value> = Vec::new();
 
-    // Resume at the channel's resume cursor when it has one — unless a
-    // relaxed blob knob means the already-stored messages have to come
+    // Resume at the channel's resume cursor when it has one — unless
+    // `media` turned on means the already-stored messages have to come
     // back past `download_files_for_messages`, in which case we walk
     // the whole configured range again. Upserts are idempotent, so the
     // cost is API calls, not duplicate rows.
@@ -802,7 +923,7 @@ async fn export_channel(
         download_blobs,
         blob_size_limit_bytes,
         totals,
-        &mut attach,
+        attach,
         blake3_by_file,
         bar,
         &mut collected,
@@ -839,7 +960,7 @@ async fn export_channel(
                     download_blobs,
                     blob_size_limit_bytes,
                     totals,
-                    &mut attach,
+                    attach,
                     blake3_by_file,
                     bar,
                     &mut collected,
@@ -891,7 +1012,7 @@ async fn export_channel(
                     download_blobs,
                     blob_size_limit_bytes,
                     totals,
-                    &mut attach,
+                    attach,
                     blake3_by_file,
                     bar,
                     &mut collected,
@@ -947,7 +1068,7 @@ async fn export_channel(
             download_blobs,
             blob_size_limit_bytes,
             totals,
-            &mut attach,
+            attach,
             blake3_by_file,
             latchkey,
         )
@@ -959,12 +1080,6 @@ async fn export_channel(
             "msgs={} replies={} media={}",
             totals.messages, totals.replies, media_downloaded
         ));
-    }
-
-    // End-of-channel flush: CAS put_many + slack_attachments bulk
-    // upsert. Mirrors chatgpt/claude's per-conv flush pattern.
-    if let Err(e) = api::flush_channel_attachments(db, &attach).await {
-        warn!(event = "slack_attachment_flush_err", channel = %channel_id, error = %e, "a channel's attachments could not be written");
     }
 
     Ok(())
@@ -1498,6 +1613,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             t_setup.elapsed().as_millis() as u64
         ));
 
+        let attempts_before: HashMap<String, i64> = if opts.media {
+            db.unfetched_attachments()
+                .await?
+                .into_iter()
+                .map(|a| (a.id, a.attempts))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+
         // Seeded with one tick per channel, so the bar reads as
         // something before the first channel has listed anything.
         let bar = RunBar::new(&opts.progress, targets.len() as u64);
@@ -1568,6 +1693,23 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
             }
         }
+        if opts.media && !opts.control.stop.requested() {
+            let in_scope: HashSet<&str> = targets.iter().map(|(cid, _)| cid.as_str()).collect();
+            let retries = attachments_to_retry(
+                &attempts_before,
+                db.unfetched_attachments().await?,
+                &in_scope,
+            );
+            retry_attachments(
+                &db,
+                &retries,
+                &mut blake3_by_file,
+                &opts,
+                &bar,
+                &mut grand.media,
+            )
+            .await;
+        }
         bar.finish();
         Ok::<(), anyhow::Error>(())
     };
@@ -1612,11 +1754,10 @@ fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
 mod tests {
     use super::*;
 
-    fn opts(since: &str, media: bool, blob_size_limit_bytes: Option<u64>) -> ScopeInputs {
+    fn opts(since: &str, media: bool) -> ScopeInputs {
         ScopeInputs {
             since: since.to_string(),
             media,
-            blob_size_limit_bytes,
         }
     }
 
@@ -1625,7 +1766,7 @@ mod tests {
     /// is what every unchanged sync exercises.
     #[test]
     fn unchanged_config_plans_nothing() {
-        let o = opts("2024-01-01", true, Some(1000));
+        let o = opts("2024-01-01", true);
         let prev = scope_config_blob(&o);
         assert!(!Adjustments::plan(Some(&prev), &o).any());
     }
@@ -1634,7 +1775,7 @@ mod tests {
     fn absent_prior_config_plans_nothing() {
         // Every data root in the field on first upgrade. Must not
         // trigger a backfill.
-        let o = opts("2020-01-01", true, None);
+        let o = opts("2020-01-01", true);
         assert!(!Adjustments::plan(None, &o).any());
     }
 
@@ -1642,8 +1783,8 @@ mod tests {
 
     #[test]
     fn since_moved_earlier_schedules_backfill_only() {
-        let prev = scope_config_blob(&opts("2024-01-01", true, None));
-        let plan = Adjustments::plan(Some(&prev), &opts("2023-01-01", true, None));
+        let prev = scope_config_blob(&opts("2024-01-01", true));
+        let plan = Adjustments::plan(Some(&prev), &opts("2023-01-01", true));
         assert!(plan.backfill_below_oldest);
         // A widened `since` never needs the expensive re-walk — the
         // forward resume cursor is still valid.
@@ -1652,35 +1793,35 @@ mod tests {
 
     #[test]
     fn since_moved_later_is_a_noop() {
-        let prev = scope_config_blob(&opts("2024-01-01", true, None));
+        let prev = scope_config_blob(&opts("2024-01-01", true));
         // Narrowing leaves an on-disk superset; nothing to fetch.
-        assert!(!Adjustments::plan(Some(&prev), &opts("2025-01-01", true, None)).any());
+        assert!(!Adjustments::plan(Some(&prev), &opts("2025-01-01", true)).any());
     }
 
     #[test]
     fn since_compares_instants_not_strings() {
         // `2024-01-01` and its RFC 3339 spelling are the same instant, so
         // rewriting the config in the other format must not backfill.
-        let prev = scope_config_blob(&opts("2024-01-01", true, None));
-        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01T00:00:00Z", true, None));
+        let prev = scope_config_blob(&opts("2024-01-01", true));
+        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01T00:00:00Z", true));
         assert!(!plan.any());
     }
 
     #[test]
     fn unparseable_stored_since_is_ignored() {
-        let mut prev = scope_config_blob(&opts("2024-01-01", true, None));
+        let mut prev = scope_config_blob(&opts("2024-01-01", true));
         prev[K_SINCE] = json!("not-a-date");
         // No information beats guessing: a garbage stored value must not
         // fail the sync or provoke a backfill.
-        assert!(!Adjustments::plan(Some(&prev), &opts("2020-01-01", true, None)).any());
+        assert!(!Adjustments::plan(Some(&prev), &opts("2020-01-01", true)).any());
     }
 
     // ── media ────────────────────────────────────────────────────────
 
     #[test]
     fn media_turned_on_forces_full_walk() {
-        let prev = scope_config_blob(&opts("2024-01-01", false, None));
-        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01", true, None));
+        let prev = scope_config_blob(&opts("2024-01-01", false));
+        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01", true));
         // Attachment rows only exist for messages walked with media on,
         // so the messages have to come back past the download path.
         assert!(plan.force_full_walk);
@@ -1688,40 +1829,8 @@ mod tests {
 
     #[test]
     fn media_turned_off_is_a_noop() {
-        let prev = scope_config_blob(&opts("2024-01-01", true, None));
-        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", false, None)).any());
-    }
-
-    // ── blob_size_limit_bytes ────────────────────────────────────────
-
-    #[test]
-    fn raised_blob_cap_forces_full_walk() {
-        let prev = scope_config_blob(&opts("2024-01-01", true, Some(1000)));
-        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01", true, Some(5000)));
-        assert!(plan.force_full_walk);
-    }
-
-    #[test]
-    fn lifted_blob_cap_forces_full_walk() {
-        let prev = scope_config_blob(&opts("2024-01-01", true, Some(1000)));
-        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01", true, None));
-        assert!(plan.force_full_walk);
-    }
-
-    #[test]
-    fn relaxed_blob_cap_with_media_off_is_a_noop() {
-        // The cap is only consulted inside `download_files_for_messages`,
-        // which the walk skips entirely when blobs are off. Re-walking to
-        // download zero bytes is pure rate-limit burn.
-        let prev = scope_config_blob(&opts("2024-01-01", false, Some(1000)));
-        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", false, Some(5000))).any());
-        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", false, None)).any());
-    }
-
-    #[test]
-    fn lowered_blob_cap_is_a_noop() {
-        let prev = scope_config_blob(&opts("2024-01-01", true, Some(5000)));
-        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", true, Some(1000))).any());
+        let prev = scope_config_blob(&opts("2024-01-01", true));
+        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", false)).any());
     }
 
     // ── thread reply skip ────────────────────────────────────────────
@@ -1746,7 +1855,7 @@ mod tests {
     #[test]
     fn force_full_walk_re_walks_mirrored_threads() {
         // Reply attachments are downloaded only inside `paginate_replies`,
-        // so a relaxed blob knob has to re-enter fully-mirrored threads or
+        // so turning `media` on has to re-enter fully-mirrored threads or
         // it silently misses every in-thread file.
         let plan = Adjustments {
             force_full_walk: true,
@@ -1790,7 +1899,7 @@ mod tests {
         // Everything the blob must ignore — channels, refresh window,
         // members_only, the DM knobs — is absent from `ScopeInputs` by
         // construction, so this asserts the split as well as the blob.
-        let blob = scope_config_blob(&opts("2024-01-01", true, None));
+        let blob = scope_config_blob(&opts("2024-01-01", true));
         let obj = blob.as_object().expect("blob is an object");
         // A newly listed channel cold-starts on its own, and the refresh
         // window is re-applied every run — recording either would only
@@ -1804,7 +1913,55 @@ mod tests {
         // handled by the sweep key, not by this blob.
         assert!(!obj.contains_key("dms"));
         assert!(!obj.contains_key("dm_conversations"));
-        assert_eq!(obj.len(), 3, "unexpected keys in blob: {obj:?}");
+        // The size limit is not recorded either: the retry pass re-judges
+        // every skipped file against it on every run.
+        assert!(!obj.contains_key("blob_size_limit_bytes"));
+        assert_eq!(obj.len(), 2, "unexpected keys in blob: {obj:?}");
+    }
+
+    // ── attachment retry ─────────────────────────────────────────────
+
+    fn unfetched(id: &str, attempts: i64, channel: Option<&str>) -> UnfetchedAttachment {
+        UnfetchedAttachment {
+            id: format!("T1#{}#1.0#F{id}", channel.unwrap_or("C0")),
+            message_uuid: format!("T1#{}#1.0", channel.unwrap_or("C0")),
+            file_id: format!("F{id}"),
+            attempts,
+            channel_id: channel.map(String::from),
+            message: channel.map(|_| json!({"ts": "1.0", "files": [{"id": format!("F{id}")}]})),
+        }
+    }
+
+    /// Only an attachment the walk left alone, in a mirrored
+    /// conversation, whose file is still on its stored message.
+    #[test]
+    fn retries_are_the_unfetched_attachments_the_walk_left_alone() {
+        let mut file_gone = unfetched("e", 1, Some("C1"));
+        file_gone.message = Some(json!({"ts": "1.0", "files": [{"id": "Fother"}]}));
+        let rows = vec![
+            unfetched("a", 1, Some("C1")),
+            unfetched("b", 2, Some("C1")),
+            unfetched("c", 1, Some("C9")),
+            unfetched("d", 1, None),
+            file_gone,
+            unfetched("f", 1, Some("C1")),
+        ];
+        let before: HashMap<String, i64> = rows
+            .iter()
+            .filter(|r| r.file_id != "Ff")
+            .map(|r| (r.id.clone(), 1))
+            .collect();
+        let in_scope: HashSet<&str> = ["C1"].into();
+
+        let retries = attachments_to_retry(&before, rows, &in_scope);
+        assert_eq!(
+            retries,
+            vec![Retry {
+                channel_id: "C1".to_string(),
+                message_uuid: "T1#C1#1.0".to_string(),
+                file: json!({"id": "Fa"}),
+            }]
+        );
     }
 
     // ── DM scoping ───────────────────────────────────────────────────

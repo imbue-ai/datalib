@@ -3,17 +3,16 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
 use tracing::{debug, instrument, warn};
 
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::events;
 use datalib_etl::http::{
-    default_retryability, latchkey_curl_classified, parse_retry_after, HttpError, HttpRequest,
-    HttpResponse, HttpService, LatchkeySettings, Retryability, IMPERSONATE_MARKER_HEADER,
+    default_retryability, latchkey_curl, latchkey_curl_classified, parse_retry_after, HttpError,
+    HttpRequest, HttpResponse, HttpService, LatchkeySettings, Retryability,
 };
-use datalib_etl::latchkey::latchkey_curl_command;
 
 use super::db::RawDb;
 use super::schema_raw::{slack_message_key, SlackAttachmentRow};
@@ -233,10 +232,44 @@ pub async fn download_files_for_messages(
     Ok(counts)
 }
 
+/// `files` are `(message_uuid, file object)`. What was tried is written
+/// before an error is handed back.
+pub async fn retry_files(
+    db: &RawDb,
+    files: &[(&str, &Value)],
+    blake3_by_file: &mut HashMap<String, String>,
+    blob_size_limit_bytes: Option<u64>,
+    latchkey: &LatchkeySettings,
+) -> Result<BTreeMap<String, usize>> {
+    let mut attach = CasEdgeAccumulator::new();
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut tried = Ok(());
+    for (message_uuid, file) in files {
+        match download_one_file(
+            db,
+            message_uuid,
+            file,
+            &mut attach,
+            blake3_by_file,
+            blob_size_limit_bytes,
+            latchkey,
+        )
+        .await
+        {
+            Ok(outcome) => *counts.entry(outcome.to_string()).or_insert(0) += 1,
+            Err(e) => {
+                tried = Err(e);
+                break;
+            }
+        }
+    }
+    flush_channel_attachments(db, &attach).await?;
+    tried.map(|()| counts)
+}
+
 /// Fetch one file's bytes (or note it as skipped/external/tombstoned)
-/// and feed the outcome into the per-channel accumulator. Trust-our-
-/// copy: signed URLs rotate, bytes don't, so a `file_id` we've
-/// already hashed never re-downloads.
+/// and feed the outcome into the per-channel accumulator. A file's bytes
+/// never change, so a `file_id` we've already hashed never re-downloads.
 async fn download_one_file(
     _db: &RawDb,
     message_uuid: &str,
@@ -292,9 +325,8 @@ async fn download_one_file(
                 limit = limit,
                 "a file is over the size limit; skipped it"
             );
-            // Not `add_failed`: the config asked for this. Raising
-            // `blob_size_limit_bytes` picks the file up next run, which
-            // is what the bookkeeping behind this is for.
+            // Not `add_failed`: the config asked for this. The retry
+            // pass re-judges the file against the limit every run.
             attach.add_skipped(
                 message_uuid,
                 file_id,
@@ -308,46 +340,34 @@ async fn download_one_file(
     let name = file_obj.get("name").and_then(|v| v.as_str());
     let mime = file_obj.get("mimetype").and_then(|v| v.as_str());
 
-    let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
-    // Slack file hosts (files.slack.com) are CF-fronted; mark the request so
-    // the router curl hands it to the impersonating curl. The helper
-    // supplies `[--account <acct>] curl`, so this fetch runs as the same
-    // identity as the API calls that discovered the file.
-    let mut cmd = latchkey_curl_command(latchkey)?;
-    cmd.arg("-fSL")
-        .arg("-H")
-        .arg(IMPERSONATE_MARKER_HEADER)
-        .arg("-o")
-        .arg(tmp.path())
-        .arg(url);
-
-    let proc = tokio::time::timeout(LATCHKEY_FILE_TIMEOUT, cmd.output())
-        .await
-        .context("file curl timed out")?
-        .context("file curl spawn failed")?;
-    if !proc.status.success() {
-        let stderr_full = String::from_utf8_lossy(&proc.stderr).into_owned();
-        let tail: String = stderr_full
-            .chars()
-            .rev()
-            .take(200)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        warn!(
-            event = "slack_media_failed",
-            file_id = file_id,
-            name = name.unwrap_or(""),
-            exit = proc.status.code().unwrap_or(-1),
-            stderr = %tail.trim(),
-            "a file could not be downloaded"
-        );
-        attach.add_failed(message_uuid, file_id, tail.trim().to_string());
-        return Ok("error");
-    }
-    let bytes =
-        std::fs::read(tmp.path()).with_context(|| format!("read tempfile for {file_id}"))?;
+    let req = HttpRequest::get(HttpService::Slack, url)
+        .latchkey(latchkey.clone())
+        .timeout(LATCHKEY_FILE_TIMEOUT);
+    let resp = match latchkey_curl(&req).await {
+        Ok(resp) if resp.status == 200 => resp,
+        Err(e @ HttpError::Interrupted { .. }) => return Err(e.into()),
+        failed => {
+            let failure = match failed {
+                // What a stored URL answers for a file that is gone, or
+                // that the credential cannot see: a redirect to a 404.
+                Ok(resp) if resp.status == 302 => {
+                    "HTTP 302: the file is gone or this account cannot see it".to_string()
+                }
+                Ok(resp) => format!("HTTP {}", resp.status),
+                Err(e) => e.to_string(),
+            };
+            warn!(
+                event = "slack_media_failed",
+                file_id = file_id,
+                name = name.unwrap_or(""),
+                error = %failure,
+                "a file could not be downloaded"
+            );
+            attach.add_failed(message_uuid, file_id, failure);
+            return Ok("error");
+        }
+    };
+    let bytes = resp.body;
     let len = bytes.len() as u64;
     // Compute blake3 once, stamp into the run-scoped cache so later
     // messages referencing the same file_id hit the cache, then hand
@@ -361,7 +381,7 @@ async fn download_one_file(
         mime.map(String::from),
         name.map(String::from),
     );
-    events::item_fetched(url, len, 0);
+    events::item_fetched(url, len, resp.duration_ms);
     debug!(
         event = "slack_media_downloaded",
         file_id = file_id,

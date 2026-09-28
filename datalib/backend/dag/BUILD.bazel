@@ -259,4 +259,8 @@ rust_test(
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
+    # The random walk runs four walks at once (`walk.rs`'s `AT_ONCE`), each
+    # a loop and its puppets; `cpu:4` claims them, so bazel does not start
+    # other tests beside it on CI's four vCPUs.
+    tags = ["cpu:4"],
 )

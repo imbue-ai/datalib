@@ -51,9 +51,11 @@ fn every_line_four_writers_publish_reaches_the_store() {
 
 /// The same, onto a store this build has to remake: the file is already
 /// there carrying another schema version, so every writer's open finds
-/// a store it must delete and rebuild. Only one of them may actually do
-/// it — a second delete would take the file the first is already
-/// writing to, leaving it filling an inode nobody will ever read.
+/// a store it must empty and rebuild. Only one of them may actually do
+/// it — a second would empty the store the first had already remade and
+/// begun writing. The reader here opens the file with no lock, as
+/// `datalib-http` does, so it can hold the old store open across the
+/// remake.
 #[test]
 fn a_store_from_another_schema_version_is_remade_once_under_four_writers() {
     let t = Scratch::new();

@@ -113,7 +113,8 @@ that column; a third click puts the config's order back.</p>
 <p><b>Name</b> stays in view while the table scrolls sideways. <b>Last update</b> leads
 with an icon for what the row is doing or did last, then says when it got there. That
 icon, and the mark before a name — the service a source mirrors, or what a step
-does — give their word on hover; hovering a step’s name shows its id.
+does — give their word on hover. Hovering a name shows its id: for a group, the
+folder its data is in.
 <b>Right-click a header</b> to show or hide columns: <b>Last synced</b> and
 <b>Last success</b> start hidden. <b>Double-click a Last update</b> to read that
 step's log — from the run in flight while it runs, else from the run it last took

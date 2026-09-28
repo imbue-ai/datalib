@@ -724,9 +724,7 @@ impl Supervisor {
             std::thread::spawn(move || {
                 let reader = std::io::BufReader::new(stderr);
                 for line in reader.lines().map_while(Result::ok) {
-                    // Relayed as this server's line about the applet,
-                    // the way the runner relays a step's stderr.
-                    tracing::info!(applet = %id, "{line}");
+                    relay_applet_line(&id, &line);
                     if let Ok(mut t) = tail.lock() {
                         t.push(line);
                         // Bounded: this lives as long as the applet.
@@ -762,7 +760,7 @@ impl Supervisor {
                         }
                         // Anything else on stdout is just output. An
                         // applet is not required to keep it clean.
-                        None => tracing::info!(applet = %id, "{line}"),
+                        None => relay_applet_line(&id, &line),
                     }
                 }
                 if !announced {
@@ -838,7 +836,16 @@ impl Supervisor {
             Ok(None) => Some(r.port),
             _ => {
                 if let Some(mut dead) = map.remove(id) {
-                    let _ = dead.child.wait();
+                    let status = dead
+                        .child
+                        .wait()
+                        .map_or_else(|e| format!("wait failed: {e}"), |s| s.to_string());
+                    tracing::error!(
+                        applet = %id,
+                        pid = dead.child.id(),
+                        %status,
+                        "the applet exited; it starts again when the config next changes"
+                    );
                 }
                 None
             }
@@ -1079,6 +1086,38 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
         content_type,
         body,
     })
+}
+
+/// Logs one line an applet wrote as this server's line about it, the way
+/// the runner relays a step's: a tracing-JSON line at its own level, with
+/// the applet's target and fields beside it; anything else at `info`.
+fn relay_applet_line(id: &str, line: &str) {
+    use datalib_dag::events::LogLevel;
+    let Some(e) = datalib_dag::subprocess::parse_envelope(line) else {
+        tracing::info!(applet = %id, "{line}");
+        return;
+    };
+    let target = e.target.as_deref();
+    let fields = e.fields.map(|f| serde_json::Value::Object(f).to_string());
+    let fields = fields.as_deref();
+    let msg = &e.msg;
+    match e.level {
+        LogLevel::Error => {
+            tracing::error!(applet = %id, applet_target = target, applet_fields = fields, "{msg}")
+        }
+        LogLevel::Warn => {
+            tracing::warn!(applet = %id, applet_target = target, applet_fields = fields, "{msg}")
+        }
+        LogLevel::Info => {
+            tracing::info!(applet = %id, applet_target = target, applet_fields = fields, "{msg}")
+        }
+        LogLevel::Debug => {
+            tracing::debug!(applet = %id, applet_target = target, applet_fields = fields, "{msg}")
+        }
+        LogLevel::Trace => {
+            tracing::trace!(applet = %id, applet_target = target, applet_fields = fields, "{msg}")
+        }
+    }
 }
 
 #[cfg(test)]

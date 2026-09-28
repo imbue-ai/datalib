@@ -502,6 +502,24 @@ async fn a_corrupt_store_is_replaced() {
     assert_eq!(log_after(td.path(), "run-1", None, 0, 10).await.len(), 1);
 }
 
+/// A store that will not open is `None` from `start`, where the caller
+/// says nothing will be recorded. It used to be a writer that took every
+/// line and kept none, with one WARN on its own thread to say so.
+#[test]
+fn a_store_that_will_not_open_starts_no_writer() {
+    let td = tempfile::tempdir().unwrap();
+    let dir = datalib_runs::runs_path(td.path())
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    std::fs::write(&dir, b"a file where the store's directory goes").unwrap();
+    assert!(RunWriter::start(td.path(), "run-1", "run-1", None, Retention::default()).is_none());
+    assert!(
+        ProcessLogWriter::start(td.path(), Process::Http, None, Retention::default()).is_none()
+    );
+}
+
 /// A store written by another schema version is remade, not migrated
 /// and not fatal — the same trade as a corrupt file.
 #[tokio::test]

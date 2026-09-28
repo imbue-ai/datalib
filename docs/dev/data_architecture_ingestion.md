@@ -626,7 +626,7 @@ Current consumers, and what each does when the knob widens:
 | Provider | Knob | Reaction |
 |---|---|---|
 | slack | `since` | Walk `[since, min(ts)]` per channel |
-| slack | `media`, `blob_size_limit_bytes` | Re-walk from `since` (blob knobs only reach messages the walk visits) |
+| slack | `media` | Re-walk from `since` (the knob only reaches messages the walk visits); a raised `blob_size_limit_bytes` needs nothing, since every run retries the files it skipped |
 | github, gitlab | `refresh_window_days` | `scope_state::since_for_scope`, given the prior record, reaches back to the earlier of the cursor and `now - window` |
 | email (JMAP) | `only_extract_labels` | `Email/query` scoped to the newly-added mailboxes |
 | email (Gmail) | `only_extract_labels` | `history.list` since the cursor as usual, plus a `messages.list` walk over the newly-added labels (or the whole account when the filter was removed) |

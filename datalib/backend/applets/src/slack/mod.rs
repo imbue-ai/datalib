@@ -321,14 +321,14 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
         .context("read the bound address")?
         .port();
     let gate = crate::gate::Gate::from_env(bound)?;
-    eprintln!("datalib-applet slack: listening on 127.0.0.1:{bound}, tree {tree}");
+    tracing::info!(port = bound, tree = %tree, "listening");
     // Written and bound, in that order — now the gateway may look.
     crate::announce_port(bound);
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         if let Err(e) = handle(stream, &tree_path, &workspace, &gate) {
-            eprintln!("datalib-applet slack: request failed: {e:#}");
+            tracing::error!(error = %format!("{e:#}"), "a request failed");
         }
     }
     Ok(())
@@ -421,7 +421,7 @@ fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 
 fn warn(warnings: &[String]) {
     for w in warnings {
-        eprintln!("datalib-applet slack: unreadable: {w}");
+        tracing::warn!(detail = %w, "part of the Slack tree is unreadable");
     }
 }
 

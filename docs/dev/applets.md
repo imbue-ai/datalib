@@ -95,9 +95,16 @@ of one binary differ only in configuration, so the argument a gallery
 entry passes — usually the instance's own id — has to come from
 outside.
 
-Everything on stdout other than that one line is ignored. stderr is the
-log: the gateway forwards it line by line and keeps the tail, which
-becomes the error message if the applet never announces.
+Everything on stdout other than that one line is logged and otherwise
+ignored. stderr is the log: the gateway forwards it line by line and
+keeps the tail, which becomes the error message if the applet never
+announces. A line of tracing JSON — what `datalib_obs::init` writes
+when stderr is a pipe, as `datalib-applet` does — is stored at its own
+level, the way the runner stores a step's; any other line at `info`.
+The lines belong to the server's `http` process, with `applet` naming
+which applet, and `applet_target` and `applet_fields` holding the
+applet's own target and fields ([`logging.md`](logging.md)). An applet
+the gateway finds has exited is logged at `error` with its exit status.
 
 **stdin is a liveness pipe, not an input channel.** Nothing is ever
 sent through it. The gateway holds the write end for exactly as long as
@@ -341,7 +348,13 @@ that is not configured at all, since the two want different fixes.
 One that is running but sends nothing for 30 seconds answers `504`,
 `applet "<id>" did not answer within 30s`. The `unified_index` applet
 builds a search's whole answer before sending any of it, so a big
-search on a machine short of memory is the usual cause there.
+search on a machine short of memory is the usual cause there. A hung
+qmd is not: a free-text search waits at most 20 seconds on it
+(`QMD_ANSWER_DEADLINE`), then asks it for a Node diagnostic report,
+logs what the report says it was doing, stops it, and answers with a
+`qmd_error`. The next search starts a fresh qmd. The reports are kept,
+the newest twenty, in `unified_index/qmd_index/reports/` under the data
+root.
 
 The gateway forwards an applet's stderr line by line as it arrives and
 keeps the tail, rather than reading the pipe to EOF when the applet

@@ -102,7 +102,7 @@ impl Phase {
 pub fn columns() -> Vec<ColumnSpec> {
     vec![
         ColumnSpec::new("name", "Name", ColumnType::Identity)
-            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does. A group's id — the folder under the data root — sits beside it when they differ; a step's is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) its store holds as of its last run; double-click them for the list.")
+            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does; its id — for a group, the folder under the data root — is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) its store holds as of its last run; double-click them for the list.")
             .editable()
             .badges("problems"),
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)

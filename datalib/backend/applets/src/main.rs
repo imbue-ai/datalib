@@ -62,11 +62,25 @@ fn main() {
         eprintln!("datalib-applet: {e}");
         std::process::exit(2);
     }
+    // JSON on stderr, which the gateway unwraps the way the runner
+    // unwraps a step's, so each line is stored at its own level. No
+    // OTLP: its exporter needs a runtime this process builds later.
+    let obs = datalib_obs::ObsArgs {
+        log_level: std::env::var("RUST_LOG").ok(),
+        ..Default::default()
+    };
+    let _obs = match datalib_obs::init(&obs, "datalib-applet") {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            eprintln!("datalib-applet: logging is not set up: {e:#}");
+            None
+        }
+    };
     // The unified_index applet runs qmd; from a release tarball that
     // ships no `runtime/`, the first search fetches the manifest's.
     datalib_fetch::enable_runtime_fetch();
     if let Err(e) = run() {
-        eprintln!("datalib-applet: {e:#}");
+        tracing::error!(error = %format!("{e:#}"), "the applet stopped");
         std::process::exit(1);
     }
 }
