@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_etl::stop::StopFlag;
 use datalib_etl_render::grid_index::{build_grid_index_for, open_index};
 use datalib_schema::problems::{Severity, METRIC};
 
@@ -25,6 +26,7 @@ pub async fn run(
     env: &StepEnv,
     now: Option<&str>,
     emitter: &Emitter,
+    stop: &StopFlag,
 ) -> Result<Vec<OutputClaim>> {
     let db_path = datalib_core::layout::grid_index_db(data_root);
     if let Some(parent) = db_path.parent() {
@@ -48,10 +50,16 @@ pub async fn run(
     let sources = crate::qmd_index::groups_from_inputs(&env.inputs);
     tracing::info!(sources = %sources.join(", "), "the render stores the graph names");
     let progress = emitter.progress();
-    let summary =
-        build_grid_index_for(&pool, data_root, &sources, |m| progress.set_message(m), now)
-            .await
-            .context("stack the per-source render stores")?;
+    let summary = build_grid_index_for(
+        &pool,
+        data_root,
+        &sources,
+        |m| progress.set_message(m),
+        now,
+        stop,
+    )
+    .await
+    .context("stack the per-source render stores")?;
     tracing::info!(
         // `read` is the one that says whether the cursors are working:
         // it is how many documents were pulled out of the per-source
@@ -83,26 +91,11 @@ pub async fn run(
         );
     }
 
-    let msg = format!(
-        "datalib-step grid_index: markdowns_read={} markdowns_loaded={} \
-         markdowns_removed={} rows_inserted={}",
-        summary.markdowns_total,
-        summary.markdowns_loaded,
-        summary.markdowns_removed,
-        summary.rows_inserted,
-    );
-    let commit = datalib_etl::doltlite_raw::commit_run(&pool, &msg)
-        .await
-        .context("grid_index commit")?;
-    if let Some(h) = commit.as_deref() {
-        tracing::info!(commit = h, "committed the index");
-    }
-    // HEAD, not the commit this run happened to make: `commit_run`
-    // returns `None` both without doltlite *and* when the working tree
-    // was already clean. Reporting no version in the clean case would
-    // drop us to the tree hash — a digest from a different hash space
-    // than the dolt hash reported last time — so every no-op run after
-    // a real change would read as changed.
+    // HEAD, whether or not this pass sealed anything: the builder seals
+    // once per source that moved, and a pass that moved none reporting no
+    // version would drop us to the tree hash — a digest from a different
+    // hash space than the dolt hash reported last time — so every no-op
+    // run after a real change would read as changed.
     let version = datalib_etl::doltlite_raw::head_commit(&pool)
         .await
         .context("grid_index head")?;
@@ -147,6 +140,7 @@ mod tests {
             &env,
             Some("2026-01-01T00:00:00+00:00"),
             &Emitter::new("test".into()),
+            &StopFlag::new(),
         )
         .await
         .expect("grid_index over an empty data root should succeed");

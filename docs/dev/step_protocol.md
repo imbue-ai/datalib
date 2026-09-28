@@ -468,6 +468,8 @@ The run then returns as a shorter run, `finish` commits blobs then
 entities, and the step reports `cancelled`. A stopped run does not
 record its scope config as satisfied, so a widened filter interrupted
 part-way is backfilled by the next run rather than believed done.
+`grid_index` reads the same flag between documents: it rolls back the
+source it is loading and keeps the ones it has already committed.
 
 ## Minimal examples
 

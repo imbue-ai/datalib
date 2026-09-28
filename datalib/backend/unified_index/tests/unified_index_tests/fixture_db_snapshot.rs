@@ -194,9 +194,9 @@ async fn snapshot_grid_rows_and_documents() {
     // ── dolt_log ─────────────────────────────────────────────────
     // doltlite stamps every `dolt_commit` call into `dolt_log`.
     //
-    // `grid_index` commits once per *pass*, and since `render` streams it
-    // runs a pass whenever a source seals or finishes. **How the work
-    // splits across those passes is timing, not behavior** — it moves with
+    // `grid_index` commits once per source per *pass*, and since `render`
+    // streams it runs a pass whenever a source seals or finishes. **How the
+    // work splits across those passes is timing, not behavior** — it moves with
     // machine speed, so pinning it here would make this golden fail on a
     // slower box while nothing was wrong. It did: 2/21/22/25/6 locally
     // against 2/33/35 on CI, for the same 76 documents.

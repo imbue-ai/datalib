@@ -67,7 +67,9 @@ source's own render store,
 into the unified index: it asks each one for the `dolt_diff` between
 the commit the index last consumed (`source_cursors`) and that store's
 HEAD, applies each changed document's row set, and copies the
-corresponding `markdowns` row across.
+corresponding `markdowns` row across. Each source is one transaction
+and one commit, its cursor moving inside it, so a stopped or failed
+pass keeps every source it finished.
 
 ## Consumer side
 

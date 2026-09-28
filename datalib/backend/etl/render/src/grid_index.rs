@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
+use datalib_etl::stop::StopFlag;
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
@@ -576,14 +577,6 @@ pub async fn apply_one(
     apply_markdown(write_lock, md, &qmd_rel).await
 }
 
-/// Stack every source's render store into the unified index — the
-/// `grid_index` DAG step's whole job.
-///
-/// **Each source is asked what changed, not read whole**, via `dolt_diff`
-/// between the commit `source_cursors` last consumed and the store's HEAD.
-/// Two things fall out of that: a document a source stopped holding can be
-/// named and deleted, and the cursor advances inside the write transaction,
-/// so it can never claim more than the index holds.
 /// Every source under the data root with a render store: the directory
 /// name is the source's id. This is the dev tools' answer to "which
 /// sources"; the step's answer is the graph, see [`build_grid_index_for`].
@@ -611,246 +604,357 @@ pub async fn build_grid_index(
     now_override: Option<&str>,
 ) -> Result<GridIndexSummary> {
     let sources = discover_sources(out_dir);
-    build_grid_index_for(pool, out_dir, &sources, progress, now_override).await
+    build_grid_index_for(
+        pool,
+        out_dir,
+        &sources,
+        progress,
+        now_override,
+        &StopFlag::new(),
+    )
+    .await
 }
 
-/// Stack the render stores of exactly `sources` into the index. The step
-/// passes the groups its declared inputs name, so a source dropped from
-/// the config stops being read on the next run even while its tree is
-/// still on disk — and a directory that is not in the config is never
-/// read at all. A listed source with no store yet is skipped: its render
-/// step has not produced one.
+/// Stack the render stores of exactly `sources` into the index — the
+/// `grid_index` DAG step's whole job. The step passes the groups its
+/// declared inputs name, so a source dropped from the config stops being
+/// read on the next run even while its tree is still on disk — and a
+/// directory that is not in the config is never read at all. A listed
+/// source with no store yet is skipped: its render step has not produced
+/// one.
+///
+/// **Each source is asked what changed, not read whole**, via `dolt_diff`
+/// between the commit `source_cursors` last consumed and the store's HEAD,
+/// so a document a source stopped holding can be named and deleted.
+///
+/// **Each source is its own transaction and its own seal**, its cursor
+/// advancing inside it: a stop, a crash or a failure keeps every source
+/// already indexed, and costs only the one in flight, which the next pass
+/// reads again from the cursor it left.
 pub async fn build_grid_index_for(
     pool: &SqlitePool,
     out_dir: &Path,
     sources: &[String],
     progress: impl Fn(&str),
     now_override: Option<&str>,
+    stop: &StopFlag,
 ) -> Result<GridIndexSummary> {
-    // The whole loop runs in one begin/commit batch: doltlite charges ~50ms
-    // per auto-committed statement bundle, which is ruinous on a full rebuild.
-    // An error rolls back, leaving the index exactly as it was.
     let write_lock = WriteLock::new(pool.clone());
-    // Cursors and the per-source document lists load before the write
-    // transaction opens, because the index pool is one connection wide.
+    // Before any transaction opens, because the index pool is one
+    // connection wide.
     let cursors = load_source_cursors(pool).await?;
     let indexed = load_markdown_uuids_by_source(pool).await?;
+    let now = run_stamp(now_override);
 
-    let mut docs: Vec<(String, RenderedMarkdown)> = Vec::new();
-    // `source_id → (new_head, documents_applied)` for the cursors this
-    // run will advance, and the ids each source dropped.
-    let mut advanced: Vec<(String, String)> = Vec::new();
-    let mut removed: Vec<(String, String)> = Vec::new();
-    // `source_id → its problems at the pin`, for every store read. The
-    // copy is wholesale per source: the pinned store is the complete
-    // truth about that source's problems, so there is nothing to diff.
-    let mut problems: Vec<(String, Vec<ProblemRow>)> = Vec::new();
-    let mut unreadable: Vec<String> = Vec::new();
-    // One line per pass says what the pass found; the per-source lines
-    // are `debug` unless a source moved, because a streaming pass runs
-    // on every producer checkpoint and most sources moved on none.
-    let mut not_yet_rendered = 0usize;
-    let mut read_whole = 0usize;
-    let mut sources_changed = 0usize;
-    let mut documents_changed = 0usize;
-    {
-        let mut stanzas: Vec<(String, PathBuf)> = Vec::new();
-        for source in sources {
-            let rendered_root = out_dir
-                .join(source)
-                .join(datalib_etl::layout::RENDER_MARKDOWN_DIR);
-            if crate::indexed_markdown::path_for(&rendered_root).is_file() {
-                stanzas.push((source.clone(), rendered_root));
-            } else {
-                not_yet_rendered += 1;
-                tracing::debug!(source, "no render store yet; skipping it this pass");
-            }
+    let mut stanzas: Vec<(String, PathBuf)> = Vec::new();
+    let mut pass = PassCounts::default();
+    for source in sources {
+        let rendered_root = out_dir
+            .join(source)
+            .join(datalib_etl::layout::RENDER_MARKDOWN_DIR);
+        if crate::indexed_markdown::path_for(&rendered_root).is_file() {
+            stanzas.push((source.clone(), rendered_root));
+        } else {
+            pass.not_yet_rendered += 1;
+            tracing::debug!(source, "no render store yet; skipping it this pass");
         }
-        stanzas.sort();
-        stanzas.dedup();
-        for (stanza, rendered_root) in stanzas {
-            // Read-only: the render step owns this store, and an ordinary
-            // open would discard the renderer's in-flight rows and
-            // schema-commit into it — writing to a file we do not own.
-            // Pinned at open: the diff below and the rows behind it name
-            // one commit, and the views exist before either query runs.
-            let Some(store) = crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(
-                &rendered_root,
-                None,
-            )
-            .with_context(|| format!("open render store for {stanza}"))?
-            else {
-                tracing::warn!(
-                    source = %stanza,
-                    "this render store names no commit, so there is nothing \
-                     committed to index; skipping it this pass"
-                );
-                continue;
-            };
-            let pin = store.pin().expect("a reader is pinned at open").clone();
-            let cursor = cursors.get(&stanza).map(String::as_str);
-            let scan = store
-                .changed_since(cursor, &pin)
-                .with_context(|| format!("diff render store for {stanza}"))?;
-            // Say which path was taken: a cold start that fires silently
-            // on every run looks exactly like a fast one from the outside
-            // — it just does more work and still gets the right answer.
-            match (&scan.render, cursor) {
-                (None, None) => {
-                    read_whole += 1;
-                    tracing::info!(
-                        source = %stanza,
-                        "no cursor for this source; reading its whole render store"
-                    )
-                }
-                (None, Some(from)) => {
-                    read_whole += 1;
-                    tracing::warn!(
-                        source = %stanza,
-                        from,
-                        "cursor unusable against this render store (reset, rebuilt, or \
-                         no dolt_diff); falling back to reading it whole"
-                    )
-                }
-                (Some(changed), _) if changed.is_empty() => tracing::debug!(
-                    source = %stanza,
-                    scan_ms = scan.scan_elapsed.map(|d| d.as_millis() as u64),
-                    "no documents changed since the last index"
-                ),
-                (Some(changed), _) => {
-                    sources_changed += 1;
-                    documents_changed += changed.len();
-                    tracing::info!(
-                        source = %stanza,
-                        changed = changed.len(),
-                        scan_ms = scan.scan_elapsed.map(|d| d.as_millis() as u64),
-                        "documents changed since the last index"
-                    )
-                }
-            }
-            let found = match store.documents_matching(out_dir, scan.render.as_ref(), &pin) {
-                Ok(found) => found,
-                // Its rows, cursor and problems stay as the index has them.
-                Err(e) if written_in_another_shape(&e) => {
-                    tracing::warn!(
-                        source = %stanza,
-                        error = %format!("{e:#}"),
-                        "this render store is in a shape this build cannot read; \
-                         indexing the other sources and leaving this one as it was \
-                         until it re-renders"
-                    );
-                    store.close();
-                    unreadable.push(stanza.clone());
-                    continue;
-                }
-                Err(e) => return Err(e.context(format!("read documents from {stanza}"))),
-            };
-            problems.push((
-                stanza.clone(),
-                store
-                    .problems_at_pin()
-                    .with_context(|| format!("read problems from {stanza}"))?,
-            ));
-            let present: HashSet<&str> = found.iter().map(|d| d.markdown_uuid.as_str()).collect();
-            match &scan.render {
-                // An id the diff named that the store no longer has is a
-                // deletion.
-                Some(changed) => {
-                    for gone in changed.iter().filter(|u| !present.contains(u.as_str())) {
-                        removed.push((stanza.clone(), gone.clone()));
-                    }
-                }
-                // The store was read whole, so it is the complete answer:
-                // a document the index holds for this source that the
-                // store does not is one the source no longer produces. A
-                // committed store with no rows is an honest "nothing";
-                // the store that could not be read was skipped above.
-                None => {
-                    for gone in indexed
-                        .get(&stanza)
-                        .into_iter()
-                        .flatten()
-                        .filter(|u| !present.contains(u.as_str()))
-                    {
-                        removed.push((stanza.clone(), gone.clone()));
-                    }
-                }
-            }
-            store.close();
-            // Only advance a cursor when we know the HEAD we consumed.
-            // `new_head: None` means `dolt_log()` did not answer, and an
-            // unwritten cursor cold-starts the next run — the safe direction.
-            if let Some(head) = scan.new_head {
-                advanced.push((stanza.clone(), head));
-            }
-            docs.extend(found.into_iter().map(|d| (stanza.clone(), d)));
+    }
+    stanzas.sort();
+    stanzas.dedup();
+
+    let mut summary = GridIndexSummary::default();
+    for (stanza, rendered_root) in stanzas {
+        if stopped_before(stop, &stanza) {
+            break;
+        }
+        let read = read_source(
+            &stanza,
+            &rendered_root,
+            out_dir,
+            cursors.get(&stanza).map(String::as_str),
+            indexed.get(&stanza),
+            &mut pass,
+        )?;
+        let Some(read) = read else {
+            continue;
+        };
+        if stopped_before(stop, &stanza) {
+            break;
+        }
+        let applied = apply_source(
+            &write_lock,
+            out_dir,
+            &stanza,
+            read,
+            &now,
+            &progress,
+            stop,
+            &mut summary,
+        )
+        .await?;
+        if !applied {
+            tracing::info!(
+                source = %stanza,
+                "asked to stop; this source's changes are rolled back and the \
+                 next pass reads them again"
+            );
+            break;
         }
     }
     tracing::info!(
         sources = sources.len(),
-        not_yet_rendered,
-        read_whole,
-        sources_changed,
-        documents_changed,
-        unreadable = unreadable.len(),
+        not_yet_rendered = pass.not_yet_rendered,
+        read_whole = pass.read_whole,
+        sources_changed = pass.sources_changed,
+        documents_changed = pass.documents_changed,
+        unreadable = summary.sources_unreadable.len(),
         "read the render stores"
     );
+    Ok(summary)
+}
 
-    let mut summary = GridIndexSummary {
-        markdowns_total: docs.len(),
-        sources_unreadable: unreadable,
-        ..Default::default()
+fn stopped_before(stop: &StopFlag, source: &str) -> bool {
+    if stop.requested() {
+        tracing::info!(
+            source,
+            "asked to stop; leaving this source for the next pass"
+        );
+    }
+    stop.requested()
+}
+
+/// One line per pass says what the pass found; the per-source lines are
+/// `debug` unless a source moved, because a streaming pass runs on every
+/// producer checkpoint and most sources moved on none.
+#[derive(Default)]
+struct PassCounts {
+    not_yet_rendered: usize,
+    read_whole: usize,
+    sources_changed: usize,
+    documents_changed: usize,
+}
+
+/// What one source's render store holds for the index this pass.
+enum SourceRead {
+    /// Written in a shape this build cannot read. Its rows and cursor stay
+    /// as the index has them.
+    Unreadable,
+    Read {
+        docs: Vec<RenderedMarkdown>,
+        /// Documents the index holds for this source that the store no
+        /// longer does.
+        removed: Vec<String>,
+        /// Its problems at the pin. The copy is wholesale: the pinned store
+        /// is the complete truth about that source's problems.
+        problems: Vec<ProblemRow>,
+        /// The commit read. `None` when `dolt_log()` did not answer, and an
+        /// unwritten cursor cold-starts the next pass — the safe direction.
+        head: Option<String>,
+    },
+}
+
+/// `None` when the store names no commit, so there is nothing committed
+/// to index.
+fn read_source(
+    stanza: &str,
+    rendered_root: &Path,
+    out_dir: &Path,
+    cursor: Option<&str>,
+    indexed: Option<&HashSet<String>>,
+    pass: &mut PassCounts,
+) -> Result<Option<SourceRead>> {
+    // Read-only: the render step owns this store, and an ordinary open
+    // would discard the renderer's in-flight rows and schema-commit into
+    // it — writing to a file we do not own. Pinned at open: the diff below
+    // and the rows behind it name one commit.
+    let Some(store) =
+        crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(rendered_root, None)
+            .with_context(|| format!("open render store for {stanza}"))?
+    else {
+        tracing::warn!(
+            source = %stanza,
+            "this render store names no commit, so there is nothing \
+             committed to index; skipping it this pass"
+        );
+        return Ok(None);
     };
+    let pin = store.pin().expect("a reader is pinned at open").clone();
+    let scan = store
+        .changed_since(cursor, &pin)
+        .with_context(|| format!("diff render store for {stanza}"))?;
+    // Say which path was taken: a cold start that fires silently on every
+    // run looks exactly like a fast one from the outside — it just does
+    // more work and still gets the right answer.
+    match (&scan.render, cursor) {
+        (None, None) => {
+            pass.read_whole += 1;
+            tracing::info!(
+                source = %stanza,
+                "no cursor for this source; reading its whole render store"
+            )
+        }
+        (None, Some(from)) => {
+            pass.read_whole += 1;
+            tracing::warn!(
+                source = %stanza,
+                from,
+                "cursor unusable against this render store (reset, rebuilt, or \
+                 no dolt_diff); falling back to reading it whole"
+            )
+        }
+        (Some(changed), _) if changed.is_empty() => tracing::debug!(
+            source = %stanza,
+            scan_ms = scan.scan_elapsed.map(|d| d.as_millis() as u64),
+            "no documents changed since the last index"
+        ),
+        (Some(changed), _) => {
+            pass.sources_changed += 1;
+            pass.documents_changed += changed.len();
+            tracing::info!(
+                source = %stanza,
+                changed = changed.len(),
+                scan_ms = scan.scan_elapsed.map(|d| d.as_millis() as u64),
+                "documents changed since the last index"
+            )
+        }
+    }
+    let docs = match store.documents_matching(out_dir, scan.render.as_ref(), &pin) {
+        Ok(docs) => docs,
+        Err(e) if written_in_another_shape(&e) => {
+            tracing::warn!(
+                source = %stanza,
+                error = %format!("{e:#}"),
+                "this render store is in a shape this build cannot read; \
+                 indexing the other sources and leaving this one as it was \
+                 until it re-renders"
+            );
+            store.close();
+            return Ok(Some(SourceRead::Unreadable));
+        }
+        Err(e) => return Err(e.context(format!("read documents from {stanza}"))),
+    };
+    let problems = store
+        .problems_at_pin()
+        .with_context(|| format!("read problems from {stanza}"))?;
+    store.close();
+    let present: HashSet<&str> = docs.iter().map(|d| d.markdown_uuid.as_str()).collect();
+    let removed = match &scan.render {
+        // An id the diff named that the store no longer has is a deletion.
+        Some(changed) => changed
+            .iter()
+            .filter(|u| !present.contains(u.as_str()))
+            .cloned()
+            .collect(),
+        // The store was read whole, so it is the complete answer: a
+        // document the index holds for this source that the store does not
+        // is one the source no longer produces. A committed store with no
+        // rows is an honest "nothing"; the store that could not be read
+        // returned above.
+        None => indexed
+            .into_iter()
+            .flatten()
+            .filter(|u| !present.contains(u.as_str()))
+            .cloned()
+            .collect(),
+    };
+    Ok(Some(SourceRead::Read {
+        docs,
+        removed,
+        problems,
+        head: scan.new_head,
+    }))
+}
 
+/// Write one source's changes, problems and cursor in one transaction
+/// and seal it. `false` when the stop came first: the transaction is
+/// rolled back and nothing of this source is written.
+#[allow(clippy::too_many_arguments)]
+async fn apply_source(
+    write_lock: &WriteLock,
+    out_dir: &Path,
+    stanza: &str,
+    read: SourceRead,
+    now: &datalib_time::StoredStamp,
+    progress: &impl Fn(&str),
+    stop: &StopFlag,
+    summary: &mut GridIndexSummary,
+) -> Result<bool> {
+    let before = SealCounts::of(summary);
     write_lock
         .begin_transaction()
         .await
-        .context("WriteLock::begin_transaction for build_grid_index")?;
+        .with_context(|| format!("begin the index transaction for {stanza}"))?;
     let res = async {
-        for (stanza, gone) in &removed {
-            delete_markdown(&write_lock, gone)
+        let (docs, removed, problems, head) = match read {
+            SourceRead::Unreadable => {
+                let mut guard = write_lock.acquire().await?;
+                record_unreadable_store(guard.conn(), &unreadable_store_problem(stanza, now))
+                    .await?;
+                summary.sources_unreadable.push(stanza.to_string());
+                return Ok(true);
+            }
+            SourceRead::Read {
+                docs,
+                removed,
+                problems,
+                head,
+            } => (docs, removed, problems, head),
+        };
+        summary.markdowns_total += docs.len();
+        for gone in &removed {
+            delete_markdown(write_lock, gone)
                 .await
                 .with_context(|| format!("delete {gone} dropped by {stanza}"))?;
             summary.markdowns_removed += 1;
         }
-        load_all_batch(&write_lock, out_dir, &docs, &progress, &mut summary).await?;
-        // Cursors last and in the same transaction: a failure above rolls
-        // back to both the old rows and the old cursors.
-        let now = run_stamp(now_override);
+        let loaded = load_source(write_lock, out_dir, stanza, &docs, progress, stop).await?;
+        let Some((markdowns, rows)) = loaded else {
+            return Ok(false);
+        };
+        summary.markdowns_loaded += markdowns;
+        summary.rows_inserted += rows;
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
-        for (source_id, rows) in &problems {
-            replace_source_problems(conn, source_id, rows)
-                .await
-                .with_context(|| format!("copy {source_id}'s problems into the index"))?;
-            summary.problems_copied += rows.len();
-        }
-        for source_id in &summary.sources_unreadable {
-            record_unreadable_store(conn, &unreadable_store_problem(source_id, &now)).await?;
-        }
-        for (source_id, store_commit) in &advanced {
+        replace_source_problems(conn, stanza, &problems)
+            .await
+            .with_context(|| format!("copy {stanza}'s problems into the index"))?;
+        summary.problems_copied += problems.len();
+        // Last and in the same transaction: a failure above rolls back to
+        // both the old rows and the old cursor.
+        if let Some(store_commit) = head {
             write_source_cursor(
                 conn,
                 &SourceCursorRow {
-                    source_id: source_id.clone(),
-                    store_commit: store_commit.clone(),
+                    source_id: stanza.to_string(),
+                    store_commit,
                     indexed_at_utc: now.utc.clone(),
                     tz_offset: now.tz_offset.clone(),
-                    documents_applied: summary.markdowns_loaded as i64,
+                    documents_applied: markdowns as i64,
                 },
             )
             .await?;
         }
-        Ok::<(), anyhow::Error>(())
+        Ok::<bool, anyhow::Error>(true)
     }
     .await;
     match res {
-        Ok(()) => {
+        Ok(true) => {
             write_lock
                 .commit_transaction()
                 .await
-                .context("WriteLock::commit_transaction for build_grid_index")?;
-            Ok(summary)
+                .with_context(|| format!("commit the index transaction for {stanza}"))?;
+            let msg = SealCounts::of(summary).since(&before).message(stanza);
+            let commit = datalib_etl::doltlite_raw::commit_run(&write_lock.pool, &msg)
+                .await
+                .with_context(|| format!("seal the index after {stanza}"))?;
+            if let Some(commit) = commit {
+                tracing::info!(source = %stanza, commit, "committed the index");
+            }
+            Ok(true)
+        }
+        Ok(false) => {
+            write_lock.rollback_transaction().await?;
+            Ok(false)
         }
         Err(e) => {
             // Best effort — the held connection rolls back on drop anyway.
@@ -860,48 +964,77 @@ pub async fn build_grid_index_for(
     }
 }
 
-/// The per-document loop of [`build_grid_index`], separated so the caller
-/// can wrap it in one transaction.
-async fn load_all_batch(
+/// The summary's counters at one moment, so a seal can say what its own
+/// source added.
+#[derive(Clone, Copy)]
+struct SealCounts {
+    read: usize,
+    loaded: usize,
+    removed: usize,
+    rows: usize,
+}
+
+impl SealCounts {
+    fn of(s: &GridIndexSummary) -> Self {
+        Self {
+            read: s.markdowns_total,
+            loaded: s.markdowns_loaded,
+            removed: s.markdowns_removed,
+            rows: s.rows_inserted,
+        }
+    }
+
+    fn since(self, before: &Self) -> Self {
+        Self {
+            read: self.read - before.read,
+            loaded: self.loaded - before.loaded,
+            removed: self.removed - before.removed,
+            rows: self.rows - before.rows,
+        }
+    }
+
+    /// The fixture golden sums the numeric fields of every commit with
+    /// this prefix (`fixture_db_snapshot.rs`), so the names are load-bearing.
+    fn message(self, source: &str) -> String {
+        format!(
+            "datalib-step grid_index: source={source} markdowns_read={} \
+             markdowns_loaded={} markdowns_removed={} rows_inserted={}",
+            self.read, self.loaded, self.removed, self.rows
+        )
+    }
+}
+
+/// Apply one source's documents. `None` when the stop came first.
+async fn load_source(
     write_lock: &WriteLock,
     out_dir: &Path,
-    docs: &[(String, RenderedMarkdown)],
+    stanza: &str,
+    docs: &[RenderedMarkdown],
     progress: &impl Fn(&str),
-    summary: &mut GridIndexSummary,
-) -> Result<()> {
-    for (stanza, md) in docs {
-        // The stanza dir name is the source's id.
-        let source_id = if stanza.is_empty() {
-            md.rows
-                .first()
-                .map(|r| r.provider.clone())
-                .unwrap_or_default()
-        } else {
-            stanza.clone()
-        };
-
-        // Every document the diff named is applied. One whose rows come
-        // out identical writes identical rows, and doltlite's tables are
-        // content-addressed: the next commit carries no diff for it.
+    stop: &StopFlag,
+) -> Result<Option<(usize, usize)>> {
+    let mut rows = 0;
+    for (i, md) in docs.iter().enumerate() {
+        if stop.requested() {
+            return Ok(None);
+        }
         // The stanza name is authoritative. Everything else comes through
-        // from the store unchanged.
+        // from the store unchanged: every document the diff named is
+        // applied, and one whose rows come out identical writes identical
+        // rows, which doltlite's content-addressed tables then carry no
+        // diff for.
         let md = RenderedMarkdown {
-            source_id,
+            source_id: stanza.to_string(),
             // Already rows in the store; re-applying would double-count.
             problems: Vec::new(),
             ..md.clone()
         };
-        let inserted = apply_one(write_lock, out_dir, &md)
+        rows += apply_one(write_lock, out_dir, &md)
             .await
             .with_context(|| format!("load {} from {stanza}", md.markdown_uuid))?;
-        summary.rows_inserted += inserted;
-        summary.markdowns_loaded += 1;
-        progress(&format!(
-            "loaded {}/{}",
-            summary.markdowns_loaded, summary.markdowns_total
-        ));
+        progress(&format!("{stanza}: loaded {}/{}", i + 1, docs.len()));
     }
-    Ok(())
+    Ok(Some((docs.len(), rows)))
 }
 
 async fn load_markdown_uuids_by_source(
@@ -1907,6 +2040,7 @@ mod source_cursor_tests {
         RenderedMarkdown,
     };
     use crate::indexed_markdown::IndexedMarkdownStore;
+    use datalib_etl::stop::StopFlag;
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
 
@@ -2005,7 +2139,7 @@ mod source_cursor_tests {
         );
 
         let listed = ["kept".to_string(), "not-rendered-yet".to_string()];
-        build_grid_index_for(&pool, root, &listed, |_| {}, None)
+        build_grid_index_for(&pool, root, &listed, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
         assert_eq!(index_row_count(&pool).await, 1, "only `kept`");
@@ -2115,7 +2249,7 @@ mod source_cursor_tests {
         let sources = ["fresh".to_string(), "stale".to_string()];
         render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
         render(root, "stale", &[doc(root, "stale", "md-s", "stale body")]);
-        build_grid_index_for(&pool, root, &sources, |_| {}, None)
+        build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
 
@@ -2127,7 +2261,7 @@ mod source_cursor_tests {
             .execute(&pool)
             .await
             .unwrap();
-        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None)
+        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .expect("the other sources are indexed");
         assert_eq!(s.sources_unreadable, vec!["stale".to_string()]);
@@ -2146,7 +2280,7 @@ mod source_cursor_tests {
 
         // Its next render rebuilds the store in the current shape.
         render(root, "stale", &[doc(root, "stale", "md-s", "stale body")]);
-        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None)
+        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
         assert!(s.sources_unreadable.is_empty());
@@ -2193,6 +2327,95 @@ mod source_cursor_tests {
         );
         assert_eq!(second.markdowns_loaded, 0);
         assert_eq!(index_row_count(&pool).await, 2, "and the rows are intact");
+    }
+
+    /// What a reader sees: the table at the index's last seal, not its
+    /// working set.
+    async fn sealed<T>(pool: &SqlitePool, select: &str) -> Vec<T>
+    where
+        T: for<'r> sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite> + Send + Unpin,
+    {
+        let head = datalib_etl::doltlite_raw::head_commit(pool)
+            .await
+            .unwrap()
+            .expect("the index has a seal");
+        let sql = select.replace("HEAD", &head);
+        // Audited: `select` is a literal in this module and `head` a hash
+        // doltlite handed back.
+        sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn sealed_cursors(pool: &SqlitePool) -> Vec<String> {
+        sealed(
+            pool,
+            "SELECT source_id FROM dolt_at_source_cursors('HEAD') ORDER BY source_id",
+        )
+        .await
+    }
+
+    /// A stop used to be ignored until the step's grace ran out and killed
+    /// it, throwing away every source loaded so far with the one
+    /// transaction they shared. A stop partway through the second source
+    /// keeps the first sealed, cursor and all, and the next pass reads only
+    /// the second.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stop_keeps_the_sources_already_sealed() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        for source in ["a", "b"] {
+            let docs: Vec<_> = (1..=3)
+                .map(|i| doc(root, source, &format!("md-{source}{i}"), "body"))
+                .collect();
+            render(root, source, &docs);
+        }
+
+        let stop = StopFlag::new();
+        let sources = ["a".to_string(), "b".to_string()];
+        let first = build_grid_index_for(
+            &pool,
+            root,
+            &sources,
+            |m| {
+                if m.starts_with("b: loaded 1/") {
+                    stop.request();
+                }
+            },
+            None,
+            &stop,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.markdowns_loaded, 3, "a's three, and none of b's");
+        assert_eq!(
+            sealed_cursors(&pool).await,
+            vec!["a".to_string()],
+            "a is sealed with its cursor; b's half-load is rolled back"
+        );
+        let sealed_rows: Vec<i64> =
+            sealed(&pool, "SELECT COUNT(*) FROM dolt_at_grid_rows('HEAD')").await;
+        assert_eq!(sealed_rows, vec![3]);
+        assert_eq!(
+            index_row_count(&pool).await,
+            3,
+            "b's first row did not stay"
+        );
+
+        let second = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            second.markdowns_total, 3,
+            "b alone is read; a's cursor held"
+        );
+        assert_eq!(index_row_count(&pool).await, 6);
+        assert_eq!(
+            sealed_cursors(&pool).await,
+            vec!["a".to_string(), "b".to_string()]
+        );
     }
 
     /// The point of pinning the index's reads. A document the renderer has
