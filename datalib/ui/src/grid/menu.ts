@@ -26,6 +26,48 @@ export type MenuEntry = {
   action?: () => void;
 };
 
+export type Box = { top: number; left: number; width: number; height: number };
+
+/// Where a menu of `box` goes so all of it is inside `view`, `margin`
+/// clear of each edge: moved rather than cut off, and only as tall as the
+/// window when it is taller — past that, it scrolls. The grid flips a
+/// menu above or below its row but never moves or shrinks it, so a long
+/// menu on a low row in a short window ran off the top.
+export function fitInView(
+  box: Box,
+  view: { width: number; height: number },
+  margin = 8,
+): { top: number; left: number; maxHeight: number | null } {
+  const room = Math.max(0, view.height - 2 * margin);
+  const height = Math.min(box.height, room);
+  const clamp = (at: number, size: number, span: number) =>
+    Math.max(margin, Math.min(at, span - margin - size));
+  return {
+    top: clamp(box.top, height, view.height),
+    left: clamp(box.left, box.width, view.width),
+    maxHeight: box.height > room ? room : null,
+  };
+}
+
+/// `onAfterMenuShow` for a grid's `contextMenu` options: keeps the menu
+/// inside the window. The grid calls it just before placing the menu,
+/// so the fit waits for the placement.
+export function onAfterMenuShowFit(_e: Event | SlickEventData, args: MenuFromCellCallbackArgs) {
+  const uid = args.grid.getUID();
+  queueMicrotask(() => {
+    const el = document.body.querySelector<HTMLElement>(`.slick-context-menu.${uid}`);
+    if (!el) return;
+    const at = el.getBoundingClientRect();
+    const fit = fitInView(at, { width: window.innerWidth, height: window.innerHeight });
+    el.style.top = `${parseFloat(el.style.top || "0") + fit.top - at.top}px`;
+    el.style.left = `${parseFloat(el.style.left || "0") + fit.left - at.left}px`;
+    if (fit.maxHeight === null) return;
+    // The menu's padding and border are measured in `at`, so the cap has to include them.
+    el.style.boxSizing = "border-box";
+    el.style.maxHeight = `${fit.maxHeight}px`;
+  });
+}
+
 /// What `compute` gave when the menu last opened, for every call about
 /// that opening. `onBeforeMenuShow` goes in the grid's `contextMenu`
 /// options; `read` is what the items call.
@@ -53,6 +95,7 @@ export function menuSlots(
 ): {
   commandItems: MenuCommandItem[];
   onBeforeMenuShow: ReturnType<typeof perOpening>["onBeforeMenuShow"];
+  onAfterMenuShow: typeof onAfterMenuShowFit;
 } {
   const opening = perOpening(entries);
   const at = (args: unknown, i: number): MenuEntry | undefined =>
@@ -67,7 +110,7 @@ export function menuSlots(
     slotRenderer: (_item, args) => {
       const e = at(args, i);
       const wrap = document.createElement("div");
-      // The item lays its icon and text out itself; the wrapper only
+      // The item lays its text out itself; the wrapper only
       // exists because a renderer returns one element.
       wrap.style.display = "contents";
       if (!e || e.separator) {
@@ -76,15 +119,12 @@ export function menuSlots(
         wrap.appendChild(line);
         return wrap;
       }
-      const icon = document.createElement("div");
-      icon.className = "slick-menu-icon";
-      icon.textContent = "◦";
       const text = document.createElement("span");
       text.className = "slick-menu-content";
       if (e.danger) text.classList.add("menu-danger");
       text.textContent = e.name;
       if (e.disabled) text.title = e.disabled;
-      wrap.append(icon, text);
+      wrap.append(text);
       return wrap;
     },
     action: (_e, args) => {
@@ -92,5 +132,9 @@ export function menuSlots(
       if (e && !e.disabled && !e.separator) e.action?.();
     },
   }));
-  return { commandItems, onBeforeMenuShow: opening.onBeforeMenuShow };
+  return {
+    commandItems,
+    onBeforeMenuShow: opening.onBeforeMenuShow,
+    onAfterMenuShow: onAfterMenuShowFit,
+  };
 }

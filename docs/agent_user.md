@@ -216,10 +216,29 @@ and every request served in that stretch is in it.
 by `seq`. `GET /api/log?q=` is the same log across every run, in the
 search bar's grammar (`level:warn -target:sqlx "history"`), and
 `process:http` narrows it to what the server itself said (its sync
-loop, the applets, requests that failed). All of it is
-`system/runs/runs.sqlite`, plain SQLite, so `sqlite3` reads it directly
-too. `GET /api/sync/stream` is a server-sent-event stream that pushes a
-`root` frame whenever any of this moves.
+loop, the applets, requests that failed). `GET /api/sync/stream` is a
+server-sent-event stream that pushes a `root` frame whenever any of
+this moves.
+
+All of it is one file, `<data_root>/system/runs/runs.sqlite`: every
+line any datalib process wrote — the runner, each step, the server,
+the applets. It is plain SQLite, so stock `sqlite3` reads it with no
+server up. `log` holds one row per line, `processes` says who wrote
+each (join on `process_id`), `runs` and `step_runs` hold each run and
+each step's state, attempt and error, and `metrics` holds a step's
+numbers:
+
+```sh
+sqlite3 <data_root>/system/runs/runs.sqlite \
+  "SELECT l.ts_utc, p.process, l.step, l.level, l.target, l.msg
+     FROM log l LEFT JOIN processes p USING (process_id)
+    WHERE l.level IN ('warn', 'error')
+    ORDER BY l.seq DESC LIMIT 50"
+```
+
+`select run_id, step, state, attempt, error from step_runs where error
+is not null` lists the steps that failed. Every table and column is in
+[`docs/dev/logging.md`](dev/logging.md).
 
 ## Reading the mirrored data
 

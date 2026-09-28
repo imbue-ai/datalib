@@ -5,14 +5,7 @@
 // it.
 
 import { test, expect } from "@playwright/test";
-import {
-  expandGroup,
-  expectGridPainted,
-  groupRow,
-  MENU_DISABLED,
-  TABLE_ROWS,
-  menuEntry,
-} from "./grid-helpers";
+import { expandGroup, expectGridPainted, groupRow, TABLE_ROWS, menuEntry } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
 
@@ -73,7 +66,7 @@ test("a group's commit history opens from the context menu as a card", async ({ 
   await expect(page.locator(".miller-col-title").last()).toHaveText(/^Log/);
 });
 
-test("an applet row keeps the entry, disabled, with the reason", async ({ page }) => {
+test("an applet row leaves out what an applet cannot do", async ({ page }) => {
   await page.goto("/data_sources");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   await expandGroup(page, "unified_index");
@@ -81,13 +74,10 @@ test("an applet row keeps the entry, disabled, with the reason", async ({ page }
   await expect(appletRow).toBeVisible();
 
   await appletRow.click({ button: "right" });
-  const entry = menuEntry(page, "Show commit history");
-  await expect(entry).toHaveClass(MENU_DISABLED);
-  // The reason is the entry's own hover text.
-  await expect(entry.locator(".slick-menu-content")).toHaveAttribute(
-    "title",
-    /An applet writes no store/,
-  );
+  // The menu is open — an entry every row has is showing — so the
+  // missing one is left out, not yet to be drawn.
+  await expect(menuEntry(page, "Copy id")).toBeVisible();
+  await expect(menuEntry(page, "Show commit history")).toHaveCount(0);
 });
 
 /// "Compare two versions…" opens the same card, set up to compare. The

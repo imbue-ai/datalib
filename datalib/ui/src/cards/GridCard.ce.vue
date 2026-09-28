@@ -55,7 +55,7 @@ import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { followFrame, isDarkTheme } from "@/grid/gridFrame";
 import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
-import { perOpening } from "@/grid/menu";
+import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { keepActiveOnRecord } from "@/grid/activeCell";
@@ -1243,7 +1243,6 @@ watch(
     // grid worth building.
     if (specs.length === 0) return;
     const typed = typedColumns<Row>(specs, {
-      rows: () => rows.value,
       overrides: columnOverrides,
       groupable: true,
     });
@@ -1261,7 +1260,7 @@ watch(
   { immediate: true },
 );
 
-/// A menu entry drawn like the built-in ones (icon slot, then text),
+/// A menu entry drawn like the others (text only, see grid/menu.ts),
 /// with a label decided when the menu opens. The grid copies the options
 /// it is given, so an entry cannot be retitled from outside once the
 /// menu exists; a renderer is handed the cell instead.
@@ -1275,16 +1274,13 @@ function entry(
     itemVisibilityOverride: (args) => label(scopeOf(args)) !== null,
     slotRenderer: (_item, args) => {
       const wrap = document.createElement("div");
-      // The menu item lays its icon and text out itself; the wrapper
+      // The menu item lays its text out itself; the wrapper
       // only exists because a renderer returns one element.
       wrap.style.display = "contents";
-      const icon = document.createElement("div");
-      icon.className = "slick-menu-icon";
-      icon.textContent = "◦";
       const text = document.createElement("span");
       text.className = "slick-menu-content";
       text.textContent = label(scopeOf(args)) ?? "";
-      wrap.append(icon, text);
+      wrap.append(text);
       return wrap;
     },
     action: (_e, args) => run(scopeOf(args)),
@@ -1556,11 +1552,7 @@ function gridOptions(): GridOption {
     contextMenu: {
       commandItems: menuItems,
       onBeforeMenuShow: scopes.onBeforeMenuShow,
-      // The grid opens the menu below the row, or above it when there is
-      // more room there, but never shrinks it: taller than both, it ran
-      // off the window and its first entries could not be reached. The
-      // larger side always holds this much; past it, the menu scrolls.
-      maxHeight: "40vh",
+      onAfterMenuShow: onAfterMenuShowFit,
       // The grid scrolls itself — a page landing above the viewport holds
       // the top row in place, a selection is scrolled back to — and a menu
       // that closed on every scroll closed under the person reading it.

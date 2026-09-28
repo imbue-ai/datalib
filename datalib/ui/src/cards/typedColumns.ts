@@ -17,15 +17,10 @@ import {
   renderTimeseries,
   renderTimestamp,
 } from "./cellRenderers";
-import { calibrationMax } from "@/config/sparkline";
 import { compareStamps, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
 
 export type SlickColumnOptions<T> = {
-  /// The rows the columns will draw, read when a cell needs the whole
-  /// column — a `timeseries` sparkline is calibrated against the
-  /// largest value any row reaches.
-  rows: () => T[];
   /// How far back a `timeseries` cell's samples reach, in seconds.
   windowSecs?: number;
   /// The rows form a tree; the tree column (`treeColumnField`) carries
@@ -216,10 +211,6 @@ export function typedColumns<T extends Record<string, unknown>>(
   opts: SlickColumnOptions<T>,
 ): Column<T>[] {
   const windowSecs = opts.windowSecs ?? 300;
-  const ceilingOf = (field: string) =>
-    calibrationMax(
-      opts.rows().map((r) => (r[field] as Timeseries | undefined) ?? { value: null, samples: [] }),
-    );
 
   const Actions = actionsFormatter<T>(opts.actions ?? {});
   const treeField = treeColumnField(specs);
@@ -315,8 +306,7 @@ export function typedColumns<T extends Record<string, unknown>>(
           };
         case "timeseries":
           return {
-            formatter: (_r, _c, value) =>
-              renderTimeseries(value as Timeseries | null, ceilingOf(f), windowSecs),
+            formatter: (_r, _c, value) => renderTimeseries(value as Timeseries | null, windowSecs),
             sortComparer: (a, b, dir) =>
               compareNumber(
                 (a as Timeseries | null)?.value,
