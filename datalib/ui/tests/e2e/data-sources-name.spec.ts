@@ -55,9 +55,10 @@ function fanInInputs(config: string, fn: string): string[] {
 const stepBlock = (group: string, fn: string) =>
   new RegExp(`group = "${group}"\nfunction = "${fn}"\n`);
 const idField = (page: Page) => field(page, "Id");
-/// The step-role mark. It rides after the name — there is no Step
-/// column any more — and `aria-label` is the only place the word
-/// survives, which is also what a person gets by hovering it.
+/// The step-role mark. It leads the name, where a group's brand mark
+/// sits — there is no Step column any more — and `aria-label` is the
+/// only place the word survives, which is also what a person gets by
+/// hovering it.
 const stepMark = (page: Page, id: string) => nameCell(page, id).locator('.tg-mark [role="img"]');
 
 async function pickClaude(page: Page) {
@@ -135,8 +136,16 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // reaches claude.ai. The phase is a glyph suffixed onto the label, so
   // it is asserted through the accessible name rather than cell text.
   await expandGroup(page, "personal-claude");
+  // A step's id is not drawn: the label and the glyph say it, and the
+  // hover on the label names it.
   await expect(nameCell(page, "personal-claude/ingest")).toContainText("Download");
-  await expect(nameCell(page, "personal-claude/ingest")).toContainText("personal-claude/ingest");
+  await expect(nameCell(page, "personal-claude/ingest")).not.toContainText(
+    "personal-claude/ingest",
+  );
+  await expect(nameCell(page, "personal-claude/ingest").locator(".tg-label")).toHaveAttribute(
+    "title",
+    /^personal-claude\/ingest/,
+  );
   await expect(stepMark(page, "personal-claude/ingest")).toHaveAttribute("aria-label", "Ingest");
   await expect(nameCell(page, "personal-claude/render_markdown")).toContainText("Render markdown");
   await expect(stepMark(page, "personal-claude/render_markdown")).toHaveAttribute(

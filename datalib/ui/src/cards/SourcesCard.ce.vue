@@ -109,13 +109,17 @@ while a sync is in flight it draws one segment per step. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
 with it.</p>
 <p><b>Name</b> stays in view while the table scrolls sideways. <b>Last update</b> leads
-with an icon for what the row is doing or did last, then says when it got there. The
-icon, and the mark after a step’s name that says what it does, give their word on
-hover. <b>Right-click a header</b> to show or hide columns: <b>Last synced</b> and
+with an icon for what the row is doing or did last, then says when it got there. That
+icon, and the mark before a name — the service a source mirrors, or what a step
+does — give their word on hover; hovering a step’s name shows its id.
+<b>Right-click a header</b> to show or hide columns: <b>Last synced</b> and
 <b>Last success</b> start hidden. <b>Double-click a Last update</b> to read that
 step's log — from the run in flight while it runs, else from the run it last took
 part in, with a picker for its other runs — as a grid you can sort, filter and
 search; on a group row, the log of the step its status came from.
+A <b>red or yellow number</b> after a name counts the errors (records dropped) and
+warnings (records kept with something lost) its store holds as of its last run; a row
+with none shows nothing. <b>Double-click the number</b> for the list.
 <b>Activity</b> is what a running step has reported: how much is queued ahead of
 it, what it has counted so far, and how many warnings and errors it has logged.</p>
 <p><b>Browse</b>, <b>Sync</b> and the switch are on the row: they are what a row

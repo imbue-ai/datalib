@@ -22,7 +22,7 @@
 
 .tg-identity { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
 /* The label is what the eye lands on: the id beside it gives way first. */
-.tg-identity > span:first-of-type { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 4ch; }
+.tg-identity > .tg-label { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 4ch; }
 .tg-identity > .tg-id { flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* The tree cell: indent, chevron, then the column's own drawing, which
    gives way before the chevron does. One flex row, so the cell's own
@@ -40,6 +40,20 @@
   flex: 0 0 auto;
 }
 .tg-id { color: var(--datalib-muted); font-size: 12px; }
+/* Counts after a name: a red and a yellow bubble, the number alone. */
+.tg-badges { display: inline-flex; gap: 3px; flex: 0 0 auto; cursor: default; }
+.tg-badge {
+  min-width: 18px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+}
 
 /* The status vocabulary. Anything unstyled falls through to the default
    colour, which is right for a status this sheet hasn't met. */

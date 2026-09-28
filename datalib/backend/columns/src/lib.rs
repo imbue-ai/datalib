@@ -96,6 +96,11 @@ pub struct ColumnSpec {
     /// can: a cell's value becomes a term the viewer writes into it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<ColumnSearch>,
+    /// On an [`Identity`] column: the row field holding [`Chip`]s the
+    /// cell draws after the label, as bare counts. A double-click on
+    /// them reaches the viewer as a double-click on that field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badges: Option<String>,
 }
 
 /// The key a term on this column starts with (`author:`), and the row
@@ -148,6 +153,7 @@ impl ColumnSpec {
             default_visible: true,
             editable: false,
             search: None,
+            badges: None,
         }
     }
     pub fn describe(mut self, description: &str) -> Self {
@@ -160,6 +166,10 @@ impl ColumnSpec {
     }
     pub fn editable(mut self) -> Self {
         self.editable = true;
+        self
+    }
+    pub fn badges(mut self, field: &str) -> Self {
+        self.badges = Some(field.into());
         self
     }
 }

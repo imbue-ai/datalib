@@ -102,16 +102,15 @@ impl Phase {
 pub fn columns() -> Vec<ColumnSpec> {
     vec![
         ColumnSpec::new("name", "Name", ColumnType::Identity)
-            .describe("What the config calls it, led by the mark of the service a source mirrors; its id — the folder under the data root — beside it when they differ.")
-            .editable(),
+            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does. A group's id — the folder under the data root — sits beside it when they differ; a step's is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) its store holds as of its last run; double-click them for the list.")
+            .editable()
+            .badges("problems"),
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
             .describe("Browse this row's data, and sync it \u{2014} or stop the sync in progress."),
         ColumnSpec::new("status", "Last update", ColumnType::Status)
             .describe("What it is doing now, or did last, and when it got there. Hover for why; double-click for the log."),
         ColumnSpec::new("activity", "Activity", ColumnType::Chips)
             .describe("What a running step has reported: what is queued ahead of it, what it has counted, and how fast."),
-        ColumnSpec::new("problems", "Problems", ColumnType::Chips)
-            .describe("Errors (records dropped) and warnings (records kept with something lost) the step's store holds, as of its last run. A green zero means it counted and found none; blank means it has never counted. Double-click for the list."),
         ColumnSpec::new("documents", "Documents", ColumnType::Count)
             .describe("How many documents this source holds \u{2014} the things Browse opens, whole store, as of its last render. Blank means it has never counted; a source that renders nothing counts zero."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp)
@@ -170,8 +169,9 @@ pub struct ManageRow {
     pub status_from: Option<String>,
     /// What the step has reported in the run in flight.
     pub activity: Vec<Chip>,
-    /// The errors and warnings its store holds — see `manage::problems`.
-    /// A group shows its render step's, the union for the source.
+    /// The errors and warnings its store holds, drawn after the name —
+    /// see `manage::problems`. A group shows its render step's, the
+    /// union for the source.
     pub problems: Vec<Chip>,
     /// Documents its store holds, as of the run it last counted in.
     /// `None` — drawn blank — for a row that has never counted, which

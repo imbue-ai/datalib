@@ -109,16 +109,17 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
             "actions",
             "status",
             "chips",
-            "chips",
             "count",
             "timestamp",
             "timestamp",
             "timeseries"
         ]
     );
+    // The problem counts ride in the Name cell rather than a column.
+    assert_eq!(got["columns"][0]["badges"], "problems", "{got}");
     let rows = by_key(&got);
     assert_eq!(rows.len(), 8, "{got}");
-    // Nothing has counted its problems, so no row claims a green zero.
+    // Nothing has counted its problems, so no row draws a count.
     // Nothing has counted its documents either, so no row claims a
     // zero there — an empty store and a store nobody has looked in
     // read the same to a person, and only one of them is true.
@@ -346,11 +347,11 @@ async fn a_finished_run_reaches_the_rows() {
     assert!(slack["status"].get("segments").is_none(), "{slack}");
 }
 
-/// The Problems cell reads the `problems{severity=…}` metrics a step
-/// reported at the end of its last run: red and yellow on the render
-/// step that counted some, a green zero on the index that counted none,
-/// nothing on the ingest step that never counted — and the group shows
-/// its last counting step's.
+/// The counts after a row's name read the `problems{severity=…}`
+/// metrics a step reported at the end of its last run: a red and a
+/// yellow number on the render step that counted some, nothing on the
+/// index that counted none or the ingest step that never counted — and
+/// the group shows its last counting step's.
 #[tokio::test]
 async fn problem_counts_reach_the_rows_from_the_run_store() {
     let tmp = tempfile::tempdir().unwrap();
@@ -394,8 +395,8 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
             .collect()
     };
     let red_and_yellow = vec![
-        ("error".to_string(), "2 errors".to_string()),
-        ("warning".to_string(), "5 warnings".to_string()),
+        ("error".to_string(), "2".to_string()),
+        ("warning".to_string(), "5".to_string()),
     ];
     assert_eq!(chips("slack/render_markdown"), red_and_yellow);
     assert_eq!(
@@ -403,19 +404,13 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
         red_and_yellow,
         "the group shows render's"
     );
-    assert_eq!(
-        chips("slack/ingest"),
-        vec![],
-        "never counted: blank, not zero"
-    );
+    assert_eq!(chips("slack/ingest"), vec![], "never counted");
     assert_eq!(
         chips("unified_index/grid_index"),
-        vec![("ok".to_string(), "0".to_string())]
+        vec![],
+        "counted none: nothing drawn"
     );
-    assert_eq!(
-        chips("group:unified_index"),
-        vec![("ok".to_string(), "0".to_string())]
-    );
+    assert_eq!(chips("group:unified_index"), vec![]);
 }
 
 /// An entry the loader drops still has a row — it is still in the

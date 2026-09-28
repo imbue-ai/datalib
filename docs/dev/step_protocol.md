@@ -150,12 +150,13 @@ nothing where a dropped increment would be lost work.
 Two names are read by name rather than just drawn. **`documents`** is
 how many documents your output store holds — whole store, not this run
 — and fills the Manage screen's Documents column; **`problems`**, with
-a `severity=error` or `severity=warning` label, fills its Problems
-column. Report each one every run, zero included: a missing series
-means "never counted" and draws as a blank cell, which is what you want
-a step that does not count either of them to leave behind. They are
+a `severity=error` or `severity=warning` label, fills the red and
+yellow counts after a row's name. Report each one every run, zero
+included: the screen shows the newest value a step reported, so a
+count left out keeps last run's. A step that counts neither leaves no
+series, and draws a blank Documents cell and no counts. They are
 `datalib_metrics::DOCUMENTS` and `datalib_problems::METRIC` in the
-tree; nothing else makes the reporter and the column agree on the
+tree; nothing else makes the reporter and the screen agree on the
 spelling.
 
 A step that counts one thing and knows its total may use the shorter

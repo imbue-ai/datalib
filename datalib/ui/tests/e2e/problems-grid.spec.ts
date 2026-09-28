@@ -1,4 +1,4 @@
-// A Manage row's problems open in the search grid over the index's
+// A Manage row's problem counts, after its name, open in the search grid over the index's
 // `problems` table: the filter it opens with is text in its search bar,
 // and a cell's right-click narrows it the way the search's does.
 
@@ -6,7 +6,7 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
 import {
   actOnRowByUuid,
   gridSettled,
-  groupRow,
+  nameCell,
   SEARCH_ROWS,
   searchMenuItem,
   type GridApi,
@@ -25,6 +25,30 @@ const held = (page: Page) =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows(),
   ) as Promise<Problem[]>;
 
+/// Give a group row counts after its name, whatever the served root's
+/// run store holds: the counts come from metrics a render run reports
+/// (covered in `manage_rows.rs`), and this spec is about where a
+/// double-click on them leads.
+async function withCounts(page: Page, source: string) {
+  await page.route("**/api/manage/rows**", async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { rows: { key: string; problems: unknown[] }[] };
+    for (const r of body.rows) {
+      if (r.key === `group:${source}`) {
+        r.problems = [
+          { kind: "error", text: "2", title: "2 errors" },
+          { kind: "warning", text: "5", title: "5 warnings" },
+        ];
+      }
+    }
+    await route.fulfill({ response, json: body });
+  });
+}
+
+/// The counts after a row's name.
+const counts = (page: Page, source: string) =>
+  nameCell(page, `group:${source}`).locator(".tg-badges");
+
 /// The source with the most problems in the fixture, and its problems.
 async function busiest(request: APIRequestContext): Promise<[string, Problem[]]> {
   const all = await problems(request, "");
@@ -39,10 +63,15 @@ test("a source's problems open in the grid, its filter in the search bar", async
   request,
 }) => {
   const [source, theirs] = await busiest(request);
+  await withCounts(page, source);
   await page.goto("/data_sources");
-  await groupRow(page, source).locator('[col-id="problems"]').dblclick();
+  await expect(counts(page, source).locator(".tg-badge")).toHaveText(["2", "5"]);
+  await counts(page, source).locator(".tg-chip-warning").dblclick();
 
   await expect(page.getByTestId("search-input")).toHaveValue(`source_id:${source}`);
+  // The badges are inside the Name cell, which a double-click would
+  // otherwise open for renaming.
+  await expect(nameCell(page, `group:${source}`).locator("input")).toHaveCount(0);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   await gridSettled(page);
   const rows = await held(page);
@@ -54,8 +83,9 @@ test("a source's problems open in the grid, its filter in the search bar", async
 test("a severity cell's right-click keeps only its severity", async ({ page, request }) => {
   const [source, theirs] = await busiest(request);
   await page.setViewportSize({ width: 1280, height: 480 });
+  await withCounts(page, source);
   await page.goto("/data_sources");
-  await groupRow(page, source).locator('[col-id="problems"]').dblclick();
+  await counts(page, source).dblclick();
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   await gridSettled(page);
 
