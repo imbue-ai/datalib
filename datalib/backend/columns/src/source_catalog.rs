@@ -47,6 +47,13 @@ const CATALOG: &[Entry] = &[
     e("calendar", Some("caldav"), "CalDAV", Some("calendar")),
     e("calendar", Some("ics"), "Calendar files", Some("calendar")),
     e("calendar", None, "Calendar", Some("calendar")),
+    e(
+        "contacts",
+        Some("carddav"),
+        "CardDAV contacts",
+        Some("contacts"),
+    ),
+    e("contacts", Some("vcf"), "Contact files", Some("contacts")),
     e("contacts", None, "Contacts", Some("contacts")),
     e("garmin", None, "Garmin", Some("garmin")),
     e("yolink", None, "YoLink", Some("yolink")),
@@ -138,6 +145,15 @@ mod tests {
             source_type("claude", &json!({"export": {"path": "x"}})).label,
             "Claude export"
         );
+        assert_eq!(
+            source_type("contacts", &json!({"carddav": {"server_url": "x"}})).label,
+            "CardDAV contacts"
+        );
+        assert_eq!(
+            source_type("contacts", &json!({"vcf": {"path": "x"}})).label,
+            "Contact files"
+        );
+        assert_eq!(source_type("contacts", &json!({})).label, "Contacts");
     }
 
     /// The Manage screen has no Type column; a group's mark is the only
