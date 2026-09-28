@@ -25,6 +25,10 @@ pub struct SearchRow {
     /// When the thing last changed, where the source says; null for a
     /// row not known to have changed since `created_at`.
     pub modified_at: Option<String>,
+    /// When it last changed at its source: `modified_at`, else
+    /// `created_at`, unless the provider knows better. What the grid's
+    /// newest-first order sorts on.
+    pub touched_at: Option<String>,
     /// True on the row that is a whole rendered document, false on a
     /// row inside one. `is:document` in the search bar.
     pub is_document: bool,

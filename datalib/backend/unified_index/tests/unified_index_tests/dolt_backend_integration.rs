@@ -596,6 +596,7 @@ async fn every_wire_field_survives_the_round_trip() {
 const SCANS: &[&str] = &[
     "created_at",
     "modified_at",
+    "touched_at",
     "org_name",
     "byte_size",
     "item_count",

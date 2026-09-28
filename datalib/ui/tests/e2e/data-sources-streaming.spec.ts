@@ -445,10 +445,10 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
 
     // Newest first, so the rows the rest of the download brings land
     // above the ones already there.
-    const created = searchHeader(grid, "created_at");
+    const touched = searchHeader(grid, "touched_at");
     await expect(async () => {
-      if (!(await created.locator(".slick-sort-indicator-desc").count())) await created.click();
-      await expect(created.locator(".slick-sort-indicator-desc")).toHaveCount(1, { timeout: 500 });
+      if (!(await touched.locator(".slick-sort-indicator-desc").count())) await touched.click();
+      await expect(touched.locator(".slick-sort-indicator-desc")).toHaveCount(1, { timeout: 500 });
     }).toPass({ timeout: 10_000 });
 
     const picked = (await grid.evaluate(() =>

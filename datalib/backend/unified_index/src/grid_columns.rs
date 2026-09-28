@@ -18,6 +18,7 @@ pub enum GridColumn {
     Channel,
     CreatedAt,
     ModifiedAt,
+    TouchedAt,
     Snippet,
     Author,
     Account,
@@ -56,6 +57,7 @@ impl View for GridColumn {
             GridColumn::Channel => same(G::Channel),
             GridColumn::CreatedAt => same(G::CreatedAt),
             GridColumn::ModifiedAt => same(G::ModifiedAt),
+            GridColumn::TouchedAt => same(G::TouchedAt),
             // The cell shows qmd's matched words, or the preview: no value
             // to match.
             GridColumn::Snippet => (SortBy::Column(G::Preview), None),
@@ -107,6 +109,7 @@ mod tests {
                 ("source", none, "source_label", false),
                 ("created_at", none, "created_at", false),
                 ("modified_at", none, "modified_at", false),
+                ("touched_at", none, "touched_at", false),
                 ("author", none, "author", true),
                 ("account", none, "account", true),
                 ("project", none, "project", true),

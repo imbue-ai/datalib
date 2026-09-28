@@ -76,10 +76,17 @@ fn declared() -> Vec<ColumnSpec> {
             )
             .hidden(),
         ColumnSpec::new("channel", "Channel", ColumnType::Text),
-        ColumnSpec::new("created_at", "Created", ColumnType::Datetime).describe(
-            "When the thing came into being, as the source wrote it: a message's own \
-             stamp; for a document, the earliest moment in it.",
+        ColumnSpec::new("touched_at", "Touched", ColumnType::Datetime).describe(
+            "When it last changed at its source: Modified where the row has one, else \
+             Created. The grid's newest-first order sorts on it.",
         ),
+        ColumnSpec::new("created_at", "Created", ColumnType::Datetime)
+            .describe(
+                "When the thing came into being, as the source wrote it: a message's own \
+                 stamp; for a document, the earliest moment in it; for a calendar event, \
+                 when it happens.",
+            )
+            .hidden(),
         // Off by default in the unified grid, where most rows are
         // messages with nothing here; a Browse of one source names it,
         // and there — one row per thread — it is the column that says
@@ -268,6 +275,7 @@ mod tests {
             sender: "who".into(),
             created_at: Some("2026-06-02T13:00:00-07:00".into()),
             modified_at: Some("2026-06-03T09:30:00-07:00".into()),
+            touched_at: Some("2026-06-03T09:30:00-07:00".into()),
             is_document: true,
             conversation_name: "n".into(),
             project: "p".into(),

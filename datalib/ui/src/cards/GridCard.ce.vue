@@ -934,7 +934,7 @@ const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
   score: "score",
   kind: "kind",
   channel: "channel",
-  created_at: "created_at",
+  touched_at: "touched_at",
   author: "author",
   account: "account",
 };

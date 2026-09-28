@@ -26,6 +26,9 @@ export type SearchRow = {
   // thread, a PR's updated_at, a vCard's REV. Null on a row not known
   // to have changed since created_at — most messages.
   modified_at: string | null;
+  // When it last changed at its source: modified_at, else created_at,
+  // unless the provider knows better. What newest-first sorts on.
+  touched_at: string | null;
   // True on the one row per rendered document that *is* the document
   // (the thread, the PR, the page); false on every row inside one.
   // `is:document` in the search bar.
