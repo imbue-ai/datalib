@@ -16,7 +16,8 @@
 
 // A descriptor with a `credentialService` also gets a **Connection**
 // block: which latchkey account to use, "Latchkey auth", which runs
-// latchkey's browser login, and "Test connection", which calls the
+// latchkey's browser login, "Paste a credential", which stores a token
+// or app password with `latchkey auth set`, and "Test connection", which calls the
 // provider's own probe (`datalib-step probe <type>`). What comes back is not just a
 // green tick — it names the account actually reached, and it fills
 // every `probe:` field's checklist, the render step's included. A
@@ -49,6 +50,7 @@ import {
 import { type ProbeItem, type ProbeItemKind, type ProbeReport, type StoredAccount } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { iconUrl } from "@/config/icons";
+import { SECRET, credentialShape, pastedCredential } from "@/config/credentialShape";
 import { ingestReach } from "@/config/ingestMethods";
 import { isDesktopApp, pickPath } from "@/desktop";
 import {
@@ -62,7 +64,13 @@ import {
 import ProbeItemPicker from "@/components/ProbeItemPicker.vue";
 import { STATUS_GLYPHS } from "@/config/glyphs";
 
-const { latchkeyService, probeSource, startLatchkeyConnect, latchkeyConnectStatus } = useApi();
+const {
+  latchkeyService,
+  probeSource,
+  setLatchkeyCredential,
+  startLatchkeyConnect,
+  latchkeyConnectStatus,
+} = useApi();
 
 const props = defineProps<{
   /// Group ids already in the config, plus the id of every step outside
@@ -511,6 +519,8 @@ async function loadAccounts() {
     latchkeyCli.value = info.cli;
     gateway.value = info.gateway;
     accountsError.value = info.error;
+    // Where pasting is the only way in, the form is the next step.
+    if (setOnlyService.value && !pasteOpen.value) openPaste();
   } catch (e) {
     accounts.value = [];
     accountsError.value = String(e);
@@ -550,6 +560,84 @@ const setCommand = computed(() => {
   const example = setExample.value ?? `latchkey auth set ${service.value} -H "…"`;
   return example.replace(/^latchkey /, `${latchkeyCli.value} `);
 });
+
+// Pasting a credential
+
+/// Offered wherever latchkey takes a credential by hand — every service
+/// the wizard names — except under a gateway, which refuses `auth set`.
+const canPaste = computed(() => !gateway.value && authOptions.value.includes("set"));
+const pasteShape = computed(() =>
+  credentialShape(setExample.value, chosen.value?.credentialPaste?.headers),
+);
+/// Open from the start where pasting is the only way in.
+const pasteOpen = ref(false);
+const pasteUsername = ref("");
+const pasteSecret = ref("");
+const pasteAccount = ref("");
+const paste = ref<{ state: "idle" | "saving" | "ok" | "failed"; message: string }>({
+  state: "idle",
+  message: "",
+});
+function openPaste() {
+  pasteOpen.value = true;
+  pasteAccount.value = accountValue.value;
+  if (!pasteUsername.value && accountValue.value.includes("@"))
+    pasteUsername.value = accountValue.value;
+}
+
+/// latchkey's own word for the secret: "Token", "App password".
+const pasteSecretLabel = computed(() => {
+  const label = pasteShape.value.secretLabel;
+  return label.charAt(0).toUpperCase() + label.slice(1);
+});
+
+const pasted = computed(() =>
+  pastedCredential(pasteShape.value, pasteUsername.value, pasteSecret.value),
+);
+
+/// The header the secret is sent in, shown with the secret elided so a
+/// person can see it is the kind of thing they have.
+const pasteHeaderHint = computed(() =>
+  pasteShape.value.kind === "headers" && pasteShape.value.headers[0] !== SECRET
+    ? pasteShape.value.headers.map((h) => h.replace(SECRET, "…")).join("  ")
+    : "",
+);
+
+/// latchkey files a credential stored with no account over the one it
+/// already holds, if it holds exactly one, and refuses if it holds
+/// several. Both are said before the button is pressed.
+const pasteReplaces = computed(() => {
+  const list = accounts.value ?? [];
+  const named = pasteAccount.value.trim();
+  if (named) return list.some((a) => a.account === named) ? named : null;
+  return list.length === 1 ? list[0]!.account || "latchkey’s default account" : null;
+});
+const pasteAmbiguous = computed(
+  () => !pasteAccount.value.trim() && (accounts.value?.length ?? 0) > 1,
+);
+
+async function savePasted() {
+  const name = service.value;
+  const credential = pasted.value;
+  if (!name || !credential || paste.value.state === "saving") return;
+  const account = accountField.value ? pasteAccount.value.trim() : "";
+  paste.value = { state: "saving", message: "" };
+  try {
+    await setLatchkeyCredential(name, account, credential);
+  } catch (e) {
+    paste.value = { state: "failed", message: String(e) };
+    return;
+  }
+  pasteSecret.value = "";
+  const field = accountField.value;
+  if (field && account) values.value[field.target] = account;
+  paste.value = { state: "ok", message: "Stored in latchkey." };
+  await loadAccounts();
+  // The credential is only a guess until something uses it; the probe is
+  // the cheapest thing that does.
+  probe.value = { state: "idle", message: "", report: null };
+  if (canProbe.value) await testConnection();
+}
 
 /// Set by the button on a service latchkey holds without a browser
 /// login: converting one means taking it apart and putting it back,
@@ -805,6 +893,10 @@ const probeSummary = computed(() => {
 watch(
   service,
   (name) => {
+    // A half-typed secret belongs to the service it was typed for.
+    pasteOpen.value = false;
+    pasteSecret.value = "";
+    paste.value = { state: "idle", message: "" };
     if (name) void loadAccounts();
   },
   { immediate: true },
@@ -962,6 +1054,14 @@ function submit() {
               {{ connect.state === "running" ? "Waiting for the browser…" : "Latchkey auth" }}
             </button>
             <button
+              v-if="canPaste && !pasteOpen"
+              type="button"
+              class="btn ghost"
+              @click="openPaste"
+            >
+              Paste a credential
+            </button>
+            <button
               v-if="canProbe"
               type="button"
               class="btn ghost"
@@ -1004,9 +1104,73 @@ function submit() {
           <!-- Only where the button cannot help: a service its owner
                registered without a browser login. -->
           <p v-if="setOnlyService" class="wiz-help wiz-conn-note">
-            <code>{{ service }}</code> has no browser login, so its credential is pasted:
-            <code>{{ setCommand }}</code>
+            <code>{{ service }}</code> has no browser login, so its credential is pasted — below, or
+            from a terminal: <code>{{ setCommand }}</code>
           </p>
+          <!-- latchkey's `auth set`, run by the server. The secret is
+               sent once and never kept in the form after it is stored. -->
+          <div v-if="canPaste && pasteOpen" class="wiz-conn-note wiz-paste">
+            <p v-if="chosen.credentialPaste?.help" class="wiz-help">
+              {{ chosen.credentialPaste.help }}
+            </p>
+            <label v-if="pasteShape.kind === 'basic'" class="wiz-field">
+              <span class="wiz-label">Username</span>
+              <input
+                v-model="pasteUsername"
+                class="wiz-input"
+                :placeholder="pasteShape.userHint"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+            <label class="wiz-field">
+              <span class="wiz-label">{{ pasteSecretLabel }}</span>
+              <input
+                v-model="pasteSecret"
+                class="wiz-input"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <small v-if="pasteHeaderHint" class="wiz-help">
+                Sent as <code>{{ pasteHeaderHint }}</code>
+              </small>
+            </label>
+            <label v-if="accountField" class="wiz-field">
+              <span class="wiz-label">Store under account</span>
+              <input
+                v-model="pasteAccount"
+                class="wiz-input"
+                placeholder="latchkey’s default account"
+                spellcheck="false"
+              />
+              <small v-if="pasteAmbiguous" class="wiz-help">
+                latchkey holds several <code>{{ service }}</code> credentials; name the one to store
+                this under.
+              </small>
+              <small v-else-if="pasteReplaces" class="wiz-help">
+                This replaces the credential stored for <code>{{ pasteReplaces }}</code
+                >. Name a new account to keep it.
+              </small>
+            </label>
+            <div class="wiz-conn-actions">
+              <button
+                type="button"
+                class="btn"
+                :disabled="!pasted || pasteAmbiguous || paste.state === 'saving'"
+                @click="savePasted"
+              >
+                {{ paste.state === "saving" ? "Storing…" : "Store in latchkey" }}
+              </button>
+            </div>
+            <p
+              v-if="paste.message"
+              class="wiz-help"
+              :class="{ 'wiz-error': paste.state === 'failed' }"
+            >
+              {{ paste.message }}
+            </p>
+          </div>
           <p v-if="connect.state !== 'idle'" class="wiz-help wiz-conn-note">
             {{ connect.message }}
           </p>
@@ -1578,6 +1742,17 @@ function submit() {
   padding-left: 10px;
 }
 .wiz-convert-head {
+  margin: 0;
+}
+.wiz-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-left: 3px solid var(--datalib-border);
+  padding-left: 10px;
+}
+.wiz-paste p,
+.wiz-paste .wiz-field {
   margin: 0;
 }
 .wiz-req {

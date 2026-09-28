@@ -1582,6 +1582,25 @@ export function startLatchkeyConnect(
   });
 }
 
+/// A credential pasted by hand. Mirrors `PastedCredential` in
+/// datalib/backend/http/src/connect.rs.
+export type PastedCredential =
+  { kind: "headers"; headers: string[] } | { kind: "basic"; username: string; password: string };
+
+/// Store a pasted credential with `latchkey auth set`. An empty account
+/// lets latchkey choose, which replaces the one it holds if it holds one.
+export function setLatchkeyCredential(
+  service: string,
+  account: string,
+  credential: PastedCredential,
+): Promise<{ ok: true }> {
+  return quietJson<{ ok: true }>(`/api/latchkey/${encodeURIComponent(service)}/credential`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ account, credential }),
+  });
+}
+
 /// Poll one browser login. The server drops a finished attempt once it
 /// has been read, so a second poll after `ok`/`failed` is a 404 — read
 /// it once and keep the answer.

@@ -335,14 +335,20 @@ regional datacenter gets. The browser flow stores an OAuth token:
 latchkey auth browser fastmail
 ```
 
-If you would rather use an API token, create one at
+That login can read, change and send mail: Fastmail offers no
+read-only scope for it. For read-only access, use an API token instead.
+Create one at
 [app.fastmail.com/settings/security](https://app.fastmail.com/settings/security)
-under **Integrations** → **API tokens** → **New API token**, give it
-read access to your mail, copy it, and store it instead:
+under **Integrations** → **API tokens** → **New API token**, tick
+**Read-only access**, copy it, and paste it into the wizard's **Paste a
+credential** form — give it an account name of its own there, or it
+replaces the browser login latchkey already holds. From a terminal:
 
 ```sh
-latchkey auth set fastmail -H "Authorization: Bearer $(pbpaste)"
+latchkey --account you-readonly auth set fastmail -H "Authorization: Bearer $(pbpaste)"
 ```
+
+and name the same account in the source.
 
 Use a `jmap` table with `hostname = "api.fastmail.com"`. Fastmail's
 contacts and calendars are separate sources — see [Fastmail
@@ -356,7 +362,8 @@ Contacts](#fastmail-contacts) and [Fastmail Calendar](#fastmail-calendar).
 Fastmail's CalDAV login is built into latchkey as `fastmail-dav`, and
 takes an app password (Settings → Privacy & Security → Integrations →
 App passwords, with calendar access) — not the OAuth login the mail
-source uses:
+source uses. The wizard asks for it itself (**Paste a credential**:
+your address and the app password); from a terminal it is:
 
 ```sh
 latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
@@ -374,7 +381,8 @@ The same `fastmail-dav` login as [Fastmail Calendar](#fastmail-calendar):
 an app password (Settings → Privacy & Security → Integrations → App
 passwords, with contacts access), not the OAuth login the mail source
 uses. One app password with both contacts and calendar access serves
-both sources.
+both sources. The wizard's **Paste a credential** form stores it, or
+from a terminal:
 
 ```sh
 latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"

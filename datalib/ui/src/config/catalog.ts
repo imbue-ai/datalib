@@ -147,6 +147,11 @@ export type CatalogEntry = {
   /// Shown beside the Connect button, when connecting this way costs
   /// something the person should decide about before clicking.
   credentialConnectWarning?: string;
+  /// The "Paste a credential" form. `help` says where the credential
+  /// comes from; `headers` replaces the shape latchkey's own example
+  /// gives, for a service whose example is wrong — `{secret}` marks
+  /// where the pasted value goes (see `credentialShape.ts`).
+  credentialPaste?: { help?: string; headers?: string[] };
   /// Dotted params path whose presence identifies this entry among the
   /// several that share one `type`. Undefined on a type with only one
   /// entry, which is nearly all of them.
@@ -298,6 +303,14 @@ export const CATALOG: CatalogEntry[] = [
     // cost, not the history of how we found out (2026-08-31, the
     // captured cookie and the everyday browser evicting each other).
     credentialConnectWarning: "Signing in again may log out your other claude.ai session.",
+    // latchkey offers a service it did not ship the generic Bearer
+    // example; claude.ai's credential is the cookie.
+    credentialPaste: {
+      headers: ["Cookie: sessionKey={secret}"],
+      help:
+        "The sessionKey cookie from a signed-in claude.ai tab: DevTools → Application → " +
+        "Cookies → https://claude.ai → sessionKey → Value.",
+    },
     canProbe: true,
     fields: [
       {
@@ -524,6 +537,14 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     canProbe: true,
     credentialService: "fastmail",
+    // Fastmail has no read-only OAuth scope, so the browser login can
+    // read, change and send mail; a hand-made token is the way to less.
+    credentialPaste: {
+      help:
+        "For read-only access, make an API token at app.fastmail.com → Settings → Privacy & " +
+        "Security → Integrations → API tokens, with Read-only access ticked, and paste it " +
+        "here. Latchkey auth signs in with full read and write access instead.",
+    },
     preset: [
       // The JMAP server. A preset rather than a field because this
       // entry *is* Fastmail — a different host is a different service
@@ -665,6 +686,11 @@ export const CATALOG: CatalogEntry[] = [
     // CalDAV takes an app password, which is its own latchkey service,
     // not the OAuth login the `fastmail` mail entry uses.
     credentialService: "fastmail-dav",
+    credentialPaste: {
+      help:
+        "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
+        "Privacy & Security → Integrations → App passwords, with calendar access.",
+    },
     canProbe: true,
     fields: [
       {
@@ -805,6 +831,11 @@ export const CATALOG: CatalogEntry[] = [
     // The app password Fastmail Calendar uses too: DAV refuses the OAuth
     // login the `fastmail` mail entry holds.
     credentialService: "fastmail-dav",
+    credentialPaste: {
+      help:
+        "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
+        "Privacy & Security → Integrations → App passwords, with contacts access.",
+    },
     canProbe: true,
     fields: [
       {
