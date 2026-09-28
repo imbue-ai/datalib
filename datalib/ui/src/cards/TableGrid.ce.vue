@@ -30,6 +30,7 @@ import { clockFaces, movedCells, type ClockFaces } from "@/grid/clockFaces";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
+import { hoverWholeRow } from "@/grid/rowHover";
 import { treeColumnField, typedColumns } from "./typedColumns";
 import type { TableGridApi } from "./tableGridApi";
 import { fieldsOfType } from "./cellRenderers";
@@ -445,6 +446,7 @@ function createGrid() {
   for (const r of props.rows) painted.set(keyOf(r), JSON.stringify(r));
   handed = props.rows.map(keyOf);
   stampRowKeys(b.slickGrid, b.dataView, (item) => keyOf(item as T));
+  hoverWholeRow(b.slickGrid);
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
   b.slickGrid.onCellChange.subscribe(onCellChange);
   b.slickGrid.onDblClick.subscribe(onDblClick);

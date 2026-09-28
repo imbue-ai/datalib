@@ -308,6 +308,12 @@
 /* Rows are what get selected here; the cell the click landed in is
    not a thing to outline. */
 .slick-cell.active { box-shadow: none; border-color: transparent; }
+/* Both halves of a row that pinned columns split (grid/rowHover.ts);
+   the theme's :hover lights only the half under the pointer. */
+.slickgrid-container .slick-row.datalib-row-hover,
+.slickgrid-container .slick-row.odd.datalib-row-hover {
+  background-color: var(--slick-row-mouse-hover-color, #eff5fc);
+}
 .slick-cell.tg-right { text-align: right; }
 /* A group row spans the grid in one cell that borrows the first
    column's class; a number column first would push the title off the

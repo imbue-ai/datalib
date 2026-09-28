@@ -484,6 +484,9 @@ again, and the only ones that should know the grid's DOM or options:
   four places a grid is built.
 - `grid/menu.ts` and `grid/rowKeys.ts` — the row menu and the `data-key`
   a row carries; `grid/query.ts` knows no grid at all.
+- `grid/rowHover.ts` — lights both halves of a row that pinned columns
+  split in two; the theme's `:hover` reaches only the half under the
+  pointer.
 - `grid/gridFrame.ts` — how a grid sits in its card: the resize options
   that make it follow the card's frame, and the theme test.
 - `grid/columnLayout.ts` — how every grid treats its columns: never
