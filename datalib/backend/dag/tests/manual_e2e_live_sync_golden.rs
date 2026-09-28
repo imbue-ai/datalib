@@ -610,7 +610,7 @@ fn manual_e2e_live_sync_golden() {
         snapshot_path => snap_base().join("unified_index").display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
-        description => "unified_index/qmd_index: documents and embedding left, per source",
+        description => "the qmd index: documents and embedding left, per source",
     }, {
         assert_json_snapshot!("qmd_collections", qmd_collections_report(&data_root, &cfg_out));
     });
@@ -1167,9 +1167,9 @@ fn markdown_qmd_reads(dir: &Path) -> u64 {
         .count() as u64
 }
 
-/// Run 2's qmd work is only where a render moved: `qmd_index` reruns for
-/// any source's render but keeps its version, so a source whose render
-/// did not move keeps its keyword index and its embedding up to date.
+/// Run 2's qmd work is only where a render moved: a source's
+/// `keyword_index` reads only its render and its `embed` only that, so a
+/// source whose render did not move skips both, whatever other sources did.
 fn assert_qmd_steps_follow_their_render(summary: &Value) {
     let steps = summary
         .get("steps")
