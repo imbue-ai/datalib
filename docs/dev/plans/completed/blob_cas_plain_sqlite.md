@@ -1,7 +1,14 @@
 # The blob CAS as a plain SQLite file
 
-*Proposal (2026-09-28), decisions agreed the same day; nothing here is
-built. The sizes were measured that day on copies of two stores from
+**Status: built (2026-09-28), kept as the record.** The reference is
+`datalib/backend/etl/README.md` §"Blob CAS and per-provider edge
+tables". Where the build differs from the text below: `RawStoreHandle`
+gained `versioned_pools()` so `commit_all` leaves the CAS out; the
+refusal prints the conversion command itself, with the real paths,
+rather than pointing at a doc; and `introspect.rs` lists `blobs.sqlite`
+by name, since it had only been counting `*.doltlite_db` files.
+
+*The sizes were measured on 2026-09-28 on copies of two stores from
 `~/datalib/stay_alive_1`, with the doltlite 0.50.5 shell; the stores
 themselves were written by the pinned 0.50.12.*
 

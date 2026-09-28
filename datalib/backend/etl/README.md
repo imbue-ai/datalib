@@ -592,7 +592,7 @@ not, and a row never changes — so nothing ever read its doltlite log,
 diffs or pins, while every checkpoint's rewritten pages stayed in the
 file for good: measured on two real stores, a doltlite CAS was 2.1× and
 4.7× its payload, and `dolt_gc()` reclaimed almost none of it
-(`docs/dev/plans/blob_cas_plain_sqlite.md`). So the one-writer lock,
+(`docs/dev/plans/completed/blob_cas_plain_sqlite.md`). So the one-writer lock,
 the writer branch, the seal and the pin are all doltlite's rules and
 none of them apply here.
 
