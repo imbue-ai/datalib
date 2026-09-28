@@ -325,7 +325,10 @@ datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml
 ```
 
 It keeps the original beside the result as `config.toml.orig`. Comments
-from the old file don't carry over, so review the result. A much older
+from the old file don't carry over, so review the result. A config from
+before each source had its own search steps needs none of this: the app
+adds them the first time it reads the file, and keeps the old one as
+`config.toml.bak`. A much older
 root with only a `config.yaml` is not convertible any more: set it up
 again from the app.
 

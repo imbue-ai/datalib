@@ -157,7 +157,11 @@ function from the environment (steps with a `datalib-step download …`
 or `datalib-step render …` command, grouped or not) is refused, and the
 diagnostic says so; tell the user to rewrite it once with
 `datalib-migrate-config <data_root> --force`. There is no API for it,
-and you should not try to translate the file yourself.
+and you should not try to translate the file yourself. A `qmd_index`
+naming a source that has no `keyword_index` step is different: the
+server gives each such source its `keyword_index` and `embed` steps as
+soon as it reads the file, keeping the old one as `config.toml.bak`, so
+re-read the config after writing one.
 
 ## Adding your own step commands
 

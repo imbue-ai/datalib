@@ -12,7 +12,8 @@
 //! `datalib-step download <type>` command lines, the `_api` / `_backup`
 //! type words, and the `sync` / `common.input_path` / `common.raw_path`
 //! params — and, after it, `qmd_steps.rs`: a source the qmd fan-in names
-//! gets its own `keyword_index` and `embed` steps.
+//! gets its own `keyword_index` and `embed` steps. That second rewrite is
+//! also the one `datalib-http` makes by itself (`upgrade_qmd_steps`).
 
 pub mod convert;
 pub mod qmd_steps;
@@ -53,6 +54,27 @@ pub fn convert(text: &str) -> Result<String> {
     // runner rejected and let the message speak.
     verify(&out).context("the converted config does not load")?;
     Ok(out)
+}
+
+/// The rewrite `datalib-http` makes unattended, to a config in the shape
+/// from before each source had its own qmd steps. `None` when there is
+/// nothing to do, including text that is not TOML: the loader reports
+/// that. Refused when the result would drop an entry the original ran,
+/// since nobody reviews this rewrite before it lands.
+pub fn upgrade_qmd_steps(text: &str) -> Result<Option<String>> {
+    if !qmd_steps::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = qmd_steps::rewrite(text)?;
+    let before = datalib_dag::config::check_text(text);
+    let after = datalib_dag::config::check_text(&out);
+    if after.dropped() > before.dropped() {
+        bail!(
+            "the rewritten config would not load every entry the original does:\n{}",
+            after.render(std::path::Path::new(datalib_dag::config::CONFIG_FILE_NAME))
+        );
+    }
+    Ok(Some(out))
 }
 
 fn verify(toml_text: &str) -> Result<()> {
@@ -548,6 +570,65 @@ inputs = ["slack/render_markdown"]
         .to_string();
         assert!(err.contains("slack"), "{err}");
         assert!(err.contains("email"), "{err}");
+    }
+
+    const SHARED_QMD_INDEX: &str = r#"
+[[groups]]
+id = "mail"
+type = "email"
+
+[[steps]]
+group = "mail"
+function = "ingest"
+[steps.params.mbox]
+path = "/m"
+
+[[steps]]
+group = "mail"
+function = "render_markdown"
+inputs = ["mail/ingest"]
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
+inputs = ["mail/render_markdown"]
+"#;
+
+    /// What the server rewrites by itself: the shared qmd index, and
+    /// nothing it has already rewritten, nor text the loader should be the
+    /// one to report on.
+    #[test]
+    fn the_unattended_upgrade_rewrites_only_the_shared_qmd_index() {
+        let out = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
+        assert!(out.contains("function = \"keyword_index\""), "{out}");
+        assert!(out.contains("function = \"embed\""), "{out}");
+        let check = datalib_dag::config::check_text(&out);
+        assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
+        assert_eq!(upgrade_qmd_steps(&out).unwrap(), None);
+        assert_eq!(upgrade_qmd_steps("not [ toml").unwrap(), None);
+        assert_eq!(upgrade_qmd_steps("").unwrap(), None);
+    }
+
+    /// A rewrite nobody reviews must not cost an entry the original ran.
+    /// Here a custom step already writes under `mail/keyword_index/`, so
+    /// the keyword step the rewrite adds would nest with it, and the
+    /// loader drops one of the two.
+    #[test]
+    fn the_unattended_upgrade_refuses_a_rewrite_that_drops_an_entry() {
+        let clash = format!(
+            "{SHARED_QMD_INDEX}\n[[steps]]\nid = \"mail/keyword_index/extra\"\ncommand = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
+        );
+        let before = datalib_dag::config::check_text(&clash).dropped();
+        let after = datalib_dag::config::check_text(&qmd_steps::rewrite(&clash).unwrap()).dropped();
+        assert!(
+            after > before,
+            "the fixture must make the rewrite drop an entry"
+        );
+        let err = upgrade_qmd_steps(&clash).unwrap_err().to_string();
+        assert!(err.contains("would not load"), "{err}");
     }
 
     #[test]

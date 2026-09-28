@@ -918,19 +918,6 @@ export function unwireFromFanIns(text: string, stepId: string, only?: FanInFunct
   );
 }
 
-/// Does the fan-in `fn` name this render step — that is, does this
-/// source reach that index? A config with no such step answers false,
-/// which is what it is: nothing indexes this source that way.
-export function fanInNames(
-  steps: ConfiguredStep[],
-  fn: FanInFunction,
-  renderStepId: string,
-): boolean {
-  return steps.some(
-    (s) => s.kind === "step" && fanInFunctionOf(s) === fn && s.inputs.includes(renderStepId),
-  );
-}
-
 /// Which fan-in a step is, or null for a step that is not one. A
 /// grouped step says so with `group` + `function`; a custom step filed
 /// outside any group says it in the id it writes.
@@ -956,28 +943,40 @@ export function buildQmdSteps(group: string): { id: string; body: string }[] {
   ];
 }
 
-/// Give a source its qmd steps — those it lacks — and its embeddings a
-/// place on the map; or, with `searched` false, take both away. Only
-/// where the config has a qmd index for the steps to read: without one,
-/// they would only be dropped by the loader.
-export function setQmdSteps(text: string, group: string, searched: boolean): string {
-  const steps = buildQmdSteps(group);
-  const embedId = steps[1].id;
+/// How far into qmd a source's markdown goes: not at all, a keyword
+/// index, or a keyword index and the embeddings that read it. There is
+/// no embeddings-only: the embed step reads the keyword index.
+export type QmdIndexing = "none" | "keyword" | "embedded";
+
+/// Which of a source's qmd steps the config has, as a `QmdIndexing`.
+export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexing {
+  const has = (fn: string) => steps.some((s) => s.id === `${group}/${fn}`);
+  if (!has("keyword_index")) return "none";
+  return has("embed") ? "embedded" : "keyword";
+}
+
+/// Give a source the qmd steps `indexing` asks for — those it lacks —
+/// and its embeddings a place on the map, and take away the ones it does
+/// not ask for, with every step that reads them. Only where the config has
+/// a qmd index for the steps to read: without one, they would only be
+/// dropped by the loader.
+export function setQmdSteps(text: string, group: string, indexing: QmdIndexing): string {
+  const [keyword, embed] = buildQmdSteps(group);
   const all = listSteps(text);
   const hasIndex = all.some((s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_index");
-  if (searched && hasIndex) {
-    const missing = steps.filter((b) => !all.some((s) => s.id === b.id));
-    let next = missing.length ? appendSource(text, missing.map((b) => b.body).join("\n\n")) : text;
-    next = wireIntoFanIns(next, embedId, "embedding_map");
-    return next;
-  }
-  const ids = new Set(steps.map((b) => b.id));
-  let next = removeSteps(
-    text,
-    all.filter((s) => ids.has(s.id)),
-  );
-  next = unwireFromFanIns(next, embedId, "embedding_map");
-  return unwireFromFanIns(next, stepIdFor(group, "render"), "qmd_index");
+  const wanted =
+    !hasIndex || indexing === "none" ? [] : indexing === "keyword" ? [keyword] : [keyword, embed];
+  const unwanted = [keyword, embed].filter((b) => !wanted.includes(b)).map((b) => b.id);
+  const gone = [...all.filter((s) => unwanted.includes(s.id)), ...readersOf(unwanted, all)];
+  let next = gone.length ? removeSteps(text, gone) : text;
+  const missing = wanted.filter((b) => !all.some((s) => s.id === b.id));
+  if (missing.length) next = appendSource(next, missing.map((b) => b.body).join("\n\n"));
+  next = wanted.includes(embed)
+    ? wireIntoFanIns(next, embed.id, "embedding_map")
+    : unwireFromFanIns(next, embed.id, "embedding_map");
+  return wanted.includes(keyword)
+    ? next
+    : unwireFromFanIns(next, stepIdFor(group, "render"), "qmd_index");
 }
 
 /// Every step that reads one of `ids`, directly or through another, other

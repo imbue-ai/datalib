@@ -1326,9 +1326,10 @@ fn accept_steps(
                 )
                 .with_help(
                     "each source searched has `keyword_index` and `embed` steps in its own \
-                     group; `datalib-migrate-config <data root> --force` adds them for every \
-                     source this step names. Or drop the source from `inputs` to leave it out \
-                     of search.",
+                     group. The app adds them for every source this step names when it next \
+                     reads the file, keeping the old one as `config.toml.bak`; \
+                     `datalib-migrate-config <data root> --force` does the same from a \
+                     terminal. Or drop the source from `inputs` to leave it out of search.",
                 ),
             );
         }

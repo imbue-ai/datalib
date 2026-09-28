@@ -146,7 +146,7 @@ pub fn rewrite(text: &str) -> Result<String> {
 
     let mut out = format!("{}\n", out.trim_end());
     out.push_str(
-        "\n# Added by datalib-migrate-config: each source's own qmd steps, which\n\
+        "\n# Added by the config migration: each source's own qmd steps, which\n\
          # keyword-index and embed what `qmd_index` used to do for all of them.\n",
     );
     for b in blocks {

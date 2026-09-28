@@ -259,8 +259,11 @@ search off for the whole root. Each reports what it read as its version and lets
 it already has, and `qmd_index` reports its collection set, so one
 source re-rendering reruns that source's two steps and nobody else's.
 A `qmd_index` naming a group with no `keyword_index` is the shape from
-before these were per source, when it did both itself; the loader warns
-and names `datalib-migrate-config`, which adds the pair.
+before these were per source, when it did both itself. The loader warns;
+`datalib-http` adds the pair itself as soon as it reads such a file, at
+boot or on any change to it, keeping the old text as `config.toml.bak`
+(`http/src/config_upgrade.rs`). `datalib-migrate-config` makes the same
+rewrite from a terminal.
 
 So the lists are what decides which indexes a source reaches. A render
 step named by neither fan-in renders and reaches nothing. Named by
@@ -274,11 +277,12 @@ off just its `embed` step keeps keyword search.
 The wizard maintains all of it (`ui/src/config/sourceSteps.ts`):
 `wireIntoFanIns` on create, `unwireFromFanIns` on delete and when a
 render step is removed, and `setQmdSteps` for the Rendering section's
-"Index the markdown for free-text search" tickbox, which adds or
-removes the source's two steps, its render in `qmd_index` and its
-`embed` in the map. Removing any step takes every step that reads it
-(`readersOf`). A hand edit has to remember, and the Manage screen flags
-a render step nothing consumes.
+two qmd tickboxes. "Keyword-index the markdown" adds or removes the
+source's `keyword_index` and its render in `qmd_index`; "Embed it for
+search by meaning", which needs the first, adds or removes its `embed`
+and that step's place in the map. Removing any step takes every step
+that reads it (`readersOf`). A hand edit has to remember, and the Manage
+screen flags a render step nothing consumes.
 
 ## What the Manage screen and the wizard make of it
 
@@ -311,4 +315,7 @@ retired type words become the current ones, and `sync` /
 `common.input_path` / `common.raw_path` become method tables with
 their own `path`. The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool.
+well enough to name the tool. The one rewrite made without asking is the
+qmd steps', a text edit that keeps comments: `datalib-http` makes it
+through `upgrade_qmd_steps`, which refuses a result that would drop an
+entry the original ran.
