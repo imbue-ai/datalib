@@ -30,6 +30,7 @@ import {
   stampOf,
   stampsBefore,
   statusOf,
+  syncAllButton,
   MANAGE_WITH_CONFIG,
 } from "./grid-helpers";
 
@@ -83,7 +84,7 @@ async function resolveDataRoot(request: APIRequestContext): Promise<string> {
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expect(syncAllButton(page)).toBeVisible();
 }
 
 async function writeConfig(page: Page, text: string) {

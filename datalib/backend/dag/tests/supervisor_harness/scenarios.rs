@@ -5,7 +5,7 @@ use std::time::Duration;
 use datalib_dag::supervisor::store::RequestOutcome;
 use datalib_dag::Event;
 
-use crate::harness::{reads, source, Clocks, Harness, Seen, Step};
+use crate::harness::{reads, source, Clocks, Harness, Seen, State, Step};
 
 const SIGABRT: i32 = 6;
 const SIGKILL: i32 = 9;
@@ -650,6 +650,66 @@ async fn a_burst_of_seals_costs_a_running_fan_in_exactly_one_more_pass_on_the_ne
     }
     assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
     assert_eq!(h.state().await.started("d"), 2);
+    h.finish().await;
+}
+
+/// The requests a step's record says it still has work in.
+fn served(s: &State, step: &str) -> Vec<String> {
+    s.record
+        .steps
+        .get(step)
+        .map(|r| r.requests.clone())
+        .unwrap_or_default()
+}
+
+/// Sync everything: one sync per source, opened at once, all feeding one
+/// fan-in. A source done with its download serves none of them — its row
+/// offers Sync — while the fan-in, waiting on the sources still running,
+/// serves every sync. It runs once, after the last, and every sync stays
+/// open until that pass has ended.
+#[tokio::test(flavor = "multi_thread")]
+async fn syncs_of_every_source_share_the_fan_in_and_close_with_its_pass() {
+    let mut h = Harness::new(&fan_in(&["a", "b", "c"])).await;
+    let syncs = [
+        h.sync(&["a"]).await,
+        h.sync(&["b"]).await,
+        h.sync(&["c"]).await,
+    ];
+    for s in ["a", "b", "c"] {
+        h.started(s).await;
+    }
+    h.run("a", "ok a1").await;
+    h.until("a to serve nothing, and d every sync", |s| {
+        (served(s, "a").is_empty() && served(s, "d") == syncs).then_some(())
+    })
+    .await;
+    let state = h.state().await;
+    assert_eq!(served(&state, "b"), [syncs[1].as_str()]);
+    assert_eq!(served(&state, "c"), [syncs[2].as_str()]);
+    assert_eq!(state.started("d"), 0, "d waits for b and c to finish");
+
+    h.run("b", "ok b1").await;
+    h.run("c", "ok c1").await;
+    h.started("d").await;
+    let state = h.state().await;
+    assert_eq!(
+        state.outcome(&syncs[0]),
+        None,
+        "a's sync is open until d has read it"
+    );
+    h.run("d", "ok d1").await;
+    for id in &syncs {
+        assert_eq!(h.closed(id).await, RequestOutcome::Done);
+    }
+    let state = h.state().await;
+    assert_eq!(state.started("d"), 1);
+    for step in ["a", "b", "c", "d"] {
+        assert!(
+            served(&state, step).is_empty(),
+            "{step}: {:?}",
+            served(&state, step)
+        );
+    }
     h.finish().await;
 }
 

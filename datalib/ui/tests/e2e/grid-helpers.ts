@@ -12,6 +12,11 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 /// The search grid's rows, wherever it is on the page.
 export const SEARCH_ROWS = ".grid-box .slick-row";
+
+/// The Manage header's sync button, whichever way it faces: Sync
+/// everything, or Stop everything while anything syncs.
+export const syncAllButton = (page: Page) =>
+  page.getByRole("button", { name: /^(Sync|Stop|Stopping) everything$/ });
 /// One of its column headers.
 export const searchHeader = (page: Page, colId: string) =>
   page.locator(`.grid-box .slick-header-column[col-id="${colId}"]`);
@@ -547,7 +552,7 @@ export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
     )
     .toBe(false);
   await page.reload();
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expect(syncAllButton(page)).toBeVisible();
 }
 
 /// Resolves once the wall clock is in a later second than when it was
