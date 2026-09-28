@@ -11,8 +11,8 @@ import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
 
 /// The fields of one type among the specs. A `timestamp` cell reads "5
-/// minutes ago" and a `timeseries` sparkline slides, so both go stale
-/// on their own and the host repaints them on a clock.
+/// minutes ago", so it goes stale on its own and the host repaints it
+/// on a clock.
 export function fieldsOfType(specs: ColumnSpec[], type: ColumnType): string[] {
   return specs.filter((c) => c.type === type).map((c) => c.field);
 }
@@ -60,11 +60,6 @@ function windowPhrase(secs: number): string {
 }
 
 const SPARK = { width: 120, height: 18 };
-
-/// How long the clock takes to move a sparkline by one pixel.
-export function sparkStepMs(windowSecs: number): number {
-  return (windowSecs * 1000) / SPARK.width;
-}
 
 function sparkSvg(value: number, samples: Sample[], windowMs: number): SVGSVGElement | null {
   const nowMs = Date.now();

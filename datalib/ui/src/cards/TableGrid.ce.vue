@@ -29,7 +29,7 @@ import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
 import { treeColumnField, typedColumns } from "./typedColumns";
 import type { TableGridApi } from "./tableGridApi";
-import { fieldsOfType, sparkStepMs } from "./cellRenderers";
+import { fieldsOfType } from "./cellRenderers";
 
 const props = withDefaults(
   defineProps<{
@@ -422,22 +422,15 @@ function createGrid() {
   emit("ready", api);
 }
 
-// Some cells go stale with no new data ("5 minutes ago", a sliding
-// sparkline), so they need a clock rather than an event. It ticks every
-// second and repaints only the cells that would draw differently.
+// A "5 minutes ago" cell goes stale with no new data, so it needs a
+// clock rather than an event. It ticks every second and repaints only
+// the cells that would draw differently.
 let faces: ClockFaces = new Map();
 let clock: ReturnType<typeof setInterval> | null = null;
 function tickClock() {
   const timestamps = fieldsOfType(props.columns, "timestamp");
-  const timeseries = fieldsOfType(props.columns, "timeseries");
-  if (timestamps.length === 0 && timeseries.length === 0) return;
-  const cols = {
-    timestamps,
-    timeseries,
-    windowMs: props.windowSecs * 1000,
-    stepMs: sparkStepMs(props.windowSecs),
-  };
-  const next = clockFaces(props.rows, keyOf, cols, Date.now());
+  if (timestamps.length === 0) return;
+  const next = clockFaces(props.rows, keyOf, timestamps, Date.now());
   const moved = movedCells(faces, next);
   faces = next;
   repaintCells(moved);
