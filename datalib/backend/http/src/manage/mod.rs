@@ -119,7 +119,7 @@ pub fn columns() -> Vec<ColumnSpec> {
         ColumnSpec::new("last_success", "Last success", ColumnType::Timestamp)
             .hidden()
             .describe("When it last ran without failing \u{2014} for a source, the last moment its mirror is known to have matched upstream. Older than Last synced when the runs since have failed; blank if none has succeeded."),
-        ColumnSpec::new("disk", "Bytes on disk", ColumnType::Timeseries)
+        ColumnSpec::new("disk", "Size", ColumnType::Timeseries)
             .describe("What this tree weighs, with the last few minutes behind it."),
     ]
 }

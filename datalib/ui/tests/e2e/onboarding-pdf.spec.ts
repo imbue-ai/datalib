@@ -45,7 +45,7 @@ const SIGNAL_BACKUP_DIR = process.env.DATALIB_TEST_E2E_SIGNAL_BACKUP_DIR;
 /// sibling, and the fan-in that makes the documents searchable.
 const SYNCED_ROWS = ["pdfs/ingest", "pdfs/render_markdown", "unified_index/grid_index"];
 
-/// "Bytes on disk" as a number, read back off the label drawn over the
+/// The "Size" column as a number, read back off the label drawn over the
 /// sparkline — the number a person actually sees. `null` for a row with
 /// nothing on disk, which the column renders as an em dash rather than
 /// as a flat line at zero.

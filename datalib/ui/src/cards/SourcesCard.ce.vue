@@ -145,9 +145,9 @@ counted over the whole store, not this run, by the render step: on its own row a
 the group above it. It moves while a render runs, each time the step seals what it has
 written. A blank cell means nothing has counted yet; a source that renders no documents
 of its own, like a photo library, counts zero.</p>
-<p><b>Bytes on disk</b> is a directory walk over each row’s tree — a group’s is its
-whole folder, measured on the same walk — plotted over the last few minutes, with its
-change over that time beside the size. Each row’s line is scaled to its own range, so a
+<p><b>Size</b> is bytes on disk, from a directory walk over each row’s tree — a group’s
+is its whole folder, measured on the same walk — plotted over the last few minutes, with
+its change over that time beside it. Each row’s line is scaled to its own range, so a
 jump in a small source shows as plainly as one in a large one: the line is the shape of
 the change, and the numbers are its size. Hover for the breakdown.</p>
 <p><b>Last update</b> and <b>Last synced</b> are per step, read from the runner’s own
