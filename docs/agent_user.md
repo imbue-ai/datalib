@@ -55,7 +55,7 @@ write the one index file under `unified_index/qmd_index/`):
 The split is by writer: `unified_index/` is produced by the pipeline
 and fully derived, `system/` is the server's own state. Canonical
 definition — the constants both sides read — is
-[`datalib/backend/runtime/src/layout.rs`](/datalib/backend/runtime/src/layout.rs).
+[`datalib/backend/runtime/src/layout.rs`](../datalib/backend/runtime/src/layout.rs).
 
 Ten binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `datalib-http` (API
@@ -69,7 +69,7 @@ directory-tree scanner, also reachable as a step) and
 and `datalib-migrate-config` (rewrites a `config.toml` from a retired
 shape; see below). The authoritative list is the `:dist`
 filegroup in
-[`datalib/backend/BUILD.bazel`](/datalib/backend/BUILD.bazel).
+[`datalib/backend/BUILD.bazel`](../datalib/backend/BUILD.bazel).
 End-to-end setup walkthrough:
 [`docs/user/first_time_user.md`](user/first_time_user.md).
 
@@ -316,7 +316,7 @@ Pick the surface that fits the question:
   caching the value; `DATALIB_TOKEN=<value>` pins it. The onboarding
   guides at `<origin>/agent/cards.md` and `<origin>/agent/config.md`
   are readable without it. Design notes:
-  [`datalib/backend/http/src/auth.rs`](/datalib/backend/http/src/auth.rs).
+  [`datalib/backend/http/src/auth.rs`](../datalib/backend/http/src/auth.rs).
 
 ## Extending datalib
 

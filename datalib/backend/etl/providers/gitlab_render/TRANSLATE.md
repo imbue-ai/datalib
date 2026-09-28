@@ -26,10 +26,7 @@ GitLab `ForgeProfile` (`src/render/mod.rs`). What differs:
 - **Rows**: the MR's own row is `kind = "GitLab MR"`; a note's is
   `"GitLab Discussion Note"` or `"GitLab Inline Note"`.
 
-## Run it
-
-Render runs as a source's `render_markdown` step (`datalib-step`); there
-is no standalone binary. To exercise it without a sync:
+## Tests
 
 ```sh
 bazelisk test //datalib/backend/etl/providers/gitlab_render:gitlab_render_unittests \

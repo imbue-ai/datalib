@@ -11,9 +11,9 @@ Two words, because they are two things and conflating them causes real
 confusion:
 
 - **parse** — deserialize a stored payload into the provider's typed
-  in-memory representation. Pure, no I/O, lives in
-  `render/parse.rs`.
-- **render** — turn that representation into the artifacts: `<id>.md`
+  in-memory representation. Pure, no I/O; usually `render/parse.rs` in
+  the provider's `_render` crate.
+- **render** — turn that representation into the artifacts: a `.md`
   for humans and the rows of the render store for the index.
 
 Together they are one pipeline stage, the `render_markdown` step of a
@@ -79,8 +79,8 @@ database per source, at
   - `source_measurements` — the storage report's samples
     ([`grid_rows.md`](grid_rows.md)).
 
-The human artifact stays a file: `<id>.md`, with YAML frontmatter,
-beside a `blobs/` directory for its attachments.
+The human artifact stays a file: a `.md` with YAML frontmatter, beside
+a `blobs/` directory for its attachments.
 
 Every table's schema is a hand-written struct in `datalib_schema` with
 `#[derive(PortableTable)]` deriving the DDL, so the same struct defines
@@ -318,7 +318,7 @@ one.** The seam matters. `render/parse.rs` deserializes into types that
 look like *that provider's* data, with its own vocabulary and its own
 optionality. Projecting onto a shared schema is render's job. Keeping
 the two apart is what lets a provider's oddities stay in one file
-instead of leaking into a type eight providers depend on — and it is
+instead of leaking into a type fourteen providers depend on — and it is
 why the unification rules below are all about render.
 
 ### Unification and fidelity, and how the tension resolves
@@ -326,7 +326,7 @@ why the unification rules below are all about render.
 Unification is a stated goal of this project: one `grid_rows` schema,
 one query behind the grid, `before:` and `after:` meaning the same
 thing whether the row came from Slack or GitHub or Notion. Without it
-there is no union grid — only twenty per-provider views.
+there is no union grid — only a view per provider.
 
 But every unification is a **claim that two things from different
 sources are the same kind of thing**, and that claim is lossy at the

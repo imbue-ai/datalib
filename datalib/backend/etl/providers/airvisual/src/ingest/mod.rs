@@ -12,7 +12,6 @@ pub mod schema_raw;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::SqlitePool;
 use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
 
@@ -23,8 +22,6 @@ use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan::{self, ScannedFile};
 use datalib_etl::progress::Progress;
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 
 use datalib_etl_airvisual_config::AirvisualDevice;
 
@@ -37,27 +34,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 const HISTORY_SUFFIX: &str = "_AirVisual_values.txt";
 const LATEST_JSON: &str = "latest_config_measurements.json";
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-}
-
-impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
-    }
-
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-}
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
@@ -369,6 +346,7 @@ fn sample_row(device: &str, sample: parse::Sample, source_file: &str) -> Airvisu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::sqlite::SqlitePool;
     use std::path::PathBuf;
 
     const HEADER: &str = "Date;Time;Timestamp;PM2_5(ug/m3);AQI(US);AQI(CN);PM10(ug/m3);PM1(ug/m3);Outdoor AQI(US);Outdoor AQI(CN);Temperature(C);Temperature(F);Humidity(%RH);CO2(ppm);\n";

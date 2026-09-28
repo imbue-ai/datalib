@@ -146,7 +146,7 @@ Every backend route requires a per-process API token — Jupyter's scheme,
 and for Jupyter's reason: loopback does not keep a *web page* out, and
 `PUT /api/config` + `POST /api/requests` runs arbitrary `command:`
 strings. See
-[`datalib/backend/http/src/auth.rs`](/datalib/backend/http/src/auth.rs)
+[`datalib/backend/http/src/auth.rs`](../../datalib/backend/http/src/auth.rs)
 for the design.
 
 Both launchers handle it for you:
@@ -158,7 +158,7 @@ Both launchers handle it for you:
   browser talks to Vite, not the backend, so it never gets a cookie —
   instead Vite's server-side `/api` proxy stamps
   `Authorization: Bearer …` on every forwarded request
-  ([`vite.config.ts`](/datalib/ui/vite.config.ts)). Starting Vite by
+  ([`vite.config.ts`](../../datalib/ui/vite.config.ts)). Starting Vite by
   hand means exporting the same `DATALIB_TOKEN` the backend has, or
   every `/api` call comes back 401.
 
@@ -292,7 +292,7 @@ module" says why.
 When upstream content changes, the test will fail with a diff; accept the
 change with the sibling `.update` target (e.g. `bazel run
 //datalib/backend/etl/providers/claude:claude_live.update` —
-see [`/docs/dev/testing.md`](/docs/dev/testing.md) § "Updating insta
+see [`testing.md`](testing.md) § "Updating insta
 goldens").
 
 ### Changing a row schema

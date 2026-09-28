@@ -221,10 +221,10 @@ third-party/   vendored upstream code.
 
 A provider's config schema is its own crate (`<p>_config`, serde
 structs and nothing else) so anything that needs to *understand* a
-config can link it without the machinery. Those crates are Bazel-only
-by design — no `Cargo.toml` — because a first-party crate with only
-third-party deps needs just a `BUILD.bazel`. The `<p>_render` split is
-the same move (see §"Ingest and render are separate crates").
+config can link it without the machinery. Those crates have no
+`Cargo.toml` (§"Git: prefer merges over rebases" says why). The
+`<p>_render` split is the same move (see §"Ingest and render are
+separate crates").
 
 ## The sync pipeline
 
@@ -236,7 +236,7 @@ tree it writes; `inputs` name steps by that id and are the edges; an
 `[[applets]]` entry is a server the gateway spawns. A built-in step has
 no `command` and runs `datalib-step`.
 
-Each source has an `ingest` step and a `render_markdown` step, and
+Each source has an `ingest` step and (most) a `render_markdown` step, and
 `grid_index` under `unified_index` reads every render tree its `inputs`
 name into the SQL index the grid reads. A searched source fills its own
 collection of the qmd index (free-text search) with two more steps of
@@ -245,8 +245,9 @@ turned off or run by hand per source. `qmd_aggregator` reads every
 source's pair: it retires the collection of any source it does not name
 and reports on the whole, and removing it turns search off.
 `embedding_map` reads the aggregator and lays the embeddings out on a
-plane for the map card (`datalib/backend/embedding_map/README.md`). All of it is read by the
-`unified_index` applet; `datalib-http` never opens them. A render
+plane for the map card (`datalib/backend/embedding_map/README.md`).
+All of it is queried by the `unified_index` applet; `datalib-http`
+reads only the stores' commit logs (`history/`), never their rows. A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
@@ -258,10 +259,8 @@ shows `ConfigErrorView`, live in both directions. The http server runs
 the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
 `runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
 there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
-edits the config; a
-root with no config gets the launcher and the first-run screen. See
-`docs/dev/step_protocol.md` for writing a step and `docs/dev/applets.md`
-for applets.
+edits the config; a root with no config gets the launcher and the
+first-run screen.
 
 ## Ingest and render are separate crates
 
@@ -291,12 +290,11 @@ it should not have.
 
 ## The grid_rows union table
 
-The grid is backed by one denormalized table, `grid_rows`, populated by
-the `grid_index` step from every source's render store, and read by the
-`unified_index` applet with one SELECT — no per-provider branches in the
-query path. The schema is the `GridRow` struct in
-`datalib/backend/schema/src/grid_rows.rs`; `docs/dev/grid_rows.md` has
-the architecture and the checklist for adding a column.
+The grid is one denormalized table, `grid_rows` (the `GridRow` struct in
+`datalib/backend/schema/src/grid_rows.rs`), which `grid_index` fills
+from every source's render store and the `unified_index` applet reads
+with one SELECT — no per-provider branches in the query path.
+`docs/dev/grid_rows.md` has the checklist for adding a column.
 
 ## QMDs are write-only
 

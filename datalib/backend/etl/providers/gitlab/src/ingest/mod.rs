@@ -267,24 +267,22 @@ mod tests {
 
     #[test]
     fn parse_mr_ref_accepts_bang_form_and_url() {
-        let (p, n) = parse_mr_ref("generally-intelligent/generally_intelligent!7643").unwrap();
-        assert_eq!(p, "generally-intelligent/generally_intelligent");
-        assert_eq!(n, 7643);
-        let (p, n) = parse_mr_ref(
-            "https://gitlab.com/generally-intelligent/generally_intelligent/-/merge_requests/7643",
-        )
-        .unwrap();
-        assert_eq!(p, "generally-intelligent/generally_intelligent");
-        assert_eq!(n, 7643);
+        let (p, n) = parse_mr_ref("starfleet/enterprise!1701").unwrap();
+        assert_eq!(p, "starfleet/enterprise");
+        assert_eq!(n, 1701);
+        let (p, n) =
+            parse_mr_ref("https://gitlab.com/starfleet/enterprise/-/merge_requests/1701").unwrap();
+        assert_eq!(p, "starfleet/enterprise");
+        assert_eq!(n, 1701);
     }
 
     #[test]
     fn project_full_path_extracts_namespace() {
         assert_eq!(
             project_full_path_from_web_url(
-                "https://gitlab.com/generally-intelligent/generally_intelligent/-/merge_requests/7643"
+                "https://gitlab.com/starfleet/enterprise/-/merge_requests/1701"
             ),
-            Some("generally-intelligent/generally_intelligent".to_string())
+            Some("starfleet/enterprise".to_string())
         );
     }
 }

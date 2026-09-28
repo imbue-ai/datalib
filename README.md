@@ -23,7 +23,7 @@ Three ways in, from least to most hands-on:
 1. **The desktop app** (macOS, Apple Silicon). Download the `.dmg` from
    the [latest release](https://github.com/imbue-ai/datalib/releases/latest).
    It asks which folder to keep your data in, then opens the app; you
-   add your first source from the **Manage** screen.
+   add your first source from the **Data sources** card.
 2. **The command-line tools** (macOS or Linux). One `curl | sh` installs
    them. The [**first-time user guide**](docs/user/first_time_user.md)
    walks through install, credentials, the config file, and your first
@@ -173,8 +173,8 @@ Two mechanisms carry it here:
 - **Every store keeps its history.** A raw store's commits are the
   syncs; a render store's commits are the renders. `datalib-doltlite`
   reads either at any commit or diffs any two (`dolt_log`, `dolt_diff`),
-  and a Manage row's commit history shows what each commit did to each
-  table.
+  and a source's commit history in the app shows what each commit did
+  to each table.
 - **A comparison is a source of its own.** "Compare two versions…" on a
   source makes a *diff group*: the source's own renderer run at both
   commits and subtracted, written as an ordinary source. Its documents

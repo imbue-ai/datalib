@@ -484,6 +484,8 @@ again, and the only ones that should know the grid's DOM or options:
   four places a grid is built.
 - `grid/menu.ts` and `grid/rowKeys.ts` — the row menu and the `data-key`
   a row carries; `grid/query.ts` knows no grid at all.
+- `grid/gridFrame.ts` — how a grid sits in its card: the resize options
+  that make it follow the card's frame, and the theme test.
 - `grid/columnLayout.ts` — how every grid treats its columns: never
   fitted to the viewport, so a width a person drags stays, and carried
   across a rebuild. Each of the four spreads its `KEEP_COLUMN_WIDTHS`.

@@ -111,7 +111,7 @@ answers with an error, not a weaker search.
    on `GridRowBuilder` (`schema/src/grid_rows_builder.rs`).
 2. Fill it where rows are built: the shared layers named under
    "Producer side", and the render crates that build rows themselves
-   (notion, pdf, perseus, garmin, contacts).
+   (notion, pdf, perseus, garmin; pdf writes the struct literally).
 3. Update `unified_index/src/dolt_repo.rs` — both the
    `SEARCH_ROW_COLUMNS` list and `search_row_from`, which name columns
    by `GridRowColumn` — and `SearchRow` in `unified_index/src/search.rs`
