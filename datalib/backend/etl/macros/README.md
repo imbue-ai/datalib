@@ -140,7 +140,34 @@ as the single source of truth the same way `schema_raw.rs` is.
   the column it follows. Declares a column that lives in the DB but is
   computed at load time and so is absent from the struct.
 
-Emits module-level `TABLES`, `DDL`, `COLUMNS` and `INDEXES`.
+Emits module-level `TABLES`, `DDL`, `COLUMNS` and `INDEXES`, and an enum
+naming every column, the derived ones included: `GridRow` gets
+`GridRowColumn`, with `as_str`, `parse` and `ALL`. Code that picks a
+column names it by that enum rather than by a string.
+
+### Searched tables
+
+`search(...)` inside `#[portable_table(...)]` says the search bar reads
+the table, and the derive then writes a `datalib_query::table::SearchTable`
+for it: the keys, the default order and what free text matches, all from
+the table's own columns. Every column named must exist, or it is a
+compile error.
+
+- `search(order = "touched_at_utc desc, uuid desc", ...)` — required: the
+  rows' order when nobody asks for one. Its first column is also a
+  group's newest row.
+- `range = "created_at_utc"` — the stamp `before:` and `after:` compare.
+- `qmd` — free text goes to the table's qmd index. Without it, at least
+  one column must say `like`.
+
+On a `#[col(...)]` or a `#[derived(...)]`:
+
+- `search` (the key is the column's name) or `search = "convo"`; with
+  `alias = "old_name"` (repeatable) for a spelling people already type,
+  and `uuid` when a value may come as `slug-uuid`.
+- `sort_by = "created_at_utc"` — sorts and groups by this twin instead.
+- `is = "document"` — `is:document` keeps the rows where it is true.
+- `like` — free text is a case-insensitive substring of this column.
 
 The `BulkUpsertable` impl is **skipped for a composite primary key, and
 for an integer one**: `BulkUpsertable` keys on one column by contract

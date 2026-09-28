@@ -1,5 +1,6 @@
 //! End-to-end integration test for the doltlite backend.
 
+use datalib_query::table::SearchTable;
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_DDL, INDEXES as GRID_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use datalib_schema::problems::{
@@ -8,9 +9,9 @@ use datalib_schema::problems::{
 use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
 use datalib_unified_index::dolt_repo::{listing_sql, DoltRepo};
+use datalib_unified_index::grid_columns::grid_order;
 use datalib_unified_index::query::parse_query;
 use datalib_unified_index::repo::IndexRepo;
-use datalib_unified_index::search_keys::SEARCH_KEYS;
 use datalib_unified_index::sort::Sort;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -93,7 +94,7 @@ fn chat_row_at(uuid: &str, qmd_path: &str, created_at: &str) -> GridRow {
 }
 
 fn order(spelled: &str) -> Vec<Sort> {
-    Sort::parse_order(spelled).unwrap()
+    grid_order(spelled).unwrap()
 }
 
 fn unique_db_path() -> PathBuf {
@@ -613,7 +614,7 @@ async fn every_filter_key_is_served_by_an_index() {
     for (_t, ddl) in GRID_DDL.iter().chain(GRID_INDEXES.iter()) {
         sqlx::query(*ddl).execute(&writer).await.expect("create");
     }
-    let key_queries: Vec<(String, bool)> = SEARCH_KEYS
+    let key_queries: Vec<(String, bool)> = GridRow::KEYS
         .iter()
         .map(|k| (format!("{}:x", k.key), SCANS.contains(&k.key)))
         .collect();

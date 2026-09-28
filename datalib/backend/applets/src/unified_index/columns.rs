@@ -10,15 +10,15 @@ use std::path::Path;
 
 use datalib_columns::{source_catalog, ColumnSearch, ColumnSpec, ColumnType, Identity};
 use datalib_unified_index::db::datalib_source_id;
+use datalib_unified_index::grid_columns;
 use datalib_unified_index::search::SearchRow;
-use datalib_unified_index::search_keys;
 
 pub fn columns() -> Vec<ColumnSpec> {
     let mut columns = declared();
     // The search bar is the grid's one filter: each column says which of
     // its keys filters its cells.
     for c in &mut columns {
-        c.search = search_keys::for_column(&c.field).map(|(key, field)| ColumnSearch {
+        c.search = grid_columns::for_column(&c.field).map(|(key, field)| ColumnSearch {
             key: key.into(),
             field: field.into(),
         });

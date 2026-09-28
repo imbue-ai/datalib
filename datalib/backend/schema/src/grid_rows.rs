@@ -36,7 +36,13 @@ use serde::{Deserialize, Serialize};
     index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_diff_status:diff_status,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_is_document:is_document,touched_at_utc,uuid"
+    index = "grid_rows_by_is_document:is_document,touched_at_utc,uuid",
+    // The search bar's keys are on the columns they filter.
+    search(
+        order = "touched_at_utc desc, is_document desc, uuid desc",
+        range = "created_at_utc",
+        qmd
+    )
 )]
 pub struct GridRow {
     /// Stable and globally unique. Must be deterministic from the source
@@ -49,10 +55,10 @@ pub struct GridRow {
     pub provider: String,
     /// Display label for the Kind column; drives the row-type filter and the
     /// icon. Not the same thing as `upstream_entity_kind`.
-    #[col(sql = "VARCHAR(32)")]
+    #[col(sql = "VARCHAR(32)", search)]
     pub kind: String,
     /// Human-friendly provider name for the Source column.
-    #[col(sql = "VARCHAR(32)")]
+    #[col(sql = "VARCHAR(32)", search = "source")]
     pub source_label: String,
     /// When the thing this row describes came into being, as the source
     /// wrote it: ISO-8601 with explicit offset. A message's own stamp; for
@@ -75,7 +81,7 @@ pub struct GridRow {
     /// source wrote it — it is the record's stamp — which is why it is
     /// not `created_at_utc` + `tz_offset` like the stamps we mint
     /// (AGENTS.md, "Timestamp convention").
-    #[col(sql = "VARCHAR(40)")]
+    #[col(sql = "VARCHAR(40)", search, sort_by = "created_at_utc")]
     #[derived(name = "created_at_utc", sql = "VARCHAR(40)")]
     #[derived(name = "created_offset", sql = "VARCHAR(8)")]
     pub created_at: Option<String>,
@@ -85,7 +91,7 @@ pub struct GridRow {
     /// an inner row, the edit stamp where the source keeps one, else null:
     /// null means "not known to have changed since `created_at`", never a
     /// copy of it. Same form and the same derived twins as `created_at`.
-    #[col(sql = "VARCHAR(40)")]
+    #[col(sql = "VARCHAR(40)", search, sort_by = "modified_at_utc")]
     #[derived(name = "modified_at_utc", sql = "VARCHAR(40)")]
     #[derived(name = "modified_offset", sql = "VARCHAR(8)")]
     pub modified_at: Option<String>,
@@ -95,7 +101,7 @@ pub struct GridRow {
     /// event's `created_at` is when it happens, often years ahead, so its
     /// `touched_at` is its edit stamp. Same form and derived twins as
     /// `created_at`.
-    #[col(sql = "VARCHAR(40)")]
+    #[col(sql = "VARCHAR(40)", sort_by = "touched_at_utc")]
     #[derived(name = "touched_at_utc", sql = "VARCHAR(40)")]
     #[derived(name = "touched_offset", sql = "VARCHAR(8)")]
     pub touched_at: Option<String>,
@@ -107,21 +113,21 @@ pub struct GridRow {
     /// Browse of a source starts on these rows (`is:document` in the
     /// search bar), and the render store refuses a document with any
     /// number of them other than one.
-    #[col(sql = "INTEGER")]
+    #[col(sql = "INTEGER", is = "document")]
     pub is_document: bool,
     /// Display name of the author: the model slug for LLM responses, the
     /// account for user input, the real name for Slack.
-    #[col(sql = "VARCHAR(255)")]
+    #[col(sql = "VARCHAR(255)", search, uuid)]
     pub author: Option<String>,
     /// Whose mirror this row came from — the login's email where the
     /// source stores one, else its name, else the provider's own id.
     /// Null for a source with no login (a PDF folder, an address book).
     /// Drives the `account:` filter.
-    #[col(sql = "VARCHAR(96)")]
+    #[col(sql = "VARCHAR(96)", search, uuid)]
     pub account: Option<String>,
     /// Claude project name, or the repo full name for github/gitlab. Null
     /// for providers with no notion of a project.
-    #[col(sql = "VARCHAR(96)")]
+    #[col(sql = "VARCHAR(96)", search, uuid)]
     pub project: Option<String>,
     /// The organization a login lives inside: Claude's Anthropic org,
     /// which disambiguates conversations that share a login but live in
@@ -131,11 +137,11 @@ pub struct GridRow {
     #[col(sql = "VARCHAR(96)")]
     pub org_uuid: Option<String>,
     /// Display name for `org_uuid`, shown in the Org column.
-    #[col(sql = "VARCHAR(255)")]
+    #[col(sql = "VARCHAR(255)", search)]
     pub org_name: Option<String>,
     /// Slack channel, or a chat's display name (group subject, 1:1
     /// counterpart). Null for providers with no channel concept.
-    #[col(sql = "VARCHAR(255)")]
+    #[col(sql = "VARCHAR(255)", search)]
     pub channel: Option<String>,
     /// Title of the parent conversation, carried onto every child row so a
     /// grid row stands alone without a join. For thread-level rows this
@@ -144,7 +150,7 @@ pub struct GridRow {
     pub conversation_name: Option<String>,
     /// The parent thread, so the preview pane knows what to open. Equals
     /// `uuid` for thread-level rows.
-    #[col(sql = "VARCHAR(96)")]
+    #[col(sql = "VARCHAR(96)", search = "convo", uuid)]
     pub conversation_uuid: String,
     /// Zero-based position within the conversation, in the order the QMD
     /// renders messages. Null for thread-level rows.
@@ -180,7 +186,7 @@ pub struct GridRow {
     /// filed under, which the `source_id:` filter matches
     /// (`GridRow::derived_source_id`).
     #[col(sql = "VARCHAR(512)")]
-    #[derived(name = "source_id", sql = "VARCHAR(96)")]
+    #[derived(name = "source_id", sql = "VARCHAR(96)", search, alias = "source_name")]
     pub qmd_path: Option<String>,
     /// Canonical link back to the provider's own web UI. Null for providers
     /// with no stable public link.
@@ -230,7 +236,7 @@ pub struct GridRow {
     pub upstream_account: Option<String>,
     /// Notion only. The datalib id of the page this row lives in, so the
     /// grid can filter every row in a document. Equals `uuid` for page rows.
-    #[col(sql = "VARCHAR(96)")]
+    #[col(sql = "VARCHAR(96)", search = "notion_page", uuid)]
     pub notion_page_uuid: Option<String>,
     /// Notion only. The block this row is anchored to — the heading block,
     /// or the block a discussion hangs off. Null for page-level rows.
@@ -253,7 +259,7 @@ pub struct GridRow {
     /// Which of those it is depends on `kind`, and the table in
     /// `docs/dev/grid_rows.md` says which. Never mix them under one
     /// kind: a store row measures the file, never a sum of its fields.
-    #[col(sql = "BIGINT")]
+    #[col(sql = "BIGINT", search)]
     pub byte_size: Option<i64>,
     /// How many things this row counts: rows in a table, files under a
     /// directory, messages in a conversation. 1 when the row is one of
@@ -262,17 +268,17 @@ pub struct GridRow {
     ///
     /// Deliberately unitless — what is being counted is `kind`'s job to
     /// say, not this column's.
-    #[col(sql = "BIGINT")]
+    #[col(sql = "BIGINT", search)]
     pub item_count: Option<i64>,
     /// How this row differs between the two commits its diff group
     /// compares — a `DiffStatus` spelling, bound as text. **NULL on
     /// every real source's row**; non-NULL is what marks a row as
     /// coming from a diff tree. See `docs/dev/plans/completed/diff_renderer.md`.
-    #[col(sql = "VARCHAR(16)")]
+    #[col(sql = "VARCHAR(16)", search = "change")]
     pub diff_status: Option<String>,
     /// For a `modified` row: the names of the columns whose value
     /// differs between the two sides, sorted, joined with
     /// `diff_status::CHANGED_COLUMNS_SEPARATOR`. NULL otherwise.
-    #[col(sql = "TEXT")]
+    #[col(sql = "TEXT", search)]
     pub diff_changed_columns: Option<String>,
 }
