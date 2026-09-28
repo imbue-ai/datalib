@@ -8,9 +8,10 @@
 use axum::extract::{Query, State};
 use axum::Json;
 use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, DocumentLink, Identity, RowsSpec};
-use datalib_problems::{Outcome, ProblemRow, ProblemRowColumn, ScopeKind, Severity};
+use datalib_problems::{Outcome, ProblemRow, ProblemRowColumn, Severity};
 use datalib_unified_index::group::Within;
 use datalib_unified_index::problems::{ProblemColumn, ProblemsQuery};
+use datalib_unified_index::repo::LocatedProblem;
 use datalib_unified_index::sort::Sort;
 use datalib_unified_index::view;
 use serde::{Deserialize, Serialize};
@@ -50,8 +51,8 @@ pub struct ProblemView {
     pub field: Option<String>,
     pub rule: Option<String>,
     pub sample: String,
-    /// The document this is about, when the scope is a document: the
-    /// viewer opens it on click.
+    /// The document this is about — its scope's, or its item's — which
+    /// the viewer opens on click.
     pub markdown_uuid: Option<String>,
     pub item_uuid: Option<String>,
     pub scope_kind: &'static str,
@@ -63,7 +64,8 @@ pub struct ProblemView {
 }
 
 impl ProblemView {
-    fn of(row: ProblemRow, sources: &Sources) -> Self {
+    fn of(located: LocatedProblem, sources: &Sources) -> Self {
+        let LocatedProblem { row, markdown_uuid } = located;
         let chip = Chip {
             kind: match row.severity {
                 Severity::Error => ChipKind::Error,
@@ -81,7 +83,6 @@ impl ProblemView {
                 }
             ),
         };
-        let markdown_uuid = (row.scope_kind == ScopeKind::Markdown).then(|| row.scope_key.clone());
         ProblemView {
             problem_uuid: row.problem_uuid,
             severity: row.severity.as_str(),
@@ -153,8 +154,8 @@ pub fn sort_for_banner(rows: &mut [ProblemRow]) {
     });
 }
 
-/// A problem about a document opens it at the section the record has;
-/// one about a raw entity, before any document, opens nothing.
+/// A problem opens its document at the section the record has; one
+/// about a raw entity with no row opens nothing.
 pub fn rows_spec() -> RowsSpec {
     RowsSpec {
         row_key: ProblemRowColumn::ProblemUuid.as_str(),
@@ -183,7 +184,7 @@ pub fn columns() -> Vec<ColumnSpec> {
         ColumnSpec::new("sample", "Sample", ColumnType::Text)
             .describe("The first 80 characters of the offending value."),
         ColumnSpec::new("markdown_uuid", "Document", ColumnType::MarkdownUuid)
-            .describe("The document the record belongs to. Empty when the failure happened before that was known."),
+            .describe("The document the record belongs to. Empty when it has no row there."),
         ColumnSpec::new("outcome", "Outcome", ColumnType::Text).hidden(),
         ColumnSpec::new("rule", "Rule", ColumnType::Text)
             .describe("The deliberate lossy rule that fired, when one did.")
@@ -301,7 +302,7 @@ struct PageSpec<'a> {
 }
 
 struct Page {
-    rows: Vec<ProblemRow>,
+    rows: Vec<LocatedProblem>,
     total: usize,
     next_offset: Option<usize>,
     at: Option<String>,
@@ -689,7 +690,11 @@ mod tests {
             Problem::field("created_at", Reason::CoercionFailed, "yesterday"),
             Some(3),
         );
-        let view = ProblemView::of(row, &Sources::default());
+        let located = LocatedProblem {
+            row,
+            markdown_uuid: Some("md-1".into()),
+        };
+        let view = ProblemView::of(located, &Sources::default());
         let json = serde_json::to_value(&view).unwrap();
         let keys: std::collections::BTreeSet<&str> = json
             .as_object()

@@ -12,7 +12,7 @@ use datalib_unified_index::dolt_repo::{listing_sql, DoltRepo};
 use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::problems::ProblemsQuery;
 use datalib_unified_index::query::parse_query;
-use datalib_unified_index::repo::IndexRepo;
+use datalib_unified_index::repo::{IndexRepo, LocatedProblem};
 use datalib_unified_index::sort::Sort;
 use datalib_unified_index::view;
 use std::path::{Path, PathBuf};
@@ -714,6 +714,26 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
         Problem::field("created_at", Reason::CoercionFailed, "yesterday"),
         Some(1),
     );
+    insert_problems(&writer, std::slice::from_ref(&row)).await;
+    commit(&writer, "problems").await;
+
+    let listing = repo
+        .problem_keys(&ProblemsQuery::parse(""), &[], &[])
+        .await
+        .unwrap();
+    let all = repo.problems_by_keys(&listing.uuids).await.unwrap();
+    assert_eq!(
+        all,
+        vec![LocatedProblem {
+            row: row.clone(),
+            markdown_uuid: Some("md-1".into())
+        }]
+    );
+    assert_eq!(repo.document_problems("md-1").await.unwrap(), vec![row]);
+    assert!(repo.document_problems("md-2").await.unwrap().is_empty());
+}
+
+async fn insert_problems(writer: &sqlx::SqlitePool, rows: &[ProblemRow]) {
     let columns = std::iter::once(ProblemRow::ID_COLUMN)
         .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
         .collect::<Vec<_>>();
@@ -722,18 +742,62 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
         columns.join(", "),
         vec!["?"; columns.len()].join(", ")
     );
-    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
-        .execute(&writer)
-        .await
+    for row in rows {
+        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+            .execute(writer)
+            .await
+            .unwrap();
+    }
+}
+
+/// A download's problem knows only its raw entity; the one whose item is
+/// a row of a document is located at that document, in the table and in
+/// the document's banner, and one whose item the index lacks is at none.
+#[tokio::test]
+async fn an_entity_problem_is_located_at_its_items_document() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let writer = writer(&root).await;
+    for (_t, ddl) in GRID_DDL.iter().chain(PROBLEMS_DDL.iter()) {
+        sqlx::query(*ddl).execute(&writer).await.unwrap();
+    }
+    let message = GridRow::builder()
+        .uuid("msg-2")
+        .provider(Provider::Slack)
+        .kind("Slack Message")
+        .source_label("Slack")
+        .conversation_uuid("md-2")
+        .entire_chat("/chat/md-2")
+        .body("a file")
+        .markdown_uuid(Some("md-2".to_string()))
+        .build()
         .unwrap();
+    insert_rows(&writer, &[chat_row("md-2", "slack/md-2.md"), message]).await;
+    let fetch_failed = |key: &str, item: &str| {
+        ProblemRow::new(
+            "slack",
+            Stage::Fetch,
+            Scope::Entity(key),
+            Some(item),
+            Outcome::Ok,
+            Problem::record(Reason::FetchFailed, "curl: (22) 403"),
+            None,
+        )
+    };
+    let located = fetch_failed("slack_attachments:T1#C1#1.1#F1", "msg-2");
+    let lost = fetch_failed("slack_attachments:T1#C1#2.2#F2", "not-in-the-index");
+    insert_problems(&writer, &[located.clone(), lost.clone()]).await;
     commit(&writer, "problems").await;
 
-    let listing = repo
-        .problem_keys(&ProblemsQuery::parse(""), &[], &[])
+    let keys = [located.problem_uuid.clone(), lost.problem_uuid.clone()];
+    let documents: Vec<Option<String>> = repo
+        .problems_by_keys(&keys)
         .await
-        .unwrap();
-    let all = repo.problems_by_keys(&listing.uuids).await.unwrap();
-    assert_eq!(all, vec![row.clone()]);
-    assert_eq!(repo.document_problems("md-1").await.unwrap(), vec![row]);
-    assert!(repo.document_problems("md-2").await.unwrap().is_empty());
+        .unwrap()
+        .into_iter()
+        .map(|p| p.markdown_uuid)
+        .collect();
+    assert_eq!(documents, [Some("md-2".to_string()), None]);
+    assert_eq!(repo.document_problems("md-2").await.unwrap(), vec![located]);
 }

@@ -15,9 +15,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl_slack::ingest::db::db_path_for;
-use datalib_etl_slack::ingest::schema_raw::{
-    slack_thread_key, split_thread_key, SlackAttachmentRow,
-};
+use datalib_etl_slack::ingest::schema_raw::{slack_thread_key, split_key, SlackAttachmentRow};
 use datalib_etl_slack::ingest::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
 use super::{ts_to_iso, Channel, Message, User, Workspace};
@@ -222,7 +220,7 @@ async fn parse_doltlite_async(
             (a.ts_iso.as_deref(), a.ts.as_str()).cmp(&(b.ts_iso.as_deref(), b.ts.as_str()))
         });
         if has_read_states {
-            if let Some((_, channel, _)) = split_thread_key(&thread_key) {
+            if let Some((_, channel, _)) = split_key(&thread_key) {
                 inputs.read("channel_read_states", channel);
             }
         }
@@ -343,7 +341,7 @@ async fn scan_diff(
         .await?
         .into_iter()
         .filter_map(|key| {
-            let (team, channel, ts) = split_thread_key(&key)?;
+            let (team, channel, ts) = split_key(&key)?;
             Some((super::ids::thread(source_id, team, channel, ts).uuid, key))
         })
         .collect();

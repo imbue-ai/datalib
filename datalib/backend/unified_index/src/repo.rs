@@ -25,6 +25,15 @@ pub struct Listing {
     pub at: Option<String>,
 }
 
+/// A problem and the document it is about: its scope's, when that is a
+/// document, else the document its item is a row of. `None` when it has
+/// neither.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocatedProblem {
+    pub row: ProblemRow,
+    pub markdown_uuid: Option<String>,
+}
+
 /// Reads of the grid index: `grid_rows`, `markdowns`, `edges`.
 #[async_trait]
 pub trait IndexRepo: Send + Sync {
@@ -149,7 +158,7 @@ pub trait IndexRepo: Send + Sync {
 
     /// The problems `keys` name, in that order; one the index no longer
     /// has is left out.
-    async fn problems_by_keys(&self, _keys: &[String]) -> Result<Vec<ProblemRow>, RepoError> {
+    async fn problems_by_keys(&self, _keys: &[String]) -> Result<Vec<LocatedProblem>, RepoError> {
         Ok(Vec::new())
     }
 
@@ -158,7 +167,7 @@ pub trait IndexRepo: Send + Sync {
         &self,
         _query: &ProblemsQuery,
         _by: &[ProblemRowColumn],
-    ) -> Result<Grouping<ProblemRow>, RepoError> {
+    ) -> Result<Grouping<LocatedProblem>, RepoError> {
         Ok(Grouping::default())
     }
 

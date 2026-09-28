@@ -76,12 +76,24 @@ entity in a raw store — and each consumer that reads a store pinned
 copies that store's rows for the source **wholesale** into its own,
 then adds its own: render copies the raw store's fetch-stage rows
 (minting them again under the source's id, which a download does not
-know), `grid_index` copies every render store's into the index. The
+know, and filling in `item_uuid` — see below), `grid_index` copies
+every render store's into the index. The
 pinned store is the complete truth about its source's problems at that
 commit, so the copy is the sweep and there is nothing to diff. Stamps
 travel with the row. The step then reports whole-store counts as
 `problems{severity=…}` metrics, which the Manage screen reads. Design
 and surfaces: `docs/dev/plans/problem_visibility.md`.
+
+A download's problem names only its raw entity (`<table>:<id>`): the
+grid row it is about has an id minted under the source's id, which the
+download never sees. So render asks each processor
+(`RenderProcessor::item_of_entity`) which row that entity is or belongs
+to — a Slack attachment belongs to its message — and fills in
+`item_uuid` only when the render store holds that row. A filled
+`item_uuid` therefore always opens something: the problems table links
+the row's document, and the document's banner lists the problem. A
+provider without the hook leaves `item_uuid` empty, and `scope_key` is
+the only pointer.
 
 ## Volatile fields: split them out, don't diff them
 

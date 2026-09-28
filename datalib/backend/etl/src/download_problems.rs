@@ -341,7 +341,7 @@ pub struct RecordProblem {
 /// [`report_records`] writes, and only those, so a run's report
 /// replaces the last one's whole and a record that fetches this time
 /// stops being a problem.
-const RECORD_PREFIX: &str = "record:";
+pub const RECORD_PREFIX: &str = "record:";
 
 impl RecordProblem {
     pub fn new(table: &str, id: &str, detail: impl Into<String>) -> Self {

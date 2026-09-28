@@ -36,9 +36,25 @@ impl SourceRender for SlackRender {
         datalib_etl_chat_common::render::layout_params()
     }
 
+    /// A message is its own row; an attachment is its message's.
+    fn item_of_entity(&self, source_id: &str, table: &str, id: &str) -> Option<String> {
+        use datalib_etl::blob_cas::CasEdgeRow;
+        use datalib_etl::bulk::BulkUpsertable;
+        use datalib_etl_slack::ingest::schema_raw::{split_key, MessageRow, SlackAttachmentRow};
+        let message_key = if table == MessageRow::TABLE {
+            id
+        } else if table == SlackAttachmentRow::TABLE {
+            SlackAttachmentRow::owning_id_of(id)?
+        } else {
+            return None;
+        };
+        let (team, channel, ts) = split_key(message_key)?;
+        Some(crate::render::ids::message(source_id, team, channel, ts).uuid)
+    }
+
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        use datalib_etl_slack::ingest::schema_raw::split_thread_key as slack_thread_key_parts;
+        use datalib_etl_slack::ingest::schema_raw::split_key;
         let parsed = parse(raw_path, ctx.name, ctx.raw_range())
             .with_context(|| format!("slack parse {}", raw_path.display()))?;
         // Users are read whole every run; messages only for the changed
@@ -55,7 +71,7 @@ impl SourceRender for SlackRender {
         // chat, so chat-common never sees it: declared with nothing, its
         // documents go. The rendered ones follow and replace that.
         for key in parsed.scan.render.iter().flatten() {
-            let Some((team, channel, ts)) = slack_thread_key_parts(key) else {
+            let Some((team, channel, ts)) = split_key(key) else {
                 continue;
             };
             ctx.declare_bucket(
@@ -65,5 +81,31 @@ impl SourceRender for SlackRender {
         }
         ctx.finish(&summary.buckets, parsed.scan.new_head.as_deref())?;
         Ok("rendered".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datalib_etl::blob_cas::CasEdgeRow;
+    use datalib_etl_slack::ingest::schema_raw::{slack_message_key, SlackAttachmentRow};
+
+    /// A download's problem about an attachment reaches the grid row of
+    /// its message: the key the download wrote, taken apart, mints the id
+    /// the render gives that message.
+    #[test]
+    fn an_attachment_is_its_messages_row() {
+        let ts = "1700000000.000100";
+        let message_key = slack_message_key("T1", "C1", ts);
+        let attachment = SlackAttachmentRow::pk_recipe(&message_key, "F1");
+        let message = crate::render::ids::message("src", "T1", "C1", ts).uuid;
+        let item = |table, id| SlackRender.item_of_entity("src", table, id);
+        assert_eq!(
+            item("slack_attachments", &attachment),
+            Some(message.clone())
+        );
+        assert_eq!(item("messages", &message_key), Some(message));
+        assert_eq!(item("users", "U1"), None);
+        assert_eq!(item("slack_attachments", "no-separator"), None);
     }
 }

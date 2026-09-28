@@ -679,6 +679,12 @@ pub trait CasEdgeRow: crate::bulk::BulkUpsertable {
     fn pk_recipe(owning_id: &str, ref_id: &str) -> String {
         format!("{owning_id}#{ref_id}")
     }
+
+    /// The owning id back out of a [`pk_recipe`](Self::pk_recipe) key.
+    /// An owning id may hold `#` (Slack's does); a ref id must not.
+    fn owning_id_of(pk: &str) -> Option<&str> {
+        pk.rsplit_once('#').map(|(owning, _)| owning)
+    }
 }
 
 // Per-provider CAS-edge index loader

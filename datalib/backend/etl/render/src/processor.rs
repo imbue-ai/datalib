@@ -46,6 +46,15 @@ pub trait RenderProcessor: Send + Sync {
     fn render_params(&self) -> serde_json::Value {
         serde_json::json!({})
     }
+
+    /// The `grid_rows.uuid` of the row a raw entity — `id` in raw table
+    /// `table` — is, or belongs to: how a download's problem, which
+    /// knows only the raw key, reaches the row a person can open. `None`
+    /// where this processor has no row for it. The driver keeps the
+    /// answer only when the store holds that row.
+    fn item_of_entity(&self, _source_id: &str, _table: &str, _id: &str) -> Option<String> {
+        None
+    }
 }
 
 /// What a provider writes to render a source whose render wave is one
@@ -64,6 +73,11 @@ pub trait SourceRender: Send + Sync + 'static {
     /// See [`RenderProcessor::render_params`].
     fn render_params(&self) -> serde_json::Value {
         serde_json::json!({})
+    }
+
+    /// See [`RenderProcessor::item_of_entity`].
+    fn item_of_entity(&self, _source_id: &str, _table: &str, _id: &str) -> Option<String> {
+        None
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String>;
@@ -104,6 +118,10 @@ impl<R: SourceRender> RenderProcessor for SourceRenderProcessor<R> {
 
     fn render_params(&self) -> serde_json::Value {
         self.render.render_params()
+    }
+
+    fn item_of_entity(&self, source_id: &str, table: &str, id: &str) -> Option<String> {
+        self.render.item_of_entity(source_id, table, id)
     }
 }
 

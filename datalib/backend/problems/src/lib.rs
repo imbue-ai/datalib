@@ -328,7 +328,8 @@ pub struct ProblemRow {
     /// The `grid_rows.uuid` the record has, or would have had; `None`
     /// for a problem about the whole document or entity. With a
     /// markdown scope this is the section the document view can scroll
-    /// to.
+    /// to. On a fetch-stage row it is the row the raw entity is or
+    /// belongs to, set only where the render store holds that row.
     #[col(
         sql = "VARCHAR(96)",
         search = "item",

@@ -15,7 +15,7 @@ use crate::group::{group_sql, where_within, GroupCount, Grouping, Within, MAX_GR
 use crate::problems::ProblemsQuery;
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
-use crate::repo::{DocRow, EdgeRowOut, IndexRepo, Listing, MapDocRow};
+use crate::repo::{DocRow, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow};
 use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
 use datalib_core::repo::RepoError;
@@ -386,6 +386,58 @@ impl At {
         Ok(keys.iter().filter_map(|k| by_key.remove(k)).collect())
     }
 
+    /// `rows`, each with the document it is about.
+    async fn located(&mut self, rows: Vec<ProblemRow>) -> Result<Vec<LocatedProblem>, RepoError> {
+        let items: Vec<String> = rows
+            .iter()
+            .filter(|r| r.scope_kind == ScopeKind::Entity)
+            .filter_map(|r| r.item_uuid.clone())
+            .collect();
+        let documents = self.documents_of(&items).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let markdown_uuid = match row.scope_kind {
+                    ScopeKind::Markdown => Some(row.scope_key.clone()),
+                    ScopeKind::Entity => row
+                        .item_uuid
+                        .as_ref()
+                        .and_then(|item| documents.get(item).cloned()),
+                };
+                LocatedProblem { row, markdown_uuid }
+            })
+            .collect())
+    }
+
+    /// The document each of `uuids` is a row of, for the ones the
+    /// snapshot holds.
+    async fn documents_of(
+        &mut self,
+        uuids: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, RepoError> {
+        let mut out = std::collections::HashMap::with_capacity(uuids.len());
+        for chunk in uuids.chunks(LOOKUP_CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT uuid, markdown_uuid FROM {} \
+                 WHERE uuid IN ({placeholders}) AND markdown_uuid IS NOT NULL",
+                self.grid_rows
+            );
+            // Audited: the table name is a literal; a placeholder run
+            // sized from the chunk, every uuid bound.
+            let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql));
+            for u in chunk {
+                query = query.bind(u);
+            }
+            match query.fetch_all(&mut *self.tx).await {
+                Ok(rows) => out.extend(rows),
+                Err(e) if is_missing_table(&e, "grid_rows") => return Ok(out),
+                Err(e) => return Err(RepoError::Internal(e.to_string())),
+            }
+        }
+        Ok(out)
+    }
+
     /// `SELECT * FROM problems` in this read, with the caller's clause,
     /// as typed rows. An index built before the table existed reads as
     /// empty; a row this build cannot parse is an error.
@@ -604,18 +656,19 @@ impl IndexRepo for DoltRepo {
         })
     }
 
-    async fn problems_by_keys(&self, keys: &[String]) -> Result<Vec<ProblemRow>, RepoError> {
+    async fn problems_by_keys(&self, keys: &[String]) -> Result<Vec<LocatedProblem>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        at.problems_in(keys).await
+        let rows = at.problems_in(keys).await?;
+        at.located(rows).await
     }
 
     async fn problem_groups(
         &self,
         q: &ProblemsQuery,
         by: &[ProblemRowColumn],
-    ) -> Result<Grouping<ProblemRow>, RepoError> {
+    ) -> Result<Grouping<LocatedProblem>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Grouping::default());
         };
@@ -623,6 +676,7 @@ impl IndexRepo for DoltRepo {
         let (keys, truncated) = at.group_keys(at.problems, &where_sql, &params, by).await?;
         let sample_keys: Vec<String> = keys.iter().map(|(_, _, key)| key.clone()).collect();
         let samples = at.problems_in(&sample_keys).await?;
+        let samples = at.located(samples).await?;
         Ok(grouping(keys, samples, truncated, at.commit))
     }
 

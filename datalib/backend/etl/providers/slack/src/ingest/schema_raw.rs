@@ -317,9 +317,9 @@ pub fn slack_thread_key(team_id: &str, channel_id: &str, thread_ts: &str) -> Str
     format!("{team_id}#{channel_id}#{thread_ts}")
 }
 
-/// The three parts of a [`slack_thread_key`], for a render that has
-/// only the key in hand — the driver names stale buckets by it.
-pub fn split_thread_key(key: &str) -> Option<(&str, &str, &str)> {
+/// The three parts of a [`slack_message_key`] or a [`slack_thread_key`],
+/// for a render that has only the key in hand.
+pub fn split_key(key: &str) -> Option<(&str, &str, &str)> {
     let mut it = key.splitn(3, '#');
     Some((it.next()?, it.next()?, it.next()?))
 }

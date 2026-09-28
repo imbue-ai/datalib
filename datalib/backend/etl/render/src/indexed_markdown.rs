@@ -505,6 +505,31 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Which of `uuids` this store holds a `grid_rows` row for.
+    pub fn grid_rows_among(&self, uuids: &[String]) -> Result<HashSet<String>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let mut out = HashSet::new();
+            for chunk in uuids.chunks(datalib_etl::bulk::SQL_CHUNK) {
+                let mut sql = String::from("SELECT uuid FROM grid_rows WHERE uuid IN (");
+                datalib_etl::bulk::push_placeholder_list(&mut sql, chunk.len());
+                sql.push(')');
+                // Audited: a placeholder run sized from the chunk; every
+                // uuid is bound.
+                let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+                for uuid in chunk {
+                    q = q.bind(uuid);
+                }
+                out.extend(
+                    q.fetch_all(&mut **guard.conn())
+                        .await
+                        .context("look up grid rows by uuid")?,
+                );
+            }
+            Ok(out)
+        })
+    }
+
     /// The newest `items` sample per subject in `source_measurements`:
     /// what the storage report compares its counts against to decide
     /// whether anything moved.
