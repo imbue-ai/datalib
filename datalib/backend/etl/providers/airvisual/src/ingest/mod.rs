@@ -232,9 +232,9 @@ async fn fetch_device(
     Ok(())
 }
 
-/// Write the device row only when it would change: an upsert stamps
-/// the bookkeeping sidecar, and a stamp on an unchanged run is a commit
-/// on an unchanged store, which makes the render re-run for nothing.
+/// Write the device row only when it would change, so a run that finds
+/// nothing new leaves the store as it was and the render has nothing
+/// to redo.
 async fn upsert_device(
     tx: &mut Transaction<'_, Sqlite>,
     who: &Identity,

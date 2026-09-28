@@ -143,11 +143,12 @@ that *reads* `config.toml` keeps whatever loads: an entry it cannot use
 is dropped, named in `diagnostics`, and everything else still runs.
 That exists so one stray key cannot cost the user their whole app.
 
-The PUT does not do that — it refuses anything with a problem. So if
-`GET /api/config` shows a non-empty `diagnostics` with `parsed_ok:
-true`, you are looking at a file someone hand-edited into a partly
-broken state; the app is running on the rest of it, and your PUT will
-not be accepted until you fix the entries it names.
+The PUT does not do that — it refuses any config that would drop an
+entry. So if `GET /api/config` shows `diagnostics` of severity
+`rejected` or `blocked` with `parsed_ok: true`, you are looking at a
+file someone hand-edited into a partly broken state; the app is running
+on the rest of it, and your PUT will not be accepted until you fix the
+entries it names. (A `warning` drops nothing and does not block a PUT.)
 
 `app_ready` on `GET /api/config` is the separate question of whether the
 app can serve anything at all: false when the file is not a config,
@@ -192,10 +193,9 @@ so the shared index steps pick it up.
 - On every successful PUT the user's config editor (the Manage tab)
   reloads automatically — there is nothing to refresh manually.
 - `GET <origin>/api/dag` (with the `Authorization` header) returns the
-  step DAG the saved config
-  produces (`{ok, error, steps: [{id, command, inputs, outputs,
-  deps, …}], run}`), in topological order — use it to confirm the
-  wiring you intended.
+  step DAG the saved config produces (`{ok, error, steps: [{id,
+  command, inputs, outputs, deps, …}], run}`), in topological order —
+  use it to confirm the wiring you intended.
 - `GET <origin>/api/sync/sources` lists the source steps, as derived
   from the saved config.
 - `POST <origin>/api/requests` with `{"roots": ["<step id>", …]}` syncs

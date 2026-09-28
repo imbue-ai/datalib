@@ -47,20 +47,19 @@ struct Args {
     /// Fetch only these conversation UUIDs instead of walking the full
     /// listing. Pass `--conv-uuid` once per target. Tries each org until
     /// one returns 200; 403/404 are treated as "wrong org, continue".
-    /// Merges results into the existing `conversations.json` rather
-    /// than replacing it.
+    /// Every other conversation already in the store is left as it is.
     #[arg(long = "conv-uuid", value_name = "UUID")]
     conv_uuids: Vec<String>,
 
     /// Skip the Claude Projects mirror (project metadata + knowledge
-    /// documents). Mirrors the config's `sync.projects = false`.
+    /// documents). Mirrors the config's `api.projects = false`.
     #[arg(long)]
     no_projects: bool,
 
     /// Mirror only these projects instead of every one the account can
     /// see. Pass `--project-uuid` once per target (bare UUID or a
     /// paste-able `https://claude.ai/project/<uuid>` URL). Mirrors the
-    /// config's `sync.project_uuids`.
+    /// config's `api.project_uuids`.
     #[arg(long = "project-uuid", value_name = "UUID")]
     project_uuids: Vec<String>,
 

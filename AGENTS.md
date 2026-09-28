@@ -58,7 +58,7 @@ merge conflict waiting to happen.
 **Dev workflow**
 
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
-- [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell.
+- [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell; how to audit the docs and the code for drift and copies.
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md). Writing or fixing a Playwright spec: read its §"Writing a spec that does not flake" first.
 - [`docs/dev/ci.md`](docs/dev/ci.md) — CI, its caches and BuildBuddy, and reading a run.
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — how a release is assembled, and testing its steps from a mac.
@@ -86,13 +86,20 @@ saved queries, and an alias costs one line. And say what breaks: a
 change that invalidates a store or a config belongs in the commit
 message.
 
-## Prose can be stale — verify claims against the tree
+## A change keeps the docs true
 
-The docs and this repo's commit messages are detailed and
-well-argued, and that is what makes a wrong one dangerous: a
-well-reasoned paragraph reads as evidence. **Before reporting any "we
-now do X" or "X still needs doing" claim as current fact, verify it
-against the tree or the diff:**
+The reference docs — the ones the doc map lists, and the `README.md`,
+`INGEST.md` and `TRANSLATE.md` files beside the code — say what the
+tree does now. **A change that makes one of them wrong fixes it in the
+same change.** A doc carries no "current as of" date and no "the code
+wins" hedge: it is either right or it gets fixed. How to audit them
+against the tree, and the tree for copies:
+[`style.md`](docs/dev/style.md) §"Auditing the tree for drift and
+repetition".
+
+Plans, audits and commit messages are records of the day they were
+written, not of the tree. Before repeating a "we now do X" or "X still
+needs doing" from one of them as current fact, check it:
 
 ```sh
 git show --stat <sha>                    # did that commit touch what its message says?
@@ -104,9 +111,6 @@ grep -rn <thing-said-to-exist> <subtree> # is the thing there at all?
 one is self-concealing. Treat "now covered by a test" as unverified until
 you have read the assertion — and for a test whose job is to catch a
 silent no-op, until you have watched it fail against the broken behavior.
-
-When prose and the tree disagree, the tree wins. Fix the prose in the
-same change.
 
 ## Write plainspoken
 

@@ -8,10 +8,9 @@
 // keep columns that are *meaningless* for a source from ever appearing:
 // no Channel on a GitHub browse, no Project on WhatsApp.
 //
-// The sets come from the per-provider mapping in `docs/dev/grid_rows.md`,
-// corrected against a real index where the two disagreed — that doc's
-// `account` / `project` / `channel` table lists eight providers and at
-// least eight more populate `channel`.
+// The sets come from what each provider's render crate puts in each
+// column (the rules are `docs/dev/grid_rows.md` § "Column conventions"),
+// checked against a real index.
 
 import type { SearchRow } from "@/api";
 

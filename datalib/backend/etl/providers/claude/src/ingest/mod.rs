@@ -742,7 +742,7 @@ async fn sync_projects(
         }
     }
 
-    // A UUID in `sync.project_uuids` that matched nothing is almost
+    // A UUID in `api.project_uuids` that matched nothing is almost
     // always a typo or a project in an org this account can't see.
     // Silently mirroring nothing is the worst outcome, so say it.
     for requested in only {
@@ -750,7 +750,7 @@ async fn sync_projects(
             warn!(
                 event = "claude_project_uuid_not_found",
                 uuid = %requested,
-                note = "listed in sync.project_uuids but not present in any visible org",
+                note = "listed in api.project_uuids but not present in any visible org",
                 "a configured project uuid is in no org"
             );
         }

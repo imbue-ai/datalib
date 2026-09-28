@@ -7,7 +7,9 @@
 // `#[derive(PortableTable)]` derives the DDL from it. Per-provider tables
 // stay authoritative for raw payloads; this is the denormalized projection.
 //
-// How each provider fills each column is in `docs/dev/grid_rows.md`.
+// The rules every provider follows in filling a column are in
+// `docs/dev/grid_rows.md` § "Column conventions"; what one provider puts
+// there is in the render crate that builds its rows.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
