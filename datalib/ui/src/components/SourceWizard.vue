@@ -155,13 +155,13 @@ const renders = computed(() => providerRenders.value && renderWanted.value);
 /// source nobody can search is a surprise, not a saving. Editing seeds
 /// them from the qmd steps the source has.
 const keywordWanted = ref(props.editing ? props.editing.qmdIndexing !== "none" : true);
-const embedWanted = ref(props.editing ? props.editing.qmdIndexing === "embedded" : true);
+const embedWanted = ref(props.editing ? props.editing.qmdIndexing === "keyword_and_embed" : true);
 
 /// How far into qmd this source goes: only as far as there is markdown to
 /// index, and embeddings only on top of a keyword index.
 const qmdIndexing = computed<QmdIndexing>(() => {
   if (!renders.value || !keywordWanted.value) return "none";
-  return embedWanted.value ? "embedded" : "keyword";
+  return embedWanted.value ? "keyword_and_embed" : "keyword";
 });
 
 /// The fields the form shows for one phase: the descriptor's, less any

@@ -939,13 +939,13 @@ export function buildQmdSteps(group: string): { id: string; body: string }[] {
 /// How far into qmd a source's markdown goes: not at all, a keyword
 /// index, or a keyword index and the embeddings that read it. There is
 /// no embeddings-only: the embed step reads the keyword index.
-export type QmdIndexing = "none" | "keyword" | "embedded";
+export type QmdIndexing = "none" | "keyword" | "keyword_and_embed";
 
 /// Which of a source's qmd steps the config has, as a `QmdIndexing`.
 export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexing {
   const has = (fn: string) => steps.some((s) => s.id === `${group}/${fn}`);
   if (!has("keyword_index")) return "none";
-  return has("embed") ? "embedded" : "keyword";
+  return has("embed") ? "keyword_and_embed" : "keyword";
 }
 
 /// Give a source the qmd steps `indexing` asks for — those it lacks — and

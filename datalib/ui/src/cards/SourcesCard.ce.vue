@@ -818,7 +818,7 @@ async function openEdit(groupId: string) {
   const steps = sourceStepsOf(group.id, sources.value);
   const entry = groupEntry(group, steps);
   if (!entry) return;
-  const qmdIndexing = steps.render ? qmdIndexingOf(sources.value, group.id) : "embedded";
+  const qmdIndexing = steps.render ? qmdIndexingOf(sources.value, group.id) : "keyword_and_embed";
   editing.value = { group, entry, steps, qmdIndexing };
   wizardKey.value++;
   wizardOpen.value = true;
