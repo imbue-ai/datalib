@@ -6,7 +6,7 @@ import { useApi } from "@/cards/cardApi";
 import {
   listGroups,
   listSteps,
-  appendSource,
+  insertEntries,
   removeSteps,
   describeGroup,
   renameGroup,
@@ -108,6 +108,8 @@ off if any is, failed if any failed, and otherwise the last step’s in pipeline
 while a sync is in flight it draws one segment per step. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
 with it.</p>
+<p>Rows come in the order <code>config.toml</code> lists them. Click a header to sort by
+that column; a third click puts the config's order back.</p>
 <p><b>Name</b> stays in view while the table scrolls sideways. <b>Last update</b> leads
 with an icon for what the row is doing or did last, then says when it got there. The
 icon, and the mark after a step’s name that says what it does, give their word on
@@ -865,7 +867,7 @@ async function onWizardSubmit(payload: {
       next = unwireFromFanIns(next, current.steps.render.id);
     }
   } else {
-    next = appendSource(
+    next = insertEntries(
       configText.value,
       payload.groupBody ? `${payload.groupBody}\n\n${payload.stepsBody}` : payload.stepsBody,
     );

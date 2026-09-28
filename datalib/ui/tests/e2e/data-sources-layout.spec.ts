@@ -81,6 +81,24 @@ test("a dragged column width outlives a sync", async ({ page }) => {
   expect((await col.boundingBox())!.width).toBe(dragged);
 });
 
+/// The config's order is a hidden column, so without a way back a
+/// header click would lose it until the card was reopened.
+test("a third click on a header puts the config's order back", async ({ page }) => {
+  await openSources(page);
+  const declared = await groupOrder(page);
+  const name = header(page, "name");
+  await name.click();
+  await expect.poll(() => groupOrder(page)).not.toEqual(declared);
+  const ascending = await groupOrder(page);
+  await name.click();
+  await expect.poll(() => groupOrder(page)).not.toEqual(ascending);
+  await name.click();
+  await expect.poll(() => groupOrder(page)).toEqual(declared);
+  await expect(name.locator(".slick-sort-indicator-asc, .slick-sort-indicator-desc")).toHaveCount(
+    0,
+  );
+});
+
 test("a header sort outlives a sync", async ({ page }) => {
   test.setTimeout(120_000);
   await openSources(page);

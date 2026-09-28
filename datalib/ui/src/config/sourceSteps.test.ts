@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { catalogFor, type CatalogEntry, type Field } from "./catalog";
 import {
-  appendSource,
+  insertEntries,
   buildDiffSource,
   buildStep,
   listGroups,
@@ -206,7 +206,7 @@ inputs = ["slack/render_markdown"]
       maxDocuments: 50,
     });
     expect(built.renderId).toBe("slack-diff/render_markdown");
-    let next = appendSource(base, `${built.groupBody}\n\n${built.stepsBody}`);
+    let next = insertEntries(base, `${built.groupBody}\n\n${built.stepsBody}`);
     next = wireIntoFanIns(next, built.renderId);
     const group = listGroups(next).find((g) => g.id === "slack-diff")!;
     expect(group.type).toBe("diff");

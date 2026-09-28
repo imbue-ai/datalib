@@ -15,9 +15,11 @@ import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
 import type {
   Column,
   GridOption,
+  MultiColumnSort,
   OnBeforeEditCellEventArgs,
   OnCellChangeEventArgs,
   OnDblClickEventArgs,
+  SingleColumnSort,
   SlickEventData,
   TreeToggleStateChange,
 } from "@slickgrid-universal/common";
@@ -100,14 +102,15 @@ let bundle: Grid | null = null;
 /// own bookkeeping on them), so it is handed copies.
 const PARENT = "treeParentKey";
 const COLLAPSED = "__collapsed";
-/// The order the rows came in, which is the order a tree shows them in
-/// until a header is clicked: the grid sorts a tree by its first
-/// column unless told which column, and this hidden one is the telling.
-const ORDER = "treeOrder";
+/// The order the rows came in, as a hidden column: what the grid shows
+/// until a header is clicked, and what a third click on that header
+/// returns to. A tree needs telling — the grid sorts one by its first
+/// column unless told which column.
+const ORDER = "hostOrder";
 const collapsedByKey = new Map<string, boolean>();
 
 function annotate(rows: T[]): T[] {
-  if (!props.tree) return rows.map((r) => ({ ...r }));
+  if (!props.tree) return rows.map((r, i) => ({ ...r, [ORDER]: i }));
   const keyByPath = new Map<string, string>();
   for (const r of rows) keyByPath.set((r.path as string[]).join("\n"), keyOf(r));
   return rows.map((r, i) => {
@@ -224,7 +227,6 @@ function buildColumns(): Column<T>[] {
     // A pinned column hidden would unpin the one after it.
     i < props.pinnedColumns ? { ...c, excludeFromColumnPicker: true, reorderable: false } : c,
   );
-  if (!props.tree) return typed;
   return [
     ...typed,
     {
@@ -233,6 +235,8 @@ function buildColumns(): Column<T>[] {
       name: "",
       hidden: true,
       type: "number",
+      // The grid refuses to sort by a column that is not sortable.
+      sortable: true,
       excludeFromColumnPicker: true,
     },
   ];
@@ -271,6 +275,8 @@ function options(): GridOption {
     autoEdit: false,
     enableSorting: true,
     multiColumnSort: false,
+    // Ascending, descending, then back to the host's order (`onSort`).
+    tristateMultiColumnSort: true,
     enableColumnReorder: true,
     enableHeaderMenu: false,
     enableGridMenu: false,
@@ -370,6 +376,13 @@ function onDblClick(_e: SlickEventData, args: OnDblClickEventArgs) {
   if (row && column) emit("cellDoubleClick", row, String(column.id));
 }
 
+/// A cleared sort leaves the rows in the order it last put them; put
+/// back the order they came in.
+function onSort(_e: SlickEventData, args: SingleColumnSort | MultiColumnSort) {
+  if (!bundle || args.multiColumnSort || args.sortCol) return;
+  bundle.sortService.updateSorting([{ columnId: ORDER, direction: "ASC" }]);
+}
+
 function onTreeToggled(change: TreeToggleStateChange) {
   if (!bundle) return;
   const key = String(change.fromItemId ?? "");
@@ -424,6 +437,7 @@ function createGrid() {
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
   b.slickGrid.onCellChange.subscribe(onCellChange);
   b.slickGrid.onDblClick.subscribe(onDblClick);
+  b.slickGrid.onSort.subscribe(onSort);
   b.instances?.eventPubSubService?.subscribe<TreeToggleStateChange>(
     "onTreeItemToggled",
     onTreeToggled,

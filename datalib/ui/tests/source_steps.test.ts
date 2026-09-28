@@ -7,7 +7,8 @@
 // `replaceSteps`).
 import { describe, expect, it } from "vitest";
 import {
-  appendSource,
+  insertEntries,
+  buildDiffSource,
   buildGroup,
   buildSource,
   buildStep,
@@ -657,14 +658,14 @@ describe("removeSteps / replaceSteps", () => {
     ]);
   });
 
-  it("appends where a new source can safely go", () => {
+  it("adds a new source where it can safely go", () => {
     const body = `${buildGroup({ id: "extra", name: "", type: "slack" })}\n\n${buildStep({
       entry: SLACK,
       group: "extra",
       phase: "download",
       values: {},
     })}`;
-    const after = appendSource(PAIR, body);
+    const after = insertEntries(PAIR, body);
     expect(listSteps(after).map((s) => s.id)).toContain("extra/ingest");
     expect(listGroups(after).map((g) => g.id)).toContain("extra");
   });
@@ -1011,5 +1012,186 @@ inputs = ["slack/embed"]
       "slack/embed",
     ]);
     expect(removedWith(["unified_index/grid_index"], all)).toEqual([]);
+  });
+});
+
+describe("where the wizard writes", () => {
+  /// Sources first, each with its steps, then the index they all feed:
+  /// every step below the steps it reads.
+  const FLOWING = `data_root = "~/datalib"
+
+# ── slack ─────────────────────────────────────────────────────────────
+[[groups]]
+id = "slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+[steps.params.api]
+channels = ["general"]
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+inputs = ["slack/ingest"]
+
+# ── notes ─────────────────────────────────────────────────────────────
+[[groups]]
+id = "notes"
+type = "slack"
+
+[[steps]]
+group = "notes"
+function = "ingest"
+[steps.params.api]
+channels = ["notes"]
+
+[[steps]]
+group = "notes"
+function = "render_markdown"
+inputs = ["notes/ingest"]
+
+# ── the unified index ─────────────────────────────────────────────────
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = ["slack/render_markdown", "notes/render_markdown"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_aggregator"
+inputs = []
+
+[[applets]]
+group = "unified_index"
+id = "unified_index"
+command = "datalib-applet unified_index"
+`;
+
+  /// Every input a step names that is in the file comes above it.
+  function flowsDown(text: string): string[] {
+    const ids = listSteps(text).map((s) => s.id);
+    return listSteps(text).flatMap((s) =>
+      s.inputs
+        .filter((i) => ids.includes(i) && ids.indexOf(i) > ids.indexOf(s.id))
+        .map((i) => `${s.id} reads ${i}, below it`),
+    );
+  }
+
+  /// What the Sources card does on "+ Data Source".
+  function addSource(text: string, group: string): string {
+    const built = buildSource({ entry: SLACK, group, name: "", values: {}, withGroup: true });
+    let next = insertEntries(text, `${built.groupBody}\n\n${built.stepsBody}`);
+    next = wireIntoFanIns(next, built.renderId!);
+    return setQmdSteps(next, group, "keyword_and_embed");
+  }
+
+  it("adds a source after the last one, above the index, with its steps together", () => {
+    const next = addSource(FLOWING, "extra");
+    expect(listGroups(next).map((g) => g.id)).toEqual(["slack", "notes", "extra", "unified_index"]);
+    expect(listSteps(next).map((s) => s.id)).toEqual([
+      "slack/ingest",
+      "slack/render_markdown",
+      "notes/ingest",
+      "notes/render_markdown",
+      "extra/ingest",
+      "extra/render_markdown",
+      "extra/keyword_index",
+      "extra/embed",
+      "unified_index/grid_index",
+      "unified_index/qmd_aggregator",
+      "unified_index",
+    ]);
+    expect(flowsDown(next)).toEqual([]);
+    expect(next.startsWith('data_root = "~/datalib"\n')).toBe(true);
+    // Its divider stays above its group, and the index's above the index.
+    expect(next.indexOf("── extra")).toBeLessThan(next.indexOf('id = "extra"'));
+    expect(next.indexOf('function = "embed"')).toBeLessThan(next.indexOf("── the unified index"));
+  });
+
+  /// The scaffold a new root starts from is the index alone; the first
+  /// source goes above it, not after it.
+  it("puts the first source above the index a new root starts with", () => {
+    const scaffold = FLOWING.slice(FLOWING.indexOf("# ── the unified index")).replace(
+      'inputs = ["slack/render_markdown", "notes/render_markdown"]',
+      "inputs = []",
+    );
+    const next = addSource(scaffold, "extra");
+    expect(listGroups(next).map((g) => g.id)).toEqual(["extra", "unified_index"]);
+    expect(flowsDown(next)).toEqual([]);
+    expect(next.startsWith("# ── extra")).toBe(true);
+  });
+
+  /// Search turned on for a source that is not the last: its steps go
+  /// beside its own, not after whichever source was added last.
+  it("puts a source's qmd steps right after its render", () => {
+    const next = setQmdSteps(FLOWING, "slack", "keyword");
+    expect(
+      listSteps(next)
+        .map((s) => s.id)
+        .slice(0, 4),
+    ).toEqual(["slack/ingest", "slack/render_markdown", "slack/keyword_index", "notes/ingest"]);
+    const both = setQmdSteps(next, "slack", "keyword_and_embed");
+    expect(
+      listSteps(both)
+        .map((s) => s.id)
+        .slice(2, 5),
+    ).toEqual(["slack/keyword_index", "slack/embed", "notes/ingest"]);
+    expect(flowsDown(both)).toEqual([]);
+  });
+
+  /// An edit rewrites a source where it stands: the table does not
+  /// reshuffle because someone changed a channel list.
+  it("rewrites an edited source in place", () => {
+    const { ingest, render } = sourceStepsOf("slack", listSteps(FLOWING));
+    const out = buildSource({
+      entry: SLACK,
+      group: "slack",
+      name: "",
+      values: { "api.channels": ["random"] },
+      withGroup: false,
+    });
+    const after = replaceSteps(FLOWING, [ingest!, render!], out.stepsBody);
+    expect(listSteps(after).map((s) => s.id)).toEqual(listSteps(FLOWING).map((s) => s.id));
+    expect(after).toContain('channels = ["random"]');
+    expect(after).not.toContain('channels = ["general"]');
+    expect(after.indexOf('channels = ["random"]')).toBeLessThan(after.indexOf("── notes"));
+  });
+
+  /// A comparison reads its source's download, so it goes below that, and
+  /// above the index that reads it.
+  it("puts a comparison after the sources, above the index", () => {
+    const built = buildDiffSource({
+      id: "slack-diff",
+      name: "",
+      source: "slack",
+      from: "aaa",
+      to: "bbb",
+      maxDocuments: 50,
+    });
+    const next = insertEntries(FLOWING, `${built.groupBody}\n\n${built.stepsBody}`);
+    expect(listGroups(next).map((g) => g.id)).toEqual([
+      "slack",
+      "notes",
+      "slack-diff",
+      "unified_index",
+    ]);
+    expect(flowsDown(wireIntoFanIns(next, built.renderId))).toEqual([]);
+  });
+
+  /// A file written with the index first has no place above every reader
+  /// and below the source's own steps; its qmd steps go at the end, as
+  /// they always did, and the file still loads.
+  it("falls back to the end of a file already out of order", () => {
+    const next = setQmdSteps(PAIR, "slack", "keyword");
+    expect(
+      listSteps(next)
+        .map((s) => s.id)
+        .at(-1),
+    ).toBe("slack/keyword_index");
   });
 });

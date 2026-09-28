@@ -1393,9 +1393,10 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 /// rendered markdown feeds. Non-empty on purpose — the two index steps
 /// are source-independent and belong in every pipeline. They start with
 /// no inputs, which is a valid graph that indexes nothing; adding a
-/// source appends its render step's id here (the UI's "Add a source"
-/// flow does that for you). `data_root` is omitted: it defaults to this
-/// file's own directory, keeping the root self-contained.
+/// source adds its render step's id here (the UI's "Add a source"
+/// flow does that for you, and writes the source above this block).
+/// `data_root` is omitted: it defaults to this file's own directory,
+/// keeping the root self-contained.
 fn scaffold_toml() -> String {
     "\
 # ── the unified index ──────────────────────────────────────────────────
@@ -1405,6 +1406,14 @@ fn scaffold_toml() -> String {
 # `<group>/<function>`, the tree it writes, and `inputs` names the
 # steps it reads by that id. A step with no `command` is one of
 # datalib's own.
+#
+# Sources go above this block: a [[groups]] entry with a `type`, then
+# its steps. The file then reads in the order data flows, each step
+# below the steps it reads, which is where the Sources screen writes
+# them and the order it lists them in. The runner follows `inputs`,
+# not the file. Anything above the first [[…]] header is a top-level
+# key (data_root, binary_dir), not part of an entry. See
+# <origin>/agent/config.md.
 
 [[groups]]
 id = \"unified_index\"
@@ -1430,12 +1439,6 @@ inputs = []
 group = \"unified_index\"
 id = \"unified_index\"
 command = \"datalib-applet unified_index\"
-
-# Sources go below: a [[groups]] entry with a `type`, then its steps.
-# Anything you add above the first [[…]] header is a top-level key
-# (data_root, binary_dir), not part of an entry. See
-# <origin>/agent/config.md.
-# ───────────────────────────────────────────────────────────────────────
 "
     .to_string()
 }
