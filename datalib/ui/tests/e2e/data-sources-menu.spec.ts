@@ -22,9 +22,7 @@ async function openManager(page: Page) {
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
-test("a row's menu offers every action, and the cell under the pointer adds its own", async ({
-  page,
-}) => {
+test("a row's menu offers every action, grouped, wherever the pointer is", async ({ page }) => {
   await openManager(page);
   const row = groupRow(page, "unified_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
@@ -35,9 +33,12 @@ test("a row's menu offers every action, and the cell under the pointer adds its 
     "Sync now",
     "Turn off",
     "Edit settings…",
-    "Compare two syncs…",
-    "Show log",
+    "Rename…",
     "Show commit history",
+    "Compare two versions…",
+    "Show step log",
+    "Copy path",
+    "Copy id",
     "Reset (preserve attachments)…",
     "Reset (drop attachments)…",
     "Remove from config, with everything under it",
@@ -46,10 +47,9 @@ test("a row's menu offers every action, and the cell under the pointer adds its 
   await expect(menuEntry(page, "Reset (preserve attachments)…")).toHaveClass(MENU_DISABLED);
   await page.keyboard.press("Escape");
 
-  // The Name cell adds Rename and Copy id ahead of the row's entries.
+  // The Name cell offers the same menu as any other.
   await row.locator('[col-id="name"]').click({ button: "right" });
-  await expect(menuEntries(page).first()).toHaveText("Rename…");
-  await expect(menuEntries(page).nth(1)).toHaveText("Copy id");
+  await expect(menuEntries(page)).toHaveCount(13);
   await page.keyboard.press("Escape");
 });
 
@@ -59,7 +59,7 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await openManager(page);
   await expandGroup(page, "unified_index");
   const grid = pipelineRow(page, "unified_index/grid_index");
-  const qmd = pipelineRow(page, "unified_index/qmd_index");
+  const qmd = pipelineRow(page, "unified_index/qmd_aggregator");
   await expect(grid).toBeVisible();
   await grid.locator('[col-id="status"]').click();
   await qmd.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
@@ -72,7 +72,7 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expect(history).toHaveClass(MENU_DISABLED);
   await expect(history.locator(".slick-menu-content")).toHaveAttribute(
     "title",
-    /QMD index: The QMD index keeps no doltlite store/,
+    /QMD aggregator: The QMD index keeps no doltlite store/,
   );
   await page.keyboard.press("Escape");
 
@@ -98,9 +98,11 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   const input = page.locator(".tg-grid input.editor-text");
   await expect(input).toBeVisible();
   // The table repaints cells on a clock ("12 seconds ago" goes stale),
-  // and a repaint of the cell being edited would reset it under the
-  // typist. Force one of this very column and expect the same input to
-  // survive it.
+  // and a repaint of the cell being edited would put back the stored
+  // name under the typist. Type, force a repaint of this very column
+  // (synchronous, so it is over when `evaluate` returns), and expect
+  // what was typed to survive it.
+  await input.fill("Everything, indexed");
   await page
     .locator(".tg-grid")
     .first()
@@ -109,10 +111,8 @@ test("Rename edits the group's name in the cell and writes it to the config", as
         "name",
       ]);
     });
-  await page.waitForTimeout(200);
-  await expect(input).toBeVisible();
   await expect(input).toBeFocused();
-  await input.fill("Everything, indexed");
+  await expect(input).toHaveValue("Everything, indexed");
   await input.press("Enter");
 
   await expect(page.getByText("Renamed unified_index to Everything, indexed.")).toBeVisible();

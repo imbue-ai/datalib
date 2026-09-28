@@ -1,15 +1,20 @@
-//! The shape from before a source's qmd work was its own: one
-//! `unified_index/qmd_index` step keyword-indexed and embedded every
-//! source it named. Now that step only registers the collections, and each
-//! source it names needs a `keyword_index` and an `embed` step of its own
-//! to fill one.
+//! The two shapes from before `qmd_aggregator`, when a
+//! `unified_index/qmd_index` step read every source's render: it either
+//! keyword-indexed and embedded every source itself, or registered the
+//! collections that each source's `keyword_index`, reading it, then filled.
+//!
+//! Now each source's `keyword_index` reads only its render, its `embed`
+//! reads that, and `qmd_aggregator` reads both, downstream of them all.
+//! The rewrite renames the step, points it at the per-source steps, adds
+//! any a source lacks (both of them, in the first shape, which embedded
+//! everything), and points the embedding map at the aggregator.
 //!
 //! Unlike `convert.rs`, a text edit: the config is otherwise current, so
-//! the missing steps are appended and the embedding map's `inputs` are
-//! replaced where they stand, and every comment, lock and key the file
-//! holds survives.
+//! values are replaced where they stand and the missing steps appended,
+//! and every comment, lock and key the file holds survives.
 
 use std::collections::BTreeSet;
+use std::ops::Range;
 
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
@@ -27,7 +32,7 @@ struct StepView {
     #[serde(default)]
     group: Option<String>,
     #[serde(default)]
-    function: Option<String>,
+    function: Option<toml::Spanned<String>>,
     #[serde(default)]
     command: Option<String>,
     #[serde(default)]
@@ -35,15 +40,19 @@ struct StepView {
 }
 
 impl StepView {
+    fn function(&self) -> Option<&str> {
+        self.function.as_ref().map(|f| f.get_ref().as_str())
+    }
+
     fn id(&self) -> Option<String> {
-        match (&self.group, &self.function) {
+        match (&self.group, self.function()) {
             (Some(g), Some(f)) => Some(format!("{g}/{f}")),
             _ => self.id.clone(),
         }
     }
 
     fn is_builtin(&self, function: &str) -> bool {
-        self.command.is_none() && self.function.as_deref() == Some(function)
+        self.command.is_none() && self.function() == Some(function)
     }
 
     fn inputs(&self) -> &[String] {
@@ -51,107 +60,133 @@ impl StepView {
     }
 }
 
-/// What the rewrite would add: each source a `qmd_index` names with no
-/// `keyword_index`, paired with that fan-in's id.
-fn missing(view: &View) -> Vec<(String, String)> {
+pub fn is_retired(text: &str) -> Result<bool> {
+    let view: View = toml::from_str(text).context("parse the config")?;
+    Ok(view.steps.iter().any(|s| s.is_builtin("qmd_index")))
+}
+
+fn quote(s: &str) -> String {
+    toml::Value::String(s.to_string()).to_string()
+}
+
+fn quote_list(ids: &[String]) -> String {
+    let quoted: Vec<String> = ids.iter().map(|i| quote(i)).collect();
+    format!("[{}]", quoted.join(", "))
+}
+
+fn block(group: &str, function: &str, inputs: &[String]) -> String {
+    format!(
+        "[[steps]]\ngroup = {}\nfunction = {}\ninputs = {}\n",
+        quote(group),
+        quote(function),
+        quote_list(inputs)
+    )
+}
+
+fn push_unique(list: &mut Vec<String>, item: &str) {
+    if !list.iter().any(|x| x == item) {
+        list.push(item.to_string());
+    }
+}
+
+pub fn rewrite(text: &str) -> Result<String> {
+    let view: View = toml::from_str(text).context("parse the config")?;
+    let olds: Vec<&StepView> = view
+        .steps
+        .iter()
+        .filter(|s| s.is_builtin("qmd_index"))
+        .collect();
+    if olds.is_empty() {
+        return Ok(text.to_string());
+    }
+    let old_ids: BTreeSet<String> = olds.iter().filter_map(|s| s.id()).collect();
     let declared: BTreeSet<String> = view.steps.iter().filter_map(StepView::id).collect();
-    let mut out = Vec::new();
-    for fan_in in view.steps.iter().filter(|s| s.is_builtin("qmd_index")) {
-        let Some(fan_in_id) = fan_in.id() else {
-            continue;
-        };
-        for group in fan_in
+    let keywords: Vec<&StepView> = view
+        .steps
+        .iter()
+        .filter(|s| s.is_builtin("keyword_index"))
+        .collect();
+    // No source step of its own anywhere: the fan-in embedded everything.
+    let embedded_everything = keywords.is_empty();
+
+    let mut groups: Vec<String> = Vec::new();
+    for old in &olds {
+        for g in old
             .inputs()
             .iter()
             .filter_map(|i| i.strip_suffix("/render_markdown"))
         {
-            if !declared.contains(&format!("{group}/keyword_index"))
-                && !out.iter().any(|(g, _)| g == group)
-            {
-                out.push((group.to_string(), fan_in_id.clone()));
+            push_unique(&mut groups, g);
+        }
+    }
+    for g in keywords.iter().filter_map(|k| k.group.as_deref()) {
+        push_unique(&mut groups, g);
+    }
+
+    let mut blocks = Vec::new();
+    let mut aggregated = Vec::new();
+    for g in &groups {
+        let keyword = format!("{g}/keyword_index");
+        if !declared.contains(&keyword) {
+            blocks.push(block(g, "keyword_index", &[format!("{g}/render_markdown")]));
+        }
+        aggregated.push(keyword.clone());
+        let embed = format!("{g}/embed");
+        if declared.contains(&embed) {
+            aggregated.push(embed);
+        } else if embedded_everything {
+            blocks.push(block(g, "embed", &[keyword]));
+            aggregated.push(embed);
+        }
+    }
+
+    let mut edits: Vec<(Range<usize>, String)> = Vec::new();
+    let mut aggregator_id = None;
+    for old in &olds {
+        if let Some(f) = &old.function {
+            edits.push((f.span(), quote("qmd_aggregator")));
+        }
+        if let Some(i) = &old.inputs {
+            edits.push((i.span(), quote_list(&aggregated)));
+        }
+        aggregator_id = old.group.as_ref().map(|g| format!("{g}/qmd_aggregator"));
+    }
+    for i in keywords.iter().filter_map(|k| k.inputs.as_ref()) {
+        if i.get_ref().iter().any(|x| old_ids.contains(x)) {
+            let kept: Vec<String> = i
+                .get_ref()
+                .iter()
+                .filter(|x| !old_ids.contains(*x))
+                .cloned()
+                .collect();
+            edits.push((i.span(), quote_list(&kept)));
+        }
+    }
+    if let Some(aggregator) = &aggregator_id {
+        for map in view.steps.iter().filter(|s| s.is_builtin("embedding_map")) {
+            if let Some(i) = &map.inputs {
+                edits.push((i.span(), quote_list(std::slice::from_ref(aggregator))));
             }
         }
     }
-    out
-}
 
-pub fn is_retired(text: &str) -> Result<bool> {
-    let view: View = toml::from_str(text).context("parse the config")?;
-    Ok(!missing(&view).is_empty())
-}
-
-fn quote_list(ids: &[String]) -> String {
-    let quoted: Vec<String> = ids
-        .iter()
-        .map(|i| toml::Value::String(i.clone()).to_string())
-        .collect();
-    format!("[{}]", quoted.join(", "))
-}
-
-/// Add each missing source's two steps, and point every embedding map
-/// that read a `qmd_index` at the embed steps instead, which is where the
-/// vectors it lays out now come from.
-pub fn rewrite(text: &str) -> Result<String> {
-    let view: View = toml::from_str(text).context("parse the config")?;
-    let add = missing(&view);
-    if add.is_empty() {
-        return Ok(text.to_string());
-    }
-    let declared: BTreeSet<String> = view.steps.iter().filter_map(StepView::id).collect();
-    let fan_ins: BTreeSet<String> = view
-        .steps
-        .iter()
-        .filter(|s| s.is_builtin("qmd_index"))
-        .filter_map(StepView::id)
-        .collect();
-
-    let mut embeds: Vec<String> = view
-        .steps
-        .iter()
-        .filter(|s| s.is_builtin("embed"))
-        .filter_map(StepView::id)
-        .collect();
-    let mut blocks = Vec::new();
-    for (group, fan_in) in &add {
-        let g = toml::Value::String(group.clone()).to_string();
-        let keyword = format!("{group}/keyword_index");
-        blocks.push(format!(
-            "[[steps]]\ngroup = {g}\nfunction = \"keyword_index\"\ninputs = {}\n",
-            quote_list(&[format!("{group}/render_markdown"), fan_in.clone()])
-        ));
-        let embed = format!("{group}/embed");
-        if !declared.contains(&embed) {
-            blocks.push(format!(
-                "[[steps]]\ngroup = {g}\nfunction = \"embed\"\ninputs = {}\n",
-                quote_list(&[keyword])
-            ));
-            embeds.push(embed);
-        }
-    }
-
-    // Spans are into the original text, so the replacements go last
-    // first and leave each earlier span where it was.
+    // Spans index the original text, so replacing the last first leaves
+    // every earlier span where it was.
+    edits.sort_by_key(|(r, _)| std::cmp::Reverse(r.start));
     let mut out = text.to_string();
-    let mut maps: Vec<std::ops::Range<usize>> = view
-        .steps
-        .iter()
-        .filter(|s| s.is_builtin("embedding_map"))
-        .filter(|s| s.inputs().iter().any(|i| fan_ins.contains(i)))
-        .filter_map(|s| s.inputs.as_ref().map(toml::Spanned::span))
-        .collect();
-    maps.sort_by_key(|r| std::cmp::Reverse(r.start));
-    for span in maps {
-        out.replace_range(span, &quote_list(&embeds));
+    for (span, with) in edits {
+        out.replace_range(span, &with);
     }
-
-    let mut out = format!("{}\n", out.trim_end());
-    out.push_str(
-        "\n# Added by datalib-migrate-config: each source's own qmd steps, which\n\
-         # keyword-index and embed what `qmd_index` used to do for all of them.\n",
-    );
-    for b in blocks {
-        out.push('\n');
-        out.push_str(&b);
+    if !blocks.is_empty() {
+        out = format!("{}\n", out.trim_end());
+        out.push_str(
+            "\n# Added by datalib-migrate-config: each source's own qmd steps, which\n\
+             # `unified_index/qmd_aggregator` reads.\n",
+        );
+        for b in blocks {
+            out.push('\n');
+            out.push_str(&b);
+        }
     }
     Ok(out)
 }
@@ -160,7 +195,7 @@ pub fn rewrite(text: &str) -> Result<String> {
 mod tests {
     use super::*;
 
-    const BEFORE: &str = r#"# my sources
+    const HEAD: &str = r#"# my sources
 [[groups]]
 id = "mail"
 type = "email"
@@ -178,39 +213,148 @@ function = "render_markdown"
 inputs = ["mail/ingest"]
 
 [[groups]]
+id = "notes"
+type = "email"
+
+[[steps]]
+group = "notes"
+function = "ingest"
+[steps.params.mbox]
+path = "/n"
+
+[[steps]]
+group = "notes"
+function = "render_markdown"
+inputs = ["notes/ingest"]
+
+[[groups]]
 id = "unified_index"
-
-[[steps]]
-group = "unified_index"
-function = "qmd_index"
-inputs = ["mail/render_markdown"]
-
-[[steps]]
-group = "unified_index"
-function = "embedding_map"
-inputs = ["unified_index/qmd_index"] # the map
 
 [[locks]]
 name = "mine"
 "#;
 
-    #[test]
-    fn the_fan_in_shape_is_retired_and_the_current_one_is_not() {
-        assert!(is_retired(BEFORE).unwrap());
-        let after = rewrite(BEFORE).unwrap();
-        assert!(!is_retired(&after).unwrap(), "{after}");
-        assert_eq!(
-            rewrite(&after).unwrap(),
-            after,
-            "a second run changes nothing"
-        );
+    /// The first shape: the fan-in did everything, and no source had a
+    /// qmd step of its own.
+    fn everything_in_the_fan_in() -> String {
+        format!(
+            "{HEAD}
+[[steps]]
+group = \"unified_index\"
+function = \"qmd_index\"
+inputs = [\"mail/render_markdown\", \"notes/render_markdown\"]
+
+[[steps]]
+group = \"unified_index\"
+function = \"embedding_map\"
+inputs = [\"unified_index/qmd_index\"] # the map
+"
+        )
     }
 
-    /// The point of a text edit: nothing the file held is lost, and what
-    /// it adds is the steps and the map's new inputs.
+    /// The second shape: the fan-in registered, the per-source steps read
+    /// it, and only `mail` embedded.
+    fn fan_in_upstream() -> String {
+        format!(
+            "{HEAD}
+[[steps]]
+group = \"unified_index\"
+function = \"qmd_index\"
+inputs = [\"mail/render_markdown\", \"notes/render_markdown\"]
+
+[[steps]]
+group = \"mail\"
+function = \"keyword_index\"
+inputs = [\"mail/render_markdown\", \"unified_index/qmd_index\"]
+
+[[steps]]
+group = \"mail\"
+function = \"embed\"
+inputs = [\"mail/keyword_index\"]
+
+[[steps]]
+group = \"notes\"
+function = \"keyword_index\"
+inputs = [\"notes/render_markdown\", \"unified_index/qmd_index\"]
+
+[[steps]]
+group = \"unified_index\"
+function = \"embedding_map\"
+inputs = [\"mail/embed\"]
+"
+        )
+    }
+
+    fn inputs_of(text: &str, id: &str) -> Vec<String> {
+        let view: View = toml::from_str(text).unwrap();
+        view.steps
+            .iter()
+            .find(|s| s.id().as_deref() == Some(id))
+            .unwrap_or_else(|| panic!("no step {id}:\n{text}"))
+            .inputs()
+            .to_vec()
+    }
+
+    fn loads_clean(text: &str) {
+        let check = datalib_dag::config::check_text(text);
+        assert!(check.is_clean(), "{:?}\n{text}", check.diagnostics);
+    }
+
+    #[test]
+    fn the_first_shape_gains_both_steps_per_source_and_an_aggregator() {
+        let before = everything_in_the_fan_in();
+        assert!(is_retired(&before).unwrap());
+        let after = rewrite(&before).unwrap();
+        assert!(!is_retired(&after).unwrap(), "{after}");
+        assert_eq!(
+            inputs_of(&after, "mail/keyword_index"),
+            ["mail/render_markdown"]
+        );
+        assert_eq!(inputs_of(&after, "notes/embed"), ["notes/keyword_index"]);
+        assert_eq!(
+            inputs_of(&after, "unified_index/qmd_aggregator"),
+            [
+                "mail/keyword_index",
+                "mail/embed",
+                "notes/keyword_index",
+                "notes/embed"
+            ]
+        );
+        assert_eq!(
+            inputs_of(&after, "unified_index/embedding_map"),
+            ["unified_index/qmd_aggregator"]
+        );
+        loads_clean(&after);
+    }
+
+    /// Only the source that embedded keeps embedding: the second shape
+    /// already says which, and the rewrite adds no `embed` to it.
+    #[test]
+    fn the_second_shape_moves_the_edges_and_keeps_its_embeds() {
+        let after = rewrite(&fan_in_upstream()).unwrap();
+        assert_eq!(
+            inputs_of(&after, "notes/keyword_index"),
+            ["notes/render_markdown"]
+        );
+        assert_eq!(
+            inputs_of(&after, "unified_index/qmd_aggregator"),
+            ["mail/keyword_index", "mail/embed", "notes/keyword_index"]
+        );
+        assert!(
+            !after.contains("group = \"notes\"\nfunction = \"embed\""),
+            "{after}"
+        );
+        assert_eq!(
+            inputs_of(&after, "unified_index/embedding_map"),
+            ["unified_index/qmd_aggregator"]
+        );
+        loads_clean(&after);
+    }
+
+    /// The point of a text edit: nothing the file held is lost.
     #[test]
     fn comments_locks_and_other_keys_survive() {
-        let after = rewrite(BEFORE).unwrap();
+        let after = rewrite(&everything_in_the_fan_in()).unwrap();
         for kept in [
             "# my sources",
             "locks = [\"mine\"]",
@@ -219,33 +363,13 @@ name = "mine"
         ] {
             assert!(after.contains(kept), "lost {kept:?}:\n{after}");
         }
-        assert!(
-            after.contains("inputs = [\"mail/render_markdown\", \"unified_index/qmd_index\"]"),
-            "{after}"
-        );
-        assert!(after.contains("function = \"embed\"\ninputs = [\"mail/keyword_index\"]"));
-        assert!(
-            after.contains("function = \"embedding_map\"\ninputs = [\"mail/embed\"] # the map"),
-            "{after}"
-        );
     }
 
     #[test]
-    fn the_result_loads_clean() {
-        let after = rewrite(BEFORE).unwrap();
-        let check = datalib_dag::config::check_text(&after);
-        assert!(check.is_clean(), "{:?}\n{after}", check.diagnostics);
-    }
-
-    /// A source whose embed a person already added keeps it, and gets the
-    /// keyword step it was missing.
-    #[test]
-    fn an_existing_embed_step_is_not_duplicated() {
-        let with_embed = format!(
-            "{BEFORE}\n[[steps]]\ngroup = \"mail\"\nfunction = \"embed\"\ninputs = [\"mail/keyword_index\"]\n"
-        );
-        let after = rewrite(&with_embed).unwrap();
-        assert_eq!(after.matches("function = \"embed\"").count(), 1, "{after}");
-        assert_eq!(after.matches("function = \"keyword_index\"").count(), 1);
+    fn a_second_run_changes_nothing() {
+        for before in [everything_in_the_fan_in(), fan_in_upstream()] {
+            let after = rewrite(&before).unwrap();
+            assert_eq!(rewrite(&after).unwrap(), after);
+        }
     }
 }

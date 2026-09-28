@@ -49,7 +49,7 @@ pub async fn read_document_vectors(root: &Path) -> Result<Option<DocumentVectors
     if !path.exists() {
         return Ok(None);
     }
-    // Read-only: the file belongs to the `qmd_index` step.
+    // Read-only: the file belongs to the qmd steps.
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
         .create_if_missing(false)
         .read_only(true);

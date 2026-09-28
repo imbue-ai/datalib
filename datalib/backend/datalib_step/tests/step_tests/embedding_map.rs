@@ -30,7 +30,7 @@ fn run(root: &Path, reset: bool) -> Value {
     cmd.env("DATALIB_DAG_STEP", STEP)
         .env("DATALIB_DAG_GROUP", "unified_index")
         .env("DATALIB_DAG_FUNCTION", "embedding_map")
-        .env("DATALIB_DAG_INPUTS", r#"["unified_index/qmd_index"]"#)
+        .env("DATALIB_DAG_INPUTS", r#"["unified_index/qmd_aggregator"]"#)
         .env("DATALIB_DAG_DATA_ROOT", root)
         .env("DATALIB_DAG_NOW", "2026-09-25T00:00:00+00:00")
         .stdin(Stdio::null());

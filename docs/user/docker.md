@@ -170,13 +170,13 @@ inputs = ["gmail/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["gmail/render_markdown"]
+function = "qmd_aggregator"
+inputs = ["gmail/keyword_index", "gmail/embed"]
 
 [[steps]]
 group = "gmail"
 function = "keyword_index"
-inputs = ["gmail/render_markdown", "unified_index/qmd_index"]
+inputs = ["gmail/render_markdown"]
 
 [[steps]]
 group = "gmail"

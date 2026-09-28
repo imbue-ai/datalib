@@ -21,8 +21,8 @@
 # `datalib-step`, which reads the function and the group's `type` from
 # the environment. A step's id is composed as `<group>/<function>` and
 # never written; it is what another step's `inputs` name. Two shared
-# fan-in steps under the `unified_index` group index every source's
-# rendered markdown.
+# fan-in steps under the `unified_index` group index every source: one
+# reads its rendered markdown, the other its own qmd search steps.
 #
 # TOML shape: each entry is a `[[groups]]`, `[[steps]]` or `[[applets]]`
 # table, and a step's `params` are `[steps.params.…]` sub-tables. A
@@ -68,8 +68,10 @@ data_root = "~/datalib"  # Base dir; everything is written under here. `~` is ex
 
 # --- Shared index steps -------------------------------------------------
 
-# Every source's rendered markdown feeds these two fan-ins: the SQL
-# index behind the grid UI, and the qmd semantic-search index.
+# The two fan-ins: the SQL index behind the grid UI, fed by every
+# source's rendered markdown, and the qmd aggregator, which runs after
+# every source's `keyword_index` and `embed` and keeps the search index
+# to the sources it names.
 [[groups]]
 id = "unified_index"
 
@@ -80,8 +82,8 @@ inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "google-calendar/render_markdown", "fastmail-calendar/render_markdown", "icloud-calendar/render_markdown", "ics-calendar/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
+function = "qmd_aggregator"
+inputs = ["claude-api/keyword_index", "claude-api/embed", "claude-export/keyword_index", "claude-export/embed", "claude-code/keyword_index", "claude-code/embed", "codex/keyword_index", "codex/embed", "chatgpt/keyword_index", "chatgpt/embed", "slack/keyword_index", "slack/embed", "github/keyword_index", "github/embed", "gitlab/keyword_index", "gitlab/embed", "notion/keyword_index", "notion/embed", "fastmail/keyword_index", "fastmail/embed", "gmail/keyword_index", "gmail/embed", "gmail-takeout/keyword_index", "gmail-takeout/embed", "icloud-contacts/keyword_index", "icloud-contacts/embed", "vcard-contacts/keyword_index", "vcard-contacts/embed", "google-calendar/keyword_index", "google-calendar/embed", "fastmail-calendar/keyword_index", "fastmail-calendar/embed", "icloud-calendar/keyword_index", "icloud-calendar/embed", "ics-calendar/keyword_index", "ics-calendar/embed", "beeper/keyword_index", "beeper/embed", "perseus/keyword_index", "perseus/embed", "yolink/keyword_index", "yolink/embed", "garmin/keyword_index", "garmin/embed", "ship-air/keyword_index", "ship-air/embed", "signal/keyword_index", "signal/embed", "whatsapp/keyword_index", "whatsapp/embed", "facebook/keyword_index", "facebook/embed", "linkedin/keyword_index", "linkedin/embed", "google-takeout/keyword_index", "google-takeout/embed", "sms-backup-restore/keyword_index", "sms-backup-restore/embed", "pdfs/keyword_index", "pdfs/embed", "messages/keyword_index", "messages/embed"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -120,7 +122,7 @@ inputs = ["claude-api/ingest"]
 [[steps]]
 group = "claude-api"
 function = "keyword_index"
-inputs = ["claude-api/render_markdown", "unified_index/qmd_index"]
+inputs = ["claude-api/render_markdown"]
 
 [[steps]]
 group = "claude-api"
@@ -156,7 +158,7 @@ inputs = ["claude-export/ingest"]
 [[steps]]
 group = "claude-export"
 function = "keyword_index"
-inputs = ["claude-export/render_markdown", "unified_index/qmd_index"]
+inputs = ["claude-export/render_markdown"]
 
 [[steps]]
 group = "claude-export"
@@ -195,7 +197,7 @@ max_tool_result_bytes = 16384
 [[steps]]
 group = "claude-code"
 function = "keyword_index"
-inputs = ["claude-code/render_markdown", "unified_index/qmd_index"]
+inputs = ["claude-code/render_markdown"]
 
 [[steps]]
 group = "claude-code"
@@ -233,7 +235,7 @@ max_tool_result_bytes = 16384
 [[steps]]
 group = "codex"
 function = "keyword_index"
-inputs = ["codex/render_markdown", "unified_index/qmd_index"]
+inputs = ["codex/render_markdown"]
 
 [[steps]]
 group = "codex"
@@ -266,7 +268,7 @@ inputs = ["chatgpt/ingest"]
 [[steps]]
 group = "chatgpt"
 function = "keyword_index"
-inputs = ["chatgpt/render_markdown", "unified_index/qmd_index"]
+inputs = ["chatgpt/render_markdown"]
 
 [[steps]]
 group = "chatgpt"
@@ -346,7 +348,7 @@ inputs = ["slack/ingest"]
 [[steps]]
 group = "slack"
 function = "keyword_index"
-inputs = ["slack/render_markdown", "unified_index/qmd_index"]
+inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "slack"
@@ -381,7 +383,7 @@ inputs = ["github/ingest"]
 [[steps]]
 group = "github"
 function = "keyword_index"
-inputs = ["github/render_markdown", "unified_index/qmd_index"]
+inputs = ["github/render_markdown"]
 
 [[steps]]
 group = "github"
@@ -415,7 +417,7 @@ inputs = ["gitlab/ingest"]
 [[steps]]
 group = "gitlab"
 function = "keyword_index"
-inputs = ["gitlab/render_markdown", "unified_index/qmd_index"]
+inputs = ["gitlab/render_markdown"]
 
 [[steps]]
 group = "gitlab"
@@ -470,7 +472,7 @@ inputs = ["notion/ingest"]
 [[steps]]
 group = "notion"
 function = "keyword_index"
-inputs = ["notion/render_markdown", "unified_index/qmd_index"]
+inputs = ["notion/render_markdown"]
 
 [[steps]]
 group = "notion"
@@ -523,7 +525,7 @@ only_render_labels = []
 [[steps]]
 group = "fastmail"
 function = "keyword_index"
-inputs = ["fastmail/render_markdown", "unified_index/qmd_index"]
+inputs = ["fastmail/render_markdown"]
 
 [[steps]]
 group = "fastmail"
@@ -597,7 +599,7 @@ only_render_labels = []
 [[steps]]
 group = "gmail"
 function = "keyword_index"
-inputs = ["gmail/render_markdown", "unified_index/qmd_index"]
+inputs = ["gmail/render_markdown"]
 
 [[steps]]
 group = "gmail"
@@ -646,7 +648,7 @@ only_render_labels = []    # render only threads touching these labels; empty = 
 [[steps]]
 group = "gmail-takeout"
 function = "keyword_index"
-inputs = ["gmail-takeout/render_markdown", "unified_index/qmd_index"]
+inputs = ["gmail-takeout/render_markdown"]
 
 [[steps]]
 group = "gmail-takeout"
@@ -677,7 +679,7 @@ inputs = ["icloud-contacts/ingest"]
 [[steps]]
 group = "icloud-contacts"
 function = "keyword_index"
-inputs = ["icloud-contacts/render_markdown", "unified_index/qmd_index"]
+inputs = ["icloud-contacts/render_markdown"]
 
 [[steps]]
 group = "icloud-contacts"
@@ -709,7 +711,7 @@ inputs = ["vcard-contacts/ingest"]
 [[steps]]
 group = "vcard-contacts"
 function = "keyword_index"
-inputs = ["vcard-contacts/render_markdown", "unified_index/qmd_index"]
+inputs = ["vcard-contacts/render_markdown"]
 
 [[steps]]
 group = "vcard-contacts"
@@ -743,7 +745,7 @@ inputs = ["google-calendar/ingest"]
 [[steps]]
 group = "google-calendar"
 function = "keyword_index"
-inputs = ["google-calendar/render_markdown", "unified_index/qmd_index"]
+inputs = ["google-calendar/render_markdown"]
 
 [[steps]]
 group = "google-calendar"
@@ -770,7 +772,7 @@ inputs = ["fastmail-calendar/ingest"]
 [[steps]]
 group = "fastmail-calendar"
 function = "keyword_index"
-inputs = ["fastmail-calendar/render_markdown", "unified_index/qmd_index"]
+inputs = ["fastmail-calendar/render_markdown"]
 
 [[steps]]
 group = "fastmail-calendar"
@@ -798,7 +800,7 @@ inputs = ["icloud-calendar/ingest"]
 [[steps]]
 group = "icloud-calendar"
 function = "keyword_index"
-inputs = ["icloud-calendar/render_markdown", "unified_index/qmd_index"]
+inputs = ["icloud-calendar/render_markdown"]
 
 [[steps]]
 group = "icloud-calendar"
@@ -825,7 +827,7 @@ inputs = ["ics-calendar/ingest"]
 [[steps]]
 group = "ics-calendar"
 function = "keyword_index"
-inputs = ["ics-calendar/render_markdown", "unified_index/qmd_index"]
+inputs = ["ics-calendar/render_markdown"]
 
 [[steps]]
 group = "ics-calendar"
@@ -861,7 +863,7 @@ period = "month"   # month (default) | day | year | all — span of each rendere
 [[steps]]
 group = "beeper"
 function = "keyword_index"
-inputs = ["beeper/render_markdown", "unified_index/qmd_index"]
+inputs = ["beeper/render_markdown"]
 
 [[steps]]
 group = "beeper"
@@ -894,7 +896,7 @@ inputs = ["perseus/ingest"]
 [[steps]]
 group = "perseus"
 function = "keyword_index"
-inputs = ["perseus/render_markdown", "unified_index/qmd_index"]
+inputs = ["perseus/render_markdown"]
 
 [[steps]]
 group = "perseus"
@@ -948,7 +950,7 @@ inputs = ["yolink/ingest"]
 [[steps]]
 group = "yolink"
 function = "keyword_index"
-inputs = ["yolink/render_markdown", "unified_index/qmd_index"]
+inputs = ["yolink/render_markdown"]
 
 [[steps]]
 group = "yolink"
@@ -996,7 +998,7 @@ inputs = ["garmin/ingest"]
 [[steps]]
 group = "garmin"
 function = "keyword_index"
-inputs = ["garmin/render_markdown", "unified_index/qmd_index"]
+inputs = ["garmin/render_markdown"]
 
 [[steps]]
 group = "garmin"
@@ -1043,7 +1045,7 @@ inputs = ["ship-air/ingest"]
 [[steps]]
 group = "ship-air"
 function = "keyword_index"
-inputs = ["ship-air/render_markdown", "unified_index/qmd_index"]
+inputs = ["ship-air/render_markdown"]
 
 [[steps]]
 group = "ship-air"
@@ -1080,7 +1082,7 @@ period = "month"   # month (default) | day | year | all — span of each rendere
 [[steps]]
 group = "signal"
 function = "keyword_index"
-inputs = ["signal/render_markdown", "unified_index/qmd_index"]
+inputs = ["signal/render_markdown"]
 
 [[steps]]
 group = "signal"
@@ -1118,7 +1120,7 @@ inputs = ["whatsapp/ingest"]
 [[steps]]
 group = "whatsapp"
 function = "keyword_index"
-inputs = ["whatsapp/render_markdown", "unified_index/qmd_index"]
+inputs = ["whatsapp/render_markdown"]
 
 [[steps]]
 group = "whatsapp"
@@ -1153,7 +1155,7 @@ inputs = ["facebook/ingest"]
 [[steps]]
 group = "facebook"
 function = "keyword_index"
-inputs = ["facebook/render_markdown", "unified_index/qmd_index"]
+inputs = ["facebook/render_markdown"]
 
 [[steps]]
 group = "facebook"
@@ -1198,7 +1200,7 @@ inputs = ["linkedin/ingest"]
 [[steps]]
 group = "linkedin"
 function = "keyword_index"
-inputs = ["linkedin/render_markdown", "unified_index/qmd_index"]
+inputs = ["linkedin/render_markdown"]
 
 [[steps]]
 group = "linkedin"
@@ -1253,7 +1255,7 @@ inputs = ["google-takeout/ingest"]
 [[steps]]
 group = "google-takeout"
 function = "keyword_index"
-inputs = ["google-takeout/render_markdown", "unified_index/qmd_index"]
+inputs = ["google-takeout/render_markdown"]
 
 [[steps]]
 group = "google-takeout"
@@ -1289,7 +1291,7 @@ inputs = ["sms-backup-restore/ingest"]
 [[steps]]
 group = "sms-backup-restore"
 function = "keyword_index"
-inputs = ["sms-backup-restore/render_markdown", "unified_index/qmd_index"]
+inputs = ["sms-backup-restore/render_markdown"]
 
 [[steps]]
 group = "sms-backup-restore"
@@ -1369,7 +1371,7 @@ inputs = ["pdfs/ingest"]
 [[steps]]
 group = "pdfs"
 function = "keyword_index"
-inputs = ["pdfs/render_markdown", "unified_index/qmd_index"]
+inputs = ["pdfs/render_markdown"]
 
 [[steps]]
 group = "pdfs"
@@ -1618,7 +1620,7 @@ inputs = ["messages/ingest"]
 [[steps]]
 group = "messages"
 function = "keyword_index"
-inputs = ["messages/render_markdown", "unified_index/qmd_index"]
+inputs = ["messages/render_markdown"]
 
 [[steps]]
 group = "messages"

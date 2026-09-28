@@ -170,6 +170,15 @@ export type ViewLibs = {
   // One log line in full — its message, fields, source and process —
   // by its store sequence number. See cards/LogLineCard.ce.vue.
   logLineView: (seq: number) => CardRender;
+  // The commit history of the doltlite stores under some trees, as a
+  // tree of store, commit and table; on a source, where two of its
+  // versions are compared. See cards/HistoryCard.ce.vue.
+  historyView: (opts: {
+    trees: string[];
+    title: string;
+    source?: string | null;
+    compare?: boolean;
+  }) => CardRender;
   // Every embedded document as a point, placed by the `embedding_map`
   // step so like sits near like; filter with the grid's grammar, colour
   // by a field, hover to preview, click to open. See cards/UmapCard.ce.vue.

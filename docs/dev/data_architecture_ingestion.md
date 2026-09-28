@@ -24,7 +24,7 @@ Practitioner-facing material — how we test, how to add a provider, how the sch
 The ETL pipeline currently has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`datalib/backend/dag/README.md`](/datalib/backend/dag/README.md) for the runner's rules and [`step_protocol.md`](step_protocol.md) for the step contract:
 
 1. **Download** — pull from upstream, UPSERT into `<data_root>/<data_source>/ingest/entities.doltlite_db` (entities) and `<data_root>/<data_source>/ingest/blobs.doltlite_db` (a single `cas_objects` table keyed by blake3 hash).
-2. **Render** — derive `.md` files under `<stanza>/render_markdown/...` plus that source's render store (`indexed_markdown.doltlite_db`) from the raw store, deterministically (indexing with qmd is the separate `qmd_index` step).
+2. **Render** — derive `.md` files under `<stanza>/render_markdown/...` plus that source's render store (`indexed_markdown.doltlite_db`) from the raw store, deterministically (indexing with qmd is the source's separate `keyword_index` and `embed` steps).
 3. **Grid index (currently: view in UI)** — feed the sidecar tree into the canonical `grid_rows` table to drive the UI
 
 Each provider (data source) is **three** crates at [`datalib/backend/etl/providers/`](/datalib/backend/etl/providers): `datalib-etl-<name>-config` is the config schema (serde structs, nothing else), `datalib-etl-<name>` downloads, and `datalib-etl-<name>-render` renders. The download crate owns its bins, its integration tests, and the sample fixtures the tests run against — keeping sample data next to the code under test serves as documentation of "what this provider's wire format looks like." The split is what keeps the render schema off the download side; see AGENTS.md §"Ingest and render are separate crates". Grid index is provider-agnostic and lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`); a new provider needs no grid_index-side changes.
@@ -460,8 +460,8 @@ it at the level of the things the rows make up. A **diff group**
 `params.diff`) is the source's own render step run at both commits and
 subtracted, written as an ordinary render tree — documents with the
 changes marked, `grid_rows` with `diff_status` set — so everything that
-serves a source serves the difference. "Compare two syncs…" on the
-Manage screen writes one; [`config_model.md`](config_model.md) has the
+serves a source serves the difference. "Compare two versions…" on a
+Manage row opens its commit history, where one is written; [`config_model.md`](config_model.md) has the
 shape and [`plans/diff_renderer.md`](plans/completed/diff_renderer.md) the design
 and what it cost to build.
 

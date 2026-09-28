@@ -1386,11 +1386,6 @@ fn rewrite_config(text: &str) -> String {
             continue;
         };
         let function = m.get("function").and_then(|v| v.as_str()).unwrap_or("");
-        assert!(
-            function != "qmd_index",
-            "config declares a qmd_index step; the golden test deliberately \
-             excludes qmd (non-deterministic status text) — drop the step"
-        );
         let group = m.get("group").and_then(|v| v.as_str()).unwrap_or("");
         if function != "ingest" || !slack_groups.iter().any(|g| g == group) {
             continue;

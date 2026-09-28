@@ -115,7 +115,7 @@ def main() -> int:
     if r.returncode != 0:
         return r.returncode
 
-    # The one index file, under the `qmd_index` step's tree (see
+    # The one index file, under the qmd index's directory (see
     # runtime::qmd).
     produced = work / "unified_index" / "qmd_index" / "qmd" / "index.sqlite"
     if not produced.exists():

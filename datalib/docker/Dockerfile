@@ -140,7 +140,7 @@ RUN set -eux; \
 # Pre-fetch qmd's three pinned GGUF models (embedding + query-expansion
 # + reranker, ~2.25 GB) into qmd's cache (`~/.cache/qmd/models`), each
 # from its pinned HuggingFace revision and sha256-verified — the same
-# table the `qmd_index` step checks on every sync, so a rebuilt image
+# table the `embed` step and the search applet check, so a rebuilt image
 # with the same pins lands the same bytes.
 #
 # `QMD_PREFETCH_MODELS=false` skips it, which is what makes the

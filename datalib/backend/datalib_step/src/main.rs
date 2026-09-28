@@ -79,7 +79,7 @@ struct Cli {
     /// `DATALIB_HTTP_PLAYBACK` for every provider transport.
     #[arg(long)]
     playback_root: Option<PathBuf>,
-    /// `qmd_index` only: directory where qmd caches its embedding model.
+    /// `embed` only: directory where qmd caches its embedding model.
     #[arg(long)]
     models_dir: Option<PathBuf>,
     #[command(flatten)]
@@ -112,8 +112,8 @@ enum Cmd {
         domain: String,
     },
     /// Utility (not a pipeline step): put qmd's pinned GGUF models in
-    /// place, sha256-verified — what the `qmd_index` step does before
-    /// it indexes, runnable ahead of time (an image build, a first-run
+    /// place, sha256-verified — what an `embed` step does before
+    /// it embeds, runnable ahead of time (an image build, a first-run
     /// warmup). Needs no data root.
     PullModels {
         /// Where the models go; default is qmd's own cache,
@@ -467,9 +467,9 @@ async fn run_function(
             writes_the_index_tree(&env, &grid_index::out_rel())?;
             grid_index::run(data_root, &env, Some(now), emitter).await
         }
-        Function::QmdIndex => {
-            writes_the_index_tree(&env, &qmd_index::out_rel())?;
-            qmd_index::run(data_root, &env, models_dir, emitter).await
+        Function::QmdAggregator => {
+            writes_the_index_tree(&env, &qmd_index::aggregator_rel())?;
+            qmd_index::run_aggregator(data_root, &env, emitter).await
         }
         Function::KeywordIndex => qmd_index::run_keyword(data_root, &env, emitter).await,
         Function::Embed => qmd_index::run_embed(data_root, &env, models_dir, emitter).await,

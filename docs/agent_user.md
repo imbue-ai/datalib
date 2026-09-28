@@ -24,12 +24,13 @@ Everything lives under one **data root** directory. A sync is a DAG of
 steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
 `<group>/ingest` step (bring the raw data in) and a
 `<group>/render_markdown` step (raw → markdown + a per-source index
-database), then two shared fan-in steps under the `unified_index`
-group — `grid_index` (SQL index) and `qmd_index` (the search index,
-one collection per source) — and, for a searched source,
-`<group>/keyword_index` and `<group>/embed`, which fill that source's
-collection. A step's function is the directory it writes (the two qmd
-steps are the exception: they write into `qmd_index`'s file):
+database), `grid_index` under the `unified_index` group (the SQL
+index), and, for a searched source, `<group>/keyword_index` and
+`<group>/embed`, which fill that source's collection of the search
+index. `unified_index/qmd_aggregator` runs after every source's pair
+and keeps the search index to the sources it names. A step's function
+is the directory it writes (the qmd steps are the exception: they all
+write the one index file under `unified_index/qmd_index/`):
 
 ```
 <data_root>/

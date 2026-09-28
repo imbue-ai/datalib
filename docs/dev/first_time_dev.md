@@ -239,12 +239,14 @@ their install scripts run.
 
 ### QMD search index (default-on, incremental)
 
-Three kinds of step build the qmd search index. `unified_index/qmd_index`
-registers one qmd collection per source it names (and puts the pinned,
-sha256-verified GGUFs in place through `datalib_qmd_models`, so qmd
-never fetches a model itself); each source's `keyword_index` then brings
-its collection's keyword index in line with its rendered tree, and its
-`embed` embeds what that collection is missing. All three drive qmd's
+Three kinds of step build the qmd search index. Each source's
+`keyword_index` registers the source's qmd collection and brings its
+keyword index in line with its rendered tree; its `embed` embeds what
+that collection is missing, after putting the pinned, sha256-verified
+embedding model in place through `datalib_qmd_models`, so qmd never
+fetches a model itself. `unified_index/qmd_aggregator` reads every
+source's pair, so it runs after them: it retires the collection of any
+source it does not name and reports what each holds. All three drive qmd's
 SDK from the staged runtime tree (above) through
 `datalib/backend/qmd_indexer/`, with
 `XDG_CACHE_HOME=<root>/unified_index/qmd_index`, so the one index lands

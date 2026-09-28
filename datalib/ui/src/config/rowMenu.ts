@@ -18,7 +18,7 @@ export type MenuTarget = {
   kind: MenuKind;
   /// The source type, or null for the index group and its steps.
   type: string | null;
-  /// The step's function (`ingest`, `qmd_index`, …); null off a step.
+  /// The step's function (`ingest`, `qmd_aggregator`, …); null off a step.
   func: string | null;
   runBlocked: string | null;
   editBlocked: string | null;
@@ -85,8 +85,6 @@ export type MenuEntry =
     };
 
 export type MenuOptions = {
-  /// Which column was under the pointer, for the entries a cell adds.
-  column: string;
   /// Whether this host can show a path in its file manager at all; the
   /// entry is absent in a plain browser, as the button is.
   canReveal: boolean;
@@ -109,7 +107,7 @@ export function notComparableReason(t: MenuTarget): string | null {
 export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
   if (t.kind === "system") return "The run log is plain SQLite, with no commit history";
-  if (t.func === "qmd_index" || t.func === "keyword_index" || t.func === "embed") {
+  if (t.func === "qmd_aggregator" || t.func === "keyword_index" || t.func === "embed") {
     return "The QMD index keeps no doltlite store";
   }
   if (t.func === "embedding_map") return "The embedding map keeps no doltlite store";
@@ -130,7 +128,7 @@ export function notResettableReason(t: MenuTarget): string | null {
   if (
     !t.type ||
     t.func === "grid_index" ||
-    t.func === "qmd_index" ||
+    t.func === "qmd_aggregator" ||
     t.func === "keyword_index" ||
     t.func === "embed"
   ) {
@@ -177,30 +175,6 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
   const only = targets[0];
   const entries: MenuEntry[] = [];
 
-  // What the cell under the pointer adds, ahead of what the row offers.
-  if (opts.column === "name") {
-    entries.push({
-      action: "rename",
-      name: "Rename…",
-      disabled: !one
-        ? ONE_AT_A_TIME
-        : (notInConfig(only) ?? (only.kind !== "group" ? "Only a group has a name" : null)),
-    });
-    entries.push({
-      action: "copy_id",
-      name: one ? "Copy id" : `Copy ${plural(targets.length, "id")}`,
-      disabled: null,
-    });
-    entries.push({ separator: true });
-  } else if (opts.column === "bytes") {
-    entries.push({
-      action: "copy_path",
-      name: one ? "Copy path" : `Copy ${plural(targets.length, "path")}`,
-      disabled: firstBlocked(targets, (t) => (t.revealPath ? null : "Nothing on disk yet")),
-    });
-    entries.push({ separator: true });
-  }
-
   entries.push({
     action: "browse",
     name: browseLabel(only),
@@ -229,20 +203,35 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
     name: off === targets.length ? "Turn on" : "Turn off",
     disabled: firstBlocked(targets, notSwitchableReason),
   });
+  entries.push({ separator: true });
+
   entries.push({
     action: "edit",
     name: "Edit settings…",
     disabled: !one ? ONE_AT_A_TIME : only.editBlocked,
   });
   entries.push({
-    action: "compare",
-    name: "Compare two syncs…",
-    disabled: !one ? ONE_AT_A_TIME : notComparableReason(only),
+    action: "rename",
+    name: "Rename…",
+    disabled: !one
+      ? ONE_AT_A_TIME
+      : (notInConfig(only) ?? (only.kind !== "group" ? "Only a group has a name" : null)),
   });
   entries.push({ separator: true });
+
+  entries.push({
+    action: "history",
+    name: "Show commit history",
+    disabled: firstBlocked(targets, noStoreReason),
+  });
+  entries.push({
+    action: "compare",
+    name: "Compare two versions…",
+    disabled: !one ? ONE_AT_A_TIME : notComparableReason(only),
+  });
   entries.push({
     action: "log",
-    name: "Show log",
+    name: "Show step log",
     disabled: !one
       ? ONE_AT_A_TIME
       : only.kind === "applet"
@@ -253,11 +242,8 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
             ? "No step under this group has run yet"
             : null,
   });
-  entries.push({
-    action: "history",
-    name: "Show commit history",
-    disabled: firstBlocked(targets, noStoreReason),
-  });
+  entries.push({ separator: true });
+
   if (opts.canReveal) {
     entries.push({
       action: "reveal",
@@ -265,7 +251,18 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
       disabled: firstBlocked(targets, (t) => t.revealBlocked),
     });
   }
+  entries.push({
+    action: "copy_path",
+    name: one ? "Copy path" : `Copy ${plural(targets.length, "path")}`,
+    disabled: firstBlocked(targets, (t) => (t.revealPath ? null : "Nothing on disk yet")),
+  });
+  entries.push({
+    action: "copy_id",
+    name: one ? "Copy id" : `Copy ${plural(targets.length, "id")}`,
+    disabled: null,
+  });
   entries.push({ separator: true });
+
   entries.push({
     action: "reset",
     name: "Reset (preserve attachments)…",

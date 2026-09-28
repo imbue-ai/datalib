@@ -166,15 +166,22 @@ command = "datalib-applet unified_index"
 # for the build-time run; keep the search index's steps last)
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
+function = "qmd_aggregator"
 inputs = [
-  "claude-export/render_markdown",
-  "gmail-takeout/render_markdown",
-  "google-takeout/render_markdown",
-  "sms-backup-restore/render_markdown",
-  "linkedin/render_markdown",
-  "contacts/render_markdown",
-  "pdfs/render_markdown",
+  "claude-export/keyword_index",
+  "claude-export/embed",
+  "gmail-takeout/keyword_index",
+  "gmail-takeout/embed",
+  "google-takeout/keyword_index",
+  "google-takeout/embed",
+  "sms-backup-restore/keyword_index",
+  "sms-backup-restore/embed",
+  "linkedin/keyword_index",
+  "linkedin/embed",
+  "contacts/keyword_index",
+  "contacts/embed",
+  "pdfs/keyword_index",
+  "pdfs/embed",
 ]
 
 # Each source fills its own part of the index: keywords, then embeddings.
@@ -182,7 +189,7 @@ inputs = [
 [[steps]]
 group = "claude-export"
 function = "keyword_index"
-inputs = ["claude-export/render_markdown", "unified_index/qmd_index"]
+inputs = ["claude-export/render_markdown"]
 
 [[steps]]
 group = "claude-export"
@@ -192,7 +199,7 @@ inputs = ["claude-export/keyword_index"]
 [[steps]]
 group = "gmail-takeout"
 function = "keyword_index"
-inputs = ["gmail-takeout/render_markdown", "unified_index/qmd_index"]
+inputs = ["gmail-takeout/render_markdown"]
 
 [[steps]]
 group = "gmail-takeout"
@@ -202,7 +209,7 @@ inputs = ["gmail-takeout/keyword_index"]
 [[steps]]
 group = "google-takeout"
 function = "keyword_index"
-inputs = ["google-takeout/render_markdown", "unified_index/qmd_index"]
+inputs = ["google-takeout/render_markdown"]
 
 [[steps]]
 group = "google-takeout"
@@ -212,7 +219,7 @@ inputs = ["google-takeout/keyword_index"]
 [[steps]]
 group = "sms-backup-restore"
 function = "keyword_index"
-inputs = ["sms-backup-restore/render_markdown", "unified_index/qmd_index"]
+inputs = ["sms-backup-restore/render_markdown"]
 
 [[steps]]
 group = "sms-backup-restore"
@@ -222,7 +229,7 @@ inputs = ["sms-backup-restore/keyword_index"]
 [[steps]]
 group = "linkedin"
 function = "keyword_index"
-inputs = ["linkedin/render_markdown", "unified_index/qmd_index"]
+inputs = ["linkedin/render_markdown"]
 
 [[steps]]
 group = "linkedin"
@@ -232,7 +239,7 @@ inputs = ["linkedin/keyword_index"]
 [[steps]]
 group = "contacts"
 function = "keyword_index"
-inputs = ["contacts/render_markdown", "unified_index/qmd_index"]
+inputs = ["contacts/render_markdown"]
 
 [[steps]]
 group = "contacts"
@@ -242,7 +249,7 @@ inputs = ["contacts/keyword_index"]
 [[steps]]
 group = "pdfs"
 function = "keyword_index"
-inputs = ["pdfs/render_markdown", "unified_index/qmd_index"]
+inputs = ["pdfs/render_markdown"]
 
 [[steps]]
 group = "pdfs"

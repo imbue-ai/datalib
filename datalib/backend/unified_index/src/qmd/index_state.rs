@@ -38,9 +38,9 @@ pub struct QmdIndexSummary {
 /// Read-only handle on a data root's qmd index.
 ///
 /// Every query here spans the whole index rather than naming a
-/// collection. The index at `unified_index/qmd_index` has exactly one
-/// writer — the `qmd_index` step — and that step registers one
-/// collection per group, so every row in it is one of ours. Naming a
+/// collection. The index at `unified_index/qmd_index` holds one collection
+/// per source, registered by that source's own qmd steps and pruned by
+/// `qmd_aggregator`, so every row in it is one of ours. Naming a
 /// collection would only create a way to under-report: a source added
 /// after this code was written would read as "not indexed".
 pub struct QmdIndexReader {
@@ -58,7 +58,7 @@ impl QmdIndexReader {
             return Ok(None);
         }
         // `create_if_missing(false)` + `read_only(true)`: this file
-        // belongs to the `qmd_index` step. Note qmd's index is a plain
+        // belongs to the qmd steps. Note qmd's index is a plain
         // SQLite database, unlike every `.doltlite_db` in the tree —
         // the doltlite amalgamation our binaries link reads it fine.
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?

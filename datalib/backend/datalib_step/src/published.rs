@@ -20,9 +20,10 @@ pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> 
         Function::Ingest => return crate::ingest::raw_store_version(&tree).await,
         Function::RenderMarkdown => datalib_etl_render::indexed_markdown::path_for(&tree),
         Function::GridIndex => datalib_core::layout::grid_index_db(data_root),
-        Function::QmdIndex | Function::KeywordIndex | Function::Embed | Function::EmbeddingMap => {
-            return Ok(None)
-        }
+        Function::QmdAggregator
+        | Function::KeywordIndex
+        | Function::Embed
+        | Function::EmbeddingMap => return Ok(None),
     };
     datalib_etl::doltlite_raw::head_commit_at_path(&store).await
 }
@@ -91,7 +92,7 @@ mod tests {
         assert_eq!(claimed[0].path, "mail/ingest");
         assert_eq!(Some(claimed[0].version.clone()), sealed);
 
-        let qmd = env("unified_index/qmd_index", Function::QmdIndex);
+        let qmd = env("unified_index/qmd_aggregator", Function::QmdAggregator);
         assert!(
             claims(&qmd, root.path()).await.is_empty(),
             "no store of its own"

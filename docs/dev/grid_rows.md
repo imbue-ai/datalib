@@ -145,9 +145,9 @@ shape, and the grid index rebuilds itself from the stores.
    `datalib/backend/datalib_step` and to the dispatch table in
    `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
    ingest/render step pair in the config and name the render step in
-   the two fan-ins' `inputs` (the wizard does this for a source it
-   adds); `grid_index` and `qmd_index` read exactly the stores their
-   inputs name.
+   `grid_index`'s `inputs` (the wizard does this for a source it adds,
+   with the source's qmd steps); `grid_index` reads exactly the stores
+   its inputs name.
 3. Add the source label to the consuming bits as needed (icon
    resolution, etc.) — but the query path itself does not change.
 

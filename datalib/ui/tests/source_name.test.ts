@@ -90,8 +90,8 @@ inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["slack/render_markdown"]
+function = "qmd_aggregator"
+inputs = []
 
 [[applets]]
 group = "unified_index"
@@ -107,7 +107,7 @@ command = "datalib-applet unified_index"
 
   it("gives an unnamed shared step its default label", () => {
     const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
-    expect(byId.get("unified_index/qmd_index")?.name).toBe("Unified Index (QMD)");
+    expect(byId.get("unified_index/qmd_aggregator")?.name).toBe("Unified Index (QMD)");
   });
 
   it("labels the applet too, which has no config key to name it", () => {

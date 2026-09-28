@@ -1,7 +1,8 @@
-//! The qmd index, one collection per source, in the one file
-//! `unified_index/qmd_index`'s tree holds: that step registers every
-//! source's collection and retires the rest, and each source's
-//! `keyword_index` and `embed` fill its own.
+//! The qmd index, one collection per source, in one file
+//! (`unified_index/qmd_index/qmd/index.sqlite`): each source's
+//! `keyword_index` and `embed` fill its own collection, and
+//! `unified_index/qmd_aggregator`, which reads all of them, keeps the
+//! collection set to the sources it reads and reports on the whole.
 //!
 //! One collection per source, so a search scoped to one source is a
 //! filter qmd applies inside retrieval rather than one the applet applies
@@ -18,20 +19,20 @@ use datalib_qmd_indexer::{EmbedProgress, Index, Qmd, UpdateProgress};
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
 
-/// The one tree this step writes, as the applet that reads it resolves
-/// it from the data root.
-pub fn out_rel() -> String {
+/// The aggregator's id, which nothing but the runner reads: the index it
+/// keeps is where the applet finds it, under `unified_index/qmd_index`.
+pub fn aggregator_rel() -> String {
     format!(
         "{}/{}",
         datalib_core::layout::UNIFIED_INDEX_DIR,
-        datalib_core::layout::QMD_DIR
+        crate::function::Function::QmdAggregator.as_str()
     )
 }
 
-/// The groups this step indexes, read off its declared inputs.
+/// The groups a fan-in reads, off its declared inputs.
 ///
 /// An input is a step id, and a step id is the tree it writes, so each
-/// one reads `<group>/render_markdown` — the group is its first segment.
+/// one is `<group>/<function>` — the group is its first segment.
 /// Taking the list from the graph rather than from a directory scan means
 /// a source dropped from the config stops being indexed on the next run,
 /// even while its rendered tree is still on disk.
@@ -150,35 +151,16 @@ fn update_progress_sink(progress: Progress) -> datalib_qmd_indexer::OnUpdateProg
     })
 }
 
-/// The collection set's version: the groups, and the qmd that registers
-/// them. What the per-source steps read from this one, so adding or
-/// removing a source is the only change here that moves them.
-fn version_of_collections(groups: &[String]) -> String {
-    let text = format!(
-        "{}\n{}",
-        datalib_qmd_indexer::DEFAULT_QMD_VERSION,
-        groups.join("\n")
-    );
-    format!("collections:{}", blake3::hash(text.as_bytes()).to_hex())
-}
-
-/// Every model search uses: embedding, query expansion, reranking.
-/// `qmd_index` provisions these for the applet that searches.
-const SEARCH_MODELS: &[datalib_runtime::qmd::PinnedModel] = datalib_qmd_models::PINNED_MODELS;
-
 /// The embedding model alone, first in the pinned table: all an embed
-/// loads.
-const EMBED_MODELS: &[datalib_runtime::qmd::PinnedModel] = SEARCH_MODELS.split_at(1).0;
+/// loads. The search applet fetches the rest itself.
+const EMBED_MODELS: &[datalib_runtime::qmd::PinnedModel] =
+    datalib_qmd_models::PINNED_MODELS.split_at(1).0;
 
-/// Put `models` in place, sha256-verified, and link the index to them:
-/// qmd then finds each already there and never fetches one itself. A
-/// no-op once they are.
-fn provision_models(
-    index: &Index,
-    root: &Path,
-    models_dir: Option<PathBuf>,
-    models: &[datalib_runtime::qmd::PinnedModel],
-) -> Result<()> {
+/// Put the embedding model in place, sha256-verified, and link the index
+/// to it: qmd then finds it already there and never fetches it itself. A
+/// no-op once it is.
+fn provision_embed_model(index: &Index, root: &Path, models_dir: Option<PathBuf>) -> Result<()> {
+    let models = EMBED_MODELS;
     let models_dir = models_dir.unwrap_or_else(datalib_qmd_indexer::default_models_dir);
     let effective = datalib_qmd_models::effective_models_dir(
         &datalib_runtime::qmd::qmd_state_dir(root),
@@ -202,38 +184,50 @@ fn provision_models(
     index.link_models(&models_dir)
 }
 
-/// `unified_index/qmd_index`: provision qmd's models and register one
-/// collection per group this step reads, retiring any other.
-pub async fn run(
+/// `unified_index/qmd_aggregator`: leave the index's collections exactly
+/// the sources whose qmd steps it reads, retiring any other with its
+/// documents, and report what each holds.
+pub async fn run_aggregator(
     data_root: &Path,
     env: &StepEnv,
-    models_dir: Option<PathBuf>,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
-    emitter.progress().set_message("registering collections");
+    let progress = emitter.progress();
+    progress.set_message("aggregating the qmd index");
     let groups = groups_from_inputs(&env.inputs);
     let root = data_root.to_path_buf();
-    let registered = groups.clone();
-    let retired = tokio::task::spawn_blocking(move || {
+    let (retired, collections) = tokio::task::spawn_blocking(move || {
         let index = open_index(&root)?;
-        provision_models(&index, &root, models_dir, SEARCH_MODELS)?;
-        index.register(&registered)
+        let retired = index.register(&groups)?;
+        anyhow::Ok((retired, index.collections()?))
     })
     .await
     .context("qmd task panicked")??;
     if !retired.is_empty() {
-        tracing::info!(collections = %retired.join(", "), "retired the collections no group claims");
+        tracing::info!(collections = %retired.join(", "), "retired the collections no source claims");
     }
+    for c in &collections {
+        let labels = [("source", c.name.as_str())];
+        progress.metric("qmd_documents", &labels, c.documents as i64);
+        progress.metric("qmd_needs_embedding", &labels, c.needs_embedding as i64);
+    }
+    progress.set_message(&index_summary(&collections));
     // The index rebuilds from the render_markdown trees, so cache-aware
     // backups (`restic --exclude-caches` etc.) may skip it. Tag the
     // whole `unified_index/` tree for the same reason the grid step
     // does — one tag covers both indexes however they are ordered.
     datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(data_root));
-    Ok(vec![OutputClaim {
-        path: out_rel(),
-        version: version_of_collections(&groups),
-        rows: None,
-    }])
+    Ok(claim_reads(env))
+}
+
+/// The aggregator's one-line account of the whole index.
+fn index_summary(collections: &[datalib_qmd_indexer::Collection]) -> String {
+    let documents: u64 = collections.iter().map(|c| c.documents).sum();
+    let left: u64 = collections.iter().map(|c| c.needs_embedding).sum();
+    format!(
+        "{documents} documents in {} sources; {left} not embedded",
+        collections.len()
+    )
 }
 
 /// `<group>/keyword_index`: this source's collection, brought in line
@@ -270,10 +264,8 @@ pub async fn run_embed(
     let root = data_root.to_path_buf();
     let group = env.group.clone();
     let embedded = tokio::task::spawn_blocking(move || {
-        // Its own, rather than relying on `qmd_index` having run: the
-        // runner does not hold a step back for an input still waiting.
         let index = open_index(&root)?;
-        provision_models(&index, &root, models_dir, EMBED_MODELS)?;
+        provision_embed_model(&index, &root, models_dir)?;
         index.embed(&[group], sink.as_ref())
     })
     .await
@@ -322,21 +314,18 @@ mod tests {
         assert_eq!(version_of_reads("{}"), None);
     }
 
-    /// The fan-in's version moves when a source joins or leaves, and not
-    /// when one re-renders: every per-source qmd step reads it, so a
-    /// version that followed the renders would rerun all of them on any
-    /// one source's change.
+    /// What the aggregator's Manage row says about the whole index.
     #[test]
-    fn the_registry_version_is_the_collection_set() {
-        let ab = groups_from_inputs(&["a/render_markdown".into(), "b/render_markdown".into()]);
-        let ba = groups_from_inputs(&["b/render_markdown".into(), "a/render_markdown".into()]);
-        let abc = groups_from_inputs(&[
-            "a/render_markdown".into(),
-            "b/render_markdown".into(),
-            "c/render_markdown".into(),
-        ]);
-        assert_eq!(version_of_collections(&ab), version_of_collections(&ba));
-        assert_ne!(version_of_collections(&ab), version_of_collections(&abc));
+    fn the_summary_adds_up_every_collection() {
+        let c = |name: &str, documents, needs_embedding| datalib_qmd_indexer::Collection {
+            name: name.to_string(),
+            documents,
+            needs_embedding,
+        };
+        assert_eq!(
+            index_summary(&[c("mail", 12, 0), c("notes", 3, 3)]),
+            "15 documents in 2 sources; 3 not embedded"
+        );
     }
 
     fn at(bytes_processed: u64, total_bytes: u64, chunks_embedded: u64) -> EmbedProgress {
