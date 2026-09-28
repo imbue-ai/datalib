@@ -1879,8 +1879,9 @@ async fn record_object_bookkeeping(
 /// The bookkeeping is a failed attempt's, deliberately: `last_error`
 /// carries what the rule measured, and it is what puts the record in
 /// [`failed_ids`], so raising the limit picks the file up on the next
-/// run. Only the `problems` row differs — nothing went wrong here, and
-/// a person reading the Manage screen should not be told it did.
+/// run. Only the `problems` row differs: a warning with the rule's own
+/// reason, because nothing failed, but the mirror is still missing a
+/// file a person may want to know about.
 pub async fn record_object_skipped(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -1920,8 +1921,8 @@ impl NotFetched<'_> {
 /// successful one. A failure on a record that has never fetched is a
 /// dropped record — an error; one on a record that fetched before
 /// leaves the earlier copy in place, and is a warning: what the reader
-/// sees is stale, not missing. A skip is neither: nothing was lost that
-/// was not meant to be, so it is `Ok` and `Info` whatever came before.
+/// sees is stale, not missing. A skip is `Ok` and a `Warning` whatever
+/// came before: nothing failed, but the file is not in the mirror.
 async fn record_fetch_problem(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -1969,7 +1970,7 @@ async fn record_fetch_problem(
         .with_context(|| format!("probe {entity_id} for an earlier fetch"))?
         .unwrap_or(false);
     let (outcome, severity, reason) = match not_fetched {
-        NotFetched::Skipped { reason, .. } => (Outcome::Ok, Severity::Info, reason),
+        NotFetched::Skipped { reason, .. } => (Outcome::Ok, Severity::Warning, reason),
         NotFetched::Failed(_) if fetched_before => {
             (Outcome::Ok, Severity::Warning, Reason::FetchFailed)
         }
@@ -2880,7 +2881,7 @@ mod tests {
     }
 
     /// A record the config told us not to fetch is not a failure. It
-    /// reads `info` / `ok` with the rule's own reason, where a failure
+    /// reads `warning` / `ok` with the rule's own reason, where a failure
     /// on a never-fetched record reads `error` / `dropped` — and it
     /// stays in `failed_ids`, which is what picks the file up if the
     /// limit is raised.
@@ -2910,8 +2911,8 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.get::<String, _>(0), Severity::Info.as_str());
-        assert_eq!(row.get::<String, _>(1), "ok", "nothing was lost");
+        assert_eq!(row.get::<String, _>(0), Severity::Warning.as_str());
+        assert_eq!(row.get::<String, _>(1), "ok", "nothing failed");
         assert_eq!(row.get::<String, _>(2), Reason::OverSizeLimit.as_str());
         assert_eq!(row.get::<String, _>(3), "size 25107330 > limit 5000000");
 
