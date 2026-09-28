@@ -20,16 +20,18 @@
 .m2-head { display: flex; align-items: flex-start; gap: 16px; flex: 0 0 auto; }
 /* The two header actions travel together, pinned right. */
 .m2-head-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-/* Sized to sit level with "+ Data Source", but outlined rather than
-   filled: running what is already configured is the routine act, adding
-   a source the deliberate one, and only one of them should read as the
-   primary thing to do on this screen. */
+/* The rows' Sync/Stop glyph, stretched level with "+ Data Source" but
+   outlined rather than filled: running what is already configured is the
+   routine act, adding a source the deliberate one, and only one of them
+   should read as the primary thing to do on this screen. */
 .m2-runall {
-  padding: 8px 14px;
-  font-size: inherit;
-  font-weight: 600;
-  white-space: nowrap;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  color: var(--datalib-muted);
 }
+.m2-runall:hover:not(:disabled) { color: var(--datalib-fg); }
 /* Sized to sit level with the two buttons beside it, but plain: it
    opens a panel, it doesn't do anything to the pipeline. */
 .m2-add {

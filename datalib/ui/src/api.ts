@@ -1029,8 +1029,9 @@ export type ManageRow = {
   actions: Action[];
   seeds: string[];
   reveal_blocked: string | null;
-  /// The open request this row is being run for: what Stop stops.
-  stop_request_id: string | null;
+  /// The open requests this row has work left in: what Stop stops.
+  /// Several for a step more than one source's sync reaches.
+  stop_request_ids: string[];
   /// Who turned this step off, while it is off.
   turned_off_by: string | null;
   last_run_id: string;
@@ -1150,9 +1151,10 @@ export function fetchRequests(signal?: AbortSignal): Promise<SyncRequest[]> {
   return getJson<SyncRequest[]>("/api/requests", signal);
 }
 
-/// Sync `roots` and everything downstream of them; none syncs every source.
-export async function openRequest(roots: string[]): Promise<SyncRequest> {
-  return (await (await post("/api/requests", { roots })).json()) as SyncRequest;
+/// Sync `roots` and everything downstream of them, one request per
+/// source they belong to; no roots syncs every source.
+export async function openRequest(roots: string[]): Promise<SyncRequest[]> {
+  return (await (await post("/api/requests", { roots })).json()) as SyncRequest[];
 }
 
 export async function stopRequest(id: string): Promise<void> {

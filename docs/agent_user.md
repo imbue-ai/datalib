@@ -160,7 +160,7 @@ a shell with no server needed, or over HTTP while the app is up.
 
 | verb | CLI | HTTP |
 |---|---|---|
-| sync | `datalib-dag <config> --sync <step> --by claude` | `POST /api/requests {"roots": ["<step>"], "by": "claude"}` (no roots: every source) |
+| sync | `datalib-dag <config> --sync <step> --by claude` | `POST /api/requests {"roots": ["<step>"], "by": "claude"}` (no roots: every source; one request per source) |
 | stop a sync | `datalib-dag stop <config> <request-id> --by claude` | `POST /api/requests/<id>/stop {"by": "claude"}` |
 | turn a step off | `datalib-dag turn-off <config> <step> --by claude` | `POST /api/steps/<step>/turn_off {"by": "claude"}` (`/` in the id as `%2F`) |
 | turn it on | `datalib-dag turn-on <config> <step>` | `POST /api/steps/<step>/turn_on` |
@@ -170,8 +170,11 @@ turn-on take effect within a second. Turning a step off (the switch on
 its Manage row) stops it if it is running, skips it in every sync until
 it is turned on, and makes whatever reads it wait. It does not hold a
 sync open: a sync whose only work is a step turned off closes without
-running it. Turning it on starts nothing by itself. `POST /api/requests` answers once the
-loop has taken the request on, with the request's `id`.
+running it. Turning it on starts nothing by itself. `POST /api/requests` opens one
+request per source the roots belong to, so each can be stopped alone,
+and answers once the loop has taken them on, with the list of them, each
+with its `id`. A sync of the same steps that is already open comes back
+instead of a second one.
 
 **Watching.** `GET /api/requests` lists the open requests, then the
 newest closed ones: each with its `roots`, `by`, and `state` (`open`, or

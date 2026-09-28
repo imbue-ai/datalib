@@ -19,7 +19,7 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 
 /// Where this build's tables stand. A store at a higher version was
 /// written by a newer build, whose columns this one would not fill.
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 
 /// Tables and columns this build calls by another name, renamed in place
 /// on open so what a person set carries over: (table, new name), then

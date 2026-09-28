@@ -153,7 +153,7 @@ test("Compare two versions writes a comparison of the two commits and syncs it",
   await page.route("**/api/requests", async (r) => {
     if (r.request().method() !== "POST") return r.fallback();
     asked.push((r.request().postDataJSON() as { roots: string[] }).roots);
-    await r.fulfill({ json: { id: "e2e-request", roots: [] } });
+    await r.fulfill({ json: [{ id: "e2e-request", roots: [] }] });
   });
 
   await page.goto("/data_sources");

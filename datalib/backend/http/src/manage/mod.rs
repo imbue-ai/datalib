@@ -188,9 +188,9 @@ pub struct ManageRow {
     /// action says why.
     pub seeds: Vec<String>,
     pub reveal_blocked: Option<String>,
-    /// The open request this row is being run for, when there is one:
-    /// what the Stop action stops.
-    pub stop_request_id: Option<String>,
+    /// The open requests this row has work left in: what the Stop action
+    /// stops. Several for a step more than one source's sync reaches.
+    pub stop_request_ids: Vec<String>,
     /// Who turned this step off, while it is off.
     pub turned_off_by: Option<String>,
     /// The run the step's `last_run` happened in — where its log is.
@@ -317,7 +317,7 @@ async fn requests_named(s: &AppState, record: &DagRecord) -> HashMap<String, Req
         return HashMap::new();
     };
     let mut out = HashMap::new();
-    for id in record.steps.values().filter_map(|st| st.request.as_deref()) {
+    for id in record.steps.values().flat_map(|st| &st.requests) {
         if out.contains_key(id) {
             continue;
         }
@@ -429,6 +429,19 @@ fn child_label(step: &WrittenStep) -> String {
         None => "Step",
     }
     .to_string()
+}
+
+fn stop_button(label: String, stopping: bool) -> Action {
+    Action {
+        id: "stop".into(),
+        enabled: !stopping,
+        hint: None,
+        disabled_reason: stopping
+            .then(|| format!("{label} \u{2014} its steps are checkpointing and exiting.")),
+        label,
+        danger: true,
+        on: None,
+    }
 }
 
 fn browse_action(label: &str, hint: &str, blocked: Option<String>) -> Action {
@@ -566,7 +579,7 @@ impl Snapshot<'_> {
             reveal_blocked: on_disk
                 .is_none()
                 .then(|| "Nothing on disk yet.".to_string()),
-            stop_request_id: None,
+            stop_request_ids: Vec::new(),
             turned_off_by: None,
             last_run_id: String::new(),
             live_run_id: None,
@@ -736,43 +749,23 @@ impl RowCtx<'_> {
         view
     }
 
-    /// Sync, or Stop while an open request wants the row: the one button
-    /// beside Browse.
-    fn sync_action(&self, id: &str, offer: SyncOffer) -> (Action, Option<String>) {
+    /// Sync, or Stop while the row has work left in an open request: the
+    /// one button beside Browse. With it, the requests Stop stops.
+    fn sync_action(&self, id: &str, offer: SyncOffer) -> (Action, Vec<String>) {
         let step = self.step(id);
-        let request = step
-            .and_then(|s| s.request.as_deref())
-            .and_then(|r| self.snap.requests.get(r));
-        let stop = |label: String, stopping: bool| Action {
-            id: "stop".into(),
-            enabled: !stopping,
-            hint: None,
-            disabled_reason: stopping
-                .then(|| format!("{label} \u{2014} its steps are checkpointing and exiting.")),
-            label,
-            danger: true,
-            on: None,
-        };
-        if let Some(r) = request {
-            // The sync a row is part of may be one started elsewhere — of
-            // another source, or by an agent — and Stop stops all of it.
-            let of = self.sources_named(&r.roots);
-            let whose = match r.opened_by.as_str() {
-                "ui" => String::new(),
-                by => format!(", started by {by}"),
-            };
-            // Once asked to stop there is nothing more to ask.
-            let stopping = r.stop_requested_by.is_some();
-            let verb = if stopping { "Stopping" } else { "Stop" };
-            return (
-                stop(format!("{verb} the sync of {of}{whose}"), stopping),
-                Some(r.id.clone()),
-            );
+        let requests: Vec<&RequestRow> = step
+            .map(|s| s.requests.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|r| self.snap.requests.get(r))
+            .collect();
+        if !requests.is_empty() {
+            return self.stop_action(&requests);
         }
         // Running for no open request: its request was stopped, or it was
         // turned off, and it is checkpointing on its way out.
         if step.is_some_and(|s| s.state == Some(StateKind::Running)) {
-            return (stop("Stopping the sync".into(), true), None);
+            return (stop_button("Stopping the sync".into(), true), Vec::new());
         }
         let (hint, blocked) = match offer {
             Ok(hint) => (Some(hint), None),
@@ -787,7 +780,36 @@ impl RowCtx<'_> {
             danger: false,
             on: None,
         };
-        (sync, None)
+        (sync, Vec::new())
+    }
+
+    /// Stop for the requests a row serves. A step several sources feed —
+    /// the index — serves each of their syncs, and its Stop stops them all.
+    fn stop_action(&self, requests: &[&RequestRow]) -> (Action, Vec<String>) {
+        let mut roots: Vec<String> = Vec::new();
+        let mut openers: Vec<&str> = Vec::new();
+        for r in requests {
+            for root in &r.roots {
+                if !roots.contains(root) {
+                    roots.push(root.clone());
+                }
+            }
+            if r.opened_by != "ui" && !openers.contains(&r.opened_by.as_str()) {
+                openers.push(&r.opened_by);
+            }
+        }
+        let of = self.sources_named(&roots);
+        let whose = match openers.as_slice() {
+            [] => String::new(),
+            by => format!(", started by {}", by.join(" and ")),
+        };
+        // Once asked to stop there is nothing more to ask.
+        let stopping = requests.iter().all(|r| r.stop_requested_by.is_some());
+        let verb = if stopping { "Stopping" } else { "Stop" };
+        (
+            stop_button(format!("{verb} the sync of {of}{whose}"), stopping),
+            requests.iter().map(|r| r.id.clone()).collect(),
+        )
     }
 
     /// The sources a request's roots belong to, by the names the config
@@ -993,7 +1015,7 @@ impl RowCtx<'_> {
                 }
             }),
         );
-        let (sync, stop_request_id) = self.sync_action(&id, sync_offer);
+        let (sync, stop_request_ids) = self.sync_action(&id, sync_offer);
         let turned_off_by = self.step(&id).and_then(|st| st.turned_off_by.clone());
         let switch = match e {
             Entry::Step(_) => Some(buttons::switch(
@@ -1035,7 +1057,7 @@ impl RowCtx<'_> {
             actions: [browse, sync].into_iter().chain(switch).collect(),
             seeds,
             reveal_blocked,
-            stop_request_id,
+            stop_request_ids,
             turned_off_by,
             last_run_id,
             live_run_id,
@@ -1205,15 +1227,31 @@ impl RowCtx<'_> {
                 }),
             )
         };
-        // While a child reads Stop, the group's button is that child's.
-        let (sync, stop_request_id) = ordered
+        // While a child reads Stop, the group's Stop stops every sync any
+        // child still has work in.
+        let child_rows: Vec<&ManageRow> = ordered.iter().map(|c| row_of(c.id())).collect();
+        let mut served: Vec<&RequestRow> = Vec::new();
+        for id in child_rows
             .iter()
-            .map(|c| row_of(c.id()))
-            .find_map(|r| {
-                let stop = r.actions.iter().find(|a| a.id == "stop")?;
-                Some((stop.clone(), r.stop_request_id.clone()))
-            })
-            .unwrap_or_else(|| self.sync_action(&g.id, sync_offer));
+            .flat_map(|r| self.step(&r.id))
+            .flat_map(|st| &st.requests)
+        {
+            if let Some(r) = self.snap.requests.get(id) {
+                if !served.iter().any(|x| x.id == r.id) {
+                    served.push(r);
+                }
+            }
+        }
+        let (sync, stop_request_ids) = if !served.is_empty() {
+            self.stop_action(&served)
+        } else if let Some(stop) = child_rows
+            .iter()
+            .find_map(|r| r.actions.iter().find(|a| a.id == "stop"))
+        {
+            (stop.clone(), Vec::new())
+        } else {
+            self.sync_action(&g.id, sync_offer)
+        };
         // A group is off when every step under it is.
         let turned_off: Vec<Option<String>> = steps
             .iter()
@@ -1302,7 +1340,7 @@ impl RowCtx<'_> {
             reveal_blocked: on_disk.is_none().then(|| {
                 "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()
             }),
-            stop_request_id,
+            stop_request_ids,
             turned_off_by,
             // A group's log is a child's; `status_from` names which.
             last_run_id: String::new(),

@@ -479,12 +479,28 @@ impl Runner {
             // reader that sees it closed must find no step still serving it.
             let closing: BTreeSet<usize> = t.closed.iter().map(|&(r, _)| r).collect();
             let held: Vec<bool> = slots.iter().map(|s| s.ended.is_some()).collect();
+            // A step serves a request only while it has work left in it,
+            // so a source whose part is done offers Sync again while the
+            // index its request also reaches is still running.
+            let working: Vec<bool> = (0..slots.len())
+                .map(|i| {
+                    held[i]
+                        || match t.states[i] {
+                            Row::Running | Row::Waiting(_) => true,
+                            Row::Fresh => above_unsettled[i],
+                            _ => false,
+                        }
+                })
+                .collect();
             record_states(graph, &shape, &mut state, &t, &held, &turned_off, |i| {
-                let mut serving = open
-                    .iter()
+                if !working[i] {
+                    return Vec::new();
+                }
+                open.iter()
                     .enumerate()
-                    .filter(|(r, _)| !closing.contains(r));
-                serving.find(|(_, o)| o.scope[i]).map(|(_, o)| o.id.clone())
+                    .filter(|(r, o)| !closing.contains(r) && o.scope[i])
+                    .map(|(_, o)| o.id.clone())
+                    .collect()
             });
             record_deferred(graph, &mut state, &mailbox.deferred);
 
@@ -629,7 +645,7 @@ impl Runner {
             &t,
             &vec![false; slots.len()],
             &turned_off,
-            |_| None,
+            |_| Vec::new(),
         );
         record_deferred(graph, &mut state, &mailbox.deferred);
         if let Some(run) = state.current_run.as_mut() {
@@ -801,7 +817,9 @@ impl Runner {
         let shape = shape_of(graph, &self.lock_slots);
         let t = tick(&shape, &intent, &facts_of(graph, &state));
         let held = vec![false; graph.steps.len()];
-        record_states(graph, &shape, &mut state, &t, &held, &turned_off, |_| None);
+        record_states(graph, &shape, &mut state, &t, &held, &turned_off, |_| {
+            Vec::new()
+        });
         record.save(&state).await?;
         Ok(all)
     }
@@ -1063,8 +1081,8 @@ fn turned_off_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usiz
 
 /// Write what the tick made of each step into its record. A step between
 /// passes (`held`: its invocation ended, and what it reads has not
-/// settled) is still running. `serving` names the open request a step is
-/// run for.
+/// settled) is still running. `serving` names the open requests a step
+/// has work left in, oldest first.
 fn record_states(
     graph: &Graph,
     shape: &Shape,
@@ -1072,7 +1090,7 @@ fn record_states(
     t: &Tick,
     held: &[bool],
     turned_off: &BTreeMap<usize, String>,
-    serving: impl Fn(usize) -> Option<String>,
+    serving: impl Fn(usize) -> Vec<String>,
 ) {
     let id = |j: usize| graph.steps[j].id.as_str();
     for (i, &st) in t.states.iter().enumerate() {
@@ -1113,7 +1131,7 @@ fn record_states(
         entry.state = Some(st.into());
         entry.state_detail = detail;
         entry.turned_off_by = turned_off_by;
-        entry.request = serving(i);
+        entry.requests = serving(i);
     }
 }
 
@@ -1127,15 +1145,17 @@ fn record_deferred(graph: &Graph, state: &mut Record, deferred: &BTreeMap<String
         if graph.by_id.contains_key(id) {
             continue;
         }
-        let request = deferred
+        let requests: Vec<String> = deferred
             .iter()
-            .find(|(_, roots)| roots.contains(id))
-            .map(|(r, _)| r.clone());
-        st.state = request.as_ref().map(|_| super::tick::StateKind::Waiting);
-        st.state_detail = request.as_ref().map(|_| {
+            .filter(|(_, roots)| roots.contains(id))
+            .map(|(r, _)| r.clone())
+            .collect();
+        let waiting = !requests.is_empty();
+        st.state = waiting.then_some(super::tick::StateKind::Waiting);
+        st.state_detail = waiting.then(|| {
             "waiting for the sync in progress to take on a config that has this step".to_string()
         });
-        st.request = request;
+        st.requests = requests;
     }
 }
 
@@ -1638,7 +1658,7 @@ mod tests {
             st.state == Some(StateKind::Waiting)
         })
         .await;
-        assert_eq!(c.request.as_deref(), Some(later.as_str()));
+        assert_eq!(c.requests, [later.as_str()]);
         assert_eq!(t.runs(2), 0, "c waits for the step the config dropped");
 
         t.go.store(true, Ordering::SeqCst);
@@ -1766,13 +1786,13 @@ mod tests {
             st.state == Some(StateKind::Running)
         })
         .await;
-        assert_eq!(a.request.as_deref(), Some(id.as_str()));
+        assert_eq!(a.requests, [id.as_str()]);
         let b = crate::supervisor::record::recorded(f.root.path())
             .await
             .steps["b/raw"]
             .clone();
         assert_eq!(b.state, Some(StateKind::Stale), "never succeeded");
-        assert_eq!(b.request, None);
+        assert!(b.requests.is_empty());
 
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
@@ -1780,7 +1800,59 @@ mod tests {
             .await
             .steps["a/raw"]
             .clone();
-        assert_eq!((a.state, a.request), (Some(StateKind::Idle), None));
+        assert_eq!(a.state, Some(StateKind::Idle));
+        assert!(a.requests.is_empty());
+    }
+
+    /// Two sources' syncs share the index both feed. The one whose download
+    /// is done serves nothing — its row offers Sync, not a Stop of a sync
+    /// it has no part left in — while the index serves both until it runs.
+    #[tokio::test]
+    async fn a_step_done_with_its_part_serves_no_request_while_the_fan_in_waits() {
+        let root = tempfile::tempdir().unwrap();
+        let (quick, held) = (
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let runs = || Arc::new(AtomicU32::new(0));
+        let stopped = || Arc::new(AtomicBool::new(false));
+        let graph = Arc::new(
+            Graph::build(vec![
+                source("a/raw", runs(), quick.clone(), stopped()),
+                source("b/raw", runs(), held.clone(), stopped()),
+                source("index/all", runs(), quick.clone(), stopped())
+                    .input("a/raw")
+                    .input("b/raw"),
+            ])
+            .unwrap(),
+        );
+        let other = Store::open(root.path()).await.unwrap();
+        let ra = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let rb = other.open_request(&["b/raw".into()], "ui").await.unwrap();
+        let running = {
+            let (root, graph) = (root.path().to_path_buf(), graph.clone());
+            tokio::spawn(async move {
+                let store = Store::open(&root).await?;
+                let report = Runner::new(&root).serve(&graph, &store).await;
+                store.close().await;
+                report
+            })
+        };
+
+        let a = until_recorded(root.path(), "a/raw", "done with its part", |st| {
+            st.state == Some(StateKind::Fresh)
+        })
+        .await;
+        assert!(a.requests.is_empty(), "{:?}", a.requests);
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        assert_eq!(record.steps["b/raw"].requests, [rb.as_str()]);
+        assert_eq!(
+            record.steps["index/all"].requests,
+            [ra.as_str(), rb.as_str()]
+        );
+
+        held.store(true, Ordering::SeqCst);
+        running.await.unwrap().unwrap();
     }
 
     /// A stop closes the request at once, but the step it stopped is still
@@ -1833,7 +1905,7 @@ mod tests {
         })
         .await;
         let a = until_recorded(root.path(), "a/raw", "serving no request", |st| {
-            st.request.is_none()
+            st.requests.is_empty()
         })
         .await;
         assert_eq!(a.state, Some(StateKind::Running), "still running");
@@ -1907,7 +1979,7 @@ mod tests {
             st.state == Some(StateKind::Waiting)
         })
         .await;
-        assert_eq!(c.request.as_deref(), Some(later.as_str()));
+        assert_eq!(c.requests, [later.as_str()]);
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
 

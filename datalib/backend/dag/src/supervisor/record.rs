@@ -81,8 +81,9 @@ pub struct StepRecord {
     /// What it waits on or is blocked by, or who turned it off: a sentence.
     pub state_detail: Option<String>,
     pub turned_off_by: Option<String>,
-    /// The open request it is being run for, the oldest if several are.
-    pub request: Option<String>,
+    /// The open requests it has work left in, oldest first: what a Stop
+    /// on its row stops. Stored as a JSON array, NULL when empty.
+    pub requests: Vec<String>,
 }
 
 /// One thing the store must write to hold `next` where it held `prev`.
@@ -153,7 +154,7 @@ pub(super) const DDL: [&str; 5] = [
         state TEXT,
         state_detail TEXT,
         turned_off_by TEXT,
-        request TEXT
+        requests TEXT
     )",
     // The version each tree was last published at, by its path (a
     // step's tree is its id).
@@ -184,7 +185,7 @@ pub(super) const ADDED_COLUMNS: [(&str, &str, &str); 4] = [
     ("steps", "state", "TEXT"),
     ("steps", "state_detail", "TEXT"),
     ("steps", "turned_off_by", "TEXT"),
-    ("steps", "request", "TEXT"),
+    ("steps", "requests", "TEXT"),
 ];
 
 /// A process the loop started, as its row names it.
@@ -290,7 +291,10 @@ impl Store {
                     .and_then(StateKind::parse),
                 state_detail: r.try_get("state_detail")?,
                 turned_off_by: r.try_get("turned_off_by")?,
-                request: r.try_get("request")?,
+                requests: match r.try_get::<Option<String>, _>("requests")? {
+                    Some(json) => serde_json::from_str(&json).context("a step's requests")?,
+                    None => Vec::new(),
+                },
             };
             steps.insert(id, state);
         }
@@ -353,7 +357,7 @@ impl Store {
                         "INSERT OR REPLACE INTO steps (step, succeeded, fingerprint, reads, \
                          last_run_id, last_started_at_utc, last_finished_at_utc, last_status, \
                          last_attempts, last_error, last_success_at_utc, tz_offset, state, \
-                         state_detail, turned_off_by, request) \
+                         state_detail, turned_off_by, requests) \
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(id)
@@ -371,7 +375,11 @@ impl Store {
                     .bind(st.state.map(StateKind::as_str))
                     .bind(&st.state_detail)
                     .bind(&st.turned_off_by)
-                    .bind(&st.request)
+                    .bind(if st.requests.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::to_string(&st.requests)?)
+                    })
                     .execute(&mut *tx)
                     .await?;
                     match &st.version {
@@ -411,7 +419,7 @@ impl Store {
     /// it, or it has already closed.
     pub async fn taken_on(&self, request: &str) -> Result<bool> {
         Ok(sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM steps WHERE request = ?1) \
+            "SELECT EXISTS(SELECT 1 FROM steps, json_each(steps.requests) WHERE json_each.value = ?1) \
              OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)",
         )
         .bind(request)
@@ -582,7 +590,7 @@ mod tests {
                     state: Some(StateKind::Waiting),
                     state_detail: Some("waiting for x/raw".into()),
                     turned_off_by: Some("claude".into()),
-                    request: Some("req-1".into()),
+                    requests: vec!["req-1".into(), "req-2".into()],
                 },
             )]),
             current_run: Some(CurrentRun {

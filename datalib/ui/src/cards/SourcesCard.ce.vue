@@ -28,6 +28,8 @@ import {
   type StepPhase,
 } from "@/config/sourceSteps";
 import TableGrid from "./TableGrid.ce.vue";
+import { ACTION_ICONS } from "./typedColumns";
+import { syncAllButton } from "@/config/syncAll";
 import type { TableGridApi } from "./tableGridApi";
 import type { MenuEntry } from "@/grid/menu";
 import { catalogForStep, type CatalogEntry } from "@/config/catalog";
@@ -90,11 +92,13 @@ inputs already hold, then rebuilds everything downstream; nothing upstream runs.
 is offered while that step is out of date: its code, its settings or what it reads
 changed since it last succeeded, as after an upgrade that changes how a source
 renders.</p>
-<p>While a sync wants a row, its Sync button is a <b>Stop</b> that names the sync —
-“Stop the sync of Work Gmail” — and who started it, if not you: a row can be part of
-a sync started on another row, from a terminal or by an agent, and Stop stops all of
-it. The steps in flight checkpoint what they have and exit; until they do the button
-reads Stopping.</p>
+<p>While a row has work left in a sync, its Sync button is a <b>Stop</b> that names
+the sync — “Stop the sync of Work Gmail” — and who started it, if not you. Each source
+syncs on its own, even under Sync everything, so a source’s Stop stops that source.
+The index every source feeds is part of each of their syncs, and its Stop stops all
+of them. The steps in flight checkpoint what they have and exit; until they do the
+button reads Stopping. The button at the top syncs everything, and while anything
+syncs it stops everything.</p>
 <p>The <b>switch</b> at the end of a row says whether it runs in syncs. Turned off,
 every sync skips it, and if it is running it stops; what reads it waits. Turned back
 on, it runs in the next sync — turning it on starts nothing by itself. On a group it
@@ -164,28 +168,28 @@ const serverSourceCount = ref(0);
 const configExists = ref(false);
 const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
-// The request a banner is about, when it is about one. Such a banner
-// retires once that request has closed, not on the next action.
-const bannerRequest = ref<string | null>(null);
+// The requests a banner is about, when it is about some. Such a banner
+// retires once they have all closed, not on the next action.
+const bannerRequests = ref<string[]>([]);
 
-/// Put up a banner, optionally tying it to a request's lifetime.
-function say(ok: boolean, text: string, requestId: string | null = null) {
+/// Put up a banner, optionally tying it to requests' lifetimes.
+function say(ok: boolean, text: string, requestIds: string[] = []) {
   banner.value = { ok, text };
-  bannerRequest.value = requestId;
+  bannerRequests.value = requestIds;
 }
 
 function clearBanner() {
   banner.value = null;
-  bannerRequest.value = null;
+  bannerRequests.value = [];
 }
 
-/// Take down a request's banner once the request has closed.
+/// Take down a request's banner once its requests have closed.
 async function retireBanner() {
-  const id = bannerRequest.value;
-  if (!id) return;
+  const ids = bannerRequests.value;
+  if (ids.length === 0) return;
   try {
-    const open = (await fetchRequests()).some((r) => r.id === id && r.state === "open");
-    if (!open && bannerRequest.value === id) clearBanner();
+    const open = (await fetchRequests()).some((r) => ids.includes(r.id) && r.state === "open");
+    if (!open && bannerRequests.value === ids) clearBanner();
   } catch {
     // The banner stays until the next action.
   }
@@ -286,6 +290,8 @@ const rows = computed<Row[]>(() => {
   const groups = new Map(all.filter((r) => r.kind === "group").map((g) => [g.id, g]));
   return all.map((r) => decorate(r, groups));
 });
+
+const syncAll = computed(() => syncAllButton(rows.value));
 
 function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
   // `system/` is not a config entry: nothing to edit, and Browse is
@@ -422,7 +428,7 @@ const rowActions: Record<string, (row: Row) => void> = {
   browse: (row) => openBrowse(row),
   sync: (row) => void runRow(row),
   stop: (row) => {
-    if (row.stop_request_id) void stopSync(row.stop_request_id);
+    if (row.stop_request_ids.length > 0) void stopSyncs(row.stop_request_ids);
   },
   in_syncs: (row) => {
     const on = row.actions.find((a) => a.id === "in_syncs")?.on;
@@ -577,7 +583,7 @@ function menuTarget(row: Row): MenuTarget {
     revealBlocked: row.reveal_blocked,
     browseBlocked: browseAction(row)?.disabled_reason ?? null,
     rawStore: row.rawStore !== null,
-    stopRequestId: row.stop_request_id,
+    stopRequestIds: row.stop_request_ids,
     turnedOffBy: row.turned_off_by,
     statusFrom: row.status_from,
     revealPath: row.reveal_path,
@@ -607,12 +613,10 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
     case "sync":
       await runRows(targets);
       return;
-    case "stop": {
+    case "stop":
       // One stop per request: several rows can be wanted by the same one.
-      const ids = new Set(targets.flatMap((t) => (t.stop_request_id ? [t.stop_request_id] : [])));
-      for (const id of ids) await stopSync(id);
+      await stopSyncs([...new Set(targets.flatMap((t) => t.stop_request_ids))]);
       return;
-    }
     case "turn_off":
     case "turn_on":
       await setTurnedOff(targets, action === "turn_off");
@@ -1122,7 +1126,8 @@ function runRow(row: Row) {
   return runRows([row]);
 }
 
-/// Several rows as one request, so their downstream steps run once.
+/// Several rows at once, so their downstream steps run once. The server
+/// opens one request per source among them, each with its own Stop.
 async function runRows(targets: Row[]) {
   const seeds = [...new Set(targets.flatMap((r) => r.seeds))];
   if (seeds.length === 0) return;
@@ -1139,8 +1144,12 @@ async function queueSync(seeds: string[], shown: string) {
   busy.value = true;
   clearBanner();
   try {
-    const request = await openRequest(seeds);
-    say(true, `Queued a sync for ${shown}.`, request.id);
+    const requests = await openRequest(seeds);
+    say(
+      true,
+      `Queued a sync for ${shown}.`,
+      requests.map((r) => r.id),
+    );
     // The loop's record moving refetches too; this is for a page whose
     // stream is down.
     await loadRows();
@@ -1207,13 +1216,18 @@ async function resetRows(targets: Row[], blobs: boolean) {
   }
 }
 
-/// Sync everything the config declares, in one run.
+/// Sync everything the config declares: one request per source, in one
+/// run.
 async function runEverything() {
   busy.value = true;
   clearBanner();
   try {
-    const request = await openRequest([]);
-    say(true, "Queued a sync of everything.", request.id);
+    const requests = await openRequest([]);
+    say(
+      true,
+      "Queued a sync of everything.",
+      requests.map((r) => r.id),
+    );
     await loadRows();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
@@ -1222,14 +1236,20 @@ async function runEverything() {
   }
 }
 
-/// Stop a request. Its steps checkpoint and exit; the rows say Stopping
+/// Stop requests. Their steps checkpoint and exit; the rows say Stopping
 /// until they have.
-async function stopSync(requestId: string) {
+async function stopSyncs(requestIds: string[]) {
+  if (requestIds.length === 0) return;
   busy.value = true;
   clearBanner();
   try {
-    await stopRequest(requestId);
-    say(true, "Stopping the sync. Steps in flight checkpoint what they have and exit.", requestId);
+    for (const id of requestIds) await stopRequest(id);
+    say(
+      true,
+      `Stopping ${requestIds.length === 1 ? "the sync" : `${requestIds.length} syncs`}. ` +
+        "Steps in flight checkpoint what they have and exit.",
+      requestIds,
+    );
     await loadRows();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
@@ -1325,15 +1345,15 @@ onUnmounted(() => {
       <div class="m2-head-actions">
         <button
           class="m2-btn m2-runall"
-          :disabled="busy || !!parseError || !!configError || rows.length === 0"
-          :title="
-            rows.length === 0
-              ? 'Nothing configured yet.'
-              : 'Run every step the config declares, in one sync.'
-          "
-          @click="runEverything"
+          :class="{ danger: syncAll.glyph === 'stop' }"
+          :disabled="busy || !!parseError || !!configError || !!syncAll.blocked"
+          :title="syncAll.blocked ?? syncAll.label"
+          :aria-label="syncAll.label"
+          @click="syncAll.stops.length > 0 ? stopSyncs(syncAll.stops) : runEverything()"
         >
-          Sync everything
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path fill="currentColor" :d="ACTION_ICONS[syncAll.glyph]" />
+          </svg>
         </button>
         <button class="m2-add" :disabled="busy || !!parseError || !!configError" @click="openAdd">
           + Data Source

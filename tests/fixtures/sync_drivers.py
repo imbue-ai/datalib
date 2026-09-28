@@ -6,7 +6,7 @@ reads the same whichever door it goes through.
 The HTTP driver builds the root the way a person does in the app — the
 starter config from `POST /api/config/init`, then one `PUT /api/config`
 per source added — and syncs with `POST /api/requests`, waiting on
-`GET /api/requests` for the request to close.
+`GET /api/requests` for each request it opened to close.
 """
 
 from __future__ import annotations
@@ -126,19 +126,23 @@ class HttpDriver:
                 )
 
     def sync(self, roots: list[str] | None = None) -> None:
-        request = self.call("POST", "/api/requests", {"roots": roots or []})
-        print(
-            f"[sync_drivers] request {request['id']} → {request['roots']}", flush=True
-        )
-        closed = self.wait_closed(request["id"])
-        if closed["state"] != "done":
-            raise SystemExit(
-                f"request {request['id']} ended {closed['state']}"
-                f" (failed step: {closed['failed_step']}); server log: {self.log_path}\n"
-                + self.failure_log(closed["failed_step"])
-                + "\n--- server log, last lines ---\n"
-                + "\n".join(self.log_path.read_text().splitlines()[-60:])
+        """One request per source the roots belong to; waits for each."""
+        opened = self.call("POST", "/api/requests", {"roots": roots or []})
+        for request in opened:
+            print(
+                f"[sync_drivers] request {request['id']} → {request['roots']}",
+                flush=True,
             )
+        for request in opened:
+            closed = self.wait_closed(request["id"])
+            if closed["state"] != "done":
+                raise SystemExit(
+                    f"request {request['id']} ended {closed['state']}"
+                    f" (failed step: {closed['failed_step']}); server log: {self.log_path}\n"
+                    + self.failure_log(closed["failed_step"])
+                    + "\n--- server log, last lines ---\n"
+                    + "\n".join(self.log_path.read_text().splitlines()[-60:])
+                )
 
     def reset(self, targets: list[str]) -> None:
         self.call("POST", "/api/reset", {"targets": targets})

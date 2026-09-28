@@ -23,6 +23,7 @@ use datalib_core::repo::{DynAppRepo, RepoError};
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -1580,12 +1581,14 @@ async fn requests_list(State(s): State<AppState>) -> Result<Json<Vec<RequestView
     Ok(Json(rows.into_iter().map(RequestView::from).collect()))
 }
 
-/// `POST /api/requests` — sync `roots` and everything downstream of them.
-/// Refused, with the reason, when the config cannot run or lacks a root.
+/// `POST /api/requests` — sync `roots` and everything downstream of them,
+/// as one request per group the roots belong to, so each source's sync
+/// can be stopped without stopping the others'. Refused, with the reason,
+/// when the config cannot run or lacks a root.
 async fn request_open(
     State(s): State<AppState>,
     Json(req): Json<OpenRequest>,
-) -> Result<Json<RequestView>, Refusal> {
+) -> Result<Json<Vec<RequestView>>, Refusal> {
     let checked = supervisor::load_config(&s.root).map_err(|e| (StatusCode::CONFLICT, e))?;
     let roots = if req.roots.is_empty() {
         source_ids(&checked)
@@ -1599,45 +1602,70 @@ async fn request_open(
         ));
     }
     let store = mailbox(&s).await?;
-    // A sync of these steps that is already open is this sync: a second
-    // click is not a second run. (A second request from anywhere else
-    // still is: the loop runs its steps once more when the first ends.)
-    let wanted: std::collections::BTreeSet<&str> = roots.iter().map(String::as_str).collect();
-    let open = store.open_requests().await.map_err(internal)?;
-    if let Some(same) = open.into_iter().find(|r| {
-        r.stop_requested_by.is_none()
-            && r.roots
-                .iter()
-                .map(String::as_str)
-                .collect::<std::collections::BTreeSet<_>>()
-                == wanted
-    }) {
-        return Ok(Json(RequestView::from(same)));
-    }
     let by = req.by.unwrap_or_else(|| "ui".to_string());
+    let open = store.open_requests().await.map_err(internal)?;
     let mut listener =
         datalib_dag::supervisor::announce::Listener::new(store, "POST /api/requests");
-    let id = store.open_request(&roots, &by).await.map_err(internal)?;
-    // Answered once the loop has taken it on, so rows read after this
-    // show its steps as wanted. A loop whose config lacks a root leaves
+    let mut answer = Vec::new();
+    let mut opened = Vec::new();
+    for roots in by_group(&checked.graph, roots) {
+        // A sync of these steps that is already open is this sync: a
+        // second click is not a second run. (A second request from
+        // anywhere else still is: the loop runs its steps once more when
+        // the first ends.)
+        let wanted: BTreeSet<&str> = roots.iter().map(String::as_str).collect();
+        let same = open.iter().find(|r| {
+            r.stop_requested_by.is_none()
+                && r.roots.iter().map(String::as_str).collect::<BTreeSet<_>>() == wanted
+        });
+        if let Some(same) = same {
+            answer.push(RequestView::from(same.clone()));
+            continue;
+        }
+        let id = store.open_request(&roots, &by).await.map_err(internal)?;
+        opened.push(id.clone());
+        answer.push(RequestView {
+            id,
+            roots,
+            by: by.clone(),
+            state: "open",
+            stop_requested_by: None,
+            failed_step: None,
+        });
+    }
+    // Answered once the loop has taken them on, so rows read after this
+    // show their steps as wanted. A loop whose config lacks a root leaves
     // it for the next sync, so the wait is bounded.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
-    while !store.taken_on(&id).await.map_err(internal)? {
-        if tokio::time::timeout_at(deadline, listener.next())
-            .await
-            .is_err()
-        {
-            break;
+    for id in &opened {
+        while !store.taken_on(id).await.map_err(internal)? {
+            if tokio::time::timeout_at(deadline, listener.next())
+                .await
+                .is_err()
+            {
+                break;
+            }
         }
     }
-    Ok(Json(RequestView {
-        id,
-        roots,
-        by,
-        state: "open",
-        stop_requested_by: None,
-        failed_step: None,
-    }))
+    Ok(Json(answer))
+}
+
+/// `roots` split by the group each step belongs to, groups in the order
+/// they first appear.
+fn by_group(graph: &datalib_dag::Graph, roots: Vec<String>) -> Vec<Vec<String>> {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for root in roots {
+        let group = graph
+            .by_id
+            .get(&root)
+            .and_then(|&i| graph.steps[i].group.clone())
+            .unwrap_or_else(|| root.clone());
+        match groups.iter_mut().find(|(g, _)| *g == group) {
+            Some((_, of)) => of.push(root),
+            None => groups.push((group, vec![root])),
+        }
+    }
+    groups.into_iter().map(|(_, of)| of).collect()
 }
 
 /// `POST /api/requests/{id}/stop` — asking, not doing: the loop stops the

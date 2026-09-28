@@ -5,6 +5,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use datalib_http::{router, ApiToken, AppState};
+use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tower::ServiceExt;
@@ -74,7 +75,7 @@ async fn sync_as(state: &AppState, source: &str, by: &str) -> String {
         Some(serde_json::json!({ "roots": [source], "by": by })),
     )
     .await;
-    request["id"].as_str().unwrap().to_string()
+    request[0]["id"].as_str().unwrap().to_string()
 }
 
 async fn sync(state: &AppState, source: &str) -> String {
@@ -171,7 +172,7 @@ async fn a_source_synced_during_anothers_sync_runs_beside_it() {
     let a = sync(&state, "a/out").await;
     // The POST answers once the loop has taken the request on, so the
     // first rows read after it already offer to stop it.
-    assert_eq!(row(&state, "a/out").await["stop_request_id"], a.as_str());
+    assert_eq!(row(&state, "a/out").await["stop_request_ids"], json!([a]));
     until("a to start", Duration::from_secs(30), || async {
         started(root, "a")
     })
@@ -194,7 +195,7 @@ async fn a_source_synced_during_anothers_sync_runs_beside_it() {
     )
     .await;
     let (ra, rb) = (row(&state, "a/out").await, row(&state, "b/out").await);
-    assert_eq!(ra["stop_request_id"], a.as_str(), "{ra}");
+    assert_eq!(ra["stop_request_ids"], json!([a]), "{ra}");
     // Named for the sync it stops, and for who started it if not the UI:
     // a row can be part of a sync started anywhere.
     assert_eq!(action(&ra, "stop")["label"], "Stop the sync of a");
@@ -234,7 +235,8 @@ async fn a_source_synced_during_anothers_sync_runs_beside_it() {
 
 /// A Sync pressed while the same sync is open is that sync: the POST
 /// answers with the open request rather than opening a second, which the
-/// loop would run once more when the first ends.
+/// loop would run once more when the first ends. A sync of two sources is
+/// one request each, so the one already open is kept.
 #[tokio::test]
 async fn a_sync_of_steps_already_syncing_is_the_sync_already_open() {
     let td = tempfile::tempdir().unwrap();
@@ -252,13 +254,11 @@ async fn a_sync_of_steps_already_syncing_is_the_sync_already_open() {
         &state,
         "POST",
         "/api/requests",
-        Some(serde_json::json!({ "roots": ["a/out", "b/out"] })),
+        Some(json!({ "roots": ["a/out", "b/out"] })),
     )
-    .await["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert_ne!(both, first, "other steps are another sync");
+    .await;
+    assert_eq!(both[0]["id"], first.as_str(), "{both}");
+    assert_eq!(both[1]["roots"], json!(["b/out"]), "{both}");
     let open = call(&state, "GET", "/api/requests", None).await;
     let open: Vec<&serde_json::Value> = open
         .as_array()
@@ -269,6 +269,80 @@ async fn a_sync_of_steps_already_syncing_is_the_sync_already_open() {
     assert_eq!(open.len(), 2, "{open:?}");
 
     std::fs::write(root.join("release"), "").unwrap();
+    state.sync.shutdown(Duration::from_secs(5)).await;
+}
+
+/// "Sync everything" is one sync per source, so a source's Stop stops
+/// that source and nothing else. The index both feed serves both syncs,
+/// and its Stop names both; once one is stopped it serves the other.
+#[tokio::test]
+async fn sync_everything_gives_each_source_a_stop_of_its_own() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let index = root.join("index.sh");
+    std::fs::write(
+        &index,
+        "mkdir -p \"$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP\"\n",
+    )
+    .unwrap();
+    let config = source(root, "a", HELD)
+        + &source(root, "b", HELD)
+        + &format!(
+            "[[groups]]\nid = \"index\"\n\n\
+             [[steps]]\ngroup = \"index\"\nfunction = \"out\"\ncommand = \"/bin/sh {}\"\n\
+             inputs = [\"a/out\", \"b/out\"]\n",
+            index.display()
+        );
+    std::fs::write(root.join("config.toml"), config).unwrap();
+    let state = server(root).await;
+
+    let opened = call(&state, "POST", "/api/requests", Some(json!({}))).await;
+    let roots: Vec<&serde_json::Value> = opened
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| &r["roots"])
+        .collect();
+    assert_eq!(roots, [&json!(["a/out"]), &json!(["b/out"])], "{opened}");
+    let (ra, rb) = (opened[0]["id"].clone(), opened[1]["id"].clone());
+    until("both to start", Duration::from_secs(30), || async {
+        started(root, "a") && started(root, "b")
+    })
+    .await;
+
+    let a = row(&state, "a/out").await;
+    assert_eq!(a["stop_request_ids"], json!([ra]), "{a}");
+    assert_eq!(action(&a, "stop")["label"], "Stop the sync of a");
+    assert_eq!(
+        row(&state, "group:a").await["stop_request_ids"],
+        json!([ra])
+    );
+    let ix = row(&state, "index/out").await;
+    assert_eq!(ix["stop_request_ids"], json!([ra, rb]), "{ix}");
+    assert_eq!(action(&ix, "stop")["label"], "Stop the sync of a and b");
+
+    let ra = ra.as_str().unwrap();
+    call(&state, "POST", &format!("/api/requests/{ra}/stop"), None).await;
+    until("a's sync to close", Duration::from_secs(30), || async {
+        request(&state, ra).await["state"] == "stopped"
+    })
+    .await;
+    until(
+        "the index to serve b alone",
+        Duration::from_secs(10),
+        || async { row(&state, "index/out").await["stop_request_ids"] == json!([rb]) },
+    )
+    .await;
+    let b = row(&state, "b/out").await;
+    assert_eq!(b["status"]["key"], "running", "{b}");
+    assert_eq!(b["stop_request_ids"], json!([rb]), "{b}");
+
+    std::fs::write(root.join("release"), "").unwrap();
+    let rb = rb.as_str().unwrap();
+    until("b's sync to close", Duration::from_secs(30), || async {
+        request(&state, rb).await["state"] == "done"
+    })
+    .await;
     state.sync.shutdown(Duration::from_secs(5)).await;
 }
 

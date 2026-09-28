@@ -27,9 +27,9 @@ export type MenuTarget = {
   /// Browse opens the step's raw store rather than the grid: a download
   /// step with one, in the desktop app.
   rawStore: boolean;
-  /// Non-null while an open request wants this row — the state in which
-  /// Sync reads as Stop.
-  stopRequestId: string | null;
+  /// The open requests this row has work left in; non-empty is the
+  /// state in which Sync reads as Stop.
+  stopRequestIds: string[];
   /// Who turned it off; for a group, who turned off every step under it.
   turnedOffBy: string | null;
   /// For a group, the step whose status it shows; the log to open.
@@ -123,7 +123,7 @@ export function noStoreReason(t: MenuTarget): string | null {
 export function notResettableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet writes no store";
-  if (t.stopRequestId) return "Busy — stop the sync first";
+  if (t.stopRequestIds.length > 0) return "Busy — stop the sync first";
   if (t.kind === "step" && t.func === "embedding_map") return null;
   if (
     !t.type ||
@@ -180,7 +180,7 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
     name: browseLabel(only),
     disabled: !one ? ONE_AT_A_TIME : only.browseBlocked,
   });
-  const claimed = targets.filter((t) => t.stopRequestId).length;
+  const claimed = targets.filter((t) => t.stopRequestIds.length > 0).length;
   if (claimed === targets.length) {
     entries.push({
       action: "stop",

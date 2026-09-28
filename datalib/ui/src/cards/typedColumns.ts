@@ -112,7 +112,7 @@ function treeCell<T extends Record<string, unknown>>(inner: Formatter<T>): Forma
 /// 24×24 Material-ish glyphs for the action ids the viewer knows a
 /// picture for, drawn in `currentColor`. An action carrying `on` draws
 /// a switch; any other id draws its label.
-const ACTION_ICONS: Record<string, string> = {
+export const ACTION_ICONS: Record<string, string> = {
   // A table: what Browse opens is this row's data as rows and columns.
   browse: "M3 5h18v4H3V5zm0 6h8v8H3v-8zm10 0h8v8h-8v-8z",
   sync: "M8 5v14l11-7z",
