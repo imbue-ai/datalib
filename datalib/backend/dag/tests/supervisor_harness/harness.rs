@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datalib_dag::config;
@@ -151,6 +151,31 @@ impl State {
     }
 }
 
+/// What a harness has seen and what it is waiting for, where a watchdog
+/// on another thread can read them after the harness has stopped moving.
+#[derive(Default)]
+pub struct Progress {
+    trail: VecDeque<String>,
+    seen: usize,
+    waiting: Option<String>,
+}
+
+impl Progress {
+    pub fn report(&self) -> String {
+        let waiting = match &self.waiting {
+            Some(what) => format!("waiting for {what}\n"),
+            None => String::new(),
+        };
+        let trail: Vec<&str> = self.trail.iter().map(String::as_str).collect();
+        format!(
+            "{waiting}--- the last {} of {} things seen ---\n{}",
+            self.trail.len(),
+            self.seen,
+            trail.join("\n")
+        )
+    }
+}
+
 struct ChannelSink(mpsc::UnboundedSender<Seen>);
 
 impl EventSink for ChannelSink {
@@ -165,12 +190,14 @@ pub struct Harness {
     puppet_bin: String,
     person: Store,
     rx: mpsc::UnboundedReceiver<Seen>,
-    trail: VecDeque<String>,
-    seen_count: usize,
+    progress: Arc<Mutex<Progress>>,
     /// Seen, and not yet taken by a wait: the next wait for something
     /// takes the earliest that matches, so two things arriving in the
     /// other order than they are waited for are both found.
     backlog: VecDeque<Seen>,
+    /// Every announcement heard, in the order it arrived, which for one
+    /// announcer is the order it committed in.
+    heard: Vec<String>,
     /// Said first when a check fails: the walk's seed, say.
     pub context: String,
     /// The scenario's own `[[locks]]` entries, written into every config.
@@ -234,9 +261,9 @@ impl Harness {
                 .to_string(),
             person,
             rx,
-            trail: VecDeque::new(),
-            seen_count: 0,
+            progress: Arc::default(),
             backlog: VecDeque::new(),
+            heard: Vec::new(),
             context: String::new(),
             locks: locks.to_string(),
             fifos: HashMap::new(),
@@ -339,16 +366,25 @@ impl Harness {
         tx
     }
 
-    fn note(&mut self, line: String) {
-        self.seen_count += 1;
-        if self.trail.len() == TRAIL {
-            self.trail.pop_front();
-        }
-        self.trail.push_back(line);
+    fn progressed(&self) -> std::sync::MutexGuard<'_, Progress> {
+        self.progress.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    pub fn trail(&self) -> String {
-        self.trail.iter().cloned().collect::<Vec<_>>().join("\n")
+    pub fn progress(&self) -> Arc<Mutex<Progress>> {
+        self.progress.clone()
+    }
+
+    fn note(&mut self, line: String) {
+        let mut p = self.progressed();
+        p.seen += 1;
+        if p.trail.len() == TRAIL {
+            p.trail.pop_front();
+        }
+        p.trail.push_back(line);
+    }
+
+    fn waiting_for(&self, what: Option<&str>) {
+        self.progressed().waiting = what.map(str::to_string);
     }
 
     /// Queue an instruction for `step`'s puppet, running or next to run.
@@ -391,6 +427,7 @@ impl Harness {
             let seen = self.backlog.remove(at).expect("just found");
             return pick(&seen).expect("just matched");
         }
+        self.waiting_for(Some(what));
         let deadline = tokio::time::Instant::now() + DEADLINE;
         loop {
             let seen = match tokio::time::timeout_at(deadline, self.rx.recv()).await {
@@ -400,6 +437,7 @@ impl Harness {
             };
             self.saw(&seen);
             if let Some(t) = pick(&seen) {
+                self.waiting_for(None);
                 return t;
             }
             self.backlog.push_back(seen);
@@ -416,6 +454,7 @@ impl Harness {
         what: &str,
         mut pick: impl FnMut(&Seen) -> Option<T>,
     ) -> Option<T> {
+        self.waiting_for(Some(what));
         let deadline = tokio::time::Instant::now() + DEADLINE;
         loop {
             while let Ok(seen) = self.rx.try_recv() {
@@ -424,9 +463,11 @@ impl Harness {
             }
             if let Some(at) = self.backlog.iter().position(|s| pick(s).is_some()) {
                 let seen = self.backlog.remove(at).expect("just found");
+                self.waiting_for(None);
                 return pick(&seen);
             }
             if !alive(pid) {
+                self.waiting_for(None);
                 return None;
             }
             let seen = match tokio::time::timeout_at(deadline, self.rx.recv()).await {
@@ -466,6 +507,10 @@ impl Harness {
             .collect()
     }
 
+    pub fn heard(&self) -> &[String] {
+        &self.heard
+    }
+
     /// A line of the walk's own in the trail.
     pub fn say(&mut self, line: String) {
         self.note(line);
@@ -475,7 +520,10 @@ impl Harness {
         let line = match seen {
             Seen::Ack { step, pid, what } => format!("ack {step} [{pid}] {what}"),
             Seen::Event(e) => format!("event {}", describe(e)),
-            Seen::Heard(l) => format!("heard {l}"),
+            Seen::Heard(l) => {
+                self.heard.push(l.clone());
+                format!("heard {l}")
+            }
             Seen::Host(l) => format!("host: {l}"),
             Seen::Broke(why) => {
                 let why = why.clone();
@@ -500,13 +548,8 @@ impl Harness {
     }
 
     pub fn fail(&self, why: &str) -> ! {
-        panic!(
-            "{}{why}\n--- the last {} of {} things seen ---\n{}",
-            self.context,
-            self.trail.len(),
-            self.seen_count,
-            self.trail()
-        )
+        let report = self.progressed().report();
+        panic!("{}{why}\n{report}", self.context)
     }
 
     pub async fn state(&self) -> State {
@@ -520,9 +563,11 @@ impl Harness {
     /// Wait until what the store says satisfies `check`, looking again
     /// whenever something is announced.
     pub async fn until<T>(&mut self, what: &str, mut check: impl FnMut(&State) -> Option<T>) -> T {
+        self.waiting_for(Some(what));
         let deadline = tokio::time::Instant::now() + DEADLINE;
         loop {
             if let Some(t) = check(&self.state().await) {
+                self.waiting_for(None);
                 return t;
             }
             let seen = match tokio::time::timeout_at(deadline, self.rx.recv()).await {
