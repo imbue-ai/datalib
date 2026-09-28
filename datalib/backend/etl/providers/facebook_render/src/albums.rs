@@ -60,7 +60,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         let item_id = ids::photo(&owner.source_id, row_id, &uri, date_ms);
         items.push(NormalizedChatItem {
             kind_label: Some("Facebook Photo".to_string()),
-            ..item(
+            ..chat_item(
                 item_id,
                 "me".to_string(),
                 owner.name.clone(),

@@ -145,7 +145,7 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
             let item_id = ids::reaction(&owner.source_id, &row_ids, Some(ms));
             NormalizedChatItem {
                 source_url: r.url.clone(),
-                ..item(
+                ..chat_item(
                     item_id,
                     "me".to_string(),
                     owner.name.clone(),
