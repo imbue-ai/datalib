@@ -490,7 +490,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `count` | an integer | grouped digits |
 | `bytes` | an integer | a base-10 size, exact figure on hover |
 | `timestamp` | an ISO stamp | "7 days ago", exact stamp on hover; sorts on the instant |
-| `timeseries` | `{value, unit, samples, detail}` | the value over a sparkline, calibrated across the column |
+| `timeseries` | `{value, unit, samples, detail}` | the value and its change over the window, over a sparkline scaled to its own range |
 | `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset |
 | `status` | `{key, label, at, detail, fraction, segments}` | a glyph for the key, the reason on hover, a bar while running |
 | `chips` | `[{kind, text, title}]` | a row of chips |

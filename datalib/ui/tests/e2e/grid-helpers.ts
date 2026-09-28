@@ -370,7 +370,7 @@ export async function sampleRow(page: Page, id: string): Promise<RowReading | nu
         status,
         lastSynced: stamp("last_synced"),
         lastSuccess: stamp("last_success"),
-        disk: row.querySelector('[col-id="disk"] .tg-plot-label')?.textContent?.trim() ?? null,
+        disk: row.querySelector('[col-id="disk"] .tg-plot-value')?.textContent?.trim() ?? null,
         activity: row.querySelector('[col-id="activity"] .tg-chips')?.getAttribute("title") ?? "",
       };
     }),

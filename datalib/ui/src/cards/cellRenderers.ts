@@ -6,7 +6,7 @@
 import type { Chip, ColumnSpec, ColumnType, Identity, StatusView, Timeseries } from "@/api";
 import { iconUrl } from "@/config/icons";
 import { STATUS_GLYPHS, STEP_GLYPHS, glyphSvg } from "@/config/glyphs";
-import { sparkline, type Sample } from "@/config/sparkline";
+import { ownRange, sparkline, windowDelta, type Sample } from "@/config/sparkline";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
 
@@ -66,11 +66,12 @@ export function sparkStepMs(windowSecs: number): number {
   return (windowSecs * 1000) / SPARK.width;
 }
 
-function sparkSvg(samples: Sample[], max: number, windowMs: number): SVGSVGElement | null {
+function sparkSvg(value: number, samples: Sample[], windowMs: number): SVGSVGElement | null {
+  const nowMs = Date.now();
   const spark = sparkline(samples, {
-    nowMs: Date.now(),
+    nowMs,
     windowMs,
-    max,
+    ...ownRange(value, samples, nowMs, windowMs),
     width: SPARK.width,
     height: SPARK.height,
     inset: 0.5,
@@ -90,6 +91,48 @@ function sparkSvg(samples: Sample[], max: number, windowMs: number): SVGSVGEleme
   line.classList.add("tg-spark-line");
   svg.appendChild(line);
   return svg;
+}
+
+/// A series drawn as a sparkline with its present value and its change
+/// over the window laid over it. The Manage table's cells and the
+/// status bar's data-root total are both this, so they read alike.
+/// `change` says the movement in words, for the hover.
+export function sparkTrack(
+  value: number,
+  unit: string,
+  samples: Sample[],
+  windowSecs: number,
+): { el: HTMLElement; change: string } {
+  const windowMs = windowSecs * 1000;
+  const track = document.createElement("span");
+  track.className = "tg-plot";
+  // No samples yet means the producer hasn't measured twice. The value
+  // still shows; there is just nothing behind it to draw.
+  const svg = sparkSvg(value, samples, windowMs);
+  if (svg) track.appendChild(svg);
+  const label = document.createElement("span");
+  label.className = "tg-plot-label";
+  const now = document.createElement("span");
+  now.className = "tg-plot-value";
+  now.textContent = formatUnit(value, unit);
+  label.appendChild(now);
+  const moved = windowDelta(value, samples, Date.now(), windowMs);
+  if (moved) {
+    const delta = document.createElement("span");
+    delta.className = "tg-plot-delta";
+    delta.textContent = `${moved > 0 ? "+" : "−"}${formatUnit(Math.abs(moved), unit)}`;
+    label.appendChild(delta);
+  }
+  track.appendChild(label);
+  const change = moved
+    ? // Said as a change rather than as two endpoints: both endpoints
+      // round to the same figure whenever the movement is small
+      // against the total.
+      `${moved > 0 ? "Grew" : "Shrank"} by ${formatUnit(Math.abs(moved), unit)} over ` +
+      `${windowPhrase(windowSecs)}. The line is scaled to its own range rather than to ` +
+      `zero, so its height is the shape of the change, not the size.`
+    : `No change over ${windowPhrase(windowSecs)}.`;
+  return { el: track, change };
 }
 
 // ── Cell renderers, one per type ─────────────────────────────────
@@ -215,7 +258,6 @@ export function renderTimestamp(iso: string | null | undefined): HTMLElement {
 
 export function renderTimeseries(
   v: Timeseries | null | undefined,
-  ceiling: number,
   windowSecs: number,
 ): HTMLElement {
   const wrap = document.createElement("span");
@@ -227,20 +269,9 @@ export function renderTimeseries(
     if (v?.detail) wrap.title = v.detail;
     return wrap;
   }
-  wrap.title =
-    `${v.detail ?? formatUnit(v.value, v.unit)} · the line is ${windowPhrase(windowSecs)}, ` +
-    `drawn against the largest row`;
-  const track = document.createElement("span");
-  track.className = "tg-plot";
-  // No samples yet means the producer hasn't measured twice. The value
-  // still shows; there is just nothing behind it to draw.
-  const svg = sparkSvg(v.samples, ceiling, windowSecs * 1000);
-  if (svg) track.appendChild(svg);
-  const label = document.createElement("span");
-  label.className = "tg-plot-label";
-  label.textContent = formatUnit(v.value, v.unit);
-  track.appendChild(label);
-  wrap.appendChild(track);
+  const track = sparkTrack(v.value, v.unit, v.samples, windowSecs);
+  wrap.title = `${v.detail ?? formatUnit(v.value, v.unit)}\n${track.change}`;
+  wrap.appendChild(track.el);
   return wrap;
 }
 
@@ -251,7 +282,7 @@ export const WIDTH: Record<ColumnType, number> = {
   bytes: 110,
   timestamp: 150,
   datetime: 165,
-  timeseries: 140,
+  timeseries: 170,
   identity: 120,
   status: 96,
   chips: 260,

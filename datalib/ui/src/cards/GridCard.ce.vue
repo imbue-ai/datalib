@@ -1242,7 +1242,6 @@ watch(
     // grid worth building.
     if (specs.length === 0) return;
     const typed = typedColumns<Row>(specs, {
-      rows: () => rows.value,
       overrides: columnOverrides,
       groupable: true,
     });
