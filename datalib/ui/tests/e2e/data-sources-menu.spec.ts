@@ -5,6 +5,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
+  savedConfig,
+  nameCell,
   MENU_DISABLED,
   SELECTED_ROWS,
   expandGroup,
@@ -47,7 +49,7 @@ test("a row's menu offers the actions for its kind, grouped, wherever the pointe
   await page.keyboard.press("Escape");
 
   // The Name cell offers the same menu as any other.
-  await row.locator('[col-id="name"]').click({ button: "right" });
+  await nameCell(page, "group:unified_index").click({ button: "right" });
   await expect(menuEntries(page)).toHaveCount(10);
   await page.keyboard.press("Escape");
 });
@@ -87,14 +89,17 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await page.keyboard.press("Escape");
 });
 
-test("Rename edits the group's name in the cell and writes it to the config", async ({ page }) => {
+test("Rename edits the group's name in the cell and writes it to the config", async ({
+  page,
+  request,
+}) => {
   await openManager(page);
   const editor = page.locator(".m2-editor");
-  const original = await editor.inputValue();
+  const original = await savedConfig(request);
   const row = groupRow(page, "unified_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
 
-  await row.locator('[col-id="name"]').click({ button: "right" });
+  await nameCell(page, "group:unified_index").click({ button: "right" });
   await menuEntry(page, "Rename…").click();
   const input = page.locator(".tg-grid input.editor-text");
   await expect(input).toBeVisible();
@@ -117,7 +122,9 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await input.press("Enter");
 
   await expect(page.getByText("Renamed unified_index to Everything, indexed.")).toBeVisible();
-  await expect(row.locator(".tg-parent")).toHaveText("Everything, indexed");
+  await expect(nameCell(page, "group:unified_index").locator(".tg-parent")).toHaveText(
+    "Everything, indexed",
+  );
   await expect(editor).toHaveValue(/name = "Everything, indexed"/);
 
   // Put the root back for the next spec on this sandbox.

@@ -175,8 +175,8 @@ export function renderStatus(s: StatusView | null | undefined): HTMLElement {
   if (!s) return wrap;
   const { key, label } = s;
   wrap.className = `tg-status tg-status-${key.replace(/[\s_]+/g, "-")}`;
-  // The word, and then why it is that word. The column is glyphs, so
-  // this is the only place either appears.
+  // The word, and then why it is that word. The glyph stands for the
+  // word, so this is the only place either appears.
   wrap.title = s.detail ? `${label} — ${s.detail}` : label;
   const spinnerOrGlyph = () => {
     if (key === "running") {
@@ -200,6 +200,13 @@ export function renderStatus(s: StatusView | null | undefined): HTMLElement {
     return word;
   };
   wrap.appendChild(spinnerOrGlyph());
+  if (s.at) {
+    const when = document.createElement("span");
+    when.className = "tg-status-at";
+    when.textContent = formatRelative(s.at, Date.now());
+    when.title = formatStamp(s.at);
+    wrap.appendChild(when);
+  }
   if (s.segments) {
     // One segment per part, each in its own status colour, the running
     // one pulsing. No arithmetic across parts; the bar *is* the parts.
@@ -279,7 +286,7 @@ export const WIDTH: Record<ColumnType, number> = {
   datetime: 165,
   timeseries: 170,
   identity: 120,
-  status: 96,
+  status: 150,
   chips: 260,
   actions: 92,
   markdown_uuid: 200,

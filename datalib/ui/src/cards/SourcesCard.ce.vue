@@ -83,8 +83,8 @@ its chevron for the <b>steps</b> that do the work — fetch, render, index — a
 disabled and say why.</p>
 <p>Each row says what its step is doing now. <b>Sync</b> on a source fetches what’s
 new, then rebuilds everything downstream: its own steps, and the index every source
-feeds. Each of those rows then shows the sync in its own <b>Status</b> — queued, and
-what it waits for; running; then how it ended — so pressing Sync on one row moves
+feeds. Each of those rows then shows the sync in its own <b>Last update</b> — queued,
+and what it waits for; running; then how it ended — so pressing Sync on one row moves
 others too. Syncs run side by side: a source synced while another syncs starts at
 once.</p>
 <p>On a step that reads another — a render, the index — Sync reruns it on what its
@@ -103,13 +103,16 @@ syncs it stops everything.</p>
 every sync skips it, and if it is running it stops; what reads it waits. Turned back
 on, it runs in the next sync — turning it on starts nothing by itself. On a group it
 turns every step under it off or on. Hover it to see who turned it off.</p>
-<p>A group row reads off its steps: <b>Status</b> is running if any step is, off
-if any is, failed if any failed, and otherwise the last step’s in pipeline order;
+<p>A group row reads off its steps: <b>Last update</b> is running if any step is,
+off if any is, failed if any failed, and otherwise the last step’s in pipeline order;
 while a sync is in flight it draws one segment per step. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
 with it.</p>
-<p><b>Type</b> and <b>Status</b> are icons, and the mark after a step’s name says what
-it does — hover any of them for the word. <b>Double-click a Status</b> to read that
+<p><b>Name</b> stays in view while the table scrolls sideways. <b>Last update</b> leads
+with an icon for what the row is doing or did last, then says when it got there. The
+icon, and the mark after a step’s name that says what it does, give their word on
+hover. <b>Right-click a header</b> to show or hide columns: <b>Last synced</b> and
+<b>Last success</b> start hidden. <b>Double-click a Last update</b> to read that
 step's log — from the run in flight while it runs, else from the run it last took
 part in, with a picker for its other runs — as a grid you can sort, filter and
 search; on a group row, the log of the step its status came from.
@@ -140,7 +143,7 @@ whole folder, measured on the same walk — plotted over the last few minutes, w
 change over that time beside the size. Each row’s line is scaled to its own range, so a
 jump in a small source shows as plainly as one in a large one: the line is the shape of
 the change, and the numbers are its size. Hover for the breakdown.</p>
-<p><b>Last synced</b> and <b>Status</b> are per step, read from the runner’s own
+<p><b>Last update</b> and <b>Last synced</b> are per step, read from the runner’s own
 record — so a sync you or an agent start from a terminal shows up here too.
 <b>Last success</b> is when the step last ran without failing: when it is older than
 Last synced, every run since has failed, and a source's mirror is only known to match
@@ -464,7 +467,7 @@ function freshest<T>(commit: (value: T) => void) {
   return run as typeof run & { invalidate: () => void };
 }
 
-// ── One step's log. A red Status says *that* a step failed; the next
+// ── One step's log. A red status says *that* a step failed; the next
 // question is always what it was doing. Double-clicking the cell opens
 // the run store's lines for that step, in the run it last took part in
 // — or the one in flight — as a grid that follows the run while it goes.
@@ -1378,7 +1381,7 @@ onUnmounted(() => {
     <!-- Entries the loader dropped. Not a whole-config error: the rest
          of the pipeline is running, which is why this is a note above a
          working table rather than a screen in front of it. The per-row
-         Status column carries each reason; this says how many and where
+         Last update column carries each reason; this says how many and where
          to look, because a dropped row is easy to scroll past. -->
     <div v-else-if="droppedRows.length" class="m2-msg bad m2-invalid">
       <b>
@@ -1387,7 +1390,7 @@ onUnmounted(() => {
       </b>
       <span class="m2-invalid-why">
         The rest of this config loaded and still syncs. These are in the file and were not loaded —
-        each one’s Status cell says why. Open the config to fix them, or run
+        each one’s Last update cell says why. Open the config to fix them, or run
         <code>datalib-dag --check {{ configPath }}</code
         >.
       </span>
@@ -1415,6 +1418,7 @@ onUnmounted(() => {
         :menu="contextMenuItems"
         :selectable="true"
         :openByDefault="isGroupOpenByDefault"
+        :pinnedColumns="1"
         @ready="onGridReady"
         @cellDoubleClick="onCellDoubleClicked"
         @edit="onCellEdit"

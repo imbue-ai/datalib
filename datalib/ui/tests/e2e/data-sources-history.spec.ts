@@ -5,7 +5,15 @@
 // it.
 
 import { test, expect } from "@playwright/test";
-import { expandGroup, expectGridPainted, groupRow, TABLE_ROWS, menuEntry } from "./grid-helpers";
+import {
+  expandGroup,
+  expectGridPainted,
+  groupRow,
+  TABLE_ROWS,
+  menuEntry,
+  nameCell,
+  pipelineRow,
+} from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
 
@@ -70,8 +78,9 @@ test("an applet row leaves out what an applet cannot do", async ({ page }) => {
   await page.goto("/data_sources");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   await expandGroup(page, "unified_index");
-  const appletRow = page.locator(ROWS).filter({ has: page.locator('[title="Applet"]') });
-  await expect(appletRow).toBeVisible();
+  // The applet shares its group's id; its row is keyed by the bare id.
+  await expect(nameCell(page, "unified_index").locator('[title="Applet"]')).toBeVisible();
+  const appletRow = pipelineRow(page, "unified_index");
 
   await appletRow.click({ button: "right" });
   // The menu is open — an entry every row has is showing — so the

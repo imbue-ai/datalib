@@ -6,9 +6,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import { copyFileSync } from "node:fs";
 import {
+  nameCell,
   expandGroup,
   expectGridPainted,
-  groupRow,
+  LAST_UPDATE_AT,
   readRow,
   pipelineRow as row,
   rowMenuEntry,
@@ -127,9 +128,9 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The scaffold's one group, and the System group every root has,
     // are the table's whole content; the scaffold's three entries are
     // under it.
-    await expect(groupRow(page, "unified_index")).toContainText("Unified Index");
+    await expect(nameCell(page, "group:unified_index")).toContainText("Unified Index");
     await expect(page.locator(TABLE_ROWS)).toHaveCount(2);
-    await expect(row(page, "system")).toContainText("System");
+    await expect(nameCell(page, "system")).toContainText("System");
     await expandGroup(page, "unified_index");
     for (const id of [
       "unified_index/grid_index",
@@ -141,8 +142,8 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The two index steps are labelled by their function, not by the
     // generic "Index" the label map falls through to when a key is
     // stale — which is what happened when the functions were renamed.
-    await expect(row(page, "unified_index/grid_index")).toContainText("Grid index");
-    await expect(row(page, "unified_index/qmd_aggregator")).toContainText("QMD aggregator");
+    await expect(nameCell(page, "unified_index/grid_index")).toContainText("Grid index");
+    await expect(nameCell(page, "unified_index/qmd_aggregator")).toContainText("QMD aggregator");
 
     // The qmd aggregator, removed before the source is added: without it
     // the wizard writes no qmd steps, whose embedding is real work this
@@ -188,7 +189,10 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // run: no status history, nothing on disk. This is the state the
     // sync below has to move. The group reads off its steps, so it
     // says the same.
-    await expect(groupRow(page, "pdfs").locator("img.tg-brand")).toHaveAttribute("title", "PDFs");
+    await expect(nameCell(page, "group:pdfs").locator("img.tg-brand")).toHaveAttribute(
+      "title",
+      "PDFs",
+    );
     expect(await statusOf(page, "group:pdfs")).toBe("Never run");
     expect(await bytesOf(page, "group:pdfs")).toBeNull();
     await expandGroup(page, "pdfs");
@@ -196,7 +200,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(row(page, "pdfs/render_markdown")).toHaveCount(1);
     expect(await statusOf(page, "pdfs/ingest")).toBe("Never run");
     expect(await bytesOf(page, "pdfs/ingest")).toBeNull();
-    await expect(row(page, "pdfs/ingest").locator('[col-id="last_synced"]')).toHaveText("—");
+    await expect(row(page, "pdfs/ingest").locator(LAST_UPDATE_AT)).toHaveCount(0);
 
     // The render step was wired into the surviving fan-in, which is
     // what gets these documents indexed rather than merely converted.
@@ -217,13 +221,13 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(firstDone["unified_index/grid_index"]).toMatch(/^(Succeeded|Up to date)$/);
 
     // ── 9. the two columns that report it ────────────────────────────
-    const cell = row(page, "pdfs/ingest").locator('[col-id="last_synced"]');
+    const cell = row(page, "pdfs/ingest").locator(LAST_UPDATE_AT);
     await expect(cell).toHaveText("seconds ago");
     const stamp = await stampOf(page, "pdfs/ingest");
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
     expect(
       Math.abs(Date.now() - Date.parse(stamp!)),
-      `Last synced claims ${stamp}, which is not a moment ago`,
+      `Last update claims ${stamp}, which is not a moment ago`,
     ).toBeLessThan(5 * 60_000);
 
     const rawBytes = await bytesOf(page, "pdfs/ingest");
@@ -348,7 +352,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // instant to report it at.
     expect(await statusOf(page, "pdfs/ingest")).toBe("Succeeded");
     expect(await statusOf(page, "signal/ingest")).toBe("Never run");
-    await expect(row(page, "signal/ingest").locator('[col-id="last_synced"]')).toHaveText("—");
+    await expect(row(page, "signal/ingest").locator(LAST_UPDATE_AT)).toHaveCount(0);
     expect(
       await stampOf(page, "signal/ingest"),
       "a row that never ran has no instant to reveal",
@@ -383,9 +387,9 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // per-row button was pressed for it.
     for (const id of ALL) {
       await expect(
-        row(page, id).locator('[col-id="last_synced"]'),
+        row(page, id).locator(LAST_UPDATE_AT),
         `${id} should report when it last ran`,
-      ).not.toHaveText("—");
+      ).toHaveCount(1);
       expect(await bytesOf(page, id), `${id} should have bytes on disk`).toBeGreaterThan(0);
     }
 

@@ -964,8 +964,9 @@ export type Segment = { id: string; key: string; label: string };
 export type StatusView = {
   key: string;
   label: string;
-  /// When this status was reached. Feeds the "Last synced" column, so
-  /// the two can never disagree about which run they describe.
+  /// When this status was reached, drawn beside its glyph. Feeds the
+  /// "Last synced" column too, so the two can never disagree about
+  /// which run they describe.
   at: string | null;
   /// When it last succeeded, whatever it has done since. Feeds "Last
   /// success"; older than `at` when the runs since have failed.

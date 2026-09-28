@@ -2,7 +2,7 @@
 // are on, the DM picker — through the same probe and the same grid the
 // email and Claude forms use.
 import { test, expect, type Page } from "@playwright/test";
-import { MANAGE_WITH_CONFIG } from "./grid-helpers";
+import { MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 const field = (page: Page, caption: string) =>
@@ -111,11 +111,11 @@ async function pickSlack(page: Page) {
 
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
   lastProbeRequest = {};
   await stubBackend(page);
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {

@@ -52,8 +52,9 @@ pub enum ColumnType {
     /// by whoever serves the row, shown as icon + label with the id on
     /// hover.
     Identity,
-    /// A [`Status`]: a glyph for the word, the reason on hover, and a
-    /// bar while it moves.
+    /// A [`Status`]: a glyph for the word, when it got there (relative,
+    /// like a `Timestamp`), the reason on hover, and a bar while it
+    /// moves. Sorts on when.
     Status,
     /// A row of [`Chip`]s.
     Chips,

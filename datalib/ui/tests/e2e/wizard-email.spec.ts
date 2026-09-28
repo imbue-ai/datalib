@@ -1,7 +1,7 @@
 // Gmail and Fastmail: two wizard forms over one step type, and the
 // Connection block that fills their label pickers from the live account.
 import { test, expect, type Page } from "@playwright/test";
-import { expandGroup, pickRowMenu, MANAGE_WITH_CONFIG } from "./grid-helpers";
+import { expandGroup, pickRowMenu, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 /// A field's own input. Descendant rather than direct child: a
@@ -148,11 +148,11 @@ async function pickTile(page: Page, query: string, blurb: string) {
 
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
   lastProbeRequest = {};
   await stubBackend(page);
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {
@@ -276,7 +276,7 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
   await expect(page.getByText("Added Bridge mail.")).toBeVisible();
   await expandGroup(page, "bridge-mail");
   await expect(
-    page.locator('.tg-grid .slick-row[data-key="bridge-mail/render_markdown"]'),
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="bridge-mail/render_markdown"]'),
   ).toBeVisible();
   // The outlink is a preset: a Gmail source's webmail links are
   // Gmail's, and there is no second answer to ask about.
@@ -376,7 +376,9 @@ test("an existing source reopens on the form that wrote it", async ({ page }) =>
   await expandGroup(page, "personal-mail");
   await pickRowMenu(
     page,
-    page.locator('.tg-grid .slick-row[data-key="personal-mail/render_markdown"]'),
+    page.locator(
+      '.tg-grid .slick-row:not([data-pinned])[data-key="personal-mail/render_markdown"]',
+    ),
     "Edit settings…",
     wizard(page),
   );

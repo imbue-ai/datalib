@@ -84,7 +84,7 @@ test("a broken entry costs that entry, and nothing else", async ({ page, request
 
   // The dropped entry is on its own row, saying why — not missing, and
   // not wearing a status from some earlier run.
-  const row = page.locator('.tg-grid .slick-row[data-key="broken/ingest"]');
+  const row = page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="broken/ingest"]');
   await expect(row).toBeVisible();
   await expect(row.locator('[col-id="status"] .tg-status')).toHaveAttribute(
     "title",
@@ -106,7 +106,7 @@ test("a step naming a group the config lacks says so on its Edit button", async 
   await expect(gate(page)).toHaveCount(0);
   const edit = await rowMenuEntry(
     page,
-    page.locator('.tg-grid .slick-row[data-key="ghost/ingest"]'),
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="ghost/ingest"]'),
     "Edit settings…",
   ).open();
   await expect(edit).toHaveClass(MENU_DISABLED);

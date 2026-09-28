@@ -1,7 +1,8 @@
 // Which cells of a table the clock alone has changed. A `timestamp`
-// cell reads "5 minutes ago", so it goes stale with no new data. The
-// grid repaints those cells, and only those, when their face here
-// moves: repainting a row rebuilds its buttons under the pointer.
+// cell reads "5 minutes ago", and a `status` cell says the same of when
+// it got there, so both go stale with no new data. The grid repaints
+// those cells, and only those, when their face here moves: repainting
+// a row rebuilds its buttons under the pointer.
 // A `timeseries` sparkline is not on the clock: it redraws when a new
 // measurement arrives, like the status bar's.
 import { formatRelative } from "@/config/timeFormat";
@@ -10,17 +11,27 @@ import { formatRelative } from "@/config/timeFormat";
 /// needs repainting when its string changes.
 export type ClockFaces = Map<string, string>;
 
+export type ClockColumns = {
+  timestamps: string[];
+  /// Status cells, whose stamp is the status's `at`.
+  statuses: string[];
+};
+
 export function clockFaces<T extends Record<string, unknown>>(
   rows: T[],
   keyOf: (row: T) => string,
-  timestamps: string[],
+  cols: ClockColumns,
   now: number,
 ): ClockFaces {
   const faces: ClockFaces = new Map();
   for (const row of rows) {
     const key = keyOf(row);
-    for (const f of timestamps) {
+    for (const f of cols.timestamps) {
       faces.set(`${key}\n${f}`, formatRelative((row[f] as string | null) ?? null, now));
+    }
+    for (const f of cols.statuses) {
+      const at = (row[f] as { at?: string | null } | null)?.at ?? null;
+      faces.set(`${key}\n${f}`, formatRelative(at, now));
     }
   }
   return faces;

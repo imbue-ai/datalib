@@ -180,7 +180,7 @@ newest closed ones: each with its `roots`, `by`, and `state` (`open`, or
 how it ended: `done`, `failed`, `stopped`). `datalib-dag status
 <config>` prints the same from the shell, with the steps turned off and the steps
 running now. What each step is doing is in the loop's record, which the
-Manage screen's Status column reads directly:
+Manage screen's Last update column reads directly:
 
 ```sh
 sqlite3 <data_root>/system/supervisor.sqlite \

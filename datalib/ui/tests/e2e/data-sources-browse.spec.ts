@@ -8,6 +8,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
+  savedConfig,
   searchAndSettle,
   SEARCH_ROWS,
   TABLE_ROWS,
@@ -87,9 +88,9 @@ async function browse(page: Page, groupId: string, expectQuery: string) {
 // failure — leaving sources in the config would take later specs down.
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
   await openManage(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
   await writeConfig(page, `${original.replace(/\s*$/, "")}\n${GROUPS}`);
 });
 
