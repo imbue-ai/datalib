@@ -107,7 +107,7 @@ function severityLabel(d: Diagnostic): string {
 </script>
 
 <template>
-  <section class="cfg-error">
+  <section class="cfg-error notice">
     <div class="card">
       <template v-if="notAConfig">
         <h2>This config file can’t be read</h2>
@@ -182,50 +182,15 @@ function severityLabel(d: Diagnostic): string {
   </section>
 </template>
 
+<style scoped src="./notice.css"></style>
 <style scoped>
-.cfg-error {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 2rem 1rem;
-}
 .card {
   width: 100%;
   max-width: 56rem;
-  border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  background: var(--datalib-card-bg);
-  padding: 1.5rem 1.75rem;
-}
-h2 {
-  margin: 0 0 0.75rem;
-  font-size: 1.25rem;
-}
-p {
-  margin: 0.6rem 0;
-  line-height: 1.5;
-}
-code {
-  background: var(--datalib-code-bg);
-  border-radius: 3px;
-  padding: 0.05rem 0.3rem;
-  font-size: 0.9em;
-}
-.root {
-  display: inline-block;
-  overflow-wrap: anywhere;
-}
-.lead {
-  color: var(--datalib-log-error);
 }
 .where {
   color: var(--datalib-muted);
   margin-left: 0.4rem;
-}
-.cli {
-  color: var(--datalib-muted);
-  font-size: 0.9rem;
 }
 .diags {
   list-style: none;
@@ -313,26 +278,5 @@ code {
   align-items: center;
   gap: 0.75rem;
   margin-top: 0.75rem;
-}
-.error {
-  color: var(--datalib-log-error);
-}
-button {
-  font: inherit;
-  padding: 0.45rem 0.9rem;
-  border-radius: 4px;
-  border: 1px solid var(--datalib-border);
-  background: var(--datalib-input-bg);
-  color: var(--datalib-fg);
-  cursor: pointer;
-}
-button:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-button.primary {
-  border-color: var(--datalib-accent);
-  color: var(--datalib-accent);
-  font-weight: 600;
 }
 </style>

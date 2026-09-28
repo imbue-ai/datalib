@@ -618,21 +618,9 @@ async fn fetch_attachments_for(
             .and_then(|c| c.get("parts"))
             .and_then(|v| v.as_array())
         {
-            for p in parts {
-                let Some(obj) = p.as_object() else { continue };
-                if obj.get("content_type").and_then(|v| v.as_str()) != Some("image_asset_pointer") {
-                    continue;
-                }
-                let Some(ptr) = obj.get("asset_pointer").and_then(|v| v.as_str()) else {
-                    continue;
-                };
-                let id = ptr
-                    .strip_prefix("sediment://")
-                    .or_else(|| ptr.strip_prefix("file-service://"))
-                    .unwrap_or(ptr)
-                    .to_string();
-                if seen.insert(id.clone()) {
-                    targets.push((id, None, Some("image/*".into())));
+            for id in parts.iter().filter_map(image_asset_file_id) {
+                if seen.insert(id.to_string()) {
+                    targets.push((id.to_string(), None, Some("image/*".into())));
                 }
             }
         }
@@ -677,6 +665,22 @@ async fn fetch_attachments_for(
         warn!(event = "chatgpt_attachment_flush_err", conv = %cid, error = %e, "a conversation's attachments could not be written");
     }
     let _ = now;
+}
+
+/// The file id an `image_asset_pointer` content part points at, its
+/// `sediment://` or `file-service://` scheme stripped; `None` for any
+/// other part.
+pub fn image_asset_file_id(part: &Value) -> Option<&str> {
+    let obj = part.as_object()?;
+    if obj.get("content_type").and_then(Value::as_str) != Some("image_asset_pointer") {
+        return None;
+    }
+    let ptr = obj.get("asset_pointer").and_then(Value::as_str)?;
+    Some(
+        ptr.strip_prefix("sediment://")
+            .or_else(|| ptr.strip_prefix("file-service://"))
+            .unwrap_or(ptr),
+    )
 }
 
 /// Fetch one attachment's bytes via the two-hop dance: metadata via

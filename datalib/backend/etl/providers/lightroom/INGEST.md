@@ -7,18 +7,16 @@ database, table for table, into a doltlite store and lets doltlite's
 content-addressed prolly trees do the deduplication.
 
 The engine is
-[`datalib_etl_sqlite_mirror`](/datalib/backend/etl/sqlite_mirror/), its
-own crate since `apple_photos` became its second user; this provider is
-the config that points it at a `.lrcat` and the `id_global` /
-`skip_xmp` defaults. This document is still where the engine is
-explained. [`apple_photos/INGEST.md`](../apple_photos/INGEST.md) covers
-only what differs there.
+[`datalib_etl_sqlite_mirror`](/datalib/backend/etl/sqlite_mirror/),
+shared with `apple_photos`; this provider is the config that points it
+at a `.lrcat`, with `id_global` as the preferred key and the `skip_xmp`
+preset. This document is where the engine is explained;
+[`apple_photos/INGEST.md`](../apple_photos/INGEST.md) covers only what
+differs there.
 
 The result is an incremental, versioned backup that costs one pass over
 the catalog per run and stores only what actually changed, with every
-prior state still queryable.
-
-**Status: download-only prototype.** There is no render step yet — see
+prior state still queryable. There is no render step; see
 [What render will need](#what-render-will-need).
 
 ## The model
@@ -66,19 +64,16 @@ integer in one row and a blob in the next, and both arrive intact.
 Marshalling through Rust would force a decision about what such a column
 "is" — and getting it wrong would silently corrupt the backup.
 
-A database doltlite creates is in its own format *by default*, whatever
-the filename extension — but that is a default, not a limitation. The
-URI parameter `doltlite_engine=sqlite` selects the stock engine for a
-new empty file (it is read with `sqlite3_uri_parameter`, so the name has
-to be `file:`-shaped, and it is ignored once the file has content).
+A database doltlite creates is in its own format by default, whatever
+the filename extension; the URI parameter `doltlite_engine=sqlite`
+selects the stock engine for a new empty file (it must be a `file:`
+URI, and is ignored once the file has content).
 `datalib/backend/runs/src/store.rs` uses it, and
-`runs/tests/stock_sqlite_engine.rs` asserts the resulting magic
-bytes against a control that omits the parameter and gets `CTLD`.
+`runs/tests/runs_tests/stock_sqlite_engine.rs` pins it.
 
-The test fixture is still minted by
-`//tests/fixtures:make_lightroom_catalog.py` in a genrule rather than by
-Rust, but for a better reason than "Rust can't": generating the input
-out of band keeps the fixture independent of the engine under test.
+The test fixture is minted by `//tests/fixtures:make_lightroom_catalog.py`
+in a genrule rather than by Rust, so the input stays independent of the
+engine under test.
 
 ## What gets mirrored
 
@@ -187,11 +182,10 @@ the honest representation of a table with no identity of its own: you
 still see every change, classified as `added`/`removed` rather than
 `modified`.
 
-Note that all 22 are `Ag*`- or `Migrated*`-prefixed (19 and 3). A glance
-at that list reads as "the Ag* tables have no primary keys", which is
-wrong and has been believed: of the catalog's 93 `Ag*` tables, 19 are
-keyless and the other 74 are keyed — 47 on `id_local`, 18 on
-`id_global`, 9 on another declared column.
+All 22 are `Ag*`- or `Migrated*`-prefixed (19 and 3), which reads at a
+glance as "the Ag* tables have no primary keys". They do: of the
+catalog's 93 `Ag*` tables, 19 are keyless and the other 74 are keyed —
+47 on `id_local`, 18 on `id_global`, 9 on another declared column.
 
 Set `stable_key_columns = []` to mirror declared keys verbatim, or use
 `primary_keys = { Table = ["a", "b"] }` to pin one explicitly (an empty
@@ -235,13 +229,10 @@ catalog needs no configuration at all.
 | Table gone | drops it, so HEAD means "the catalog as it is now" | none |
 
 "None" is the accurate answer in every row, and that is the whole point
-of the design. Rebuilding is free because doltlite is content-addressed:
-a `CREATE TABLE` identical to the one at HEAD is not a change, and rows
-written back byte-identical hash to the chunks already there. So a
+of the design: rebuilding is free for the reason in §"The model", so a
 rebuild from an unchanged catalog leaves `dolt_status` clean and produces
-no commit — which `unchanged_source_produces_no_commit` asserts, and
-which now covers schema stability as well as row stability in one
-assertion.
+no commit — which `unchanged_source_produces_no_commit` asserts, for
+schema stability as well as row stability.
 
 Diff quality and history are untouched by the rebuild: an edited row
 still reads as `modified` (not removed-plus-added) in
@@ -250,13 +241,10 @@ knows nor cares that the table was dropped in between, and
 `dolt_history_<table>` keeps every prior version across the drop —
 including across a schema change.
 
-An earlier version of this provider compared the mirror's introspected
-shape against the source's and chose between `ALTER TABLE … ADD COLUMN`
-and drop-and-recreate. It was ~150 lines, and it had a bug this version
-cannot have: SQLite reports a non-`INTEGER PRIMARY KEY` column as
-nullable while dolt stores it NOT NULL, the two shapes therefore never
-compared equal, and ten of a real catalog's 133 tables rebuilt on *every*
-run. Nothing compares shapes now.
+Nothing compares the mirror's shape with the source's, which is what
+keeps the rebuild honest: SQLite reports a non-`INTEGER PRIMARY KEY`
+column as nullable while dolt stores it NOT NULL, so two such shapes
+never compare equal.
 
 ### Reading a column HEAD no longer has
 
@@ -276,51 +264,33 @@ Both halves — the absence from `dolt_history_`, and the recovery via a
 branch — are pinned by
 `a_dropped_columns_values_survive_at_their_commit`.
 
-## A doltlite blob bug this provider found (fixed upstream)
+## A doltlite blob bug worth recognising (fixed upstream)
 
-**doltlite used to silently corrupt large values read out of an ordinary
-SQLite file** — [dolthub/doltlite#2327](https://github.com/dolthub/doltlite/issues/2327),
-fixed in **v0.11.53** by
-[dolthub/doltlite#2329](https://github.com/dolthub/doltlite/pull/2329),
-which is what `MODULE.bazel` pins. It is written up here because the
-failure mode is worth recognising, not because the mirror still has to
-dodge it.
+Before doltlite v0.11.53
+([dolthub/doltlite#2327](https://github.com/dolthub/doltlite/issues/2327),
+fixed by [#2329](https://github.com/dolthub/doltlite/pull/2329)), a value
+read out of an ordinary SQLite file that spilled past the page's local
+payload limit (4057 bytes at a 4096-byte `page_size`) was backed by a
+buffer reused across rows. Any consumer holding more than one row's
+value at a time — `DISTINCT`, `GROUP BY`, a materialised subquery, or an
+`INSERT … SELECT` into a table whose primary key is not a rowid alias —
+saw every value collapse onto the first row's bytes, truncated to each
+row's own length. Row counts, lengths and `typeof()` all looked right,
+no error was raised, and the damage survived `dolt_commit`; only a
+byte-for-byte comparison against the source showed it (an `EXCEPT`
+against the ATTACHed catalog hit the same bug). The mirror's `id_global`
+key rewrite is exactly that shape: six of a real catalog's 50 XMP
+packets came out holding another photo's bytes.
 
-Any value that spilled past the source file's local payload limit (4057
-bytes at the usual 4096-byte `page_size`; the cutover moved with
-`page_size`) was backed by a buffer reused across rows, so any consumer
-holding more than one row's value at a time — `DISTINCT`, `GROUP BY`, a
-materialised subquery, or an `INSERT … SELECT` into a table whose primary
-key is not a rowid alias — saw every value collapse onto the first row's
-bytes, truncated to each row's own correct length. Row counts, lengths
-and `typeof()` all still looked right; no error was raised; the damage
-survived `dolt_commit`. A plain row-at-a-time scan was unaffected, as
-were doltlite's own tables.
-
-This provider walked straight into it, and only because of the
-`id_global` key rewrite: keying on the source's `id_local INTEGER` is the
-shape that happened to be safe. Six of a real catalog's 50 XMP packets
-came out holding another photo's bytes. Every cheap check passed — it
-surfaced only on a byte-for-byte comparison against the source, and the
-first version of *that* check was an `EXCEPT` query against the ATTACHed
-catalog, which hit the same bug and lied.
-
-Until the fix landed, [`mirror::rebuild_table`](/datalib/backend/etl/sqlite_mirror/src/mirror.rs)
-routed rows through a keyless staging table whenever the mirror's key was
-not a single `INTEGER` column. That detour is gone;
-`large_values_round_trip_byte_for_byte` is the regression test that
-justified it and now guards its absence, comparing every XMP packet
-against the source byte for byte.
-
-To re-check the upstream behaviour directly, without going through this
-crate:
+`large_values_round_trip_byte_for_byte` compares every XMP packet
+against the source byte for byte. To re-check upstream directly:
 
 ```sh
-hack/doltlite_blob_bug/run.sh                    # the pinned-fix version
+hack/doltlite_blob_bug/run.sh                    # the fixed version
 DOLTLITE_VERSION=0.11.52 hack/doltlite_blob_bug/run.sh   # the last broken one
 ```
 
-That script is standalone — it fetches the official doltlite CLI, builds a
+The script is standalone — it fetches the official doltlite CLI, builds a
 plain SQLite file with the system `sqlite3`, and needs nothing from this
 repo. `DOLTLITE_BIN=… run.sh` points it at a local build instead.
 
@@ -451,9 +421,10 @@ $dl $db "SELECT commit_date, rating, pick FROM dolt_history_Adobe_images
 $dl $db "SELECT * FROM dolt_history_Adobe_images WHERE id_global = '…';"
 ```
 
-`dolt_history_<table>` is the one to reach for day to day: it carries the
-full row at every commit, which is how a deleted photo's metadata is
-recovered. There is no MySQL-style `AS OF` clause in doltlite — the
+`dolt_history_<table>` carries the full row at every commit, which is
+how a deleted photo's metadata is recovered; on a text key such as
+`id_global` it reads every commit's whole table, so it is slow on a long
+history (`docs/dev/doltlite.md`). There is no MySQL-style `AS OF` clause in doltlite — the
 equivalent is the table-valued `dolt_at_<table>('<commit-ish>')`, which
 accepts `HEAD`, `HEAD~N` or a raw commit hash and reads *committed*
 state only (it ignores a dirty working set).
@@ -488,9 +459,8 @@ would want the copy chunked by primary-key range. A Lightroom catalog
 
 ## What render will need
 
-Render is deferred rather than stubbed, because a photo is not
-chat-shaped and the projection is its own design question. What it will
-need:
+Render is not built: a photo is not chat-shaped and the projection is
+its own design question. What it would need:
 
 - **One `grid_rows` row per image.** This join runs against a mirrored
   catalog today and yields absolute on-disk paths:
@@ -512,11 +482,10 @@ need:
   ```
 
   Add `AgLibraryKeywordImage` → `AgLibraryKeyword` for keywords and
-  `AgInternedExifLens` for the lens. One caveat for
-  [the repo's timestamp convention](/AGENTS.md#timestamp-convention):
-  `Adobe_images.captureTime` is ISO-8601 but **carries no offset**
-  (`2002-10-01T00:00:00`), so render will have to decide what to do about
-  that rather than pass it straight through.
+  `AgInternedExifLens` for the lens. `Adobe_images.captureTime` is
+  ISO-8601 but **carries no offset** (`2002-10-01T00:00:00`); it stays
+  as written ([timestamp convention](/AGENTS.md#timestamp-convention)),
+  but a sortable UTC twin cannot be derived from it alone.
 - **A way to show the pictures.** The catalog stores paths, not pixels.
   Three candidates, cheapest first: (1) link out to the original file via
   the resolved absolute path — no bytes copied, breaks if the library
@@ -527,11 +496,3 @@ need:
   (3) generate thumbnails from the originals — most work, most control.
 - **`fsindex` as a companion**, if you want to know whether the files the
   catalog points at are still there.
-
-The second SQLite-backed source was Apple Photos, and the engine moved
-out to [`datalib_etl_sqlite_mirror`](/datalib/backend/etl/sqlite_mirror/)
-when it landed — as its own crate rather than into `datalib_etl`, so that
-an engine change rebuilds two providers and not the eighty test targets
-downstream of the shared crate. The tests that pin the model
-(`mirror_roundtrip.rs`) went with it and still run against the
-Lightroom-shaped fixture.

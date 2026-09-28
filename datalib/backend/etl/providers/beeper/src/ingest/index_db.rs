@@ -67,7 +67,7 @@ fn matches_network(account_id: &str, network: &str) -> bool {
 /// have to worry about shell escaping or argv length limits) and the
 /// CLI is invoked in immutable read-only mode so a live writer
 /// (Beeper Texts) can't be disturbed.
-async fn query_json(db_path: &Path, sql: &str) -> Result<Vec<Value>> {
+pub(super) async fn query_json(db_path: &Path, sql: &str) -> Result<Vec<Value>> {
     // We deliberately use the plain path here, NOT a
     // `file:?immutable=1` URI. `immutable=1` tells SQLite to ignore
     // the WAL — convenient for snapshotting, but it silently hides

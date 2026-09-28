@@ -136,16 +136,10 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// `prune_scope` must delete inside its scope and nowhere else. The
-    /// scope is the whole safety story now that nothing vetoes a large
-    /// prune: a scope that leaks deletes rows the caller never enumerated.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn prune_scope_deletes_only_inside_its_scope() {
-        let d = tempfile::tempdir().unwrap();
-        let db = d.path().join("t.doltlite_db");
-        // With its bookkeeping sidecar, because that is the shape every
-        // caller has and `prune_scope` clears both. A table without one is
-        // not an entity table and has no business being pruned here.
+    // With its bookkeeping sidecar, because that is the shape every
+    // caller has and `prune_scope` clears both. A table without one is
+    // not an entity table and has no business being pruned here.
+    async fn open_notes(db: &std::path::Path) -> SqlitePool {
         let ddl = [
             "CREATE TABLE IF NOT EXISTS notes (
              id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT )"
@@ -153,10 +147,18 @@ mod tests {
             crate::doltlite_raw::bookkeeping_ddl_for("notes"),
         ];
         let slices: Vec<&str> = ddl.iter().map(String::as_str).collect();
-        let pool =
-            crate::doltlite_raw::open_derived(&db, &slices, crate::doltlite_raw::StoreKind::Raw)
-                .await
-                .unwrap();
+        crate::doltlite_raw::open_derived(db, &slices, crate::doltlite_raw::StoreKind::Raw)
+            .await
+            .unwrap()
+    }
+
+    /// `prune_scope` must delete inside its scope and nowhere else. The
+    /// scope is the whole safety story now that nothing vetoes a large
+    /// prune: a scope that leaks deletes rows the caller never enumerated.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn prune_scope_deletes_only_inside_its_scope() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = open_notes(&d.path().join("t.doltlite_db")).await;
         for (id, owner) in [("a", "x"), ("b", "x"), ("c", "y")] {
             sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
                 .bind(id)
@@ -191,21 +193,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn an_empty_scope_covers_the_table() {
         let d = tempfile::tempdir().unwrap();
-        let db = d.path().join("t.doltlite_db");
-        // With its bookkeeping sidecar, because that is the shape every
-        // caller has and `prune_scope` clears both. A table without one is
-        // not an entity table and has no business being pruned here.
-        let ddl = [
-            "CREATE TABLE IF NOT EXISTS notes (
-             id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT )"
-                .to_string(),
-            crate::doltlite_raw::bookkeeping_ddl_for("notes"),
-        ];
-        let slices: Vec<&str> = ddl.iter().map(String::as_str).collect();
-        let pool =
-            crate::doltlite_raw::open_derived(&db, &slices, crate::doltlite_raw::StoreKind::Raw)
-                .await
-                .unwrap();
+        let pool = open_notes(&d.path().join("t.doltlite_db")).await;
         for id in ["a", "b"] {
             sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, 'x', '{}')")
                 .bind(id)

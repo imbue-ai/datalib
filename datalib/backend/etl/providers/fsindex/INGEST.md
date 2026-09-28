@@ -6,13 +6,13 @@ symlinks as `(path, kind, size, blake3)` rows in `files`, directories
 as `(path, size, entries, blake3, optional identity uuid)` rows in
 `dirs`.
 
-This document covers what's load-bearing and provider-specific.
-For the framework contracts every provider honors —
-schema-first, bulk-upsert chokepoints, commit lifecycle,
-bookkeeping sidecars, what a reset does —
-see [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
-For the row-level schema, see
-[`src/ingest/schema_raw.rs`](src/ingest/schema_raw.rs).
+The row-level schema is in [`src/ingest/schema_raw.rs`](src/ingest/schema_raw.rs);
+the contracts every provider honors are in
+[`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
+How `fsindex` relates to the other two tree scanners, `pdf` and `media`:
+[`../media/INGEST.md`](../media/INGEST.md) §"Relationship to `fsindex`
+and `pdf`". Storage measurements are in
+[`src/ingest/STORAGE_NOTES.md`](src/ingest/STORAGE_NOTES.md).
 
 ## Why two entity tables: `files` and `dirs`
 
@@ -31,7 +31,7 @@ of every descendant — a 50 000-file subtree move is 100 000 rows in
 `dolt_diff_files`. In `dolt_diff_dirs` it is one row per directory
 under it, and those rows already tell the whole story: `top3` gone,
 `renamed3` arrived with the same digest, 50 010 entries and 438 900
-bytes inside. Measured on a 500 000-file scan (2026-09-11):
+bytes inside. Measured on a 500 000-file scan:
 
 | | rows | wall |
 |---|---|---|
@@ -84,8 +84,8 @@ and stable.
 
 ### Truncate-and-rebuild on every scan
 
-Every scan starts by `DELETE FROM files; DELETE FROM dirs;
-DELETE FROM scan_meta;`, then walks the tree fresh. Two reasons this
+Every scan starts by emptying `files`, `dirs` and `scan_meta` (and
+`scan_meta_bookkeeping`), then walks the tree fresh. Two reasons this
 works:
 
 1. **Deletions fall out naturally.** A file present at scan-A and
@@ -100,31 +100,18 @@ works:
    the same row for an unchanged file is a no-op at the storage
    layer.
 
-The Unison-style fast-rescan cache survives the truncate by living
-**in memory**: the orchestrator loads this host's prior fingerprints
-— cursor and digest together — BEFORE the truncate, so
-`fswalk::decide` still has cached state to compare against and the
-reuse path still skips the `read(2)` + `blake3` on unchanged files.
-See `ingest::fetch` for the load-then-truncate ordering.
+The fast-rescan cache is not in the store, so the truncate does not
+touch it: the scan loads this host's prior fingerprints for the root —
+cursor and digest together — into memory, and `fswalk::decide` compares
+each entry against them, skipping the `read(2)` + `blake3` on
+unchanged files.
 
-A reset (`datalib-dag --reset`) empties the store but not this host's
+A reset (`datalib-dag --reset <group>/ingest`) empties the store but not this host's
 cache, which lives outside it; to force a full rehash, drop the cache
 file.
 
-Caveat: the `<t>_bookkeeping` sidecars get truncated along with
-the entity tables, so the running `attempt_count` visible at HEAD
-resets to 1 on every scan. The per-commit history is NOT lost —
-dolt preserves every prior commit's bookkeeping rows, queryable
-via `dolt_at_<t>_bookkeeping('HEAD~N')` and the
-`dolt_diff_<t>_bookkeeping` virtual table — so "did this row error on
-the previous scan?"
-is still answerable, just not via a single SELECT against HEAD.
-What's gone is the running-total semantic ("this row has failed
-across 5 sync runs" as a single column value). For fsindex this
-is acceptable because the upstream is the local filesystem —
-there's no API quota to protect or transient-failure budget to
-track across scans. A future provider where the running total
-matters would need a different reconciliation strategy.
+`files` and `dirs` carry no bookkeeping sidecar; `scan_meta` is the one
+table with one, recording when the root was last scanned.
 
 ## The fast-rescan trick
 
@@ -136,8 +123,7 @@ For each known path, before opening the file:
    hash that went with them from this host's fingerprint cache.
 3. If `stamp_kind = inode` and `(mtime, size, inode, dev)` all match
    the live stat, the cached digest is still valid — no rehash, no
-   file read. `attempt_count` does not bump (we didn't attempt
-   anything).
+   file read.
 4. If anything mismatched, open the file, rehash, and write the new
    `files` row and the new cache entry.
 
@@ -152,10 +138,9 @@ be nothing there. Holding both means an unchanged tree scans fast into
 drops the inode check and falls back to `(mtime, size)`. Less safe,
 but Unison's own behavior on those filesystems.
 
-`stamp_kind = "rescan"` is the sentinel for "previous run was
-interrupted mid-fingerprint of this path; force a rehash regardless
-of what the triple says." We set it before opening the file and
-clear it on successful hash write.
+`stamp_kind = "rescan"` forces a rehash regardless of what the triple
+says. Nothing writes it today; a `stamp_kind` the cache does not
+recognise reads as `rescan`, so an unknown writer's row is rehashed.
 
 ## Stamping policy
 
@@ -164,17 +149,16 @@ upstream. It is opt-in, gated, and logged.
 
 The gates, in order:
 
-1. **Standalone CLI `--no-stamp` overrides everything to off.**
-   Escape hatch for read-only scans where the user does not want
-   the filesystem touched.
+1. **Stamping must be switched on for the scan.** A config-driven
+   scan stamps only with `stamp = true` on its ingest step (default
+   off); the standalone `fsindex` CLI stamps unless given `--no-stamp`.
 2. **The cascaded `.fsindex.yaml` must say `stamp_me_with_uuid: true`.**
    Options cascade root → leaf. A child `.fsindex.yaml` with
    `stamp_me_with_uuid: false` cancels stamping for its subtree.
    Default off.
 3. **Stamping is per-directory only.** Files don't get
-   breadcrumbs. (The honest options for files are xattrs (lossy
-   across `cp`) or a parallel shadow tree (complex). Neither is
-   built yet.)
+   breadcrumbs; the options for files are xattrs (lossy across `cp`)
+   or a parallel shadow tree, and neither is built.
 4. **A directory is stamped at most once.** If `.fsindex.yaml`
    already carries an `identity:` block, it is not rewritten.
    Removing the `identity:` block manually is the explicit way to
@@ -205,10 +189,10 @@ identity:
   originally_at: "Documents/Photos/2019"
 ```
 
-The breadcrumb file is **excluded from the directory's blake3
-tree-hash** — see `schema_raw.rs` §"Directory tree-hash
-canonicalization." Otherwise the act of stamping would invalidate
-the dir's hash and fan a rehash storm up to the root.
+The walker skips `.fsindex.yaml` altogether (`walker.rs`), so it is
+neither a `files` row nor part of its directory's tree-hash. Otherwise
+the act of stamping would change the directory's hash and every
+ancestor's up to the root.
 
 ### The UUID is not unique
 
@@ -226,81 +210,25 @@ hint, surfaced by these queries:
   GROUP BY identity_uuid
   HAVING COUNT(*) > 1;
   ```
-- **Move detection** across branches:
-  ```sql
-  SELECT a.id AS was_at, b.id AS now_at, a.identity_uuid
-  FROM main.dirs a JOIN laptop2.dirs b USING(identity_uuid)
-  WHERE a.id != b.id;
-  ```
+- **Move detection** between two scans: `datalib-dirtree-diff`
+  ([its README](/datalib/backend/dirtree_diff/README.md)) reports a
+  moved subtree as one move.
 
-## `scan_meta.id` is the source name from config
+## `scan_meta.id` is the source id
 
-The per-root metadata table (`scan_meta`) keys by the source name —
-the `<name>` prefix of the step's declared outputs in `config.toml`
-(`fsindex-home/ingest` → `fsindex-home`) — *not* by the absolute path
-of the scan root. That name is the same per-source stable
-identifier used everywhere else in the framework (`.doltlite_db`
-filenames, log lines, render cursor paths), it survives moves of
-the data root because it's user-supplied, and it sidesteps the
-"what do we do if the root moves?" question entirely — `abs_path`
-lives in a regular column and is allowed to evolve between scans
-without disturbing the PK. If the user renames a source in config,
-the runner treats that as a separate source and the old row
-stays put until garbage-collected.
+The per-root metadata table (`scan_meta`) keys by the source's id — its
+group id, the directory under the data root — *not* by the absolute
+path of the scan root. `abs_path` lives in a regular column and may
+change between scans without disturbing the key.
 
-## Multi-root via doltlite branches
+## Several roots in one file: branches
 
-> **Stale:** the `doltlite_db` / `target_doltlite_branch` knobs this
-> section describes are not in the current `FsindexConfig` schema
-> (`common` + `stamp` are the only fields, and the config structs are
-> `deny_unknown_fields`), so the config below would be rejected. The
-> storage design is recorded here because the branch-level diff
-> primitive still holds; the config surface for it does not exist yet.
-
-Two scan roots that want to share storage and benefit from
-prolly-tree dedup would point at the same `<name>.doltlite_db` and
-pick different `target_doltlite_branch` values:
-
-```toml
-# NOT CURRENTLY SUPPORTED — see the note above.
-[[groups]]
-id = "laptop_home"
-type = "fsindex"
-
-[[steps]]
-group = "laptop_home"
-function = "ingest"
-[steps.params.fswalk]
-path = "/Users/thad"
-
-[[groups]]
-id = "nas_backup"
-type = "fsindex"
-
-[[steps]]
-group = "nas_backup"
-function = "ingest"
-[steps.params.fswalk]
-path = "/Volumes/nas/thad"
-```
-
-Today each of those two steps gets its own raw store under
-`<group>/ingest/` instead, which is the supported way to scan two roots.
-
-The §"Single writer per doltlite file" rule still applies — the
-runner serializes per-source, so two roots sharing a file would scan
-one at a time. Branch-level diff is the
-diff/sync primitive:
-
-```sql
-ATTACH 'fsindex.doltlite_db' AS db;
-SELECT m.id AS path, m.blake3 AS laptop, n.blake3 AS nas
-FROM db.laptop.files m FULL OUTER JOIN db.nas.files n USING(id)
-WHERE m.blake3 IS NOT n.blake3;
-```
-
-`target_doltlite_branch` would default to `main`, so a single-root
-configuration needs nothing extra.
+The standalone CLI (`datalib-fsindex`, the `fsindex` Bazel target) takes
+`--db <file> --branch <name>`, so two roots can be scanned into two
+branches of one file and share every identical subtree's chunks. That
+is how [`datalib-dirtree-diff`](/datalib/backend/dirtree_diff/README.md)
+compares two trees. A config-driven scan has no branch knob: each
+`fsindex` group gets its own store under `<group>/ingest/`.
 
 ## Inspecting a scan: what changed?
 
@@ -313,12 +241,13 @@ descends into changed subtrees, so it stays fast even on a
 million-entry tree (≈10 s on a 1.7 M-entry index):
 
 ```sh
-doltlite -readonly -box <name>.doltlite_db \
+db=<data_root>/<group>/ingest/entities.doltlite_db
+doltlite -readonly -box $db \
   "SELECT diff_type, from_id, to_id, to_entries, to_size
      FROM dolt_diff_dirs
     WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD'
       AND diff_type != 'unchanged';"
-doltlite -readonly -box <name>.doltlite_db \
+doltlite -readonly -box $db \
   "SELECT diff_type, from_id, to_id, hex(to_blake3) AS to_blake3
      FROM dolt_diff_files
     WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD'
@@ -355,76 +284,25 @@ Recognized keys:
 | `stamp_me_with_uuid`   | `bool`              | `false` | Opt-in to identity-UUID stamping for this directory and its descendants.               |
 | `identity`             | `map`               | absent  | Machine-managed breadcrumb. See §"Stamping policy." Hand-edit at your own risk.        |
 
-The options file itself, and the breadcrumb (same file), are
-**excluded from the directory's blake3 tree-hash** so they don't
-fan rehash storms.
-
-## What's NOT here yet
-
-This document and `schema_raw.rs` are the schema-first deliverable.
-The walker, stamp-comparator, hasher, db helper, options parser,
-and the standalone `fsindex` binary land in follow-up commits.
-The shape they'll take, briefly, so the schema reads as a
-contract not a tease:
-
-- **Walker** — `jwalk` for parallel directory traversal + the
-  `ignore` crate for cascaded gitignore-shaped matching. Both
-  well-trodden Rust.
-- **Hasher** — blake3 with mmap above a size threshold; rayon to
-  fan out across CPUs. Directory tree-hash via the canonical
-  encoding in `schema_raw.rs`.
-- **DB** — `bulk_upsert_in_tx` + `bulk_upsert_bookkeeping` per
-  §"Bulk-upsert as the standard write path." For the **standalone
-  binary**, the binary is its own orchestrator and is allowed to
-  commit periodically (proposal: every 100k upserts, configurable)
-  so a mid-scan ^C on a tens-of-millions-of-rows tree doesn't lose
-  everything. When invoked **inside `datalib-sync`**, the
-  one-commit-per-source rule applies as normal.
-- **Options** — `.fsindex.yaml` cascade, gitignore patterns via
-  the `ignore` crate, atomic breadcrumb write-via-rename.
+The options file (which is also the breadcrumb) is not indexed and not
+part of any tree-hash; see §"Stamping policy".
 
 ## What `fsindex` does not do
 
-- No translate side. Filesystem entries don't currently project to
-  `GridRow`. A future "filesystem entry" `GridRow` family is the
-  natural home if/when we want them in the UI's union view.
+- No render side. Filesystem entries do not project to `GridRow`.
 - No CAS, no `.blobs.doltlite_db`. We hash bytes; we don't store
   them.
-- No JSONL wire-event tape. There is no upstream wire to mirror —
-  file-imported sources skip the chokepoint by design (see
-  [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-  §"Bulk-upsert as the standard write path"). The filesystem
-  itself is the human-inspectable tape.
+- No JSONL wire-event tape. There is no upstream wire to mirror; the
+  filesystem itself is the human-inspectable tape.
 - No retry semantics for transient failures. A `read(2)` either
-  succeeds or it's a real error; we don't have an upstream API
-  with 5xx behavior to reason about. Unreadable entries get
-  `attempt_count` and `last_error` in the `_bookkeeping` sidecar
-  per the framework's universal pattern, and a future scan picks
-  them up if they become readable.
+  succeeds or it's a real error. An unreadable entry is logged
+  (`fsindex_entry_error`) and counted in the `fsindex_phase_breakdown`
+  event (`stat_errors`, `read_errors`, `non_utf8_paths`); nothing about
+  it is written to the store, and the next scan simply tries it again.
 
 ## Open follow-ups
 
-- **`#[derive(BulkUpsertable)]` for non-payload tables.** Every
-  row impl in this provider's `schema_raw.rs` is hand-rolled
-  because the existing `#[derive(WirePayloadRow)]` macro is
-  specifically for the JSONB-payload shape and doesn't fit our
-  typed-column tables. The doc's
-  [§"Deferred work"](/docs/dev/data_architecture_ingestion.md)
-  calls out exactly this gap. Tracked in a follow-up issue; when
-  it lands, each `BulkUpsertable` impl in this file collapses to
-  its struct definition. Tracked at
-  [imbue-ai/datalib#41](https://github.com/imbue-ai/datalib/issues/41).
-
-- **Rescan-cache load is sqlx-bound, not engine-bound.** On a
-  1.7 M-entry index the in-memory cache load takes ~29 s, but the
-  engine scans the same rows in ~6 s (measured with
-  `SELECT COUNT(*), SUM(LENGTH(id)), … FROM files`). The ~4.5× gap is
-  Rust-side per-row marshalling: sqlx
-  allocates a `SqliteRow` and runs `try_get` type-dispatch per
-  column (~10 M calls), plus a `String`/`Vec`/struct allocation and
-  a `HashMap` insert per row. Cheap win: pre-size the maps from
-  `COUNT(*)`. The real win is a lower-level read path — a raw
-  doltlite C-API column scan like [`docs/dev/doltlite.md`](/docs/dev/doltlite.md)
-  §"`sqlite3_open_v2`" already uses for open — bypassing sqlx's
-  per-row overhead. Even bigger: don't full-slurp the cache every
-  run (drive the rescan from `dolt_diff` against the prior commit).
+- **The row impls are hand-rolled.** Every `BulkUpsertable` impl in
+  `schema_raw.rs` is written out by hand; `#[derive(RawTable)]`
+  ([`etl/macros/README.md`](/datalib/backend/etl/macros/README.md)) now
+  covers payload-less tables, so they could collapse to it.

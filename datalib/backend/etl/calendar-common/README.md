@@ -2,8 +2,8 @@
 
 A calendar provider turns what its upstream sent into
 `NormalizedEvent`s; this crate turns each one into a markdown page, a
-`grid_rows` row and the `edges` that link it to its relatives. Today the
-one provider is `calendar`, which has four ways in — Google's API,
+`grid_rows` row and the `edges` that link it to its relatives. The one
+provider is `calendar`, which has four ways in — Google's API,
 Fastmail over CalDAV, any other CalDAV server, and `.ics` files — and
 two raw shapes (iCalendar text and Google's JSON). Both normalize here,
 so an event reads the same whichever way it arrived.

@@ -214,6 +214,19 @@ mod tests {
         (pool, dir)
     }
 
+    async fn summary_deltas(pool: &SqlitePool, run_id: i64) -> serde_json::Map<String, Value> {
+        let row: (String,) = sqlx::query_as("SELECT summary FROM sync_runs WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let s: Value = serde_json::from_str(&row.0).unwrap();
+        s.get("deltas")
+            .and_then(|v| v.as_object())
+            .expect("deltas object present in summary")
+            .clone()
+    }
+
     #[derive(Serialize)]
     struct DummySummary {
         new: usize,
@@ -280,16 +293,7 @@ mod tests {
         let summary = DummySummary { new: 0, skipped: 0 };
         run.finish(&work_result, &summary).await;
 
-        let row: (String,) = sqlx::query_as("SELECT summary FROM sync_runs WHERE run_id = ?")
-            .bind(run_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        let s: Value = serde_json::from_str(&row.0).unwrap();
-        let deltas = s
-            .get("deltas")
-            .and_then(|v| v.as_object())
-            .expect("deltas object present in summary");
+        let deltas = summary_deltas(&pool, run_id).await;
         // sync_scope_state: 1 row inserted since baseline.
         let scope_state = deltas
             .get("sync_scope_state")
@@ -418,16 +422,7 @@ mod tests {
         run.finish(&work_result, &DummySummary { new: 7, skipped: 0 })
             .await;
 
-        let row: (String,) = sqlx::query_as("SELECT summary FROM sync_runs WHERE run_id = ?")
-            .bind(run_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        let s: Value = serde_json::from_str(&row.0).unwrap();
-        let deltas = s
-            .get("deltas")
-            .and_then(|v| v.as_object())
-            .expect("deltas object present in summary");
+        let deltas = summary_deltas(&pool, run_id).await;
         let notes = deltas
             .get("notes")
             .unwrap_or_else(|| panic!("notes missing in deltas: {deltas:?}"));

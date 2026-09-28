@@ -1,9 +1,9 @@
 # Coverage
 
 `bazelisk coverage` works on this repo via LLVM source-based coverage,
-including for **Rust binaries that tests launch as subprocesses**.
-That last bit was the wrinkle; this doc records how we set it up and
-how to use it.
+including for **Rust binaries that tests launch as subprocesses**. The
+wrapper is `tools/run_coverage.sh`; this doc is how to use it and why
+it is shaped the way it is.
 
 ## TL;DR — running coverage
 
@@ -53,10 +53,10 @@ it so — `llvm-cov export` reads the coverage-mapping section out of the
 linked binary, and that section names every file compiled into it,
 vendored C included. The wrapper passes `--ignore-filename-regex`
 instead; override the pattern with `$IGNORE_RE`. Without it the report
-was 8.0 MB, 81% of it code we do not own (doltlite's `sqlite3.c`
+measured 8.0 MB, 81% of it code we do not own (doltlite's `sqlite3.c`
 amalgamation alone was 5.4 MB, plus oniguruma and ring's vendored
 crypto), so `genhtml`'s tree view opened on third-party sources. With
-it: 3.2 MB (2026-09-25).
+it: 3.2 MB.
 
 HTML report:
 
@@ -68,13 +68,12 @@ open /tmp/cov-html/index.html
 
 ## What it measures
 
-The most useful single coverage target right now is
+The most useful single coverage target is
 `//tests/fixtures:ingested_tng_test`. It's a `py_test` wrapper around
 the same `run_sync_pipeline.py` invocation as the `:ingested_tng`
 genrule, exercising the **entire ETL pipeline** end-to-end across every
-provider's TNG fixtures. With the wrapper above you get **489 source
-files** covered, all of them first-party (measured 2026-09-25),
-including:
+provider's TNG fixtures. With the wrapper above it measured **489
+source files** covered, all of them first-party, including:
 
   - the per-provider download + render (`claude`, `chatgpt`,
     `slack`, `notion`, `github`, `gitlab`, `beeper`, `signal`,
@@ -132,16 +131,16 @@ profraws lived in the sandbox and were gone by then.
    rules_rust's coverage transition through, so the binaries at
    `bazel-bin/datalib/backend/dag/datalib_dag_bin` and
    `bazel-bin/datalib/backend/datalib_step/datalib_step` after a
-   `bazelisk coverage` invocation are the instrumented ones. This Just
-   Works in rules_rust 0.70 — no custom transition, no
-   `rustc_flags = select(...)`, no second binary target. Check one
-   with `otool -l <binary> | grep -c __llvm_prf` (nonzero means
-   instrumented).
+   `bazelisk coverage` invocation are the instrumented ones. No custom
+   transition, no `rustc_flags = select(...)`, no second binary target.
+   Check one with `otool -l <binary> | grep -c __llvm_prf` on a mac
+   (nonzero means instrumented).
 
 2. **The profraws survive the test.** The wrapper passes
    `--experimental_split_coverage_postprocessing` (and
-   `--experimental_fetch_all_coverage_outputs`, so a remote-cache hit
-   brings them down too). Each test's profraws then sit in
+   `--experimental_fetch_all_coverage_outputs`), plus
+   `--nocache_test_results`, because a cached result writes no profraws
+   and leaves no test binary in `bazel-bin`. Each test's profraws then sit in
    `$(bazelisk info bazel-testlogs)/<pkg>/<name>/_coverage/`, and the
    wrapper merges only the ones for the targets you passed. Because
    they are now outputs, a remote cache would take them too, so the
@@ -204,8 +203,8 @@ subprocess, the steps are:
 
 Not available on the pinned compiler. The report has line and function
 counts only; no `BRDA` records. Rust's branch coverage is
-`-Zcoverage-options=branch`, and on stable rustc 1.98.0 both spellings
-are refused (measured 2026-09-25): `-Ccoverage-options` is an unknown
+`-Zcoverage-options=branch`, and stable rustc 1.98.0 refuses both
+spellings: `-Ccoverage-options` is an unknown
 codegen option, and `-Z` is only accepted on nightly. With
 `RUSTC_BOOTSTRAP=1`, which unlocks nightly flags on a stable compiler,
 a toy program did produce `BRDA` records, so the LLVM side works. We
@@ -216,13 +215,12 @@ option is stabilized.
 ## Future: Playwright / UI e2e coverage
 
 The Playwright e2e suite at `//datalib/ui:e2e_test` drives the
-backend through the HTTP server, which is a `rust_binary`. The same
-mechanism should in principle work: add the backend binary to the
-e2e test's `data`, run `tools/run_coverage.sh` with the e2e test
-target before `--` and the backend binary after `--`. Untested as of
-this writing. Would give us coverage of the request-path code that
-the unit tests don't reach (HTTP routing, response serialization,
-auth middleware, etc.).
+backend through the HTTP server, which is a `rust_binary` already in
+the e2e test's `data`. The same mechanism should in principle work:
+`tools/run_coverage.sh //datalib/ui:e2e_test --
+//datalib/backend/http:datalib_http_bin`. Untested. It
+would cover the request-path code the unit tests don't reach (HTTP
+routing, response serialization, auth middleware).
 
 ## Limitations and gotchas
 
@@ -244,8 +242,7 @@ auth middleware, etc.).
     script deliberately does not do a second build.
   - **A failed BuildBuddy upload stops the wrapper.** `bazelisk
     coverage` exits non-zero when the build-event upload fails
-    (`No route to host`), even though the test passed. Re-run; the
-    test result is cached.
+    (`No route to host`), even though the test passed. Re-run it.
 
 ## Sources
 

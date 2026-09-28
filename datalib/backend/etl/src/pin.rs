@@ -256,6 +256,22 @@ mod view_tests {
             .unwrap()
     }
 
+    // A doltlite file with nothing written into it yet, which
+    // `doltlite_raw::open` never leaves behind.
+    async fn bare_store(path: &std::path::Path) -> sqlx::SqlitePool {
+        sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(path)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap()
+    }
+
     /// The point of the `pinned_` prefix over shadowing the real table name: a
     /// query that runs without the views installed must fail, not silently
     /// read the working set. This is the whole safety argument for the naming,
@@ -532,17 +548,7 @@ mod view_tests {
         // Deliberately not `doltlite_raw::open`: that creates tables and
         // commits them. This is the file as it is between the writer's
         // connect and its first statement.
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(
-                sqlx::sqlite::SqliteConnectOptions::new()
-                    .filename(&path)
-                    .create_if_missing(true),
-            )
-            .await
-            .unwrap();
+        let pool = bare_store(&path).await;
         if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
@@ -575,17 +581,7 @@ mod view_tests {
         // the way in, which is the guarantee. This reproduces a download
         // that created its tables and died before its first commit.
         let path = dir.path().join("half.doltlite_db");
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(
-                sqlx::sqlite::SqliteConnectOptions::new()
-                    .filename(&path)
-                    .create_if_missing(true),
-            )
-            .await
-            .unwrap();
+        let pool = bare_store(&path).await;
         if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }

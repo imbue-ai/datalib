@@ -15,7 +15,9 @@ use serde_json::Value;
 use datalib_etl_gitlab::ingest::db::{db_path_for, LoadedRaw, RawDb};
 use datalib_etl_gitlab::ingest::schema_raw::mr_pk_recipe;
 
-use datalib_etl_forge_render_common::{ChangeRequest, Comment, Parsed, Section};
+use datalib_etl_forge_render_common::{
+    opt_str, str_field, ChangeRequest, Comment, Parsed, Section,
+};
 
 use super::ids::KIND_NOTE;
 
@@ -176,14 +178,6 @@ pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> Parsed {
     }
 
     out
-}
-
-fn str_field(p: &Value, key: &str) -> String {
-    p.get(key).and_then(|v| v.as_str()).unwrap_or("").into()
-}
-
-fn opt_str(p: &Value, key: &str) -> Option<String> {
-    p.get(key).and_then(|v| v.as_str()).map(String::from)
 }
 
 fn username(p: &Value) -> Option<String> {

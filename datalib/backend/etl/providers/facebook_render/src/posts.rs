@@ -3,9 +3,7 @@
 //! thread per post.
 
 use datalib_etl_chat_common::render::RenderProfile;
-use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
-};
+use datalib_etl_chat_common::types::{NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_facebook::ingest::schema_raw::{OTHER_POSTS_TABLE, POSTS_TABLE};
 
 use crate::ids;
@@ -13,8 +11,8 @@ use datalib_etl_render::inputs::Inputs;
 use serde_json::Value;
 
 use crate::common::{
-    attachment_entries, data_values, first_line, label_value, media_attachment, media_caption,
-    profile, str_field, strip_mentions, truncate, ts_ms,
+    attachment_entries, chat_item, data_values, first_line, label_value, media_attachment,
+    media_caption, profile, str_field, strip_mentions, truncate, ts_ms,
 };
 use crate::processor::Owner;
 
@@ -111,27 +109,14 @@ fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         inputs,
         display,
         None,
-        NormalizedChatItem {
-            message_uuid: item_id.uuid,
-            author_id: "me".to_string(),
-            author_display: owner.name.clone(),
+        chat_item(
+            item_id,
+            "me".to_string(),
+            owner.name.clone(),
             date_ms,
-            text: (!text.is_empty()).then_some(text),
-            kind: if attachments.is_empty() {
-                ItemKind::Text
-            } else {
-                ItemKind::Attachment
-            },
+            (!text.is_empty()).then_some(text),
             attachments,
-            reactions: Vec::new(),
-            system_note: None,
-            source_url: None,
-            kind_label: None,
-            source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
-            is_aside: false,
-            unread: false,
-            problems: Vec::new(),
-        },
+        ),
         owner,
     )
 }
@@ -174,27 +159,14 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         inputs,
         display,
         None,
-        NormalizedChatItem {
-            message_uuid: item_id.uuid,
-            author_id: "me".to_string(),
-            author_display: owner.name.clone(),
+        chat_item(
+            item_id,
+            "me".to_string(),
+            owner.name.clone(),
             date_ms,
-            text: (!text.is_empty()).then_some(text),
-            kind: if attachments.is_empty() {
-                ItemKind::Text
-            } else {
-                ItemKind::Attachment
-            },
+            (!text.is_empty()).then_some(text),
             attachments,
-            reactions: Vec::new(),
-            system_note: None,
-            source_url: None,
-            kind_label: None,
-            source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
-            is_aside: false,
-            unread: false,
-            problems: Vec::new(),
-        },
+        ),
         owner,
     )
 }
@@ -273,6 +245,7 @@ fn one_item_chat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl_chat_common::types::ItemKind;
     use serde_json::json;
 
     fn owner() -> Owner {

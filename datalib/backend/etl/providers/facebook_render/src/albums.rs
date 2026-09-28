@@ -2,16 +2,16 @@
 //! then every photo in the order it was added.
 
 use datalib_etl_chat_common::render::RenderProfile;
-use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
-};
+use datalib_etl_chat_common::types::{NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_facebook::ingest::schema_raw::ALBUMS_TABLE;
 
 use crate::ids;
 use datalib_etl_render::inputs::Inputs;
 use serde_json::Value;
 
-use crate::common::{media_attachment, media_caption, profile, str_field, strip_mentions, ts_ms};
+use crate::common::{
+    chat_item, media_attachment, media_caption, profile, str_field, strip_mentions, ts_ms,
+};
 use crate::processor::Owner;
 
 pub fn albums_profile() -> RenderProfile {
@@ -42,23 +42,14 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     if let Some(description) = str_field(v, "description") {
         let date_ms = first_photo_ms.or_else(|| ts_ms(v, "last_modified_timestamp"));
         let item_id = ids::album_description(&owner.source_id, row_id, date_ms);
-        items.push(NormalizedChatItem {
-            message_uuid: item_id.uuid,
-            author_id: "me".to_string(),
-            author_display: owner.name.clone(),
+        items.push(chat_item(
+            item_id,
+            "me".to_string(),
+            owner.name.clone(),
             date_ms,
-            text: Some(strip_mentions(description)),
-            kind: ItemKind::Text,
-            attachments: Vec::new(),
-            reactions: Vec::new(),
-            system_note: None,
-            source_url: None,
-            kind_label: None,
-            source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
-            is_aside: false,
-            unread: false,
-            problems: Vec::new(),
-        });
+            Some(strip_mentions(description)),
+            Vec::new(),
+        ));
     }
     for (i, photo) in photos.iter().enumerate() {
         let Some(att) = media_attachment(photo, row_id, &inputs) else {
@@ -68,21 +59,15 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         let date_ms = ts_ms(photo, "creation_timestamp");
         let item_id = ids::photo(&owner.source_id, row_id, &uri, date_ms);
         items.push(NormalizedChatItem {
-            message_uuid: item_id.uuid,
-            author_id: "me".to_string(),
-            author_display: owner.name.clone(),
-            date_ms,
-            text: media_caption(photo, Some(name)),
-            kind: ItemKind::Attachment,
-            attachments: vec![att],
-            reactions: Vec::new(),
-            system_note: None,
-            source_url: None,
             kind_label: Some("Facebook Photo".to_string()),
-            source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
-            is_aside: false,
-            unread: false,
-            problems: Vec::new(),
+            ..chat_item(
+                item_id,
+                "me".to_string(),
+                owner.name.clone(),
+                date_ms,
+                media_caption(photo, Some(name)),
+                vec![att],
+            )
         });
     }
     items.sort_by_key(|i| i.date_ms);
@@ -119,6 +104,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl_chat_common::types::ItemKind;
     use serde_json::json;
 
     #[test]

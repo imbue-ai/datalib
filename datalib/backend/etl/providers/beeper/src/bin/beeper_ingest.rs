@@ -33,8 +33,8 @@ struct Args {
     #[arg(long, env = "BEEPER_DATA_DIR")]
     beeper_data_dir: Option<PathBuf>,
 
-    /// Copy cached media bytes into the `blobs` table. Off = metadata
-    /// + source URL only.
+    /// Copy cached media bytes into the blob CAS. Off = each attachment
+    /// gets its `beeper_media_attachments` edge with no bytes behind it.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     media: bool,
 

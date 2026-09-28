@@ -2,9 +2,9 @@
 
 How the CI is wired, what each cache is for, how to read a slow run,
 and what has been measured — in one place, so the next "CI feels slow"
-starts from the numbers rather than from a hunch. Everything here was
-verified against the tree or a real run on the date given; the run ids
-are in the linked PRs and issues, so a claim can be re-checked.
+starts from the numbers rather than from a hunch. The workflows are
+`.github/workflows/*.yml`, the configs they use are in `.bazelrc`, and
+a measurement's run ids are in its linked PR or issue.
 
 The operational rules a contributor needs day to day are in
 [`AGENTS.md`](../../AGENTS.md) § "Running tests"; this page is the
@@ -12,12 +12,17 @@ reference behind them.
 
 ## What runs where
 
-**`test.yml`** is the merge gate. Two jobs on `ubuntu-latest` (4 vCPU),
-both inside `ghcr.io/imbue-ai/datalib_devcontainer:latest`:
+**`test.yml`** is the merge gate. Every job runs on `ubuntu-latest`
+(4 vCPU); the bazel ones run inside
+`ghcr.io/imbue-ai/datalib_devcontainer:latest`:
 
+- `cargo deny` — a RustSec and license scan of both Cargo lockfiles
+  (`datalib/backend/deny.toml`, `datalib/tauri/deny.toml`), on the bare
+  runner, with no bazel in it.
 - `bazel test //...` — the repo hygiene lint, then
   `bazel test -c opt --config=release --config=ci --nostamp --jobs=16 //...`,
-  then a `bazel build //datalib/backend:bin` staged as a downloadable
+  then the "No crate built a second time for a tool" check (below), then
+  a `bazel build //datalib/backend:bin` staged as a downloadable
   tarball. Everything but a `main` push adds `--config=pr-tests`, which
   builds our own crates at opt-level 1 and leaves third-party crates and
   doltlite's C at 3 (see "Every `rust_test` is a whole test binary"
@@ -25,6 +30,8 @@ both inside `ghcr.io/imbue-ai/datalib_devcontainer:latest`:
 - `bazel build :dist (musl static)` — the fully static release leg,
   plus `doltlite_link_test` against those binaries. Separate job so
   its ~80 s is not on the other one's critical path.
+- `warm the contributor cache` — on a `main` push only; see "Two caches"
+  below.
 
 A `pull_request` run builds **the merge of the PR into `main` as it
 is at that moment** (`HEAD is now at … Merge <pr> into <main>` in the
@@ -33,28 +40,31 @@ next run re-executes whatever is unique to the PR *and* downstream of
 what `main` changed, even though the PR did not. A `workflow_dispatch`
 run builds the bare branch head; compare like with like before calling
 a cache key unstable (#484's comments are the worked example).
-`test.yml` also takes a `devcontainer_tag` dispatch input, to run
-against an image that is not yet `latest`.
+`test.yml` also takes two dispatch inputs: `devcontainer_tag`, to run
+against an image that is not yet `latest`, and `remote_execution`, to
+run the test job on BuildBuddy's executors (`--config=remote`).
 
 **`devcontainer.yml`** builds and publishes that image
-(`.devcontainer/Dockerfile`, `FROM ubuntu:24.04`): on every `v*` tag,
+(`.devcontainer/Dockerfile`, `FROM ubuntu:26.04`): on every `v*` tag,
 and on demand — not on pushes or PRs, since a build is ~8 min and
 ~2.5 GB and a release's worth of drift costs seconds. To try a
 Dockerfile change early, dispatch it on the branch and then `test.yml`
 with the `sha-` tag it prints. Every build is tagged `sha-<commit>`,
-a tag build also `:X.Y.Z`, and `latest` moves only after
+a tag build also `:X.Y.Z`. `latest` moves on a tag build, or on a
+dispatch with `publish_latest` set, and only after
 `.devcontainer/smoke_test.sh` has analysed `//...` from the image
 under a different path and HOME than it was built with, with zero
-downloads. Old `sha-` versions are pruned. Nothing in it waits on a
-release job — the previous publish, a job at the end of `release.yml`
-behind the prod image's doc check, was skipped for four releases and
-CI ran on a two-week-old image (#500).
+downloads. The newest six `sha-` versions are kept and older ones
+pruned. It is a workflow of its own so that nothing in a release can
+keep it from publishing (#500).
 
-**`release.yml`** runs on a `v*` tag: the three runtime assets first
-(the Node runtime `qmd` and `latchkey` run from, one per platform, which
-the binaries fetch on first use — `runtime_fetch.md`), then the six
-tarballs, the notarized macOS app, and the prod docker image with its
-doc test (#469). It does not build the CI image. The steps that
+**`release.yml`** runs on a `v*` tag: the runtime assets first
+(the Node runtime `qmd` and `latchkey` run from, which the binaries
+fetch on first use — `runtime_fetch.md`; one per host platform, plus a
+CUDA overlay for Linux x86_64), then the five tarballs (macOS arm64,
+Linux gnu and musl on x86_64 and aarch64), the notarized macOS app, and
+the prod docker image with its doc test (`datalib/docker/doc_test.sh`,
+#469). It does not build the CI image. The steps that
 assemble the assets are scripts under `scripts/release/`, run by
 `bazel test //...` before any tag runs them — `release_steps.md`.
 
@@ -125,8 +135,8 @@ a second time into a `--disk_cache` that dies with the container.
 real files. A failed test's log still reaches the runner — checked
 with a deliberately failing test, not assumed.
 
-**The pre-fetched output base in the image** (#500, #503). A warm run
-used to spend ~77 s before its first action downloading and, mostly,
+**The pre-fetched output base in the image** (#500, #503). Without it
+a warm run spends ~77 s before its first action downloading and, mostly,
 *extracting* every external repository on 4 vCPUs; with them on disk
 the same analysis takes ~16 s. The image's `bazelisk fetch //...`
 puts them at `/opt/bazel/output-base`, and `prepare-bazel` points CI's
@@ -138,10 +148,10 @@ are not obvious:
   root (`$HOME/.cache/bazel/_bazel_root/cache/repos/v1/contents/…`)
   and makes `external/<repo>` a symlink into it. `HOME` is `/root`
   when the image is built and `/github/home` on a runner, so with only
-  the output base pinned every entry looked absent from the runner's
-  cache and was fetched again — 157 downloads, 50 s, on the first
-  invocation of every run, and the image's own smoke test could not
-  see it because `docker run` has HOME=`/root`. Hence
+  the output base pinned every entry looks absent from the runner's
+  cache and is fetched again — measured at 157 downloads, 50 s, on the
+  first invocation of every run, invisible to a smoke test run with
+  `docker run`'s HOME=`/root`. Hence
   `--output_user_root=/opt/bazel/user-root` in the fetch, the smoke
   test and `prepare-bazel`, and the smoke test running under a
   different HOME.
@@ -155,12 +165,12 @@ The downloaded archives are dropped from the image after the fetch
 what a run uses.
 
 **The remote downloader** (`--experimental_remote_downloader` in the
-`buildbuddy` config) serves repository downloads from BuildBuddy
-instead of the origin, so a repository added after the image was built
-never reaches crates.io or GitHub from a runner. It was added for the
-qmd GGUF models after HuggingFace answered a cold fetch with a 429
-(2026-09-03); those are build actions now (`//third-party/qmd_models`,
-#499), fetched once per pin into the action cache and never moved on a
+`buildbuddy` configs, with a local fallback) serves repository
+downloads from BuildBuddy instead of the origin, so a repository added
+after the image was built never reaches crates.io or GitHub from a
+runner. The qmd GGUF models are build actions rather than repositories
+(`//third-party/qmd_models`, #499): fetched once per pin into the
+action cache, with retries on HuggingFace's 429, and never moved on a
 warm run.
 
 **What is deliberately not cached:** a `--disk_cache` in CI (see
@@ -202,12 +212,10 @@ view <id> --json jobs --jq '.jobs | length'` says `0`, and its
 `updatedAt` is within seconds of the *next* run's `createdAt`. A
 concurrency group holds at most one pending run, so a newly queued run
 evicts the one already waiting — `cancel-in-progress: false` protects
-only the run that is executing. This used to hit `main`: every push
-shared one group, so 25 of the 98 completed main runs between
-2026-09-18 and 2026-09-22 were cancelled before starting, each a
-commit whose actions never reached the release cache. Since #674 a
-push and a dispatch each get a group of their own
-(`github.run_id`), and only PR runs supersede one another.
+only the run that is executing. So only PR runs share a group (one per
+ref) and supersede one another; a push and a dispatch each get a group
+of their own (`github.run_id`), because a `main` run evicted before it
+starts is a commit whose actions never reach the release cache (#674).
 
 **Runs are bimodal.** A warm run executes 0 tests; a cold one, after a
 change to a shared crate, rebuilds hundreds of opt-mode Rust actions
@@ -233,19 +241,11 @@ is the bill, and a PR needs the code correct, not fast. An opt-only bug
 then shows on the `main` push rather than the PR.
 The rlibs underneath are cache hits; that last step is not, and a
 shared-crate edit repeats it once per test target. So one binary per
-`tests/*.rs` file is the expensive layout: `datalib/backend/http` paid
-it 17 times for one crate. The layout now is one binary per package —
-`tests/<name>/main.rs` of `mod` lines, the files themselves unchanged
-(#664, #665) — which took the tree from 207 `rust_test` targets to
-159. Split a package's integration tests into binaries only along a
-line the process forces: a different `tags` (`no-sandbox`, `external`),
-or a process-global a test must own — `datalib/backend/http`'s three
-log tests each install the process's only tracing subscriber, so they
-stay separate. Where the global is shared rather than owned, the
-binary serializes instead: the provider tests choose their playback
-fixture through one environment variable, so those binaries set
-`RUST_TEST_THREADS = "1"`. `docs/dev/testing.md` § "A package's
-integration tests are one binary" is the reference.
+`tests/*.rs` file is the expensive layout, and the tree uses one binary
+per package instead (#664, #665); a module that needs its own tags or
+its own process runs from that binary as a slice.
+[`testing.md`](testing.md) § "A package's integration tests are one
+binary" has the layout.
 
 **A `[for tool]` suffix on a `Compiling Rust …` line is a second
 copy** — the crate built in the exec configuration as well as the

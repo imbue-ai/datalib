@@ -1,76 +1,62 @@
-# Claude Translate
+# Claude render
 
-`claude-translate` reads a directory of conversations in
-export-shape JSON (written by `claude-ingest` or by an
-Anthropic bulk export) and emits, per conversation, a `.md` at
-`<out>/render_markdown/claude/<account>/llm_chats/<conv>__<slug>.md` plus
-that document's rows in the source's render store
-(`<out>/render_markdown/indexed_markdown.doltlite_db`).
+Every conversation and every Project in a `claude` group's raw store,
+whichever ingest method filled it
+([`../claude/INGEST.md`](../claude/INGEST.md)), is rendered as a page
+through chat-common. Shared machinery is documented once: the page
+layout and `LAYOUT_VERSION` in [`chat-common/README.md`](../../chat-common/README.md), and change detection in
+[`data_architecture_parse_and_render.md` §5](../../../../../docs/dev/data_architecture_parse_and_render.md#5-incrementality-and-deletion).
 
-The Load step is provider-agnostic and lives in
-`datalib_etl_render::grid_index`.
+## Conversations
 
-## What is a "document"?
+An API-fetched payload goes through
+`normalize::normalize_to_export_shape` in the download crate on its way
+out of the store; an export-ingested one is already that shape. Either
+way one parser reads it (`src/render/parse.rs`).
 
-**One Claude conversation is one document.** Messages are walked in
-`(created_at, message_uuid)` order. Each assistant message can
-contain a mix of `text`, `thinking`, `tool_use`, and `tool_result`
-blocks; all of them surface in the rendered prose, with the
-thinking/tool blocks each emitting their own grid row in addition to
-the parent message row.
+Messages are ordered by `(created_at, message_uuid)`. Each message
+becomes one item whose `kind` comes from its sender: `User Input` for
+`human`, `LLM Response` for `assistant` (authored by the
+conversation's `model`), `Tool Call` for anything else. Its body is the
+message's `text` blocks, so search prose is not polluted by thinking
+or tool traffic, plus each `attachments[]` entry's extracted text as a
+quoted block. Downloadable `files[]` are materialized by chat-common
+from the ingest's `claude_attachments` edges.
 
-For each conversation we emit:
+Every `thinking`, `tool_use` and `tool_result` block is an item of its
+own, placed just before its message's answer:
 
-  * **One Chat row** (`kind = "Chat"`) — points at the rendered
-    `.md` and carries the conversation name/summary for snippets.
-  * **One message row per chat message** — `kind` is
-    `User Input` / `LLM Response` / `Tool Call`, decided by sender.
-    `text` is reconstructed from the message's `type=text` blocks so
-    search prose isn't polluted by raw thinking transcripts.
-  * **One block row per `tool_use` / `tool_result` / `thinking`** —
-    `kind` is `LLM Thinking` for thinking blocks, `Tool Call`
-    otherwise. `uuid` is `<message_uuid>:<block_index>`.
+| block | `kind` | aside | body |
+|---|---|---|---|
+| `thinking` | `LLM Thinking` | no | a `<details>` "Thinking" with the thought quoted |
+| `tool_use` | `Tool Call` | yes | the tool's name, and its `input` as JSON with sorted keys |
+| `tool_result` | `Tool Call` | yes | the tool's name, `(error)` when `is_error`, and its content |
 
-`document_uuid` is the upstream conversation UUID directly — Claude's
-UUIDs are already globally unique, so no namespacing is needed.
+A block's id is keyed on the upstream `tool_use` id where it has one,
+else on `(message_uuid, block_index)` (`src/render/ids.rs`).
 
-## Markdown rendering
+## Projects
 
-`render.rs` builds CommonMark with YAML frontmatter (`provider`,
-`uuid`, `name`, `summary`, `account_uuid`, `project_uuid`, `model`,
-`created_at`, `updated_at`). Per message it emits:
+A Project renders as a page of its own through the same renderer, with
+the grid `kind` `Project`: its description, its custom instructions,
+and one `Project Knowledge` section per knowledge document. A document
+is cut at the render step's `max_project_doc_bytes` (default 128 KiB)
+with a visible marker; the raw store keeps all of it. A conversation's
+`project` grid column carries the project's name.
 
-  * A `<div id="m-…" data-msg-index="N" class="msg msg--claude">`
-    wrapper for anchor stability.
-  * `## <Role>` heading + italic `*timestamp · model*` line.
-  * Per content block, a `<a id="b-…">` anchor and type-specific
-    rendering: `text` as prose, `thinking` as a `> blockquote` with
-    a leading `<!-- thinking -->` HTML comment, `tool_use` /
-    `tool_result` as fenced JSON with sorted keys for diff stability.
+## Ids and links
 
-The body is byte-stable against the Python `_render_one_claude`.
+Ids are minted in `src/render/ids.rs` under `IdNamespace::Claude`,
+scoped to the group, never Anthropic's UUIDs passed through
+(`docs/dev/entity_ids.md`). The document keeps the upstream UUID as
+`external_id` and links back to `https://claude.ai/chat/<uuid>` or
+`https://claude.ai/project/<uuid>`. The account is the account's email.
 
-## Incrementality
+[`RENDER_VERSION`](src/render/render.rs) is bumped whenever this
+crate's output changes.
 
-Render asks the raw store `dolt_diff` from the commit the render
-cursor names and renders only the conversations that moved. Every document
-it renders is written; an unchanged one writes identical rows, which
-doltlite's content-addressed tables store as no change, so the index
-never sees it.
+## Tests
 
-Bump [`RENDER_VERSION`](src/render/render.rs) when the on-disk render
-layout changes: the driver then re-renders every document. The shared
-chat layout has its own number, `LAYOUT_VERSION` in chat-common, which
-every chat provider declares through `render_params`.
-
-## Goldens
-
-The renderer + grid_rows emitter are pinned by insta snapshots
-against the TNG-themed fixture at `tests/fixtures/claude_export/`.
-
-```sh
-bazelisk test //datalib/backend/etl/providers/claude:claude_render
-```
-
-Tagged `manual` in Bazel — the fixture lives in `CARGO_MANIFEST_DIR`
-which the bazel sandbox doesn't surface in runfiles.
+`claude/:claude_tests` (its `claude_render` module) snapshots the
+render of `../claude/tests/fixtures/claude_export/`;
+`:claude_tests.update` rewrites the snapshots.

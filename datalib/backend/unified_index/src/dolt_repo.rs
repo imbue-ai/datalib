@@ -287,6 +287,29 @@ impl DoltRepo {
 /// newest row's primary key.
 type GroupKey = (Vec<Option<String>>, u64, String);
 
+// Pairs each group with its sample, which the caller read in key order.
+fn grouping<R>(
+    keys: Vec<GroupKey>,
+    samples: Vec<R>,
+    truncated: bool,
+    commit: String,
+) -> Grouping<R> {
+    let groups = keys
+        .into_iter()
+        .zip(samples)
+        .map(|((values, count, _), sample)| GroupCount {
+            values,
+            count,
+            sample,
+        })
+        .collect();
+    Grouping {
+        groups,
+        truncated,
+        at: Some(commit),
+    }
+}
+
 impl At {
     /// Runs [`ordered_sql`]; a table the index does not have yet holds no
     /// rows.
@@ -505,20 +528,7 @@ impl IndexRepo for DoltRepo {
         // In the same snapshot as the counts, so every group's newest row
         // is there and the samples line up with the groups one for one.
         let samples = rows_in(&mut at, &sample_uuids).await?;
-        let groups: Vec<GroupCount> = keys
-            .into_iter()
-            .zip(samples)
-            .map(|((values, count, _), sample)| GroupCount {
-                values,
-                count,
-                sample,
-            })
-            .collect();
-        Ok(Grouping {
-            groups,
-            truncated,
-            at: Some(at.commit),
-        })
+        Ok(grouping(keys, samples, truncated, at.commit))
     }
 
     async fn rows_by_uuids(&self, uuids: &[String]) -> Result<Vec<SearchRow>, RepoError> {
@@ -611,20 +621,7 @@ impl IndexRepo for DoltRepo {
         let (keys, truncated) = at.group_keys(at.problems, &where_sql, &params, by).await?;
         let sample_keys: Vec<String> = keys.iter().map(|(_, _, key)| key.clone()).collect();
         let samples = at.problems_in(&sample_keys).await?;
-        let groups = keys
-            .into_iter()
-            .zip(samples)
-            .map(|((values, count, _), sample)| GroupCount {
-                values,
-                count,
-                sample,
-            })
-            .collect();
-        Ok(Grouping {
-            groups,
-            truncated,
-            at: Some(at.commit),
-        })
+        Ok(grouping(keys, samples, truncated, at.commit))
     }
 
     async fn document_problems(&self, markdown_uuid: &str) -> Result<Vec<ProblemRow>, RepoError> {

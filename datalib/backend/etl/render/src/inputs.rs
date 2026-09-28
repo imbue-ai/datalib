@@ -149,6 +149,23 @@ pub async fn changed_rows(
     Ok(Some(out))
 }
 
+/// The keys of the documents, given as `(key, declared inputs)`, that
+/// read a row [`changed_rows`] names: the forward set
+/// [`RawRange::narrow`] takes.
+pub fn keys_reading<'a>(
+    changed: &HashMap<String, HashSet<String>>,
+    docs: impl IntoIterator<Item = (&'a str, &'a [Input])>,
+) -> HashSet<String> {
+    docs.into_iter()
+        .filter(|(_, inputs)| {
+            inputs
+                .iter()
+                .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
+        })
+        .map(|(key, _)| key.to_string())
+        .collect()
+}
+
 /// The rows one bucket asked for, in the order the store diffs them.
 /// Interior-mutable so a lookup through a shared `&` still records.
 #[derive(Debug, Default)]

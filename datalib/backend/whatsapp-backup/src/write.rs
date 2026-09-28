@@ -2,13 +2,9 @@
 //! crypt15 file (header + ciphertext + GCM tag + MD5 footer) from
 //! plaintext SQLite bytes.
 
-use aes::cipher::{BlockCipherEncrypt, KeyInit, KeyIvInit, StreamCipher};
-use aes::Aes256;
-use ghash::universal_hash::UniversalHash;
-use ghash::GHash;
 use md5::{Digest, Md5};
 
-use crate::crypto::{compute_h, compute_j0};
+use crate::crypto::encrypt_gcm;
 use crate::derive_backup_encryption_key;
 
 pub fn encrypt_to_crypt15(
@@ -28,43 +24,8 @@ pub fn encrypt_to_crypt15(
     // 2. Derive the AES key from the root key.
     let aes_key = derive_backup_encryption_key(root_key);
 
-    // 3. AES-256-GCM encrypt with the NIST-J0 derivation matching
-    //    decrypt. Reuses `compute_h` / `compute_j0` from crypto.rs so
-    //    encrypt and decrypt stay in lockstep.
-    let aes = Aes256::new((&aes_key).into());
-    let h = compute_h(&aes);
-    let j0 = compute_j0(&h, iv);
-
-    let mut ciphertext = deflated.clone();
-    let mut counter_init = j0;
-    incr_u32_be_lsb(&mut counter_init);
-    let mut ctr = ctr::Ctr32BE::<Aes256>::new((&aes_key).into(), (&counter_init).into());
-    ctr.apply_keystream(&mut ciphertext);
-
-    // 4. Compute GCM auth tag with empty AAD.
-    let mut g = GHash::new((&h).into());
-    // See the note in crypto.rs::update_padded — same split, same lint.
-    let (blocks, tail) = ciphertext.as_chunks::<16>();
-    for chunk in blocks {
-        g.update(&[(*chunk).into()]);
-    }
-    if !tail.is_empty() {
-        let mut last = [0u8; 16];
-        last[..tail.len()].copy_from_slice(tail);
-        g.update(&[last.into()]);
-    }
-    let mut len_block = [0u8; 16];
-    // AAD bit length = 0; ciphertext bit length follows.
-    len_block[8..].copy_from_slice(&((ciphertext.len() as u64) * 8).to_be_bytes());
-    g.update(&[len_block.into()]);
-    let s = g.finalize();
-
-    let mut tag_block = j0;
-    aes.encrypt_block((&mut tag_block).into());
-    let mut tag = [0u8; 16];
-    for i in 0..16 {
-        tag[i] = s[i] ^ tag_block[i];
-    }
+    // 3. AES-256-GCM encrypt, and 4. its auth tag with empty AAD.
+    let (ciphertext, tag) = encrypt_gcm(&aes_key, iv, &deflated);
 
     // 5. Build the BackupPrefix protobuf carrying the IV.
     let proto = build_backup_prefix(iv);
@@ -107,12 +68,6 @@ fn build_backup_prefix(iv: &[u8; 16]) -> Vec<u8> {
     out.push(16);
     out.extend_from_slice(iv);
     out
-}
-
-fn incr_u32_be_lsb(block: &mut [u8; 16]) {
-    let c = u32::from_be_bytes([block[12], block[13], block[14], block[15]]);
-    let c = c.wrapping_add(1);
-    block[12..].copy_from_slice(&c.to_be_bytes());
 }
 
 #[cfg(test)]

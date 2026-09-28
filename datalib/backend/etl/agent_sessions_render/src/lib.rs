@@ -2,9 +2,26 @@
 //! item a transcript line becomes, the folded block a run of tool
 //! traffic becomes, and the text helpers both read their JSON with.
 
+use datalib_etl_chat_common::normalize::json_pretty_sorted;
 use datalib_etl_chat_common::types::{ItemKind, NormalizedChatItem, UpstreamRef};
 use datalib_id::Identity;
 use serde_json::Value;
+
+/// The `bucket_query` of an agent-session render's diff scan: the
+/// transcripts the diff since `?1` touched, by `transcripts.id`, over
+/// the two tables every agent-session raw store keeps.
+pub const TRANSCRIPT_BUCKETS_SQL: &str = "
+    SELECT DISTINCT bucket FROM (
+        SELECT coalesce(to_transcript_id, from_transcript_id) AS bucket
+          FROM dolt_diff_records
+         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+        UNION
+        SELECT coalesce(to_id, from_id)
+          FROM dolt_diff_transcripts
+         WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+    )
+    WHERE bucket IS NOT NULL
+";
 
 /// One item of a transcript, as chat-common renders it.
 pub fn item(
@@ -87,37 +104,22 @@ pub fn str_of<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
-pub fn iso_to_ms(s: &str) -> Option<i64> {
-    datalib_time::parse_strict(s)
-        .ok()
-        .map(|t| t.to_unix_millis())
+/// A tool's JSON input or arguments as a fenced block, keys sorted;
+/// empty when there is nothing in it to show.
+pub fn json_block(v: &Value, max_bytes: usize) -> String {
+    if json_is_empty(v) {
+        return String::new();
+    }
+    format!("```json\n{}\n```", clamp(&json_pretty_sorted(v), max_bytes))
 }
 
-pub fn json_is_empty(v: &Value) -> bool {
+fn json_is_empty(v: &Value) -> bool {
     match v {
         Value::Object(m) => m.is_empty(),
         Value::Array(a) => a.is_empty(),
         Value::String(s) => s.is_empty(),
         Value::Null => true,
         _ => false,
-    }
-}
-
-/// `v` with every object's keys sorted, so it serializes the same way
-/// whatever order the agent wrote them in.
-pub fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
     }
 }
 

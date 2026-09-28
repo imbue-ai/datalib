@@ -241,12 +241,11 @@ sh_test(
     deps = _E2E_DEPS,
     # Needs network (Playwright fetches any missing browser binary —
     # chromium and webkit) and the host's pnpm / node / Playwright
-    # cache, hence `no-sandbox` + `requires-network`. Do NOT re-add the `external` tag: this is a
-    # routine UI integration test that must run on the default
-    # `bazel test //...` path (and CI's
-    # `--test_tag_filters=-manual,-external`). `requires-network`
-    # already gates it out of hermetic / offline environments;
-    # `external` would over-exclude.
+    # cache, hence `no-sandbox` + `requires-network`. Do NOT add the
+    # `external` tag: this is a routine UI integration test that must
+    # run on the default `bazel test //...` path, which is what CI runs.
+    # `requires-network` already gates it out of hermetic / offline
+    # runs; `external` would over-exclude.
     #
     # `cpu:4` claims the whole CI runner (ubuntu-latest has four vCPUs):
     # nine backend processes, two browser engines and Playwright's own
@@ -261,8 +260,8 @@ sh_test(
     ],
     # `long` = 900s. NOT decoration: an `sh_test` with no `size` or
     # `timeout` is `medium`, i.e. **300 seconds**, and this suite does
-    # not fit in that. It runs ~69 tests from 26 spec files across two
-    # browser engines behind nine backend processes, and the `warmup`
+    # not fit in that. It runs every spec file across two browser
+    # engines behind nine backend processes, and the `warmup`
     # project alone — qmd's cold model load, paid once for the whole
     # suite — grew to 1.2-1.5 min in qmd 2.8.3.
     #

@@ -60,16 +60,19 @@ after `dolt_gc()` reclaims 25 chunks — as does a diff spanning the gc
 boundary. Nothing has to be held open to keep a pin alive, so a slow
 consumer cannot have its view collected out from under it.
 
-## What this leaves for the design
+## What the runner built on it
 
-Pinning costs a reader nothing and disturbs the writer not at all, so
-the reader side is essentially free. What remains is not a storage
-question but a scheduling one: how a consumer *learns* there is a new
-commit worth re-pinning to, and how it keeps durable offset state
-between chunks.
+Pinning costs a reader nothing and disturbs the writer not at all. The
+runner uses that: a consumer reads its producer at a pinned commit and
+holds no lock on it, and may start on a producer still running when that
+producer declares `streams_output`, reading each seal as it lands
+([`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
+§ "What keeps steps apart: locks"; the reader side is
+`datalib/backend/etl/src/pin.rs`).
 
 ## Environment
 
-macOS, doltlite as pinned in `MODULE.bazel` — 0.50.3 at time of
-writing, via `//third-party/doltlite:doltlite`. `run.sh` prints the
-engine version it actually ran against and builds the CLI if missing.
+macOS, doltlite 0.50.3 via `//third-party/doltlite:doltlite` (the pin
+is `DOLTLITE_VERSION` in `third-party/doltlite/BUILD.bazel`). `run.sh`
+prints the engine version it actually ran against and builds the CLI
+if missing; re-run it after a doltlite bump.

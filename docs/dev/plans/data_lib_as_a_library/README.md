@@ -23,8 +23,8 @@ exception is the DAG runner, which schedules processes and carries none
 of our render behaviour — that can ship first.
 
 **Both are proposals. Nothing in either is built.** Treat every "we
-should" as unbuilt and every "we do" as a claim to verify against the
-tree, per [`AGENTS.md`](/AGENTS.md) §"Prose can be stale."
+should" as unbuilt and every "we do" as describing the tree the day it
+was written.
 
 ## Where this came from
 

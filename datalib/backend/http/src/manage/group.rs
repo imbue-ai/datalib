@@ -1,10 +1,10 @@
 //! What a group's row on the Manage screen says about the steps and
 //! applets filed under it: the order they run in, the status the row
 //! shows, the instants it calls "last synced" and "last success", and
-//! the steps a sync of the group starts at. The rules are the
-//! aggregation table in docs/dev/config_model.md. Nothing here does
-//! arithmetic across children: a group's bytes come from its own
-//! measured series.
+//! the steps a sync of the group starts at. docs/dev/config_model.md
+//! § "What the Manage screen and the wizard make of it" states the
+//! rules in prose. Nothing here does arithmetic across children: a
+//! group's bytes come from its own measured series.
 
 use super::status::{compare_stamps, StatusView};
 

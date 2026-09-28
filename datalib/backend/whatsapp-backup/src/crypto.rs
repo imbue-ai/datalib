@@ -60,24 +60,7 @@ pub fn decrypt_crypt15(
     let mut ctr = AesCtr::new(key.into(), (&counter_init).into());
     ctr.apply_keystream(&mut plaintext);
 
-    // GCM auth tag:
-    //   S = GHASH(H, AAD || 0^pad_a || C || 0^pad_c || len(AAD)_64_BE || len(C)_64_BE)
-    //   T = S XOR E_K(J0)
-    let mut ghash = GHash::new((&h).into());
-    update_padded(&mut ghash, aad);
-    update_padded(&mut ghash, ciphertext);
-    let mut len_block = [0u8; 16];
-    len_block[..8].copy_from_slice(&((aad.len() as u64) * 8).to_be_bytes());
-    len_block[8..].copy_from_slice(&((ciphertext.len() as u64) * 8).to_be_bytes());
-    ghash.update(&[len_block.into()]);
-    let s = ghash.finalize();
-
-    let mut tag_block = j0;
-    aes.encrypt_block((&mut tag_block).into());
-    let mut tag_calc = [0u8; 16];
-    for i in 0..16 {
-        tag_calc[i] = s[i] ^ tag_block[i];
-    }
+    let tag_calc = gcm_tag(&aes, &h, &j0, aad, ciphertext);
 
     if tag_calc.ct_eq(tag_in).into() {
         Ok(plaintext)
@@ -86,16 +69,14 @@ pub fn decrypt_crypt15(
     }
 }
 
-/// GHASH subkey H = E_K(0^128). Both encrypt and decrypt need this;
-/// exposing it here lets the encrypt path in `write.rs` reuse it
-/// instead of recomputing.
-pub(crate) fn compute_h(aes: &Aes256) -> [u8; 16] {
+/// GHASH subkey H = E_K(0^128).
+fn compute_h(aes: &Aes256) -> [u8; 16] {
     let mut h = [0u8; 16];
     aes.encrypt_block((&mut h).into());
     h
 }
 
-pub(crate) fn compute_j0(h: &[u8; 16], iv: &[u8]) -> [u8; 16] {
+fn compute_j0(h: &[u8; 16], iv: &[u8]) -> [u8; 16] {
     let mut ghash = GHash::new(h.into());
     // Pad IV to a multiple of 16 bytes.
     update_padded(&mut ghash, iv);
@@ -107,6 +88,42 @@ pub(crate) fn compute_j0(h: &[u8; 16], iv: &[u8]) -> [u8; 16] {
     let mut j0 = [0u8; 16];
     j0.copy_from_slice(&out);
     j0
+}
+
+// The inverse of `decrypt_crypt15` (empty AAD), sharing its J0 and tag
+// derivation so the two stay in lockstep.
+pub(crate) fn encrypt_gcm(key: &[u8; 32], iv: &[u8], plaintext: &[u8]) -> (Vec<u8>, [u8; 16]) {
+    let aes = Aes256::new(key.into());
+    let h = compute_h(&aes);
+    let j0 = compute_j0(&h, iv);
+    let mut counter_init = j0;
+    incr_u32_be_lsb(&mut counter_init);
+    let mut ciphertext = plaintext.to_vec();
+    let mut ctr = AesCtr::new(key.into(), (&counter_init).into());
+    ctr.apply_keystream(&mut ciphertext);
+    let tag = gcm_tag(&aes, &h, &j0, b"", &ciphertext);
+    (ciphertext, tag)
+}
+
+// S = GHASH(H, AAD || 0^pad_a || C || 0^pad_c || len(AAD)_64_BE || len(C)_64_BE)
+// T = S XOR E_K(J0)
+fn gcm_tag(aes: &Aes256, h: &[u8; 16], j0: &[u8; 16], aad: &[u8], ciphertext: &[u8]) -> [u8; 16] {
+    let mut ghash = GHash::new(h.into());
+    update_padded(&mut ghash, aad);
+    update_padded(&mut ghash, ciphertext);
+    let mut len_block = [0u8; 16];
+    len_block[..8].copy_from_slice(&((aad.len() as u64) * 8).to_be_bytes());
+    len_block[8..].copy_from_slice(&((ciphertext.len() as u64) * 8).to_be_bytes());
+    ghash.update(&[len_block.into()]);
+    let s = ghash.finalize();
+
+    let mut tag_block = *j0;
+    aes.encrypt_block((&mut tag_block).into());
+    let mut tag = [0u8; 16];
+    for i in 0..16 {
+        tag[i] = s[i] ^ tag_block[i];
+    }
+    tag
 }
 
 fn update_padded(ghash: &mut GHash, data: &[u8]) {
@@ -177,22 +194,7 @@ mod tests {
         ctr.apply_keystream(&mut pt);
         assert_eq!(pt, plaintext, "plaintext mismatch (J0 derivation wrong)");
 
-        // Verify tag too.
-        let mut g = GHash::new((&h).into());
-        update_padded(&mut g, &aad);
-        update_padded(&mut g, &expected_ct);
-        let mut len_block = [0u8; 16];
-        len_block[..8].copy_from_slice(&((aad.len() as u64) * 8).to_be_bytes());
-        len_block[8..].copy_from_slice(&((expected_ct.len() as u64) * 8).to_be_bytes());
-        g.update(&[len_block.into()]);
-        let s = g.finalize();
-
-        let mut tag_block = j0;
-        aes.encrypt_block((&mut tag_block).into());
-        let mut tag_calc = [0u8; 16];
-        for i in 0..16 {
-            tag_calc[i] = s[i] ^ tag_block[i];
-        }
+        let tag_calc = gcm_tag(&aes, &h, &j0, &aad, &expected_ct);
         assert_eq!(tag_calc, expected_tag, "tag mismatch");
     }
 
@@ -203,35 +205,8 @@ mod tests {
         let key = [0x42u8; 32];
         let iv = [0x99u8; 16];
 
-        // Hand-encrypt: AES-CTR with j0+1 as initial counter, then compute
-        // the tag the same way decrypt does.
         let plaintext = b"hello whatsapp crypt15 backup test vector".to_vec();
-        let aes = Aes256::new((&key).into());
-        let mut h = [0u8; 16];
-        aes.encrypt_block((&mut h).into());
-        let j0 = compute_j0(&h, &iv);
-
-        let mut counter_init = j0;
-        incr_u32_be_lsb(&mut counter_init);
-        let mut ct = plaintext.clone();
-        let mut ctr = AesCtr::new((&key).into(), (&counter_init).into());
-        ctr.apply_keystream(&mut ct);
-
-        let mut g = GHash::new((&h).into());
-        update_padded(&mut g, &ct);
-        let mut len_block = [0u8; 16];
-        len_block[8..].copy_from_slice(&((ct.len() as u64) * 8).to_be_bytes());
-        g.update(&[len_block.into()]);
-        let s = g.finalize();
-
-        let mut tag_block = j0;
-        aes.encrypt_block((&mut tag_block).into());
-        let mut tag = [0u8; 16];
-        for i in 0..16 {
-            tag[i] = s[i] ^ tag_block[i];
-        }
-
-        let mut ct_tag = ct;
+        let (mut ct_tag, tag) = encrypt_gcm(&key, &iv, &plaintext);
         ct_tag.extend_from_slice(&tag);
 
         let recovered = decrypt_crypt15(&ct_tag, &iv, &key, b"").unwrap();
@@ -244,30 +219,7 @@ mod tests {
         let wrong_key = [0x43u8; 32];
         let iv = [0x99u8; 16];
 
-        // Encrypt with `key`.
-        let pt = b"plaintext".to_vec();
-        let aes = Aes256::new((&key).into());
-        let mut h = [0u8; 16];
-        aes.encrypt_block((&mut h).into());
-        let j0 = compute_j0(&h, &iv);
-        let mut counter_init = j0;
-        incr_u32_be_lsb(&mut counter_init);
-        let mut ct = pt.clone();
-        let mut ctr = AesCtr::new((&key).into(), (&counter_init).into());
-        ctr.apply_keystream(&mut ct);
-        let mut g = GHash::new((&h).into());
-        update_padded(&mut g, &ct);
-        let mut len_block = [0u8; 16];
-        len_block[8..].copy_from_slice(&((ct.len() as u64) * 8).to_be_bytes());
-        g.update(&[len_block.into()]);
-        let s = g.finalize();
-        let mut tag_block = j0;
-        aes.encrypt_block((&mut tag_block).into());
-        let mut tag = [0u8; 16];
-        for i in 0..16 {
-            tag[i] = s[i] ^ tag_block[i];
-        }
-        let mut ct_tag = ct;
+        let (mut ct_tag, tag) = encrypt_gcm(&key, &iv, b"plaintext");
         ct_tag.extend_from_slice(&tag);
 
         // Decrypt with `wrong_key` — must fail with AuthFailed.
