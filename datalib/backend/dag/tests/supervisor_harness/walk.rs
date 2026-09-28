@@ -233,7 +233,9 @@ impl Walk {
     /// A step names only requests still open, and only while it has work
     /// left in them: running, waiting, or up to date with something above
     /// it still moving. The requests are read before the record, since
-    /// the loop saves a step's record before it closes a request.
+    /// the loop saves a step's record before it closes a request whose
+    /// work is done. A stopped one it closes as soon as it reads the stop,
+    /// and the record lets go of it on the next save.
     async fn check_served(&mut self) {
         let requests = self.h.state().await.requests;
         let record = self.h.state().await.record;
@@ -252,7 +254,9 @@ impl Walk {
                 ));
             }
             for id in &st.requests {
-                let closed = requests.iter().any(|r| &r.id == id && r.closed.is_some());
+                let closed = requests
+                    .iter()
+                    .any(|r| &r.id == id && r.closed.is_some() && r.stop_requested_by.is_none());
                 if closed {
                     self.h
                         .fail(&format!("{step} names {id}, which had already closed"));
