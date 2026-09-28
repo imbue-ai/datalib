@@ -817,8 +817,8 @@ impl CasEdgeAccumulator {
     }
 
     /// A blob the download declined to fetch, because a rule in the
-    /// config said not to. Not a failure: nothing went wrong, and the
-    /// Manage screen should not colour it as though it had.
+    /// config said not to. Not a failure, but a warning all the same:
+    /// the mirror is missing the file.
     ///
     /// The bookkeeping is a failure's, which is deliberate — it keeps
     /// the blob where a provider's retry pass looks for what did not

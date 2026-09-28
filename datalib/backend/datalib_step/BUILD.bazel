@@ -194,6 +194,7 @@ rust_test(
         "@datalib_crates//:sha2",
         "@datalib_crates//:tar",
         "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )
 

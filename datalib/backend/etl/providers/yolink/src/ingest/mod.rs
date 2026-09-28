@@ -37,6 +37,9 @@ const DEFAULT_OVERLAP_MINUTES: i64 = 5;
 /// per-device download caching. The default of 7 keeps the
 /// `dolt_commit`-per-window history weekly-grained.
 const DEFAULT_WINDOW_DAYS: i64 = 7;
+/// A device with no reading this recent is reported as gone quiet. The
+/// sensors report every few minutes, so a day is far past a gap.
+const SILENT_AFTER_MS: i64 = 86_400_000;
 
 // ── parser ──────────────────────────────────────────────────────────
 
@@ -69,6 +72,11 @@ fn columns_for(kind: &str) -> Result<&'static [(&'static str, &'static str, &'st
 
 pub fn parse(body: &str, kind: &str) -> Result<Vec<Reading>> {
     let cols = columns_for(kind)?;
+    // A device that sent nothing in the window gets an empty body, not
+    // even the header row.
+    if body.trim().is_empty() {
+        return Ok(Vec::new());
+    }
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(true)
         .flexible(true)
@@ -263,6 +271,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             warn!(event = "yolink_device_failed", device = %dev.name, error = %format!("{e:#}"), "a device could not be fetched");
         }
     }
+    let mut silent = Vec::new();
+    for dev in &opts.sync.devices {
+        let last: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(ts_ms) FROM yolink_readings WHERE device_name = ?")
+                .bind(&dev.name)
+                .fetch_one(db.pool())
+                .await
+                .with_context(|| format!("last reading of {}", dev.name))?;
+        if let Some(detail) = silence(last, now_ms) {
+            silent.push(datalib_etl::download_problems::SilentEntry {
+                name: dev.name.clone(),
+                detail,
+            });
+        }
+    }
+    datalib_etl::download_problems::report_silent(db.pool(), &silent).await;
     // Record the config only when every device succeeded: a device that
     // errored hasn't covered its widened `start`, and the blob is one
     // row for all of them.
@@ -274,6 +298,24 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await;
     Ok(s)
+}
+
+/// Why a device whose newest reading is `last_ts_ms` counts as gone
+/// quiet at `now_ms`, or `None` while it is still reporting.
+fn silence(last_ts_ms: Option<i64>, now_ms: i64) -> Option<String> {
+    let Some(last) = last_ts_ms else {
+        return Some("no readings yet; the device may be offline".into());
+    };
+    if now_ms - last <= SILENT_AFTER_MS {
+        return None;
+    }
+    let since = Utc
+        .timestamp_millis_opt(last)
+        .single()
+        .map_or_else(|| last.to_string(), |t| t.to_rfc3339());
+    Some(format!(
+        "no readings since {since}; the device may be offline"
+    ))
 }
 
 /// How many windows `walk_device` requests walking from `cursor` to
@@ -563,6 +605,27 @@ mod tests {
     #[test]
     fn parse_watermeter() {
         insta::assert_yaml_snapshot!(parse(WM, "watermeter").unwrap());
+    }
+
+    /// An offline device's window comes back as an empty body, not even
+    /// a header; that read as a missing `Time` column, a failure logged
+    /// once per window per run.
+    #[test]
+    fn an_empty_body_is_no_readings() {
+        assert!(parse("", "temperature_humidity").unwrap().is_empty());
+        assert!(parse("\n", "watermeter").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_device_is_silent_after_a_day_without_a_reading() {
+        let day = SILENT_AFTER_MS;
+        let now = 400 * day;
+        assert_eq!(silence(Some(now - day), now), None);
+        assert_eq!(
+            silence(Some(0), now).as_deref(),
+            Some("no readings since 1970-01-01T00:00:00+00:00; the device may be offline")
+        );
+        assert!(silence(None, now).is_some());
     }
 
     #[test]

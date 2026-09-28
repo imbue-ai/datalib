@@ -110,9 +110,9 @@ closed_vocabulary! {
         /// missing, or — when an earlier fetch left a payload — stale.
         FetchFailed,
         /// The download declined to fetch this record, because a limit
-        /// in the config said not to. → nothing went wrong; the record
-        /// is absent on purpose, and a provider that retries its skips
-        /// fetches it once the limit allows.
+        /// in the config said not to. → a warning: nothing failed, but
+        /// the record is not in the mirror. A provider that retries its
+        /// skips fetches it once the limit allows.
         OverSizeLimit,
         /// A configured entry — a label, a channel, a conversation id —
         /// that upstream does not have. → that entry is not mirrored;
@@ -121,6 +121,10 @@ closed_vocabulary! {
         /// A configured entry that exists but this credential cannot
         /// read. → the same.
         Forbidden,
+        /// A configured entry upstream has sent nothing new for a while:
+        /// a sensor unplugged, out of range or out of battery. → what
+        /// came before is kept; nothing new is arriving.
+        Silent,
         /// Nothing was lost; this is a finding worth publishing.
         Noted,
     }

@@ -653,6 +653,11 @@ def main() -> int:
         # run the pipeline as usual.
         if fx.reset:
             driver.reset(fx.ingest_ids)
+            snapshot = os.environ.get("INGESTED_TNG_AFTER_RESET")
+            if snapshot:
+                Path(snapshot).write_text(
+                    json.dumps(_latest_problem_counts(workspace, fx.ingest_ids))
+                )
         driver.sync()
 
         _run_pipeline_twice_and_diff(
@@ -730,6 +735,29 @@ def _run_pipeline_twice_and_diff(
     # incremental request has no tape in either tree now, which it
     # reports and skips, and the store does not move.
     driver.sync(chains)
+
+
+def _latest_problem_counts(
+    workspace: Path, steps: list[str]
+) -> dict[str, dict[str, int]]:
+    """`step -> {labels: value}`: each step's newest `problems` sample,
+    picked the way `datalib_runs::latest_metric` picks what the Manage
+    screen's Problems cell shows."""
+    store = workspace / "system" / "runs" / "runs.sqlite"
+    con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            "SELECT m.step, m.labels, m.value FROM metrics m "
+            "JOIN runs r ON r.run_id = m.run_id WHERE m.name = 'problems' "
+            "ORDER BY m.step, m.labels, r.started_at_utc DESC, r.rowid DESC"
+        ).fetchall()
+    finally:
+        con.close()
+    out: dict[str, dict[str, int]] = {}
+    for step, labels, value in rows:
+        if step in steps:
+            out.setdefault(step, {}).setdefault(labels, value)
+    return out
 
 
 def _diff_pairs_file(workspace: Path) -> Path:

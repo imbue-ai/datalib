@@ -28,6 +28,7 @@ mod reset;
 mod source;
 mod source_type;
 mod synth;
+mod topo_sort_config;
 
 #[cfg(test)]
 mod config_examples_test;
@@ -129,6 +130,18 @@ enum Cmd {
     /// every sync does on its first `qmd` or `latchkey`, runnable ahead
     /// of time. Needs no data root.
     PullRuntime,
+    /// Utility (not a pipeline step): rewrite a config file in the order
+    /// data flows — each step below the steps it reads, each group's
+    /// entries together — moving an entry only when it has to, and
+    /// its comments with it. The previous text is kept as `<file>.bak`.
+    /// Needs no data root.
+    TopoSortConfig {
+        /// The config file: `<data root>/config.toml`.
+        path: PathBuf,
+        /// Only say whether it is in order: exit 1 if not, and write nothing.
+        #[arg(long)]
+        check: bool,
+    },
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
     /// for one source from a raw fixture tree (`--params-file` naming a
     /// `{"fixture_path": …}`), for later replay via `--playback-root`.
@@ -252,6 +265,10 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+    }
+    // `topo-sort-config` likewise: it reads and writes one file.
+    if let Some(Cmd::TopoSortConfig { path, check }) = &cli.cmd {
+        std::process::exit(topo_sort_config::run_cli(path, *check));
     }
     // `login` likewise: it talks to a terminal, not to the runner.
     if let Some(Cmd::Login {
@@ -389,10 +406,13 @@ async fn run(
         Some(Cmd::Login { .. }) => unreachable!("login is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
         Some(Cmd::PullRuntime) => unreachable!("pull-runtime is answered in main"),
+        Some(Cmd::TopoSortConfig { .. }) => {
+            unreachable!("topo-sort-config is answered in main")
+        }
         None => {
             let env = StepEnv::from_env()?;
             if let Ok(part) = std::env::var(ENV_RESET) {
-                return reset::run(&env, data_root, &part).await;
+                return reset::run(&env, data_root, &part, emitter).await;
             }
             run_function(
                 env,

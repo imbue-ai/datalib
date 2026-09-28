@@ -189,7 +189,7 @@ async fn a_raised_size_limit_fetches_a_skipped_file_without_a_rewalk() {
     assert_eq!(first.blake3, None);
     assert_eq!(
         first.problem,
-        Some(("info".to_string(), "over_size_limit".to_string()))
+        Some(("warning".to_string(), "over_size_limit".to_string()))
     );
 
     let _second = second_world();
@@ -215,7 +215,7 @@ async fn a_failed_file_over_todays_limit_is_reclassified_as_a_skip() {
     assert_eq!(after.blake3, None);
     assert_eq!(
         after.problem,
-        Some(("info".to_string(), "over_size_limit".to_string()))
+        Some(("warning".to_string(), "over_size_limit".to_string()))
     );
 }
 

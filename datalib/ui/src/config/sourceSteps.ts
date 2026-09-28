@@ -963,7 +963,7 @@ export function setQmdSteps(text: string, group: string, indexing: QmdIndexing):
   const gone = [...all.filter((s) => unwanted.includes(s.id)), ...readersOf(unwanted, all)];
   let next = gone.length ? removeSteps(text, gone) : text;
   const missing = wanted.filter((b) => !all.some((s) => s.id === b.id));
-  if (missing.length) next = appendSource(next, missing.map((b) => b.body).join("\n\n"));
+  if (missing.length) next = insertEntries(next, missing.map((b) => b.body).join("\n\n"));
   for (const b of [keyword, embed]) {
     next = wanted.includes(b)
       ? wireIntoFanIns(next, b.id, "qmd_aggregator")
@@ -1013,26 +1013,81 @@ export function readersOf(ids: string[], all: ConfiguredStep[]): ConfiguredStep[
   return out;
 }
 
-/// Append entries to the config text. Always at the end: the DAG
-/// derives execution order from declared inputs rather than file order,
-/// and in TOML the end is the only safe insertion point — every key
-/// after a `[[…]]` header belongs to that table, so a mid-file splice
-/// would reparent whatever followed.
-export function appendSource(text: string, body: string): string {
-  return `${text.replace(/\s*$/, "")}\n\n${body}\n`;
+/// The group every source feeds.
+const INDEX_GROUP = "unified_index";
+
+/// Add entries — a source, a comparison, a source's qmd steps — where the
+/// file keeps reading in the order data flows: each step below the steps
+/// it reads, a source's entries together. That is beside its own group's
+/// entries when the group is already in the file, and otherwise after the
+/// last source, just above the index every source feeds. A file already
+/// out of that order may have no such place; then the entries go at the
+/// end, which loads the same — the runner follows `inputs`, not the file.
+export function insertEntries(text: string, body: string): string {
+  const at = placeFor(text, body);
+  return at === null ? `${text.replace(/\s*$/, "")}\n\n${body}\n` : splice(text, at, at, body);
+}
+
+/// Where [`insertEntries`] puts `body`, or null for the end. Always
+/// between two entries, so what follows starts with a `[[…]]` header: a
+/// splice anywhere else would reparent the keys after it to the table
+/// spliced in.
+function placeFor(text: string, body: string): number | null {
+  const steps = listSteps(text).filter((s) => s.end > 0);
+  const groups = listGroups(text).filter((g) => g.end > 0);
+  const added = listSteps(body);
+  const addedIds = new Set(added.map((s) => s.id));
+  const reads = new Set(added.flatMap((s) => s.inputs).filter((id) => !addedIds.has(id)));
+  const earliest = Math.max(0, ...steps.filter((s) => reads.has(s.id)).map((s) => s.end));
+  const readers = [
+    ...steps.filter((s) => s.group === INDEX_GROUP || fanInFunctionOf(s) !== null),
+    ...steps.filter((s) => s.inputs.some((id) => addedIds.has(id))),
+    ...groups.filter((g) => g.id === INDEX_GROUP),
+  ];
+  const latest = Math.min(text.length, ...readers.map((r) => extendOverComments(text, r.start)));
+  const own = new Set(added.map((s) => s.group).filter((g) => g !== null));
+  const beside = listGroups(body).length
+    ? []
+    : [
+        ...steps.filter((s) => s.group !== null && own.has(s.group)),
+        ...groups.filter((g) => own.has(g.id)),
+      ];
+  const at = beside.length ? Math.max(...beside.map((e) => e.end)) : latest;
+  return earliest <= at && at <= latest ? at : null;
+}
+
+/// `text` with [start, end) replaced by `body`, a blank line either side.
+function splice(text: string, start: number, end: number, body: string): string {
+  const before = text.slice(0, start).replace(/\s*$/, "");
+  const after = text.slice(end).replace(/^\s*/, "");
+  return `${[before, body, after].filter(Boolean).join("\n\n").replace(/\s*$/, "")}\n`;
+}
+
+/// Each entry's span, its banner included (`extendOverComments`).
+function spans(text: string, steps: Pick<ConfiguredStep, "start" | "end">[]): [number, number][] {
+  return steps
+    .filter((s) => s.end > 0)
+    .map((s) => [extendOverComments(text, s.start), s.end] as [number, number])
+    .sort((a, b) => a[0] - b[0]);
+}
+
+/// `text` without the spans. The last is cut first, so each cut's
+/// offsets still hold when its turn comes.
+function cut(text: string, ranges: [number, number][]): string {
+  let out = text;
+  for (const [start, end] of [...ranges].reverse()) {
+    out = out.slice(0, start) + out.slice(end);
+  }
+  return out;
+}
+
+function tidy(text: string): string {
+  return text.replace(/\n{3,}/g, "\n\n").replace(/^\s+/, "");
 }
 
 /// Remove entries — steps, applets or groups — from the config text.
 export function removeSteps(text: string, steps: Pick<ConfiguredStep, "start" | "end">[]): string {
-  const cuts = steps
-    .filter((s) => s.end > 0)
-    .map((s) => [extendOverComments(text, s.start), s.end] as const)
-    .sort((a, b) => b[0] - a[0]);
-  let out = text;
-  for (const [start, end] of cuts) {
-    out = out.slice(0, start) + out.slice(end);
-  }
-  return out.replace(/\n{3,}/g, "\n\n").replace(/^\s+/, "");
+  return tidy(cut(text, spans(text, steps)));
 }
 
 /// Walk back from a step's start over blank lines and `#` comments, so
@@ -1051,13 +1106,14 @@ function extendOverComments(text: string, start: number): number {
   return at;
 }
 
-/// Replace a source's steps with freshly generated ones. All the cuts
-/// happen against the text as parsed, then one append: cutting and
-/// appending one step at a time would leave the second step's offsets
-/// pointing into text the first cut had already shifted. Only safe
-/// when `paramsAreRepresentable` said so — see this module's header.
+/// Replace a source's steps with freshly generated ones, where the first
+/// of them was, so an edit moves nothing. Every cut is made against the
+/// text as parsed, the last first. Only safe when
+/// `paramsAreRepresentable` said so — see this module's header.
 export function replaceSteps(text: string, steps: ConfiguredStep[], body: string): string {
-  return appendSource(removeSteps(text, steps), body);
+  const [first, ...rest] = spans(text, steps);
+  if (!first) return insertEntries(text, body);
+  return tidy(splice(cut(text, rest), first[0], first[1], body));
 }
 
 /// A human name reduced to something that can be a directory: NFKD

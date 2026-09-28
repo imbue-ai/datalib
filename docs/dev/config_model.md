@@ -319,10 +319,26 @@ The wizard (`SourceWizard.vue`, writers in `sourceSteps.ts`) edits a
 source as one thing: the group plus its `ingest` and `render_markdown`
 steps from one form, render fields under a "Rendering" heading, one
 name box for the group. Editing renames the group in place and
-replaces both steps in one cut-and-append. A source missing one of its
+rewrites both steps where the first of them stood. A source missing one of its
 two steps gets it back on save; a render step under a provider that
 renders nothing (`renderStep: false` in `ui/src/config/catalog.ts`) is
 removed and unwired, and the dialog says so before Save.
+
+The screen lists groups, and the steps under each, in file order, and a
+header click's sort is undone by a third click. So the writers keep the
+file in the order data flows (`insertEntries`): a new source goes after
+the last one and above the `unified_index` group, its qmd steps right
+after its render, and each step below the steps it reads. A file already
+out of that order where no place fits gets the new entries at the end.
+The runner itself reads only `inputs`.
+
+`datalib-step topo-sort-config <root>/config.toml` puts a whole file in
+that order (`dag/src/config_order.rs`), keeping the old text as
+`config.toml.bak`; `--check` only says whether it is. Each group, with
+its steps and applets, goes after the groups it reads, and inside a
+group each step after the steps it reads. Nothing else moves, and the
+comments above an entry move with it. Where two groups read each other
+it orders the steps one by one instead.
 
 ## The retired shapes
 

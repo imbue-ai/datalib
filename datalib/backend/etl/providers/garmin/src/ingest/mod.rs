@@ -43,6 +43,9 @@ const CURSOR_DAILY_PREFIX: &str = "garmin:daily:";
 const CURSOR_WEIGHT: &str = "garmin:weight";
 const CURSOR_ACTIVITIES: &str = "garmin:activities";
 const CURSOR_WELLNESS: &str = "garmin:wellness";
+/// Where the window starts when the config names no `since`: a year
+/// before the first run, kept here so later runs start there too.
+const DEFAULT_SINCE_SCOPE: &str = "garmin:default_since";
 
 /// Days of one metric written per transaction.
 const DAILY_BATCH_DAYS: usize = 31;
@@ -215,6 +218,17 @@ fn days_through(start: NaiveDate, end: NaiveDate) -> u64 {
     ((end - start).num_days() + 1).max(0) as u64
 }
 
+/// The first day the walks cover: the configured `since`, else the
+/// default recorded by the first run, else a year before today. Taken
+/// afresh each run, a year before today moves a day a day, and a failed
+/// day that falls out behind it is never asked for again.
+fn window_start(configured: Option<&str>, recorded: Option<&str>, today: NaiveDate) -> String {
+    configured
+        .or(recorded)
+        .map(str::to_string)
+        .unwrap_or_else(|| ymd(today - Duration::days(DEFAULT_SINCE_DAYS)))
+}
+
 /// Today, or the configured `until` when it is earlier: a window that
 /// ends in the past stays that window, run after run.
 fn walk_end(today: NaiveDate, until: Option<&str>) -> Result<NaiveDate> {
@@ -227,10 +241,11 @@ fn walk_end(today: NaiveDate, until: Option<&str>) -> Result<NaiveDate> {
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db;
     let api = opts.api;
-    let since_str = match &api.since {
-        Some(s) => s.clone(),
-        None => ymd(opts.today - Duration::days(DEFAULT_SINCE_DAYS)),
-    };
+    let recorded_since = db.cursor(DEFAULT_SINCE_SCOPE).await?;
+    let since_str = window_start(api.since.as_deref(), recorded_since.as_deref(), opts.today);
+    if api.since.is_none() && recorded_since.is_none() {
+        db.set_cursor(DEFAULT_SINCE_SCOPE, &since_str).await?;
+    }
     let since = date(&since_str)?;
     let end = walk_end(opts.today, api.until.as_deref())?;
     let scope_cfg = scope_config_blob(&api, &since_str);
@@ -699,6 +714,10 @@ impl Walk<'_> {
     // ── per-day metrics ──────────────────────────────────────────────
 
     async fn daily(&mut self, s: &mut FetchSummary) -> Result<()> {
+        let forgotten = self.db.forget_failed_days_before(&ymd(self.since)).await?;
+        if forgotten > 0 {
+            info!(event = "garmin_failed_days_forgotten", forgotten, since = %ymd(self.since), "failed days before the window no longer count as problems");
+        }
         let failed = self.db.failed_daily_ids().await?;
         let mut walks = Vec::new();
         for metric in self.api.metrics() {
@@ -1348,6 +1367,17 @@ mod tests {
         assert_eq!(days_through(d("2026-09-01"), d("2026-09-01")), 1);
         assert_eq!(days_through(d("2026-09-01"), d("2026-09-08")), 8);
         assert_eq!(days_through(d("2026-09-09"), d("2026-09-08")), 0);
+    }
+
+    #[test]
+    fn the_window_starts_at_since_else_the_first_runs_default() {
+        let today = date("2026-09-28").unwrap();
+        assert_eq!(
+            window_start(Some("2026-01-01"), Some("2025-09-23"), today),
+            "2026-01-01"
+        );
+        assert_eq!(window_start(None, Some("2025-09-23"), today), "2025-09-23");
+        assert_eq!(window_start(None, None, today), "2025-09-28");
     }
 
     /// Only failed days behind the resume point, of this metric and not

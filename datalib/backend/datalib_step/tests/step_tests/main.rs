@@ -3,4 +3,5 @@
 
 mod embedding_map;
 mod interrupt;
+mod reset;
 mod runtime_fetch;

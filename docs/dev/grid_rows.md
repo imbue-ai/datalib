@@ -206,8 +206,9 @@ LinkedIn's `Contact` and `LinkedIn Chat`.
 All three are the record's own stamps, kept as the source wrote them
 (see the timestamp convention in AGENTS.md); each gets a `_utc` twin
 and an offset column at index time. `touched_at_utc` is what the grid
-sorts on, newest first; `created_at_utc` is what `before:`/`after:`
-filter on.
+sorts on, newest first, and Touched is the one date column the grid
+shows by default (a calendar's Browse shows Created instead);
+`created_at_utc` is what `before:`/`after:` filter on.
 
 - **A document row:** `created_at` is the earliest moment in the
   document and `modified_at` the latest. Through `chat-common` that is

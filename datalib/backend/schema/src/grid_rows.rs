@@ -103,7 +103,7 @@ pub struct GridRow {
     /// event's `created_at` is when it happens, often years ahead, so its
     /// `touched_at` is its edit stamp. Same form and derived twins as
     /// `created_at`.
-    #[col(sql = "VARCHAR(40)", sort_by = "touched_at_utc")]
+    #[col(sql = "VARCHAR(40)", search, sort_by = "touched_at_utc")]
     #[derived(name = "touched_at_utc", sql = "VARCHAR(40)")]
     #[derived(name = "touched_offset", sql = "VARCHAR(8)")]
     pub touched_at: Option<String>,

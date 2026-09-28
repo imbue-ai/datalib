@@ -261,7 +261,7 @@ A file that does not land — the fetch failed, or it is over
 `common.blob_size_limit_bytes` — keeps its row with `last_error` set on
 `slack_attachments_bookkeeping` and a `problems` row keyed
 `slack_attachments:<row id>`: `fetch_failed` (an error — the file is
-missing) for a failure, `over_size_limit` (info) for a skip.
+missing) for a failure, `over_size_limit` (a warning) for a skip.
 
 The resume cursor passes a message once, so the walk alone would never
 come back to that file. After the walk, every run tries again each such

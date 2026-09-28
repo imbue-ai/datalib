@@ -59,7 +59,7 @@ test("the grid opens on the newest page and loads older rows as it is scrolled u
 /// the oldest row of all comes first, though the page the grid opened on
 /// held only the newest.
 test("a header sort orders the whole search", async ({ page, request }) => {
-  const [oldest] = await searchUuids(request, "limit=1&sort=created_at:asc");
+  const [oldest] = await searchUuids(request, "limit=1&sort=touched_at:asc");
   await page.goto("/");
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   const openedOn = await page.evaluate(() =>
@@ -67,7 +67,7 @@ test("a header sort orders the whole search", async ({ page, request }) => {
   );
   expect(openedOn, "the fixture's oldest row is past the first page").not.toContain(oldest);
 
-  await searchHeader(page, "created_at").click();
+  await searchHeader(page, "touched_at").click();
   await expect.poll(async () => (await api(page)).first).toBe(oldest);
   expect((await held(page)).loaded, "a sort loaded every row").toBeLessThan(
     (await held(page)).total,

@@ -37,7 +37,11 @@ long-lived servers that contribute card components and the endpoints
 behind them, filed under a group but declaring no inputs because they
 read what steps wrote. This guide is about groups and steps; for
 applets see `docs/dev/applets.md`. Edges are the declared `inputs`,
-which name steps by composed id — file order does not matter. A step
+which name steps by composed id — file order does not matter to the
+runner. It does to a person: the Sources screen lists groups and steps
+in file order, and writes them in the order data flows, each source
+above the `unified_index` group and each step below the steps it
+reads. Write yours the same way. A step
 with no `inputs` is a **source step** (where a sync normally starts); every
 source feeds the two fan-in steps under the `unified_index` group:
 

@@ -66,7 +66,8 @@ weigh-ins, activities, wellness bundles) each keep a cursor in
 `sync_scope_state` (`garmin:daily:<metric>`, `garmin:weight`,
 `garmin:activities`, `garmin:wellness`) and resume from it less
 `api.refresh_days` (default 7). Every date walk is bounded below by
-`api.since` (default: a year before the first run) and above by
+`api.since` (default: a year before the first run, recorded as
+`garmin:default_since` so later runs start there too) and above by
 `api.until` or the run's local date, whichever is earlier; a past
 `until` fixes the window, so a mirror of a finished stretch stops
 growing.
@@ -93,7 +94,8 @@ below).
    "asked, empty" is distinguishable from "never asked". Days are
    written and the cursor moved a month (31 days) at a time, so an
    interrupted run re-fetches at most a month. A day an earlier run
-   failed to fetch is retried first, however far behind the cursor.
+   failed to fetch is retried first, however far behind the cursor;
+   once `since` has moved past it, its `problems` row goes instead.
 3. **Weigh-ins.** `/weight-service/weight/range/<start>/<end>?includeAll=true`
    in 90-day chunks, flattened one
    row per `samplePk` into `garmin_weigh_ins`. Rows dated inside the

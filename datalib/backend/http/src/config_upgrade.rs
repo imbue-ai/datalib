@@ -29,8 +29,8 @@ pub fn upgrade(root: &Path) -> Option<PathBuf> {
         }
     };
     let bak = path.with_extension("toml.bak");
-    let written = crate::write_owner_only(&bak, text.as_bytes())
-        .and_then(|()| crate::replace_config(&path, &upgraded));
+    let written = datalib_dag::config::write_owner_only(&bak, text.as_bytes())
+        .and_then(|()| datalib_dag::config::replace_config(&path, &upgraded));
     if let Err(e) = written {
         tracing::error!("config: could not migrate {}: {e}", path.display());
         return None;
