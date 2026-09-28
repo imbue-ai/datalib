@@ -16,7 +16,8 @@ pub type ProblemsQuery = ParsedQuery<ProblemRowColumn>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
 #[strum(serialize_all = "snake_case")]
 pub enum ProblemColumn {
-    Severity,
+    /// The severity drawn as a coloured chip.
+    SeverityChip,
     SourceRef,
     Stage,
     Reason,
@@ -54,7 +55,7 @@ impl View for ProblemColumn {
         // Sorted, never matched whole: free text reads these.
         let text = |c| (SortBy::Column(c), None);
         match self {
-            ProblemColumn::Severity => same(P::Severity),
+            ProblemColumn::SeverityChip => same(P::Severity),
             ProblemColumn::SourceRef => same(P::SourceId),
             ProblemColumn::Stage => same(P::Stage),
             ProblemColumn::Reason => same(P::Reason),

@@ -35,21 +35,22 @@ export function unread<Row>(group: ServerGroup<Row>, at: string | null): GroupWi
 
 /// The row that stands for a group's rows not yet read: the group's
 /// sample, so every grouping column reads the group's own value off it,
-/// under an id of its own.
-export function placeholderOf<Row extends { uuid: string }>(group: ServerGroup<Row>): Row {
+/// under an id of its own in the field `rowKey` names.
+export function placeholderOf<Row extends object>(group: ServerGroup<Row>, rowKey: string): Row {
   const key = groupKey(group.values);
-  return { ...group.sample, uuid: `more:${key}`, [MORE]: key };
+  return { ...group.sample, [rowKey]: `more:${key}`, [MORE]: key };
 }
 
 /// What the grid is handed: each group's rows read so far, then its
 /// placeholder while it has more.
-export function groupItems<Row extends { uuid: string }>(
+export function groupItems<Row extends object>(
   groups: ServerGroup<Row>[],
   windows: ReadonlyMap<string, GroupWindow<Row>>,
+  rowKey: string,
 ): Row[] {
   return groups.flatMap((g) => {
     const w = windows.get(groupKey(g.values))!;
-    return w.next === null ? w.rows : [...w.rows, placeholderOf(g)];
+    return w.next === null ? w.rows : [...w.rows, placeholderOf(g, rowKey)];
   });
 }
 

@@ -239,6 +239,8 @@ pub struct SearchResponse {
     pub query_echo: serde_json::Value,
     /// The columns the rows carry, typed — see `datalib_columns`.
     pub columns: Vec<datalib_columns::ColumnSpec>,
+    #[serde(flatten)]
+    pub rows_spec: datalib_columns::RowsSpec,
     pub rows: Vec<SearchRow>,
     /// Every row the search holds, not just this page's.
     pub total: u64,
@@ -262,6 +264,7 @@ impl SearchResponse {
         SearchResponse {
             query_echo: serde_json::json!({}),
             columns: columns::columns(),
+            rows_spec: columns::rows_spec(),
             rows: Vec::new(),
             total: 0,
             next_offset: None,
@@ -371,6 +374,7 @@ async fn search_handler(
     }
     Json(SearchResponse {
         columns: columns::columns(),
+        rows_spec: columns::rows_spec(),
         query_echo: serde_json::json!({
             "free_text": parsed.free_text,
             "free_text_mode": match parsed.free_text_mode {

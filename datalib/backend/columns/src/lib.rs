@@ -106,6 +106,33 @@ pub struct ColumnSearch {
     pub field: String,
 }
 
+/// What a paged grid reads of its rows beyond their columns: the field
+/// that names a row, the document a selected row opens, and what free
+/// text in its search bar matches.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RowsSpec {
+    pub row_key: &'static str,
+    pub document: DocumentLink,
+    pub free_text: FreeTextMatch,
+}
+
+/// The document a row opens: the first of `fields` the row has a value
+/// in, at the section `anchor` names.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DocumentLink {
+    pub fields: &'static [&'static str],
+    pub anchor: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FreeTextMatch {
+    /// qmd ranks the rows: they come in its order, best first.
+    Qmd,
+    /// A substring of some of the columns; the rows keep their order.
+    Like,
+}
+
 fn yes() -> bool {
     true
 }

@@ -101,12 +101,27 @@ export type QueryEcho = {
   [key: string]: unknown;
 };
 
-export type SearchResponse = {
-  query_echo: QueryEcho;
+/// What a paged grid reads of its rows beyond their columns — see
+/// `datalib_columns::RowsSpec`.
+export type RowsSpec = {
+  // The field that names a row.
+  row_key: string;
+  // The document a selected row opens: the first of `fields` the row has
+  // a value in, at the section its `anchor` field names.
+  document: { fields: string[]; anchor: string };
+  // qmd ranks free text, best first; `like` matches a substring and keeps
+  // the rows' order.
+  free_text: "qmd" | "like";
+};
+
+/// One page of a paged table's rows: the search's, or the problems'.
+export type RowsResponse<Row> = RowsSpec & {
+  // Only the search has one.
+  query_echo?: QueryEcho;
   // The columns the rows carry, typed — see `ColumnSpec`.
   columns: ColumnSpec[];
-  // One page of the search's rows, from `offset`.
-  rows: SearchRow[];
+  // One page of the rows, from `offset`.
+  rows: Row[];
   // Every row the search holds, not just this page's.
   total: number;
   // Where the next page starts; null when this one reaches the end.
@@ -119,6 +134,8 @@ export type SearchResponse = {
   // them; the field is omitted when empty (serde `skip_serializing_if`).
   errors?: string[];
 };
+
+export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho };
 
 // QMDs are write-only output. The backend ships the body verbatim
 // (frontmatter stripped) and the UI runs markdown-it on it. Per-section
@@ -477,23 +494,34 @@ export type SearchPageSpec = {
   within?: string | null;
 };
 
-export async function fetchSearch(
+export const SEARCH = `${UNIFIED_INDEX}/search`;
+
+export function fetchSearch(
   q: string,
   limit = 200,
   signal?: AbortSignal,
   options: GetOptions = {},
   spec: SearchPageSpec = {},
 ): Promise<SearchResponse> {
+  return fetchRows<SearchRow>(SEARCH, q, limit, signal, options, spec) as Promise<SearchResponse>;
+}
+
+/// A page of the table `url` serves: `/search`, or another table that
+/// pages the way it does.
+export async function fetchRows<Row>(
+  url: string,
+  q: string,
+  limit = 200,
+  signal?: AbortSignal,
+  options: GetOptions = {},
+  spec: SearchPageSpec = {},
+): Promise<RowsResponse<Row>> {
   const params = new URLSearchParams({ q, limit: String(limit) });
   if (spec.offset) params.set("offset", String(spec.offset));
   if (spec.sort) params.set("sort", spec.sort);
   if (spec.through) params.set("through", spec.through);
   if (spec.within) params.set("within", spec.within);
-  const r = await getJson<SearchResponse>(
-    `${UNIFIED_INDEX}/search?${params.toString()}`,
-    signal,
-    options,
-  );
+  const r = await getJson<RowsResponse<Row>>(`${url}?${params.toString()}`, signal, options);
   // Backend returned 200 but is telling us something went sideways
   // (schema mismatch, fallback path errored, etc.). Surface each entry
   // as its own toast — the dedupe window in `pushToast` keeps repeated
@@ -504,32 +532,33 @@ export async function fetchSearch(
   return r;
 }
 
-/// One group of a search: its value in each grouped column, how many
-/// rows it holds, and its newest row, which its labels are read from.
-export type SearchGroup = { values: (string | null)[]; count: number; sample: SearchRow };
+/// One group of a table's rows: its value in each grouped column, how
+/// many rows it holds, and its newest row, which its labels are read from.
+export type RowGroup<Row> = { values: (string | null)[]; count: number; sample: Row };
 
-export type GroupsResponse = {
-  groups: SearchGroup[];
+export type GroupsResponse<Row = SearchRow> = {
+  groups: RowGroup<Row>[];
   // More groups than one answer carries; the rest are left out.
   truncated: boolean;
   at: string | null;
-  qmd_error: string | null;
+  // Only the search has one.
+  qmd_error?: string | null;
   errors: string[];
 };
 
-/// The groups a search falls into by `by`, grid column ids outermost
-/// first and comma-joined (`source_ref,kind`), each with its true count.
-export async function fetchGroups(
+/// The groups the rows of `url` (the search's, by default) fall into by
+/// `by`, grid column ids outermost first and comma-joined
+/// (`source_ref,kind`), each with its true count.
+export async function fetchGroups<Row = SearchRow>(
   q: string,
   by: string,
   signal?: AbortSignal,
-): Promise<GroupsResponse> {
+  url: string = SEARCH,
+): Promise<GroupsResponse<Row>> {
   const params = new URLSearchParams({ q, by });
-  const r = await getJson<GroupsResponse>(
-    `${UNIFIED_INDEX}/search/groups?${params.toString()}`,
-    signal,
-    { toast: false },
-  );
+  const r = await getJson<GroupsResponse<Row>>(`${url}/groups?${params.toString()}`, signal, {
+    toast: false,
+  });
   for (const e of r.errors) pushToast(e);
   if (r.truncated)
     pushToast("There are more groups than the grid can show; the rest are left out.");

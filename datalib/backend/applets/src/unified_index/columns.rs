@@ -8,7 +8,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use datalib_columns::{source_catalog, ColumnSearch, ColumnSpec, ColumnType, Identity};
+use datalib_columns::{
+    source_catalog, ColumnSearch, ColumnSpec, ColumnType, DocumentLink, FreeTextMatch, Identity,
+    RowsSpec,
+};
+use datalib_query::table::{FreeText, SearchTable};
+use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::search::SearchRow;
@@ -16,6 +21,27 @@ use datalib_unified_index::view::{self, View};
 
 pub fn columns() -> Vec<ColumnSpec> {
     searchable::<GridColumn>(declared())
+}
+
+/// A search row opens its document at itself; a row with no document
+/// named opens as one.
+pub fn rows_spec() -> RowsSpec {
+    use GridRowColumn as G;
+    RowsSpec {
+        row_key: G::Uuid.as_str(),
+        document: DocumentLink {
+            fields: &["markdown_uuid", "uuid"],
+            anchor: "uuid",
+        },
+        free_text: free_text_of::<GridRow>(),
+    }
+}
+
+pub fn free_text_of<T: SearchTable>() -> FreeTextMatch {
+    match T::FREE_TEXT {
+        FreeText::Qmd => FreeTextMatch::Qmd,
+        FreeText::Like(_) => FreeTextMatch::Like,
+    }
 }
 
 /// The search bar is a grid's one filter: each column says which of its

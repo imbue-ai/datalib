@@ -36,7 +36,7 @@ describe("groupItems", () => {
       [groupKey(logs.values), unread(logs, "c1")],
       [groupKey(notes.values), unread(notes, "c1")],
     ]);
-    const items = groupItems([logs, notes], windows);
+    const items = groupItems([logs, notes], windows, "uuid");
     expect(items.map((r) => r.uuid)).toEqual(['more:["Log"]', 'more:["Note"]']);
     // The placeholder carries the group's own values, so the grid files
     // it under the right group.
@@ -62,7 +62,7 @@ describe("groupItems", () => {
       [groupKey(logs.values), partly],
       [groupKey(notes.values), done],
     ]);
-    expect(groupItems([logs, notes], windows).map((r) => r.uuid)).toEqual([
+    expect(groupItems([logs, notes], windows, "uuid").map((r) => r.uuid)).toEqual([
       "log-3",
       'more:["Log"]',
       "note-1",
@@ -70,7 +70,17 @@ describe("groupItems", () => {
   });
 
   it("gives each placeholder an id of its own", () => {
-    expect(placeholderOf(logs).uuid).not.toBe(logs.sample.uuid);
+    expect(placeholderOf(logs, "uuid").uuid).not.toBe(logs.sample.uuid);
+  });
+
+  /// A table whose rows are named by another field gets its placeholder
+  /// named there, or the grid would take it for the sample row itself.
+  it("names the placeholder in the table's own row key", () => {
+    const problem = { problem_uuid: "p-1", severity: "error" };
+    const g = { values: ["error"], count: 2, sample: problem };
+    const more = placeholderOf(g, "problem_uuid");
+    expect(more.problem_uuid).toBe('more:["error"]');
+    expect(more.severity).toBe("error");
   });
 });
 

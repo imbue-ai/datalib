@@ -7,7 +7,7 @@
 
 use axum::extract::{Query, State};
 use axum::Json;
-use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, Identity};
+use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, DocumentLink, Identity, RowsSpec};
 use datalib_problems::{Outcome, ProblemRow, ProblemRowColumn, ScopeKind, Severity};
 use datalib_unified_index::group::Within;
 use datalib_unified_index::problems::{ProblemColumn, ProblemsQuery};
@@ -15,7 +15,7 @@ use datalib_unified_index::sort::Sort;
 use datalib_unified_index::view;
 use serde::{Deserialize, Serialize};
 
-use super::columns::{searchable, Sources};
+use super::columns::{free_text_of, searchable, Sources};
 use super::{grouping, results, Index};
 
 /// As `/search` takes them.
@@ -24,21 +24,25 @@ pub struct Params {
     pub q: Option<String>,
     pub offset: Option<usize>,
     pub limit: Option<usize>,
-    /// `last_seen_at_utc:desc,severity`, by the columns' ids.
+    /// `last_seen_at_utc:desc,severity_chip`, by the columns' ids.
     pub sort: Option<String>,
     /// Stretch the page to reach this problem.
     pub through: Option<String>,
-    /// `[["severity","error"]]`: one group's problems.
+    /// `[["severity_chip","error"]]`: one group's problems.
     pub within: Option<String>,
 }
 
 /// One row as the viewer draws it: the stored row, with the enums as
-/// their words, the severity as a coloured chip, and the source
-/// resolved to its configured name.
+/// their words, the severity also as a coloured chip, and the source
+/// resolved to its configured name. A column a key filters keeps its
+/// stored value under the stored column's name, which is where the
+/// viewer reads the value a term names (`ColumnSearch::field`).
 #[derive(Debug, Clone, Serialize)]
 pub struct ProblemView {
     pub problem_uuid: String,
-    pub severity: Vec<Chip>,
+    pub severity: &'static str,
+    pub severity_chip: Vec<Chip>,
+    pub source_id: String,
     pub source_ref: Identity,
     pub stage: &'static str,
     pub outcome: &'static str,
@@ -80,8 +84,10 @@ impl ProblemView {
         let markdown_uuid = (row.scope_kind == ScopeKind::Markdown).then(|| row.scope_key.clone());
         ProblemView {
             problem_uuid: row.problem_uuid,
-            severity: vec![chip],
+            severity: row.severity.as_str(),
+            severity_chip: vec![chip],
             source_ref: sources.identity(&row.source_id),
+            source_id: row.source_id,
             stage: row.stage.as_str(),
             outcome: row.outcome.as_str(),
             reason: row.reason.as_str(),
@@ -147,9 +153,22 @@ pub fn sort_for_banner(rows: &mut [ProblemRow]) {
     });
 }
 
+/// A problem about a document opens it at the section the record has;
+/// one about a raw entity, before any document, opens nothing.
+pub fn rows_spec() -> RowsSpec {
+    RowsSpec {
+        row_key: ProblemRowColumn::ProblemUuid.as_str(),
+        document: DocumentLink {
+            fields: &["markdown_uuid"],
+            anchor: ProblemRowColumn::ItemUuid.as_str(),
+        },
+        free_text: free_text_of::<ProblemRow>(),
+    }
+}
+
 pub fn columns() -> Vec<ColumnSpec> {
     searchable::<ProblemColumn>(vec![
-        ColumnSpec::new("severity", "Severity", ColumnType::Chips).describe(
+        ColumnSpec::new("severity_chip", "Severity", ColumnType::Chips).describe(
             "error: the record was dropped. warning: it was kept with something lost. \
              info: a finding, nothing lost.",
         ),
@@ -186,11 +205,11 @@ pub fn columns() -> Vec<ColumnSpec> {
     ])
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct Response {
     pub columns: Vec<ColumnSpec>,
-    /// The field that identifies a row, for the viewer.
-    pub row_key: &'static str,
+    #[serde(flatten)]
+    pub rows_spec: RowsSpec,
     pub rows: Vec<ProblemView>,
     /// How many problems the query matches, across every page.
     pub total: usize,
@@ -207,8 +226,12 @@ pub struct Response {
 pub async fn handler(State(s): State<Index>, Query(p): Query<Params>) -> Json<Response> {
     let mut out = Response {
         columns: columns(),
-        row_key: "problem_uuid",
-        ..Response::default()
+        rows_spec: rows_spec(),
+        rows: Vec::new(),
+        total: 0,
+        next_offset: None,
+        at: None,
+        errors: Vec::new(),
     };
     let query = ProblemsQuery::parse(p.q.as_deref().unwrap_or(""));
     // A term the search cannot read is the answer, not dropped: the rest
@@ -316,7 +339,7 @@ async fn page(s: &Index, query: &ProblemsQuery, spec: PageSpec<'_>) -> Result<Pa
 #[derive(Debug, Deserialize)]
 pub struct GroupParams {
     pub q: Option<String>,
-    /// The columns to group by, outermost first: `source_ref,severity`.
+    /// The columns to group by, outermost first: `source_ref,severity_chip`.
     pub by: String,
 }
 
@@ -550,7 +573,7 @@ mod tests {
         let by_severity = ask(
             &s,
             Params {
-                sort: Some("severity:asc".into()),
+                sort: Some("severity_chip:asc".into()),
                 ..Params::default()
             },
         )
@@ -561,7 +584,7 @@ mod tests {
         let errors = ask(
             &s,
             Params {
-                within: Some(r#"[["severity","error"]]"#.into()),
+                within: Some(r#"[["severity_chip","error"]]"#.into()),
                 ..Params::default()
             },
         )
@@ -590,7 +613,7 @@ mod tests {
 
         let params = GroupParams {
             q: None,
-            by: "severity".into(),
+            by: "severity_chip".into(),
         };
         let r = groups_handler(State(s.clone()), Query(params)).await.0;
         assert!(r.errors.is_empty(), "{:?}", r.errors);
@@ -616,7 +639,7 @@ mod tests {
                 .map(|s| (s.key, s.field))
         };
         assert_eq!(
-            search("severity"),
+            search("severity_chip"),
             Some(("severity".into(), "severity".into()))
         );
         assert_eq!(
@@ -675,11 +698,23 @@ mod tests {
             .map(String::as_str)
             .collect();
         let specs = columns();
-        let specs: std::collections::BTreeSet<&str> =
+        let fields: std::collections::BTreeSet<&str> =
             specs.iter().map(|c| c.field.as_str()).collect();
-        assert_eq!(keys, specs);
+        // Beside the columns, a row carries only the values their keys name.
+        let named: std::collections::BTreeSet<&str> = specs
+            .iter()
+            .filter_map(|c| c.search.as_ref())
+            .map(|s| s.field.as_str())
+            .collect();
+        assert!(fields.is_subset(&keys), "{:?}", fields.difference(&keys));
+        let extra: Vec<&&str> = keys.difference(&fields).collect();
+        assert!(extra.iter().all(|k| named.contains(**k)), "{extra:?}");
+        assert!(specs
+            .iter()
+            .filter_map(|c| c.search.as_ref())
+            .all(|s| keys.contains(s.field.as_str())));
         assert_eq!(view.markdown_uuid.as_deref(), Some("md-1"));
-        assert_eq!(view.severity[0].kind, ChipKind::Warning);
+        assert_eq!(view.severity_chip[0].kind, ChipKind::Warning);
         assert_eq!(
             view.source_ref.label, "slack",
             "an unconfigured source shows its id"

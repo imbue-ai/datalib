@@ -2,7 +2,13 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 import type { Column } from "@slickgrid-universal/common";
-import { type Action, type ManageResponse, type ManageRow, type ColumnSpec } from "@/api";
+import {
+  UNIFIED_INDEX,
+  type Action,
+  type ManageResponse,
+  type ManageRow,
+  type ColumnSpec,
+} from "@/api";
 import { useApi } from "@/cards/cardApi";
 import {
   listGroups,
@@ -515,21 +521,24 @@ function onCellDoubleClicked(data: Row, field: string) {
 }
 
 /// The problems behind a row's count, as a grid over the index's
-/// `problems` table filtered to the row's source. A step's problems are
-/// its group's — the render store is where a source's live — so a step
-/// row opens the same grid as its group. The index group shows every
-/// source's.
+/// `problems` table, its search bar holding the row's source. A step's
+/// problems are its group's — the render store is where a source's
+/// live — so a step row opens the same grid as its group. The index
+/// group shows every source's.
 function openProblems(row: Row) {
   const sourceId = row.kind === "group" ? row.id : (row.group ?? row.id);
   const q = sourceId === "unified_index" ? "" : `source_id:${sourceId}`;
-  const url = `/applet/unified_index/problems?q=${encodeURIComponent(q)}`;
   const source =
     row.kind === "group" ? row : rows.value.find((r) => r.kind === "group" && r.id === sourceId);
-  const title =
+  const name =
     sourceId === "unified_index" ? "Problems" : `Problems: ${source?.name.label ?? sourceId}`;
-  props.ctx.host.openCards(
-    `tableView({ url: ${JSON.stringify(url)}, title: ${JSON.stringify(title)} })`,
-  );
+  const opts = {
+    url: `${UNIFIED_INDEX}/problems`,
+    q,
+    name,
+    placeholder: "search problems…  (try: severity:error, -stage:fetch, after:2026-01-01)",
+  };
+  props.ctx.host.openCards(`gridView(${JSON.stringify(opts)})`);
 }
 
 /// An in-place edit of the Name cell: a group's rename.

@@ -1,7 +1,11 @@
 <script setup lang="ts">
-// Search-grid card: a search bar + a slickgrid over the unified_index
-// applet's /search results, a page at a time (grid/pagedWindow.ts). The
-// server orders the rows: a header click asks it again in the new order.
+// Search-grid card: a search bar + a slickgrid over a table the
+// unified_index applet pages — its /search results by default, or another
+// endpoint that pages the same way (/problems) — a page at a time
+// (grid/pagedWindow.ts). The server orders the rows: a header click asks
+// it again in the new order. What a row is named by, the document it
+// opens and whether qmd ranks its free text, the server declares
+// (`RowsSpec`).
 //
 // Selecting a row opens the row's document as a new card via
 // ctx.host.openCards — structural changes never go through the bus.
@@ -31,10 +35,12 @@ import type {
 } from "@slickgrid-universal/common";
 import { typedColumns, groupTitle } from "./typedColumns";
 import {
+  SEARCH,
   type AccountsMap,
   type ColumnSpec,
   type QmdDocState,
-  type SearchResponse,
+  type RowsResponse,
+  type RowsSpec,
   type SearchRow,
 } from "@/api";
 import { useApi } from "@/cards/cardApi";
@@ -80,7 +86,11 @@ import { searchFailure, type SearchFailure } from "./searchFailure";
 import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
 
-const { fetchAccounts, fetchGroups, fetchQmdState, fetchSearch } = useApi();
+const { fetchAccounts, fetchGroups, fetchQmdState, fetchRows } = useApi();
+
+/// A row of whichever table the card pages: a search row's fields where
+/// it is one, and nothing is assumed of any of them.
+type Row = Partial<SearchRow> & Record<string, unknown>;
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -97,7 +107,14 @@ const props = defineProps<{
   // The card's name, from the card source (`gridView({name: "Slack
   // documents"})`). Without one the card is named for its live query.
   name?: string;
+  // The table the card pages (`gridView({url: "/applet/unified_index/problems"})`);
+  // the search when absent. Its groups are at `${url}/groups`.
+  url?: string;
+  // What the empty search bar suggests typing.
+  placeholder?: string;
 }>();
+
+const url = props.url ?? SEARCH;
 
 const initialState = new URLSearchParams(props.ctx.initialState);
 
@@ -108,9 +125,14 @@ const query = ref(initialState.get("q") ?? props.q ?? "");
 watch(query, (q) => props.ctx.setTitle(props.name ?? (q ? `Search: ${q}` : "Search")), {
   immediate: true,
 });
-const rows = shallowRef<SearchRow[]>([]);
+const rows = shallowRef<Row[]>([]);
 /// The columns the applet declares for its rows — see `ColumnSpec`.
 const columns = ref<ColumnSpec[]>([]);
+/// How the rows are named, what they open, and what free text matches —
+/// see `RowsSpec`. Set by the first answer, before the grid is built.
+let rowsSpec: RowsSpec | null = null;
+/// qmd ranks this table's free text, and indexes its documents.
+const qmd = () => rowsSpec?.free_text === "qmd";
 // The query whose results are actually painted right now — not `query`
 // (what is typed) and not `!loading` (which flips in both directions
 // within one tick, so an observer can miss the transition entirely).
@@ -156,6 +178,7 @@ function qmdColumnsVisible(): boolean {
 // documents searchable" line under the grid, which is the only thing on
 // screen that hints the columns exist.
 function refreshQmdState() {
+  if (!qmd()) return;
   qmdGeneration++;
   qmdAsked.clear();
   for (const ctrl of qmdInflight) ctrl.abort();
@@ -247,12 +270,12 @@ function indexFlag(v: boolean | null | undefined): string {
 
 // The index state for a row's document, or undefined before the first
 // /qmd_state response lands.
-function qmdDocState(row: SearchRow | null | undefined): QmdDocState | undefined {
+function qmdDocState(row: Row | null | undefined): QmdDocState | undefined {
   if (!row?.markdown_uuid) return undefined;
   return qmdState.value.get(row.markdown_uuid);
 }
 
-function qmdFlagTooltip(row: SearchRow | null | undefined, which: "indexed" | "embedded"): string {
+function qmdFlagTooltip(row: Row | null | undefined, which: "indexed" | "embedded"): string {
   if (!row) return "";
   if (!row.markdown_uuid) return "This row has no rendered document.";
   const st = qmdState.value.get(row.markdown_uuid);
@@ -270,7 +293,7 @@ function qmdFlagTooltip(row: SearchRow | null | undefined, which: "indexed" | "e
     : "No complete set of embedding vectors yet — semantic search will not find this document.";
 }
 
-function flagFormatter(which: "indexed" | "embedded"): Formatter<SearchRow> {
+function flagFormatter(which: "indexed" | "embedded"): Formatter<Row> {
   return (_r, _c, _v, _col, row) => {
     const flag = indexFlag(qmdDocState(row)?.[which]);
     const span = document.createElement("span");
@@ -280,7 +303,7 @@ function flagFormatter(which: "indexed" | "embedded"): Formatter<SearchRow> {
     return { html: span, toolTip: qmdFlagTooltip(row, which) };
   };
 }
-const selectedRow = ref<SearchRow | null>(null);
+const selectedRow = ref<Row | null>(null);
 // Selected row uuid as persisted state — survives reloads so the
 // deep-linked column highlights the same row.
 const sel = ref<string | null>(initialState.get("sel"));
@@ -289,9 +312,9 @@ const sel = ref<string | null>(initialState.get("sel"));
 // services around them. `dataView` and `slickGrid` are optional on the
 // bundle's type only because it can be asked for them before `init`;
 // here it is never handed out before both exist.
-type Grid = SlickVanillaGridBundle<SearchRow> & {
-  dataView: NonNullable<SlickVanillaGridBundle<SearchRow>["dataView"]>;
-  slickGrid: NonNullable<SlickVanillaGridBundle<SearchRow>["slickGrid"]>;
+type Grid = SlickVanillaGridBundle<Row> & {
+  dataView: NonNullable<SlickVanillaGridBundle<Row>["dataView"]>;
+  slickGrid: NonNullable<SlickVanillaGridBundle<Row>["slickGrid"]>;
 };
 let vueGrid: Grid | null = null;
 let groupingPlugin: SlickDraggableGrouping | null = null;
@@ -422,36 +445,51 @@ function currentSort(): string | null {
   return sorters.map((s) => `${s.columnId}:${String(s.direction).toLowerCase()}`).join(",");
 }
 
-function rowKey(row: SearchRow): string {
-  return row.uuid;
+function rowKey(row: Row): string {
+  return String(row[rowsSpec?.row_key ?? "uuid"] ?? "");
+}
+
+function rowKeyOf(row: Row | undefined): string | null {
+  return row ? rowKey(row) : null;
+}
+
+/// The document a row opens, and the section in it, or null for a row
+/// with none.
+function documentOf(row: Row): { md: string; anchor: string | null } | null {
+  const link = rowsSpec?.document;
+  if (!link) return null;
+  const md = link.fields.map((f) => row[f]).find((v) => typeof v === "string" && v !== "");
+  if (typeof md !== "string") return null;
+  const anchor = row[link.anchor];
+  return { md, anchor: typeof anchor === "string" && anchor !== "" ? anchor : null };
 }
 
 /// The record at a grid row, or null where the row is a group header
 /// or its totals — the data view hands those out as items too.
-function rowData(row: number): SearchRow | null {
+function rowData(row: number): Row | null {
   const item = vueGrid?.dataView.getItem(row) as
-    (SearchRow & { __group?: boolean; __groupTotals?: boolean; [MORE]?: string }) | undefined;
+    (Row & { __group?: boolean; __groupTotals?: boolean; [MORE]?: string }) | undefined;
   if (!item || item.__group || item.__groupTotals || item[MORE]) return null;
   return item;
 }
 
 /// The rows the grid has selected, in grid order.
-function selectedRows(): SearchRow[] {
+function selectedRows(): Row[] {
   if (!vueGrid) return [];
   return vueGrid.slickGrid
     .getSelectedRows()
     .map(rowData)
-    .filter((r): r is SearchRow => r != null);
+    .filter((r): r is Row => r != null);
 }
 
 // Lightroom-style: if multiple rows are selected and the right-click anchor
 // is part of that selection, the action targets all selected rows;
 // otherwise it targets only the anchor row. The selection itself is left
 // alone either way — a right-click aims the action, it does not re-select.
-function resolveTargetRows(anchor: SearchRow | null | undefined): SearchRow[] {
+function resolveTargetRows(anchor: Row | null | undefined): Row[] {
   if (!anchor) return [];
   const selected = selectedRows();
-  if (selected.length > 1 && selected.some((r) => r.uuid === anchor.uuid)) return selected;
+  if (selected.length > 1 && selected.some((r) => rowKey(r) === rowKey(anchor))) return selected;
   return [anchor];
 }
 
@@ -505,7 +543,7 @@ function formatSlugUuid(slug: string, uuid: string): string {
 }
 
 /// Put one id per target on the clipboard, comma-separated.
-async function copyIds(targets: SearchRow[], pick: (r: SearchRow) => string) {
+async function copyIds(targets: Row[], pick: (r: Row) => string) {
   const text = targets
     .map(pick)
     .filter((v) => v.length > 0)
@@ -516,7 +554,7 @@ async function copyIds(targets: SearchRow[], pick: (r: SearchRow) => string) {
 
 // Build a FilterCtx for the cell at `colId` on the given row, from the
 // search key the applet declares for the column.
-function buildFilterCtx(colId: string, data: SearchRow): FilterCtx | null {
+function buildFilterCtx(colId: string, data: Row): FilterCtx | null {
   const spec = columns.value.find((c) => c.field === colId);
   if (!spec?.search) return null;
   const row = data as Record<string, unknown>;
@@ -544,7 +582,7 @@ let inflight: AbortController | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 /// The rows the grid holds, a prefix of the search's.
-let win: PagedWindow<SearchRow, number> | null = null;
+let win: PagedWindow<Row, number> | null = null;
 /// The search they answer. Replaced, never mutated, so a page that comes
 /// back for a search since replaced can tell. `tail` is the default
 /// order, newest first, which the grid shows the other way up: newest at
@@ -564,8 +602,8 @@ let grouped: {
   q: string;
   sort: string | null;
   by: string[];
-  groups: ServerGroup<SearchRow>[];
-  windows: Map<string, GroupWindow<SearchRow>>;
+  groups: ServerGroup<Row>[];
+  windows: Map<string, GroupWindow<Row>>;
   counts: Map<string, number>;
 } | null = null;
 
@@ -580,19 +618,19 @@ function withinOf(by: string[], values: (string | null)[]): string {
 }
 
 /// How each grouped column reads its group's value off a row.
-function gettersOf(by: string[]): Getter<SearchRow>[] {
+function gettersOf(by: string[]): Getter<Row>[] {
   return by.map(
-    (id) => gridColumns.value.find((c) => c.id === id)!.grouping!.getter as Getter<SearchRow>,
+    (id) => gridColumns.value.find((c) => c.id === id)!.grouping!.getter as Getter<Row>,
   );
 }
 
 /// The rows in the order the grid shows them.
-function display(rows: SearchRow[]): SearchRow[] {
+function display(rows: Row[]): Row[] {
   return shown?.tail ? [...rows].reverse() : rows;
 }
 
-/// A `/search` answer as a page of the search, read on by offset.
-function searchPage(r: SearchResponse): Page<SearchRow, number> {
+/// An answer as a page of the rows, read on by offset.
+function searchPage(r: RowsResponse<Row>): Page<Row, number> {
   return { rows: r.rows, next: r.next_offset, total: r.total, at: r.at };
 }
 
@@ -608,7 +646,7 @@ async function runSearch(q: string, refresh = false) {
   const again = refresh && win !== null && shown?.q === q && shown.sort === sort;
   const limit = again ? refreshLimit(win!) : PAGE;
   const through = again
-    ? win!.rows[win!.rows.length - 1]?.uuid
+    ? rowKeyOf(win!.rows[win!.rows.length - 1])
     : seekingSelection
       ? sel.value
       : null;
@@ -617,12 +655,15 @@ async function runSearch(q: string, refresh = false) {
   qmdError.value = null;
   try {
     // The card shows a failure itself, beside the rows it concerns.
-    const r = await fetchSearch(q, limit, ctrl.signal, { toast: false }, { sort, through });
+    const r = await fetchRows<Row>(url, q, limit, ctrl.signal, { toast: false }, { sort, through });
+    rowsSpec = { row_key: r.row_key, document: r.document, free_text: r.free_text };
     if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
       columns.value = r.columns;
     }
     win = firstWindow(searchPage(r));
-    if (!again) shown = { q, sort, tail: sort === null && !r.query_echo?.free_text };
+    // qmd's rank is not an order in time.
+    const ranked = qmd() && !!r.query_echo?.free_text;
+    if (!again) shown = { q, sort, tail: sort === null && !ranked };
     rows.value = win.rows;
     total.value = r.total;
     qmdError.value = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
@@ -650,7 +691,8 @@ async function loadThrough(through: number, uuid: string | null = null) {
   win = asking(win, fetch);
   const load = (async () => {
     try {
-      const r = await fetchSearch(
+      const r = await fetchRows<Row>(
+        url,
         search.q,
         fetch.limit,
         undefined,
@@ -719,7 +761,7 @@ async function runGrouped(q: string, refresh: boolean) {
   error.value = null;
   qmdError.value = null;
   try {
-    const r = await fetchGroups(q, by.join(","), ctrl.signal);
+    const r = await fetchGroups<Row>(q, by.join(","), ctrl.signal, url);
     const windows = new Map(r.groups.map((g) => [groupKey(g.values), unread(g, r.at)]));
     if (again) {
       await Promise.all(
@@ -727,12 +769,13 @@ async function runGrouped(q: string, refresh: boolean) {
           const held = was.windows.get(groupKey(g.values));
           const last = held?.rows[held.rows.length - 1];
           if (!last) return;
-          const page = await fetchSearch(
+          const page = await fetchRows<Row>(
+            url,
             q,
             refreshLimit(held!),
             ctrl.signal,
             { toast: false },
-            { sort, within: withinOf(by, g.values), through: last.uuid },
+            { sort, within: withinOf(by, g.values), through: rowKey(last) },
           );
           windows.set(groupKey(g.values), firstWindow(searchPage(page)));
         }),
@@ -748,7 +791,7 @@ async function runGrouped(q: string, refresh: boolean) {
     };
     shown = { q, sort, tail: false };
     win = null;
-    qmdError.value = r.qmd_error;
+    qmdError.value = r.qmd_error ?? null;
     shownQuery.value = q;
     showGroups(again ? "refresh" : "new");
   } catch (e) {
@@ -769,7 +812,8 @@ async function loadGroupPage(key: string) {
   g.windows.set(key, asking(held, fetch));
   const values = JSON.parse(key) as (string | null)[];
   try {
-    const r = await fetchSearch(
+    const r = await fetchRows<Row>(
+      url,
       g.q,
       fetch.limit,
       undefined,
@@ -807,7 +851,7 @@ function loadGroupsInView() {
 /// rows of a group, or the grouping read again, touch only what changed.
 function showGroups(kind: "new" | "refresh" | "more") {
   if (!vueGrid || !grouped) return;
-  const items = groupItems(grouped.groups, grouped.windows);
+  const items = groupItems(grouped.groups, grouped.windows, rowsSpec?.row_key ?? "uuid");
   rows.value = items.filter((r) => !(MORE in r));
   total.value = grouped.groups.reduce((n, g) => n + g.count, 0);
   if (kind === "new") {
@@ -997,19 +1041,20 @@ function showChanged(indexMoved: boolean) {
 /// Apply a patch in place, leaving the rows in `order`, the server's.
 /// Rows inserted above the viewport would push what the person is
 /// reading down, so the row at the top is held at the top.
-function applyPatch(patch: RowPatch<SearchRow>, order: SearchRow[]) {
+function applyPatch(patch: RowPatch<Row>, order: Row[]) {
   if (!vueGrid || isEmpty(patch)) return;
   const { dataView, slickGrid: grid } = vueGrid;
   const top = grid.getViewport().top;
-  const anchor = rowData(top)?.uuid ?? null;
-  const position = new Map(order.map((r, i) => [r.uuid, i]));
+  const anchorRow = rowData(top);
+  const anchor = anchorRow ? rowKey(anchorRow) : null;
+  const position = new Map(order.map((r, i) => [rowKey(r), i]));
   keepActiveOnRecord(grid, dataView, () => {
     redrawChanged(grid, dataView, () => {
       dataView.beginUpdate();
       for (const id of patch.removed) dataView.deleteItem(id);
-      for (const row of patch.changed) dataView.updateItem(row.uuid, row);
+      for (const row of patch.changed) dataView.updateItem(rowKey(row), row);
       for (const row of patch.added) dataView.addItem(row);
-      dataView.sort((a, b) => position.get(a.uuid)! - position.get(b.uuid)!);
+      dataView.sort((a, b) => position.get(rowKey(a))! - position.get(rowKey(b))!);
       dataView.endUpdate();
     });
     const moved = anchor ? dataView.getRowById(anchor) : undefined;
@@ -1050,17 +1095,18 @@ function docSource(md: string, anchor: string | null): string {
   return `documentView(${args})`;
 }
 
-function openRow(row: SearchRow) {
+function openRow(row: Row) {
   // Double-click → open this row's doc as a standalone single-column
   // page in a new tab, with the row's section highlighted.
-  const md = row.markdown_uuid ?? row.uuid;
-  const href = encodeColumns([{ code: docSource(md, row.uuid), state: "" }]);
+  const doc = documentOf(row);
+  if (!doc) return;
+  const href = encodeColumns([{ code: docSource(doc.md, doc.anchor), state: "" }]);
   window.open(href, "_blank", "noopener");
 }
 
 /// A cell's text with the account name where the value is an account's
 /// uuid.
-const accountFormatter: Formatter<SearchRow> = (_r, _c, value) => {
+const accountFormatter: Formatter<Row> = (_r, _c, value) => {
   const v = typeof value === "string" ? value : "";
   const label = accountLabel(v);
   return { text: label, toolTip: v && label !== v ? v : "" };
@@ -1070,7 +1116,7 @@ const accountFormatter: Formatter<SearchRow> = (_r, _c, value) => {
 /// hovers a type cannot know, the account-name formatting on the
 /// author/account cells (the accounts map is the browser's), and the
 /// two-line clamp on the text.
-const columnOverrides: Record<string, Partial<Column<SearchRow>>> = {
+const columnOverrides: Record<string, Partial<Column<Row>>> = {
   source_ref: { width: 150 },
   kind: { width: 110 },
   conversation_name: { width: 200 },
@@ -1092,7 +1138,7 @@ const columnOverrides: Record<string, Partial<Column<SearchRow>>> = {
     width: 130,
     formatter: accountFormatter,
     grouping: {
-      getter: (row: SearchRow) => accountLabel(row.author ?? ""),
+      getter: (row: Row) => accountLabel(row.author ?? ""),
       formatter: groupTitle("Author"),
       collapsed: false,
     },
@@ -1100,7 +1146,7 @@ const columnOverrides: Record<string, Partial<Column<SearchRow>>> = {
   account: {
     formatter: accountFormatter,
     grouping: {
-      getter: (row: SearchRow) => accountLabel(row.account ?? ""),
+      getter: (row: Row) => accountLabel(row.account ?? ""),
       formatter: groupTitle("Account"),
       collapsed: false,
     },
@@ -1123,8 +1169,9 @@ const columnOverrides: Record<string, Partial<Column<SearchRow>>> = {
 /// the gap between them is exactly what a user hunting a missing
 /// result needs to see. The card's own, not the applet's: they are
 /// answered by a second request the card makes only when they are on
-/// screen.
-const extraColumns: Column<SearchRow>[] = [
+/// screen. Untyped by row: the grid's field type has no room for a row
+/// type that names its fields only by string.
+const extraColumns: Column[] = [
   {
     id: "qmd_indexed",
     field: "markdown_uuid",
@@ -1187,20 +1234,21 @@ function trueCount(inner: (g: GroupingFormatterItem) => string) {
 /// facets, where a 640px card still has them on screen. Built once per
 /// declaration, since handing the grid new definitions resets its
 /// layout.
-const gridColumns = shallowRef<Column<SearchRow>[]>([]);
+const gridColumns = shallowRef<Column[]>([]);
 watch(
   columns,
   (specs) => {
     // Nothing declared yet: the card's own two columns alone are not a
     // grid worth building.
     if (specs.length === 0) return;
-    const typed = typedColumns<SearchRow>(specs, {
+    const typed = typedColumns<Row>(specs, {
       rows: () => rows.value,
       overrides: columnOverrides,
       groupable: true,
     });
     const at = typed.findIndex((c) => c.id === "project") + 1;
-    gridColumns.value = [...typed.slice(0, at), ...extraColumns, ...typed.slice(at)].map((c) => ({
+    const own = qmd() ? extraColumns : [];
+    gridColumns.value = [...typed.slice(0, at), ...own, ...typed.slice(at)].map((c) => ({
       ...c,
       sortComparer: serverOrder,
       ...(c.grouping
@@ -1254,18 +1302,18 @@ function dividerAfter(shown: (m: MenuScope) => boolean): MenuCommandItem {
 /// What one right-click is about: the row under it, the rows it aims
 /// at, and the filters its cell offers.
 type MenuScope = {
-  anchor: SearchRow | null;
+  anchor: Row | null;
   /// The cell under the click: its column, its painted text (closer to
   /// what the user saw — an author's name, not their uuid — than the
   /// row's field), and its element, for the feedback breadcrumb.
   cell: { column: string; cellValue: string; el: HTMLElement | null } | null;
-  targets: SearchRow[];
+  targets: Row[];
   filter: FilterEntry[];
   notion: FilterEntry[];
-  links: { web: SearchRow[]; local: string[] };
+  links: { web: Row[]; local: string[] };
 };
 
-const linkOf = (r: SearchRow): string => r.source_url || "";
+const linkOf = (r: Row): string => r.source_url || "";
 
 function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   const anchor = args.row != null ? rowData(args.row) : null;
@@ -1286,13 +1334,14 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   // all rows on a single Notion page from any cell of any row on that
   // page — useful because the page UUID isn't always the same as
   // conversation_uuid (e.g. comment threads use the discussion UUID).
-  const notionCtx: FilterCtx | null = anchor?.notion_page_uuid
+  const page = anchor?.notion_page_uuid;
+  const notionCtx: FilterCtx | null = page
     ? {
         key: "notion_page",
         header: "Notion Page",
         value: formatSlugUuid(
-          anchor.conversation_uuid === anchor.notion_page_uuid ? anchor.conversation_name : "",
-          anchor.notion_page_uuid,
+          anchor?.conversation_uuid === page ? (anchor?.conversation_name ?? "") : "",
+          page,
         ),
       }
     : null;
@@ -1324,7 +1373,7 @@ const plural = (m: MenuScope) => (m.targets.length === 1 ? "" : "s");
 const countSuffix = (n: number) => (n === 1 ? "" : ` (${n})`);
 
 function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
-  const rowUuids = m.targets.map((r) => r.uuid);
+  const rowUuids = m.targets.map(rowKey);
   const anchor = m.cell?.el ?? null;
   if (surface === "grid_cell" && m.cell) {
     feedbackContext.value = buildContext({
@@ -1378,7 +1427,7 @@ const menuItems: (MenuCommandItem | "divider")[] = [
   entry(
     "copy-uuids",
     (m) => (m.targets.length ? `Copy UUID${plural(m)}` : null),
-    (m) => void copyIds(m.targets, (r) => r.uuid),
+    (m) => void copyIds(m.targets, rowKey),
   ),
   // Only offered when at least one selected row actually carries an
   // upstream id — a provider that hasn't been ported onto
@@ -1453,7 +1502,7 @@ function isDark(): boolean {
 
 function gridOptions(): GridOption {
   return {
-    datasetIdPropertyName: "uuid",
+    datasetIdPropertyName: rowsSpec?.row_key ?? "uuid",
     // Cells are text, never markup: a row's snippet is the source's own.
     enableHtmlRendering: false,
     enableEmptyDataWarningMessage: false,
@@ -1531,7 +1580,7 @@ function gridOptions(): GridOption {
 /// grouping extension installs its own provider for group rows, so
 /// this wraps whatever is there rather than replacing it. A group's
 /// placeholder, for its rows not yet read, is one cell across the row.
-function changedColumns(row: SearchRow | undefined): Set<string> {
+function changedColumns(row: Row | undefined): Set<string> {
   const names = row?.diff_changed_columns;
   if (!names) return new Set();
   // The body is shown as Contents: its preview, or its hash when the
@@ -1551,7 +1600,7 @@ function installRowMetadata(dataView: Grid["dataView"]) {
   const inner = dataView.getItemMetadata.bind(dataView);
   dataView.getItemMetadata = (row: number) => {
     const meta = inner(row);
-    const item = dataView.getItem(row) as SearchRow | undefined;
+    const item = dataView.getItem(row) as Row | undefined;
     if (item && MORE in item) return PLACEHOLDER_META;
     const status = item?.diff_status;
     if (!status || status === "unchanged") return meta;
@@ -1578,7 +1627,7 @@ function createGrid() {
   // The grid's own stylesheet must live in this card's shadow root,
   // where the grid is.
   if (root instanceof ShadowRoot) options.shadowRoot = root;
-  const bundle = new SlickVanillaGridBundle<SearchRow>(
+  const bundle = new SlickVanillaGridBundle<Row>(
     boxEl.value,
     gridColumns.value,
     options,
@@ -1609,17 +1658,21 @@ function createGrid() {
       loading.value ||
       loadingMore !== null ||
       [...(grouped?.windows.values() ?? [])].some((w) => w.pending !== null),
-    uuidAt: (row: number) => (bundle.dataView.getItem(row) as SearchRow | undefined)?.uuid ?? null,
-    rows: () => (bundle.dataView.getItems() as SearchRow[]).filter((r) => !(MORE in r)),
+    uuidAt: (row: number) => {
+      const item = bundle.dataView.getItem(row) as Row | undefined;
+      return item ? rowKey(item) : null;
+    },
+    rows: () => (bundle.dataView.getItems() as Row[]).filter((r) => !(MORE in r)),
     scrollToRow: (row: number) => grid.scrollRowIntoView(row),
     scrollToColumn: (id: string) => {
       const idx = grid.getColumnIndex(id);
       if (idx != null) grid.scrollColumnIntoView(idx);
     },
-    isSelected: (uuid: string) => selectedRows().some((r) => r.uuid === uuid),
+    isSelected: (uuid: string) => selectedRows().some((r) => rowKey(r) === uuid),
     activeUuid: () => {
       const active = grid.getActiveCell();
-      return active ? (rowData(active.row)?.uuid ?? null) : null;
+      const row = active ? rowData(active.row) : null;
+      return row ? rowKey(row) : null;
     },
     hiddenColumns: () =>
       grid
@@ -1684,7 +1737,7 @@ let selectedIds = new Set<string>();
 
 function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEventArgs) {
   if (!vueGrid) return;
-  const now = args.rows.map(rowData).filter((d): d is SearchRow => d != null);
+  const now = args.rows.map(rowData).filter((d): d is Row => d != null);
   const { picked, selected } = newlyPicked(selectedIds, now, rowKey);
   selectedIds = selected;
   const data = picked[picked.length - 1];
@@ -1696,8 +1749,8 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   // (and don't rewrite the state we just read).
   if (restoring) return;
   saveState();
-  const md = data.markdown_uuid ?? data.uuid;
-  props.ctx.host.openCards(docSource(md, data.uuid));
+  const doc = documentOf(data);
+  if (doc) props.ctx.host.openCards(docSource(doc.md, doc.anchor));
 }
 
 function onClick(_e: SlickEventData, args: OnClickEventArgs) {
@@ -1706,7 +1759,7 @@ function onClick(_e: SlickEventData, args: OnClickEventArgs) {
   // change: keep the persisted selection on it.
   const data = rowData(args.row);
   const selected = selectedRows();
-  if (data && selected.length === 1 && selected[0].uuid === data.uuid) {
+  if (data && selected.length === 1 && rowKey(selected[0]) === rowKey(data)) {
     selectedRow.value = data;
     sel.value = rowKey(data);
     saveState();
@@ -1762,7 +1815,10 @@ onBeforeUnmount(() => {
     <div ref="searchWrapEl" class="search-input-wrap">
       <input
         v-model="query"
-        placeholder="search messages…  (try: source:Slack, -channel:announce, before:2025-01-01)"
+        :placeholder="
+          props.placeholder ??
+          'search messages…  (try: source:Slack, -channel:announce, before:2025-01-01)'
+        "
         class="search-input"
         data-testid="search-input"
         autofocus
