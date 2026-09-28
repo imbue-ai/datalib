@@ -40,7 +40,9 @@ pub async fn run(
             let store = datalib_etl_render::indexed_markdown::path_for(&tree);
             reset_store(&store).await?;
             report_problems(emitter, &store).await?;
-            emitter.progress().metric(datalib_metrics::DOCUMENTS, &[], 0);
+            emitter
+                .progress()
+                .metric(datalib_metrics::DOCUMENTS, &[], 0);
             // The documents are files beside the store, one directory each.
             for entry in std::fs::read_dir(&tree).into_iter().flatten() {
                 let entry = entry?;
