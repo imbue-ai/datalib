@@ -65,6 +65,10 @@ pub struct ServiceInfo {
     /// `browser`, `set`, … — straight from latchkey. The wizard offers
     /// its "Connect" button only when `browser` is among them.
     pub auth_options: Vec<String>,
+    /// latchkey's own `auth set` command line for this service, which
+    /// knows the credential's shape (a bearer header, a `user:password`
+    /// pair). Shown to a person who has to paste one.
+    pub set_example: Option<String>,
     pub accounts: Vec<StoredAccount>,
     /// Whether latchkey knows this service at all. False means the name
     /// is free, which is the only state in which anything here may
@@ -119,6 +123,7 @@ pub async fn get_service(
             Ok(Json(ServiceInfo {
                 service,
                 auth_options: Vec::new(),
+                set_example: None,
                 accounts: Vec::new(),
                 registered: !unknown,
                 cli: datalib_core::node_runtime::latchkey_cli_hint(),
@@ -164,6 +169,10 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
     ServiceInfo {
         service: service.to_string(),
         auth_options,
+        set_example: v
+            .get("setCredentialsExample")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         accounts,
         registered: true,
         cli: datalib_core::node_runtime::latchkey_cli_hint(),
@@ -930,6 +939,26 @@ mod tests {
         assert_eq!(info.accounts[0].account, "thad@imbue.com");
         assert_eq!(info.accounts[0].credential_status.as_deref(), Some("valid"));
         assert!(info.error.is_none());
+    }
+
+    /// A set-only service's paste note has to name the credential's
+    /// shape: `fastmail-dav` takes `-u user:password`, not the bearer
+    /// header most services take. Shape from latchkey 3.15.0.
+    #[test]
+    fn carries_latchkeys_own_set_example() {
+        let v = json!({
+            "type": "built-in",
+            "authOptions": ["set"],
+            "credentials": {},
+            "setCredentialsExample":
+                "latchkey auth set fastmail-dav -u \"you@fastmail.com:<app password>\""
+        });
+        let info = parse_service_info("fastmail-dav", &v);
+        assert_eq!(
+            info.set_example.as_deref(),
+            Some("latchkey auth set fastmail-dav -u \"you@fastmail.com:<app password>\"")
+        );
+        assert!(parse_service_info("x", &json!({})).set_example.is_none());
     }
 
     /// latchkey spells "the one unnamed account" as an empty key. It

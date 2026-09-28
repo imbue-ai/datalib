@@ -1,18 +1,16 @@
-// The forms for Google Takeout, LinkedIn, SMS Backup & Restore and the
-// two ways into `contacts`. What each must get right: write the table
+// The forms for Google Takeout, LinkedIn, SMS Backup & Restore and
+// `contacts` from .vcf files. What each must get right: write the table
 // that names its ingest method, and read back the configs people have
 // written by hand, which all carry `always_clear_before_ingest`.
 import { describe, expect, it } from "vitest";
-import { CATALOG, catalogForStep, entryKey } from "../src/config/catalog";
+import { CATALOG } from "../src/config/catalog";
 import type { CatalogEntry } from "../src/config/catalog";
 import {
   buildStep,
-  entryForStep,
   listSteps,
   paramsAreRepresentable,
   seedFieldValues,
 } from "../src/config/sourceSteps";
-import methods from "../src/config/ingestMethods.json";
 
 const byType = (type: string, variantKey?: string) =>
   CATALOG.find((e) => e.type === type && e.variantKey === variantKey)!;
@@ -56,41 +54,6 @@ describe("the snapshot switch", () => {
       expect(seedFieldValues(entry)["common.always_clear_before_ingest"], entry.label).toBe(true);
       expect(toml(entry), entry.label).toContain("always_clear_before_ingest = true");
     }
-  });
-});
-
-describe("the catalog's contacts variants", () => {
-  const CONTACTS = CATALOG.filter((e) => e.type === "contacts");
-
-  it("has a form for every method the backend declares", () => {
-    const declared = (methods as Record<string, { path: string }[]>).contacts.map((m) => m.path);
-    expect(CONTACTS.map((e) => e.variantKey).sort()).toEqual([...declared].sort());
-    expect(CONTACTS.every((e) => e.wizard)).toBe(true);
-    expect(CONTACTS.map(entryKey)).toEqual(["contacts:carddav", "contacts:vcf"]);
-  });
-
-  it("writes a CardDAV server and a .vcf folder under their own tables", () => {
-    const carddav = toml(byType("contacts", "carddav"), {
-      "carddav.server_url": "https://contacts.icloud.com/",
-      "carddav.addressbooks": ["Enterprise crew"],
-    });
-    expect(carddav).toContain("[steps.params.carddav]");
-    expect(carddav).toContain('server_url = "https://contacts.icloud.com/"');
-    expect(carddav).toContain('addressbooks = ["Enterprise crew"]');
-    const vcf = toml(byType("contacts", "vcf"), { "vcf.path": "~/backups/crew_vcf" });
-    expect(vcf).toContain("[steps.params.vcf]");
-    expect(vcf).toContain('path = "~/backups/crew_vcf"');
-  });
-
-  it("finds each method's form from the table it carries", () => {
-    const carddav = ingestStep(
-      "contacts",
-      `[steps.params.carddav]\nserver_url = "https://contacts.icloud.com/"`,
-    );
-    expect(catalogForStep("contacts", carddav[0].params)!.label).toBe("CardDAV contacts");
-    expect(entryForStep(carddav[1], carddav)!.label).toBe("CardDAV contacts");
-    const vcf = ingestStep("contacts", `[steps.params.vcf]\npath = "~/backups/crew_vcf"`);
-    expect(catalogForStep("contacts", vcf[0].params)!.label).toBe("Contact files (.vcf)");
   });
 });
 

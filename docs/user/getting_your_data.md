@@ -259,22 +259,25 @@ mirror.
 
 ## Contacts
 
-`type = "contacts"` — a CardDAV server through latchkey (`carddav`),
-**or** local `.vcf` files (`vcf`). Mirrors your address book.
+`type = "contacts"` — any CardDAV server, such as iCloud or Nextcloud,
+through latchkey (`carddav`), **or** local `.vcf` files (`vcf`).
+Mirrors your address book. Fastmail has a section of its own:
+[Fastmail Contacts](#fastmail-contacts).
 
 - **A `.vcf` export.** Most address books export vCards; point
   `vcf.path` at a directory of them. No credentials. The directory is
   the whole address book, so `all_sources.toml` sets
   `always_clear_before_ingest = true` to let a missing `.vcf` mean a
   missing contact.
-- **A CardDAV server.** Credentials go in latchkey under a service
-  whose base URL matches the server. Fastmail's is built in and takes
-  an app password (Settings → Privacy & Security → Integrations → App
-  passwords, with contacts access):
+- **A CardDAV server.** Put it in `carddav.server_url` — the host alone
+  is usually enough, since discovery tries `/.well-known/carddav`. The
+  login is latchkey's: register a service for the server's host
+  (`latchkey services register`), then give it an app password with
+  `latchkey auth set`.
 
-  ```sh
-  latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
-  ```
+An `addressbooks` list of names narrows a server to those address books,
+matched exactly; leave it out for all of them. The wizard's **Test
+connection** lists them to pick from.
 
 ## Email
 
@@ -342,7 +345,8 @@ latchkey auth set fastmail -H "Authorization: Bearer $(pbpaste)"
 ```
 
 Use a `jmap` table with `hostname = "api.fastmail.com"`. Fastmail's
-contacts are a separate route — see [Contacts](#contacts).
+contacts and calendars are separate sources — see [Fastmail
+Contacts](#fastmail-contacts) and [Fastmail Calendar](#fastmail-calendar).
 
 ## Fastmail Calendar
 
@@ -360,6 +364,24 @@ latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
 
 The `fastmail` table needs nothing else; `calendars` narrows it to the
 calendars you name.
+
+## Fastmail Contacts
+
+`type = "contacts"` — Fastmail's address books over CardDAV, through
+latchkey (`fastmail`). Rendered the way [Contacts](#contacts) says.
+
+The same `fastmail-dav` login as [Fastmail Calendar](#fastmail-calendar):
+an app password (Settings → Privacy & Security → Integrations → App
+passwords, with contacts access), not the OAuth login the mail source
+uses. One app password with both contacts and calendar access serves
+both sources.
+
+```sh
+latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
+```
+
+The `fastmail` table needs nothing else; `addressbooks` narrows it to
+the address books you name.
 
 ## Garmin
 

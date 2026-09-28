@@ -71,6 +71,10 @@
   ],
   "contacts": [
     {
+      "path": "fastmail",
+      "reach": "origin"
+    },
+    {
       "path": "carddav",
       "reach": "origin"
     },

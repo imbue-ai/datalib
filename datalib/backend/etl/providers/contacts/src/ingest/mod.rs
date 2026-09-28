@@ -37,9 +37,9 @@ pub struct FetchOptions {
     /// `https://www.googleapis.com/carddav/v1/principals/`.
     pub server_url: String,
     /// Restrict the run to the named addressbooks (matched against
-    /// the addressbook's `displayname`). `None` = sync every
+    /// the addressbook's `displayname`). Empty = sync every
     /// addressbook the server lists under the principal.
-    pub addressbooks: Option<Vec<String>>,
+    pub addressbooks: Vec<String>,
     pub progress: Progress,
     pub control: DownloadControl,
 }
@@ -62,9 +62,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let account_id = host_for_account(&opts.server_url)?;
 
-    // ── Discovery ──────────────────────────────────────────────────
-    let (principal_url, home_set_url) =
-        discover(&opts.server_url, &mut summary, &opts.latchkey).await?;
+    let Reached {
+        principal_url,
+        home_set_url,
+        books,
+    } = reach(&opts.server_url, &mut summary, &opts.latchkey).await?;
     let server_url = opts.server_url.trim_end_matches('/').to_string();
     db.upsert_account(
         &account_id,
@@ -73,19 +75,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         Some(home_set_url.as_str()),
     )
     .await?;
-    info!(
-        event = "carddav_discovery",
-        principal = %principal_url,
-        addressbook_home_set = %home_set_url,
-        "discovered the principal and the addressbook home"
-    );
-
-    let books = list_addressbooks(&home_set_url, &mut summary, &opts.latchkey).await?;
-    info!(
-        event = "carddav_addressbook_count",
-        n = books.len(),
-        "listed the addressbooks"
-    );
     for book in &books {
         db.upsert_addressbook(
             &account_id,
@@ -99,17 +88,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     summary.addressbooks = books.len();
 
     // ── Per-addressbook sync ──────────────────────────────────────
-    let only_named = opts.addressbooks.as_deref();
     for book in &books {
-        if let Some(want) = only_named {
-            let matches = book
-                .display_name
-                .as_deref()
-                .map(|d| want.iter().any(|w| w == d))
-                .unwrap_or(false);
-            if !matches {
-                continue;
-            }
+        let named = book
+            .display_name
+            .as_deref()
+            .is_some_and(|d| opts.addressbooks.iter().any(|w| w == d));
+        if !opts.addressbooks.is_empty() && !named {
+            continue;
         }
         let book_id = addressbook_pk(&account_id, &book.href);
         let prev_token = db.sync_token(&book_id).await?.unwrap_or_default();
@@ -157,12 +142,45 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 /// absolute URL we hit for REPORTs (server URL + href, with the
 /// usual care around already-absolute hrefs).
 #[derive(Debug, Clone)]
-struct Book {
+pub(crate) struct Book {
     href: String,
     url: String,
-    display_name: Option<String>,
+    pub(crate) display_name: Option<String>,
     description: Option<String>,
     ctag: Option<String>,
+}
+
+/// What discovery and the addressbook listing found: everything a run
+/// needs before it syncs, and all a probe reports.
+pub(crate) struct Reached {
+    pub(crate) principal_url: String,
+    home_set_url: String,
+    pub(crate) books: Vec<Book>,
+}
+
+pub(crate) async fn reach(
+    server_url: &str,
+    summary: &mut FetchSummary,
+    latchkey: &LatchkeySettings,
+) -> Result<Reached> {
+    let (principal_url, home_set_url) = discover(server_url, summary, latchkey).await?;
+    info!(
+        event = "carddav_discovery",
+        principal = %principal_url,
+        addressbook_home_set = %home_set_url,
+        "discovered the principal and the addressbook home"
+    );
+    let books = list_addressbooks(&home_set_url, summary, latchkey).await?;
+    info!(
+        event = "carddav_addressbook_count",
+        n = books.len(),
+        "listed the addressbooks"
+    );
+    Ok(Reached {
+        principal_url,
+        home_set_url,
+        books,
+    })
 }
 
 async fn discover(

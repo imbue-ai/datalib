@@ -49,6 +49,12 @@ const CATALOG: &[Entry] = &[
     e("calendar", None, "Calendar", Some("calendar")),
     e(
         "contacts",
+        Some("fastmail"),
+        "Fastmail Contacts",
+        Some("fastmail"),
+    ),
+    e(
+        "contacts",
         Some("carddav"),
         "CardDAV contacts",
         Some("contacts"),
@@ -144,6 +150,10 @@ mod tests {
         assert_eq!(
             source_type("claude", &json!({"export": {"path": "x"}})).label,
             "Claude export"
+        );
+        assert_eq!(
+            source_type("contacts", &json!({"fastmail": {}})).label,
+            "Fastmail Contacts"
         );
         assert_eq!(
             source_type("contacts", &json!({"carddav": {"server_url": "x"}})).label,

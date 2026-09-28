@@ -145,7 +145,7 @@ async fn run(playback: &Path, store: &Path) -> ingest::FetchSummary {
         latchkey: LatchkeySettings::default(),
         db: db.clone(),
         server_url: format!("{HOST}/"),
-        addressbooks: Some(vec!["Bridge".to_string()]),
+        addressbooks: vec!["Bridge".to_string()],
         progress: Default::default(),
         control: Default::default(),
     })

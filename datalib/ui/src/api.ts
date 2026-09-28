@@ -1448,6 +1448,9 @@ export type LatchkeyService = {
   service: string;
   /// `browser`, `set`, … — which ways this service can be authenticated.
   auth_options: string[];
+  /// latchkey's own `auth set` command for this service, which knows
+  /// the credential's shape (`-H "Authorization: …"`, `-u user:pass`).
+  set_example: string | null;
   accounts: StoredAccount[];
   /// Whether latchkey knows this service at all. False means the name
   /// is free — the only state in which the wizard may register it.
@@ -1479,9 +1482,10 @@ export type ServiceRegistration = {
 /// datalib/backend/probe/src/lib.rs, hand-kept in step:
 /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
 /// downloadable, but never matched by the render-side filter),
-/// `conversation` (one chat thread — a Claude chat, a Slack DM) or
-/// `channel` (a Slack channel).
-export type ProbeItemKind = "mailbox" | "keyword" | "conversation" | "channel" | "calendar";
+/// `conversation` (one chat thread — a Claude chat, a Slack DM),
+/// `channel` (a Slack channel), `calendar` or `address_book`.
+export type ProbeItemKind =
+  "mailbox" | "keyword" | "conversation" | "channel" | "calendar" | "address_book";
 
 /// One row a probe offers a filter field. Mirrors `ProbeItem` in
 /// datalib/backend/probe/src/lib.rs.

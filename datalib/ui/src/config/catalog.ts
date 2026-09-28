@@ -85,7 +85,8 @@ export type Field =
 /// What a `probe:` field is a picker *of*: which of the probe's items
 /// it takes. The wizard says `labels` and `mailboxes` in the source's
 /// own word for them (`CatalogEntry.mailboxNoun`), the rest as written.
-export type ProbeNoun = "labels" | "mailboxes" | "conversations" | "channels" | "calendars";
+export type ProbeNoun =
+  "labels" | "mailboxes" | "conversations" | "channels" | "calendars" | "addressbooks";
 
 export type CatalogEntry = {
   /// The group's `type`: the thing mirrored (`slack`, `email`, …).
@@ -791,10 +792,45 @@ export const CATALOG: CatalogEntry[] = [
   // table, and a form for each, so no catch-all.
   {
     type: "contacts",
+    variantKey: "fastmail",
+    method: "fastmail",
+    label: "Fastmail Contacts",
+    blurb: "Mirror a Fastmail account's address books over CardDAV.",
+    keywords: ["fastmail", "contacts", "carddav", "vcard", "address book"],
+    kind: "api",
+    icon: "fastmail",
+    defaultName: "fastmail_contacts",
+    nameHint: "Personal contacts",
+    wizard: true,
+    // The app password Fastmail Calendar uses too: DAV refuses the OAuth
+    // login the `fastmail` mail entry holds.
+    credentialService: "fastmail-dav",
+    canProbe: true,
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Fastmail account",
+        help: "Which stored Fastmail app password to use. Leave it empty if latchkey holds only one.",
+      },
+      {
+        kind: "string_list",
+        probe: "addressbooks",
+        target: "fastmail.addressbooks",
+        label: "Only these address books",
+        help:
+          "Address book names exactly as Fastmail shows them, comma-separated. Empty mirrors " +
+          "every address book on the account.",
+      },
+    ],
+  },
+  {
+    type: "contacts",
     variantKey: "carddav",
     label: "CardDAV contacts",
-    blurb: "Mirror the address books on a CardDAV server: iCloud, Fastmail, Google, ….",
-    keywords: ["contacts", "carddav", "icloud", "fastmail", "vcard", "address book"],
+    blurb: "Mirror the address books on any CardDAV server: iCloud, Nextcloud, Radicale, ….",
+    keywords: ["contacts", "carddav", "icloud", "nextcloud", "vcard", "address book"],
     kind: "api",
     icon: "contacts",
     defaultName: "contacts",
@@ -803,6 +839,7 @@ export const CATALOG: CatalogEntry[] = [
     // No `credentialService`, for the reason CalDAV has none: latchkey
     // keys the login by the server's host, and registering one takes an
     // app password, which the Connect flow cannot do.
+    canProbe: true,
     fields: [
       {
         kind: "text",
@@ -810,11 +847,10 @@ export const CATALOG: CatalogEntry[] = [
         target: "carddav.server_url",
         label: "Server URL",
         help:
-          "Where the server's CardDAV starts, e.g. https://contacts.icloud.com/ or " +
-          "https://carddav.fastmail.com/. The host alone is usually enough: discovery tries " +
-          "/.well-known/carddav when it does not answer. The login is latchkey's: " +
-          "`latchkey services register` a service for this host, then " +
-          '`latchkey auth set <service> -u "you@example.com:<app password>"`.',
+          "Where the server's CardDAV starts, e.g. https://contacts.icloud.com/. The host " +
+          "alone is usually enough: discovery tries /.well-known/carddav when it does not " +
+          "answer. The login is latchkey's: `latchkey services register` a service for this " +
+          'host, then `latchkey auth set <service> -u "you@example.com:<app password>"`.',
       },
       {
         kind: "text",
@@ -824,11 +860,12 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "string_list",
+        probe: "addressbooks",
         target: "carddav.addressbooks",
         label: "Only these address books",
         help:
-          "Address book names as the server shows them, comma-separated. Empty mirrors " +
-          "every address book on the account.",
+          "Address book names exactly as the server shows them, comma-separated. Empty " +
+          "mirrors every address book on the account.",
       },
     ],
   },

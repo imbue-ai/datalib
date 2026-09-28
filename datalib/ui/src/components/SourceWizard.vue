@@ -506,6 +506,7 @@ async function loadAccounts() {
     const info = await latchkeyService(name);
     accounts.value = info.accounts;
     authOptions.value = info.auth_options;
+    setExample.value = info.set_example ?? null;
     serviceRegistered.value = info.registered;
     latchkeyCli.value = info.cli;
     gateway.value = info.gateway;
@@ -540,6 +541,15 @@ const canConnect = computed(
 const setOnlyService = computed(
   () => !gateway.value && serviceRegistered.value && !authOptions.value.includes("browser"),
 );
+
+/// latchkey's example for this service knows the credential's shape —
+/// `fastmail-dav` takes `-u user:password`, not a header. A service
+/// registered by hand may have none, and gets the generic header form.
+const setExample = ref<string | null>(null);
+const setCommand = computed(() => {
+  const example = setExample.value ?? `latchkey auth set ${service.value} -H "…"`;
+  return example.replace(/^latchkey /, `${latchkeyCli.value} `);
+});
 
 /// Set by the button on a service latchkey holds without a browser
 /// login: converting one means taking it apart and putting it back,
@@ -709,6 +719,7 @@ const PROBE_KINDS: Record<ProbeNoun, ProbeItemKind[]> = {
   conversations: ["conversation"],
   channels: ["channel"],
   calendars: ["calendar"],
+  addressbooks: ["address_book"],
 };
 
 /// What a `probe:` field should offer, given what came back.
@@ -760,6 +771,7 @@ function unknownValues(field: Field): string[] {
 /// account has conversations and a Slack workspace channels.
 function probeNoun(probe: ProbeNoun): string {
   if (probe === "labels" || probe === "mailboxes") return chosen.value?.mailboxNoun ?? "folders";
+  if (probe === "addressbooks") return "address books";
   return probe;
 }
 
@@ -770,6 +782,7 @@ const KIND_NOUNS: Record<ProbeItemKind, ProbeNoun> = {
   conversation: "conversations",
   channel: "channels",
   calendar: "calendars",
+  address_book: "addressbooks",
 };
 
 /// What the probe came back with, counted by kind: "3 channels, 2
@@ -992,7 +1005,7 @@ function submit() {
                registered without a browser login. -->
           <p v-if="setOnlyService" class="wiz-help wiz-conn-note">
             <code>{{ service }}</code> has no browser login, so its credential is pasted:
-            <code>latchkey auth set {{ service }} -H "…"</code>
+            <code>{{ setCommand }}</code>
           </p>
           <p v-if="connect.state !== 'idle'" class="wiz-help wiz-conn-note">
             {{ connect.message }}
