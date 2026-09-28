@@ -329,33 +329,80 @@ export async function pickRowMenu(
   });
 }
 
-/// A row's status. The column paints an icon, so the state is the
-/// icon's accessible name — the same word a person gets by hovering.
-/// Null while the cell is mid-repaint or the row is virtualized away.
-export async function statusOf(page: Page, id: string): Promise<string | null> {
-  const el = pipelineRow(page, id).locator('[col-id="status"] [role="img"]');
-  if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("aria-label");
+/// One drawing of a Pipeline row: every cell a spec reads, taken in one
+/// pass over the DOM so no two values come from different paints. The
+/// server sends a row with its config and the loop's record already
+/// joined, so in a drawn row a null means the value is really absent.
+export type RowReading = {
+  /// The status icon's accessible name — the word a person gets by
+  /// hovering.
+  status: string;
+  /// The exact instants, off the stamp cells' `title`. Not the visible
+  /// "5 minutes ago", which drifts on its own. Null: the step never ran
+  /// (or never succeeded), and the cell shows "—".
+  lastSynced: string | null;
+  lastSuccess: string | null;
+  /// The Bytes label over the sparkline, as drawn. Null: nothing on disk.
+  disk: string | null;
+  /// The Activity chips' title; "" when there are none.
+  activity: string;
+};
+
+/// How long a row may take to be drawn: a remount fetches the rows after
+/// the shell has painted.
+export const ROW_DRAWN = 15_000;
+
+/// A row as drawn right now, or null while it is not drawn: its group is
+/// closed, the page is remounting, or the grid is repainting it. Only for
+/// a poll that treats the null as "not yet"; everything else reads
+/// through `readRow`, which waits it out.
+export async function sampleRow(page: Page, id: string): Promise<RowReading | null> {
+  const [reading] = await pipelineRow(page, id).evaluateAll((rows) =>
+    rows.slice(0, 1).map((row) => {
+      const status = row
+        .querySelector('[col-id="status"] [role="img"]')
+        ?.getAttribute("aria-label");
+      if (!status) return null;
+      const stamp = (col: string) =>
+        row.querySelector(`[col-id="${col}"] [title]`)?.getAttribute("title") ?? null;
+      return {
+        status,
+        lastSynced: stamp("last_synced"),
+        lastSuccess: stamp("last_success"),
+        disk: row.querySelector('[col-id="disk"] .tg-plot-label')?.textContent?.trim() ?? null,
+        activity: row.querySelector('[col-id="activity"] .tg-chips')?.getAttribute("title") ?? "",
+      };
+    }),
+  );
+  return reading ?? null;
 }
 
-/// The exact instant a row last ran, off the Last-synced cell's
-/// `title`. Not the visible text, which reads "5 minutes ago" and
-/// drifts on its own — comparing that across a sync would compare two
-/// clocks rather than two records. Null for a row that has never run,
-/// which renders "—" with no title to read.
+/// A row once it is drawn. Returns the reading the wait matched, never a
+/// fresh read, which could land on the next repaint.
+export async function readRow(page: Page, id: string, timeout = ROW_DRAWN): Promise<RowReading> {
+  let reading: RowReading | null = null;
+  await expect
+    .poll(async () => (reading = await sampleRow(page, id)) !== null, {
+      timeout,
+      intervals: [100, 200],
+      message: `${id} was never drawn: is its group open?`,
+    })
+    .toBe(true);
+  return reading!;
+}
+
+export async function statusOf(page: Page, id: string): Promise<string> {
+  return (await readRow(page, id)).status;
+}
+
+/// Null only for a row that has never run.
 export async function stampOf(page: Page, id: string): Promise<string | null> {
-  return stampIn(page, id, "last_synced");
+  return (await readRow(page, id)).lastSynced;
 }
 
-/// `stampOf` for the Last-success cell.
+/// Null only for a row that has never succeeded.
 export async function lastSuccessOf(page: Page, id: string): Promise<string | null> {
-  return stampIn(page, id, "last_success");
-}
-
-async function stampIn(page: Page, id: string, column: string): Promise<string | null> {
-  const el = pipelineRow(page, id).locator(`[col-id="${column}"] [title]`);
-  if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("title");
+  return (await readRow(page, id)).lastSuccess;
 }
 
 /// States a run will not move a step out of.
@@ -451,25 +498,6 @@ export async function statusLog(page: Page, id: string): Promise<string[]> {
   }, id);
 }
 
-/// A row's status and Last-synced stamp, read from one paint of it. Read
-/// one after the other, the two can come from different paints: a sync
-/// the loop takes on at once can finish between the reads, and "Stopped"
-/// from before it beside the stamp it just wrote reads as that sync
-/// having stopped.
-async function statusAndStampOf(
-  page: Page,
-  id: string,
-): Promise<{ status: string | null; stamp: string | null }> {
-  const [reading] = await pipelineRow(page, id).evaluateAll((rows) =>
-    rows.slice(0, 1).map((row) => ({
-      status:
-        row.querySelector('[col-id="status"] [role="img"]')?.getAttribute("aria-label") ?? null,
-      stamp: row.querySelector('[col-id="last_synced"] [title]')?.getAttribute("title") ?? null,
-    })),
-  );
-  return reading ?? { status: null, stamp: null };
-}
-
 /// Wait for a row to finish a run newer than the one it was showing.
 async function settleRowOnly(
   page: Page,
@@ -481,9 +509,13 @@ async function settleRowOnly(
   await expect
     .poll(
       async () => {
-        const reading = await statusAndStampOf(page, id);
-        last = reading.status ?? "(no status)";
-        const stamp = reading.stamp;
+        // Status and stamp from one paint: read apart, "Stopped" from
+        // before a sync beside the stamp that sync just wrote reads as
+        // the sync having stopped.
+        const reading = await sampleRow(page, id);
+        if (!reading) return "(not drawn)";
+        last = reading.status;
+        const stamp = reading.lastSynced;
         return TERMINAL.test(last) && stamp !== before ? "finished" : `${last} @ ${stamp}`;
       },
       {
@@ -552,18 +584,7 @@ export async function settleRows(
   const out: Record<string, string> = {};
   for (const id of ids) out[id] = await settleRowOnly(page, id, before[id] ?? null, timeout);
   await settleRunner(page, timeout);
-  // The remount paints the shell first and the rows after it; a caller
-  // reading a settled row straight away would read it on the way to
-  // being painted, and see nothing.
-  for (const id of ids) {
-    await expect
-      .poll(() => statusOf(page, id), {
-        timeout,
-        intervals: [200],
-        message: `${id} was not painted again after the remount`,
-      })
-      .not.toBeNull();
-  }
+  for (const id of ids) await readRow(page, id, timeout);
   return out;
 }
 

@@ -23,6 +23,7 @@ import {
   groupRow,
   pickRowMenu,
   pipelineRow as row,
+  readRow,
   rowMenuEntry,
   settleRow,
   settleRunner,
@@ -155,9 +156,9 @@ async function untilStarted(page: Page, id: string, before: string | null, timeo
   await expect
     .poll(
       async () => {
-        const status = await statusOf(page, id);
+        const { status, lastSynced } = await readRow(page, id);
         if (status === "Running") return "started";
-        const finished = status === "Succeeded" && (await stampOf(page, id)) !== before;
+        const finished = status === "Succeeded" && lastSynced !== before;
         return finished ? "started" : status;
       },
       { timeout, intervals: [200], message: `${id} never started` },

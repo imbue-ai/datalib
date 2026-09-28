@@ -804,24 +804,14 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     await writeConfigAndOpenGroups(page, bumped);
     await expect(btn).toBeEnabled();
     await expect(btn).toHaveAttribute("title", /^Out of date.*sync pdfs\/ingest/);
-    // The download ran above, so a null stamp is a row not painted yet:
-    // the page paints its rows after the shell a remount waits for. The
-    // stamp returned is the one the poll matched, not a fresh read.
-    const downloadStamp = async () => {
-      let stamp: string | null = null;
-      await expect
-        .poll(async () => (stamp = await lastSyncedOf(page, "pdfs/ingest")), {
-          message: "pdfs/ingest was never painted",
-        })
-        .not.toBeNull();
-      return stamp;
-    };
-    const downloaded = await downloadStamp();
-    const before = await stampsBefore(page, [render]);
+    const before = await stampsBefore(page, ["pdfs/ingest", render]);
+    expect(before["pdfs/ingest"], "the download ran above").not.toBeNull();
     await btn.click();
     await settleRow(page, render, before[render]);
     await settleRunner(page);
-    expect(await downloadStamp(), "the download ran too").toBe(downloaded);
+    expect(await lastSyncedOf(page, "pdfs/ingest"), "the download ran too").toBe(
+      before["pdfs/ingest"],
+    );
     await expect(btn).toBeDisabled();
   });
 });
