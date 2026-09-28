@@ -26,42 +26,39 @@ restarted and minted a new one.
 
 ## The model
 
-The UI is a stack of columns; each column is a **card** defined by a
-small JS expression (its "source"). The source is evaluated with a set
-of **view factories** in scope and must return a `CardRender`:
+The UI is a stack of **cards**. Each card has a **card source**: one
+JavaScript expression, evaluated as `return (<source>)` with the builtin
+view factories (`gridView`, `documentView`, …) and `comp` in scope. It
+must produce a `CardRender`:
 
 ```js
 // a CardRender owns a shadow root and returns a teardown
 type CardRender = (root: ShadowRoot, ctx: CardCtx) => (() => void);
 ```
 
-A **component alias** is a named, reusable view factory — a function
-that takes arguments and returns a `CardRender`, exactly like the
-builtin `gridView` / `documentView`:
+A **component** is a named factory — a function that takes arguments
+and returns a `CardRender`. Yours live in the `user` namespace, and a
+card calls one as `comp.user.<aliasName>(…)`. The card your wayfinder
+points at has source `comp.user.<aliasName>()`, and it re-renders
+whenever you save the component.
+
+A component is stored as an **ES module whose default export is the
+factory**:
 
 ```js
-// the value an alias must evaluate to: a factory
-(args) => (root, ctx) => {
+export default (args) => (root, ctx) => {
   root.innerHTML = "<h1>hello</h1>";
   return () => {};            // teardown: undo anything global
 };
 ```
 
-The card that points at your alias has source `<aliasName>()`. Whenever
-you overwrite the alias, that card re-renders automatically.
-
 ## What you do
 
-1. **Write a factory.** Either inline JS (an expression that evaluates
-   to a factory function), or — for anything non-trivial — author it in
-   TypeScript with npm deps and **bundle to a single ES-expression**
-   (e.g. `esbuild app.ts --bundle --format=iife --minify` wrapped so the
-   whole thing evaluates to the factory).
-
-   The stored source is evaluated as `return (<source>)`, so it must be
-   exactly **one expression**: no statements, no module
-   `import`/`export`, and **no trailing semicolon** — end with `… }`,
-   never `… };`.
+1. **Write the module.** Plain JS is fine; for anything non-trivial,
+   author it in TypeScript with npm deps and bundle it to one
+   self-contained ES module (e.g. `esbuild app.ts --bundle
+   --format=esm --minify`). It is served from a flat store, so a
+   relative `import` cannot resolve.
 
    When the wayfinder asks you to **modify** an existing component,
    start from its current source: `GET <origin>/api/lib/<aliasName>`
@@ -73,27 +70,30 @@ you overwrite the alias, that card re-renders automatically.
    curl -X PUT "<origin>/api/lib/<aliasName>" \
      -H "Authorization: Bearer $TOKEN" \
      -H 'content-type: application/json' \
-     -d "$(jq -Rs '{source: .}' < factory.js)"
+     -d "$(jq -Rs '{source: .}' < component.js)"
    ```
 
-   `<origin>` is the base URL in your wayfinder (e.g.
-   `http://127.0.0.1:5173`). Re-PUT to iterate; each PUT live-reloads the
-   card.
+   `<origin>` is the base URL in your wayfinder. Re-PUT to iterate;
+   each PUT live-reloads the card.
 
 3. **Look at the result.** The card lives at the column URL in your
-   wayfinder. Render it headlessly and inspect the screenshot:
+   wayfinder. Render it headlessly and inspect the screenshot (this
+   needs a datalib checkout with `pnpm install` run in `datalib/ui`):
 
    ```sh
    node datalib/ui/scripts/render.mjs '<cardUrl>' --out /tmp/card.png \
      --token "$TOKEN"
-   # prints JSON: { consoleErrors, cardErrors } — check these for failures
+   # prints JSON: { url, out, consoleErrors, cardErrors }; exits non-zero if either is non-empty
    ```
 
    Open `/tmp/card.png` to see what the user sees. Iterate on 1–3 until
    it looks right.
 
-## Rules for the factory
+## Rules for the component
 
+- **It sees only browser globals.** The module is imported, not
+  evaluated as card source: `gridView`, `comp` and other components are
+  not in scope inside it.
 - **Shadow DOM isolation.** Your `root` is a shadow root. Document-head
   CSS does not reach it — inject any styles into `root` yourself. The
   app's `--datalib-*` theme CSS custom properties *do* inherit across the
@@ -102,43 +102,36 @@ you overwrite the alias, that card re-renders automatically.
 - **Set a title.** Call `ctx.setTitle("…")` first thing in your render
   (and again if a better title emerges later, e.g. after a fetch) —
   it's what the card's chrome bar shows outside dev mode. Skipping it
-  falls back to the alias name.
-- **Other aliases are in scope** by name: if your factory references
-  another alias `bar`, that's a live dependency and the card re-renders
-  when `bar` changes too. The builtins `gridView` and `documentView` are
-  always in scope.
+  falls back to one derived from the card source.
+- **Offer help.** `ctx.setHelp("<p>…</p>")` puts a "?" on the card
+  that opens what this card shows and how to work it.
 - **Data** comes from the backend HTTP API (same origin): e.g.
   `GET /applet/unified_index/search?q=…`, `GET /applet/unified_index/chat/{markdown_uuid}`. Fetch with
-  relative paths — and *don't* add an auth header in card code. The
+  relative paths — and *don't* add an auth header in component code. The
   browser holds the token as an HttpOnly session cookie it sends
   automatically; the token is deliberately not reachable from page JS.
 
-## Composing existing components
-
-```js
-// an alias that wraps the builtin grid, pre-filtered
-(q) => gridView({ q })
-```
+A pre-filtered grid needs no component at all: a card whose source is
+`gridView({ q: "…" })` is one.
 
 ## Publishing to the new-card gallery
 
-The UI's "new card" gallery lists parameter-less components with a
-short description. To make your component appear there, include a
-`description` — and a human-readable `title`, which listings show
-instead of the bare alias name — in the PUT body:
+The UI's "new card" gallery lists every component that has a `title`.
+Include a `title` and a one-line `description` in the PUT body:
 
 ```sh
 curl -X PUT "<origin>/api/lib/<aliasName>" \
   -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
-  -d "$(jq -Rs '{source: ., title: "Nice name", description: "One line on what this shows."}' < factory.js)"
+  -d "$(jq -Rs '{source: ., title: "Nice name", description: "One line on what this shows."}' < component.js)"
 ```
 
-A described component **must work when invoked with no arguments** —
-the gallery creates it as `<aliasName>()`. Omitting `title` /
-`description` on a later PUT keeps the stored values; sending `""`
-clears one (clearing the description removes the component from the
-gallery).
+The gallery calls the component with the PUT's `component_args` (a
+JSON array, default `[]`), so a listed component **must work when
+called with those arguments** — with none, unless you set them.
+Omitting `title`, `description` or `component_args` on a later PUT
+keeps the stored value; sending `""` clears a title or description
+(clearing the title takes the component out of the gallery).
 
 ## Giving your component a real name
 
@@ -152,9 +145,8 @@ curl -X POST "<origin>/api/lib/card_a1b2c3/rename" \
   -d '{"new_name": "myNiceName"}'
 ```
 
-The new name must be a valid JS identifier (≤64 ASCII chars), must not
-already be taken (409), and must not be one of the builtin view names
-(`gridView`, `documentView`, …). Cards that still reference the old
-name repoint themselves automatically — the store leaves a redirect
-behind, and the UI rewrites card source when it sees it. Rename last,
-after your final PUT: further saves must target the new name.
+The new name must be a valid JS identifier (≤64 ASCII chars) and must
+not already be taken (409). Cards that still reference the old name
+repoint themselves automatically — the store leaves a redirect behind,
+and the UI rewrites card source when it sees it. Rename last, after
+your final PUT: further saves must target the new name.

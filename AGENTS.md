@@ -166,12 +166,14 @@ datalib/
                    `datalib_schema` sits here or above.
     etl/timeseries_render/ what the time-series render crates share.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
-                   (config schema) per provider. Ten of the file-backed
-                   ones scan a local tree through etl/src/fsscan.rs
-                   (fsindex has its own walker over etl/src/fswalk.rs);
-                   four mirror a SQLite file through etl/sqlite_mirror/;
-                   two are sensor time series. fsindex, media, lightroom and apple_photos
-                   have no <p>_render.
+                   (config schema) per provider. Twelve of the
+                   file-backed ones scan a local tree through
+                   etl/src/fsscan.rs (claude_code and codex by way of
+                   etl/agent_sessions/; fsindex has its own walker over
+                   etl/src/fswalk.rs); four mirror a SQLite file through
+                   etl/sqlite_mirror/; three render time series
+                   (airvisual, yolink, garmin). fsindex, media, lightroom
+                   and apple_photos have no <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
     probe/         the "Test connection" report shape, alone.
@@ -195,20 +197,23 @@ datalib/
                    them. Linked by datalib-step and datalib-applet —
                    never by datalib-http or datalib-dag.
     applets/       `datalib-applet`: the applet host.
-    history/       a doltlite store's commit log, third-party deps only,
-                   so datalib-http can serve it without linking `etl`.
+    history/       a doltlite store's commit log; its one first-party dep
+                   is `pin`, so datalib-http can serve it without
+                   linking `etl`.
     http/          `datalib-http`: API server + sync loop + UI host +
                    applet gateway. Every route is behind a per-process
                    API token (src/auth.rs): read
                    `<root>/system/api-token`, send
                    `Authorization: Bearer <token>`.
     schema/        `grid_rows`/`edges`/`markdowns` row structs;
-    app_schema/    feedback/usage/runs; both derive DDL via
-                   `#[derive(PortableTable)]`.
+    app_schema/    feedback, disk usage, remote media, runs; both derive
+                   DDL via `#[derive(PortableTable)]`.
   ui/          Vue frontend; every grid is SlickGrid, kept behind a few
                files so it can be swapped (docs/dev/cards.md § The grid).
   tauri/       the desktop shell (out of Bazel).
-tests/fixtures/  TNG-themed source data + the cached `ingested/` artifact.
+tests/fixtures/  the TNG fixture pipeline: it syncs the providers' TNG
+               source data (each kept in its provider's tests/fixtures/)
+               into the cached `ingested/` artifact.
 docs/          dev/ architecture notes; user/ guides; dev/plans/; assets/ images
                only the docs use (the README grid shares the UI's marks).
 third-party/   vendored upstream code.
@@ -264,8 +269,9 @@ A provider is three crates: `datalib_etl_<p>_config`, `datalib_etl_<p>`
 (fetches), and `datalib_etl_<p>_render` (markdown + `grid_rows`). The
 framework splits the same way — `datalib_etl` below, `datalib_etl_render`
 above. **The render schema stops at that line:** `datalib_schema` is
-reachable from render crates and from nothing on the ingest side, which
-Rust's acyclic crate graph enforces by itself.
+reachable from render crates and from nothing on the ingest side.
+Nothing in the build refuses an ingest crate that takes it; the
+measurement below is what notices.
 
 - **Anything an ingest needs lives on the ingest side.** The uuid recipes
   are minted during download and read again during render, so they
@@ -280,7 +286,7 @@ The measurement that checks it:
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
-77 at the last count. If that number climbs, something took a dependency
+73 at the last count. If that number climbs, something took a dependency
 it should not have.
 
 ## The grid_rows union table
@@ -327,7 +333,7 @@ The rules, none optional; the reasons and measurements are in
   second one a branch of its own does not rescue it — the two then
   contend for the file instead (measured; `etl/README.md`). The
   `grid_index` step owns the index; `datalib-http`
-  owns feedback, jobs and usage; the applet only reads. A download takes
+  owns feedback, usage and remote media; the applet only reads. A download takes
   its store as an input (`FetchOptions.db: RawDb`) and never opens one.
 - **A writer works on `datalib_writer`, never on `main`**, and
   fast-forwards `main` when it seals, so a reader never sees a
@@ -347,9 +353,8 @@ The rules, none optional; the reasons and measurements are in
   the real one's seals (`etl/README.md`).
 - **A statement a reader adds is presumed guilty until
   `doltlite_two_process_test` has run with it.** Looking like a read is
-  not enough: `dolt_status` from a read-only connection failed the
-  writer's commit and lost its rows until doltlite 0.50.10 (#400); the
-  test now holds it safe. The allowlist is in `etl/README.md`.
+  not enough; `etl/README.md` has the allowlist and the statement that
+  once lost a writer's rows.
 - **Never run a store call on a runtime you are about to drop**;
   `indexed_markdown::blocking` keeps one process-wide runtime for that.
 
@@ -619,7 +624,9 @@ log when it fires.
 
 **An error or a warning about a record goes through `problems`, never
 only to the log.** A record a download could not fetch goes through
-`record_object_attempt` / `record_object_error`; a configured entry
+`record_object_attempt` / `record_object_error`, or through
+`download_problems::report_records` when it failed before we had a row
+for it; a configured entry
 upstream does not have goes through `download_problems::report`, and
 a listing or phase the run could not do as a whole through
 `download_problems::report_run`; a record render could not fully

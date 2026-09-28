@@ -5,19 +5,15 @@ folder must offer a native OS picker dialog — not a bare text box the
 user is expected to type a path into. The typed box stays, as a
 fallback and a paste target; it is not the primary way in.
 
-**Status (2026-08-28): built, for every path field that exists.** In
-the desktop app each `kind: "path"` field renders a **Choose folder… /
-Choose file…** button beside its input, wired to a real OS dialog. The
-three fields today — WhatsApp's backup folder, Signal's snapshot
-folder, Lightroom's `.lrcat` — all have one. In a plain browser the
-button is absent and the typed input is all there is; see
+In the desktop app every `kind: "path"` field in
+[`catalog.ts`](../../datalib/ui/src/config/catalog.ts) renders a
+**Choose folder… / Choose file…** button beside its input, wired to a
+real OS dialog. In a plain browser the button is absent and the typed
+input is all there is; see
 [below](#the-browser-served-case-is-still-typed-only) for why, and what
-would fix it.
-
-The count of path fields only goes up: over half the twenty source
-types read from local disk, so most descriptors still to be written
-will carry one. This doc is the rule for those, and the description of
-the machinery to reuse.
+would fix it. Most source types read from local disk, so most new
+wizard entries will carry a path field. This doc is the rule for those,
+and the machinery to reuse.
 
 ## Why a text box is the wrong control here
 
@@ -46,11 +42,10 @@ Three pieces, one per layer:
 
 1. **A Tauri capability** —
    [`capabilities/pick-local-paths.json`](../../datalib/tauri/capabilities/pick-local-paths.json)
-   grants `dialog:allow-open` to the `main` window. The Rust side
-   needed nothing new: `tauri-plugin-dialog` was already a dependency
-   and already registered in
-   [`main.rs`](../../datalib/tauri/src/main.rs), for the launcher's own
-   folder picker (`launcher_pick`).
+   grants `dialog:allow-open` (and nothing else from the dialog plugin)
+   to the `main` and `card-*` windows. `tauri-plugin-dialog` is
+   registered in [`main.rs`](../../datalib/tauri/src/main.rs), which
+   also uses it for the launcher's own folder picker (`launcher_pick`).
 2. **`pickPath()`** in
    [`ui/src/desktop.ts`](../../datalib/ui/src/desktop.ts) — calls the
    dialog through `@tauri-apps/plugin-dialog` and returns one of three
@@ -68,11 +63,10 @@ This app does not bundle its frontend: it serves the UI from
 from a remote origin unless a capability lists it. `http://127.0.0.1:*`
 without the trailing `/**` constrains the pathname to empty and matches
 no route. **An unmatched pattern denies the call silently** — a button
-that does nothing — so verify in the app, not in a browser tab. The
-same note is on
-[`reveal-local-files.json`](../../datalib/tauri/capabilities/reveal-local-files.json)
-and [`open-external-urls.json`](../../datalib/tauri/capabilities/open-external-urls.json),
-which is three capabilities that have each had to learn it.
+that does nothing — so verify in the app, not in a browser tab. Every
+capability in
+[`datalib/tauri/capabilities/`](../../datalib/tauri/capabilities/)
+that the UI reaches needs the same block.
 
 **Cancel and denial are different outcomes.** A caller that only gets
 `string | null` cannot tell "the user changed their mind" from "the
@@ -92,7 +86,7 @@ which in the browser-served case need not be the user's machine at all.
 The fix is a server-side browse endpoint (`GET /api/fs/browse`,
 sketched in [`source_wizard.md`](plans/source_wizard.md)) — the backend
 enumerating its own filesystem, which is the only party that can. It
-does not exist today. Until it does, a browser user types the path, and
+is not built. Until it is, a browser user types the path, and
 `pickPath` returns `unavailable` rather than pretending.
 
 ## Checklist for a new path field
@@ -134,16 +128,17 @@ during a sync days later".
 ## What the picker buys us in macOS permissions
 
 On macOS, choosing a path in the standard open panel grants the app
-access to it, and — measured on 2026-09-11 — that grant reaches the
-processes that do the reading. So the picker is a permissions fix as
-well as a typo fix, and for one source it is the *only* way in short of
-Full Disk Access.
+access to it, and (measured) that grant reaches the processes that do
+the reading. So the picker is a permissions fix as
+well as a typo fix, and for `apple_messages` and `apple_photos` it is
+the *only* way in short of Full Disk Access.
 
 What is established by reading the tree:
 
-- **The app is not sandboxed.** No `.entitlements` file exists;
-  `build-signed-app.sh` signs with Developer ID and `--options runtime`
-  (hardened runtime) and nothing more; `tauri.conf.json` sets no macOS
+- **The app is not sandboxed.** No `.entitlements` file exists for it;
+  `build-signed-app.sh` has Tauri sign with the Developer ID identity,
+  `tauri.conf.json`'s `beforeBuildCommand` signs the bundled binaries
+  with `--options runtime` (hardened runtime), and neither sets macOS
   entitlements. So the mechanism usually meant by this question —
   Powerbox handing a *sandboxed* app a grant for the user-selected
   file, persisted with a security-scoped bookmark — is not in play at
@@ -153,17 +148,18 @@ What is established by reading the tree:
   ask.
 - **TCC still applies.** Even unsandboxed, macOS gates `~/Desktop`,
   `~/Documents`, `~/Downloads`, iCloud Drive, removable/network
-  volumes, and a short list of application data stores — the one that
-  matters here is `~/Pictures/Photos Library.photoslibrary`, which the
-  `apple_photos` source reads. Phone backups land in the first group,
+  volumes, and a short list of application data stores — the ones that
+  matter here are `~/Pictures/Photos Library.photoslibrary`, which the
+  `apple_photos` source reads, and `~/Library/Messages`, which
+  `apple_messages` reads. Phone backups land in the first group,
   so typing `~/Documents/WhatsApp` into the field can earn an
   "Operation not permitted" that choosing the same folder would not.
 - **The picking process is not the reading process.** The panel opens
-  in the shell; the file is opened three processes down and much later:
+  in the shell; the file is opened further down and much later:
   `Datalib.app` → `datalib-http` (`tauri/src/main.rs`, `start_backend`),
-  whose loop spawns `datalib-step` (`dag/src/subprocess.rs`), when a sync
-  is queued rather than when the folder is chosen. TCC attributes a child to its responsible process,
-  normally the app.
+  whose loop spawns `datalib-step` (`dag/src/subprocess.rs`) when a sync
+  is queued rather than when the folder is chosen. TCC attributes a
+  child to its responsible process, normally the app.
 
 What was measured, against the Photos library — the most locked-down
 path any source here reads. The experiment used `osascript` under an
@@ -190,20 +186,3 @@ immediately when it fails, rather than during a sync days later.
 None of this reaches the CLI. `datalib-dag <config>` from a terminal is
 attributed to the terminal, which has its own grants or prompts for
 them; the app's consent is irrelevant there.
-
-## Corrections this doc made
-
-Two claims in the tree argued the other way, and were removed when this
-landed:
-
-- `catalog.ts` said the UI "has no Tauri IPC". It does —
-  `desktop.ts` and `externalLinks.ts` both invoke through it, each with
-  its own capability file. What was missing was a capability and an npm
-  package, not a bridge.
-- [`source_wizard.md`](plans/source_wizard.md)'s section on local-path
-  sources concluded "**a backend-served browse endpoint**, not a native
-  dialog", with the dialog as a later enhancement layered on top. That
-  ordering was inverted: in the app — which is how this ships, and how
-  nearly every user meets it — the native dialog is the primary
-  control. The browse endpoint remains the right answer for the
-  browser-served case, and still does not exist.

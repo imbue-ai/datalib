@@ -1,78 +1,68 @@
-# Slack Translate
+# Slack render
 
-The slack translate step is an in-process library (called from
-`datalib-sync`, no standalone bin) that reads the doltlite db at
-`<out>/ingest/<name>/entities.doltlite_db` (written by `slack-ingest`) and
-emits, per Slack thread, a `.md` under
-`<out>/render_markdown/slack/<team>/<channel>/threads/` plus that
-document's rows in the source's render store.
+The `render_markdown` step of a `slack` group reads the raw store its
+ingest wrote (`<data_root>/<group>/ingest/entities.doltlite_db`, described
+in [`../slack/INGEST.md`](../slack/INGEST.md)) and hands each thread to
+chat-common, which writes
+`<data_root>/<group>/render_markdown/<thread_uuid>/all.md` and the
+document's rows in `indexed_markdown.doltlite_db` beside it.
 
-## What is a "document"?
+What is shared with every chat source lives elsewhere: the markdown
+layout, the unread marker and `LAYOUT_VERSION` in
+[`chat-common/README.md`](../../chat-common/README.md); how render finds
+the threads that moved, in
+[`data_architecture_parse_and_render.md` §5](../../../../../docs/dev/data_architecture_parse_and_render.md#5-incrementality-and-deletion).
+This file covers what Slack adds.
 
-**A Slack thread is one document.** The thread root and all of its
-replies are grouped together; reactions, files, and edits are folded
-into that document's rows. This matches the ergonomic unit a human
-reader thinks of as "a conversation."
+## One thread, one document
 
-For each thread we emit:
+A thread's root and all of its replies are one document; reactions,
+files and edits fold into its items. A message that starts no thread is
+a thread of one. The grid rows are one `Slack Thread` row per document
+and one `Slack Message` row per message. The document is titled
+`#channel: <root snippet>`; a DM is named after the people in it
+(`@Jean-Luc Picard`), less the account itself.
 
-  * **One thread row** (`kind = "slack_thread"`) — `entire_chat` holds
-    the whole conversation rendered as CommonMark; `text` holds the
-    first message's text for search snippets.
-  * **N message rows** (`kind = "slack_message"`) — one per message,
-    with `message_index` set so the thread can be reassembled in order.
+`document_uuid` is `render::ids::thread` over the root's
+`(team_id, channel_id, ts)` under the configured source; a message's id
+carries its `ts` in its leading bits (`docs/dev/entity_ids.md`). The raw
+store keys messages and threads by `{team}#{channel}#{ts}`, the
+upstream's own key, never an entity id. The document's `external_id`
+is `{channel_id}#{thread_ts}` and its link is the thread's permalink.
 
-`document_uuid` is the thread's UUID, `render::ids::thread` over
-`(channel_id, thread_ts)` under the configured source and the
-workspace's `team_id`; a message's carries its `ts` in its leading bits
-(`docs/dev/entity_ids.md`). The raw store keys messages and threads by
-`{team}#{channel}#{ts}` — the upstream's own key, never an entity id.
+## mrkdwn
 
-## Markdown rendering
+`src/render/mrkdwn.rs` converts Slack's mrkdwn dialect to CommonMark:
 
-`mrkdwn.rs` converts Slack's mrkdwn dialect to CommonMark:
+- bold, italic, strike, code and blockquote, with Slack's boundary rules;
+- `<@U…>`, `<#C…|name>`, `<!subteam^…>`, `<!here>` / `<!channel>` /
+  `<!everyone>`, resolved against the workspace's users and channels;
+- `<https://…|label>` → `[label](url)`;
+- `:shortcode:` → unicode, through the `emojis` crate;
+- the three entities Slack escapes (`&amp;`, `&lt;`, `&gt;`).
 
-  * Bold/italic/strike/code/blockquote with Slack's quirky boundary
-    rules.
-  * `<@U…>` / `<#C…|name>` / `<!subteam^…>` / `<!here>` mention
-    resolution against the workspace user map.
-  * `<https://…|label>` link syntax → `[label](url)`.
-  * `:shortcode:` → unicode via the `emojis` crate.
-  * HTML entity decoding.
+## Unread messages
 
-`render.rs` composes those primitives into per-thread markdown with
-YAML frontmatter, then emits the document's rows.
+A top-level message is unread past its conversation's `last_read`; a
+reply, past its followed thread's own `last_read`. The account's own
+messages are never unread.
 
-## Incrementality
+Those marks are volatile, so a moved mark touches only a `_bookkeeping`
+table and the content diff never sees it. The scan in
+`src/render/parse.rs` therefore also reads
+`dolt_diff_channel_read_states_bookkeeping` and
+`dolt_diff_messages_bookkeeping`, and re-renders the threads whose root
+lies between a conversation's old and new `last_read`, or whose own
+thread mark moved. A thread that is unread on both sides of a move is
+left alone.
 
-Render asks the raw store `dolt_diff` from the commit the render
-cursor names and renders only the threads that moved. Every document
-it renders is written; an unchanged one writes identical rows, which
-doltlite's content-addressed tables store as no change, so the index
-never sees it.
+Bump [`RENDER_VERSION`](src/render/render.rs) when what this crate hands
+chat-common changes; the render step then re-renders every document.
 
-The read marks are the one input the content diff cannot see: they are
-volatile, so a moved mark touches only a `_bookkeeping` table. The scan
-therefore also reads `dolt_diff_channel_read_states_bookkeeping` and
-`dolt_diff_messages_bookkeeping` and renders the threads whose root lies
-between a conversation's old and new `last_read`, or whose own thread
-mark moved. A thread unread on both sides of a move is left alone.
+## Tests
 
-Bump [`RENDER_VERSION`](src/render/render.rs) when the on-disk render
-layout changes: the driver then re-renders every document. The shared
-chat layout has its own number, `LAYOUT_VERSION` in chat-common, which
-every chat provider declares through `render_params`.
-
-## Goldens
-
-The translator + renderer are pinned by insta snapshots against the
-TNG-themed fixture co-located at `tests/fixtures/slack_api/`. Run them
-with:
-
-```sh
-bazelisk test //datalib/backend/etl/providers/slack:slack_translate
-bazelisk test //datalib/backend/etl/providers/slack:slack_render
-```
-
-Both are tagged `manual` in Bazel because the fixture tree isn't in
-the bazel sandbox runfiles.
+The renderer is pinned by insta snapshots over the TNG fixture at
+`../slack/tests/fixtures/slack_api/`, in the `slack_render` and
+`slack_translate` modules of
+`//datalib/backend/etl/providers/slack:slack_tests`. Update them with
+`bazelisk run //datalib/backend/etl/providers/slack:slack_tests.update`.

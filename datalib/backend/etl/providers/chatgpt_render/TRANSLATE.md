@@ -1,73 +1,59 @@
-# ChatGPT Translate
+# ChatGPT render
 
-The chatgpt translate step is an in-process library (called from
-`datalib-sync`, no standalone bin) that reads the doltlite db at
-`<out>/ingest/<name>/entities.doltlite_db` (written by `chatgpt-ingest`) and
-emits, per ChatGPT conversation, a `.md` at
-`<out>/render_markdown/chatgpt/<account>/llm_chats/<conv>__<slug>.md` plus
-that document's rows in the source's render store
-(`<out>/render_markdown/indexed_markdown.doltlite_db`).
+The `render_markdown` step of a `chatgpt` group reads the raw store its
+ingest wrote (`<data_root>/<group>/ingest/entities.doltlite_db`, described
+in [`../chatgpt/INGEST.md`](../chatgpt/INGEST.md)) and hands each
+conversation to chat-common, which writes
+`<data_root>/<group>/render_markdown/<chat_uuid>/all.md` and the
+document's rows in `indexed_markdown.doltlite_db` beside it.
 
-The Load step is provider-agnostic and lives in
-`datalib_etl_render::grid_index`.
+What is shared with every chat source lives elsewhere: the markdown
+layout, the collapsed tool asides and `LAYOUT_VERSION` in
+[`chat-common/README.md`](../../chat-common/README.md); how render finds
+the conversations that moved, in
+[`data_architecture_parse_and_render.md` §5](../../../../../docs/dev/data_architecture_parse_and_render.md#5-incrementality-and-deletion).
+This file covers what ChatGPT adds.
 
-## What is a "document"?
+## One conversation, one document
 
-**One ChatGPT conversation is one document.** The conversation's
-`current_node → parent_id` chain is walked from the leaf to the root
-to recover the canonical reading order; orphans fall back to
-`create_time` sort. System messages and `model_editable_context`
-parts are filtered out — the rendered prose matches what a user sees
-in the web app.
+A conversation's `mapping` is a tree, because an edited prompt or a
+regenerated answer starts a branch. Render walks `current_node →
+parent` from the leaf to the root, so the page shows the branch the
+user last saw; a conversation with no usable chain falls back to
+`create_time` order. A message with no `create_time` takes the previous
+item's time plus 1 ms, and a null `created_at` when there is none.
 
-For each conversation we emit:
+Each message is one item, its `kind` decided by `(role, content_type)`
+in `render.rs`:
 
-  * **One Chat row** (`kind = "Chat"`) — points at the rendered
-    `.md` and carries the conversation title for snippet display.
-  * **N message rows** — one per surfaced message. `kind` is
-    `User Input` / `LLM Response` / `LLM Thinking` / `Tool Call`,
-    decided by `(role, content_type)`.
+| role | `kind` | aside |
+|---|---|---|
+| `user` | `User Input` | no |
+| `assistant`, `thoughts` / `reasoning_recap` content | `LLM Thinking` | no |
+| `assistant`, anything else | `LLM Response` (authored by `model_slug`) | no |
+| `tool`, `function` | `Tool Call` | yes |
+| anything else (`system`, …) | `Tool Call` | no |
 
-`document_uuid` is the upstream conversation UUID directly (no v5
-namespacing — ChatGPT's UUIDs are already globally unique).
+A message's body is its content parts in order: text as prose, `code`
+as a fence with its `language`, `execution_output` as a bare fence,
+`thoughts` / `reasoning_recap` as a blockquote. Attachments are
+materialized by chat-common from the ingest's `chatgpt_attachments`
+edges; an image is drawn inline.
 
-## Markdown rendering
+## Ids and links
 
-`render.rs` builds CommonMark with YAML frontmatter (`provider`,
-`id`, `title`, `account_id`, `create_time`, `update_time`,
-`default_model_slug`). Per message it emits:
+Ids are minted in `src/render/ids.rs` under `IdNamespace::Chatgpt`,
+scoped to the group, never ChatGPT's own ids passed through
+(`docs/dev/entity_ids.md`). The document keeps ChatGPT's conversation id
+as `external_id` and links back to `https://chatgpt.com/c/<id>`. The
+account is the login's email, from the `me` table.
 
-  * A `<div id="m-…" data-msg-index="N" class="msg msg--chatgpt">`
-    wrapper for anchor stability.
-  * `## <Role>` heading + italic `*timestamp · model_slug*` line.
-  * Per content part, a `<a id="b-…">` anchor and content-type-specific
-    rendering: text as prose, code as fenced blocks with `language`,
-    `execution_output` as bare fences, `thoughts`/`reasoning_recap`
-    as blockquotes with a leading `<!-- kind -->` HTML comment.
+Bump [`RENDER_VERSION`](src/render/render.rs) when what this crate hands
+chat-common changes; the render step then re-renders every document.
 
-The body is byte-stable against the Python `_render_one_openai`.
+## Tests
 
-## Incrementality
-
-Render asks the raw store `dolt_diff` from the commit the render
-cursor names and renders only the conversations that moved. Every document
-it renders is written; an unchanged one writes identical rows, which
-doltlite's content-addressed tables store as no change, so the index
-never sees it.
-
-Bump [`RENDER_VERSION`](src/render/render.rs) when the on-disk render
-layout changes: the driver then re-renders every document. The shared
-chat layout has its own number, `LAYOUT_VERSION` in chat-common, which
-every chat provider declares through `render_params`.
-
-## Goldens
-
-The renderer + grid_rows emitter are pinned by insta snapshots
-against the TNG-themed fixture at `tests/fixtures/chatgpt_api/`.
-
-```sh
-bazelisk test //datalib/backend/etl/providers/chatgpt:chatgpt_render
-```
-
-Tagged `manual` in Bazel — the fixture lives in `CARGO_MANIFEST_DIR`
-which the bazel sandbox doesn't surface in runfiles.
+The renderer is pinned by insta snapshots over the TNG fixture at
+`../chatgpt/tests/fixtures/chatgpt_api/`, in the `chatgpt_render` module
+of `//datalib/backend/etl/providers/chatgpt:chatgpt_tests`. Update them
+with `bazelisk run //datalib/backend/etl/providers/chatgpt:chatgpt_tests.update`.

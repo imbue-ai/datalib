@@ -1,20 +1,24 @@
 # GitLab Extract
 
-`gitlab-ingest` mirrors GitLab merge requests + their discussion
-threads via `gitlab.com/api/v4`. Same event-store JSONL layout as the
-other providers:
+`gitlab-ingest` mirrors GitLab merge requests and their discussion
+threads from `gitlab.com/api/v4` into one doltlite raw store,
+`<out>/entities.doltlite_db`. The sync loop — discovery, per-scope
+cursors, skipping unchanged items, pruning deleted children, `--full` —
+is the one GitHub uses; read [`../github/INGEST.md`](../github/INGEST.md)
+§"Incremental sync" for it. What differs is below.
 
-```
-<out>/
-  self_identity/{created,updated}/events.jsonl     # /user
-  merge_request/{created,updated}/events.jsonl     # /projects/.../merge_requests/{iid}
-  discussion/{created,updated}/events.jsonl        # /projects/.../merge_requests/{iid}/discussions
-  sync_state.json                                  # per-scope last-seen-at
-```
+| table | endpoint |
+|---|---|
+| `self_identity` | `/user` |
+| `merge_requests` | `/projects/{id}/merge_requests/{iid}` |
+| `discussions` | `/projects/{id}/merge_requests/{iid}/discussions` |
 
 GitLab discussions are natively threaded — each discussion record
-already carries its full `notes[]` array — so we store one record per
-discussion and let the translate stage unroll into per-note rows.
+already carries its full `notes[]` array — so the store keeps one row
+per discussion and render unrolls it into per-note rows. Before a
+payload is stored, a numeric `v=` parameter is stripped from every
+`avatar_url` (`src/ingest/canonicalize.rs`), so an avatar bump alone
+is not a change.
 
 ## Auth
 
@@ -23,27 +27,27 @@ One latchkey service: `gitlab` (PRIVATE-TOKEN). Latchkey injects the
 
 ## Discovery scopes
 
-`gitlab-ingest` runs each `--scope` (default: `created_by_me`,
-`assigned_to_me`, `reviewer`) against the global `/merge_requests`
-endpoint with `updated_after=<since>&state=all`. The `reviewer` scope
-expands to `reviewer_id={self.user_id}` since GitLab requires an
-explicit user id.
+Each `--scope` (default: `created_by_me`, `assigned_to_me`, `reviewer`)
+queries the global `/merge_requests` endpoint with
+`scope=<scope>&state=all&updated_after=<since>`. `reviewer` becomes
+`reviewer_id=<your user id>`, since GitLab has no reviewer scope.
 
-GitLab REST doesn't expose a "commenter:@me" or "mentions:@me" filter
-the way GitHub does. Coverage of incoming review pings comes from the
-author / assignee / reviewer trio; pure @mentions on third-party MRs
-would need `/todos?action=mentioned` (not currently fetched).
-
-## Incremental sync
-
-Same model as github: `<out>/sync_state.json` keeps `last_seen_at` per
-scope, `since_for_scope` floors to `now - refresh_window_days`, `--full`
-bypasses, empty out_dir forces full backfill.
+GitLab REST has no "commenter" or "mentions" filter the way GitHub
+does. Incoming review pings are covered by the author / assignee /
+reviewer trio; a bare @mention on someone else's MR would need
+`/todos?action=mentioned`, which is not fetched.
 
 ## Single-MR mode
 
-`--merge-request namespace/project!IID` (or a gitlab.com MR URL) skips
-discovery and pulls one MR + all its discussions.
+`--merge-request namespace/project!IID` (or a
+`https://gitlab.com/<project>/-/merge_requests/<iid>` URL; repeatable)
+skips discovery and pulls just those MRs and their discussions. The
+config's `api.merge_requests` list does the same.
+
+## Config
+
+The `api` block of a `gitlab` source (`gitlab_config`):
+`refresh_window_days`, `max_mrs`, `merge_requests`.
 
 ## Run it
 
@@ -52,5 +56,5 @@ bazelisk build //third-party/latchkey-curl-shims
 export LATCHKEY_CURL=$PWD/bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router
 bazelisk run //datalib/backend/etl/providers/gitlab:gitlab_ingest -- \
     --out /tmp/gitlab-mirror \
-    --merge-request generally-intelligent/generally_intelligent!7643
+    --merge-request <group>/<project>!<iid>
 ```
