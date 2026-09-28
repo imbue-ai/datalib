@@ -509,7 +509,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `datetime` | an ISO stamp that is the record's (when a message was sent) | the date and time it names; sorts on the instant |
 | `timeseries` | `{value, unit, samples, detail}` | the value and its change over the window, over a sparkline scaled to its own range |
 | `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset |
-| `status` | `{key, label, at, detail, fraction, segments}` | a glyph for the key, the reason on hover, a bar while running |
+| `status` | `{key, label, at, last_success_at, detail}` | a glyph for the key (a spinner while running), when it got there, the reason on hover |
 | `chips` | `[{kind, text, title}]` | a row of chips |
 | `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
 | `markdown_uuid` | a uuid or `{id, label}` | the title; click opens the document |

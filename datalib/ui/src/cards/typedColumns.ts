@@ -244,8 +244,14 @@ export function typedColumns<T extends Record<string, unknown>>(
       switch (spec.type) {
         case "identity": {
           const label = (v: unknown) => (v as Identity | null)?.label ?? "";
+          const badges = spec.badges;
           const inner: Formatter<T> = (_r, _c, _v, _col, row) =>
-            renderIdentity(row?.[f] as Identity | null, isTreeColumn, !!row?.__hasChildren);
+            renderIdentity(
+              row?.[f] as Identity | null,
+              isTreeColumn,
+              !!row?.__hasChildren,
+              badges ? { field: badges, chips: (row?.[badges] as Chip[] | null) ?? [] } : null,
+            );
           return {
             // The cell's value is the label: what sorting, filtering and
             // an in-place edit see. The object is read off the row.

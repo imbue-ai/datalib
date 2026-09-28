@@ -933,6 +933,9 @@ export type ColumnSpec = {
   // How the producer's search bar filters on this column: the key a term
   // starts with, and the row field holding the value it names.
   search?: { key: string; field: string };
+  // On an identity column: the row field of chips drawn after the label,
+  // as bare counts. Double-clicking them is a double-click on that field.
+  badges?: string;
 };
 
 /// Something resolved before it was sent: the id the producer joins on,
@@ -957,8 +960,6 @@ export type Timeseries = {
   detail?: string | null;
 };
 
-export type Segment = { id: string; key: string; label: string };
-
 /// One row's status, reduced to a vocabulary the Status column can
 /// draw. Mirrors `datalib_columns::Status`.
 export type StatusView = {
@@ -972,11 +973,6 @@ export type StatusView = {
   /// success"; older than `at` when the runs since have failed.
   last_success_at?: string | null;
   detail: string | null;
-  /// How far along, in [0, 1], while `key` is `running`.
-  fraction?: number | null;
-  /// For a status aggregating several things in flight: one segment
-  /// each, drawn as a bar instead of the glyph.
-  segments?: Segment[] | null;
 };
 
 export type ChipKind = "info" | "idle" | "metric" | "warning" | "error" | "ok";
@@ -1448,6 +1444,9 @@ export type LatchkeyService = {
   service: string;
   /// `browser`, `set`, … — which ways this service can be authenticated.
   auth_options: string[];
+  /// latchkey's own `auth set` command for this service, which knows
+  /// the credential's shape (`-H "Authorization: …"`, `-u user:pass`).
+  set_example: string | null;
   accounts: StoredAccount[];
   /// Whether latchkey knows this service at all. False means the name
   /// is free — the only state in which the wizard may register it.
@@ -1479,9 +1478,10 @@ export type ServiceRegistration = {
 /// datalib/backend/probe/src/lib.rs, hand-kept in step:
 /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
 /// downloadable, but never matched by the render-side filter),
-/// `conversation` (one chat thread — a Claude chat, a Slack DM) or
-/// `channel` (a Slack channel).
-export type ProbeItemKind = "mailbox" | "keyword" | "conversation" | "channel" | "calendar";
+/// `conversation` (one chat thread — a Claude chat, a Slack DM),
+/// `channel` (a Slack channel), `calendar` or `address_book`.
+export type ProbeItemKind =
+  "mailbox" | "keyword" | "conversation" | "channel" | "calendar" | "address_book";
 
 /// One row a probe offers a filter field. Mirrors `ProbeItem` in
 /// datalib/backend/probe/src/lib.rs.
@@ -1575,6 +1575,25 @@ export function startLatchkeyConnect(
       register: register ?? null,
       ephemeral_browser: ephemeralBrowser,
     }),
+  });
+}
+
+/// A credential pasted by hand. Mirrors `PastedCredential` in
+/// datalib/backend/http/src/connect.rs.
+export type PastedCredential =
+  { kind: "headers"; headers: string[] } | { kind: "basic"; username: string; password: string };
+
+/// Store a pasted credential with `latchkey auth set`. An empty account
+/// lets latchkey choose, which replaces the one it holds if it holds one.
+export function setLatchkeyCredential(
+  service: string,
+  account: string,
+  credential: PastedCredential,
+): Promise<{ ok: true }> {
+  return quietJson<{ ok: true }>(`/api/latchkey/${encodeURIComponent(service)}/credential`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ account, credential }),
   });
 }
 

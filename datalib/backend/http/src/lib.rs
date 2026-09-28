@@ -157,11 +157,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/config/init", post(init_config))
         // Credentials and connection testing for the Add-a-source
-        // wizard. See `connect.rs` — all three shell out, deliberately.
+        // wizard. See `connect.rs` — each shells out to latchkey or
+        // datalib-step, deliberately.
         .route("/api/latchkey/{service}", get(connect::get_service))
         .route(
             "/api/latchkey/{service}/connect",
             post(connect::start_connect),
+        )
+        .route(
+            "/api/latchkey/{service}/credential",
+            post(connect::set_credential),
         )
         .route(
             "/api/latchkey/connect/{id}/status",

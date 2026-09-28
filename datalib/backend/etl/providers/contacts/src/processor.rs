@@ -7,19 +7,19 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
-use datalib_etl_contacts_config::{CarddavSync, ContactsConfig};
+use datalib_etl_contacts_config::{ContactsConfig, ContactsMethod};
 
 use crate::ingest;
 
-/// Ingest wave: `carddav` → live CardDAV server; `vcf` → file mode
-/// (`.vcf` tree under its `path`, no account override).
+/// Ingest wave: `fastmail` or `carddav` → live CardDAV server; `vcf` →
+/// file mode (`.vcf` tree under its `path`, no account override).
 pub fn plan_ingest(
     ctx: PlanContext,
     config: ContactsConfig,
@@ -27,15 +27,21 @@ pub fn plan_ingest(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let latchkey = config.latchkey_settings.clone();
-    let mode = match (config.carddav, config.vcf) {
-        (Some(sync), _) => DownloadMode::Server(sync),
-        (None, Some(vcf)) => DownloadMode::File {
+    let mode = match config
+        .method()
+        .with_context(|| format!("contacts source {name}"))?
+    {
+        ContactsMethod::Carddav {
+            server_url,
+            addressbooks,
+        } => DownloadMode::Server {
+            server_url: server_url.to_string(),
+            addressbooks: addressbooks.to_vec(),
+        },
+        ContactsMethod::Vcf(vcf) => DownloadMode::File {
             input_path: vcf.path(),
             account_id_override: None,
         },
-        (None, None) => anyhow::bail!(
-            "contacts source {name} names neither `carddav` (a server) nor `vcf` (a directory of .vcf files)"
-        ),
     };
     Ok(vec![Box::new(ContactsIngest {
         id: format!("contacts/{name}/download"),
@@ -48,7 +54,10 @@ pub fn plan_ingest(
 /// Which download path contacts takes for this source.
 enum DownloadMode {
     /// Live CardDAV server sync.
-    Server(CarddavSync),
+    Server {
+        server_url: String,
+        addressbooks: Vec<String>,
+    },
     /// File-backed `.vcf` ingest (e.g. a Google/Fastmail export).
     File {
         input_path: PathBuf,
@@ -87,11 +96,14 @@ impl DataProcessor for ContactsIngest {
             .await;
 
         let summary = match &self.mode {
-            DownloadMode::Server(sync) => {
+            DownloadMode::Server {
+                server_url,
+                addressbooks,
+            } => {
                 let s = ingest::fetch(ingest::FetchOptions {
                     db,
-                    server_url: sync.server_url.clone(),
-                    addressbooks: sync.addressbooks.clone(),
+                    server_url: server_url.clone(),
+                    addressbooks: addressbooks.clone(),
                     latchkey: self.latchkey.clone(),
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),

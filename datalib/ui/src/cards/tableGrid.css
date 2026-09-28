@@ -22,7 +22,7 @@
 
 .tg-identity { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
 /* The label is what the eye lands on: the id beside it gives way first. */
-.tg-identity > span:first-of-type { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 4ch; }
+.tg-identity > .tg-label { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 4ch; }
 .tg-identity > .tg-id { flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* The tree cell: indent, chevron, then the column's own drawing, which
    gives way before the chevron does. One flex row, so the cell's own
@@ -40,6 +40,20 @@
   flex: 0 0 auto;
 }
 .tg-id { color: var(--datalib-muted); font-size: 12px; }
+/* Counts after a name: a red and a yellow bubble, the number alone. */
+.tg-badges { display: inline-flex; gap: 3px; flex: 0 0 auto; cursor: default; }
+.tg-badge {
+  min-width: 18px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+}
 
 /* The status vocabulary. Anything unstyled falls through to the default
    colour, which is right for a status this sheet hasn't met. */
@@ -73,48 +87,8 @@
 @keyframes tg-spin {
   to { transform: rotate(360deg); }
 }
-.tg-segs {
-  flex: 1 1 auto;
-  min-width: 20px;
-  display: flex;
-  gap: 1px;
-  height: 6px;
-}
-.tg-seg {
-  flex: 1;
-  background: color-mix(in srgb, var(--datalib-fg) 14%, transparent);
-}
-.tg-seg:first-child { border-radius: 3px 0 0 3px; }
-.tg-seg:last-child { border-radius: 0 3px 3px 0; }
-.tg-seg-succeeded,
-.tg-seg-skipped-up-to-date { background: var(--datalib-log-ok); }
-.tg-seg-failed { background: var(--datalib-log-error); }
-.tg-seg-interrupted,
-.tg-seg-stopped { background: var(--datalib-log-warn); }
-.tg-seg-blocked { background: var(--datalib-muted); }
-.tg-seg-running {
-  background: var(--datalib-accent);
-  animation: tg-seg-pulse 1s ease-in-out infinite;
-}
-@keyframes tg-seg-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
 @media (prefers-reduced-motion: reduce) {
-  .tg-spinner, .tg-seg-running { animation: none; }
-}
-.tg-progress {
-  flex: 1 1 auto;
-  min-width: 20px;
-  height: 4px;
-  border-radius: 2px;
-  background: color-mix(in srgb, currentColor 18%, transparent);
-  overflow: hidden;
-}
-.tg-progress > span {
-  display: block;
-  height: 100%;
-  background: currentColor;
+  .tg-spinner { animation: none; }
 }
 
 .tg-chips {

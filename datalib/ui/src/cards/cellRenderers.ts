@@ -136,36 +136,53 @@ export function renderIdentity(
   v: Identity | null | undefined,
   isTreeColumn: boolean,
   isParent: boolean,
+  badges: { field: string; chips: Chip[] } | null = null,
 ): HTMLElement {
   const wrap = document.createElement("span");
   wrap.className = "tg-identity";
   if (!v) return wrap;
+  // The icon leads, whether a brand mark or a role glyph; a glyph is
+  // muted so the name stays what the eye lands on.
   const icon = iconFor(v.icon, v.detail ?? v.label);
-  // A brand mark leads; a role glyph follows the name, muted, because
-  // the name is what the eye should land on and the glyph answers the
-  // follow-up question.
-  const brand = icon?.tagName === "IMG";
-  if (icon && brand) wrap.appendChild(icon);
-  const text = document.createElement("span");
-  text.textContent = v.label;
-  if (isParent) text.className = "tg-parent";
-  text.title = v.detail ? `${v.id} — ${v.detail}` : v.id;
-  wrap.appendChild(text);
-  if (icon && !brand) {
+  if (icon?.tagName === "IMG") wrap.appendChild(icon);
+  else if (icon) {
     const mark = document.createElement("span");
     mark.className = "tg-mark";
     mark.title = v.detail ?? "";
     mark.appendChild(icon);
     wrap.appendChild(mark);
   }
-  // The row's own id, where the column is the row's identity and the
-  // label hides it.
-  if (isTreeColumn && v.id !== v.label) {
+  const text = document.createElement("span");
+  text.textContent = v.label;
+  text.className = isParent ? "tg-label tg-parent" : "tg-label";
+  text.title = v.detail ? `${v.id} — ${v.detail}` : v.id;
+  wrap.appendChild(text);
+  if (badges?.chips.length) wrap.appendChild(renderBadges(badges.field, badges.chips));
+  // A tree parent's own id, where the label hides it. A child's is its
+  // parent's plus what its label and glyph already say, so it is left
+  // to the hover.
+  if (isTreeColumn && isParent && v.id !== v.label) {
     const id = document.createElement("span");
     id.className = "tg-id";
     id.textContent = v.id;
     id.title = `Id — stored in ${v.id}/ under the data root`;
     wrap.appendChild(id);
+  }
+  return wrap;
+}
+
+/// Counts drawn as bubbles after a label. `data-field` is what the grid
+/// reads to route a double-click on them to `field`.
+function renderBadges(field: string, chips: Chip[]): HTMLElement {
+  const wrap = document.createElement("span");
+  wrap.className = "tg-badges";
+  wrap.dataset.field = field;
+  for (const chip of chips) {
+    const el = document.createElement("span");
+    el.className = `tg-badge tg-chip-${chip.kind}`;
+    el.textContent = chip.text;
+    el.title = chip.title;
+    wrap.appendChild(el);
   }
   return wrap;
 }
@@ -206,28 +223,6 @@ export function renderStatus(s: StatusView | null | undefined): HTMLElement {
     when.textContent = formatRelative(s.at, Date.now());
     when.title = formatStamp(s.at);
     wrap.appendChild(when);
-  }
-  if (s.segments) {
-    // One segment per part, each in its own status colour, the running
-    // one pulsing. No arithmetic across parts; the bar *is* the parts.
-    const bar = document.createElement("span");
-    bar.className = "tg-segs";
-    for (const seg of s.segments) {
-      const cell = document.createElement("span");
-      cell.className = `tg-seg tg-seg-${seg.key.replace(/[\s_]+/g, "-")}`;
-      cell.title = `${seg.id}: ${seg.label}`;
-      bar.appendChild(cell);
-    }
-    wrap.appendChild(bar);
-  } else if (key === "running" && s.fraction != null) {
-    // A bar only when the thing said how much is ahead of it: a bar at
-    // an invented fraction claims more than we know.
-    const bar = document.createElement("span");
-    bar.className = "tg-progress";
-    const fill = document.createElement("span");
-    fill.style.width = `${s.fraction * 100}%`;
-    bar.appendChild(fill);
-    wrap.appendChild(bar);
   }
   return wrap;
 }

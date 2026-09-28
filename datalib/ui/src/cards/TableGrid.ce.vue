@@ -363,11 +363,22 @@ function writePath(item: unknown, field: string, value: unknown) {
   if (target && typeof target === "object") (target as Record<string, unknown>)[last] = value;
 }
 
-function onDblClick(_e: SlickEventData, args: OnDblClickEventArgs) {
+/// A part of a cell that names a field of its own (`data-field`, as the
+/// badges after a name do) answers a double-click as that field, and
+/// the cell's in-place edit does not open.
+function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
   if (!bundle) return;
   const row = bundle.dataView.getItem(args.row) as T | undefined;
   const column = bundle.slickGrid.getColumns()[args.cell];
-  if (row && column) emit("cellDoubleClick", row, String(column.id));
+  if (!row || !column) return;
+  const target = e.getNativeEvent<MouseEvent>()?.target;
+  const part = target instanceof Element ? target.closest<HTMLElement>("[data-field]") : null;
+  if (part?.dataset.field) {
+    e.preventDefault();
+    emit("cellDoubleClick", row, part.dataset.field);
+    return;
+  }
+  emit("cellDoubleClick", row, String(column.id));
 }
 
 function onTreeToggled(change: TreeToggleStateChange) {

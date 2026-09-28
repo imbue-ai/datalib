@@ -22,7 +22,7 @@ use std::path::Path;
 use axum::extract::{Query, State};
 use axum::Json;
 use datalib_columns::{
-    source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Sample, Segment, Timeseries,
+    source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Sample, Timeseries,
 };
 use datalib_dag::supervisor::record::StepRecord;
 use datalib_dag::supervisor::store::RequestRow;
@@ -102,16 +102,15 @@ impl Phase {
 pub fn columns() -> Vec<ColumnSpec> {
     vec![
         ColumnSpec::new("name", "Name", ColumnType::Identity)
-            .describe("What the config calls it, led by the mark of the service a source mirrors; its id — the folder under the data root — beside it when they differ.")
-            .editable(),
+            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does. A group's id — the folder under the data root — sits beside it when they differ; a step's is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) its store holds as of its last run; double-click them for the list.")
+            .editable()
+            .badges("problems"),
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
             .describe("Browse this row's data, and sync it \u{2014} or stop the sync in progress."),
         ColumnSpec::new("status", "Last update", ColumnType::Status)
             .describe("What it is doing now, or did last, and when it got there. Hover for why; double-click for the log."),
         ColumnSpec::new("activity", "Activity", ColumnType::Chips)
             .describe("What a running step has reported: what is queued ahead of it, what it has counted, and how fast."),
-        ColumnSpec::new("problems", "Problems", ColumnType::Chips)
-            .describe("Errors (records dropped) and warnings (records kept with something lost) the step's store holds, as of its last run. A green zero means it counted and found none; blank means it has never counted. Double-click for the list."),
         ColumnSpec::new("documents", "Documents", ColumnType::Count)
             .describe("How many documents this source holds \u{2014} the things Browse opens, whole store, as of its last render. Blank means it has never counted; a source that renders nothing counts zero."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp)
@@ -170,8 +169,9 @@ pub struct ManageRow {
     pub status_from: Option<String>,
     /// What the step has reported in the run in flight.
     pub activity: Vec<Chip>,
-    /// The errors and warnings its store holds — see `manage::problems`.
-    /// A group shows its render step's, the union for the source.
+    /// The errors and warnings its store holds, drawn after the name —
+    /// see `manage::problems`. A group shows its render step's, the
+    /// union for the source.
     pub problems: Vec<Chip>,
     /// Documents its store holds, as of the run it last counted in.
     /// `None` — drawn blank — for a row that has never counted, which
@@ -739,14 +739,15 @@ impl RowCtx<'_> {
     fn step_status(&self, id: &str, dropped: Option<&Diagnostic>) -> StatusView {
         let run = self.snap.record.run.as_ref().map(|r| r.run_id.as_str());
         let mut view = status::step_status(self.step(id), run, dropped);
-        // The step's own words and how far along it is, while it runs.
-        if let Some(p) = self.snap.record.progress.get(id) {
-            if let Some(msg) = &p.msg {
-                view.detail = Some(msg.clone());
-            }
-            if view.key == "running" {
-                view.fraction = activity::fraction(p);
-            }
+        // The step's own words, while it runs.
+        if let Some(msg) = self
+            .snap
+            .record
+            .progress
+            .get(id)
+            .and_then(|p| p.msg.as_ref())
+        {
+            view.detail = Some(msg.clone());
         }
         view
     }
@@ -1122,23 +1123,6 @@ impl RowCtx<'_> {
                 None,
             )
         };
-        // A group with a run in flight: one segment per step, in
-        // pipeline order, drawn as a bar instead of the glyph. No
-        // arithmetic across children; the bar *is* the children.
-        let in_flight = status.key == "running" || status.key == "queued";
-        if in_flight && !steps.is_empty() {
-            status.segments = Some(
-                steps
-                    .iter()
-                    .map(|c| Segment {
-                        id: c.id().to_string(),
-                        key: row_of(c.id()).status.key.clone(),
-                        label: row_of(c.id()).status.label.clone(),
-                    })
-                    .collect(),
-            );
-        }
-        status.fraction = None;
 
         // The folder the group's steps write into, measured as a tree
         // of its own by the usage walker — not the sum of two series

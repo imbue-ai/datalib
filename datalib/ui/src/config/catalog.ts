@@ -85,7 +85,8 @@ export type Field =
 /// What a `probe:` field is a picker *of*: which of the probe's items
 /// it takes. The wizard says `labels` and `mailboxes` in the source's
 /// own word for them (`CatalogEntry.mailboxNoun`), the rest as written.
-export type ProbeNoun = "labels" | "mailboxes" | "conversations" | "channels" | "calendars";
+export type ProbeNoun =
+  "labels" | "mailboxes" | "conversations" | "channels" | "calendars" | "addressbooks";
 
 export type CatalogEntry = {
   /// The group's `type`: the thing mirrored (`slack`, `email`, …).
@@ -146,6 +147,11 @@ export type CatalogEntry = {
   /// Shown beside the Connect button, when connecting this way costs
   /// something the person should decide about before clicking.
   credentialConnectWarning?: string;
+  /// The "Paste a credential" form. `help` says where the credential
+  /// comes from; `headers` replaces the shape latchkey's own example
+  /// gives, for a service whose example is wrong — `{secret}` marks
+  /// where the pasted value goes (see `credentialShape.ts`).
+  credentialPaste?: { help?: string; headers?: string[] };
   /// Dotted params path whose presence identifies this entry among the
   /// several that share one `type`. Undefined on a type with only one
   /// entry, which is nearly all of them.
@@ -297,6 +303,14 @@ export const CATALOG: CatalogEntry[] = [
     // cost, not the history of how we found out (2026-08-31, the
     // captured cookie and the everyday browser evicting each other).
     credentialConnectWarning: "Signing in again may log out your other claude.ai session.",
+    // latchkey offers a service it did not ship the generic Bearer
+    // example; claude.ai's credential is the cookie.
+    credentialPaste: {
+      headers: ["Cookie: sessionKey={secret}"],
+      help:
+        "The sessionKey cookie from a signed-in claude.ai tab: DevTools → Application → " +
+        "Cookies → https://claude.ai → sessionKey → Value.",
+    },
     canProbe: true,
     fields: [
       {
@@ -523,6 +537,14 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     canProbe: true,
     credentialService: "fastmail",
+    // Fastmail has no read-only OAuth scope, so the browser login can
+    // read, change and send mail; a hand-made token is the way to less.
+    credentialPaste: {
+      help:
+        "For read-only access, make an API token at app.fastmail.com → Settings → Privacy & " +
+        "Security → Integrations → API tokens, with Read-only access ticked, and paste it " +
+        "here. Latchkey auth signs in with full read and write access instead.",
+    },
     preset: [
       // The JMAP server. A preset rather than a field because this
       // entry *is* Fastmail — a different host is a different service
@@ -664,6 +686,11 @@ export const CATALOG: CatalogEntry[] = [
     // CalDAV takes an app password, which is its own latchkey service,
     // not the OAuth login the `fastmail` mail entry uses.
     credentialService: "fastmail-dav",
+    credentialPaste: {
+      help:
+        "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
+        "Privacy & Security → Integrations → App passwords, with calendar access.",
+    },
     canProbe: true,
     fields: [
       {
@@ -791,10 +818,50 @@ export const CATALOG: CatalogEntry[] = [
   // table, and a form for each, so no catch-all.
   {
     type: "contacts",
+    variantKey: "fastmail",
+    method: "fastmail",
+    label: "Fastmail Contacts",
+    blurb: "Mirror a Fastmail account's address books over CardDAV.",
+    keywords: ["fastmail", "contacts", "carddav", "vcard", "address book"],
+    kind: "api",
+    icon: "fastmail",
+    defaultName: "fastmail_contacts",
+    nameHint: "Personal contacts",
+    wizard: true,
+    // The app password Fastmail Calendar uses too: DAV refuses the OAuth
+    // login the `fastmail` mail entry holds.
+    credentialService: "fastmail-dav",
+    credentialPaste: {
+      help:
+        "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
+        "Privacy & Security → Integrations → App passwords, with contacts access.",
+    },
+    canProbe: true,
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Fastmail account",
+        help: "Which stored Fastmail app password to use. Leave it empty if latchkey holds only one.",
+      },
+      {
+        kind: "string_list",
+        probe: "addressbooks",
+        target: "fastmail.addressbooks",
+        label: "Only these address books",
+        help:
+          "Address book names exactly as Fastmail shows them, comma-separated. Empty mirrors " +
+          "every address book on the account.",
+      },
+    ],
+  },
+  {
+    type: "contacts",
     variantKey: "carddav",
     label: "CardDAV contacts",
-    blurb: "Mirror the address books on a CardDAV server: iCloud, Fastmail, Google, ….",
-    keywords: ["contacts", "carddav", "icloud", "fastmail", "vcard", "address book"],
+    blurb: "Mirror the address books on any CardDAV server: iCloud, Nextcloud, Radicale, ….",
+    keywords: ["contacts", "carddav", "icloud", "nextcloud", "vcard", "address book"],
     kind: "api",
     icon: "contacts",
     defaultName: "contacts",
@@ -803,6 +870,7 @@ export const CATALOG: CatalogEntry[] = [
     // No `credentialService`, for the reason CalDAV has none: latchkey
     // keys the login by the server's host, and registering one takes an
     // app password, which the Connect flow cannot do.
+    canProbe: true,
     fields: [
       {
         kind: "text",
@@ -810,11 +878,10 @@ export const CATALOG: CatalogEntry[] = [
         target: "carddav.server_url",
         label: "Server URL",
         help:
-          "Where the server's CardDAV starts, e.g. https://contacts.icloud.com/ or " +
-          "https://carddav.fastmail.com/. The host alone is usually enough: discovery tries " +
-          "/.well-known/carddav when it does not answer. The login is latchkey's: " +
-          "`latchkey services register` a service for this host, then " +
-          '`latchkey auth set <service> -u "you@example.com:<app password>"`.',
+          "Where the server's CardDAV starts, e.g. https://contacts.icloud.com/. The host " +
+          "alone is usually enough: discovery tries /.well-known/carddav when it does not " +
+          "answer. The login is latchkey's: `latchkey services register` a service for this " +
+          'host, then `latchkey auth set <service> -u "you@example.com:<app password>"`.',
       },
       {
         kind: "text",
@@ -824,11 +891,12 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "string_list",
+        probe: "addressbooks",
         target: "carddav.addressbooks",
         label: "Only these address books",
         help:
-          "Address book names as the server shows them, comma-separated. Empty mirrors " +
-          "every address book on the account.",
+          "Address book names exactly as the server shows them, comma-separated. Empty " +
+          "mirrors every address book on the account.",
       },
     ],
   },

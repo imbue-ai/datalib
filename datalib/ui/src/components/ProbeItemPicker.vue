@@ -146,6 +146,18 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
       { id: "role", name: "Notes", field: "role", width: 120, formatter: (_r, _c, v) => text(v) },
     ],
   },
+  address_book: {
+    placeholder: "Search these address books…",
+    columns: [
+      {
+        id: "path",
+        name: "Address book",
+        field: "path",
+        width: 280,
+        formatter: (_r, _c, v) => text(v),
+      },
+    ],
+  },
 };
 
 /// Every list a probe returns is one kind throughout (`labels` mixes

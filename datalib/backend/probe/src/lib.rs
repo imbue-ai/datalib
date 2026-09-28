@@ -71,6 +71,9 @@ pub enum ProbeItemKind {
     /// A calendar. `path` is its name, which a `calendars` filter
     /// matches without regard to case.
     Calendar,
+    /// A CardDAV address book. `path` is its name, which an
+    /// `addressbooks` filter matches exactly.
+    AddressBook,
 }
 
 impl ProbeItemKind {

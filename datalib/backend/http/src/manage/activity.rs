@@ -146,16 +146,6 @@ pub fn chips(p: &DagStepProgress) -> Vec<Chip> {
     out
 }
 
-/// How far along, when the step reported the plain done/queued pair.
-pub fn fraction(p: &DagStepProgress) -> Option<f64> {
-    let done = *p.metrics.get("done")?;
-    let queued = *p.metrics.get("queued")?;
-    if done + queued <= 0 {
-        return None;
-    }
-    Some((done as f64 / (done + queued) as f64).clamp(0.0, 1.0))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,18 +183,5 @@ mod tests {
         assert!(got[1].title.contains("busy, not advancing"));
         assert_eq!(got[2].text, "2 ⚠");
         assert_eq!(got[2].kind, ChipKind::Error);
-    }
-
-    #[test]
-    fn a_fraction_needs_both_numbers() {
-        assert_eq!(
-            fraction(&progress(&[("done", 3), ("queued", 1)], &[])),
-            Some(0.75)
-        );
-        assert_eq!(fraction(&progress(&[("done", 3)], &[])), None);
-        assert_eq!(
-            fraction(&progress(&[("done", 0), ("queued", 0)], &[])),
-            None
-        );
     }
 }
