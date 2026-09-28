@@ -7,23 +7,24 @@ just want to *run* the released tools against your own data, start with the
 ## Setup pre-reqs
 
 ```sh
-# 1. Host tools Bazel can't provide for itself. `cmake` is required by the
-#    `protobuf-src` crate's build script; `bazel` is the
-#    build driver.
-brew install bazel cmake
+# Host tools Bazel can't provide for itself. `cmake` is required by the
+# `protobuf-src` crate's build script; `bazelisk` is the build driver
+# (it also answers to `bazel`).
+brew install bazelisk cmake
 
-# That is all: qmd's models and Node are Bazel inputs, so the build needs
-# nothing in your home directory — not even to RUN a sync. The binaries
-# shell out to latchkey and qmd through a staged `runtime/` tree (the
-# .app, the tarball and the dev launchers all carry one; see "running
-# one by hand" below), never through a host Node.
+# That is all: Node, qmd and latchkey are Bazel inputs, so the build
+# needs nothing in your home directory. The binaries shell out to
+# latchkey and qmd through a staged `runtime/` tree (the dev launchers
+# stage one; see "Re-run ingestion" below), never through a host Node.
+# A sync's first `embed` step fetches the pinned embedding model,
+# sha256-verified, into qmd's cache (`~/.cache/qmd/models`).
 ```
 
 ### Linux iteration via devcontainer
 
 If you're debugging a Linux-only build issue (e.g. one the macOS host masks
-because clang is more permissive than gcc), `.devcontainer/` ships an Ubuntu
-24.04 container that mirrors GHA's release runner. Open in VS Code via
+because clang is more permissive than gcc), `.devcontainer/` ships the
+Ubuntu image CI runs `bazel test //...` in. Open in VS Code via
 "Reopen in Container", or from the CLI:
 
 ```sh
@@ -31,8 +32,8 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bazelisk build //datalib/backend:dist -c opt
 ```
 
-Caches (bazel output base, disk cache, qmd model cache, npm cache) live in
-named volumes so rebuilds aren't cold.
+Caches (bazel output base, disk cache, npm cache) live in named volumes
+so rebuilds aren't cold.
 
 ## What's in the repo
 
@@ -44,29 +45,21 @@ Two coupled projects that mirror personal data into a queryable local store:
   doltlite DB, renders one Markdown file per conversation, builds a qmd
   search index, and serves the result over axum / Tauri.
 - **`datalib/ui/`** — Vue 3 UI that searches and views the mirrored
-  data, packaged as a Tauri desktop app and an Open Host container.
-
-Backend row shapes are defined as hand-written Rust structs in two crates —
-**`datalib/backend/schema`** (the *render schema*: `grid_rows` / `edges`
-/ `markdowns`) and **`datalib/backend/app_schema`** (app-state tables:
-`feedback` / `disk_usage` / `remote_media`). Each row struct derives its portable
-`CREATE TABLE` DDL via `#[derive(PortableTable)]` (in
-`datalib/backend/etl/macros`). The struct is the single source of truth —
-there is no codegen step.
+  data, packaged as a Tauri desktop app and a Docker image.
 
 ```
 .
-├── MODULE.bazel              Bzlmod root (rules_python + rules_rust)
-├── BUILD.bazel               :all_tests aggregator
+├── MODULE.bazel              Bzlmod root
+├── BUILD.bazel               :all_tests aggregator, :precommit, :lint
 ├── docs/                     dev/ architecture notes · user/ guides + config_examples
-├── tests/fixtures/           checked-in fixture JSON + ingested_tng genrule
+├── tests/fixtures/           the TNG fixture pipeline (the ingested_tng genrule)
 └── datalib/
     ├── backend/              Cargo workspace
     │   ├── schema/           render schema: grid_rows / edges / markdowns structs
-    │   ├── app_schema/       app-state schema: feedback / usage structs
-    │   ├── core/             query engine + deeplink grammar
-    │   ├── etl/              shared render/load framework
-    │   ├── etl/providers/*/  per-provider download/render crates
+    │   ├── app_schema/       app-state schema: feedback / disk usage / remote media / runs
+    │   ├── core/             the app stores + deeplink grammar
+    │   ├── etl/              shared ingest machinery; etl/render/ the render framework
+    │   ├── etl/providers/*/  per-provider ingest / render / config crates
     │   ├── qmd_indexer/      the qmd index's operations, over qmd's SDK
     │   ├── dag/              datalib-dag DAG runner (sync orchestrator)
     │   ├── datalib_step/     datalib-step built-in step commands
@@ -77,11 +70,14 @@ there is no codegen step.
 
 ## Building & testing
 
-### One command for CI parity
+### The one test command
 
 ```sh
-bazel test //...
+bazelisk test //...
 ```
+
+Before pushing, `bazelisk run //:precommit` runs the whole CI gate
+(`AGENTS.md` § "Running tests").
 
 **Always run tests through Bazel.** It's the source of truth for "do the
 tests pass?", and the disk cache (`--disk_cache` in `.bazelrc`) is
@@ -94,14 +90,11 @@ Runs:
 - Rust unit tests (`//datalib/backend/{schema,core,etl,http}:*_unittests`)
 - Cross-language deeplink fixture test (Rust loads the same JSON the Vitest
   suite loads, asserting both implementations agree)
-- Playwright e2e suite (`//datalib/ui:e2e_test`) — non-hermetic by
-  design, though less so than it used to be: under `bazel test` it runs
-  from the `rules_js`-linked `node_modules` and a Bazel-managed Node, and
-  the remaining host reach is the Playwright **browser cache** at
-  `~/.cache/ms-playwright` (`env_inherit = HOME`). The qmd models used to
-  be a second such reach and are now bazel outputs (`//third-party/qmd_models`). What
-  is left is why it is tagged `requires-network` + `no-sandbox`, and what
-  CI has to arrange for explicitly — see [`testing.md`](testing.md).
+- Playwright e2e suite (`//datalib/ui:e2e_test`) — not hermetic: under
+  `bazel test` it runs from the `rules_js`-linked `node_modules` and a
+  Bazel-managed Node, but the browsers come from Playwright's cache under
+  `$HOME` (`env_inherit = HOME`), fetched on demand. That is why it is
+  tagged `requires-network` + `no-sandbox` — see [`testing.md`](testing.md).
 
 ### Quickest first run (no data root needed)
 
@@ -124,7 +117,7 @@ Full dev — backend (`datalib_http_bin`) **and** Vite (`pnpm dev`) at the
 same time, browser opens at the Vite URL. The trailing path is the data root:
 
 ```sh
-bazelisk run //datalib:dev -- ~/datalib.thad
+bazelisk run //datalib:dev -- <root>
 ```
 
 Both Vite and the backend default to ephemeral ports (printed at startup);
@@ -133,17 +126,10 @@ concurrent runs (different agents, different worktrees) don't collide. Pin
 specific ports with `DATALIB_PORT` (Vite) and `DATALIB_BIND`
 (backend). Ctrl-C tears both down.
 
-Data root resolution (the rendered Markdown feeds the search index, but
-`unified_index/grid_index/db.doltlite_db` remains the source of truth):
-
-1. positional arg to `bazelisk run //datalib:dev` (or `:serve`)
-2. `~/Documents/datalib`
-
-The root is the *directory*, not the config file: `datalib-http` takes
-it as a required positional and reads `<root>/config.toml` from inside
-it. That is the only config it reads, in the shape `datalib_dag::config`
-accepts today — a `config.toml` from before `[[groups]]` is rewritten
-once with `datalib-migrate-config <root> --force`.
+The data root is the positional arg to `bazelisk run //datalib:dev` (or
+`:serve`), else `~/Documents/datalib`. It is the *directory*, not the
+config file: `datalib-http` takes it as a required positional and reads
+`<root>/config.toml` from inside it.
 
 The backend starts even if the root is missing — `/api/health` reports
 `root_exists: false` and the search grid shows zero rows. (`/api/health`
@@ -159,7 +145,7 @@ being bound — useful behind a reverse proxy).
 Every backend route requires a per-process API token — Jupyter's scheme,
 and for Jupyter's reason: loopback does not keep a *web page* out, and
 `PUT /api/config` + `POST /api/requests` runs arbitrary `command:`
-strings (issue #138). See
+strings. See
 [`datalib/backend/http/src/auth.rs`](/datalib/backend/http/src/auth.rs)
 for the design.
 
@@ -180,7 +166,7 @@ For curl, scripts, and coding agents, the running server publishes its
 token to `<root>/system/api-token` (mode 0600):
 
 ```sh
-curl -H "Authorization: Bearer $(cat ~/datalib.thad/system/api-token)" \
+curl -H "Authorization: Bearer $(cat <root>/system/api-token)" \
   http://127.0.0.1:<port>/api/health
 ```
 
@@ -190,16 +176,16 @@ readable without a token — they're what tells an agent how to get one.
 
 ### Re-run ingestion
 
-Ingestion is a DAG of subprocess steps orchestrated by
-`//datalib/backend/dag:datalib_dag_bin`, which reads the data root's
-`config.toml` (the `[[groups]]` + `[[steps]]` format) and runs each step's `command`
-as a subprocess. The built-in steps live in the `datalib-step` binary
-(`//datalib/backend/datalib_step:datalib_step`): `download
-<source_type>` fetches a provider's raw dir (each provider crate under
-`datalib/backend/etl/providers/` also exposes a standalone
-`*_download` binary), `render <source_type>` renders markdown + its store,
-and `grid_index` loads them into
-`<root>/unified_index/grid_index/db.doltlite_db`. See
+Ingestion is a DAG of subprocess steps orchestrated by `datalib-dag`
+(`//datalib/backend/dag:datalib_dag_bin`), which reads the data root's
+`config.toml` (the `[[groups]]` + `[[steps]]` format) and runs each step
+as a subprocess. A step with no `command` is built in: it runs
+`datalib-step` (`//datalib/backend/datalib_step:datalib_step`), which
+reads its function and its group's type from the environment — `ingest`
+brings a source's data into its raw store, `render_markdown` renders
+markdown + its store, and `grid_index` loads every render store into
+`<root>/unified_index/grid_index/db.doltlite_db`. Several provider
+crates also build a standalone `<p>_ingest` binary. See
 [`step_protocol.md`](step_protocol.md) for the step contract and
 [`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
 for the runner's rules.
@@ -214,10 +200,10 @@ bazelisk build //datalib/backend:bin
 bazel-bin/datalib/backend/bin/datalib-dag ~/datalib/config.toml
 ```
 
-No `--binary-dir` is needed: `datalib-dag` resolves each step's
-`command` against PATH with its own directory as the fallback, so a
-bare `datalib-step` in the config finds the sibling binary. Add
-`--sync <step-id>[,<step-id>…]` to run a subset of the graph.
+No `--binary-dir` is needed: `datalib-dag` puts its own directory at the
+front of every step's `PATH`, so `datalib-step` is found beside it. Add
+`--sync <step-id>[,<step-id>…]` to run those steps and what is
+downstream of them.
 
 A sync also spawns `latchkey` and `qmd`, which the binaries run from a
 `runtime/` tree (Node plus both package trees, lockfile-pinned by
@@ -231,10 +217,10 @@ scripts/stage_runtime.sh ~/.cache/datalib/staged-runtime
 export DATALIB_RUNTIME_DIR=~/.cache/datalib/staged-runtime
 ```
 
-Without a tree the spawn fails with a message naming both fixes. The
-third, `DATALIB_ALLOW_NPX=1`, runs the tool through `npx -y` from the
-live registry instead — a dev-only escape hatch that prints a warning
-every time it fires, because the transitive packages are unpinned and
+Without a tree the spawn fails with a message naming the fixes. One of
+them, `DATALIB_ALLOW_NPX=1`, runs the tool through `npx -y` from the
+live registry instead — a dev-only escape hatch that warns once per
+process per package, because the transitive packages are unpinned and
 their install scripts run.
 
 ### QMD search index (default-on, incremental)
@@ -252,14 +238,15 @@ SDK from the staged runtime tree (above) through
 `XDG_CACHE_HOME=<root>/unified_index/qmd_index`, so the one index lands
 at `<root>/unified_index/qmd_index/qmd/index.sqlite` (each collection
 scans `<root>` with the `<group>/render_markdown/**/*.md` mask),
-alongside the per-stanza `<name>/render_markdown/` trees and
+alongside the per-source `<group>/render_markdown/` trees and
 `unified_index/grid_index/db.doltlite_db`. This is what the search bar's
 hybrid / vector queries hit (see `datalib/backend/unified_index/src/qmd/`).
 
 Design notes:
 
-- **Incremental**. qmd's `documents` table keys on `(collection, path,
-  content_hash)`, and `content_vectors` is keyed by hash, so a re-run only
+- **Incremental**. qmd's `documents` table is unique on `(collection,
+  path)` and records each file's content hash, and `content_vectors` is
+  keyed by that hash, so a re-run only
   rechunks files whose bytes changed and only re-embeds content hashes with
   no existing vector row. Deletes are detected (rows marked `active=0`) and
   orphaned content is cleaned.
@@ -270,9 +257,11 @@ Design notes:
   source's `embed` off leaves the rest running. Once the backlog drains,
   re-runs are no-ops (a couple of seconds).
 - **Models cache**: qmd's embedding model (~300 MB) is shared across data
-  roots via a symlink at `<root>/qmd/models -> ~/.cache/qmd/models` (qmd's
-  own default, so a standalone `qmd` run shares the same cache). Override
-  with `models_dir=` if you call the indexer directly.
+  roots via a symlink at `<root>/unified_index/qmd_index/qmd/models ->
+  ~/.cache/qmd/models` (qmd's own default, `$XDG_CACHE_HOME/qmd/models`
+  when that is set, so a standalone `qmd` run shares the same cache).
+  Override with `datalib-step --models-dir`; `datalib-step pull-models`
+  fetches them ahead of time.
 
 ### Manual integration tests (live provider APIs)
 
@@ -284,10 +273,11 @@ targets. Each downloads a small known fixture (e.g. one conversation),
 then asserts a curated stable view against committed
 [insta](https://insta.rs) snapshots. `email:gmail_live` is the one that
 does not: it downloads and checks the store it wrote, with no golden.
-All are tagged `manual` + `external` + `no-sandbox`, so they are excluded from `bazel test //...`; they need
-`latchkey` creds for the service and `LATCHKEY_CURL` pointing at the
-router curl (which hands Cloudflare-fronted hosts to the bundled
-`curl-impersonate` next to it — see `docs/dev/curl_impersonate.md`):
+They are `bazel run` targets, not tests, so `bazel test //...` never
+runs them. They need `latchkey` creds for the service and
+`LATCHKEY_CURL` pointing at the router curl (which hands
+Cloudflare-fronted hosts to the bundled `curl-impersonate` next to it —
+see [`curl_impersonate.md`](curl_impersonate.md)):
 
 ```sh
 bazel build //third-party/latchkey-curl-shims
@@ -295,13 +285,9 @@ export LATCHKEY_CURL="$(pwd)/bazel-bin/third-party/latchkey-curl-shims/latchkey-
 bazelisk run //datalib/backend/etl/providers/claude:claude_live
 ```
 
-`bazel run`, not `bazel test`, and no `--test_env` list: each of these
-targets runs the `live` module of its package's ordinary test binary,
-which the binary's own `--skip live::` leaves out of `bazel test`, and
-`bazel run` hands the test the shell you invoked it from. The live code
-is therefore compiled with the rest of the package's tests — it cannot
-rot — without being a separate link. `docs/dev/testing.md` § "A
-package's integration tests are one binary" has the layout.
+Each runs the `live` module of its package's ordinary test binary, with
+your shell's environment; [`testing.md`](testing.md) § "The `live`
+module" says why.
 
 When upstream content changes, the test will fail with a diff; accept the
 change with the sibling `.update` target (e.g. `bazel run
@@ -316,14 +302,21 @@ edit the struct directly:
 
 - render-schema tables (`grid_rows` / `edges` / `markdowns`) in
   `datalib/backend/schema/src/`,
-- app-state tables (`feedback` / `disk_usage` / `remote_media`) in
-  `datalib/backend/app_schema/src/`.
+- app-state tables (`feedback` / `disk_usage` / `remote_media` and the
+  run store's) in `datalib/backend/app_schema/src/`.
 
 Give each field a `#[col(sql = "…")]` portable type;
-`#[derive(PortableTable)]` produces the matching `CREATE TABLE` DDL (and
-`COLUMNS` / `TABLES` metadata) at compile time. Columns computed at load time
-(e.g. `grid_rows.created_at_utc`) are declared with
+`#[derive(PortableTable)]` (in `datalib/backend/etl/macros`) produces
+the matching `CREATE TABLE` DDL (and `COLUMNS` / `TABLES` metadata) at
+compile time. Columns computed at load time (e.g.
+`grid_rows.created_at_utc`) are declared with
 `#[derived(name = "…", sql = "…")]` on the field they trail.
+
+What a shape change does to a store that already exists, and how to
+migrate one, is in
+[`datalib/backend/etl/README.md`](../../datalib/backend/etl/README.md)
+§ "Schema self-healing" and § "The migration ladder"; a new `grid_rows`
+column has its own checklist in [`grid_rows.md`](grid_rows.md).
 
 ## Version policy: 7-day burn-in
 
@@ -333,27 +326,14 @@ regressions hide; a week of community shake-out is cheap insurance. When
 upgrading, check the upstream release date before pinning. If a useful
 version exists but is too new, pin the previous patch and revisit next week.
 
-`MODULE.bazel`, `.bazelversion`, and `datalib/ui/package.json` are the
-source of truth for the current pins; as of this writing:
+The pins live in `MODULE.bazel`, `.bazelversion` and
+`datalib/ui/package.json`. Other deps follow standard semver caret
+ranges; `cargo update` and `pnpm update` are safe within those ranges
+(`Cargo.lock` and `pnpm-lock.yaml` are committed).
 
-| Component       | Version        |
-|-----------------|----------------|
-| Bazel           | 9.1.0          |
-| rules_python    | 2.0.0          |
-| rules_rust      | 0.70.0         |
-| Rust toolchain  | 1.95.0         |
-| Vite            | 7.3.3 (exact)  |
-| Vitest          | 4.1.5 (exact)  |
-| vue-tsc         | 3.2.7 (exact)  |
+## What Bazel does not own
 
-Other deps follow standard semver caret ranges; `cargo update` and
-`pnpm update` are safe within those ranges (Cargo.lock and pnpm-lock are
-committed).
-
-## What Bazel does not own (by design, v0)
-
-- Tauri bundler (`pnpm tauri` / `cargo tauri`).
-- OpenHost docker build (run `docker build` against Bazel outputs).
-- The Vite build / Vitest under Bazel — currently driven by `pnpm`. A future
-  `rules_js` + `rules_ts` integration is on the table once the surface area
-  stabilises.
+- The Tauri shell and its bundler (`pnpm tauri` / `cargo tauri`); only
+  `datalib/tauri/src/launcher.rs` is compiled under Bazel, to run its tests.
+- The Docker image, built from the release tarball
+  ([`docker.md`](docker.md)).

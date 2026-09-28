@@ -1,11 +1,9 @@
 # Style: how code in this repo is shaped
 
-Reference, current as of 2026-09-21. The short rules — comments,
-enums, timestamps, dynamic SQL, fallbacks, unordered collections —
-live in [`AGENTS.md`](/AGENTS.md) so that every agent loads them; this
-doc holds the one rule that needs more than a paragraph to explain and
-to apply. When this doc and the tree disagree, the tree wins; fix the
-doc in the same change.
+The short rules — comments, enums, timestamps, dynamic SQL,
+fallbacks, unordered collections — live in [`AGENTS.md`](/AGENTS.md)
+so that every agent loads them; this doc holds the one rule that needs
+more than a paragraph to explain and to apply.
 
 ## Functional core, imperative shell
 
@@ -49,11 +47,10 @@ Three reasons, all of them things this tree has already paid for:
   in, value out, no tokio, no tempdir, no `until(flag)` loop. The
   best-tested code in the tree is exactly the code that is shaped
   this way (below).
-- **The supervisor is a pure tick.**
-  [`plans/supervisor.md` § 2.3](plans/supervisor.md) replaces the
-  runner's loop with one function from values to a list of starts.
-  That design only works if the function stays pure; this rule is how
-  it stays that way.
+- **The supervisor is a pure tick.** `dag/src/supervisor/tick.rs` is
+  one function from values to every step's state and the starts, stops
+  and request closures to make. The loop only works while that
+  function stays pure; this rule is how it stays that way.
 
 ### The templates already in the tree
 
@@ -62,13 +59,13 @@ shape.
 
 | core | shell that feeds it | what it decides |
 |---|---|---|
-| `supervisor::tick::tick(shape, intent, facts, budgets) -> Tick` in `dag/src/supervisor/tick.rs` | the loop in `supervisor/round.rs` | what each step is doing, and what to start, stop and close |
+| `supervisor::tick::tick(shape, intent, facts) -> Tick` in `dag/src/supervisor/tick.rs` | the loop in `supervisor/round.rs` | what each step is doing, and what to start, stop and close |
 | `RenderPlan::decide(stored, params, version_changed)` in `datalib_step/src/render.rs` | `render_source` | diff from the cursor, or render everything |
 | `Adjustments::plan(prev, inputs)` and `select_targets` in `slack/src/ingest/mod.rs` | `fetch` | what a config change means for the walk; which conversations to walk |
 | `Scan::changes_since(prev) -> Changes` in `etl/src/fsscan.rs` | `scan` | which files were added, modified, moved, removed |
 | `config::check_text(text) -> ConfigCheck` in `dag/src/config.rs` | `load_graded` | what a config means and every problem in it |
 | `scope_config::{turned_on, limit_relaxed, filter_widened}` | the provider's `plan` | whether a knob widened |
-| `ui/src/config/{rowMenu,sourceSteps,activity,browsePresets}.ts` | the Vue components | which menu entries, which steps, what the activity column shows |
+| `ui/src/config/{rowMenu,sourceSteps,browsePresets}.ts` | the Vue components | which menu entries, which steps, which columns a Browse card opens with |
 
 Every one of these has synchronous tests, and the tick's walk a sync
 through its states event by event, which is only writable because the
@@ -83,14 +80,14 @@ function over values; the I/O stays behind.
 
 Concretely:
 
-- **Name the decision as a type.** `Decision::{Run, Skip, Block}`,
-  `RenderPlan::{FromCursor, Everything}`, `Changes`, `StatusView`. A
+- **Name the decision as a type.** `StepState`,
+  `RenderPlan::{FromCursor, Everything}`, `StampDecision::{ReuseHash,
+  Rehash}`, `Changes`, `StatusView`. A
   decision with a name can be asserted on, logged, and shown in a
   UI; a decision that is control flow can only be run.
 - **Pass `now` in.** A core function that needs the time takes it as
   an argument; the shell reads the clock once (`DATALIB_DAG_NOW`
-  where a step has it). `mergeJob` in `SourcesCard.ce.vue` reads
-  `new Date()` inline and is the counter-example.
+  where a step has it).
 - **A value that already carries the bytes should not also write
   them.** `RenderedMarkdown` holds `sections` that concatenate to the
   `.md`; the write belongs in the sink that receives it, not in the
@@ -99,7 +96,7 @@ Concretely:
   from a cursor, a refresh window, a backfill — compute the list of
   passes first, as a value, then loop over it. Slack's
   `export_channel` computes them inline between fetches and is the
-  case to fix.
+  counter-example.
 - **Reducers on the frontend.** A handler that turns `(rows, event)`
   into `rows` is a pure function in a `.ts` file with a test, called
   from the component; it is not a method on the component.

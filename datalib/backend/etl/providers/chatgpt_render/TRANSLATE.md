@@ -1,18 +1,10 @@
 # ChatGPT render
 
-The `render_markdown` step of a `chatgpt` group reads the raw store its
-ingest wrote (`<data_root>/<group>/ingest/entities.doltlite_db`, described
-in [`../chatgpt/INGEST.md`](../chatgpt/INGEST.md)) and hands each
-conversation to chat-common, which writes
-`<data_root>/<group>/render_markdown/<chat_uuid>/all.md` and the
-document's rows in `indexed_markdown.doltlite_db` beside it.
-
-What is shared with every chat source lives elsewhere: the markdown
-layout, the collapsed tool asides and `LAYOUT_VERSION` in
-[`chat-common/README.md`](../../chat-common/README.md); how render finds
-the conversations that moved, in
-[`data_architecture_parse_and_render.md` §5](../../../../../docs/dev/data_architecture_parse_and_render.md#5-incrementality-and-deletion).
-This file covers what ChatGPT adds.
+Each conversation in a `chatgpt` group's raw store
+([`../chatgpt/INGEST.md`](../chatgpt/INGEST.md)) becomes one chat-common
+document, `render_markdown/<chat_uuid>/all.md`. The page layout and
+`LAYOUT_VERSION` are in [`chat-common/README.md`](../../chat-common/README.md); how render picks the conversations
+that moved is [`data_architecture_parse_and_render.md` §5](../../../../../docs/dev/data_architecture_parse_and_render.md#5-incrementality-and-deletion).
 
 ## One conversation, one document
 
@@ -48,12 +40,11 @@ scoped to the group, never ChatGPT's own ids passed through
 as `external_id` and links back to `https://chatgpt.com/c/<id>`. The
 account is the login's email, from the `me` table.
 
-Bump [`RENDER_VERSION`](src/render/render.rs) when what this crate hands
-chat-common changes; the render step then re-renders every document.
+Bump [`RENDER_VERSION`](src/render/render.rs) when this crate's output
+changes.
 
 ## Tests
 
-The renderer is pinned by insta snapshots over the TNG fixture at
-`../chatgpt/tests/fixtures/chatgpt_api/`, in the `chatgpt_render` module
-of `//datalib/backend/etl/providers/chatgpt:chatgpt_tests`. Update them
-with `bazelisk run //datalib/backend/etl/providers/chatgpt:chatgpt_tests.update`.
+Insta snapshots over `../chatgpt/tests/fixtures/chatgpt_api/` pin the
+output: the `chatgpt_render` module of `chatgpt/:chatgpt_tests`,
+rewritten by `:chatgpt_tests.update`.

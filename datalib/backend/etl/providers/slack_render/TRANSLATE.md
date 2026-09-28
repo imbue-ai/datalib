@@ -1,18 +1,10 @@
 # Slack render
 
-The `render_markdown` step of a `slack` group reads the raw store its
-ingest wrote (`<data_root>/<group>/ingest/entities.doltlite_db`, described
-in [`../slack/INGEST.md`](../slack/INGEST.md)) and hands each thread to
-chat-common, which writes
-`<data_root>/<group>/render_markdown/<thread_uuid>/all.md` and the
-document's rows in `indexed_markdown.doltlite_db` beside it.
-
-What is shared with every chat source lives elsewhere: the markdown
-layout, the unread marker and `LAYOUT_VERSION` in
-[`chat-common/README.md`](../../chat-common/README.md); how render finds
-the threads that moved, in
-[`data_architecture_parse_and_render.md` §5](../../../../../docs/dev/data_architecture_parse_and_render.md#5-incrementality-and-deletion).
-This file covers what Slack adds.
+Slack threads from the raw store the ingest writes
+([`../slack/INGEST.md`](../slack/INGEST.md)) render through chat-common,
+one `render_markdown/<thread_uuid>/all.md` per thread. See
+[`chat-common/README.md`](../../chat-common/README.md) for the page layout, the unread marker and `LAYOUT_VERSION`,
+and [`data_architecture_parse_and_render.md` §5](../../../../../docs/dev/data_architecture_parse_and_render.md#5-incrementality-and-deletion) for the diff scan this file extends.
 
 ## One thread, one document
 
@@ -58,13 +50,11 @@ lies between a conversation's old and new `last_read`, or whose own
 thread mark moved. A thread that is unread on both sides of a move is
 left alone.
 
-Bump [`RENDER_VERSION`](src/render/render.rs) when what this crate hands
-chat-common changes; the render step then re-renders every document.
+A change to this crate's output needs a
+[`RENDER_VERSION`](src/render/render.rs) bump.
 
 ## Tests
 
-The renderer is pinned by insta snapshots over the TNG fixture at
-`../slack/tests/fixtures/slack_api/`, in the `slack_render` and
-`slack_translate` modules of
-`//datalib/backend/etl/providers/slack:slack_tests`. Update them with
-`bazelisk run //datalib/backend/etl/providers/slack:slack_tests.update`.
+The `slack_render` and `slack_translate` modules of
+`slack/:slack_tests` snapshot `../slack/tests/fixtures/slack_api/`;
+`:slack_tests.update` rewrites them.

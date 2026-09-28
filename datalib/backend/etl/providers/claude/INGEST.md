@@ -47,15 +47,14 @@ The downloader never handles claude.ai cookies. It shells out to
 [`latchkey curl`](https://github.com/imbue-ai/latchkey), which injects
 the `sessionKey` cookie registered under the `claude-ai` service.
 
-`claude.ai` is fronted by Cloudflare's managed challenge, so every
-request goes out through the bundled Chrome-impersonating curl. Leave
-`LATCHKEY_CURL` unset and the downloader finds it; setting it by hand is
-in [`docs/dev/curl_impersonate.md`](/docs/dev/curl_impersonate.md). A
-Chrome handshake is never escalated to the challenge that issues a
-`cf_clearance` cookie, so `sessionKey` is the whole credential. If a
-tightening upstream ever changes that, copy `cf_clearance` from
-DevTools → Application → Cookies → `claude.ai` (HttpOnly) and add it
-through `$(pbpaste)`, so it stays out of shell history:
+Cloudflare sits in front of `claude.ai`; requests clear its managed
+challenge by going through the bundled curl that impersonates Chrome's
+TLS handshake ([`docs/dev/curl_impersonate.md`](/docs/dev/curl_impersonate.md)
+has the pieces and `LATCHKEY_CURL`). That handshake is never asked for a
+`cf_clearance` cookie, so `sessionKey` is the whole credential. Should
+Cloudflare start demanding one, take `cf_clearance` (HttpOnly) from
+DevTools → Application → Cookies → `claude.ai` and store it via
+`$(pbpaste)`, keeping it out of shell history:
 
 ```sh
 latchkey auth set claude-ai -H "Cookie: cf_clearance=$(pbpaste)"

@@ -1,18 +1,11 @@
 # Claude render
 
-The `render_markdown` step of a `claude` group reads the raw store its
-ingest wrote (`<data_root>/<group>/ingest/entities.doltlite_db`, filled
-by either ingest method; see [`../claude/INGEST.md`](../claude/INGEST.md))
-and hands each conversation and each Project to chat-common, which
-writes `<data_root>/<group>/render_markdown/<chat_uuid>/all.md` and the
-document's rows in `indexed_markdown.doltlite_db` beside it.
-
-What is shared with every chat source lives elsewhere: the markdown
-layout, the collapsed tool asides and `LAYOUT_VERSION` in
-[`chat-common/README.md`](../../chat-common/README.md); how render finds
-the conversations that moved, in
+Every conversation and every Project in a `claude` group's raw store,
+whichever ingest method filled it
+([`../claude/INGEST.md`](../claude/INGEST.md)), is rendered as a page
+through chat-common. Shared machinery is documented once: the page
+layout and `LAYOUT_VERSION` in [`chat-common/README.md`](../../chat-common/README.md), and change detection in
 [`data_architecture_parse_and_render.md` §5](../../../../../docs/dev/data_architecture_parse_and_render.md#5-incrementality-and-deletion).
-This file covers what Claude adds.
 
 ## Conversations
 
@@ -59,12 +52,11 @@ scoped to the group, never Anthropic's UUIDs passed through
 `external_id` and links back to `https://claude.ai/chat/<uuid>` or
 `https://claude.ai/project/<uuid>`. The account is the account's email.
 
-Bump [`RENDER_VERSION`](src/render/render.rs) when what this crate hands
-chat-common changes; the render step then re-renders every document.
+[`RENDER_VERSION`](src/render/render.rs) is bumped whenever this
+crate's output changes.
 
 ## Tests
 
-The renderer is pinned by insta snapshots over the TNG fixture at
-`../claude/tests/fixtures/claude_export/`, in the `claude_render` module
-of `//datalib/backend/etl/providers/claude:claude_tests`. Update them
-with `bazelisk run //datalib/backend/etl/providers/claude:claude_tests.update`.
+`claude/:claude_tests` (its `claude_render` module) snapshots the
+render of `../claude/tests/fixtures/claude_export/`;
+`:claude_tests.update` rewrites the snapshots.

@@ -380,3 +380,33 @@ pub async fn prune_children(
     }
     Ok(gone.len())
 }
+
+/// The account the store was synced as: its one `self_identity` row.
+pub async fn load_self_identity(
+    pool: &SqlitePool,
+    reads: datalib_etl::pin::Reads<'_>,
+) -> Result<Option<Value>> {
+    use anyhow::Context as _;
+    use sqlx::Row as _;
+    // Audited: the only interpolation is a table name this handle
+    // chose -- a literal, or that literal behind `pinned_`.
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT json(payload) AS payload FROM {} \
+         WHERE payload IS NOT NULL ORDER BY id LIMIT 1",
+        reads.table("self_identity")
+    )))
+    .fetch_optional(pool)
+    .await
+    .context("select self_identity")?;
+    let Some(row) = row else { return Ok(None) };
+    let payload: Option<String> = row.try_get("payload").ok();
+    Ok(payload.and_then(|s| serde_json::from_str(&s).ok()))
+}
+
+/// A loaded row's `payload` column, parsed; `None` for a row the load
+/// steps over.
+pub fn row_payload(row: &sqlx::sqlite::SqliteRow) -> Option<Value> {
+    use sqlx::Row as _;
+    let payload: String = row.try_get("payload").ok()?;
+    serde_json::from_str(&payload).ok()
+}

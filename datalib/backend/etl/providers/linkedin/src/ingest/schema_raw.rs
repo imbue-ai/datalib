@@ -109,40 +109,9 @@ pub fn message_tables() -> Vec<&'static str> {
         .collect()
 }
 
-pub fn canonical_table(rel: &str) -> String {
-    // Drop a trailing file extension (`.csv`, `.html`) so it doesn't
-    // slugify into a `_csv` suffix; callers may pass a full filename.
-    let stem = std::path::Path::new(rel)
-        .with_extension("")
-        .to_string_lossy()
-        .into_owned();
-    let s = stem.to_lowercase();
-    let mut out = String::new();
-    let mut prev_us = false;
-    for ch in s.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch);
-            prev_us = false;
-        } else if !prev_us {
-            out.push('_');
-            prev_us = true;
-        }
-    }
-    let mut t = out.trim_matches('_').to_string();
-    // Drop a trailing all-digits segment (the per-member id), but only
-    // when something stable remains in front of it.
-    if let Some((head, last)) = t.rsplit_once('_') {
-        if !head.is_empty() && !last.is_empty() && last.bytes().all(|b| b.is_ascii_digit()) {
-            t = head.to_string();
-        }
-    }
-    // Leading digit would be an awkward identifier; prefix it.
-    if t.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        format!("t_{t}")
-    } else {
-        t
-    }
-}
+/// The raw table for an export file. The trailing `_<digits>` it drops
+/// is the per-member id LinkedIn suffixes some filenames with.
+pub use datalib_etl::export_files::table_name as canonical_table;
 
 pub fn linkedin_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"linkedin.datalib")
