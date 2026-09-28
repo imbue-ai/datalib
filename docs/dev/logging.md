@@ -36,9 +36,15 @@ transaction that wrote nothing, so the writer offers the same batch once
 more before giving up — and when it does give up it says how many lines
 went with it, because a silent loss here is what makes anyone distrust
 the store. Deciding what to *do* with the file is exclusive between
-processes (`runs.sqlite.open-lock`): remaking the store is a delete, and
-doing that under another process's open leaves that process filling an
-inode nobody will ever read. `runs_two_process_test` runs four writers
+processes (`runs.sqlite.open-lock`): two processes that both found an
+old store would each empty it, the second emptying what the first had
+already remade. Remaking empties the file in place and never deletes
+it: a reader that opened the old file would stay on the deleted one,
+where no writer holds a lock, take the new file's journal for a crashed
+writer's and delete it — and the new writer's commit would fail. So
+the remake is SQLite's own reset, under the file's lock like any write
+(`open_or_recreate` in `datalib/backend/runs/src/store.rs`).
+`runs_two_process_test` runs four writers
 at once — on a fresh root, and on one this build has to remake — and
 checks that every line published reaches the store.
 
@@ -51,7 +57,9 @@ Retention is `[run_history]` in `config.toml`
 `max_runs` / `max_age_days` for runs and everything that belongs to
 one, `process_log_days` / `process_log_lines` for the lines outside
 any run — the server's and the pages'. The store is not load-bearing:
-one that will not open is remade, and a schema bump remakes it.
+one that will not open is emptied and remade, and a schema bump does
+the same. A writer that cannot open it at all is refused at the start,
+with an ERROR saying why, and the caller says nothing will be recorded.
 
 ## Every line has an author
 

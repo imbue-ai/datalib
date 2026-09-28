@@ -102,7 +102,7 @@ impl Default for Retention {
 }
 
 /// Bumped whenever the tables change shape. A store carrying another
-/// version is deleted and remade rather than migrated: nothing in it is
+/// version is emptied and remade rather than migrated: nothing in it is
 /// load-bearing, and a migration is code that would exist only to keep
 /// old log lines.
 pub const SCHEMA_VERSION: i32 = 9;
