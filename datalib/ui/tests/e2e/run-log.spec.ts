@@ -283,14 +283,17 @@ test("a line's source links to its file and line at the server's commit", async 
   const dialog = await openServerLog(page);
   const link = dialog.locator(`${ROWS} .slick-cell[col-id="source"] a`).first();
   await expect(link).toBeVisible();
-  const shown = (await link.textContent()) ?? "";
+  // The log is live: a new line can become the first row between two
+  // reads of `link`, so the text, href and target come from one element.
+  const { shown, href, target } = await link.evaluate((a: HTMLAnchorElement) => ({
+    shown: a.textContent ?? "",
+    href: a.getAttribute("href"),
+    target: a.getAttribute("target"),
+  }));
   const m = /^(datalib\/backend\/.+\.rs):(\d+)$/.exec(shown.trim());
   expect(m, `source cell reads ${JSON.stringify(shown)}`).not.toBeNull();
-  await expect(link).toHaveAttribute(
-    "href",
-    `https://github.com/imbue-ai/datalib/blob/${GIT_HASH}/${m![1]}#L${m![2]}`,
-  );
-  await expect(link).toHaveAttribute("target", "_blank");
+  expect(href).toBe(`https://github.com/imbue-ai/datalib/blob/${GIT_HASH}/${m![1]}#L${m![2]}`);
+  expect(target).toBe("_blank");
 });
 
 // A selected line opens in full in the column after the log — the
