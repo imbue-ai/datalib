@@ -73,48 +73,8 @@
 @keyframes tg-spin {
   to { transform: rotate(360deg); }
 }
-.tg-segs {
-  flex: 1 1 auto;
-  min-width: 20px;
-  display: flex;
-  gap: 1px;
-  height: 6px;
-}
-.tg-seg {
-  flex: 1;
-  background: color-mix(in srgb, var(--datalib-fg) 14%, transparent);
-}
-.tg-seg:first-child { border-radius: 3px 0 0 3px; }
-.tg-seg:last-child { border-radius: 0 3px 3px 0; }
-.tg-seg-succeeded,
-.tg-seg-skipped-up-to-date { background: var(--datalib-log-ok); }
-.tg-seg-failed { background: var(--datalib-log-error); }
-.tg-seg-interrupted,
-.tg-seg-stopped { background: var(--datalib-log-warn); }
-.tg-seg-blocked { background: var(--datalib-muted); }
-.tg-seg-running {
-  background: var(--datalib-accent);
-  animation: tg-seg-pulse 1s ease-in-out infinite;
-}
-@keyframes tg-seg-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
 @media (prefers-reduced-motion: reduce) {
-  .tg-spinner, .tg-seg-running { animation: none; }
-}
-.tg-progress {
-  flex: 1 1 auto;
-  min-width: 20px;
-  height: 4px;
-  border-radius: 2px;
-  background: color-mix(in srgb, currentColor 18%, transparent);
-  overflow: hidden;
-}
-.tg-progress > span {
-  display: block;
-  height: 100%;
-  background: currentColor;
+  .tg-spinner { animation: none; }
 }
 
 .tg-chips {

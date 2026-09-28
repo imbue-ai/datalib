@@ -10,8 +10,7 @@ use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::{Diagnostic, Severity};
 
 /// One row's status, in the shape the Status column draws. The rules
-/// here fill `key`, `label`, `at`, `last_success_at` and `detail`; the
-/// assembly adds a fraction and segments where a run is in flight.
+/// here fill `key`, `label`, `at`, `last_success_at` and `detail`.
 pub type StatusView = datalib_columns::Status;
 
 /// The word each status key stands for. `skipped_up_to_date` is the

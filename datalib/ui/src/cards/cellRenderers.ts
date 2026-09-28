@@ -207,28 +207,6 @@ export function renderStatus(s: StatusView | null | undefined): HTMLElement {
     when.title = formatStamp(s.at);
     wrap.appendChild(when);
   }
-  if (s.segments) {
-    // One segment per part, each in its own status colour, the running
-    // one pulsing. No arithmetic across parts; the bar *is* the parts.
-    const bar = document.createElement("span");
-    bar.className = "tg-segs";
-    for (const seg of s.segments) {
-      const cell = document.createElement("span");
-      cell.className = `tg-seg tg-seg-${seg.key.replace(/[\s_]+/g, "-")}`;
-      cell.title = `${seg.id}: ${seg.label}`;
-      bar.appendChild(cell);
-    }
-    wrap.appendChild(bar);
-  } else if (key === "running" && s.fraction != null) {
-    // A bar only when the thing said how much is ahead of it: a bar at
-    // an invented fraction claims more than we know.
-    const bar = document.createElement("span");
-    bar.className = "tg-progress";
-    const fill = document.createElement("span");
-    fill.style.width = `${s.fraction * 100}%`;
-    bar.appendChild(fill);
-    wrap.appendChild(bar);
-  }
   return wrap;
 }
 

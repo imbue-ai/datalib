@@ -201,15 +201,6 @@ pub struct Timeseries {
     pub detail: Option<String>,
 }
 
-/// One segment of a status bar: a part of the whole and the status it
-/// is in.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Segment {
-    pub id: String,
-    pub key: String,
-    pub label: String,
-}
-
 /// One row's status, reduced to a vocabulary a Status column can draw.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Status {
@@ -226,14 +217,6 @@ pub struct Status {
     pub last_success_at: Option<String>,
     /// Why it is that word — the failure, what it is waiting on.
     pub detail: Option<String>,
-    /// How far along, in `[0, 1]`, when the thing said how much is ahead
-    /// of it. Drawn only while `key` is `running`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fraction: Option<f64>,
-    /// For a status that aggregates several things in flight: one
-    /// segment each, drawn as a bar instead of the glyph.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub segments: Option<Vec<Segment>>,
 }
 
 #[derive(

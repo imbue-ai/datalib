@@ -85,8 +85,7 @@ async fn write_root(root: &Path, config: &str, state_json: Option<&str>) {
 }
 
 /// The tree: a row per group, its steps and applets under it by
-/// `path`, in pipeline order for the segments but config order for the
-/// rows — and the names each row shows.
+/// `path`, in config order — and the names each row shows.
 #[tokio::test]
 async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     let tmp = tempfile::tempdir().unwrap();
@@ -343,7 +342,6 @@ async fn a_finished_run_reaches_the_rows() {
         slack["status"]["last_success_at"],
         "2026-08-31T10:00:09+01:00"
     );
-    assert!(slack["status"].get("segments").is_none(), "{slack}");
 }
 
 /// The Problems cell reads the `problems{severity=…}` metrics a step

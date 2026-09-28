@@ -957,8 +957,6 @@ export type Timeseries = {
   detail?: string | null;
 };
 
-export type Segment = { id: string; key: string; label: string };
-
 /// One row's status, reduced to a vocabulary the Status column can
 /// draw. Mirrors `datalib_columns::Status`.
 export type StatusView = {
@@ -972,11 +970,6 @@ export type StatusView = {
   /// success"; older than `at` when the runs since have failed.
   last_success_at?: string | null;
   detail: string | null;
-  /// How far along, in [0, 1], while `key` is `running`.
-  fraction?: number | null;
-  /// For a status aggregating several things in flight: one segment
-  /// each, drawn as a bar instead of the glyph.
-  segments?: Segment[] | null;
 };
 
 export type ChipKind = "info" | "idle" | "metric" | "warning" | "error" | "ok";
