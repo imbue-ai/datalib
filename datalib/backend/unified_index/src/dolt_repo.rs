@@ -16,10 +16,11 @@ use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::repo::{DocRow, EdgeRowOut, IndexRepo, Listing, MapDocRow};
 use crate::search::SearchRow;
-use crate::sort::{order_by, Sort, DEFAULT_ORDER};
+use crate::sort::{default_order, order_by, Sort};
 use datalib_core::repo::RepoError;
 use datalib_pin::{is_missing_table, open_reader};
 use datalib_schema::edges::EdgeRow;
+use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_schema::problems::{ProblemRow, ScopeKind};
 
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
@@ -55,7 +56,8 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
     for chunk in uuids.chunks(LOOKUP_CHUNK) {
         let placeholders = vec!["?"; chunk.len()].join(",");
         let sql = format!(
-            "SELECT {SEARCH_ROW_COLUMNS} FROM {} WHERE uuid IN ({placeholders})",
+            "SELECT {} FROM {} WHERE uuid IN ({placeholders})",
+            search_row_select(),
             at.grid_rows
         );
         let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
@@ -79,16 +81,49 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
 /// constant because every read of a search's rows selects exactly the
 /// same set through [`search_row_from`]; two hand-kept lists drifted for
 /// as long as they existed.
-const SEARCH_ROW_COLUMNS: &str =
-    "uuid, provider, kind, source_label, created_at, modified_at, is_document, author, account, \
-     project, org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
-     message_index, entire_chat, preview, source_url, notion_page_uuid, upstream_id, \
-     upstream_entity_kind, source_id, byte_size, item_count, diff_status, diff_changed_columns";
+const SEARCH_ROW_COLUMNS: &[GridRowColumn] = {
+    use GridRowColumn as G;
+    &[
+        G::Uuid,
+        G::Provider,
+        G::Kind,
+        G::SourceLabel,
+        G::CreatedAt,
+        G::ModifiedAt,
+        G::IsDocument,
+        G::Author,
+        G::Account,
+        G::Project,
+        G::OrgUuid,
+        G::OrgName,
+        G::Channel,
+        G::ConversationName,
+        G::ConversationUuid,
+        G::MarkdownUuid,
+        G::MessageIndex,
+        G::EntireChat,
+        G::Preview,
+        G::SourceUrl,
+        G::NotionPageUuid,
+        G::UpstreamId,
+        G::UpstreamEntityKind,
+        G::SourceId,
+        G::ByteSize,
+        G::ItemCount,
+        G::DiffStatus,
+        G::DiffChangedColumns,
+    ]
+};
+
+fn search_row_select() -> String {
+    let names: Vec<&str> = SEARCH_ROW_COLUMNS.iter().map(|c| c.as_str()).collect();
+    names.join(", ")
+}
 
 /// What `ordered_uuids` runs, with its parameters.
 pub fn listing_sql(q: &ParsedQuery, sort: &[Sort], within: &[Within]) -> (String, Vec<String>) {
     let (where_sql, params) = where_within(q, within);
-    let order = order_by(sort).unwrap_or_else(|| DEFAULT_ORDER.to_string());
+    let order = order_by(sort).unwrap_or_else(default_order::<GridRow>);
     (
         format!("SELECT uuid FROM grid_rows{where_sql} ORDER BY {order}"),
         params,
@@ -100,12 +135,13 @@ pub fn listing_sql(q: &ParsedQuery, sort: &[Sort], within: &[Within]) -> (String
 const LOOKUP_CHUNK: usize = 10_000;
 
 fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
-    let kind: String = r.try_get("kind").unwrap_or_default();
-    let author: String = r.try_get("author").unwrap_or_default();
-    let provider: Option<String> = r.try_get("provider").ok().flatten();
+    use GridRowColumn as G;
+    let kind: String = r.try_get(G::Kind.as_str()).unwrap_or_default();
+    let author: String = r.try_get(G::Author.as_str()).unwrap_or_default();
+    let provider: Option<String> = r.try_get(G::Provider.as_str()).ok().flatten();
     SearchRow {
-        uuid: r.try_get("uuid").unwrap_or_default(),
-        conversation_uuid: r.try_get("conversation_uuid").unwrap_or_default(),
+        uuid: r.try_get(G::Uuid.as_str()).unwrap_or_default(),
+        conversation_uuid: r.try_get(G::ConversationUuid.as_str()).unwrap_or_default(),
         markdown_uuid: r
             .try_get::<Option<String>, _>("markdown_uuid")
             .ok()
@@ -115,18 +151,20 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .ok()
             .flatten()
             .map(|n| n as usize),
-        snippet: r.try_get("preview").unwrap_or_default(),
+        snippet: r.try_get(G::Preview.as_str()).unwrap_or_default(),
         sender: author.clone(),
         created_at: r.try_get::<Option<String>, _>("created_at").ok().flatten(),
         modified_at: r.try_get::<Option<String>, _>("modified_at").ok().flatten(),
-        is_document: r.try_get::<bool, _>("is_document").unwrap_or(false),
-        conversation_name: r.try_get("conversation_name").unwrap_or_default(),
-        project: r.try_get("project").unwrap_or_default(),
-        account: r.try_get("account").unwrap_or_default(),
-        org_uuid: r.try_get("org_uuid").unwrap_or_default(),
-        org_name: r.try_get("org_name").unwrap_or_default(),
-        entire_chat: r.try_get("entire_chat").unwrap_or_default(),
-        source: r.try_get("source_label").unwrap_or_default(),
+        is_document: r
+            .try_get::<bool, _>(G::IsDocument.as_str())
+            .unwrap_or(false),
+        conversation_name: r.try_get(G::ConversationName.as_str()).unwrap_or_default(),
+        project: r.try_get(G::Project.as_str()).unwrap_or_default(),
+        account: r.try_get(G::Account.as_str()).unwrap_or_default(),
+        org_uuid: r.try_get(G::OrgUuid.as_str()).unwrap_or_default(),
+        org_name: r.try_get(G::OrgName.as_str()).unwrap_or_default(),
+        entire_chat: r.try_get(G::EntireChat.as_str()).unwrap_or_default(),
+        source: r.try_get(G::SourceLabel.as_str()).unwrap_or_default(),
         provider: provider.clone().unwrap_or_default(),
         source_ref: None,
         source_id: r
@@ -136,11 +174,13 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .unwrap_or_default(),
         kind,
         author,
-        channel: r.try_get("channel").unwrap_or_default(),
-        source_url: r.try_get("source_url").unwrap_or_default(),
-        notion_page_uuid: r.try_get("notion_page_uuid").unwrap_or_default(),
-        upstream_id: r.try_get("upstream_id").unwrap_or_default(),
-        upstream_entity_kind: r.try_get("upstream_entity_kind").unwrap_or_default(),
+        channel: r.try_get(G::Channel.as_str()).unwrap_or_default(),
+        source_url: r.try_get(G::SourceUrl.as_str()).unwrap_or_default(),
+        notion_page_uuid: r.try_get(G::NotionPageUuid.as_str()).unwrap_or_default(),
+        upstream_id: r.try_get(G::UpstreamId.as_str()).unwrap_or_default(),
+        upstream_entity_kind: r
+            .try_get(G::UpstreamEntityKind.as_str())
+            .unwrap_or_default(),
         byte_size: r.try_get::<Option<i64>, _>("byte_size").ok().flatten(),
         item_count: r.try_get::<Option<i64>, _>("item_count").ok().flatten(),
         diff_status: r.try_get::<Option<String>, _>("diff_status").ok().flatten(),
@@ -279,12 +319,9 @@ impl IndexRepo for DoltRepo {
         };
         // Audited for injection per sqlx 0.9's `SqlSafeStr` bound. Everything
         // interpolated into `sql` is a literal (the table names on `At`
-        // included, and a `Sort`'s column, from its closed match), or comes
-        // from `build_where`, which only ever splices `&'static str` column
-        // names returned by `column_for_field`'s closed match, or from
-        // `where_within` and `group_sql`, whose column names are the
-        // `&'static str`s of `GridColumn::sql`'s closed match — every
-        // user-supplied value leaves as a `?` in `params`. Same reasoning
+        // included), or a column name, which is only ever a
+        // `GridRowColumn::as_str` — every user-supplied value leaves as a
+        // `?` in `params`. Same reasoning
         // for the other `AssertSqlSafe` sites in this file, where the
         // interpolated part is a literal table name or a `?,?,?` run built
         // from a count.
@@ -366,7 +403,7 @@ impl IndexRepo for DoltRepo {
     async fn group_counts(
         &self,
         q: &ParsedQuery,
-        by: &[&'static str],
+        by: &[GridRowColumn],
         among: Option<&[String]>,
     ) -> Result<Grouping, RepoError> {
         let Some(mut at) = self.pinned().await? else {
@@ -776,24 +813,5 @@ impl IndexRepo for DoltRepo {
         let Some(r) = row else { return Ok(None) };
         let rel: Option<String> = r.try_get("md_path").ok();
         Ok(rel.map(|p| self.root.as_ref().join(p)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The SELECT list is hand-written and the DDL is derived from
-    /// `GridRow`; a name here the table does not have fails every
-    /// search with "no such column", but only once a search runs.
-    #[test]
-    fn every_selected_column_is_in_the_grid_rows_ddl() {
-        let (_, ddl_columns) = datalib_schema::grid_rows::COLUMNS[0];
-        for name in SEARCH_ROW_COLUMNS.split(',').map(str::trim) {
-            assert!(
-                ddl_columns.contains(&name),
-                "SEARCH_ROW_COLUMNS names `{name}`, which grid_rows does not have"
-            );
-        }
     }
 }

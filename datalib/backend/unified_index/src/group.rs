@@ -3,16 +3,19 @@
 //! its true count at once, and reads a group's rows only as it is opened
 //! and scrolled, the way it reads an ungrouped search.
 
+use datalib_query::table::{Column, SearchTable};
+use datalib_schema::grid_rows::GridRowColumn;
+
 use crate::db::build_where;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
 
-/// One step of the way into a group: a `grid_rows` column (from
-/// [`crate::sort::GridColumn::sql`]) and the value its rows share, `None`
+/// One step of the way into a group: the column it groups by (a
+/// column's `SearchTable::sorts_by`) and the value its rows share, `None`
 /// for the rows with none.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Within {
-    pub column: &'static str,
+pub struct Within<C = GridRowColumn> {
+    pub column: C,
     pub value: Option<String>,
 }
 
@@ -40,16 +43,17 @@ pub const MAX_GROUPS: usize = 10_000;
 
 /// The query's own filter, narrowed to one group: `WHERE …` or empty, and
 /// the values bound to its `?`s in order.
-pub fn where_within(q: &ParsedQuery, within: &[Within]) -> (String, Vec<String>) {
+pub fn where_within<C: Column>(q: &ParsedQuery<C>, within: &[Within<C>]) -> (String, Vec<String>) {
     let (where_sql, mut params) = build_where(q);
     let mut clauses: Vec<String> = Vec::new();
     for w in within {
+        let column = w.column.as_str();
         match &w.value {
             Some(v) => {
-                clauses.push(format!("{} = ?", w.column));
+                clauses.push(format!("{column} = ?"));
                 params.push(v.clone());
             }
-            None => clauses.push(format!("{} IS NULL", w.column)),
+            None => clauses.push(format!("{column} IS NULL")),
         }
     }
     if clauses.is_empty() {
@@ -66,16 +70,23 @@ pub fn where_within(q: &ParsedQuery, within: &[Within]) -> (String, Vec<String>)
     )
 }
 
-/// The groups of the rows `where_sql` keeps, by `by`: each group's values
-/// as text, its count, and its newest row (a bare column beside the one
+/// The groups of the rows `where_sql` keeps in `table` (the pinned name
+/// of `C`'s table), by `by`: each group's values as text, its count, and
+/// its newest row by the table's own order (a bare column beside the one
 /// `max()` is taken from the row the maximum came from). At most one more
 /// than [`MAX_GROUPS`], so the caller can tell there were more.
-pub fn group_sql(table: &str, where_sql: &str, by: &[&'static str]) -> String {
-    let values: Vec<String> = by.iter().map(|c| format!("CAST({c} AS TEXT)")).collect();
+pub fn group_sql<C: Column>(table: &str, where_sql: &str, by: &[C]) -> String {
+    let values: Vec<String> = by
+        .iter()
+        .map(|c| format!("CAST({} AS TEXT)", c.as_str()))
+        .collect();
     let positions: Vec<String> = (1..=by.len()).map(|i| i.to_string()).collect();
+    let (newest, _) = <C::Table as SearchTable>::ORDER[0];
     format!(
-        "SELECT {}, count(*), uuid, max(touched_at_utc) FROM {table}{where_sql} GROUP BY {} LIMIT {}",
+        "SELECT {}, count(*), {}, max({}) FROM {table}{where_sql} GROUP BY {} LIMIT {}",
         values.join(", "),
+        <C::Table as SearchTable>::PRIMARY_KEY.as_str(),
+        newest.as_str(),
         positions.join(", "),
         MAX_GROUPS + 1
     )
@@ -90,11 +101,11 @@ mod tests {
     fn a_group_narrows_the_query_and_a_missing_value_is_null() {
         let within = [
             Within {
-                column: "kind",
+                column: GridRowColumn::Kind,
                 value: Some("Chat".into()),
             },
             Within {
-                column: "author",
+                column: GridRowColumn::Author,
                 value: None,
             },
         ];
@@ -114,7 +125,11 @@ mod tests {
     #[test]
     fn the_groups_come_by_position_with_a_sample_and_a_bound() {
         assert_eq!(
-            group_sql("grid_rows", " WHERE x = ?", &["kind", "author"]),
+            group_sql(
+                "grid_rows",
+                " WHERE x = ?",
+                &[GridRowColumn::Kind, GridRowColumn::Author]
+            ),
             format!(
                 "SELECT CAST(kind AS TEXT), CAST(author AS TEXT), count(*), uuid, max(touched_at_utc) \
                  FROM grid_rows WHERE x = ? GROUP BY 1, 2 LIMIT {}",

@@ -26,14 +26,16 @@ mod results;
 mod serve_tests;
 
 use datalib_columns::Identity;
+use datalib_schema::grid_rows::GridRowColumn;
 use datalib_unified_index::db::datalib_source_id;
+use datalib_unified_index::grid_columns::grid_order;
 use datalib_unified_index::group::Within;
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport, SummaryCache};
 use datalib_unified_index::qmd::{
     display_snippet, CollectionScope, GridIndex, QmdDaemon, QmdDaemonConfig, QmdIndexReader,
     QmdIndexSummary, QueryMode,
 };
-use datalib_unified_index::query::{parse_query, FreeTextMode, ParsedQuery};
+use datalib_unified_index::query::{parse_query, Field, FreeTextMode, ParsedQuery};
 use datalib_unified_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
 use datalib_unified_index::search::SearchRow;
 use datalib_unified_index::sort::Sort;
@@ -313,7 +315,7 @@ async fn search_handler(
     }
     let limit = p.limit.unwrap_or(200).min(results::MAX_PAGE);
     let mut errors: Vec<String> = Vec::new();
-    let sort = match p.sort.as_deref().map(Sort::parse_order).transpose() {
+    let sort = match p.sort.as_deref().map(grid_order).transpose() {
         Ok(sort) => sort.unwrap_or_default(),
         Err(e) => {
             errors.push(format!("{e}; showing the default order"));
@@ -368,10 +370,6 @@ async fn search_handler(
                 FreeTextMode::Hybrid => "hybrid",
                 FreeTextMode::Vsearch => "vsearch",
             },
-            "documents": parsed.documents,
-            "filters": parsed.filters.iter()
-                .map(|(k, v)| (k.key().to_string(), v.clone()))
-                .collect::<Vec<_>>(),
             "qmd_error": qmd_error,
         }),
         rows,
@@ -462,7 +460,7 @@ async fn group_list(
     s: &Index,
     q: &str,
     parsed: &ParsedQuery,
-    by: &[&'static str],
+    by: &[GridRowColumn],
 ) -> Result<datalib_unified_index::group::Grouping, SearchFailure> {
     let among = if parsed.free_text.is_empty() {
         None
@@ -689,7 +687,7 @@ async fn qmd_ranking(
     // visible. (ERROR level; this file logs via eprintln!.)
     // An `is:document` search wants the document a hit is in, not the
     // message it landed on — which the SQL filter would then drop.
-    let ranked = idx.ranked_rows_one_per_doc(&hits, parsed.documents == Some(true), |h| {
+    let ranked = idx.ranked_rows_one_per_doc(&hits, parsed.documents() == Some(true), |h| {
         eprintln!(
             "ERROR search: qmd hit resolved to no grid rows: path={:?} score={}",
             h.path, h.score
@@ -745,7 +743,9 @@ fn collection_scope(parsed: &ParsedQuery) -> CollectionScope {
     let names: Vec<String> = parsed
         .terms
         .iter()
-        .filter(|t| t.field.key() == "source_id" && !t.negate)
+        .filter(|t| {
+            matches!(t.field, Field::Column(k) if k.column == GridRowColumn::SourceId) && !t.negate
+        })
         .filter(|t| t.value != datalib_source_id())
         .map(|t| t.value.clone())
         .collect();

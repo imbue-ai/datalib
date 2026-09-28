@@ -58,7 +58,7 @@ pub trait IndexRepo: Send + Sync {
     async fn group_counts(
         &self,
         query: &ParsedQuery,
-        by: &[&'static str],
+        by: &[datalib_schema::grid_rows::GridRowColumn],
         among: Option<&[String]>,
     ) -> Result<Grouping, RepoError>;
 

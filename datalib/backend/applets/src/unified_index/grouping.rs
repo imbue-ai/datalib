@@ -3,16 +3,20 @@
 //! (`within=[["kind","Chat"],["author",null]]`). Both name grid columns
 //! by id; one no `grid_rows` column holds (Score) cannot group.
 
+use datalib_query::table::SearchTable;
+use datalib_schema::grid_rows::{GridRow, GridRowColumn};
+use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::group::Within;
-use datalib_unified_index::sort::GridColumn;
+use datalib_unified_index::sort::SortBy;
 
-fn column(id: &str) -> Result<&'static str, String> {
-    GridColumn::parse(id)
-        .and_then(GridColumn::sql)
-        .ok_or_else(|| format!("rows cannot be grouped by {id:?}"))
+fn column(id: &str) -> Result<GridRowColumn, String> {
+    match GridColumn::parse(id).map(GridColumn::sorts) {
+        Some(SortBy::Column(c)) => Ok(GridRow::sorts_by(c)),
+        _ => Err(format!("rows cannot be grouped by {id:?}")),
+    }
 }
 
-pub fn parse_by(spelled: &str) -> Result<Vec<&'static str>, String> {
+pub fn parse_by(spelled: &str) -> Result<Vec<GridRowColumn>, String> {
     spelled.split(',').map(column).collect()
 }
 
@@ -36,7 +40,14 @@ mod tests {
 
     #[test]
     fn columns_are_named_by_the_grids_ids() {
-        assert_eq!(parse_by("source_ref,kind"), Ok(vec!["source_id", "kind"]));
+        assert_eq!(
+            parse_by("source_ref,kind"),
+            Ok(vec![GridRowColumn::SourceId, GridRowColumn::Kind])
+        );
+        assert_eq!(
+            parse_by("created_at"),
+            Ok(vec![GridRowColumn::CreatedAtUtc])
+        );
         assert!(parse_by("score").unwrap_err().contains("\"score\""));
         assert!(parse_by("no_such_column").is_err());
     }
@@ -47,11 +58,11 @@ mod tests {
             parse_within(r#"[["kind","Chat"],["author",null]]"#),
             Ok(vec![
                 Within {
-                    column: "kind",
+                    column: GridRowColumn::Kind,
                     value: Some("Chat".into())
                 },
                 Within {
-                    column: "author",
+                    column: GridRowColumn::Author,
                     value: None
                 },
             ])
