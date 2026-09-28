@@ -406,6 +406,39 @@ impl Harness {
         }
     }
 
+    /// Like `wait`, but `None` once `pid` has exited without answering: a
+    /// puppet the loop killed at the end of its stop grace never will.
+    /// The loop reports each process it reaps, so every report is a
+    /// moment to look again.
+    pub async fn wait_while_alive<T>(
+        &mut self,
+        pid: i32,
+        what: &str,
+        mut pick: impl FnMut(&Seen) -> Option<T>,
+    ) -> Option<T> {
+        let deadline = tokio::time::Instant::now() + DEADLINE;
+        loop {
+            while let Ok(seen) = self.rx.try_recv() {
+                self.saw(&seen);
+                self.backlog.push_back(seen);
+            }
+            if let Some(at) = self.backlog.iter().position(|s| pick(s).is_some()) {
+                let seen = self.backlog.remove(at).expect("just found");
+                return pick(&seen);
+            }
+            if !alive(pid) {
+                return None;
+            }
+            let seen = match tokio::time::timeout_at(deadline, self.rx.recv()).await {
+                Ok(Some(seen)) => seen,
+                Ok(None) => self.fail(&format!("the harness's channel closed waiting for {what}")),
+                Err(_) => self.fail(&format!("no {what} within {DEADLINE:?}")),
+            };
+            self.saw(&seen);
+            self.backlog.push_back(seen);
+        }
+    }
+
     /// Every ack that has arrived and no wait has taken, oldest first,
     /// taken now, without waiting for more.
     pub fn take_acks(&mut self) -> Vec<(String, i32, String)> {

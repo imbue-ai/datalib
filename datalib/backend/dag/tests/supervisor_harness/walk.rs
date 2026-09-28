@@ -214,9 +214,9 @@ impl Walk {
             format!("did {instruction}")
         };
         let what = format!("{step} [{pid}] to do {instruction:?} or be stopped");
-        let (w, p) = self
+        let answer = self
             .h
-            .wait(&what, |s| match s {
+            .wait_while_alive(pid, &what, |s| match s {
                 Seen::Ack {
                     step: st,
                     pid: p,
@@ -227,7 +227,16 @@ impl Walk {
                 _ => None,
             })
             .await;
-        self.absorb(step, p, &w);
+        match answer {
+            Some((w, p)) => self.absorb(step, p, &w),
+            // Killed before it could say so; the instruction waits in its
+            // pipe for the step's next process.
+            None => {
+                if let Some(puppet) = self.puppets.get_mut(step) {
+                    puppet.listening = None;
+                }
+            }
+        }
     }
 
     /// A step names only requests still open, and only while it has work
