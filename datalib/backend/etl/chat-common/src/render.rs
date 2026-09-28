@@ -118,36 +118,86 @@ pub fn render_all(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    let mut summary = RenderSummary {
-        docs_total: chats.iter().map(|c| c.buckets.len()).sum(),
-        ..Default::default()
-    };
-    progress.set_length(Some(summary.docs_total as u64));
-
+    let docs_total = chats.iter().map(|c| c.buckets.len()).sum();
+    let mut renderer = ChatRenderer::new(
+        profile,
+        out_dir,
+        source_id,
+        docs_total,
+        progress,
+        on_doc_complete,
+    );
     let empty_bundle = BlobBundle::default();
     for chat in chats {
         let bundle = blobs_by_chat.get(&chat.id).unwrap_or(&empty_bundle);
-        summary.buckets.push(Bucket {
+        renderer.render_chat(chat, bundle)?;
+    }
+    Ok(renderer.finish())
+}
+
+/// [`render_all`] one chat at a time, for a provider whose chats are
+/// expensive to build: building each just before it renders puts the
+/// first document in the store at once rather than after every chat
+/// has been built, and holds one chat's bodies in memory, not all.
+pub struct ChatRenderer<'a> {
+    profile: &'a RenderProfile,
+    out_dir: &'a Path,
+    source_id: &'a str,
+    progress: &'a Progress,
+    on_doc_complete: &'a mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    summary: RenderSummary,
+}
+
+impl<'a> ChatRenderer<'a> {
+    /// `docs_total` is announced as the queue straight away.
+    pub fn new(
+        profile: &'a RenderProfile,
+        out_dir: &'a Path,
+        source_id: &'a str,
+        docs_total: usize,
+        progress: &'a Progress,
+        on_doc_complete: &'a mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    ) -> Self {
+        progress.set_length(Some(docs_total as u64));
+        Self {
+            profile,
+            out_dir,
+            source_id,
+            progress,
+            on_doc_complete,
+            summary: RenderSummary {
+                docs_total,
+                ..Default::default()
+            },
+        }
+    }
+
+    pub fn render_chat(&mut self, chat: &NormalizedChat, bundle: &BlobBundle) -> Result<()> {
+        self.summary.buckets.push(Bucket {
             key: chat.chat_uuid.clone(),
             inputs: chat.inputs.clone(),
         });
         for doc in &chat.buckets {
             let (items, reactions) = render_one(
-                profile,
+                self.profile,
                 chat,
                 doc,
-                out_dir,
-                source_id,
+                self.out_dir,
+                self.source_id,
                 bundle,
-                on_doc_complete,
+                &mut *self.on_doc_complete,
             )?;
-            summary.docs_rendered += 1;
-            summary.items_rendered += items;
-            summary.reactions_rendered += reactions;
-            progress.inc(1);
+            self.summary.docs_rendered += 1;
+            self.summary.items_rendered += items;
+            self.summary.reactions_rendered += reactions;
+            self.progress.inc(1);
         }
+        Ok(())
     }
-    Ok(summary)
+
+    pub fn finish(self) -> RenderSummary {
+        self.summary
+    }
 }
 
 /// Render one document; `(items, reactions)` rendered. Always: the

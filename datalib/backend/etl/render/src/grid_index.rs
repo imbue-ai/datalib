@@ -355,9 +355,20 @@ async fn record_unreadable_store(
 
 pub fn schema_hash() -> String {
     datalib_store_meta::schema_hash(
-        index_ddl().chain(GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl)),
+        index_ddl()
+            .chain(GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl))
+            .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied()),
     )
 }
+
+/// What replacing one document looks its old rows up by, in every store
+/// that holds documents. Without them each document's `DELETE` scans the
+/// whole table, and a full render is quadratic in the store's size.
+/// Apart from `GRID_ROWS_INDEXES`, which are the search bar's.
+pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS grid_rows_by_markdown ON grid_rows (markdown_uuid)",
+    "CREATE INDEX IF NOT EXISTS edges_by_src_markdown ON edges (src_markdown_uuid)",
+];
 
 /// Every `CREATE TABLE` in the grid index, in creation order. One list, so
 /// the DDL pass and the schema check can't drift into covering different
@@ -399,8 +410,9 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     // After the reconcile, which drops the tables and their indexes with
     // them. Only here: every render store has a `grid_rows` too, and only
     // the index the grid reads wants to pay for these on every write.
-    for (_table, ddl) in GRID_ROWS_INDEXES {
-        sqlx::query(*ddl)
+    let search = GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl);
+    for ddl in search.chain(DOCUMENT_LOOKUP_INDEXES.iter().copied()) {
+        sqlx::query(ddl)
             .execute(pool)
             .await
             .with_context(|| format!("create index: {ddl}"))?;
@@ -1231,9 +1243,52 @@ async fn insert_grid_row(
     Ok(())
 }
 
+/// Fails unless SQLite plans every one of `statements` through an index.
+#[cfg(test)]
+pub(crate) async fn assert_searched_by_index(pool: &SqlitePool, statements: &[&'static str]) {
+    for sql in statements {
+        // Audited: `sql` is a static literal from the test.
+        let mut explain = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")));
+        for _ in 0..sql.matches('?').count() {
+            explain = explain.bind("x");
+        }
+        let plan: Vec<String> = explain
+            .fetch_all(pool)
+            .await
+            .unwrap_or_else(|e| panic!("explain {sql}: {e}"))
+            .iter()
+            .map(|r| r.get::<String, _>("detail"))
+            .collect();
+        assert!(
+            plan.iter().all(|d| !d.starts_with("SCAN")),
+            "{sql} scans its table: {plan:?}"
+        );
+    }
+}
+
 #[cfg(test)]
 mod open_index_tests {
     use super::*;
+
+    /// Replacing a document looks its old rows up by index. Without one,
+    /// each document's delete scanned the whole table, and a full render
+    /// of a 20k-thread mailbox spent most of its time there.
+    #[tokio::test]
+    async fn replacing_a_document_finds_its_old_rows_by_index() {
+        let td = tempfile::tempdir().unwrap();
+        let pool = open_index(&td.path().join("db.doltlite_db"))
+            .await
+            .expect("open_index");
+        assert_searched_by_index(
+            &pool,
+            &[
+                "DELETE FROM grid_rows WHERE markdown_uuid = ?",
+                "DELETE FROM edges WHERE src_markdown_uuid = ?",
+            ],
+        )
+        .await;
+        pool.close().await;
+    }
 
     /// A `grid_index` pass that died after its SQL `COMMIT` and before its
     /// `dolt_commit` leaves the batch in the working set. The next

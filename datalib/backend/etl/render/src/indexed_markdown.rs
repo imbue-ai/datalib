@@ -57,6 +57,17 @@ fn store_ddl() -> Vec<&'static str> {
         .collect()
 }
 
+/// Indexes that change no row, so they stay out of [`schema_hash`]:
+/// adding one must not re-render every source. `open` creates them.
+fn lookup_indexes() -> impl Iterator<Item = &'static str> {
+    crate::grid_index::DOCUMENT_LOOKUP_INDEXES
+        .iter()
+        .copied()
+        .chain(std::iter::once(
+            "CREATE INDEX IF NOT EXISTS problems_by_scope ON problems (scope_kind, scope_key)",
+        ))
+}
+
 /// blake3 over this store's DDL: what the render step folds into its
 /// params, so a change to any render-store table re-renders every
 /// source. Nobody has to remember a bump, and a column added to
@@ -148,9 +159,10 @@ impl IndexedMarkdownStore {
         std::fs::create_dir_all(rendered_root)
             .with_context(|| format!("mkdir -p {}", rendered_root.display()))?;
         let path = path_for(rendered_root);
+        let ddl: Vec<&str> = store_ddl().into_iter().chain(lookup_indexes()).collect();
         let pool = blocking(datalib_etl::doltlite_raw::open_derived(
             &path,
-            &store_ddl(),
+            &ddl,
             datalib_etl::doltlite_raw::StoreKind::Render,
         ))
         .with_context(|| format!("open indexed markdown store {}", path.display()))?;
@@ -1093,6 +1105,23 @@ mod tests {
         IndexedMarkdownStore::open(dir).expect("open store")
     }
 
+    /// Every per-document lookup `put_document` makes goes through an
+    /// index: without them a full render is quadratic in the store's size.
+    #[test]
+    fn replacing_a_document_finds_its_old_rows_by_index() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        blocking(crate::grid_index::assert_searched_by_index(
+            &st.pool,
+            &[
+                "DELETE FROM grid_rows WHERE markdown_uuid = ?",
+                "DELETE FROM edges WHERE src_markdown_uuid = ?",
+                "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?",
+            ],
+        ));
+        st.close();
+    }
+
     /// A store call from a thread with no runtime must hand its
     /// connection back to the pool. With a runtime built and dropped per
     /// call, sqlx's return-to-pool task died with the runtime, the pool's
@@ -1117,6 +1146,72 @@ mod tests {
             );
         }
         st.close();
+    }
+
+    /// A store already holding `n` one-row documents, `m0` … `m{n-1}`,
+    /// committed. Filled by copying one seed row in a single statement,
+    /// so the fill costs the same with or without the lookup indexes.
+    fn store_holding(dir: &Path, n: usize) -> IndexedMarkdownStore {
+        let st = store(dir);
+        st.put_document(dir, &doc(dir, "seed", "fp")).unwrap();
+        let (_table, columns) = datalib_schema::grid_rows::COLUMNS[0];
+        let copied: Vec<String> = columns
+            .iter()
+            .map(|c| match *c {
+                "uuid" | "markdown_uuid" | "conversation_uuid" => "'m' || i".to_string(),
+                other => other.to_string(),
+            })
+            .collect();
+        // Audited: column names come from the derive's static list; `n` is
+        // a number.
+        let fill = format!(
+            "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < {n}) \
+             INSERT INTO grid_rows ({}) SELECT {} FROM grid_rows, k WHERE uuid = 'seed'",
+            columns.join(", "),
+            copied.join(", "),
+        );
+        blocking(sqlx::query(sqlx::AssertSqlSafe(fill)).execute(&st.pool)).unwrap();
+        st.commit("fill").unwrap();
+        st
+    }
+
+    /// Seconds to replace `replaced` of a store's documents in one batch,
+    /// the way the render driver writes them.
+    fn seconds_to_replace(dir: &Path, st: &IndexedMarkdownStore, replaced: usize) -> f64 {
+        let started = std::time::Instant::now();
+        st.begin_batch().unwrap();
+        for i in 0..replaced {
+            st.put_document(dir, &doc(dir, &format!("m{i}"), "fp"))
+                .unwrap();
+        }
+        st.commit_batch().unwrap();
+        started.elapsed().as_secs_f64()
+    }
+
+    /// Replacing a document costs about the same however many documents
+    /// the store holds. Each `put_document` used to scan the whole of
+    /// `grid_rows` for the document's old rows, so a full render was
+    /// quadratic: a 20k-thread mailbox spent minutes there. Compared
+    /// against a small store in the same process, so a slow machine
+    /// slows both sides alike.
+    #[test]
+    fn replacing_a_document_does_not_slow_down_as_the_store_grows() {
+        const REPLACED: usize = 700;
+        const GROWTH: usize = 80;
+        let small_dir = tempfile::tempdir().unwrap();
+        let small = store_holding(small_dir.path(), REPLACED);
+        let big_dir = tempfile::tempdir().unwrap();
+        let big = store_holding(big_dir.path(), GROWTH * REPLACED);
+        let small_s = seconds_to_replace(small_dir.path(), &small, REPLACED);
+        let big_s = seconds_to_replace(big_dir.path(), &big, REPLACED);
+        assert!(
+            big_s < 5.0 * small_s,
+            "{GROWTH}x the documents made replacing {REPLACED} take {:.1}x as long \
+             ({small_s:.3}s → {big_s:.3}s): a per-document lookup is scanning",
+            big_s / small_s
+        );
+        small.close();
+        big.close();
     }
 
     fn row(uuid: &str, markdown_uuid: &str) -> GridRow {

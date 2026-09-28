@@ -1,6 +1,6 @@
 //! Email (JMAP) render: convert parsed threads into the shared
 //! `chat-common` normalized model and delegate markdown / grid-row /
-//! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
+//! grid-row plumbing to [`datalib_etl_chat_common::render::ChatRenderer`].
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -9,7 +9,7 @@ use super::parse::ParsedEmail;
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
+use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
@@ -202,42 +202,41 @@ pub fn render_all(
         Some(resolved.ids)
     };
 
-    let mut chats: Vec<NormalizedChat> = Vec::with_capacity(parsed.docs.len());
-    let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
-    for bucket in &parsed.docs {
-        if bucket.emails.is_empty() {
-            continue;
-        }
-        // Thread-level inclusion: keep the whole thread if ANY of its
-        // emails is filed under an allowed mailbox, so conversations
-        // aren't fragmented across the filter boundary.
-        if let Some(allow) = &label_allow {
-            let in_scope = bucket.emails.iter().any(|em| {
-                bucket
-                    .joins
-                    .mailboxes
-                    .get(&em.id)
-                    .is_some_and(|ids| ids.iter().any(|m| allow.contains(m)))
-            });
-            if !in_scope {
-                continue;
-            }
-        }
-        let (chat, bundle) = build_chat(source_id, bucket, &mailbox_name, &account_label, outlink);
-        blobs_by_chat.insert(chat.id.clone(), bundle);
-        chats.push(chat);
-    }
-    let summary = cc_render_all(
-        &profile(),
-        &chats,
+    // Thread-level inclusion: keep the whole thread if ANY of its
+    // emails is filed under an allowed mailbox, so conversations
+    // aren't fragmented across the filter boundary.
+    let in_scope = |bucket: &&super::parse::EmailThreadBucket| {
+        !bucket.emails.is_empty()
+            && label_allow.as_ref().is_none_or(|allow| {
+                bucket.emails.iter().any(|em| {
+                    bucket
+                        .joins
+                        .mailboxes
+                        .get(&em.id)
+                        .is_some_and(|ids| ids.iter().any(|m| allow.contains(m)))
+                })
+            })
+    };
+    let threads: Vec<_> = parsed.docs.iter().filter(in_scope).collect();
+    // One document per thread. Each thread is built as it renders:
+    // building means parsing every `.eml` and converting its HTML, which
+    // for a large mailbox is minutes of work nobody would see.
+    let profile = profile();
+    let mut renderer = ChatRenderer::new(
+        &profile,
         root,
         source_id,
-        &blobs_by_chat,
+        threads.len(),
         progress,
         on_doc_complete,
-    )
-    .context("email chat-common render")?;
-    Ok(summary.buckets)
+    );
+    for bucket in threads {
+        let (chat, bundle) = build_chat(source_id, bucket, &mailbox_name, &account_label, outlink);
+        renderer
+            .render_chat(&chat, &bundle)
+            .context("email chat-common render")?;
+    }
+    Ok(renderer.finish().buckets)
 }
 
 /// The `accounts` row is a JMAP `Account` object, a Gmail stand-in

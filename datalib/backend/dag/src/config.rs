@@ -1489,7 +1489,7 @@ pub const BUILTIN_STORE_SHAPES: &[(&str, &str)] = &[
     ),
     (
         "grid_index",
-        "12e6e41e6fb4cb596546c0211e8b8512ae44ae870a2668fb7d21e7f1c1ef8acd",
+        "7eb041d05b657f5bcdac580386b7050cf29c0a06460dd6cc27d54bde02282ef0",
     ),
 ];
 
