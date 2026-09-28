@@ -14,6 +14,8 @@ import {
   sourceStepsOf,
   removedWith,
   setQmdSteps,
+  qmdIndexingOf,
+  type QmdIndexing,
   unwireFromFanIns,
   wireIntoFanIns,
   paramsAreRepresentable,
@@ -220,7 +222,7 @@ const editing = ref<{
   group: ConfiguredGroup;
   entry: CatalogEntry;
   steps: SourceSteps;
-  qmdIndexed: boolean;
+  qmdIndexing: QmdIndexing;
 } | null>(null);
 
 /// Non-null when the table is empty for a reason worth shouting about
@@ -819,10 +821,8 @@ async function openEdit(groupId: string) {
   const steps = sourceStepsOf(group.id, sources.value);
   const entry = groupEntry(group, steps);
   if (!entry) return;
-  const qmdIndexed = steps.render
-    ? sources.value.some((s) => s.id === `${group.id}/keyword_index`)
-    : true;
-  editing.value = { group, entry, steps, qmdIndexed };
+  const qmdIndexing = steps.render ? qmdIndexingOf(sources.value, group.id) : "keyword_and_embed";
+  editing.value = { group, entry, steps, qmdIndexing };
   wizardKey.value++;
   wizardOpen.value = true;
 }
@@ -835,7 +835,7 @@ async function onWizardSubmit(payload: {
   groupBody: string | null;
   stepsBody: string;
   renderId: string | null;
-  qmdIndex: boolean;
+  qmdIndexing: QmdIndexing;
 }) {
   const current = editing.value;
   let next: string;
@@ -869,9 +869,9 @@ async function onWizardSubmit(payload: {
   // the wizard asks about: the source's own qmd steps, added or taken out.
   if (payload.renderId) {
     next = wireIntoFanIns(next, payload.renderId);
-    next = setQmdSteps(next, payload.id, payload.qmdIndex);
+    next = setQmdSteps(next, payload.id, payload.qmdIndexing);
   } else {
-    next = setQmdSteps(next, payload.id, false);
+    next = setQmdSteps(next, payload.id, "none");
   }
 
   // Banners are for a person, so they say the name; the id is what the

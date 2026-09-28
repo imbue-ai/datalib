@@ -9,6 +9,7 @@
 mod applet;
 mod auth_endpoint;
 mod config_init;
+mod config_upgrade;
 mod dactal_csp;
 mod dag_run_state;
 mod feedback_endpoint;

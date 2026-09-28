@@ -1316,7 +1316,11 @@ fn accept_steps(
                     "`qmd_index` is the shape from before `qmd_aggregator`, which reads each \
                      source's `keyword_index` and `embed` rather than feeding them",
                 )
-                .with_help("rewrite the file once: `datalib-migrate-config <data root> --force`"),
+                .with_help(
+                    "the app rewrites the file itself when it next reads it, keeping the old \
+                     one as `config.toml.bak`; from a terminal, \
+                     `datalib-migrate-config <data root> --force`",
+                ),
             );
             continue;
         }

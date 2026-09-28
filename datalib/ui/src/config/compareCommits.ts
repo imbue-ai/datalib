@@ -98,6 +98,6 @@ export function addComparison(
   const built = buildDiffSource(opts);
   let next = appendSource(text, `${built.groupBody}\n\n${built.stepsBody}`);
   next = wireIntoFanIns(next, built.renderId);
-  next = setQmdSteps(next, opts.id, true);
+  next = setQmdSteps(next, opts.id, "keyword_and_embed");
   return { text: next, renderId: built.renderId };
 }
