@@ -74,15 +74,15 @@ describe("historyRows", () => {
   });
 
   it("keeps each store's walk order and never interleaves stores", () => {
-    const blobs: TreeHistory = {
+    const slack: TreeHistory = {
       tree: "slack",
       stores: [
         {
-          path: "slack/ingest/blobs.doltlite_db",
+          path: "slack/render_markdown/indexed_markdown.doltlite_db",
           truncated: false,
           commits: [
-            commit("b2", "2026-09-08T20:54:34+00:00", "checkpoint blobs"),
-            commit("b1", "2026-09-08T20:54:34+00:00", "Initialize data repository"),
+            commit("r2", "2026-09-08T20:54:34+00:00", "checkpoint slack"),
+            commit("r1", "2026-09-08T20:54:34+00:00", "Initialize data repository"),
           ],
         },
         {
@@ -95,16 +95,16 @@ describe("historyRows", () => {
         },
       ],
     };
-    const rows = historyRows([blobs]);
+    const rows = historyRows([slack]);
     expect(rows.map((r) => r.hash ?? r.label)).toEqual([
-      "blobs.doltlite_db",
-      "b2",
-      "b1",
+      "indexed_markdown.doltlite_db",
+      "r2",
+      "r1",
       "entities.doltlite_db",
       "e2",
       "e1",
     ]);
-    expect(truncatedStores([blobs])).toEqual(["slack/ingest/entities.doltlite_db"]);
+    expect(truncatedStores([slack])).toEqual(["slack/ingest/entities.doltlite_db"]);
   });
 
   it("names a sidecar by its suffix alone", () => {

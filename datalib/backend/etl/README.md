@@ -339,14 +339,6 @@ nothing wrong. The `pin.rs` `Pin` refuses `HEAD` by name, and the
 shared loaders take a mandatory `Reads`, so a call site has to say
 whose store it is reading.
 
-The one unpinned reader is the blob CAS (`open_cas_reader`), and that
-is a leftover rather than a design. The CAS *is* committed — at every
-checkpoint and again at the end, before the entities that name the
-blobs (`raw_store::SealState::seal`) — so a pinned read would find
-them. Until something moves it over, the unpinned read sees a writer's
-uncommitted blobs, which is harmless only because content addressing
-makes it so: a row is keyed by the blake3 of its own bytes.
-
 The two-process test measures what a read-only connection may issue
 beside a live writer — `dolt_hashof`, `sqlite_master`,
 `CREATE TEMP VIEW`, reads through `dolt_at_` modules and views,
@@ -579,9 +571,9 @@ implement it too and this crate must not reach `datalib_schema`.
 
 ## Blob CAS and per-provider edge tables
 
-A source that keeps attachment bytes has two doltlite files in its raw
-directory: `entities.doltlite_db` (entities plus that provider's CAS edge
-table) and `blobs.doltlite_db` (pure CAS). Bytes are keyed by their blake3
+A source that keeps attachment bytes has two files in its raw directory:
+`entities.doltlite_db` (entities plus that provider's CAS edge table) and
+`blobs.sqlite` (pure CAS). Bytes are keyed by their blake3
 hash and stored exactly once in `cas_objects`; each provider declares its
 own edge table, `(id, <owning>, <ref>, blake3)`, with `#[derive(CasEdgeRow)]`
 ([`macros/README.md`](macros/README.md)).
@@ -593,14 +585,31 @@ already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn blob reader.
 Parse reads the edge table through a `pinned_*` view, which uses no index, so
 a query per document would be a full scan per document.
 
-**A source that keeps a CAS opens its session with the CAS attached**
-(`RunCtx::open_store_with_blobs`), so every seal commits `blobs.doltlite_db`
-before `entities.doltlite_db`. The order is the point: a reader pinned at an
-entities commit must never find a row naming bytes that are not committed
-yet, and a CAS with no commits can be neither pinned nor versioned. Nothing
-in the CAS uses doltlite's diff or history — a hash is either present or it
-is not — so which container the bytes should live in at all is an open
-question; the `BlobCas` API is narrow enough that changing it is contained.
+**The CAS is plain SQLite, not doltlite**, created through the
+`doltlite_engine=sqlite` URI parameter like the run store. A
+content-addressed table is its own history — a hash is present or it is
+not, and a row never changes — so nothing ever read its doltlite log,
+diffs or pins, while every checkpoint's rewritten pages stayed in the
+file for good: measured on two real stores, a doltlite CAS was 2.1× and
+4.7× its payload, and `dolt_gc()` reclaimed almost none of it
+(`docs/dev/plans/blob_cas_plain_sqlite.md`). So the one-writer lock,
+the writer branch, the seal and the pin are all doltlite's rules and
+none of them apply here.
+
+**Bytes commit before the rows that name them, by construction.**
+`BlobCas::put_many` commits its own transaction, and `flush_cas_edges`
+calls it before it writes the edge rows. A reader pinned at any entities
+commit therefore finds every blob that commit names, and a reader of the
+CAS sees committed transactions only, so there is nothing to pin. The
+connection runs `synchronous=FULL` so that order survives a power cut.
+`RunCtx::open_store_with_blobs` hands the CAS to the session only so
+`finish` closes it.
+
+**Nothing resets the CAS.** Delete `blobs.sqlite` and reset the ingest
+step together; deleting the file alone leaves edge rows naming bytes
+that are gone, and the download will not refetch them. `BlobCas::open`
+refuses while a `blobs.doltlite_db` from an older build sits beside the
+new file, for the same reason, and its message says how to convert it.
 
 **Filenames dedupe on the content hash, not on the derived name.** A blob's
 rendered filename has a content-addressed stem and an extension derived from

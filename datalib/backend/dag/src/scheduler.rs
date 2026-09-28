@@ -131,34 +131,16 @@ impl Runner {
     }
 }
 
-/// One `--reset` argument: a step id, optionally `+blobs` to take an
-/// ingest step's blob CAS with its store.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResetTarget {
-    pub step: StepId,
-    pub part: String,
-}
-
-impl ResetTarget {
-    pub fn parse(arg: &str) -> ResetTarget {
-        let (step, part) = arg.split_once('+').unwrap_or((arg, "store"));
-        ResetTarget {
-            step: step.to_string(),
-            part: part.to_string(),
-        }
-    }
-}
-
 impl Runner {
     /// Empty what the named steps wrote and forget that they ever ran, so
-    /// the next run does their work from the start. Each target is one
-    /// invocation of the step with `DATALIB_DAG_RESET` naming the part;
-    /// what that empties is the step's to say (`step_protocol.md` § Reset).
+    /// the next run does their work from the start. Each step is invoked
+    /// once with `DATALIB_DAG_RESET=store`; what that empties is the
+    /// step's to say (`step_protocol.md` § Reset).
     /// Nothing else runs: the caller holds the runner lock, which is what
     /// makes emptying a store safe.
-    pub async fn reset(&self, graph: &Graph, targets: &[ResetTarget]) -> Result<()> {
+    pub async fn reset(&self, graph: &Graph, steps: &[StepId]) -> Result<()> {
         let store = crate::supervisor::store::Store::open(&self.data_root).await?;
-        let result = self.reset_each(graph, targets, &store).await;
+        let result = self.reset_each(graph, steps, &store).await;
         store.close().await;
         result
     }
@@ -166,17 +148,17 @@ impl Runner {
     async fn reset_each(
         &self,
         graph: &Graph,
-        targets: &[ResetTarget],
+        steps: &[StepId],
         store: &crate::supervisor::store::Store,
     ) -> Result<()> {
-        for target in targets {
+        for step in steps {
             let &i = graph
                 .by_id
-                .get(&target.step)
-                .with_context(|| format!("--reset {}: no such step", target.step))?;
+                .get(step)
+                .with_context(|| format!("--reset {step}: no such step"))?;
             let spec = &graph.steps[i];
             let StepRun::Subprocess { argv, env, .. } = &spec.run else {
-                anyhow::bail!("--reset {}: not a subprocess step", target.step);
+                anyhow::bail!("--reset {step}: not a subprocess step");
             };
             let ctx = StepCtx {
                 step_id: spec.id.clone(),
@@ -194,7 +176,7 @@ impl Runner {
             let mut child_env = (*self.child_env).clone();
             child_env.insert(
                 crate::subprocess::ENV_RESET.to_string(),
-                target.part.clone(),
+                "store".to_string(),
             );
             self.sink.emit(&Event::StepStart {
                 step: spec.id.clone(),
@@ -218,7 +200,7 @@ impl Runner {
                 signal: None,
             });
             if let Some(error) = error {
-                anyhow::bail!("reset {}:{}: {error}", target.step, target.part);
+                anyhow::bail!("reset {step}: {error}");
             }
             // Emptied, not gone: what reads it sees a new version and runs,
             // which is how the emptiness reaches the grid; and the step
@@ -231,7 +213,7 @@ impl Runner {
             let saved = store.load_record().await.context("load the record")?;
             let mut state = saved.clone();
             state.steps.insert(
-                target.step.clone(),
+                step.clone(),
                 crate::supervisor::record::StepRecord {
                     version: Some(version),
                     ..Default::default()

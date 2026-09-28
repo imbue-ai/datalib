@@ -73,7 +73,6 @@ export type MenuAction =
   | "history"
   | "reveal"
   | "reset"
-  | "reset_blobs"
   | "remove";
 
 export type MenuEntry =
@@ -115,7 +114,7 @@ export function noStoreReason(t: MenuTarget): string | null {
   return null;
 }
 
-/// Why "Reset (preserve attachments)…" is not for this row: a reset empties
+/// Why "Reset…" is not for this row: a reset empties
 /// what a source downloaded or rendered, and what reads it follows — so
 /// the index, which follows every source, is not reset by hand, and an
 /// applet writes nothing. The embedding map is the exception: each run
@@ -141,16 +140,6 @@ export function notResettableReason(t: MenuTarget): string | null {
 export function notSwitchableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet is not scheduled";
-  return null;
-}
-
-/// Why "Reset (drop attachments)…" does not apply: only a download keeps
-/// them.
-export function noAttachmentsReason(t: MenuTarget): string | null {
-  const why = notResettableReason(t);
-  if (why) return why;
-  if (t.type === "diff") return "A comparison downloads nothing";
-  if (t.kind === "step" && t.func !== "ingest") return "Only the download step keeps attachments";
   return null;
 }
 
@@ -266,8 +255,7 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
   add("copy_id", one ? "Copy id" : `Copy ${plural(targets.length, "id")}`, null);
   separator();
 
-  add("reset", "Reset (preserve attachments)…", forKind(targets, notResettableReason) ?? busy);
-  add("reset_blobs", "Reset (drop attachments)…", forKind(targets, noAttachmentsReason) ?? busy);
+  add("reset", "Reset…", forKind(targets, notResettableReason) ?? busy);
   add(
     "remove",
     one

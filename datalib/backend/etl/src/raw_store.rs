@@ -29,8 +29,9 @@ pub struct RawStoreSession {
 struct SealState {
     pool: SqlitePool,
     source_id: String,
-    /// Sibling blob CAS, when this source has one. Sealed *before* the
-    /// entities pool, always — see [`SealState::seal`].
+    /// Sibling blob CAS, when this source has one. Held only so `finish`
+    /// closes it: it is plain SQLite, and each `put_many` commits itself
+    /// before the edge rows naming its blobs are written.
     cas_pool: Option<SqlitePool>,
     checkpointer: std::sync::Mutex<crate::checkpointer::Checkpointer>,
     /// Where a seal is announced. `Progress` is the channel that already
@@ -84,8 +85,7 @@ impl RawStoreSession {
     }
 
     /// As [`open`](Self::open), for a source whose blobs live in a sibling
-    /// CAS file. Taken here rather than set later so the pair a seal has to
-    /// commit is fixed before anyone can seal.
+    /// CAS file, which `finish` then closes with the entities.
     pub async fn open_with_blobs(
         pool: SqlitePool,
         cas_pool: Option<SqlitePool>,
@@ -114,8 +114,7 @@ impl RawStoreSession {
     }
 
     /// Clean-completion finish: the run's last seal, then `close()` every
-    /// store so render can re-open them. Blobs before entities, for the
-    /// reason on [`SealState::seal`]. The summary comes back with
+    /// store so render can re-open them. The summary comes back with
     /// `commit=<hash>` appended when the entity store moved.
     ///
     /// A commit that fails fails the step: the rows are on disk, but the
@@ -132,12 +131,6 @@ impl RawStoreSession {
 
 impl SealState {
     async fn commit_final(&self, summary: String) -> Result<String> {
-        if let Some(cas) = self.cas_pool.as_ref() {
-            let msg = format!("download {}: blobs", self.source_id);
-            crate::doltlite_raw::commit_run(cas, &msg)
-                .await
-                .with_context(|| format!("commit {}'s blob store", self.source_id))?;
-        }
         let msg = format!("download {}: {summary}", self.source_id);
         let hash = crate::doltlite_raw::commit_run(&self.pool, &msg)
             .await
@@ -186,16 +179,6 @@ impl SealState {
             c.sealed();
             pending
         };
-        // **Blobs before entities, always.** An entity names a blob by its
-        // blake3, so sealing entities first admits a reader pinned at that
-        // commit seeing a row whose bytes are not yet committed — a dangling
-        // attachment. The other order admits only an unreferenced blob, which
-        // is already routine: the CAS is content-addressed and written with
-        // `INSERT OR IGNORE`.
-        if let Some(cas) = self.cas_pool.as_ref() {
-            let msg = format!("checkpoint {}: blobs", self.source_id);
-            crate::doltlite_raw::commit_run(cas, &msg).await?;
-        }
         let msg = format!("checkpoint {}: entities", self.source_id);
         let sealed = crate::doltlite_raw::commit_run(&self.pool, &msg).await?;
         // `None` means there was nothing dirty after all; no version moved,
@@ -295,46 +278,6 @@ mod tests {
         );
     }
 
-    /// A source whose blobs live in a sibling file must have *both* sealed.
-    /// Sealing only the entities store publishes a row naming bytes no
-    /// reader can resolve — which is exactly what shipped: `open_with_blobs`
-    /// existed, and claude, which has a CAS, was calling `open`.
-    #[tokio::test]
-    async fn a_seal_commits_the_blob_store_too() {
-        let dir = tempfile::tempdir().unwrap();
-        let entities = store(&dir.path().join("entities.doltlite_db")).await;
-        let cas = store(&dir.path().join("blobs.doltlite_db")).await;
-        if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
-            return;
-        }
-        let (before_e, before_c) = (commits(&entities).await, commits(&cas).await);
-
-        sqlx::query("INSERT INTO rows_t VALUES ('e')")
-            .execute(&entities)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO rows_t VALUES ('b')")
-            .execute(&cas)
-            .await
-            .unwrap();
-
-        state(
-            entities.clone(),
-            Some(cas.clone()),
-            crate::progress::Progress::noop(),
-        )
-        .seal()
-        .await
-        .unwrap();
-
-        assert_eq!(commits(&entities).await, before_e + 1, "entities must seal");
-        assert_eq!(
-            commits(&cas).await,
-            before_c + 1,
-            "the blob store must seal too, or a checkpoint publishes dangling attachments"
-        );
-    }
-
     /// The version announced has to be the commit the seal just made —
     /// that string is what a consumer pins to.
     #[tokio::test]
@@ -374,13 +317,16 @@ mod tests {
 
     /// `finish` has to release every store the session was handed, not just
     /// the entities one. The CAS stayed open because `finish` named the
-    /// entity pool directly, and it went unnoticed while nothing committed
-    /// through the CAS; #329 made it a committing writer.
+    /// entity pool directly.
     #[tokio::test]
     async fn finish_closes_every_store_it_was_given() {
         let dir = tempfile::tempdir().unwrap();
         let entities = store(&dir.path().join("entities.doltlite_db")).await;
-        let cas = store(&dir.path().join("blobs.doltlite_db")).await;
+        let cas = crate::blob_cas::BlobCas::open(&dir.path().join("blobs.sqlite"))
+            .await
+            .unwrap()
+            .pool()
+            .clone();
 
         state(
             entities.clone(),

@@ -32,10 +32,7 @@ mod tests {
             entities_db(dir),
             PathBuf::from("/tmp/raw/slack/entities.doltlite_db")
         );
-        assert_eq!(
-            blobs_db(dir),
-            PathBuf::from("/tmp/raw/slack/blobs.doltlite_db")
-        );
+        assert_eq!(blobs_db(dir), PathBuf::from("/tmp/raw/slack/blobs.sqlite"));
         assert_eq!(events_dir(dir), PathBuf::from("/tmp/raw/slack/events"));
     }
 }

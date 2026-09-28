@@ -127,7 +127,7 @@ pub struct Measurement {
 pub struct TreeUsage {
     pub present: bool,
     pub bytes: u64,
-    /// Size of the tree's direct `blobs.doltlite_db`, when it has one.
+    /// Size of the tree's direct `blobs.sqlite`, when it has one.
     pub blob_bytes: u64,
 }
 

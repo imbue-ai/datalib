@@ -180,9 +180,8 @@ async fn table_names(pool: &SqlitePool) -> Result<Vec<String>> {
 
 /// A store opened to count its rows, and whether the count reads the
 /// pin. The entity store counts at HEAD — what it holds, not what
-/// another process is mid-way through writing. The blob CAS is the one
-/// store read unpinned (`open_cas_reader` says why): counted at HEAD it
-/// would report no blobs at all.
+/// another process is mid-way through writing. The blob CAS is plain
+/// SQLite, with no commits to pin: a reader sees only what has committed.
 async fn open_for_counting(abs: &Path) -> Result<Option<(SqlitePool, bool)>> {
     if abs.file_name().and_then(|n| n.to_str()) == Some(datalib_etl::raw_layout::BLOBS_DB) {
         return Ok(Some((
@@ -239,7 +238,9 @@ pub async fn scan(data_root: &Path, raw_rel: &str) -> Result<Vec<Subject>> {
     if let Ok(entries) = std::fs::read_dir(&raw_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".doltlite_db") && entry.path().is_file() {
+            let is_store =
+                name.ends_with(".doltlite_db") || name == datalib_etl::raw_layout::BLOBS_DB;
+            if is_store && entry.path().is_file() {
                 stores.push((format!("{raw_rel}/{name}"), entry.path()));
             }
         }

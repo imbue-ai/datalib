@@ -12213,19 +12213,19 @@ expression: snapshot
   "storage_rows": [
     {
       "kind": "Source Size",
-      "members_sha": "sha256:3f90424acfe98700edbb8a7e4023fa4095d0c90d0217ee52acbdf317bc5bf3d7",
+      "members_sha": "sha256:e3b09ce70d4434e5e6c1be8166d187663c31575df240f1d987bc887926b5b139",
       "rows": 22,
       "source": ""
     },
     {
       "kind": "Store",
-      "members_sha": "sha256:79dd47e007d2ebe21a4ff0cea0ccb397cd1f2cac87b25f92003d6d1e806fae55",
+      "members_sha": "sha256:3ba416716d949ae7bbd676d113feddee847c0480de6e9ac04dfecaabd42205c5",
       "rows": 36,
       "source": ""
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:69603cc680ace123ab03e2bf13dc74432211e9e748cce0e14fe239f508851936",
+      "members_sha": "sha256:1985572c195b3d85c937d7d78fda01a702ec46576d98257243ff71109e0d23ca",
       "rows": 148,
       "source": ""
     }

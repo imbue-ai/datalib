@@ -579,7 +579,7 @@ pub enum OnSchemaBreak {
 }
 
 /// [`open`] without the shared download-bookkeeping tables. A *derived*
-/// store — render output, an index, a blob CAS — would otherwise get
+/// store — render output, an index — would otherwise get
 /// `sync_runs` and the scope tables as three empty tables suggesting a
 /// provenance it lacks. `kind` is what its `_datalib_meta` names it.
 /// Always [`OnSchemaBreak::Rebuild`]: every row is a function of some
@@ -698,17 +698,6 @@ pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<
         .await
         .with_context(|| format!("pin {} for reading", db_path.display()))?;
     Ok(Some(Reader { pool, pin }))
-}
-
-/// A read-only connection with no pin, for the blob CAS alone.
-///
-/// Not because the CAS cannot be pinned — it is committed like every
-/// other store, blobs before the entities that name them
-/// (`raw_store::SealState::seal`) — but because nothing has moved it
-/// over yet. `blob_cas::open_cas_reader` has the note. Everything else
-/// reads through [`open_reader`].
-pub(crate) async fn open_reader_unpinned(db_path: &Path) -> Result<SqlitePool> {
-    connect_pool(db_path, Access::ReadOnly, false).await
 }
 
 /// A store somebody else writes, read at one commit. Derefs to its pool,
@@ -1675,7 +1664,7 @@ pub async fn content_tables_changed(
 /// downloaded it yet.
 ///
 /// Deliberately not via [`open`], which is the write path: it would create
-/// bookkeeping tables inside a blob CAS and advance HEAD — a version read
+/// bookkeeping tables inside a derived store and advance HEAD — a version read
 /// that changes the version it reads.
 pub async fn head_commit_at_path(db_path: &Path) -> Result<Option<String>> {
     if !db_path.exists() {
@@ -2715,15 +2704,15 @@ mod tests {
     #[tokio::test]
     async fn head_commit_at_path_does_not_touch_the_store() {
         let td = tempfile::tempdir().unwrap();
-        let path = td.path().join("blobs.doltlite_db");
+        let path = td.path().join("derived.doltlite_db");
 
-        // As `BlobCas::open` builds it: cas_objects only.
+        // One table and no bookkeeping, as a derived store has.
         let pool = plain_pool(&path).await;
         sqlx::query(crate::blob_cas::CAS_OBJECTS_DDL)
             .execute(&pool)
             .await
             .unwrap();
-        commit_run(&pool, "cas init").await.unwrap();
+        commit_run(&pool, "init").await.unwrap();
         let before = head_commit(&pool).await.unwrap();
         pool.close().await;
         assert!(before.is_some(), "fixture must have a HEAD to compare");

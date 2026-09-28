@@ -1512,7 +1512,7 @@ struct OpenRequest {
 
 #[derive(Debug, Deserialize)]
 struct ResetRequest {
-    /// Step ids, each optionally `+blobs`.
+    /// Step ids.
     targets: Vec<String>,
     #[serde(default)]
     by: Option<String>,

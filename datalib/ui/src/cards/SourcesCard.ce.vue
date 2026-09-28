@@ -609,7 +609,7 @@ function contextMenuItems(anchor: Row, targets: Row[]): MenuEntry[] {
       : {
           name: entry.name,
           disabled: entry.disabled,
-          danger: ["remove", "reset", "reset_blobs"].includes(entry.action),
+          danger: ["remove", "reset"].includes(entry.action),
           action: () => void runMenuAction(entry.action, targets, anchor),
         },
   );
@@ -667,10 +667,7 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
       for (const t of targets) await reveal(t.key);
       return;
     case "reset":
-      await resetRows(targets, false);
-      return;
-    case "reset_blobs":
-      await resetRows(targets, true);
+      await resetRows(targets);
       return;
     case "remove":
       await deleteRows(targets);
@@ -1173,9 +1170,9 @@ async function queueSync(seeds: string[], shown: string) {
 
 /// The steps a reset of these rows empties: a step is itself; a group is
 /// its download, what it renders following — or, for a comparison, which
-/// downloads nothing, its render. With `blobs`, a download's blob store
-/// goes with it (`docs/dev/step_protocol.md` § Reset).
-function resetTargets(targets: Row[], blobs: boolean): string[] {
+/// downloads nothing, its render. A download's blob store keeps its
+/// bytes (`docs/dev/step_protocol.md` § Reset).
+function resetTargets(targets: Row[]): string[] {
   const steps = targets.flatMap((t) => {
     if (t.kind !== "group") return [t];
     const under = stepsUnder(t);
@@ -1184,7 +1181,7 @@ function resetTargets(targets: Row[], blobs: boolean): string[] {
   });
   const ids = steps
     .filter((r) => r.function === "ingest" || r.function === "render_markdown")
-    .map((r) => (blobs && r.function === "ingest" ? `${r.id}+blobs` : r.id));
+    .map((r) => r.id);
   return [...new Set(ids)];
 }
 
@@ -1193,24 +1190,20 @@ function resetTargets(targets: Row[], blobs: boolean): string[] {
 /// it catches up, so its documents leave the grid
 /// (`docs/dev/plans/supervisor.md` §2.10). The server runs it once no sync
 /// is running, and refuses it while one is.
-async function resetRows(targets: Row[], blobs: boolean) {
-  const ids = resetTargets(targets, blobs);
+async function resetRows(targets: Row[]) {
+  const ids = resetTargets(targets);
   const shown = targets.map((t) => t.name.label).join(", ");
   if (ids.length === 0) {
     say(false, `Nothing under ${shown} keeps anything to reset.`);
     return;
   }
-  const download = ids.some(
-    (id) => rows.value.find((r) => r.id === id.split("+")[0])?.function === "ingest",
-  );
+  const download = ids.some((id) => rows.value.find((r) => r.id === id)?.function === "ingest");
   const what =
-    `Reset ${shown}${blobs ? ", attachments included" : ""}?\n\n` +
+    `Reset ${shown}?\n\n` +
     `Every row goes, and the history keeps them. ` +
     (download
       ? `Its documents leave the grid, and the next Sync downloads it all again from nothing. ` +
-        (blobs
-          ? `Attachments already downloaded are deleted and fetched again.`
-          : `Attachments already downloaded are kept.`)
+        `Attachments already downloaded are kept.`
       : `Its documents are rendered again from what it has downloaded, now.`);
   if (!(await confirmAction(what))) return;
   busy.value = true;

@@ -29,7 +29,7 @@ authenticate as when more than one is stored for the service
 ```
 <data_root>/<group>/ingest/
   entities.doltlite_db   # the tables below, plus a <table>_bookkeeping sidecar each
-  blobs.doltlite_db      # attachment bytes, content-addressed by blake3
+  blobs.sqlite      # attachment bytes, content-addressed by blake3
 ```
 
 `entities.doltlite_db` — the schema is `ingest/schema_raw.rs`:
@@ -102,11 +102,11 @@ grain.
 For every `metadata.attachments[]` entry and `asset_pointer` in a
 conversation, the walk asks `/backend-api/files/{id}/download` for a
 signed URL, fetches the bytes through `latchkey curl`, and stores them
-in `blobs.doltlite_db` keyed by blake3, with a `chatgpt_attachments`
+in `blobs.sqlite` keyed by blake3, with a `chatgpt_attachments`
 row linking the conversation's `file_id` to that hash. Signed URLs
 rotate; bytes do not, so a file whose `blake3` is already on its edge
-row is not fetched again (`datalib-dag --reset <source>/ingest+blobs`
-drops the CAS with the store, and the next sync re-pulls). A failed blob bumps its `attempt_count` and `last_error`
+row is not fetched again (delete `blobs.sqlite` *and* reset the ingest
+step, and the next sync re-pulls). A failed blob bumps its `attempt_count` and `last_error`
 and does not fail the sync. The name and MIME type render needs stay
 in the conversation payload; the edge table holds only the mapping.
 

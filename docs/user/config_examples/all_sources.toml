@@ -59,7 +59,7 @@
 data_root = "~/datalib"  # Base dir; everything is written under here. `~` is expanded.
 
 # Where each source's raw store lives: a source's raw data
-# (entities.doltlite_db + blobs.doltlite_db + the events/ tape) is the
+# (entities.doltlite_db + blobs.sqlite + the events/ tape) is the
 # ingest step's tree, `<data_root>/<group>/ingest/`, and nothing else —
 # the runner versions that tree and the render step reads it by that
 # name. To keep a store on a bigger disk, put a symlink there. This is

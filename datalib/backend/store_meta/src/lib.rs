@@ -39,8 +39,6 @@ const UNKNOWN: &str = "unknown";
 pub enum StoreKind {
     /// A source's entities and sync bookkeeping (`<group>/ingest/entities`).
     Raw,
-    /// A source's blob CAS (`<group>/ingest/blobs`).
-    Blobs,
     /// A source's render store (`<group>/render_markdown`).
     Render,
     /// The grid index (`unified_index/grid_index`).

@@ -61,8 +61,8 @@ That is the whole export. Measured on doltlite 0.50.3 against a real
 16 MB grid store: 15 MB of SQL, well under a second each way, and
 `grid_rows` / `markdowns` / `edges` arrive with their schemas, primary
 keys and indexes intact. It works for the raw stores too — BLOB columns
-come through as hex literals, so a `blobs.doltlite_db` round-trips its
-attachment bytes.
+come through as hex literals. (A source's `blobs.sqlite` is plain SQLite
+already; stock `sqlite3` opens it.)
 
 What crosses and what doesn't:
 

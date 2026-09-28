@@ -4,5 +4,6 @@
 pub mod build_id;
 pub mod layout;
 pub mod node_runtime;
+pub mod plain_sqlite;
 pub mod qmd;
 pub mod runtime_manifest;

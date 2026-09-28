@@ -740,12 +740,7 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
       void d.accept();
     });
     const rendered = await stampsBefore(page, [render]);
-    await pickRowMenu(
-      page,
-      groupRow(page, "pdfs"),
-      "Reset (preserve attachments)…",
-      page.getByText("Reset pdfs."),
-    );
+    await pickRowMenu(page, groupRow(page, "pdfs"), "Reset…", page.getByText("Reset pdfs."));
     expect(asked).toContain("Every row goes, and the history keeps them");
 
     // Nothing more to click: the render catches up on the emptied store
@@ -773,12 +768,7 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
 
     page.on("dialog", (d) => void d.accept());
     const rendered = await stampsBefore(page, [render]);
-    await pickRowMenu(
-      page,
-      row(page, render),
-      "Reset (preserve attachments)…",
-      page.getByText("Reset Render markdown."),
-    );
+    await pickRowMenu(page, row(page, render), "Reset…", page.getByText("Reset Render markdown."));
     // Rebuilt from what is downloaded, with nothing more to click; the
     // download itself is untouched.
     expect(await settleRow(page, render, rendered[render])).toBe("Succeeded");

@@ -1,7 +1,7 @@
 # Data architecture: ingestion
 
 # Introduction and Context
-We have an incremental, resumable, layered ETL-shaped architecture that downloads raw data from many upstream sources and stores it as **JSON API responses preserved** in versioned doltlite tables, with attachment **BLOBs in a content-addressable store** (CAS, also doltlite, but a separate sibling database per source), then applies transformations (rendering, indexing) and presents the rendered data in a UI. Every store the pipeline writes is doltlite: the raw stores, the blob CAS, each source's render store and the grid index.
+We have an incremental, resumable, layered ETL-shaped architecture that downloads raw data from many upstream sources and stores it as **JSON API responses preserved** in versioned doltlite tables, with attachment **BLOBs in a content-addressable store** (CAS, a plain SQLite sibling database per source), then applies transformations (rendering, indexing) and presents the rendered data in a UI. Every other store the pipeline writes is doltlite: the raw stores, each source's render store and the grid index. The CAS is not, because a content-addressed table is its own history.
 
 Parts of this are not novel — the data pipeline aspect shares shape with Flume / Apache Beam / Dask / Prefect / Airflow ETL pipelines. What we optimize for that those tools don't:
 
@@ -21,7 +21,7 @@ The **parse and render stage** — deserializing a stored payload, projecting it
 
 The pipeline has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`datalib/backend/dag/README.md`](/datalib/backend/dag/README.md) for the runner's rules and [`step_protocol.md`](step_protocol.md) for the step contract:
 
-1. **Download** — pull from upstream, UPSERT into `<data_root>/<group>/ingest/entities.doltlite_db` (entities) and `<data_root>/<group>/ingest/blobs.doltlite_db` (a single `cas_objects` table keyed by blake3 hash).
+1. **Download** — pull from upstream, UPSERT into `<data_root>/<group>/ingest/entities.doltlite_db` (entities) and `<data_root>/<group>/ingest/blobs.sqlite` (a single `cas_objects` table keyed by blake3 hash).
 2. **Render** — derive `.md` files under `<group>/render_markdown/` plus that source's render store (`render_markdown/indexed_markdown.doltlite_db`) from the raw store, deterministically. Indexing with qmd is the source's separate `keyword_index` and `embed` steps.
 3. **Grid index** — read every source's render store into the one `grid_rows` table the UI's grid reads.
 
@@ -113,7 +113,7 @@ Attachment bytes are split out of the entity database into a sibling content-add
 - Attachments can be big, and Dolt DBs are (purposefully) difficult to erase from. Even garbage collecting unused attachments wouldn't delete them from the doltlite DB storage.
 - Someday we might want to share a BLOB store across multiple data sources (Perkeep-style).
 
-A source with attachments has both `<group>/ingest/entities.doltlite_db` (entities + a per-provider edge table mapping `(owning, ref) → blake3`, e.g. `slack_attachments`) and `<group>/ingest/blobs.doltlite_db` (`cas_objects` keyed by blake3). The code is [`blob_cas.rs`](/datalib/backend/etl/src/blob_cas.rs); the commit order between the two files is in [`etl/README.md` §"Blob CAS and per-provider edge tables"](/datalib/backend/etl/README.md).
+A source with attachments has both `<group>/ingest/entities.doltlite_db` (entities + a per-provider edge table mapping `(owning, ref) → blake3`, e.g. `slack_attachments`) and `<group>/ingest/blobs.sqlite` (`cas_objects` keyed by blake3). The code is [`blob_cas.rs`](/datalib/backend/etl/src/blob_cas.rs); why the bytes always commit before the rows naming them is in [`etl/README.md` §"Blob CAS and per-provider edge tables"](/datalib/backend/etl/README.md).
 
 **Per-provider CAS edge tables**
 
@@ -126,7 +126,7 @@ The skip-check ("do we already have these bytes?") is keyed by the **upstream id
 ### Shared attachment-flush primitives
 Per-bucket attachment-fetch flow is consolidated into three shared pieces in `datalib_etl::blob_cas`:
 
-- **`load_blake3_index(pool, table, ref_id_column)`** — one SQL scan at fetch entry produces the run-scoped `(ref_id → blake3)` map. The per-file dedupe check is a HashMap hit, not a SQL round trip queued behind preceding multi-MB CAS commits on the single-connection doltlite pool.
+- **`load_blake3_index(pool, table, ref_id_column)`** — one SQL scan at fetch entry produces the run-scoped `(ref_id → blake3)` map. The per-file dedupe check is a HashMap hit, not a SQL round trip per file.
 - **`CasEdgeAccumulator`** — per-bucket walker. Three add paths: `add_fetched`, `add_known`, `add_failed`. Tracks the `BlobBundle`, the `(owning, ref)` edge list, and per-`ref_id` errors. Dedupes by `(owning, ref)`.
 - **`flush_cas_edges(pool, cas, cas_inserts, rows, errors)`** — the canonical end-of-bucket flush: CAS `put_many` → one transaction that `bulk_upsert_in_tx`s the edge rows and records each failed ref through `record_object_attempt` (or `record_object_skipped`, for a ref deliberately not fetched), which writes the sidecar and the `problems` row → commit. `CasEdgeAccumulator::flush` delegates to it via a provider-supplied row-builder closure.
 
@@ -135,7 +135,7 @@ Per-bucket attachment-fetch flow is consolidated into three shared pieces in `da
 For raw ingestion, each data source owns a directory `<data_root>/<group>/ingest/` holding up to two DBs:
 
 - entities.doltlite_db: Event payloads and metadata, attachment edges
-- blobs.doltlite_db: a CAS of BLOB data specific to that source.
+- blobs.sqlite: a CAS of BLOB data specific to that source.
 
 That directory is the ingest step's tree, `<data_root>/<group>/ingest`,
 identically for every source: the step writes only the tree its id
@@ -144,7 +144,7 @@ refused, and the refusal says to move the store with a symlink instead.
 One resolver serves both sides (`SourceCommon::resolve_paths`,
 `RenderCommon::resolve_paths`): the downloader writes there and the
 renderer reads there, the latter through its `inputs`. The filenames
-inside it (`entities.doltlite_db`, `blobs.doltlite_db`, `events/`) are
+inside it (`entities.doltlite_db`, `blobs.sqlite`, `events/`) are
 the constants in `datalib_etl::raw_layout`, the one place the layout is
 defined. This is distinct from a file-backed method's `path`
 (`[steps.params.mbox] path = …`), which says where the data is read
@@ -251,9 +251,9 @@ Corollary: **the raw store is the source of truth; downstream stages are rebakea
 ## Verifiable via a reset
 A long chain of incremental syncs can in principle silently drop data (an upstream that doesn't surface a deletion, a cursor that skipped a page on a 5xx, a bug in our delta logic). One check is to empty the store, refetch from scratch, and **let dolt's diff tell you what was missing**.
 
-Reset and sync are two operations, and no provider knows about the first: `datalib-dag --reset <source>/ingest` empties every table of the raw store and commits, so the rows (the run log included) stay in history; the runner forgets the step ever ran; the next sync finds empty tables with no cursor and walks from the start, exactly as a new source does. The CAS edge table goes with the rest, so every attachment is fetched over the wire again; the re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows. `--reset <source>/ingest+blobs` empties the CAS with the store, so the bytes are fetched and stored again; the CAS is never reset on its own, because an edge row naming bytes the CAS no longer has would be a store that lies. `--reset` alone stops there; `--reset X --sync X` does both in one invocation. `datalib_etl::doltlite_raw::reset_store` is the whole of it.
+Reset and sync are two operations, and no provider knows about the first: `datalib-dag --reset <source>/ingest` empties every table of the raw store and commits, so the rows (the run log included) stay in history; the runner forgets the step ever ran; the next sync finds empty tables with no cursor and walks from the start, exactly as a new source does. The CAS edge table goes with the rest, so every attachment is fetched over the wire again; the re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows. Nothing resets the CAS. To get its space back, delete `blobs.sqlite` by hand **and** reset the ingest step: deleting only the file leaves edge rows naming bytes that are gone, and the download will not fetch what its edge rows say it has. `--reset` alone stops there; `--reset X --sync X` does both in one invocation. `datalib_etl::doltlite_raw::reset_store` is the whole of it.
 
-Nothing garbage-collects `cas_objects`: bytes are byte-stable and nothing in the tree deletes them outside a `+blobs` reset. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
+Nothing garbage-collects `cas_objects`: bytes are byte-stable and nothing in the tree deletes them. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
 
 ### A 200 can be wrong, and nothing in the store says so
 
@@ -484,7 +484,7 @@ Mint every `now` and parse every inbound RFC 3339 string through the `datalib-ti
 - `IsoOffsetTimestamp::bump_micros(n)` — the canonical sub-item synthesized-stamp recipe.
 
 ## Commit lifecycle
-**Providers do not call `dolt_commit` or `commit_run` themselves.** `RawStoreSession` ([`raw_store.rs`](/datalib/backend/etl/src/raw_store.rs)) commits for them: a `checkpoint <name>: blobs` / `checkpoint <name>: entities` seal on the `Checkpointer`'s cadence, and `finish` at the end — the blob CAS first (`download <name>: blobs`), then the entity store (`download <name>: <stats>`), because an entity names its blob by hash and a reader pinned between the two must see the bytes before the row. A run that touches N upstream pages / windows / items produces one `download` entry per store in `dolt_log()`, plus its checkpoints, not N. A `finish` whose commit fails fails the step: the next `open` discards what was never committed, so "logged and returned Ok" would have been work done for nothing.
+**Providers do not call `dolt_commit` or `commit_run` themselves.** `RawStoreSession` ([`raw_store.rs`](/datalib/backend/etl/src/raw_store.rs)) commits for them: a `checkpoint <name>: entities` seal on the `Checkpointer`'s cadence, and `finish` at the end (`download <name>: <stats>`). The blob CAS is plain SQLite and has no seal: each `put_many` commits itself before the edge rows naming its bytes are written. A run that touches N upstream pages / windows / items produces one `download` entry in `dolt_log()`, plus its checkpoints, not N. A `finish` whose commit fails fails the step: the next `open` discards what was never committed, so "logged and returned Ok" would have been work done for nothing.
 
 Two consequences:
 
@@ -504,7 +504,7 @@ Consequences:
 Why the discipline matters: the alternative is per-column conflict policies (COALESCE on some columns, replace on others), which makes the UPSERT shape diverge per table, makes the chunked-multi-row helper proliferate variants, makes `dolt diff` harder to read, and makes "which writer last touched this row?" an ambiguous question.
 
 ## Bulk-upsert as the standard write path
-Every download is shaped the same at the bottom: for some entity table `<t>`, upsert N rows of `(id, payload, …extras)`, paired with N rows on `<t>_bookkeeping`, and (if the source produced blobs) M rows on the CAS of `(blake3, byte_len, content_type, bytes)`. A SQL transaction rewrites each prolly-tree page it touched once, at `COMMIT` ([`etl/README.md` §"What a write costs"](/datalib/backend/etl/README.md#what-a-write-costs-the-transaction-is-the-unit-and-the-key-decides-the-size)), so the right shape is **one entity-pool tx + one CAS-pool tx per batch**, each containing chunked multi-row `INSERT … ON CONFLICT(id) DO UPDATE` statements. Email's mbox downloader measured it: 25k emails dropped from many minutes to ~75 seconds at `FLUSH_BATCH = 2000`.
+Every download is shaped the same at the bottom: for some entity table `<t>`, upsert N rows of `(id, payload, …extras)`, paired with N rows on `<t>_bookkeeping`, and (if the source produced blobs) M rows on the CAS of `(blake3, byte_len, content_type, bytes)`. A SQL transaction rewrites each prolly-tree page it touched once, at `COMMIT` ([`etl/README.md` §"What a write costs"](/datalib/backend/etl/README.md#what-a-write-costs-the-transaction-is-the-unit-and-the-key-decides-the-size)), so the right shape is **one entity-pool tx + one CAS-pool tx per batch** (the CAS is plain SQLite, where a transaction per batch is what keeps the fsyncs down), each containing chunked multi-row `INSERT … ON CONFLICT(id) DO UPDATE` statements. Email's mbox downloader measured it: 25k emails dropped from many minutes to ~75 seconds at `FLUSH_BATCH = 2000`.
 
 The principle: **every provider's download uses the shared chunked-multi-row helpers for the entity-table UPSERT, the `<t>_bookkeeping` upsert, and the CAS write.** Per-row UPSERTs are an anti-pattern outside ad-hoc maintenance code.
 

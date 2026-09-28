@@ -19,13 +19,12 @@ const store = (path: string, hashes: string[]) => ({
   commits: hashes.map((h, i) => commit(h, `2026-09-0${9 - i}T12:00:00+00:00`)),
 });
 
-/// The history of a source whose download keeps two stores, and whose
-/// render keeps one — newest first in each.
+/// The history of a source whose download and render keep a store each —
+/// newest first in each.
 function enterprise(): HistoryRow[] {
   const h: TreeHistory = {
     tree: "enterprise",
     stores: [
-      store("enterprise/ingest/blobs.doltlite_db", ["b2", "b1"]),
       store("enterprise/ingest/entities.doltlite_db", ["e3", "e2", "e1"]),
       store("enterprise/render_markdown/render.doltlite_db", ["r2", "r1"]),
     ],
@@ -61,7 +60,7 @@ describe("compareCommits", () => {
   });
 
   /// Only the record store's commits are raw commits the diff render
-  /// reads; a render or blob store's hash in the config fails its sync.
+  /// reads; a render store's hash in the config fails its sync.
   it("refuses a selection that is not two commits of the record store", () => {
     const rows = enterprise();
     const e3 = commitRow(rows, "e3");
@@ -69,7 +68,6 @@ describe("compareCommits", () => {
     expect(selectedPair(rows, "enterprise", [e3, commitRow(rows, "r2")])).toBe(
       "Compare two commits of enterprise/ingest/entities.doltlite_db",
     );
-    expect(selectedPair(rows, "enterprise", [e3, commitRow(rows, "b1")])).toMatch(/^Compare two/);
     const tableRow = { ...e3, level: "table" as const, key: `${e3.key}#t` };
     expect(selectedPair(rows, "enterprise", [e3, commitRow(rows, "e2"), tableRow])).toBe(
       "Select two commits to compare",

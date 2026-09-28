@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use datalib_dag::scheduler::ResetTarget;
 
 // `DATALIB_VERSION` is `git describe` at build time under Bazel
 // release stamping (see BUILD.bazel `rustc_env_files`); dev builds and
@@ -58,11 +57,11 @@ async fn main() -> Result<()> {
     })
     .map_err(|e| anyhow::anyhow!("{e}"))?;
     const USAGE: &str = "usage: datalib-dag <config.toml> [--binary-dir DIR] \
-         [--sync STEP_ID[,STEP_ID…]]… [--reset STEP_ID[+blobs][,…]]… [--now RFC3339] \
+         [--sync STEP_ID[,STEP_ID…]]… [--reset STEP_ID[,STEP_ID…]]… [--now RFC3339] \
          [--run-id ID] [--parallelism N] [--by WHO]\n       \
          datalib-dag --check <config.toml>\n\n\
-         --reset empties what a step wrote (its store; `+blobs` an ingest step's blob \
-         CAS with it), keeping its doltlite history, so the next run does its work \
+         --reset empties what a step wrote (its store; an ingest step's blob CAS keeps \
+         its bytes), keeping its doltlite history, so the next run does its work \
          from the start. Alone, that is all the invocation does; with --sync it runs \
          first.\n\n\
          --sync runs the named steps and everything downstream of them. A source step \
@@ -86,7 +85,7 @@ async fn main() -> Result<()> {
     let mut now: Option<String> = None;
     let mut run_id: Option<String> = None;
     let mut parallelism: Option<usize> = None;
-    let mut reset: Vec<ResetTarget> = Vec::new();
+    let mut reset: Vec<String> = Vec::new();
     let mut check_only = false;
     let mut by = "cli".to_string();
     let mut args = std::env::args().skip(1);
@@ -113,7 +112,7 @@ async fn main() -> Result<()> {
             }
             "--reset" => {
                 let v = args.next().context("--reset needs a step id")?;
-                reset.extend(v.split(',').map(|s| ResetTarget::parse(s.trim())));
+                reset.extend(v.split(',').map(|s| s.trim().to_string()));
             }
             "--check" => check_only = true,
             "--by" => by = args.next().context("--by needs a name")?,

@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datalib_dag::config::{ConfigCheck, DagConfig};
-use datalib_dag::scheduler::ResetTarget;
 use datalib_dag::supervisor::announce::Listener;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::record::Record;
@@ -22,7 +21,7 @@ use tokio::sync::{oneshot, watch, Notify, OnceCell};
 
 /// A reset someone asked for, waiting for the loop to be idle.
 struct Reset {
-    targets: Vec<ResetTarget>,
+    targets: Vec<String>,
     by: String,
     done: oneshot::Sender<Result<(), String>>,
 }
@@ -111,12 +110,11 @@ impl SyncControl {
             return Err("a sync is running; reset once it is over".into());
         }
         let (done, answer) = oneshot::channel();
-        let targets = targets.iter().map(|t| ResetTarget::parse(t)).collect();
         self.resets
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(Reset {
-                targets,
+                targets: targets.to_vec(),
                 by: by.to_string(),
                 done,
             });
@@ -440,7 +438,7 @@ async fn fail_open_requests(store: &Store, why: &str) {
 async fn run_reset(
     cfg: &HostConfig,
     store: &Store,
-    targets: &[ResetTarget],
+    targets: &[String],
     by: &str,
 ) -> Result<(), String> {
     let root = cfg.control.root.clone();
@@ -543,8 +541,8 @@ fn tree_group(step_id: &str) -> &str {
 /// it at once, and what reads it follows; a download is not refilled —
 /// that is its next Sync — so only what reads it runs, and takes the
 /// emptiness downstream.
-fn after_reset(graph: &datalib_dag::Graph, targets: &[ResetTarget]) -> Vec<String> {
-    let reset: BTreeSet<&str> = targets.iter().map(|t| t.step.as_str()).collect();
+fn after_reset(graph: &datalib_dag::Graph, targets: &[String]) -> Vec<String> {
+    let reset: BTreeSet<&str> = targets.iter().map(String::as_str).collect();
     let mut roots: BTreeSet<String> = BTreeSet::new();
     for step in &reset {
         let Some(&i) = graph.by_id.get(*step) else {
@@ -617,10 +615,10 @@ mod tests {
         ])
         .unwrap();
         let after = |ids: &[&str]| {
-            let targets: Vec<ResetTarget> = ids.iter().map(|id| ResetTarget::parse(id)).collect();
+            let targets: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
             after_reset(&graph, &targets)
         };
-        assert_eq!(after(&["a/ingest+blobs"]), ["a/render"]);
+        assert_eq!(after(&["a/ingest"]), ["a/render"]);
         assert_eq!(after(&["a/render"]), ["a/render"]);
         assert_eq!(after(&["a/ingest", "a/render"]), ["a/render"]);
     }

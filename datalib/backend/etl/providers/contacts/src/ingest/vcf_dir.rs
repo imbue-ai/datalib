@@ -279,7 +279,7 @@ mod tests {
     // `db_path`. The inline-photo CAS must land beside that source's entity
     // db, not one level up in the shared `raw/` root — passing the bare dir
     // to `cas_path_for`, which derives the sibling via `.parent()`, leaks
-    // the store to `raw/blobs.doltlite_db`.
+    // the store to `raw/blobs.sqlite`.
     #[tokio::test]
     async fn inline_photo_cas_lands_in_per_source_dir_not_parent() {
         // The shared raw root and the per-source dir within it.
@@ -309,11 +309,11 @@ mod tests {
         assert_eq!(summary.contacts_new, 1);
 
         assert!(
-            source_dir.join("blobs.doltlite_db").exists(),
+            source_dir.join("blobs.sqlite").exists(),
             "photo CAS must sit beside entities.doltlite_db in the source dir",
         );
         assert!(
-            !raw_root.path().join("blobs.doltlite_db").exists(),
+            !raw_root.path().join("blobs.sqlite").exists(),
             "photo CAS must not leak into the shared raw/ parent",
         );
         db.close().await;

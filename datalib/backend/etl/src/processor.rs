@@ -117,10 +117,9 @@ impl<'a> RunCtx<'a> {
         crate::raw_store::RawStoreSession::open(pool, entity_path, self).await
     }
 
-    /// The same session with the source's blob CAS attached, so every
-    /// seal commits the bytes before the rows that name them. A source
-    /// that keeps a CAS opens its session this way; one whose CAS is
-    /// optional passes `None` when it has none.
+    /// The same session with the source's blob CAS attached, so `finish`
+    /// closes it too. A source that keeps a CAS opens its session this
+    /// way; one whose CAS is optional passes `None` when it has none.
     pub async fn open_store_with_blobs(
         &self,
         pool: sqlx::sqlite::SqlitePool,

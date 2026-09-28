@@ -37,7 +37,7 @@ write the one index file under `unified_index/qmd_index/`):
 ├── config.toml                     # the pipeline config (steps format)
 ├── <group>/ingest/                 # per-source raw stores (<group> is the source's id)
 │   ├── entities.doltlite_db        #   (doltlite = SQLite + git-shaped history)
-│   └── blobs.doltlite_db
+│   └── blobs.sqlite                #   attachment bytes by blake3 (plain SQLite)
 ├── <group>/render_markdown/        # per-source markdown tree
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_index/                  # derived; carries a CACHEDIR.TAG
@@ -121,7 +121,7 @@ entries were dropped.
 Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
 everything downstream of them, and nothing else — pending work in other
 sources waits for a full run), `--parallelism N`, `--reset
-<step-id>[+blobs]` (see **Resetting** below; alone it does nothing else,
+<step-id>` (see **Resetting** below; alone it does nothing else,
 with `--sync` it runs first), `--binary-dir DIR` (put at the front of
 every step's `PATH`, so a bare `command` like `datalib-step` resolves
 there; defaults to the config's `binary_dir`, else the directory
@@ -195,13 +195,13 @@ off records who did it, so the screen shows "turned off by claude" or
 what a person started without saying so.**
 
 **Resetting** empties what a source downloaded: every row of its store
-goes (with `+blobs`, its attachments too), and the doltlite history
-keeps them. Then what reads it runs, so its documents leave the grid,
+goes, and the doltlite history keeps them; its attachments stay in
+`blobs.sqlite`, which nothing resets. Then what reads it runs, so its documents leave the grid,
 and its next sync downloads everything again from nothing. Resetting a
 render step (`slack/render_markdown`) instead rebuilds its documents
 from what is downloaded, at once. It needs the
 root to itself, so it runs only when nothing is syncing. With the app
-up, use `POST /api/reset {"targets": ["slack/ingest+blobs"], "by":
+up, use `POST /api/reset {"targets": ["slack/ingest"], "by":
 "claude"}`: it answers once the store is empty, opens the request that
 carries the emptiness downstream, and refuses while a sync runs. The
 Manage screen's row menu offers the same. With no app up,

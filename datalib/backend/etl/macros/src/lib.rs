@@ -119,8 +119,9 @@ fn parse_table_attr(attrs: &[Attribute], struct_name: &Ident) -> syn::Result<Str
 
 /// Implement `datalib_etl::store_handle::RawStoreHandle` by reading the
 /// struct's fields: every `SqlitePool` and every `BlobCas`, in declaration
-/// order, and nothing else. A field that is itself a handle
-/// (`EntityStore`, `CasEntityStore`) contributes every pool it reports.
+/// order, and nothing else; a `BlobCas` is closed but never committed. A
+/// field that is itself a handle (`EntityStore`, `CasEntityStore`)
+/// contributes every pool it reports.
 ///
 /// The point is exhaustiveness. A handle that grows a second store is the
 /// shape that has already gone wrong here — `RawStoreSession::finish`
@@ -178,20 +179,31 @@ fn expand_raw_store_handle(input: DeriveInput) -> syn::Result<TokenStream2> {
     let name = &input.ident;
     let fields = collect_named_fields(&input)?;
     let mut pushes: Vec<TokenStream2> = Vec::new();
+    let mut versioned: Vec<TokenStream2> = Vec::new();
     for f in &fields {
         let ident = f.ident.as_ref().expect("named field");
         match classify_store_field(&f.ty) {
-            Some(StoreField::Pool) => pushes.push(quote! { out.push(&self.#ident); }),
+            Some(StoreField::Pool) => {
+                pushes.push(quote! { out.push(&self.#ident); });
+                versioned.push(quote! { out.push(&self.#ident); });
+            }
             Some(StoreField::Cas) => pushes.push(quote! { out.push(self.#ident.pool()); }),
-            Some(StoreField::OptionalPool) => pushes.push(quote! {
-                if let Some(p) = self.#ident.as_ref() { out.push(p); }
-            }),
+            Some(StoreField::OptionalPool) => {
+                let push = quote! { if let Some(p) = self.#ident.as_ref() { out.push(p); } };
+                pushes.push(push.clone());
+                versioned.push(push);
+            }
             Some(StoreField::OptionalCas) => pushes.push(quote! {
                 if let Some(c) = self.#ident.as_ref() { out.push(c.pool()); }
             }),
-            Some(StoreField::Nested) => pushes.push(quote! {
-                out.extend(::datalib_etl::store_handle::RawStoreHandle::pools(&self.#ident));
-            }),
+            Some(StoreField::Nested) => {
+                pushes.push(quote! {
+                    out.extend(::datalib_etl::store_handle::RawStoreHandle::pools(&self.#ident));
+                });
+                versioned.push(quote! {
+                    out.extend(::datalib_etl::store_handle::RawStoreHandle::versioned_pools(&self.#ident));
+                });
+            }
             None => {}
         }
     }
@@ -210,6 +222,13 @@ fn expand_raw_store_handle(input: DeriveInput) -> syn::Result<TokenStream2> {
             fn pools(&self) -> ::std::vec::Vec<&::sqlx::sqlite::SqlitePool> {
                 let mut out = ::std::vec::Vec::new();
                 #(#pushes)*
+                out
+            }
+
+            fn versioned_pools(&self) -> ::std::vec::Vec<&::sqlx::sqlite::SqlitePool> {
+                #[allow(unused_mut)]
+                let mut out = ::std::vec::Vec::new();
+                #(#versioned)*
                 out
             }
         }

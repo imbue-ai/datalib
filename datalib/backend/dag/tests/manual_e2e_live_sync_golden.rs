@@ -666,19 +666,13 @@ fn manual_e2e_live_sync_golden() {
     );
     let stores_before: Vec<StoreAtCommit> = ingest_steps
         .iter()
-        .flat_map(|step| {
-            ["entities", "blobs"].map(|db| data_root.join(step).join(format!("{db}.doltlite_db")))
-        })
+        .map(|step| data_root.join(step).join("entities.doltlite_db"))
         .filter(|p| p.is_file())
         .map(|p| StoreAtCommit::head(&data_root, &p))
         .collect();
 
     let now3 = "2026-05-21T18:10:00Z";
-    let reset_all = ingest_steps
-        .iter()
-        .map(|s| format!("{s}+blobs"))
-        .collect::<Vec<_>>()
-        .join(",");
+    let reset_all = ingest_steps.join(",");
     let sync_all = ingest_steps.join(",");
     let run3 = run_pipeline(
         &bin,

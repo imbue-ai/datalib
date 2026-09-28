@@ -43,7 +43,7 @@ pub enum MeasurementKind {
     /// including stores, rendered markdown and anything else that
     /// landed there. The number the disk cares about.
     Tree,
-    /// One database file: `entities.doltlite_db`, `blobs.doltlite_db`,
+    /// One database file: `entities.doltlite_db`, `blobs.sqlite`,
     /// a render store. Bytes are the file's size on disk.
     Store,
     /// One table inside a store. Carries a row count; carries **no**

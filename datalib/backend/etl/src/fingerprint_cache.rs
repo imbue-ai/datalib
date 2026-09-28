@@ -159,19 +159,6 @@ pub fn default_cache_path() -> Result<PathBuf> {
     Ok(base.join("datalib").join("fingerprints.sqlite"))
 }
 
-fn connect_string(path: &Path) -> String {
-    // SQLite percent-decodes a URI's path, so anything that would
-    // terminate it or be decoded away has to be escaped. Spaces are
-    // fine and are left alone — data roots have them.
-    let escaped = path
-        .display()
-        .to_string()
-        .replace('%', "%25")
-        .replace('?', "%3f")
-        .replace('#', "%23");
-    format!("file:{escaped}?doltlite_engine=sqlite")
-}
-
 /// A host-local fingerprint cache.
 #[derive(Debug, Clone)]
 pub struct FingerprintCache {
@@ -189,13 +176,8 @@ impl FingerprintCache {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("create cache dir {}", dir.display()))?;
         }
-        // `filename`, not `from_str`: sqlx's URL parser rejects query
-        // parameters it does not know, while the filename field reaches
-        // `sqlite3_open_v2` verbatim — but only while sqlx has no URI
-        // parameters of its own to add, so `immutable` and `vfs` must
-        // stay unset here. See `datalib_runs::store`.
         let opts = SqliteConnectOptions::new()
-            .filename(connect_string(path))
+            .filename(datalib_runtime::plain_sqlite::uri(path))
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             // A cache. A torn row after a power cut costs one rehash.

@@ -109,11 +109,7 @@ async fn a_refresh_sees_bytes_written_since_the_last_walk() {
         vec![7u8; 4096],
     )
     .unwrap();
-    std::fs::write(
-        td.path().join("pdfs/ingest/blobs.doltlite_db"),
-        vec![7u8; 1024],
-    )
-    .unwrap();
+    std::fs::write(td.path().join("pdfs/ingest/blobs.sqlite"), vec![7u8; 1024]).unwrap();
 
     let after = storage(&app, "?refresh=1").await;
     let raw = tree(&after, "pdfs/ingest");
@@ -187,11 +183,7 @@ async fn a_group_directory_is_a_measured_tree_of_its_own() {
 
     std::fs::create_dir_all(td.path().join("pdfs/ingest")).unwrap();
     std::fs::create_dir_all(td.path().join("pdfs/render_markdown")).unwrap();
-    std::fs::write(
-        td.path().join("pdfs/ingest/blobs.doltlite_db"),
-        vec![7u8; 1024],
-    )
-    .unwrap();
+    std::fs::write(td.path().join("pdfs/ingest/blobs.sqlite"), vec![7u8; 1024]).unwrap();
     std::fs::write(td.path().join("pdfs/render_markdown/a.md"), vec![7u8; 100]).unwrap();
 
     let after = storage(&app, "?refresh=1").await;

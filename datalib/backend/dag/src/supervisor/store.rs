@@ -435,17 +435,8 @@ fn now_split() -> (String, String) {
 }
 
 fn options(path: &Path) -> SqliteConnectOptions {
-    // The plain-SQLite engine, not doltlite's: the URI parameter has to go
-    // in through `filename`, which sqlx hands to SQLite untouched (its URL
-    // parser rejects a parameter it does not know). As the run store does.
-    let escaped = path
-        .display()
-        .to_string()
-        .replace('%', "%25")
-        .replace('?', "%3f")
-        .replace('#', "%23");
     SqliteConnectOptions::new()
-        .filename(format!("file:{escaped}?doltlite_engine=sqlite"))
+        .filename(datalib_runtime::plain_sqlite::uri(path))
         .create_if_missing(true)
         // What the plain-SQLite engine really does: asked for WAL it
         // answers `wal` and stays in rollback-journal mode.

@@ -187,7 +187,7 @@ mod tests {
             "system/feedback.doltlite_db.lock",
             "system/api-token",
             "slack/ingest/entities.doltlite_db",
-            "slack/ingest/blobs.doltlite_db",
+            "slack/ingest/blobs.sqlite",
             "slack/render_markdown/indexed_markdown.doltlite_db",
             "slack/render_markdown/a/b/c.md",
             "unified_index/grid_index/db.doltlite_db",
@@ -206,7 +206,6 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                "slack/ingest/blobs.doltlite_db",
                 "slack/ingest/entities.doltlite_db",
                 "slack/render_markdown/indexed_markdown.doltlite_db",
                 "system/feedback.doltlite_db",

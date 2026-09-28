@@ -430,12 +430,11 @@ the log card that reads them: [`logging.md`](logging.md).
 
 ## Reset (optional)
 
-`datalib-dag --reset <step-id>[+blobs][,<step-id>…]` (or the app's
+`datalib-dag --reset <step-id>[,<step-id>…]` (or the app's
 Reset, `POST /api/reset`) empties what a step wrote so the next run
 does its work from the start: the
-runner invokes the step once with `DATALIB_DAG_RESET` set to `store`, or
-to whatever followed the `+` (`blobs`: the built-in ingest step's store
-*and* its blob CAS), then forgets the step ever succeeded and records
+runner invokes the step once with `DATALIB_DAG_RESET` set to `store`,
+then forgets the step ever succeeded and records
 the version the reset reports, or a new one if it reports none, so
 everything reading the tree runs again. Empty that part of your tree, keep whatever
 history you keep, commit if you commit, exit 0, and do nothing else: no
@@ -450,6 +449,12 @@ also reports the metrics a run would (`problems`, and `documents` for a
 render step), counted off the emptied store: the Manage row shows a
 step's newest sample, and the reset step itself does not run again
 until the next sync.
+
+Nothing resets an ingest step's blob CAS, `blobs.sqlite`: a reset keeps
+the bytes, and the refetch lands on them. To get the space back, delete
+the file **and** reset the ingest step, together. Deleting the file
+alone leaves edge rows naming bytes that are gone, and the download
+does not fetch what its edge rows say it already has.
 
 ## Signals: graceful cancellation (optional)
 

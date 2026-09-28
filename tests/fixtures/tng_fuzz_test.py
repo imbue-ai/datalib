@@ -142,9 +142,8 @@ def turn_on_a_step(c: Case):
 
 def reset_some(c: Case):
     picked = c.rng.sample(c.ingest_ids, c.rng.randint(1, 2))
-    targets = [f"{s}+blobs" for s in picked]
     # Refused while a sync runs, by design.
-    return c.driver.request("POST", "/api/reset", {"targets": targets})[0], {204, 409}
+    return c.driver.request("POST", "/api/reset", {"targets": picked})[0], {204, 409}
 
 
 def save_config_unchanged(c: Case):
@@ -335,7 +334,7 @@ class FuzzTest(unittest.TestCase):
                 self.settle(case)
                 fuzzed = snapshot(self.doltlite, fx.workspace)
 
-                targets = [f"{s}+blobs" for s in fx.ingest_ids] + case.render_ids
+                targets = fx.ingest_ids + case.render_ids
                 case.note(f"reset {len(targets)} steps, then sync from nothing")
                 driver.reset(targets)
                 driver.sync()

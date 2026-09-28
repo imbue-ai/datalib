@@ -20,7 +20,7 @@ nothing was taken from it beyond which URLs exist.
   garmin_activity_files    edge to an activity's original FIT file in the CAS
   garmin_wellness_files    edge to a day's wellness FIT bundle in the CAS (opt-in)
   garmin_items             personal records, gear, badges, workouts, goals
-<data_root>/<group>/ingest/blobs.doltlite_db
+<data_root>/<group>/ingest/blobs.sqlite
   cas_objects              the FIT files and bundles, keyed by blake3
 ```
 

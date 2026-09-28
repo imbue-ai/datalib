@@ -40,7 +40,7 @@ impl Default for EventTapeConfig {
 #[serde(deny_unknown_fields)]
 pub struct SourceCommon {
     /// Where *we* keep this source's raw store (`entities.doltlite_db`,
-    /// `blobs.doltlite_db`, the `events/` tape): the tree the ingest step
+    /// `blobs.sqlite`, the `events/` tape): the tree the ingest step
     /// writes, `<data_root>/<group>/ingest`, filled by `resolve_paths`.
     /// Not a config key — the runner versions and every consumer reads
     /// the tree by its id, so a store kept elsewhere is a symlink at the

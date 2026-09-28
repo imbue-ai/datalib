@@ -1485,8 +1485,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let latest_reply_map = db.latest_reply_by_thread().await?;
     // Run-scoped `(file_id → blake3)` cache: loaded once up-front so
     // the per-file dedupe check inside `download_one_file` is a
-    // HashMap hit instead of a SQLite round trip queued behind preceding
-    // multi-MB CAS commits on the single-connection doltlite pool.
+    // HashMap hit instead of a SQLite round trip per file.
     // Successful downloads insert into it so later files in the same
     // run hit the cache without re-fetching.
     let mut blake3_by_file = db.load_attachment_blake3s().await?;

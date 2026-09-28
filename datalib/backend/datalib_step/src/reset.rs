@@ -10,7 +10,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw::reset_store;
-use datalib_etl::raw_layout::{blobs_db, entities_db};
+use datalib_etl::raw_layout::entities_db;
 use datalib_schema::problems::{Severity, METRIC};
 
 use crate::events::{Emitter, OutputClaim};
@@ -27,13 +27,6 @@ pub async fn run(
     match (env.function, part) {
         (Function::Ingest, "store") => {
             reset_store(&entities_db(&tree)).await?;
-            report_problems(emitter, &entities_db(&tree)).await?;
-        }
-        // The CAS only ever goes with the entities: an edge row that
-        // names bytes the CAS no longer has would be a store that lies.
-        (Function::Ingest, "blobs") => {
-            reset_store(&entities_db(&tree)).await?;
-            reset_store(&blobs_db(&tree)).await?;
             report_problems(emitter, &entities_db(&tree)).await?;
         }
         (Function::RenderMarkdown, "store") => {

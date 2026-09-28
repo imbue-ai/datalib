@@ -898,7 +898,8 @@ mod tests {
             "system/api-token",
             "system/supervisor.sqlite",
             "system/supervisor.sqlite-wal",
-            "slack/raw/blobs.doltlite_db",
+            "slack/ingest/blobs.sqlite",
+            "slack/ingest/blobs.sqlite-journal",
             "config.yaml",
         ] {
             assert_eq!(classify(root, &root.join(quiet)), None, "{quiet}");

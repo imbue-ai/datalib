@@ -51,7 +51,6 @@ describe("rowMenu", () => {
       "copy_id",
       "—",
       "reset",
-      "reset_blobs",
       "remove",
     ]);
     for (const m of menu) if (!m.separator) expect(m.disabled).toBeNull();
@@ -93,15 +92,12 @@ describe("rowMenu", () => {
     expect(has(rowMenu([index], opts), "reset")).toBe(false);
     const busy = target({ stopRequestIds: ["req-1"] });
     expect(entry(rowMenu([busy], opts), "reset").disabled).toBe("Busy — stop the sync first");
-    expect(entry(rowMenu([busy], opts), "reset_blobs").disabled).toBe("Busy — stop the sync first");
     const ingest = target({ kind: "step", func: "ingest" });
-    expect(entry(rowMenu([ingest], opts), "reset_blobs").disabled).toBeNull();
+    expect(entry(rowMenu([ingest], opts), "reset").disabled).toBeNull();
     const render = target({ kind: "step", func: "render_markdown" });
     expect(entry(rowMenu([render], opts), "reset").disabled).toBeNull();
-    expect(has(rowMenu([render], opts), "reset_blobs")).toBe(false);
     const diff = target({ type: "diff" });
     expect(entry(rowMenu([diff], opts), "reset").disabled).toBeNull();
-    expect(has(rowMenu([diff], opts), "reset_blobs")).toBe(false);
   });
 
   it("offers Reset on the embedding map, the one index step a person resets", () => {
@@ -112,7 +108,6 @@ describe("rowMenu", () => {
       func: "embedding_map",
     });
     expect(entry(rowMenu([map], opts), "reset").disabled).toBeNull();
-    expect(has(rowMenu([map], opts), "reset_blobs")).toBe(false);
     const qmd = target({
       id: "unified_index/qmd_aggregator",
       kind: "step",

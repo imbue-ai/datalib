@@ -168,6 +168,10 @@ macro_rules! raw_db {
             fn pools(&self) -> ::std::vec::Vec<&::sqlx::sqlite::SqlitePool> {
                 $crate::store_handle::RawStoreHandle::pools(&self.store)
             }
+
+            fn versioned_pools(&self) -> ::std::vec::Vec<&::sqlx::sqlite::SqlitePool> {
+                $crate::store_handle::RawStoreHandle::versioned_pools(&self.store)
+            }
         }
 
         impl $name {

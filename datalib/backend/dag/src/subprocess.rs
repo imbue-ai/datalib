@@ -51,8 +51,7 @@ pub const ENV_READS: &str = "DATALIB_READS";
 /// prefer it over sampling their own clock.
 pub const ENV_NOW: &str = "DATALIB_DAG_NOW";
 /// Set by `datalib-dag --reset`, and then the step does no work: it
-/// empties what the value names — `store`, or `blobs` for an ingest
-/// step's store and its blob CAS with it — commits that, and exits. The
+/// empties what the value names — always `store` — commits that, and exits. The
 /// runner then forgets the step ever succeeded, so the next run does its
 /// work from the start.
 pub const ENV_RESET: &str = "DATALIB_DAG_RESET";
@@ -1364,12 +1363,10 @@ mod tests {
         assert!(r.run(&g).await.unwrap().all_ok());
         assert!(crate::supervisor::record::recorded(root.path()).await.steps["src/raw"].succeeded);
 
-        r.reset(&g, &[crate::scheduler::ResetTarget::parse("src/raw+blobs")])
-            .await
-            .unwrap();
+        r.reset(&g, &["src/raw".to_string()]).await.unwrap();
         assert_eq!(
             std::fs::read_to_string(&log).unwrap(),
-            "run\nblobs\n",
+            "run\nstore\n",
             "the reset invocation names the part and does nothing else"
         );
         let after = crate::supervisor::record::recorded(root.path())
@@ -1382,10 +1379,7 @@ mod tests {
             (false, None, None),
             "a reset step has never succeeded"
         );
-        let err = r
-            .reset(&g, &[crate::scheduler::ResetTarget::parse("nope/raw")])
-            .await
-            .unwrap_err();
+        let err = r.reset(&g, &["nope/raw".to_string()]).await.unwrap_err();
         assert!(err.to_string().contains("no such step"), "{err:#}");
     }
 

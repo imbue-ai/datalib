@@ -290,7 +290,7 @@ part of any tree-hash; see §"Stamping policy".
 ## What `fsindex` does not do
 
 - No render side. Filesystem entries do not project to `GridRow`.
-- No CAS, no `.blobs.doltlite_db`. We hash bytes; we don't store
+- No CAS, no `blobs.sqlite`. We hash bytes; we don't store
   them.
 - No JSONL wire-event tape. There is no upstream wire to mirror; the
   filesystem itself is the human-inspectable tape.

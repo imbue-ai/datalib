@@ -106,7 +106,7 @@ mod tests {
         let root = dir.path();
         for p in [
             "slack/ingest/entities.doltlite_db",
-            "slack/ingest/blobs.doltlite_db",
+            "slack/ingest/blobs.sqlite",
             "slack/render_markdown/indexed_markdown.doltlite_db",
             "slack/render_markdown/deep/nested.doltlite_db",
             "slack/stray.doltlite_db",
@@ -122,7 +122,6 @@ mod tests {
         assert_eq!(
             stores_under(root, "slack", &declared),
             [
-                "slack/ingest/blobs.doltlite_db",
                 "slack/ingest/entities.doltlite_db",
                 "slack/render_markdown/indexed_markdown.doltlite_db",
                 "slack/stray.doltlite_db",
@@ -130,10 +129,7 @@ mod tests {
         );
         assert_eq!(
             stores_under(root, "slack/ingest", &declared),
-            [
-                "slack/ingest/blobs.doltlite_db",
-                "slack/ingest/entities.doltlite_db",
-            ]
+            ["slack/ingest/entities.doltlite_db"]
         );
         assert!(stores_under(root, "missing", &declared).is_empty());
     }

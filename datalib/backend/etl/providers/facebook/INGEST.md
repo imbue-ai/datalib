@@ -96,7 +96,7 @@ run's, never an emptied one — the rule in `docs/dev/plans/one_mode.md`.
 There is no cursor for a reset to clear.
 
 After the rows are committed, every `uri` in every record is read off
-disk once and stored in the sibling `blobs.doltlite_db`, with one
+disk once and stored in the sibling `blobs.sqlite`, with one
 `media_blobs` edge per `(record, uri)` — a photo an album and a post both
 reference is stored once and reached twice. Bytes already in the CAS are
 found through the edge table's `blake3` and not re-read; a `uri` no file

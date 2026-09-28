@@ -14,7 +14,7 @@ use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::SqliteRow;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow, SqliteSynchronous};
 use sqlx::{Row, SqlitePool};
 
 // Schema
@@ -34,8 +34,8 @@ pub const CAS_OBJECTS_DDL: &str = "CREATE TABLE IF NOT EXISTS cas_objects (
 // Path helpers
 
 /// Given the entity db path (e.g. `/x/raw/slack/entities.doltlite_db`),
-/// return the sibling CAS path `/x/raw/slack/blobs.doltlite_db`. Both
-/// files live inside the per-source directory; the filename comes from
+/// return the sibling CAS path `/x/raw/slack/blobs.sqlite`. Both files
+/// live inside the per-source directory; the filename comes from
 /// [`crate::raw_layout::BLOBS_DB`].
 pub fn cas_path_for(entity_db_path: &Path) -> PathBuf {
     let parent = entity_db_path.parent().unwrap_or_else(|| Path::new("."));
@@ -66,50 +66,101 @@ pub struct CasInsert<'a> {
     pub content_type: Option<&'a str>,
 }
 
+/// How long a reader waits out a writer's commit. A commit writes bytes
+/// already in memory, so it lasts as long as the disk write.
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The CAS read-only, as a bare pool, for a render that reads blobs
-/// beside its pinned entity store.
-///
-/// Unpinned, which is a leftover rather than a design: the CAS *is*
-/// committed, at every checkpoint and again at the end, before the
-/// entities that name the blobs (`raw_store::SealState::seal`). So a
-/// pinned read would find them, and this should become one — the last
-/// unpinned reader in the system. What the unpinned read costs today is
-/// that it sees a writer's uncommitted blobs, which is only harmless
-/// because the CAS is content-addressed.
+/// beside its pinned entity store. There is nothing to pin: a reader sees
+/// committed transactions only, and every blob commits before the edge
+/// row naming it is written (`flush_cas_edges`).
 pub async fn open_cas_reader(cas_path: &Path) -> Result<SqlitePool> {
-    crate::doltlite_raw::open_reader_unpinned(cas_path).await
+    connect(cas_path, true).await
+}
+
+/// The CAS is plain SQLite rather than a doltlite store: it is its own
+/// history, since a hash is present or not and a row never changes, so a
+/// doltlite commit log would only keep every page it ever rewrote.
+async fn connect(cas_path: &Path, read_only: bool) -> Result<SqlitePool> {
+    let opts = SqliteConnectOptions::new()
+        .filename(datalib_runtime::plain_sqlite::uri(cas_path))
+        .read_only(read_only)
+        .create_if_missing(!read_only)
+        // The blobs-before-edges order survives a power cut only if the
+        // blob's commit reached the disk.
+        .synchronous(SqliteSynchronous::Full)
+        .busy_timeout(BUSY_TIMEOUT);
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(opts)
+        .await
+        .with_context(|| format!("open blob cas {}", cas_path.display()))
+}
+
+/// Where the CAS lived while it was a doltlite store. Temporary: remove
+/// it, [`refuse_a_doltlite_cas`] and its test in 0.41.
+const DOLTLITE_CAS: &str = "blobs.doltlite_db";
+
+/// A new, empty CAS beside a store whose edge rows name every hash would
+/// read as "all fetched" to the download's skip check, and every
+/// attachment would render as missing for good. So an old one stops the
+/// open until a person converts or deletes it.
+fn refuse_a_doltlite_cas(cas_path: &Path) -> Result<()> {
+    let dir = cas_path.parent().unwrap_or_else(|| Path::new("."));
+    let old = dir.join(DOLTLITE_CAS);
+    if !old.exists() {
+        return Ok(());
+    }
+    let quoted_dir = format!("'{}'", dir.display().to_string().replace('\'', "'\\''"));
+    anyhow::bail!(
+        "{old} is a blob store in doltlite's format, and this build keeps \
+         blobs in plain SQLite. Either convert it, keeping the bytes (seconds):\n\n  \
+         cd {quoted_dir} && datalib-doltlite {DOLTLITE_CAS} \"{sql}\" && rm -f {DOLTLITE_CAS} \
+         {DOLTLITE_CAS}.lock .{DOLTLITE_CAS}-lock\n\n\
+         or delete it and reset this source's ingest step, and the next sync \
+         fetches every attachment again.",
+        old = old.display(),
+        sql = conversion_sql(Path::new(crate::raw_layout::BLOBS_DB)),
+    )
+}
+
+/// Copies every blob from the doltlite CAS the connection is on into a
+/// new plain CAS at `target`.
+fn conversion_sql(target: &Path) -> String {
+    let ddl = CAS_OBJECTS_DDL
+        .replace("IF NOT EXISTS cas_objects", "out.cas_objects")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "ATTACH '{uri}' AS out; {ddl}; INSERT INTO out.cas_objects \
+         SELECT blake3, byte_len, content_type, bytes FROM cas_objects;",
+        uri = datalib_runtime::plain_sqlite::uri(target),
+    )
 }
 
 /// Per-source CAS handle. Single sqlx pool of size 1, same as every
-/// other doltlite store in this codebase.
+/// other store in this codebase.
 #[derive(Clone, Debug)]
 pub struct BlobCas {
     pool: SqlitePool,
 }
 
 impl BlobCas {
-    /// The download step's handle on its CAS: what every writer gets from
-    /// [`crate::doltlite_raw::open`] — a crashed run's dirty blobs
-    /// discarded, the schema committed, one connection never recycled —
-    /// without the download bookkeeping tables, which belong to the entity
-    /// store beside it.
+    /// The download step's handle on its CAS.
     pub async fn open(cas_path: &Path) -> Result<Self> {
-        let pool = crate::doltlite_raw::open_derived(
-            cas_path,
-            &[CAS_OBJECTS_DDL],
-            crate::doltlite_raw::StoreKind::Blobs,
-        )
-        .await
-        .context("open blob cas")?;
+        refuse_a_doltlite_cas(cas_path)?;
+        let pool = connect(cas_path, false).await?;
+        if let Err(e) = sqlx::query(CAS_OBJECTS_DDL).execute(&pool).await {
+            pool.close().await;
+            return Err(e).context("create cas_objects");
+        }
         Ok(Self { pool })
     }
 
     /// Open the CAS to *read* it, for a render pass.
-    ///
-    /// Read-only and no DDL, for the reasons on
-    /// [`crate::doltlite_raw::open_reader`]: the download step owns this file,
-    /// and a reader that creates or commits into it is writing to something it
-    /// does not own.
     pub async fn open_reader(cas_path: &Path) -> Result<Self> {
         Ok(Self {
             pool: open_cas_reader(cas_path).await?,
@@ -145,8 +196,9 @@ impl BlobCas {
     }
 
     /// Bulk-insert pre-hashed bytes in a single transaction, using
-    /// chunked multi-row `INSERT OR IGNORE` (one prolly-tree manifest
-    /// mutation per chunk's `COMMIT` instead of one per blob).
+    /// chunked multi-row `INSERT OR IGNORE`. The transaction's `COMMIT` is
+    /// the blobs' commit: a caller writing edge rows after this returns
+    /// names only bytes already on disk.
     pub async fn put_many(&self, items: &[CasInsert<'_>]) -> Result<()> {
         if items.is_empty() {
             return Ok(());
@@ -181,19 +233,6 @@ impl BlobCas {
         Ok(())
     }
 
-    /// **The CAS is deliberately not pinned**, unlike every other store a
-    /// render reads.
-    ///
-    /// Content addressing is what makes that safe: a row is keyed by the
-    /// blake3 of its own bytes, so an uncommitted row holds exactly the bytes
-    /// a committed one would. There is no version of a blob to be wrong
-    /// about, so there is nothing for a pin to protect.
-    ///
-    /// Pinning it would be actively worse. Entities are committed *after* the
-    /// blobs they name, so an entities pin can legitimately reference a blob
-    /// committed later than any CAS pin a reader sampled — and the pinned CAS
-    /// would then be missing bytes the pinned entity points at. Read unpinned,
-    /// the CAS is always a superset, which is the safe direction.
     pub async fn get(&self, blake3_hash: &str) -> Result<Option<CasObject>> {
         let row = sqlx::query(
             "SELECT blake3, byte_len, content_type, bytes FROM cas_objects WHERE blake3 = ?",
@@ -479,8 +518,8 @@ impl BlobBundle {
         drop(rows);
 
         // Stage 2: the bytes, a chunk at a time, each handed out before the
-        // next is read. `blake3` is `cas_objects`' key and the CAS is read
-        // unpinned, so a chunk is an index lookup, not a scan.
+        // next is read. `blake3` is `cas_objects`' key, so a chunk is an
+        // index lookup, not a scan.
         let hashes: Vec<String> = pending_by_blake3.keys().cloned().collect();
         for chunk in hashes.chunks(crate::bulk::SQL_CHUNK) {
             let cas_rows = sqlx::query(
@@ -692,8 +731,7 @@ pub trait CasEdgeRow: crate::bulk::BulkUpsertable {
 /// Snapshot a per-provider CAS edge table as a `(ref_id → blake3)`
 /// in-memory map. Loaded once at the start of `fetch()` so the
 /// per-file "have we got these bytes yet?" check is a HashMap hit
-/// instead of a SQLite round trip queued behind preceding multi-MB
-/// CAS commits on a single-connection doltlite pool.
+/// instead of a SQLite round trip per file.
 pub async fn load_blake3_index(
     pool: &SqlitePool,
     table: &str,
@@ -982,55 +1020,65 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
-    /// A run that died between its SQL writes and its commit — a killed
-    /// process, a panic — leaves its blobs in the working set. The next
-    /// open discards them: nothing pinned them, and a blob's entity row
-    /// went the same way in the store beside it, so keeping the bytes
-    /// would be a blob nobody references. The CAS is content-addressed
-    /// and `INSERT OR IGNORE`, so the refetch simply puts it again.
-    #[tokio::test]
-    async fn blobs_a_killed_run_left_uncommitted_are_discarded_by_the_next_open() {
-        let d = tempfile::tempdir().unwrap();
-        let path = d.path().join("blobs.doltlite_db");
-        let cas = BlobCas::open(&path).await.unwrap();
-        if !crate::doltlite_raw::has_dolt_extensions(cas.pool()).await {
-            return;
-        }
-        let hash = cas.put(b"left behind", None).await.unwrap();
-        // No commit: the process is gone.
-        cas.close().await;
+    use tempfile::tempdir;
 
+    /// The CAS is a stock SQLite file, not doltlite's format: that is the
+    /// whole of why it no longer grows with every checkpoint.
+    #[tokio::test]
+    async fn a_new_cas_is_plain_sqlite() {
+        let d = tempdir().unwrap();
+        let path = d.path().join(crate::raw_layout::BLOBS_DB);
         let cas = BlobCas::open(&path).await.unwrap();
-        let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
-            .fetch_all(cas.pool())
+        cas.put(b"hello", None).await.unwrap();
+        cas.close().await;
+        let head = std::fs::read(&path).unwrap();
+        assert_eq!(&head[..16], b"SQLite format 3\0");
+    }
+
+    /// A doltlite CAS left by an older build is refused rather than
+    /// shadowed by a new empty one, and the conversion the refusal prints
+    /// carries every blob across.
+    #[tokio::test]
+    async fn a_doltlite_cas_is_refused_and_its_conversion_keeps_every_blob() {
+        let d = tempdir().unwrap();
+        let old_path = d.path().join(DOLTLITE_CAS);
+        let new_path = d.path().join(crate::raw_layout::BLOBS_DB);
+        let old = crate::doltlite_raw::open(&old_path, &[CAS_OBJECTS_DDL])
             .await
             .unwrap();
-        assert!(
-            !messages.iter().any(|m| m.starts_with("rescue:")),
-            "open must not commit what the dead run left: {messages:?}"
-        );
-        assert!(
-            cas.get(&hash).await.unwrap().is_none(),
-            "the orphaned blob is gone from the working set"
-        );
-        let dirty: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_status")
-            .fetch_one(cas.pool())
+        let hash = blake3_hex(b"kept");
+        sqlx::query("INSERT INTO cas_objects VALUES (?, 4, 'text/plain', ?)")
+            .bind(&hash)
+            .bind(&b"kept"[..])
+            .execute(&old)
             .await
             .unwrap();
-        assert_eq!(dirty, 0, "and nothing is left for the next commit to sweep");
-        // The refetch is an ordinary put.
-        let again = cas.put(b"left behind", None).await.unwrap();
-        assert_eq!(again, hash);
+
+        let err = format!("{:#}", BlobCas::open(&new_path).await.unwrap_err());
+        assert!(
+            err.contains("datalib-doltlite") && err.contains("reset"),
+            "{err}"
+        );
+        assert!(!new_path.exists(), "no empty CAS beside the old one");
+
+        sqlx::raw_sql(sqlx::AssertSqlSafe(conversion_sql(&new_path)))
+            .execute(&old)
+            .await
+            .unwrap();
+        old.close().await;
+        std::fs::remove_file(&old_path).unwrap();
+
+        let cas = BlobCas::open(&new_path).await.unwrap();
+        let got = cas.get(&hash).await.unwrap().expect("carried across");
+        assert_eq!(got.bytes, b"kept");
+        assert_eq!(got.content_type.as_deref(), Some("text/plain"));
         cas.close().await;
     }
-    use tempfile::tempdir;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cas_put_is_idempotent() {
         let d = tempdir().unwrap();
-        let cas = BlobCas::open(&d.path().join("x.blobs.doltlite_db"))
-            .await
-            .unwrap();
+        let cas = BlobCas::open(&d.path().join("blobs.sqlite")).await.unwrap();
         let h1 = cas.put(b"hello", Some("text/plain")).await.unwrap();
         let h2 = cas.put(b"hello", Some("text/plain")).await.unwrap();
         assert_eq!(h1, h2);
@@ -1043,7 +1091,7 @@ mod tests {
         let p = Path::new("/tmp/raw/slack/entities.doltlite_db");
         assert_eq!(
             cas_path_for(p),
-            PathBuf::from("/tmp/raw/slack/blobs.doltlite_db")
+            PathBuf::from("/tmp/raw/slack/blobs.sqlite")
         );
     }
 
@@ -1223,7 +1271,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn bundle_load_many_round_trips_through_cas() {
         let d = tempdir().unwrap();
-        let cas_path = d.path().join("cas.blobs.doltlite_db");
+        let cas_path = d.path().join("blobs.sqlite");
         let cas = BlobCas::open(&cas_path).await.unwrap();
         // CAS side: stash two blobs.
         let h1 = cas.put(b"alpha", Some("image/png")).await.unwrap();
@@ -1365,9 +1413,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let cas = BlobCas::open(&d.path().join("x.blobs.doltlite_db"))
-            .await
-            .unwrap();
+        let cas = BlobCas::open(&d.path().join("blobs.sqlite")).await.unwrap();
 
         let mut acc = CasEdgeAccumulator::new();
         acc.add_failed("w1", "never", "HTTP 500");

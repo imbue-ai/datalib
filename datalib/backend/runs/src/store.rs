@@ -55,29 +55,9 @@ const RETRY_AFTER: Duration = Duration::from_millis(50);
 const OPEN_LOCK_WAIT: Duration = Duration::from_secs(30);
 const OPEN_LOCK_POLL: Duration = Duration::from_millis(20);
 
-fn connect_string(path: &Path) -> String {
-    // Percent-encode only what would otherwise terminate the path or be
-    // decoded away. SQLite percent-decodes the path portion of a URI, so
-    // a bare `%` in a directory name would eat the next two characters.
-    // Spaces are left alone — SQLite accepts them, and data roots have
-    // them (this repo lives under one).
-    let escaped = path
-        .display()
-        .to_string()
-        .replace('%', "%25")
-        .replace('?', "%3f")
-        .replace('#', "%23");
-    format!("file:{escaped}?doltlite_engine=sqlite")
-}
-
 fn options(path: &Path, create: bool) -> SqliteConnectOptions {
-    // `filename`, not `from_str`: sqlx's *URL parser* rejects query
-    // parameters it does not recognise ("unknown query parameter
-    // `doltlite_engine`"), while the filename field is handed to
-    // `sqlite3_open_v2` untouched. The URI has to go in through the door
-    // sqlx does not inspect.
     SqliteConnectOptions::new()
-        .filename(connect_string(path))
+        .filename(datalib_runtime::plain_sqlite::uri(path))
         .create_if_missing(create)
         // What the plain-SQLite engine really does: asked for WAL it
         // answers `wal` and stays in rollback-journal mode, so a reader
@@ -240,7 +220,7 @@ async fn reset(path: &Path) -> Result<(), sqlx::Error> {
     use sqlx::Connection;
 
     let bare = SqliteConnectOptions::new()
-        .filename(connect_string(path))
+        .filename(datalib_runtime::plain_sqlite::uri(path))
         .busy_timeout(BUSY_TIMEOUT);
     let mut conn = sqlx::sqlite::SqliteConnection::connect_with(&bare).await?;
     set_reset_database(&mut conn, true).await?;
