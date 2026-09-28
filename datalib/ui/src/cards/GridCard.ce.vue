@@ -1260,7 +1260,7 @@ watch(
   { immediate: true },
 );
 
-/// A menu entry drawn like the built-in ones (icon slot, then text),
+/// A menu entry drawn like the others (text only, see grid/menu.ts),
 /// with a label decided when the menu opens. The grid copies the options
 /// it is given, so an entry cannot be retitled from outside once the
 /// menu exists; a renderer is handed the cell instead.
@@ -1274,16 +1274,13 @@ function entry(
     itemVisibilityOverride: (args) => label(scopeOf(args)) !== null,
     slotRenderer: (_item, args) => {
       const wrap = document.createElement("div");
-      // The menu item lays its icon and text out itself; the wrapper
+      // The menu item lays its text out itself; the wrapper
       // only exists because a renderer returns one element.
       wrap.style.display = "contents";
-      const icon = document.createElement("div");
-      icon.className = "slick-menu-icon";
-      icon.textContent = "◦";
       const text = document.createElement("span");
       text.className = "slick-menu-content";
       text.textContent = label(scopeOf(args)) ?? "";
-      wrap.append(icon, text);
+      wrap.append(text);
       return wrap;
     },
     action: (_e, args) => run(scopeOf(args)),

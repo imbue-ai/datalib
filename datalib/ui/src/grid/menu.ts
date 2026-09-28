@@ -110,7 +110,7 @@ export function menuSlots(
     slotRenderer: (_item, args) => {
       const e = at(args, i);
       const wrap = document.createElement("div");
-      // The item lays its icon and text out itself; the wrapper only
+      // The item lays its text out itself; the wrapper only
       // exists because a renderer returns one element.
       wrap.style.display = "contents";
       if (!e || e.separator) {
@@ -119,15 +119,12 @@ export function menuSlots(
         wrap.appendChild(line);
         return wrap;
       }
-      const icon = document.createElement("div");
-      icon.className = "slick-menu-icon";
-      icon.textContent = "◦";
       const text = document.createElement("span");
       text.className = "slick-menu-content";
       if (e.danger) text.classList.add("menu-danger");
       text.textContent = e.name;
       if (e.disabled) text.title = e.disabled;
-      wrap.append(icon, text);
+      wrap.append(text);
       return wrap;
     },
     action: (_e, args) => {
