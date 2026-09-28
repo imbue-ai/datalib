@@ -285,7 +285,7 @@ pub async fn handler(State(s): State<Index>, Query(p): Query<Params>) -> Json<Re
         }
         Err(e) => {
             let msg = format!("problems: {e}");
-            eprintln!("{msg}");
+            tracing::error!(error = %e, "could not read the problems");
             out.errors.push(msg);
         }
     }

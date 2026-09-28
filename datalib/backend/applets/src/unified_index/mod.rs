@@ -117,7 +117,7 @@ pub fn serve(port: u16) -> Result<()> {
             )
             .with_state(state)
             .layer(middleware::from_fn_with_state(gate, require_gateway));
-        eprintln!("datalib-applet unified_index: listening on {bound}");
+        tracing::info!(address = %bound, "listening");
         // There was nothing to write first, so binding is all this one
         // owes before the gateway may look.
         crate::announce_port(bound.port());
@@ -154,9 +154,8 @@ fn ensure_models(root: &std::path::Path) {
     // directory and the indexer links it; this call is the belt for a
     // root the indexer has not touched in this incarnation.
     if !datalib_unified_index::qmd::qmd_index_path(root).exists() {
-        eprintln!(
-            "datalib-applet unified_index: no qmd index yet — free-text \
-             search answers with an error until the first sync builds one"
+        tracing::info!(
+            "no qmd index yet; free-text search answers with an error until the first sync builds one"
         );
         return;
     }
@@ -166,10 +165,10 @@ fn ensure_models(root: &std::path::Path) {
         .map_err(anyhow::Error::from)
         .and_then(|()| datalib_qmd_indexer::ensure_models_symlink(&qmd_dir, &models_dir))
     {
-        eprintln!(
-            "datalib-applet unified_index: could not ensure the models symlink ({e:#}); \
-             continuing with {}/models as-is",
-            qmd_dir.display()
+        tracing::warn!(
+            error = %format!("{e:#}"),
+            models = %qmd_dir.join("models").display(),
+            "could not ensure the models symlink; continuing with the models dir as it is"
         );
         return;
     }
@@ -188,19 +187,18 @@ fn ensure_models(root: &std::path::Path) {
             Ok(outcomes) => {
                 let missing = datalib_qmd_models::missing(models, &outcomes);
                 if !missing.is_empty() {
-                    eprintln!(
-                        "datalib-applet unified_index: not fetching {} into {} \
-                         ({} is set); whatever needs them will fail",
-                        missing.join(", "),
-                        effective.display(),
-                        datalib_qmd_models::NO_FETCH_ENV
+                    tracing::warn!(
+                        missing = %missing.join(","),
+                        dir = %effective.display(),
+                        switch = datalib_qmd_models::NO_FETCH_ENV,
+                        "not fetching qmd's models because fetching is switched off; whatever needs them will fail"
                     );
                 }
             }
-            Err(e) => eprintln!(
-                "datalib-applet unified_index: could not provision qmd's models in {} ({e:#}); \
-                 semantic search will fail until `datalib-step pull-models` succeeds",
-                effective.display()
+            Err(e) => tracing::error!(
+                dir = %effective.display(),
+                error = %format!("{e:#}"),
+                "could not provision qmd's models; semantic search will fail until `datalib-step pull-models` succeeds"
             ),
         }
     });
@@ -355,12 +353,13 @@ async fn search_handler(
     let page = match search_page(&s, &q, &parsed, spec).await {
         Ok(page) => page,
         Err(SearchFailure::Qmd(e)) => {
+            tracing::error!(query = %q, error = %e, "a free-text search failed in qmd");
             qmd_error = Some(e);
             Page::default()
         }
         Err(SearchFailure::Index(e)) => {
             let msg = format!("structured search: {e}");
-            eprintln!("search: {msg}");
+            tracing::error!(query = %q, error = %e, "a structured search failed");
             errors.push(msg);
             Page::default()
         }
@@ -695,14 +694,11 @@ async fn qmd_ranking(
     // matches in several places shows up once, at its best rank. Orphan hits
     // (a path the grid doesn't know about, e.g. a stale render under an old
     // layout) resolve to no rows; flag them loudly so their dropped score is
-    // visible. (ERROR level; this file logs via eprintln!.)
+    // visible.
     // An `is:document` search wants the document a hit is in, not the
     // message it landed on — which the SQL filter would then drop.
     let ranked = idx.ranked_rows_one_per_doc(&hits, parsed.documents() == Some(true), |h| {
-        eprintln!(
-            "ERROR search: qmd hit resolved to no grid rows: path={:?} score={}",
-            h.path, h.score
-        );
+        tracing::error!(path = %h.path, score = h.score, "a qmd hit resolved to no grid rows");
     });
     Ok(ranked
         .into_iter()
@@ -889,7 +885,7 @@ async fn list_docs(State(s): State<Index>) -> Result<Json<Vec<DocRow>>, StatusCo
     match s.repo.list_docs(500).await {
         Ok(rows) => Ok(Json(rows)),
         Err(e) => {
-            eprintln!("list_docs: {e}");
+            tracing::error!(error = %e, "could not list the documents");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

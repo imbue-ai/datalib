@@ -65,7 +65,7 @@ when something saw, and the commit it was built from — what a line's
 |---|---|---|---|
 | `dag` | a run of the runner | itself | it records nothing; the run row closes |
 | `step` | one attempt of one step — or one pass of a streaming consumer, which is spawned once per producer checkpoint; every pass is its own process, all under `attempt 1` | the runner, at spawn and at `wait(2)` | `exit_code` or `signal` |
-| `http` | a launch of the server | itself | it cannot see its own end |
+| `http` | a launch of the server, and what its applets said | itself | it cannot see its own end |
 | `ui` | one load of the app in one browser tab | the server, on the page's behalf | the page says so on `pagehide` |
 
 A line also keeps its **subject** — `run_id`, `step`, `attempt` — which
@@ -98,6 +98,7 @@ has the server's, since the bundle is embedded in the binary.
 | Rust in the runner or the server | `tracing::info!(target: "…", key = value, "the sentence")` | a row with `target`, `msg`, and the keys as a JSON object in `fields`; `filename` / `line_number` added ([`runs/src/tracing_layer.rs`](../../datalib/backend/runs/src/tracing_layer.rs)) |
 | the runner, about a step — a checkpoint sealed, why it ended, a hint | nothing — the runner writes these itself | `target:datalib_dag::runner` under the step, with the runner as author |
 | Rust in a built-in step (`datalib-step`) | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
+| Rust in an applet (`datalib-applet`) | the same `tracing` call | a JSON envelope on the applet's stderr, which the gateway logs again as the server's line at the envelope's level: `target:datalib_http::applets`, with `applet` naming it and the applet's own target and fields in `applet_target` and `applet_fields`. The row's `filename` / `line_number` are the gateway's; the applet's are inside `applet_fields` ([`applets.md`](applets.md)) |
 | a custom step, any language | print a line on stderr (or a non-event line on stdout) | an `info` row with `stream` set; the last lines before a non-zero exit also become the step's error |
 | the server, per request | nothing — [`http/src/request_log.rs`](../../datalib/backend/http/src/request_log.rs) does it | `target:http.request`: method, path, query, status, `ms`, `bytes`, the `page` that asked, and the `card` and `card_type` when a card asked (`ui/src/cards/cardScope.ts`; `ui.card_open` says what source that card ran); `debug` for a live refetch that succeeded (below), `info` otherwise |
 | the UI | `track("name", { …fields }, { level, msg })` from [`ui/src/telemetry.ts`](../../datalib/ui/src/telemetry.ts) | `target:ui.name` under the page's own process, with the page's clock; batched, `keepalive`, never throws |

@@ -450,30 +450,56 @@ const ENVELOPE_LIFTED: &[&str] = &[
     "fields",
 ];
 
-/// A forwarded line from either pipe. Structured tracing output (JSON
-/// with a `level` field, e.g. tracing-subscriber's JSON format) is
-/// unwrapped — its message, severity, target, thread and timestamp
-/// become the event's, and its other fields ride along as `fields` — so
-/// nothing downstream parses an envelope out of a string. Everything
-/// else — progress bars, plain chatter — is the line itself at `info`.
+/// A forwarded line from either pipe. Structured tracing output is
+/// unwrapped ([`parse_envelope`]) so nothing downstream parses an
+/// envelope out of a string; everything else — progress bars, plain
+/// chatter — is the line itself at `info`.
 fn unwrap_line(step: &str, stream: Stream, line: &str) -> Event {
-    let plain = || Event::Log {
-        step: step.to_string(),
-        level: LogLevel::Info,
-        msg: line.to_string(),
-        ts: None,
-        stream: Some(stream),
-        target: None,
-        thread: None,
-        fields: None,
-    };
+    match parse_envelope(line) {
+        Some(e) => Event::Log {
+            step: step.to_string(),
+            level: e.level,
+            msg: e.msg,
+            ts: e.ts,
+            stream: Some(stream),
+            target: e.target,
+            thread: e.thread,
+            fields: e.fields,
+        },
+        None => Event::Log {
+            step: step.to_string(),
+            level: LogLevel::Info,
+            msg: line.to_string(),
+            ts: None,
+            stream: Some(stream),
+            target: None,
+            thread: None,
+            fields: None,
+        },
+    }
+}
+
+/// One line of structured tracing output taken apart: its message,
+/// severity, target, thread and timestamp, and the rest of what it
+/// carried as `fields`. The gateway reads an applet's stderr with it too.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Envelope {
+    pub level: LogLevel,
+    pub msg: String,
+    pub ts: Option<String>,
+    pub target: Option<String>,
+    pub thread: Option<String>,
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// `None` for a line that is not a JSON object with a `level` —
+/// tracing-subscriber's JSON format, or a Python step's logging.
+pub fn parse_envelope(line: &str) -> Option<Envelope> {
     let Ok(serde_json::Value::Object(mut env)) = serde_json::from_str::<serde_json::Value>(line)
     else {
-        return plain();
+        return None;
     };
-    let Some(level_word) = env.get("level").and_then(|l| l.as_str()) else {
-        return plain();
-    };
+    let level_word = env.get("level").and_then(|l| l.as_str())?;
     // tracing-subscriber spells the level in capitals; `warning` is
     // what a Python step's logging module writes.
     let level = match level_word.to_ascii_lowercase().as_str() {
@@ -510,16 +536,14 @@ fn unwrap_line(step: &str, stream: Stream, line: &str) -> Event {
             fields.entry(k).or_insert(v);
         }
     }
-    Event::Log {
-        step: step.to_string(),
+    Some(Envelope {
         level,
         msg,
         ts,
-        stream: Some(stream),
         target,
         thread,
         fields: (!fields.is_empty()).then_some(fields),
-    }
+    })
 }
 
 fn retag(ev: Event, id: &str) -> Event {
