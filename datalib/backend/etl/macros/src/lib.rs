@@ -850,6 +850,7 @@ struct PortableColumn {
     bind: TokenStream2,
     span: proc_macro2::Span,
     search: ColSearch,
+    variants: Option<TokenStream2>,
 }
 
 fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
@@ -913,12 +914,17 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
                      add support to `classify` rather than binding this column by hand",
             )),
         };
+        let variants = is_enum.then(|| {
+            let inner = portable_search::option_inner(&f.ty);
+            quote! { <#inner as ::strum::VariantArray>::VARIANTS }
+        });
         columns.push(PortableColumn {
             name,
             decl,
             bind,
             span: ident.span(),
             search,
+            variants,
         });
         // Load-time-derived columns trail their host field, always
         // nullable (they are absent from the struct).
@@ -940,6 +946,7 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
                 bind: quote! { self.#hook() },
                 span: ident.span(),
                 search,
+                variants: None,
             });
         }
     }
@@ -1044,6 +1051,7 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
             name: &c.name,
             span: c.span,
             search: &c.search,
+            variants: c.variants.as_ref(),
         })
         .collect();
     let described = portable_search::expand(

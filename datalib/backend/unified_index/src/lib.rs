@@ -12,3 +12,4 @@ pub mod query;
 pub mod repo;
 pub mod search;
 pub mod sort;
+pub mod view;

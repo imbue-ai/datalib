@@ -165,6 +165,9 @@ On a `#[col(...)]` or a `#[derived(...)]`:
 - `search` (the key is the column's name) or `search = "convo"`; with
   `alias = "old_name"` (repeatable) for a spelling people already type,
   and `uuid` when a value may come as `slug-uuid`.
+  On an `enum` column the key takes only the enum's words
+  (`severity:eror` is refused with the list), read off its
+  `strum::VariantArray`.
 - `sort_by = "created_at_utc"` — sorts and groups by this twin instead.
 - `is = "document"` — `is:document` keeps the rows where it is true.
 - `like` — free text is a case-insensitive substring of this column.
