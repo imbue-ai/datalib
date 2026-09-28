@@ -252,7 +252,10 @@ Two rules worth knowing when reading the code:
 A message's files are fetched while the walk lists that message, when
 `media` is on. The bytes go into the blob CAS, and each (message, file)
 pair is a `slack_attachments` row. A file whose bytes we already hold is
-never fetched again.
+never fetched again. A channel's rows are written when its walk ends,
+including a walk that failed partway: the messages it stored are behind
+the resume cursor, so their files need a row for the retry below to
+find.
 
 A file that does not land — the fetch failed, or it is over
 `common.blob_size_limit_bytes` — keeps its row with `last_error` set on

@@ -9,7 +9,7 @@ use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl::synthesize::write_fixture;
 use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
-use datalib_etl_slack::recorded::History;
+use datalib_etl_slack::recorded::{record_call, History};
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, record_general, Tree};
@@ -55,6 +55,34 @@ fn first_world(file_status: u16) -> Tree {
     History::cold("C1")
         .record(&t.api, json!([message_with_file()]))
         .unwrap();
+    t.serve();
+    serve_file(&t.playback, file_status, BYTES);
+    t
+}
+
+/// Run 1's world where the walk fails after its first page: the page
+/// names a next one, and nothing serves it.
+fn first_world_failing_after_the_first_page(file_status: u16) -> Tree {
+    let t = Tree::new();
+    record_general(&t.api);
+    record_call(
+        &t.api,
+        "conversations.history",
+        json!({
+            "channel": "C1",
+            "include_all_metadata": "true",
+            "inclusive": "true",
+            "limit": "200",
+            "oldest": datalib_etl_slack::recorded::DEFAULT_SINCE_TS,
+        }),
+        json!({
+            "ok": true,
+            "messages": [message_with_file()],
+            "has_more": true,
+            "response_metadata": {"next_cursor": "page2"},
+        }),
+    )
+    .unwrap();
     t.serve();
     serve_file(&t.playback, file_status, BYTES);
     t
@@ -189,4 +217,23 @@ async fn a_failed_file_over_todays_limit_is_reclassified_as_a_skip() {
         after.problem,
         Some(("info".to_string(), "over_size_limit".to_string()))
     );
+}
+
+/// A channel whose walk fails partway still writes the attachments of
+/// the messages it stored, so the retry pass can find them. It used to
+/// return before its flush: the messages were stored, their files had
+/// no row, and the resume cursor had passed them for good.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_channel_that_fails_partway_still_records_its_attachments() {
+    let t = first_world_failing_after_the_first_page(500);
+    run(&t.out, None).await;
+    let first = attachment(&t.out).await;
+    assert_eq!(
+        first.problem,
+        Some(("error".to_string(), "fetch_failed".to_string()))
+    );
+
+    let _second = second_world();
+    run(&t.out, None).await;
+    assert_eq!(attachment(&t.out).await, landed());
 }

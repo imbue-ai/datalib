@@ -815,6 +815,10 @@ async fn retry_attachments(
 
 // Per-channel history + threads.
 
+/// Every (message, file) the walk met is written when it ends, whether
+/// or not it ended well: the messages it stored are behind the resume
+/// cursor, so a file left out here would have no row for the retry pass
+/// to find.
 #[allow(clippy::too_many_arguments)]
 async fn export_channel(
     db: &RawDb,
@@ -834,12 +838,53 @@ async fn export_channel(
     bar: &RunBar,
     latchkey: &LatchkeySettings,
 ) -> Result<()> {
-    // Per-channel attachment accumulator: every (message, file)
-    // reference is appended, the BlobBundle carries one byte set per
-    // file_id, and the end-of-channel flush writes both the CAS
-    // (via put_many) and `slack_attachments` (via bulk_upsert_in_tx).
     let mut attach = CasEdgeAccumulator::new();
+    let walked = walk_channel(
+        db,
+        team_id,
+        channel_id,
+        since_ts,
+        refresh_window_days,
+        channel_latest_ts,
+        channel_oldest_ts,
+        adjust,
+        latest_reply_by_thread,
+        now,
+        download_blobs,
+        blob_size_limit_bytes,
+        totals,
+        blake3_by_file,
+        bar,
+        latchkey,
+        &mut attach,
+    )
+    .await;
+    if let Err(e) = api::flush_channel_attachments(db, &attach).await {
+        warn!(event = "slack_attachment_flush_err", channel = %channel_id, error = %e, "a channel's attachments could not be written");
+    }
+    walked
+}
 
+#[allow(clippy::too_many_arguments)]
+async fn walk_channel(
+    db: &RawDb,
+    team_id: &str,
+    channel_id: &str,
+    since_ts: &str,
+    refresh_window_days: i64,
+    channel_latest_ts: Option<&str>,
+    channel_oldest_ts: Option<&str>,
+    adjust: &Adjustments,
+    latest_reply_by_thread: &std::collections::HashMap<(String, String), String>,
+    now: &DateTime<Utc>,
+    download_blobs: bool,
+    blob_size_limit_bytes: Option<u64>,
+    totals: &mut ChannelTotals,
+    blake3_by_file: &mut std::collections::HashMap<String, String>,
+    bar: &RunBar,
+    latchkey: &LatchkeySettings,
+    attach: &mut CasEdgeAccumulator,
+) -> Result<()> {
     // Pass A: list every history page, upsert top-level messages, and
     // download per-page media (preserves the existing commit-as-we-go
     // semantics for Ctrl-C safety). Thread replies are deferred so
@@ -878,7 +923,7 @@ async fn export_channel(
         download_blobs,
         blob_size_limit_bytes,
         totals,
-        &mut attach,
+        attach,
         blake3_by_file,
         bar,
         &mut collected,
@@ -915,7 +960,7 @@ async fn export_channel(
                     download_blobs,
                     blob_size_limit_bytes,
                     totals,
-                    &mut attach,
+                    attach,
                     blake3_by_file,
                     bar,
                     &mut collected,
@@ -967,7 +1012,7 @@ async fn export_channel(
                     download_blobs,
                     blob_size_limit_bytes,
                     totals,
-                    &mut attach,
+                    attach,
                     blake3_by_file,
                     bar,
                     &mut collected,
@@ -1023,7 +1068,7 @@ async fn export_channel(
             download_blobs,
             blob_size_limit_bytes,
             totals,
-            &mut attach,
+            attach,
             blake3_by_file,
             latchkey,
         )
@@ -1035,12 +1080,6 @@ async fn export_channel(
             "msgs={} replies={} media={}",
             totals.messages, totals.replies, media_downloaded
         ));
-    }
-
-    // End-of-channel flush: CAS put_many + slack_attachments bulk
-    // upsert. Mirrors chatgpt/claude's per-conv flush pattern.
-    if let Err(e) = api::flush_channel_attachments(db, &attach).await {
-        warn!(event = "slack_attachment_flush_err", channel = %channel_id, error = %e, "a channel's attachments could not be written");
     }
 
     Ok(())
