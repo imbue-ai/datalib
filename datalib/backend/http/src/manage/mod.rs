@@ -106,8 +106,8 @@ pub fn columns() -> Vec<ColumnSpec> {
             .editable(),
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
             .describe("Browse this row's data, and sync it \u{2014} or stop the sync in progress."),
-        ColumnSpec::new("status", "Status", ColumnType::Status)
-            .describe("What it is doing now, or did last. Hover for why; double-click for the log."),
+        ColumnSpec::new("status", "Last update", ColumnType::Status)
+            .describe("What it is doing now, or did last, and when it got there. Hover for why; double-click for the log."),
         ColumnSpec::new("activity", "Activity", ColumnType::Chips)
             .describe("What a running step has reported: what is queued ahead of it, what it has counted, and how fast."),
         ColumnSpec::new("problems", "Problems", ColumnType::Chips)
@@ -115,8 +115,10 @@ pub fn columns() -> Vec<ColumnSpec> {
         ColumnSpec::new("documents", "Documents", ColumnType::Count)
             .describe("How many documents this source holds \u{2014} the things Browse opens, whole store, as of its last render. Blank means it has never counted; a source that renders nothing counts zero."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp)
+            .hidden()
             .describe("When it last ran, whatever came of it. A source's is its ingest step's."),
         ColumnSpec::new("last_success", "Last success", ColumnType::Timestamp)
+            .hidden()
             .describe("When it last ran without failing \u{2014} for a source, the last moment its mirror is known to have matched upstream. Older than Last synced when the runs since have failed; blank if none has succeeded."),
         ColumnSpec::new("disk", "Bytes on disk", ColumnType::Timeseries)
             .describe("What this tree weighs, with the last few minutes behind it."),

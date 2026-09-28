@@ -19,8 +19,8 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
+  nameCell,
   expandGroup,
-  groupRow,
   pickRowMenu,
   pipelineRow as row,
   readRow,
@@ -504,7 +504,7 @@ test.describe("sources run independently", () => {
     // finishes, picking up from the checkpoint the stop left.
     const renamed = "chatgpt (narrowed)";
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE], { [CHATGPT.id]: renamed });
-    await expect(groupRow(page, CHATGPT.id)).toContainText(renamed);
+    await expect(nameCell(page, `group:${CHATGPT.id}`)).toContainText(renamed);
     const again = await stampsBefore(page, [ingestOf(CHATGPT), renderOf(CHATGPT), INDEX]);
     await start(page, CHATGPT);
     // Released, the restart is over in well under a second — too quick

@@ -12,6 +12,8 @@ import {
   MENU_DISABLED,
   TABLE_ROWS,
   menuEntry,
+  nameCell,
+  pipelineRow,
 } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
@@ -77,8 +79,9 @@ test("an applet row keeps the entry, disabled, with the reason", async ({ page }
   await page.goto("/data_sources");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   await expandGroup(page, "unified_index");
-  const appletRow = page.locator(ROWS).filter({ has: page.locator('[title="Applet"]') });
-  await expect(appletRow).toBeVisible();
+  // The applet shares its group's id; its row is keyed by the bare id.
+  await expect(nameCell(page, "unified_index").locator('[title="Applet"]')).toBeVisible();
+  const appletRow = pipelineRow(page, "unified_index");
 
   await appletRow.click({ button: "right" });
   const entry = menuEntry(page, "Show commit history");

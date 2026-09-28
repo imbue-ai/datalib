@@ -60,8 +60,17 @@ const props = withDefaults(
     /// Per-field refinements a type cannot know — a width, a formatter
     /// — merged over the typed definition.
     columnOverrides?: Record<string, Partial<Column<T>>>;
+    /// How many leading columns stay put while the rest scroll sideways.
+    pinnedColumns?: number;
   }>(),
-  { rowKey: "key", tree: false, windowSecs: 300, selectable: false, virtualizeRows: true },
+  {
+    rowKey: "key",
+    tree: false,
+    windowSecs: 300,
+    selectable: false,
+    virtualizeRows: true,
+    pinnedColumns: 0,
+  },
 );
 
 const emit = defineEmits<{
@@ -230,7 +239,10 @@ function buildColumns(): Column<T>[] {
     actions: props.actions,
     onOpenDocument: (uuid) => emit("openDocument", uuid),
     overrides: props.columnOverrides,
-  });
+  }).map((c, i) =>
+    // A pinned column hidden would unpin the one after it.
+    i < props.pinnedColumns ? { ...c, excludeFromColumnPicker: true, reorderable: false } : c,
+  );
   if (!props.tree) return typed;
   return [
     ...typed,
@@ -293,7 +305,15 @@ function options(): GridOption {
     enableColumnReorder: true,
     enableHeaderMenu: false,
     enableGridMenu: false,
-    enableColumnPicker: false,
+    // Right-click a header to show or hide a column; a producer may
+    // declare some hidden until asked for.
+    enableColumnPicker: true,
+    columnPicker: { hideForceFitButton: true, hideSyncResizeButton: true },
+    frozenColumn: props.pinnedColumns - 1,
+    // A box narrower than the pinned columns scrolls them with the rest;
+    // the grid's own answer to that is an alert().
+    invalidColumnFreezeWidthCallback: () =>
+      console.warn("TableGrid: too narrow to pin columns; they scroll with the rest"),
     // Folding a tree row goes through the grid's filters, so filtering
     // is on; nothing here is filterable, and the filter row stays hidden.
     enableFiltering: true,
@@ -450,10 +470,12 @@ let faces: ClockFaces = new Map();
 let clock: ReturnType<typeof setInterval> | null = null;
 function tickClock() {
   const timestamps = fieldsOfType(props.columns, "timestamp");
+  const statuses = fieldsOfType(props.columns, "status");
   const timeseries = fieldsOfType(props.columns, "timeseries");
-  if (timestamps.length === 0 && timeseries.length === 0) return;
+  if (timestamps.length + statuses.length + timeseries.length === 0) return;
   const cols = {
     timestamps,
+    statuses,
     timeseries,
     windowMs: props.windowSecs * 1000,
     stepMs: sparkStepMs(props.windowSecs),

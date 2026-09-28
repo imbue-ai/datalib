@@ -4,19 +4,19 @@
 // or removes.
 
 import { test, expect } from "@playwright/test";
-import { MENU_DISABLED, expandRow, pipelineRow, rowMenuEntry } from "./grid-helpers";
+import { MENU_DISABLED, expandRow, nameCell, pipelineRow, rowMenuEntry } from "./grid-helpers";
 
 test("System and its Logs child: sizes, a Browse that opens the log, no Sync", async ({ page }) => {
   await page.goto("/data_sources");
   const system = pipelineRow(page, "system");
   await expect(system).toBeVisible({ timeout: 10_000 });
-  await expect(system.locator('[col-id="name"]')).toContainText("System");
+  await expect(nameCell(page, "system")).toContainText("System");
   await expect(system.getByRole("button", { name: "Sync now" })).toBeDisabled();
 
-  await expandRow(system, "group system");
+  await expandRow(page, "system", "group system");
   const logs = pipelineRow(page, "system/runs");
   await expect(logs).toBeVisible();
-  await expect(logs.locator('[col-id="name"]')).toContainText("Logs");
+  await expect(nameCell(page, "system/runs")).toContainText("Logs");
   // The run store exists on a served root, so both rows carry a size.
   await expect(system.locator('[col-id="disk"]')).not.toHaveText(/^\s*[—-]?\s*$/);
   await expect(logs.locator('[col-id="disk"]')).not.toHaveText(/^\s*[—-]?\s*$/);

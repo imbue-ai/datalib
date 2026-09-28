@@ -26,7 +26,9 @@ import {
   groupRow,
   pickRowMenu,
   lastSuccessOf,
+  LAST_UPDATE_AT,
   pipelineRow as row,
+  showColumn,
   recordStatuses,
   settle,
   settleRow,
@@ -117,7 +119,7 @@ async function writeConfig(page: Page, text: string) {
   //
   // Saving re-derives the table from the config text at once — that is
   // the point of the Advanced editor — but the per-step history behind
-  // the Status and Last synced columns comes from `GET /api/dag`, which
+  // the Last update column comes from `GET /api/dag`, which
   // is refetched separately. Between the two, a row that has run before
   // paints as "Never run": it exists because the config declares it,
   // and nothing has yet said what it did. Mounting the page afresh
@@ -206,7 +208,7 @@ command = "'${STEP_BIN}'"
 path = "${dataRoot}/fsindex_scan"
 
 # Declared and never synced by any test in this file, so "never run" is
-# a state the grid can be observed handling — a Last synced of "—", and
+# a state the grid can be observed handling — a Last update with no time, and
 # a row that has to stay at the bottom of that column whichever way it
 # is sorted. Without a row like this the sort test passes with the
 # comparator deleted, because same-offset ISO stamps happen to sort
@@ -393,7 +395,9 @@ ${applets()}`;
     await settleRunner(page);
   });
 
-  test("Last synced holds still under a minute, then crosses to 1 minute ago", async ({ page }) => {
+  test("Last update's time holds still under a minute, then crosses to 1 minute ago", async ({
+    page,
+  }) => {
     // What only a browser can answer about this column. The arithmetic
     // — every unit boundary, a stamp in another UTC offset, one in the
     // future — is in src/config/timeFormat.test.ts, because provoking
@@ -416,7 +420,7 @@ ${applets()}`;
     await syncBtn(page, "pdfs/ingest").click();
     expect(await settle(page, "pdfs/ingest", countUpWas)).toBe("Succeeded");
 
-    const cell = row(page, "pdfs/ingest").locator('[col-id="last_synced"]');
+    const cell = row(page, "pdfs/ingest").locator(LAST_UPDATE_AT);
     await expect(cell).toHaveText("seconds ago");
 
     // The exact instant is still reachable, on the hover.
@@ -448,7 +452,7 @@ ${applets()}`;
     // column used to do, they would have read 3, 4, 5 — this is the
     // assertion that fails if the countup ever comes back.
     await page.clock.runFor(4000);
-    await expect(cell, "Last synced ticked while nothing happened").toHaveText("seconds ago");
+    await expect(cell, "Last update ticked while nothing happened").toHaveText("seconds ago");
 
     // The crossing to "1 minute ago" — the only self-repaint this
     // column does, and the reason the loop exists. It went untested
@@ -471,7 +475,9 @@ ${applets()}`;
     // to reveal. `unsynced/ingest` exists in the config for exactly this:
     // the data root is shared by every test in this file, so any step
     // one of them syncs would make this order-dependent.
-    await expect(row(page, "unsynced/ingest").locator('[col-id="last_synced"]')).toHaveText("—");
+    // Drawn first, so the absent time is not just an unpainted row.
+    expect(await statusOf(page, "unsynced/ingest")).toBe("Never run");
+    await expect(row(page, "unsynced/ingest").locator(LAST_UPDATE_AT)).toHaveCount(0);
     expect(await lastSyncedOf(page, "unsynced/ingest")).toBeNull();
 
     // The afterEach writes the config back through this same page: it
@@ -480,7 +486,7 @@ ${applets()}`;
     await page.clock.resume();
   });
 
-  test("sorting Last synced orders by time, not by how the cell reads", async ({ page }) => {
+  test("sorting Last update orders by time, not by how the cell reads", async ({ page }) => {
     // The column shows "5 minutes ago" and sorts on the underlying
     // stamp. Those two orders genuinely disagree here, which is what
     // makes this worth asserting through the real header rather than
@@ -507,30 +513,32 @@ ${applets()}`;
     /// Rows top to bottom, each with the exact stamp it claims — read
     /// off `title`, so the check is against instants rather than the
     /// prose the cell renders — and its depth in the tree, off the
-    /// `slick-tree-level-N` class on the tree cell.
+    /// `slick-tree-level-N` class on the tree cell. The tree cell is in
+    /// the pinned half of each row and the stamp in the other, so the
+    /// halves are joined on their row index.
     type Seen = { id: string; level: number; stamp: string | null };
     const ordering = async (): Promise<Seen[]> =>
-      page.locator(TABLE_ROWS).evaluateAll((rows) =>
-        rows
-          .sort(
-            (a, b) =>
-              Number((a as HTMLElement).getAttribute("data-row")) -
-              Number((b as HTMLElement).getAttribute("data-row")),
-          )
-          .map((r) => ({
-            id: r.getAttribute("data-key") ?? "",
-            level: Number(
-              /slick-tree-level-(\d+)/.exec(r.querySelector(".tg-tree")?.className ?? "")?.[1] ??
-                "0",
-            ),
-            stamp: r.querySelector('[col-id="last_synced"] [title]')?.getAttribute("title") ?? null,
-          })),
-      );
+      page.locator(".tg-grid .slick-row[data-key]").evaluateAll((halves, at) => {
+        const byRow = new Map<number, Seen>();
+        for (const half of halves) {
+          const n = Number(half.getAttribute("data-row"));
+          const seen = byRow.get(n) ?? {
+            id: half.getAttribute("data-key") ?? "",
+            level: 0,
+            stamp: null,
+          };
+          const tree = half.querySelector(".tg-tree");
+          if (tree) seen.level = Number(/slick-tree-level-(\d+)/.exec(tree.className)?.[1] ?? "0");
+          seen.stamp ??= half.querySelector(at)?.getAttribute("title") ?? null;
+          byRow.set(n, seen);
+        }
+        return [...byRow].sort(([a], [b]) => a - b).map(([, seen]) => seen);
+      }, LAST_UPDATE_AT);
 
     /// The sets a tree sort actually orders: the top-level rows, and
     /// each open group's children, keyed by the group. A sort is total
-    /// among siblings and nowhere else — a group row shows its ingest
-    /// step's stamp while its render child finished a second later, so
+    /// among siblings and nowhere else — a group row shows the stamp of
+    /// the child its status is read off, not of every child, so
     /// the flattened list puts a newer child under an older parent when
     /// sorted descending, and no choice of the group's stamp fixes both
     /// directions at once (the newest child's would break ascending).
@@ -568,7 +576,7 @@ ${applets()}`;
       ).toBe(true);
     };
 
-    const header = page.locator('.tg-grid .slick-header-column[col-id="last_synced"]');
+    const header = page.locator('.tg-grid .slick-header-column[col-id="status"]');
 
     await header.click(); // ascending — oldest first
     const asc = siblingSets(await ordering());
@@ -702,6 +710,7 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     const failed = await lastSyncedOf(page, "soured/ingest");
     expect(failed).not.toBe(succeeded);
     expect(await lastSuccessOf(page, "soured/ingest")).toBe(succeeded);
+    await showColumn(page, "last_synced");
     await expect(
       groupRow(page, "soured").locator('[col-id="last_synced"] [title]'),
     ).toHaveAttribute("title", failed!);

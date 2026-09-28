@@ -283,12 +283,12 @@ export function typedColumns<T extends Record<string, unknown>>(
         case "status":
           return {
             formatter: (_r, _c, value) => renderStatus(value as StatusView | null),
+            // By when, which is what the cell reads as.
             sortComparer: (a, b, dir) =>
-              compareText(
-                (a as StatusView | null)?.label,
-                (b as StatusView | null)?.label,
-                dir ?? 1,
-              ),
+              compareStamps(
+                (a as StatusView | null)?.at ?? null,
+                (b as StatusView | null)?.at ?? null,
+              ) * (dir ?? 1),
           };
         case "chips":
           return {

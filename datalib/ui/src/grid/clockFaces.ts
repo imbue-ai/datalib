@@ -1,6 +1,7 @@
 // Which cells of a table the clock alone has changed. A `timestamp`
-// cell reads "5 minutes ago" and a `timeseries` sparkline slides left
-// as time passes, so both go stale with no new data. The grid repaints
+// cell reads "5 minutes ago", a `status` cell says the same of when it
+// got there, and a `timeseries` sparkline slides left as time passes,
+// so all three go stale with no new data. The grid repaints
 // those cells, and only those, when their face here moves: repainting
 // a row rebuilds its buttons under the pointer.
 import type { Sample } from "@/config/sparkline";
@@ -12,6 +13,8 @@ export type ClockFaces = Map<string, string>;
 
 export type ClockColumns = {
   timestamps: string[];
+  /// Status cells, whose stamp is the status's `at`.
+  statuses: string[];
   timeseries: string[];
   /// How far back a sparkline reaches, ms.
   windowMs: number;
@@ -30,6 +33,10 @@ export function clockFaces<T extends Record<string, unknown>>(
     const key = keyOf(row);
     for (const f of cols.timestamps) {
       faces.set(`${key}\n${f}`, formatRelative((row[f] as string | null) ?? null, now));
+    }
+    for (const f of cols.statuses) {
+      const at = (row[f] as { at?: string | null } | null)?.at ?? null;
+      faces.set(`${key}\n${f}`, formatRelative(at, now));
     }
     for (const f of cols.timeseries) {
       const samples = (row[f] as { samples?: Sample[] } | null)?.samples ?? [];

@@ -5,6 +5,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
+  nameCell,
   MENU_DISABLED,
   SELECTED_ROWS,
   expandGroup,
@@ -48,7 +49,7 @@ test("a row's menu offers every action, grouped, wherever the pointer is", async
   await page.keyboard.press("Escape");
 
   // The Name cell offers the same menu as any other.
-  await row.locator('[col-id="name"]').click({ button: "right" });
+  await nameCell(page, "group:unified_index").click({ button: "right" });
   await expect(menuEntries(page)).toHaveCount(13);
   await page.keyboard.press("Escape");
 });
@@ -93,7 +94,7 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   const row = groupRow(page, "unified_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
 
-  await row.locator('[col-id="name"]').click({ button: "right" });
+  await nameCell(page, "group:unified_index").click({ button: "right" });
   await menuEntry(page, "Rename…").click();
   const input = page.locator(".tg-grid input.editor-text");
   await expect(input).toBeVisible();
@@ -116,7 +117,9 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await input.press("Enter");
 
   await expect(page.getByText("Renamed unified_index to Everything, indexed.")).toBeVisible();
-  await expect(row.locator(".tg-parent")).toHaveText("Everything, indexed");
+  await expect(nameCell(page, "group:unified_index").locator(".tg-parent")).toHaveText(
+    "Everything, indexed",
+  );
   await expect(editor).toHaveValue(/name = "Everything, indexed"/);
 
   // Put the root back for the next spec on this sandbox.

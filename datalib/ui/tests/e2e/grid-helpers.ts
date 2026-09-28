@@ -240,7 +240,13 @@ export async function searchAndSettle(
 
 /// The rows of any `TableGrid` on the page — the Manage tree, the
 /// commit history — scoped by a caller that has more than one open.
-export const TABLE_ROWS = ".tg-grid .slick-row";
+/// A grid with pinned columns draws each row in two halves; this is the
+/// half that scrolls, which holds every cell but the pinned Name
+/// (`nameCell`), so a row is still one element.
+export const TABLE_ROWS = ".tg-grid .slick-row:not([data-pinned])";
+/// A row's Name cell, in whichever half of the row the grid draws it.
+export const nameCell = (page: Page, key: string) =>
+  page.locator(`.tg-grid .slick-row[data-key="${key}"] [col-id="name"]`);
 /// The right-click menu the grid appends to <body>, and its entries.
 export const TABLE_MENU = ".slick-context-menu";
 /// An entry by its text — the text beside the icon slot, which reads as
@@ -277,17 +283,18 @@ export const groupRow = (page: Page, id: string) => pipelineRow(page, `group:${i
 /// table, and a click that lands on the chevron of a row the grid is
 /// about to replace opens nothing; the row that takes its place is
 /// folded again, and a check on its own would wait on it forever.
-export async function expandRow(row: Locator, what: string): Promise<void> {
-  await expect(row, `${what} should have a row`).toBeVisible();
+export async function expandRow(page: Page, key: string, what: string): Promise<void> {
+  const name = nameCell(page, key);
+  await expect(name, `${what} should have a row`).toBeVisible();
   await expect(async () => {
-    const closed = row.locator(".slick-tree-toggle.collapsed");
+    const closed = name.locator(".slick-tree-toggle.collapsed");
     if ((await closed.count()) > 0) await closed.click({ timeout: 1_000 });
-    await expect(row.locator(".slick-tree-toggle.expanded")).toBeVisible({ timeout: 1_000 });
+    await expect(name.locator(".slick-tree-toggle.expanded")).toBeVisible({ timeout: 1_000 });
   }, `${what} never opened`).toPass({ timeout: 15_000, intervals: [100, 250, 500] });
 }
 
 export async function expandGroup(page: Page, id: string): Promise<void> {
-  await expandRow(groupRow(page, id), `group ${id}`);
+  await expandRow(page, `group:${id}`, `group ${id}`);
 }
 
 /// One entry of a Manage row's right-click menu, opened on its Status
@@ -338,9 +345,11 @@ export type RowReading = {
   /// The status icon's accessible name — the word a person gets by
   /// hovering.
   status: string;
-  /// The exact instants, off the stamp cells' `title`. Not the visible
-  /// "5 minutes ago", which drifts on its own. Null: the step never ran
-  /// (or never succeeded), and the cell shows "—".
+  /// The exact instants, off the stamps' `title`. Not the visible
+  /// "5 minutes ago", which drifts on its own. `lastSynced` is the stamp
+  /// beside the Last update glyph, which on a step is its last sync.
+  /// Null: the step never ran (or never succeeded), or its column is
+  /// hidden — `lastSuccessOf` shows it first.
   lastSynced: string | null;
   lastSuccess: string | null;
   /// The Bytes label over the sparkline, as drawn. Null: nothing on disk.
@@ -348,6 +357,9 @@ export type RowReading = {
   /// The Activity chips' title; "" when there are none.
   activity: string;
 };
+
+/// The time beside the Last update glyph; absent on a row that never ran.
+export const LAST_UPDATE_AT = '[col-id="status"] .tg-status-at';
 
 /// How long a row may take to be drawn: a remount fetches the rows after
 /// the shell has painted.
@@ -358,22 +370,24 @@ export const ROW_DRAWN = 15_000;
 /// a poll that treats the null as "not yet"; everything else reads
 /// through `readRow`, which waits it out.
 export async function sampleRow(page: Page, id: string): Promise<RowReading | null> {
-  const [reading] = await pipelineRow(page, id).evaluateAll((rows) =>
-    rows.slice(0, 1).map((row) => {
-      const status = row
-        .querySelector('[col-id="status"] [role="img"]')
-        ?.getAttribute("aria-label");
-      if (!status) return null;
-      const stamp = (col: string) =>
-        row.querySelector(`[col-id="${col}"] [title]`)?.getAttribute("title") ?? null;
-      return {
-        status,
-        lastSynced: stamp("last_synced"),
-        lastSuccess: stamp("last_success"),
-        disk: row.querySelector('[col-id="disk"] .tg-plot-label')?.textContent?.trim() ?? null,
-        activity: row.querySelector('[col-id="activity"] .tg-chips')?.getAttribute("title") ?? "",
-      };
-    }),
+  const [reading] = await pipelineRow(page, id).evaluateAll(
+    (rows, at) =>
+      rows.slice(0, 1).map((row) => {
+        const status = row
+          .querySelector('[col-id="status"] [role="img"]')
+          ?.getAttribute("aria-label");
+        if (!status) return null;
+        const stamp = (col: string) =>
+          row.querySelector(`[col-id="${col}"] [title]`)?.getAttribute("title") ?? null;
+        return {
+          status,
+          lastSynced: row.querySelector(at)?.getAttribute("title") ?? null,
+          lastSuccess: stamp("last_success"),
+          disk: row.querySelector('[col-id="disk"] .tg-plot-label')?.textContent?.trim() ?? null,
+          activity: row.querySelector('[col-id="activity"] .tg-chips')?.getAttribute("title") ?? "",
+        };
+      }),
+    LAST_UPDATE_AT,
   );
   return reading ?? null;
 }
@@ -401,8 +415,21 @@ export async function stampOf(page: Page, id: string): Promise<string | null> {
   return (await readRow(page, id)).lastSynced;
 }
 
+/// A column the Sources card hides until asked for, shown through the
+/// header's right-click picker.
+export async function showColumn(page: Page, field: string) {
+  const header = (col: string) => page.locator(`.tg-grid .slick-header-column[col-id="${col}"]`);
+  if ((await header(field).count()) > 0) return;
+  await header("status").click({ button: "right" });
+  const picker = page.locator(".slick-column-picker");
+  await picker.locator("label", { has: page.locator(`input[data-columnid="${field}"]`) }).click();
+  await picker.locator("button.close").click();
+  await expect(header(field)).toHaveCount(1);
+}
+
 /// Null only for a row that has never succeeded.
 export async function lastSuccessOf(page: Page, id: string): Promise<string | null> {
+  await showColumn(page, "last_success");
   return (await readRow(page, id)).lastSuccess;
 }
 

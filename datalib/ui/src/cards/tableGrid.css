@@ -59,6 +59,8 @@
 .tg-status-succeeded,
 .tg-status-skipped-up-to-date { color: var(--datalib-log-ok); }
 .tg-status-never-run { opacity: 0.55; }
+/* When it got there, in the text colour: the glyph carries the word. */
+.tg-status-at { color: var(--datalib-fg); white-space: nowrap; }
 
 .tg-spinner {
   width: 14px;

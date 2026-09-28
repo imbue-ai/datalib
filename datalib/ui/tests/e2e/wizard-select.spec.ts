@@ -64,7 +64,7 @@ test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   await expect(page.getByText("Added Phone Signal.")).toBeVisible();
   await expandGroup(page, "phone-signal");
   await expect(
-    page.locator('.tg-grid .slick-row[data-key="phone-signal/render_markdown"]'),
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="phone-signal/render_markdown"]'),
   ).toBeVisible();
   await expect(page.locator(".m2-editor")).toHaveValue(/period = "year"/);
 });

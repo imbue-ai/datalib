@@ -3,6 +3,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
+  nameCell,
   expandGroup,
   groupRow,
   pickRowMenu,
@@ -56,8 +57,7 @@ const idField = (page: Page) => field(page, "Id");
 /// The step-role mark. It rides after the name — there is no Step
 /// column any more — and `aria-label` is the only place the word
 /// survives, which is also what a person gets by hovering it.
-const stepMark = (page: Page, id: string) =>
-  row(page, id).locator('[col-id="name"] .tg-mark [role="img"]');
+const stepMark = (page: Page, id: string) => nameCell(page, id).locator('.tg-mark [role="img"]');
 
 async function pickClaude(page: Page) {
   await page.getByRole("button", { name: "+ Data Source" }).click();
@@ -124,8 +124,9 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // beside it. The steps are under it, and folded until asked for —
   // which is the whole point of the row.
   const group = groupRow(page, "personal-claude");
-  await expect(group).toContainText("Personal Claude");
-  await expect(group.locator(".tg-id")).toHaveText("personal-claude");
+  const groupName = nameCell(page, "group:personal-claude");
+  await expect(groupName).toContainText("Personal Claude");
+  await expect(groupName.locator(".tg-id")).toHaveText("personal-claude");
   await expect(row(page, "personal-claude/ingest")).toHaveCount(0);
 
   // Opened, the two steps are labelled by what they do; the group owns
@@ -133,10 +134,10 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // reaches claude.ai. The phase is a glyph suffixed onto the label, so
   // it is asserted through the accessible name rather than cell text.
   await expandGroup(page, "personal-claude");
-  await expect(row(page, "personal-claude/ingest")).toContainText("Download");
-  await expect(row(page, "personal-claude/ingest")).toContainText("personal-claude/ingest");
+  await expect(nameCell(page, "personal-claude/ingest")).toContainText("Download");
+  await expect(nameCell(page, "personal-claude/ingest")).toContainText("personal-claude/ingest");
   await expect(stepMark(page, "personal-claude/ingest")).toHaveAttribute("aria-label", "Ingest");
-  await expect(row(page, "personal-claude/render_markdown")).toContainText("Render markdown");
+  await expect(nameCell(page, "personal-claude/render_markdown")).toContainText("Render markdown");
   await expect(stepMark(page, "personal-claude/render_markdown")).toHaveAttribute(
     "aria-label",
     "Render",
@@ -167,8 +168,8 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // The name belongs to the group, so the group row renames and the
   // steps under it — labelled by what they do — do not. Saving rewrote
   // both steps and left exactly one of each.
-  await expect(groupRow(page, "personal-claude")).toContainText("Claude Archive");
-  await expect(row(page, "personal-claude/render_markdown")).toContainText("Render markdown");
+  await expect(nameCell(page, "group:personal-claude")).toContainText("Claude Archive");
+  await expect(nameCell(page, "personal-claude/render_markdown")).toContainText("Render markdown");
   await expect(editor).toHaveValue(/name = "Claude Archive"/);
   await expect(editor).not.toHaveValue(/Personal Claude/);
   const saved = await editor.inputValue();
@@ -209,7 +210,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   await expandGroup(page, "fetch-only");
   await expect(row(page, "fetch-only/ingest")).toBeVisible();
   await expect(
-    page.locator('.tg-grid .slick-row[data-key="fetch-only/render_markdown"]'),
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="fetch-only/render_markdown"]'),
   ).toHaveCount(0);
 
   // A step under a group edits its source: the step row's button opens
@@ -251,7 +252,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   await expect(page.getByText("Saved No Render.")).toBeVisible();
 
   await expect(
-    page.locator('.tg-grid .slick-row[data-key="no-render/render_markdown"]'),
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="no-render/render_markdown"]'),
   ).toHaveCount(0);
   // The fan-ins must lose it too: an input naming a step that no longer
   // exists is a config the loader refuses outright.
@@ -405,9 +406,9 @@ test("a hand-written render step under a download-only type is called out, then 
   await expect(wizard(page)).toContainText("Lightroom renders nothing. Saving removes it");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Photos.")).toBeVisible();
-  await expect(page.locator('.tg-grid .slick-row[data-key="photos/render_markdown"]')).toHaveCount(
-    0,
-  );
+  await expect(
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="photos/render_markdown"]'),
+  ).toHaveCount(0);
   await expect(editor).not.toHaveValue(/group = "photos"\nfunction = "render_markdown"/);
   await expect(editor).toHaveValue(/group = "photos"\nfunction = "ingest"/);
 });
@@ -436,10 +437,12 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
   );
 
   // The group went with its last step, so its row is gone too.
-  await expect(page.locator('.tg-grid .slick-row[data-key="doomed/ingest"]')).toHaveCount(0);
-  await expect(page.locator('.tg-grid .slick-row[data-key="doomed/render_markdown"]')).toHaveCount(
-    0,
-  );
+  await expect(
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="doomed/ingest"]'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="doomed/render_markdown"]'),
+  ).toHaveCount(0);
   await expect(groupRow(page, "doomed")).toHaveCount(0);
   // Including the fan-in references, or the config would not load.
   await expect(editor).not.toHaveValue(/doomed/);
@@ -468,7 +471,9 @@ test("deleting the group takes every step under it", async ({ page }) => {
   );
 
   await expect(groupRow(page, "whole-group")).toHaveCount(0);
-  await expect(page.locator('.tg-grid .slick-row[data-key^="whole-group/"]')).toHaveCount(0);
+  await expect(
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key^="whole-group/"]'),
+  ).toHaveCount(0);
   // The `[[groups]]` entry, its `[[steps]]`, and any fan-in reference:
   // nothing of it is left in the file.
   await expect(editor).not.toHaveValue(/whole-group/);

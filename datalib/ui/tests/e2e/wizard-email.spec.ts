@@ -276,7 +276,7 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
   await expect(page.getByText("Added Bridge mail.")).toBeVisible();
   await expandGroup(page, "bridge-mail");
   await expect(
-    page.locator('.tg-grid .slick-row[data-key="bridge-mail/render_markdown"]'),
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="bridge-mail/render_markdown"]'),
   ).toBeVisible();
   // The outlink is a preset: a Gmail source's webmail links are
   // Gmail's, and there is no second answer to ask about.
@@ -376,7 +376,9 @@ test("an existing source reopens on the form that wrote it", async ({ page }) =>
   await expandGroup(page, "personal-mail");
   await pickRowMenu(
     page,
-    page.locator('.tg-grid .slick-row[data-key="personal-mail/render_markdown"]'),
+    page.locator(
+      '.tg-grid .slick-row:not([data-pinned])[data-key="personal-mail/render_markdown"]',
+    ),
     "Edit settings…",
     wizard(page),
   );
