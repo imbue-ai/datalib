@@ -9,6 +9,7 @@ import {
   expandGroup,
   expectGridPainted,
   groupRow,
+  readRow,
   pipelineRow as row,
   rowMenuEntry,
   searchAndSettle,
@@ -48,9 +49,8 @@ const SYNCED_ROWS = ["pdfs/ingest", "pdfs/render_markdown", "unified_index/grid_
 /// nothing on disk, which the column renders as an em dash rather than
 /// as a flat line at zero.
 async function bytesOf(page: Page, id: string): Promise<number | null> {
-  const label = row(page, id).locator('[col-id="disk"] .tg-plot-label');
-  if ((await label.count()) === 0) return null;
-  const text = ((await label.first().textContent()) ?? "").trim();
+  const text = (await readRow(page, id)).disk;
+  if (text === null) return null;
   const m = /^([\d.]+)\s*(B|kB|MB|GB|TB)$/.exec(text);
   expect(m, `unparsable size in the Bytes column: ${JSON.stringify(text)}`).not.toBeNull();
   const scale = { B: 1, kB: 1e3, MB: 1e6, GB: 1e9, TB: 1e12 }[m![2]]!;

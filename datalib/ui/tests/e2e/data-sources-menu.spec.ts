@@ -98,9 +98,11 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   const input = page.locator(".tg-grid input.editor-text");
   await expect(input).toBeVisible();
   // The table repaints cells on a clock ("12 seconds ago" goes stale),
-  // and a repaint of the cell being edited would reset it under the
-  // typist. Force one of this very column and expect the same input to
-  // survive it.
+  // and a repaint of the cell being edited would put back the stored
+  // name under the typist. Type, force a repaint of this very column
+  // (synchronous, so it is over when `evaluate` returns), and expect
+  // what was typed to survive it.
+  await input.fill("Everything, indexed");
   await page
     .locator(".tg-grid")
     .first()
@@ -109,10 +111,8 @@ test("Rename edits the group's name in the cell and writes it to the config", as
         "name",
       ]);
     });
-  await page.waitForTimeout(200);
-  await expect(input).toBeVisible();
   await expect(input).toBeFocused();
-  await input.fill("Everything, indexed");
+  await expect(input).toHaveValue("Everything, indexed");
   await input.press("Enter");
 
   await expect(page.getByText("Renamed unified_index to Everything, indexed.")).toBeVisible();

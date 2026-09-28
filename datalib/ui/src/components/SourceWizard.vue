@@ -617,6 +617,10 @@ async function connectViaLatchkey() {
         const landed = status.account;
         const field = accountField.value;
         if (landed && field) values.value[field.target] = landed;
+        // A failure from before the login is about a credential that
+        // has just been replaced.
+        if (probe.value.state === "failed")
+          probe.value = { state: "idle", message: "", report: null };
         connect.value = {
           state: "ok",
           message: landed
@@ -1001,6 +1005,13 @@ function submit() {
                 <path :d="STATUS_GLYPHS.failed" fill="currentColor" />
               </svg>
               {{ probeHeadline }}
+            </p>
+            <!-- The usual cause is a sign-in that expired, and the fix
+                 is the button above rather than the terminal command
+                 the probe's own recipe names. -->
+            <p v-if="canConnect" class="wiz-help">
+              If the sign-in has expired, press <b>Latchkey auth</b> to sign in again, then
+              <b>Test connection</b>.
             </p>
             <details v-if="probeDetail">
               <summary class="wiz-help">How to fix it</summary>

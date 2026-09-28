@@ -1,33 +1,23 @@
-//! How the grid names a grouping on the wire: the columns it groups by
+//! How a grid names a grouping on the wire: the columns it groups by
 //! (`by=kind,author`), and the group whose rows it wants
-//! (`within=[["kind","Chat"],["author",null]]`). Both name grid columns
-//! by id; one no `grid_rows` column holds (Score) cannot group.
+//! (`within=[["kind","Chat"],["author",null]]`). Both name the grid's
+//! columns by id; one no table column holds (Score) cannot group.
 
-use datalib_query::table::SearchTable;
-use datalib_schema::grid_rows::{GridRow, GridRowColumn};
-use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::group::Within;
-use datalib_unified_index::sort::SortBy;
+use datalib_unified_index::view::{group_column, View};
 
-fn column(id: &str) -> Result<GridRowColumn, String> {
-    match GridColumn::parse(id).map(GridColumn::sorts) {
-        Some(SortBy::Column(c)) => Ok(GridRow::sorts_by(c)),
-        _ => Err(format!("rows cannot be grouped by {id:?}")),
-    }
+pub fn parse_by<V: View>(spelled: &str) -> Result<Vec<V::Column>, String> {
+    spelled.split(',').map(group_column::<V>).collect()
 }
 
-pub fn parse_by(spelled: &str) -> Result<Vec<GridRowColumn>, String> {
-    spelled.split(',').map(column).collect()
-}
-
-pub fn parse_within(spelled: &str) -> Result<Vec<Within>, String> {
+pub fn parse_within<V: View>(spelled: &str) -> Result<Vec<Within<V::Column>>, String> {
     let steps: Vec<(String, Option<String>)> = serde_json::from_str(spelled)
         .map_err(|e| format!("a group is [[column, value], …]: {e}"))?;
     steps
         .into_iter()
         .map(|(id, value)| {
             Ok(Within {
-                column: column(&id)?,
+                column: group_column::<V>(&id)?,
                 value,
             })
         })
@@ -37,25 +27,29 @@ pub fn parse_within(spelled: &str) -> Result<Vec<Within>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_schema::grid_rows::GridRowColumn;
+    use datalib_unified_index::grid_columns::GridColumn;
 
     #[test]
     fn columns_are_named_by_the_grids_ids() {
         assert_eq!(
-            parse_by("source_ref,kind"),
+            parse_by::<GridColumn>("source_ref,kind"),
             Ok(vec![GridRowColumn::SourceId, GridRowColumn::Kind])
         );
         assert_eq!(
-            parse_by("created_at"),
+            parse_by::<GridColumn>("created_at"),
             Ok(vec![GridRowColumn::CreatedAtUtc])
         );
-        assert!(parse_by("score").unwrap_err().contains("\"score\""));
-        assert!(parse_by("no_such_column").is_err());
+        assert!(parse_by::<GridColumn>("score")
+            .unwrap_err()
+            .contains("\"score\""));
+        assert!(parse_by::<GridColumn>("no_such_column").is_err());
     }
 
     #[test]
     fn a_group_is_its_columns_values_and_null_is_none() {
         assert_eq!(
-            parse_within(r#"[["kind","Chat"],["author",null]]"#),
+            parse_within::<GridColumn>(r#"[["kind","Chat"],["author",null]]"#),
             Ok(vec![
                 Within {
                     column: GridRowColumn::Kind,
@@ -67,7 +61,7 @@ mod tests {
                 },
             ])
         );
-        assert!(parse_within(r#"[["score","1"]]"#).is_err());
-        assert!(parse_within("kind:Chat").is_err());
+        assert!(parse_within::<GridColumn>(r#"[["score","1"]]"#).is_err());
+        assert!(parse_within::<GridColumn>("kind:Chat").is_err());
     }
 }

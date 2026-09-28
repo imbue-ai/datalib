@@ -12,6 +12,7 @@ use sqlx::Row;
 
 use crate::db::{build_where, ChatMeta};
 use crate::group::{group_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS};
+use crate::problems::ProblemsQuery;
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::repo::{DocRow, EdgeRowOut, IndexRepo, Listing, MapDocRow};
@@ -19,9 +20,10 @@ use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
 use datalib_core::repo::RepoError;
 use datalib_pin::{is_missing_table, open_reader};
+use datalib_query::table::{Column, SearchTable};
 use datalib_schema::edges::EdgeRow;
-use datalib_schema::grid_rows::{GridRow, GridRowColumn};
-use datalib_schema::problems::{ProblemRow, ScopeKind};
+use datalib_schema::grid_rows::GridRowColumn;
+use datalib_schema::problems::{ProblemRow, ProblemRowColumn, ScopeKind};
 
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
 pub struct DoltRepo {
@@ -122,10 +124,23 @@ fn search_row_select() -> String {
 
 /// What `ordered_uuids` runs, with its parameters.
 pub fn listing_sql(q: &ParsedQuery, sort: &[Sort], within: &[Within]) -> (String, Vec<String>) {
+    ordered_sql("grid_rows", q, sort, within)
+}
+
+/// The primary keys of the rows `q` keeps in `table` (the pinned name of
+/// `C`'s table), in `sort`'s order or the table's own, with its
+/// parameters.
+fn ordered_sql<C: Column>(
+    table: &str,
+    q: &ParsedQuery<C>,
+    sort: &[Sort<C>],
+    within: &[Within<C>],
+) -> (String, Vec<String>) {
     let (where_sql, params) = where_within(q, within);
-    let order = order_by(sort).unwrap_or_else(default_order::<GridRow>);
+    let order = order_by(sort).unwrap_or_else(default_order::<C::Table>);
+    let key = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
     (
-        format!("SELECT uuid FROM grid_rows{where_sql} ORDER BY {order}"),
+        format!("SELECT {key} FROM {table}{where_sql} ORDER BY {order}"),
         params,
     )
 }
@@ -268,7 +283,84 @@ impl DoltRepo {
     }
 }
 
+/// One group as `group_sql` counts it: its values, its count, and its
+/// newest row's primary key.
+type GroupKey = (Vec<Option<String>>, u64, String);
+
 impl At {
+    /// Runs [`ordered_sql`]; a table the index does not have yet holds no
+    /// rows.
+    async fn ordered_keys<C: Column>(
+        &mut self,
+        table: &str,
+        q: &ParsedQuery<C>,
+        sort: &[Sort<C>],
+        within: &[Within<C>],
+    ) -> Result<Vec<String>, RepoError> {
+        let (sql, params) = ordered_sql(table, q, sort, within);
+        // Audited: the table name is a literal on `At`, every column name
+        // a column enum's `as_str`, and every value bound.
+        let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+        for p in &params {
+            query = query.bind(p);
+        }
+        match query.fetch_all(&mut *self.tx).await {
+            Ok(keys) => Ok(keys),
+            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Ok(Vec::new()),
+            Err(e) => Err(RepoError::Internal(e.to_string())),
+        }
+    }
+
+    /// The groups of the rows `where_sql` keeps in `table`, at most
+    /// [`MAX_GROUPS`] of them, and whether there were more.
+    async fn group_keys<C: Column>(
+        &mut self,
+        table: &str,
+        where_sql: &str,
+        params: &[String],
+        by: &[C],
+    ) -> Result<(Vec<GroupKey>, bool), RepoError> {
+        let sql = group_sql(table, where_sql, by);
+        // Audited: as `ordered_keys`.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for p in params {
+            query = query.bind(p);
+        }
+        let rows = match query.fetch_all(&mut *self.tx).await {
+            Ok(rows) => rows,
+            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Vec::new(),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        let n = by.len();
+        let truncated = rows.len() > MAX_GROUPS;
+        let groups = rows[..rows.len().min(MAX_GROUPS)]
+            .iter()
+            .map(|r| {
+                (
+                    (0..n).map(|i| r.get::<Option<String>, _>(i)).collect(),
+                    r.get::<i64, _>(n) as u64,
+                    r.get::<String, _>(n + 1),
+                )
+            })
+            .collect();
+        Ok((groups, truncated))
+    }
+
+    /// The problems `keys` name, in that order; one the snapshot lacks is
+    /// left out.
+    async fn problems_in(&mut self, keys: &[String]) -> Result<Vec<ProblemRow>, RepoError> {
+        let mut by_key: std::collections::HashMap<String, ProblemRow> =
+            std::collections::HashMap::with_capacity(keys.len());
+        for chunk in keys.chunks(LOOKUP_CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let where_sql = format!(" WHERE problem_uuid IN ({placeholders})");
+            for row in self.problem_rows(&where_sql, chunk, chunk.len()).await? {
+                by_key.insert(row.problem_uuid.clone(), row);
+            }
+        }
+        Ok(keys.iter().filter_map(|k| by_key.remove(k)).collect())
+    }
+
     /// `SELECT * FROM problems` in this read, with the caller's clause,
     /// as typed rows. An index built before the table existed reads as
     /// empty; a row this build cannot parse is an error.
@@ -282,9 +374,9 @@ impl At {
             "SELECT * FROM {}{where_sql} ORDER BY last_seen_at_utc DESC, problem_uuid LIMIT ?",
             self.problems
         );
-        // Audited: the table name is a literal; `where_sql`
-        // comes from `problems::parse`, which splices only the column
-        // names of its closed `Key` match and binds every value.
+        // Audited: the table name is a literal; `where_sql` splices only
+        // column names from a column enum's `as_str`, or literals, and
+        // binds every value.
         let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
         for p in params {
             query = query.bind(p.clone());
@@ -313,27 +405,10 @@ impl IndexRepo for DoltRepo {
         sort: &[Sort],
         within: &[Within],
     ) -> Result<Listing, RepoError> {
-        let (sql, params) = listing_sql(q, sort, within);
         let Some(mut at) = self.pinned().await? else {
             return Ok(Listing::default());
         };
-        // Audited for injection per sqlx 0.9's `SqlSafeStr` bound. Everything
-        // interpolated into `sql` is a literal (the table names on `At`
-        // included), or a column name, which is only ever a
-        // `GridRowColumn::as_str` — every user-supplied value leaves as a
-        // `?` in `params`. Same reasoning
-        // for the other `AssertSqlSafe` sites in this file, where the
-        // interpolated part is a literal table name or a `?,?,?` run built
-        // from a count.
-        let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
-        for p in &params {
-            query = query.bind(p);
-        }
-        let uuids = match query.fetch_all(&mut *at.tx).await {
-            Ok(uuids) => uuids,
-            Err(e) if is_missing_table(&e, "grid_rows") => Vec::new(),
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
+        let uuids = at.ordered_keys("grid_rows", q, sort, within).await?;
         Ok(Listing {
             uuids,
             at: Some(at.commit),
@@ -421,29 +496,21 @@ impl IndexRepo for DoltRepo {
             let placeholders = vec!["?"; uuids.len()].join(",");
             where_sql = format!("{where_sql}{joiner} uuid IN ({placeholders})");
         }
-        let sql = group_sql(at.grid_rows, &where_sql, by);
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
-        for p in params.iter().chain(among.unwrap_or_default()) {
-            query = query.bind(p);
-        }
-        let rows = match query.fetch_all(&mut *at.tx).await {
-            Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "grid_rows") => Vec::new(),
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
-        let n = by.len();
-        let truncated = rows.len() > MAX_GROUPS;
-        let rows = &rows[..rows.len().min(MAX_GROUPS)];
-        let sample_uuids: Vec<String> = rows.iter().map(|r| r.get::<String, _>(n + 1)).collect();
+        let params: Vec<String> = params
+            .into_iter()
+            .chain(among.unwrap_or_default().iter().cloned())
+            .collect();
+        let (keys, truncated) = at.group_keys(at.grid_rows, &where_sql, &params, by).await?;
+        let sample_uuids: Vec<String> = keys.iter().map(|(_, _, uuid)| uuid.clone()).collect();
         // In the same snapshot as the counts, so every group's newest row
         // is there and the samples line up with the groups one for one.
         let samples = rows_in(&mut at, &sample_uuids).await?;
-        let groups: Vec<GroupCount> = rows
-            .iter()
+        let groups: Vec<GroupCount> = keys
+            .into_iter()
             .zip(samples)
-            .map(|(r, sample)| GroupCount {
-                values: (0..n).map(|i| r.get::<Option<String>, _>(i)).collect(),
-                count: r.get::<i64, _>(n) as u64,
+            .map(|((values, count, _), sample)| GroupCount {
+                values,
+                count,
                 sample,
             })
             .collect();
@@ -509,16 +576,55 @@ impl IndexRepo for DoltRepo {
         }))
     }
 
-    async fn problems(
+    async fn problem_keys(
         &self,
-        query: &crate::problems::ProblemsQuery,
-        limit: usize,
-    ) -> Result<Vec<ProblemRow>, RepoError> {
+        q: &ProblemsQuery,
+        sort: &[Sort<ProblemRowColumn>],
+        within: &[Within<ProblemRowColumn>],
+    ) -> Result<Listing, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Listing::default());
+        };
+        let uuids = at.ordered_keys(at.problems, q, sort, within).await?;
+        Ok(Listing {
+            uuids,
+            at: Some(at.commit),
+        })
+    }
+
+    async fn problems_by_keys(&self, keys: &[String]) -> Result<Vec<ProblemRow>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        at.problem_rows(&query.where_sql, &query.params, limit)
-            .await
+        at.problems_in(keys).await
+    }
+
+    async fn problem_groups(
+        &self,
+        q: &ProblemsQuery,
+        by: &[ProblemRowColumn],
+    ) -> Result<Grouping<ProblemRow>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Grouping::default());
+        };
+        let (where_sql, params) = where_within(q, &[]);
+        let (keys, truncated) = at.group_keys(at.problems, &where_sql, &params, by).await?;
+        let sample_keys: Vec<String> = keys.iter().map(|(_, _, key)| key.clone()).collect();
+        let samples = at.problems_in(&sample_keys).await?;
+        let groups = keys
+            .into_iter()
+            .zip(samples)
+            .map(|((values, count, _), sample)| GroupCount {
+                values,
+                count,
+                sample,
+            })
+            .collect();
+        Ok(Grouping {
+            groups,
+            truncated,
+            at: Some(at.commit),
+        })
     }
 
     async fn document_problems(&self, markdown_uuid: &str) -> Result<Vec<ProblemRow>, RepoError> {

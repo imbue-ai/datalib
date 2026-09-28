@@ -23,18 +23,28 @@ pub struct Within<C = GridRowColumn> {
 /// and its newest row, which the grid shows the group's labels from
 /// before any of its rows are read.
 #[derive(Debug, Clone)]
-pub struct GroupCount {
+pub struct GroupCount<R = SearchRow> {
     pub values: Vec<Option<String>>,
     pub count: u64,
-    pub sample: SearchRow,
+    pub sample: R,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct Grouping {
-    pub groups: Vec<GroupCount>,
+#[derive(Debug, Clone)]
+pub struct Grouping<R = SearchRow> {
+    pub groups: Vec<GroupCount<R>>,
     /// More groups than [`MAX_GROUPS`]: the rest are left out.
     pub truncated: bool,
     pub at: Option<String>,
+}
+
+impl<R> Default for Grouping<R> {
+    fn default() -> Self {
+        Grouping {
+            groups: Vec::new(),
+            truncated: false,
+            at: None,
+        }
+    }
 }
 
 /// The most groups one answer carries. Grouping by a column that is
