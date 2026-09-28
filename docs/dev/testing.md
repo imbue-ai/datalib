@@ -342,6 +342,16 @@ else, wait for that thing instead: `start()` in
 `data-sources-control.spec.ts` waits for the `POST /api/requests`
 response rather than the banner.
 
+**Hold what the page is still loading when the next step can lose to
+it.** A page keeps working after it first paints: the search grid loads
+further pages of rows and scrolls to keep its top row in place when one
+lands. On a fast runner that is over before the test's next step; on a
+loaded one it lands in the middle of it. A menu that closed on every
+grid scroll then closed before the test could click in it.
+`page.route` can hold the request until the step is set up and release
+it after, which turns "usually first" into "always this order" and is
+how `grid-search-bar.spec.ts` checks the menu survives the page.
+
 **Drive the app, not a gesture, when the gesture is not what is under
 test.** A hand-driven header drag failed 23 times in one day until the
 run-log spec grouped through the panel's API instead (`bb3e9904`). When

@@ -1575,6 +1575,11 @@ function gridOptions(): GridOption {
       // off the window and its first entries could not be reached. The
       // larger side always holds this much; past it, the menu scrolls.
       maxHeight: "40vh",
+      // The grid scrolls itself — a page landing above the viewport holds
+      // the top row in place, a selection is scrolled back to — and a menu
+      // that closed on every scroll closed under the person reading it.
+      // Its entries stay with the row it opened on (`perOpening`).
+      hideMenuOnScroll: false,
     },
   };
 }
