@@ -19,6 +19,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
+  savedConfig,
   nameCell,
   expandGroup,
   pickRowMenu,
@@ -249,7 +250,7 @@ test.beforeEach(async ({ page, request }) => {
   hold();
   dataRoot = await resolveDataRoot(request);
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {

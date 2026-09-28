@@ -32,6 +32,7 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { rmSync, writeFileSync } from "node:fs";
 import {
+  savedConfig,
   expandGroup,
   pipelineRow,
   readRow,
@@ -154,7 +155,7 @@ let original = "";
 test.beforeEach(async ({ page, request }) => {
   dataRoot = await resolveDataRoot(request);
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {

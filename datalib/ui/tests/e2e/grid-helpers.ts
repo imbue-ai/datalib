@@ -8,7 +8,7 @@
 // as `data-key`; those helpers are further down. Before writing a spec,
 // read docs/dev/testing.md §"Writing a spec that does not flake".
 
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 /// The search grid's rows, wherever it is on the page.
 export const SEARCH_ROWS = ".grid-box .slick-row";
@@ -260,6 +260,17 @@ export const menuEntry = (page: Page, entry: string | RegExp) =>
 export const MENU_DISABLED = /slick-menu-item-disabled/;
 /// A row the grid has selected: its cells carry the class.
 export const SELECTED_ROWS = `${TABLE_ROWS}:has(.slick-cell.selected)`;
+
+/// The config as the server holds it, for a spec to put back when it is
+/// done. Read from the API rather than the editor: the editor fills in
+/// after the card paints, and a read that beats it snapshots nothing —
+/// the spec then writes a config with no applet, and every spec after it
+/// in the file opens on the config-error screen.
+export async function savedConfig(request: APIRequestContext): Promise<string> {
+  const { text } = (await (await request.get("/api/config")).json()) as { text: string };
+  expect(text, "the server should hold a config to put back").toContain("[[applets]]");
+  return text;
+}
 
 /// The config editor (`.m2-editor`) open beside the sources card. `/data_sources` opens the sources card alone, which is
 /// what a person gets; a spec that reads or writes `config.toml`

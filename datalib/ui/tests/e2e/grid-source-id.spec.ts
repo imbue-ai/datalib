@@ -10,7 +10,7 @@
 // crosses the backend, the config file and the grid, and it is the
 // reason renaming a source never needs a re-index.
 import { test, expect, type Page } from "@playwright/test";
-import { actOnRowByUuid, searchAndSettle, MANAGE_WITH_CONFIG } from "./grid-helpers";
+import { actOnRowByUuid, searchAndSettle, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
 
 const SOURCE_CELLS = '.grid-box .slick-row [col-id="source_ref"]';
 
@@ -41,10 +41,10 @@ async function writeConfig(page: Page, text: string): Promise<void> {
 // spec down with it.
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
   await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {

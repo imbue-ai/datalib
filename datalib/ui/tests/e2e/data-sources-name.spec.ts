@@ -3,6 +3,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
+  savedConfig,
   nameCell,
   expandGroup,
   groupRow,
@@ -69,9 +70,9 @@ async function pickClaude(page: Page) {
 
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {

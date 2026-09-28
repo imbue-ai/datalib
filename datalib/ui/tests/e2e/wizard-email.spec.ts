@@ -1,7 +1,7 @@
 // Gmail and Fastmail: two wizard forms over one step type, and the
 // Connection block that fills their label pickers from the live account.
 import { test, expect, type Page } from "@playwright/test";
-import { expandGroup, pickRowMenu, MANAGE_WITH_CONFIG } from "./grid-helpers";
+import { expandGroup, pickRowMenu, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 /// A field's own input. Descendant rather than direct child: a
@@ -148,11 +148,11 @@ async function pickTile(page: Page, query: string, blurb: string) {
 
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
   lastProbeRequest = {};
   await stubBackend(page);
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {

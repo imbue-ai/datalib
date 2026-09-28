@@ -5,6 +5,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
+  savedConfig,
   nameCell,
   MENU_DISABLED,
   SELECTED_ROWS,
@@ -87,10 +88,13 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await page.keyboard.press("Escape");
 });
 
-test("Rename edits the group's name in the cell and writes it to the config", async ({ page }) => {
+test("Rename edits the group's name in the cell and writes it to the config", async ({
+  page,
+  request,
+}) => {
   await openManager(page);
   const editor = page.locator(".m2-editor");
-  const original = await editor.inputValue();
+  const original = await savedConfig(request);
   const row = groupRow(page, "unified_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
 

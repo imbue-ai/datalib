@@ -1,7 +1,7 @@
 // A field whose backend type is a closed enum is a dropdown, not a text
 // box — `kind: "select"` in `ui/src/config/catalog.ts`.
 import { test, expect, type Page } from "@playwright/test";
-import { expandGroup, MANAGE_WITH_CONFIG } from "./grid-helpers";
+import { expandGroup, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 // Structural, matching data-sources-name.spec.ts: each field's <label>
@@ -16,9 +16,9 @@ async function openManager(page: Page) {
 
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {
