@@ -4,7 +4,7 @@
 // or removes.
 
 import { test, expect } from "@playwright/test";
-import { MENU_DISABLED, expandRow, nameCell, pipelineRow, rowMenuEntry } from "./grid-helpers";
+import { expandRow, menuEntry, nameCell, pipelineRow, rowMenuEntry } from "./grid-helpers";
 
 test("System and its Logs child: sizes, a Browse that opens the log, no Sync", async ({ page }) => {
   await page.goto("/data_sources");
@@ -21,13 +21,10 @@ test("System and its Logs child: sizes, a Browse that opens the log, no Sync", a
   await expect(system.locator('[col-id="disk"]')).not.toHaveText(/^\s*[—-]?\s*$/);
   await expect(logs.locator('[col-id="disk"]')).not.toHaveText(/^\s*[—-]?\s*$/);
 
-  // Not a config entry: the menu says so where an entry would edit it.
-  const remove = await rowMenuEntry(page, logs, /^Remove/).open();
-  await expect(remove).toHaveClass(MENU_DISABLED);
-  await expect(remove.locator(".slick-menu-content")).toHaveAttribute(
-    "title",
-    "Not a config entry",
-  );
+  // Not a config entry: the menu has nothing that would edit it.
+  await rowMenuEntry(page, logs, "Copy id").open();
+  await expect(menuEntry(page, /^Remove/)).toHaveCount(0);
+  await expect(menuEntry(page, "Edit settings…")).toHaveCount(0);
   await page.keyboard.press("Escape");
 
   await logs.getByRole("button", { name: "Browse the log" }).click();

@@ -362,11 +362,21 @@
 }
 
 /* ── the right-click menu's own entries (see grid/menu.ts) ─────── */
+/* Closer to a native menu than the theme's roomy one: a row a little
+   taller than the text, in the grid's own size. */
+.slick-context-menu {
+  --slick-menu-padding: 4px 0;
+  --slick-menu-item-height: 22px;
+  --slick-menu-line-height: 20px;
+  --slick-menu-item-padding: 0 12px;
+  --slick-menu-item-font-size: 13px;
+  --slick-menu-item-border-radius: 3px;
+}
 /* The line is the separator element's own: the slot is a disabled
    item, and the theme forces a disabled item's border transparent. */
 .slick-menu-item:has(.menu-slot-separator) {
   padding: 0;
-  margin: 4px 0;
+  margin: 3px 0;
   min-height: 0;
   height: 0;
   overflow: visible;
