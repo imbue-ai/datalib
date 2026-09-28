@@ -48,12 +48,15 @@ probe of an early window, repeated later, would settle it.
   doltlite store is safe — that is the whole point of keeping a mirror —
   but nothing recovers what was never fetched.
 - **`errors=0` does not mean healthy.** An empty window and a quiet
-  window are indistinguishable in the summary. The same blind spot hides
-  a dead sensor: a device that stops reporting produces successful,
-  empty windows forever. On the store measured above, one freezer sat
-  silent for 14 days with clean run summaries throughout. Comparing
-  `MAX(ts_ms)` per device against wall-clock time is how you notice
-  (`$dl` is the shell built below):
+  window are indistinguishable in the summary. A dead sensor is the
+  same: a device that stops reporting answers every window with an
+  empty body (not even the CSV header), which reads as no readings. On
+  the store measured above, one freezer sat silent for 14 days with
+  clean run summaries throughout. So every run compares each device's
+  newest reading against the clock, and one more than a day old is a
+  `silent:<device>` warning in `problems`, on the Manage row, until the
+  device reports again. To see every device's last reading (`$dl` is
+  the shell built below):
 
   ```sh
   $dl <data_root>/<group>/ingest/entities.doltlite_db \

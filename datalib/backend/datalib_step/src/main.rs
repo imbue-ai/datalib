@@ -412,7 +412,7 @@ async fn run(
         None => {
             let env = StepEnv::from_env()?;
             if let Ok(part) = std::env::var(ENV_RESET) {
-                return reset::run(&env, data_root, &part).await;
+                return reset::run(&env, data_root, &part, emitter).await;
             }
             run_function(
                 env,

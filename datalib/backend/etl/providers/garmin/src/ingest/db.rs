@@ -223,6 +223,24 @@ impl RawDb {
         .context("select failed garmin_daily ids")
     }
 
+    /// Drop the fetch problems of failed days before `since`: the window
+    /// no longer asks for them, so no run will fetch them and clear the
+    /// row. Returns how many went.
+    pub async fn forget_failed_days_before(&self, since: &str) -> Result<u64> {
+        let done = sqlx::query(
+            "DELETE FROM problems WHERE scope_kind = ? AND stage = ? \
+             AND scope_key LIKE 'garmin_daily:%' \
+             AND substr(scope_key, instr(scope_key, '#') + 1) < ?",
+        )
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(datalib_problems::Stage::Fetch.as_str())
+        .bind(since)
+        .execute(self.pool())
+        .await
+        .context("forget failed garmin_daily days before the window")?;
+        Ok(done.rows_affected())
+    }
+
     pub async fn cursor(&self, scope: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind(scope)
