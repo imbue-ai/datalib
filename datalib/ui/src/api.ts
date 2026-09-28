@@ -173,8 +173,10 @@ export type ProblemReason =
   | "deliberate_loss"
   | "render_failed"
   | "fetch_failed"
+  | "over_size_limit"
   | "not_found"
   | "forbidden"
+  | "silent"
   | "noted";
 
 /// One problem on a document, as the document view lists it above the

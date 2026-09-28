@@ -120,6 +120,10 @@ closed_vocabulary! {
         /// A configured entry that exists but this credential cannot
         /// read. → the same.
         Forbidden,
+        /// A configured entry upstream has sent nothing new for a while:
+        /// a sensor unplugged, out of range or out of battery. → what
+        /// came before is kept; nothing new is arriving.
+        Silent,
         /// Nothing was lost; this is a finding worth publishing.
         Noted,
     }

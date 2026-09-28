@@ -389,6 +389,50 @@ pub async fn report_records(pool: &sqlx::SqlitePool, problems: &[RecordProblem])
     }
 }
 
+/// A configured entry upstream has sent nothing new for a while, named
+/// the way the config names it.
+#[derive(Debug, Clone)]
+pub struct SilentEntry {
+    pub name: String,
+    /// Since when, in words the reader can act on.
+    pub detail: String,
+}
+
+/// The sweep key's prefix of a [`report_silent`] row.
+const SILENT_PREFIX: &str = "silent:";
+
+/// Entries that have gone quiet. A warning, not an error: nothing
+/// stored was lost. Replaces the previous run's set, so an entry that
+/// speaks again drops off by itself.
+pub async fn report_silent(pool: &sqlx::SqlitePool, silent: &[SilentEntry]) {
+    use datalib_problems::{Outcome, Problem, Reason, Severity};
+    for s in silent {
+        tracing::warn!(
+            event = "silent_entry",
+            name = %s.name,
+            detail = %s.detail,
+            "a configured entry has sent nothing new",
+        );
+    }
+    let rows: Vec<(String, Outcome, Problem)> = silent
+        .iter()
+        .map(|s| {
+            (
+                format!("{SILENT_PREFIX}{}", s.name),
+                Outcome::Ok,
+                Problem::record(Reason::Silent, &s.detail).severity(Severity::Warning),
+            )
+        })
+        .collect();
+    if let Err(e) = replace_prefixed(pool, &[SILENT_PREFIX], &rows).await {
+        tracing::warn!(
+            error = %format!("{e:#}"),
+            "silent_entry: could not record the entries that went quiet; \
+             the Manage row will not show them"
+        );
+    }
+}
+
 /// Delete every entity-scoped row whose key starts with one of
 /// `prefixes`, then write `rows`, in one transaction. A key that was
 /// there before keeps its `first_seen_at_utc`, so the screen can say
@@ -515,6 +559,43 @@ mod tests {
 
         // And a clean run clears the lot.
         report_records(&pool, &[]).await;
+        assert!(rows(&pool).await.is_empty());
+    }
+
+    /// A device that went quiet is one warning, whatever its windows
+    /// said, and it goes once the device speaks again.
+    #[tokio::test]
+    async fn a_silent_entry_is_one_warning_until_it_speaks() {
+        use datalib_problems::Severity;
+        let d = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(&d.path().join("s.doltlite_db"), &[])
+            .await
+            .unwrap();
+        let rows = |pool: &sqlx::SqlitePool| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_as::<_, (String, String, String)>(
+                    "SELECT scope_key, severity, reason FROM problems ORDER BY scope_key",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let quiet = SilentEntry {
+            name: "cargo_bay_freezer".into(),
+            detail: "no readings since 2369-03-01T00:00:00+00:00".into(),
+        };
+        report_silent(&pool, &[quiet]).await;
+        assert_eq!(
+            rows(&pool).await,
+            [(
+                "silent:cargo_bay_freezer".to_string(),
+                Severity::Warning.as_str().to_string(),
+                "silent".to_string()
+            )]
+        );
+        report_silent(&pool, &[]).await;
         assert!(rows(&pool).await.is_empty());
     }
 
