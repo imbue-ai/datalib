@@ -1,7 +1,7 @@
 # Data architecture: ingestion
 
 # Introduction and Context
-We have an incremental, resumable, layered ETL-shaped architecture that downloads raw data from many upstream sources and stores it as **JSON API responses preserved** in versioned doltlite tables, with attachment **BLOBs in a content-addressable store** (CAS, also doltlite, but a separate sibling database per source), then applies transformations (rendering, indexing) and presents the rendered data in a UI. Every store the pipeline writes is doltlite — the raw stores, the blob CAS, each source's render store and the grid index (`<data_root>/unified_index/grid_index/db.doltlite_db`).
+We have an incremental, resumable, layered ETL-shaped architecture that downloads raw data from many upstream sources and stores it as **JSON API responses preserved** in versioned doltlite tables, with attachment **BLOBs in a content-addressable store** (CAS, also doltlite, but a separate sibling database per source), then applies transformations (rendering, indexing) and presents the rendered data in a UI. Every store the pipeline writes is doltlite: the raw stores, the blob CAS, each source's render store and the grid index.
 
 Parts of this are not novel — the data pipeline aspect shares shape with Flume / Apache Beam / Dask / Prefect / Airflow ETL pipelines. What we optimize for that those tools don't:
 
@@ -15,7 +15,7 @@ Parts of this are not novel — the data pipeline aspect shares shape with Flume
 This document describes the principles for the **ingestion (download) side**: how raw data lands on disk, what shape it has at rest, and the operational properties (monitorable, stoppable, resumable, incrementally cheap, verifiable) the download stage aims for. A new provider, table, or transformation should be judged against it, and divergences should be either justified or fixed.
 
 ## Related documents
-The **parse and render stage** — deserializing a stored payload, projecting it to `GridRow` + markdown, its data-quality rules, its incrementality, and the `GridRow.created_at` policy — is [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md). The tables render writes into are covered by [`grid_rows.md`](grid_rows.md) and [`edges.md`](edges.md). How we test, how to add a provider, how the schema evolves, and the open questions are in [`data_architecture_ingestion_practices.md`](/docs/dev/data_architecture_ingestion_practices.md). The shared code and its rules — keys, sidecars, the doltlite pool rules, schema changes — are in [`etl/README.md`](/datalib/backend/etl/README.md).
+The **parse and render stage** — deserializing a stored payload, projecting it to `GridRow` + markdown, its data-quality rules, its incrementality, and the `GridRow.created_at` policy — is [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md). The tables render writes into are covered by [`grid_rows.md`](grid_rows.md) and [`edges.md`](edges.md). The practitioner's companion — testing, adding a provider, schema evolution, open questions — is [`data_architecture_ingestion_practices.md`](/docs/dev/data_architecture_ingestion_practices.md). The shared code and its rules — keys, sidecars, the doltlite pool rules, schema changes — are in [`etl/README.md`](/datalib/backend/etl/README.md).
 
 # General pipeline structure
 
@@ -205,7 +205,7 @@ The first sync from a given source is often very long (hours to days, many GB, s
 
 - Every binary flattens [`obs::ObsArgs`](/datalib/backend/obs/src/lib.rs) into its clap parser, so every stage takes the same logging / OTLP flags. On a TTY, pretty log lines on stderr; otherwise JSON. Log emissions route through an `IndicatifWriter` coordinating with the shared `MultiProgress` (`datalib_obs::shared_multi()`) so progress bars don't get stomped by log lines. Where each log line goes and how to read it: [`logging.md`](logging.md).
 - `--otlp-endpoint http://host:4317` exports spans + events via OTLP, so a single Tempo/Jaeger collector can ingest every stage. (See [the privacy-boundary unresolved question](/docs/dev/data_architecture_ingestion_practices.md#observability-and-the-privacy-boundary) for the contract that constrains what may be in those spans.)
-- A provider's download binary ends with a `<provider>_download_complete` event carrying its `FetchSummary`, which is `Serialize`, so a consumer can read the final stats provider-agnostically.
+- A provider's standalone download binary ends with a `*_download_complete` event (`slack_download_complete`, `jmap_download_complete`, …) carrying its `FetchSummary`, which is `Serialize`, so a consumer can read the final stats provider-agnostically.
 - Long-running operations must report something visible every few seconds; a download that walks 100k items silently for an hour is a bug.
 
 ## Stoppable and resumable
@@ -512,7 +512,7 @@ Because those statements are built at runtime, they go through `sqlx::AssertSqlS
 
 ### The shared pieces, all in `datalib_etl`:
 
-- **`bulk::bulk_upsert_in_tx(tx, rows, now)`** — the generic write: any `T: BulkUpsertable` (which the table derives emit), chunked into multi-row UPSERTs, with `<t>_bookkeeping` stamped for every id in the same transaction. The caller commits.
+- **`bulk::bulk_upsert_in_tx(tx, rows, now)`** — the generic write, for any `T: BulkUpsertable` (which the table derives emit); [`etl/README.md` §"Writes: one UPSERT shape, everywhere"](/datalib/backend/etl/README.md).
 - **`bulk::SQL_CHUNK` + `bulk::push_placeholders` / `bulk::push_placeholder_list`** — chunking utilities for a provider's own multi-row `INSERT` builders.
 - **`bulk::bulk_upsert_bookkeeping(tx, table, ids, now)`** — the `<t>_bookkeeping` UPSERT alone, for a hand-built entity write.
 - **`bulk::EventBatch<'a>`** — the per-table `(table, &[(id, &payload)])` shape the tape primitives share.

@@ -23,20 +23,12 @@ isn't one, and a record that "fails to parse" is a record **render**
 could not deserialize — which matters because the fix is always a
 re-render and never a re-fetch.
 
-Like its siblings this is aspirational as much as descriptive, and it
-tries to say which is which at each point. §4 in particular is a set of
-rules we do **not** follow today; the audit and retrofit plan is
+§2, §3's U-rules and §5 describe the tree as it is. §3's P-rules and
+§4's rules are partly aspiration: each says where the tree stands, and
+the retrofit plan is
 [`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
-§3's **U-rules are descriptive** — they name a pattern already built in
-four places — while its **P-rules are mixed**, and P1 and P3 are both
-violated today. §5 is descriptive throughout: it is how the render step
-driver works.
 
-## 1. Why there are three of these
-
-The two ingestion docs are scoped to download, by title and by their own
-opening paragraphs. Render material has nowhere to live in them, so it
-lives here.
+## 1. Where the neighbouring material lives
 
 | doc | stage | contains |
 | --- | --- | --- |
@@ -99,7 +91,8 @@ markdown is for humans; the store is the machine-readable projection.
 
 This part of the pipeline aspires to the same properties as download:
 
-  - **Monitorable**: same `obs` flags, same progress-bar contract.
+  - **Monitorable**: the same progress-bar contract as download, though
+    render-side progress reporting is less developed.
   - **Incremental, by diff alone.** Render asks the raw store what
     changed since the commit its cursor names and renders only the
     buckets that read those rows; the index asks the render store the
@@ -112,17 +105,12 @@ This part of the pipeline aspires to the same properties as download:
     nothing — and continues. The `.md` files are plain files, so a
     partial one left by a SIGKILL mid-write is rewritten next run.
 
-Less attention has been paid to render-side observability and to
-making partial progress visible to the user than to the same on
-download; this is an area where the implementation trails the
-principle.
-
 ### Why the projection is a database and not a file tree
 
 The render store is doltlite for the same reason the raw store is: the
 question "what changed since my cursor?" is one doltlite answers, and a
 file tree of sidecars would have to re-implement it with fingerprints
-and full walks. Four properties follow, and each is load-bearing
+and full walks. Five properties follow, and each is load-bearing
 somewhere downstream:
 
 - **No tree walks.** What a run needs to know about the render store it
@@ -131,8 +119,8 @@ somewhere downstream:
 - **A row cannot be unreadable.** A sidecar file could be malformed, and
   the two responses to that (skip it silently; abort the whole load)
   were both bad. There is no file to fail to parse.
-- **A document lands whole or not at all.** Its rows, edges, markdown
-  and problems are written inside one SQL transaction, so a commit
+- **A document lands whole or not at all.** Its `markdowns` row, grid
+  rows, edges and problems are written inside one SQL transaction, so a commit
   landing between two documents — a checkpoint, or the end of the run —
   never publishes a fraction of one.
 - **Deletion is expressible.** A `dolt_diff` can name a row that
@@ -162,22 +150,16 @@ the database (a direction
 [`multimodal_retrieval.md`](plans/multimodal_retrieval.md) already
 proposes for other reasons). Two smaller things point the same way:
 attachment blobs are materialized into each page's `blobs/` directory,
-and the markdown is deliberately human-readable and greppable on disk,
-which is a property someone will miss.
-
-The storage argument cuts both ways and should not be oversold.
-`plans/multimodal_retrieval.md` §4 measured a real data root and found
-the same text stored **five** times. Putting markdown in doltlite makes
-that six unless the file tree actually goes away — so the win is
-conditional on finishing the move, not on starting it.
+and the markdown is deliberately human-readable and greppable on disk.
+Moving the markdown into the store saves space only if the file tree
+then goes away; `plans/multimodal_retrieval.md` §4 measured the same
+text already stored five times on a real data root.
 
 Whatever the medium, the *contract* holds: render emits a human
 artifact and a separate machine-readable projection, the projection is
 never recovered by parsing the markdown, and the index reads the
-projection. If you find yourself proposing that the grid index parse
-markdown because it is conveniently in the same database, that is the
-mistake ["QMDs are write-only"](/AGENTS.md) warns about, wearing a new
-hat.
+projection — AGENTS.md's "QMDs are write-only", which holds whatever
+database the markdown sits in.
 
 ## 3. The projection
 
@@ -199,12 +181,21 @@ pure given the raw store, and both are the right place for §4's tests.
 
 ### Identity and backpointers are first-class in the projection
 
-- **Backpointers and outlinks are first-class** in the projection schema. `GridRow` (one of our indexed representations, not a raw format) carries:
-    - `uuid` — the Ship-of-Theseus identity, deterministic from upstream so re-ingest is idempotent.
-    - `external_id` — the provider-native primary id (numeric GH/GL id, PR number, …) preserved alongside our UUID so we can round-trip back to the provider's API.
-    - `source_url` — the canonical URL on the provider's web UI (e.g. `pull_request.html_url`, GitLab `note.web_url` with `#note_<id>` anchor), populated everywhere we can construct it.
-    - `qmd_path` — the path to the rendered `.md`, relative to the data root.
-    - Provider-specific cross-references (`notion_page_uuid`, `notion_block_uuid`, `git_sha`, …) so the UI can link sideways as well as out.
+Backpointers and outlinks are first-class in the projection schema.
+`GridRow` carries:
+
+- `uuid` — the Ship-of-Theseus identity, deterministic from upstream so
+  re-rendering is idempotent.
+- `upstream_id`, `upstream_entity_kind`, `upstream_account` — what the
+  uuid was minted from: the provider's own key, its word for the kind
+  of record, and the account the record names, so a row can be taken
+  back to the provider's API.
+- `source_url` — the canonical URL on the provider's web UI (e.g.
+  `pull_request.html_url`), populated everywhere we can construct it.
+- `qmd_path` — the path to the rendered `.md`, relative to the data root.
+- Provider-specific cross-references (`notion_page_uuid`,
+  `notion_block_uuid`, `git_sha`, …) so the UI can link sideways as well
+  as out.
 
 The `uuid` recipe is [`entity_ids.md`](entity_ids.md) and it is not
 optional: anything durably keyed on a row — feedback today,
@@ -220,7 +211,7 @@ into a **shared canonical schema** so the rest of the pipeline (search,
 display, threading, attachments, exports) shares code paths and stays
 consistent.
 
-Where unification actually happens **today**: the `GridRow` projection
+Where unification happens: the `GridRow` projection
 (the hand-written struct at
 [`datalib/backend/schema/src/grid_rows.rs`](../../datalib/backend/schema/src/grid_rows.rs),
 whose DDL is derived via `#[derive(PortableTable)]` — see
@@ -243,27 +234,26 @@ and indexing.
 
 Examples where schema and data handling should be unified:
 
-  1. **Chat (human)** — Slack, Beeper, Signal. "Messages in
-     channels/DMs between humans with attachments and threading."
-     Unified at `GridRow`; per-provider raw + render.
-  2. **Chat (LLM)** — Claude, ChatGPT, Gemini (planned). Same chat
-     shape but with assistant turns, thinking, and tool-use surfaced.
-     Unified at `GridRow` via `kind = 'User Input' | 'LLM Response' |
-     'LLM Thinking' | 'Tool Call'`.
+  1. **Chat (human)** — Slack, Beeper, Signal, WhatsApp, Apple
+     Messages and the rest. "Messages in channels/DMs between humans
+     with attachments and threading." Per-provider raw and parse, one
+     render through `chat-common`.
+  2. **Chat (LLM)** — Claude, ChatGPT, Claude Code, Codex. Same chat
+     shape but with assistant turns, thinking, and tool use surfaced,
+     told apart by `kind` (`User Input`, `LLM Response`, `LLM Thinking`,
+     `Tool Call`, …).
   3. **Code review threads** — GitHub PR discussions, GitLab MR
-     discussions. Threaded inline comments on diffs. Unified at
-     `GridRow`; `git_sha` and `external_id` columns are specifically
-     there to serve this family.
+     discussions. Threaded inline comments on diffs, rendered through
+     `forge-render-common`; `git_sha` is there to serve this family.
   4. **Document-comment threads** — Notion. Very similar in shape to
-     (3); may eventually share more than just `GridRow` projection.
-  5. **Time-series sensor data** — yolink today; Garmin fitness and
-     IQ Air air quality planned ([`plans/airvisual.md`](plans/airvisual.md)
-     is the investigation). Per-device samples over time with a
-     small fixed set of value channels. yolink projects one `Sensor
-     Timeseries` row for its page plus a `Sensor Device` row per
-     device (`yolink_render/src/render/render.rs::build_grid_rows`);
-     the family's shared raw schema and render are still per-provider
-     copies, and the plan says when to extract them.
+     (3), and shares only the `GridRow` projection with it.
+  5. **Time-series sensor data** — yolink, airvisual, garmin.
+     Per-device samples over time with a small fixed set of value
+     channels. Each provider keeps its own raw schema, parse and metric
+     table; the sensor page, the plot and the rows (one `Sensor
+     Timeseries` row for the page plus a `Sensor Device` row per
+     device, `timeseries_render/src/page.rs`) are shared in
+     `timeseries_render`.
 
 A new provider that fits a family should at minimum project to the
 family's `GridRow` shape rather than inventing a new `kind` taxonomy.
@@ -315,11 +305,10 @@ small. It should grow deliberately: the test for admitting one is
 whether two providers disagreeing about it would produce a *wrong
 answer* rather than merely an inconsistent-looking one.
 
-This rule is violated for timestamps: six of the 22 render crates
-(`chatgpt`, `facebook`, `google_takeout`, `linkedin`, `perseus`,
-`sms_backup_restore`) still reach for `chrono` directly rather than
-`datalib-time`, and that is where every fabricated-epoch bug in the
-tree has lived. The retrofit is in
+The tree does not yet follow this rule for timestamps: seven of the 24
+render crates (`calendar`, `chatgpt`, `facebook`, `google_takeout`,
+`linkedin`, `perseus`, `sms_backup_restore`) call `chrono` directly
+rather than going through `datalib-time` alone. The retrofit is in
 [`data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
 
 **P4 — Parse reads the raw store and nothing else.** The stage contract

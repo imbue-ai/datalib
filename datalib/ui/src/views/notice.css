@@ -1,0 +1,63 @@
+/* A view that fills the app with one card instead of the grid: the
+   first-run screen, a config the app cannot serve, a root a newer build
+   wrote. Each includes this as a scoped style and sizes its own card. */
+.notice {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 2rem 1rem;
+}
+.card {
+  border: 1px solid var(--datalib-border);
+  border-radius: 6px;
+  background: var(--datalib-card-bg);
+  padding: 1.5rem 1.75rem;
+}
+h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.25rem;
+}
+p {
+  margin: 0.6rem 0;
+  line-height: 1.5;
+}
+code {
+  background: var(--datalib-code-bg);
+  border-radius: 3px;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.9em;
+}
+/* The data root path can be long; let it wrap rather than widen the card. */
+.root {
+  display: inline-block;
+  overflow-wrap: anywhere;
+}
+.lead {
+  color: var(--datalib-log-error);
+}
+.cli {
+  color: var(--datalib-muted);
+  font-size: 0.9rem;
+}
+.error {
+  color: var(--datalib-log-error);
+}
+button {
+  font: inherit;
+  padding: 0.45rem 0.9rem;
+  border-radius: 4px;
+  border: 1px solid var(--datalib-border);
+  background: var(--datalib-input-bg);
+  color: var(--datalib-fg);
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+button.primary {
+  border-color: var(--datalib-accent);
+  color: var(--datalib-accent);
+  font-weight: 600;
+}

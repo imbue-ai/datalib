@@ -221,17 +221,11 @@ Two halves to this:
     is a function of another store; a projection change is a
     `RENDER_VERSION` bump and a re-render, never a refetch.
 
-    When the new "column" is derivable from the payload (which is most
-    of them — see
-    [Events vs bookkeeping](data_architecture_ingestion.md#events-vs-bookkeeping-where-each-column-lives)),
-    add it as a `VIRTUAL` generated column over `payload->>'$.path'`
-    plus an index, or as a bare expression index. Both produced
-    COVERING index plans when measured on doltlite 0.11.9 (not
-    re-measured on the current 0.50 line), and `ALTER TABLE ADD COLUMN
-    … VIRTUAL` applies to existing rows with no refetch and no payload
-    rewrite. Reserve real stored columns for the small set of
-    writer-supplied fields that genuinely aren't in the payload
-    (synthesized PKs, FKs, namespace discriminators).
+    When the new "column" is derivable from the payload, which is most
+    of them, it is a `VIRTUAL` generated column or an expression index
+    rather than a stored column, and lands on existing rows with no
+    refetch: [Events vs bookkeeping](data_architecture_ingestion.md#events-vs-bookkeeping-where-each-column-lives)
+    and the paragraph before it.
 
   - **Upstream schema drift** — Slack adds a field, Notion changes a
     block type, GitHub renames `merged_by`. Because we preserve raw
