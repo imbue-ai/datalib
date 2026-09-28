@@ -15,6 +15,10 @@ use datalib_etl_email_render::render::ids;
 use datalib_etl_email_render::render::parse::parse;
 use datalib_etl_email_render::render::render::{render_all, OutlinkFormat};
 
+/// `X-GM-THRID` of the fixture's three-message briefing thread: the Gmail
+/// id of its first message, as Gmail assigns it.
+const BRIEFING_THREAD: &str = "1853466712473707184";
+
 fn thread_uuid(account_id: &str, thread_id: &str) -> String {
     ids::thread("star-trek-mbox", account_id, thread_id).uuid
 }
@@ -72,9 +76,21 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
 
     let briefing = threads
         .iter()
-        .find(|t| t["id"] == "1000000000000000001")
+        .find(|t| t["id"] == BRIEFING_THREAD)
         .expect("briefing thread present");
     assert_eq!(briefing["emailIds"].as_array().unwrap().len(), 3);
+
+    // Rows are keyed by Gmail's id from each `From ` line, which sorts in
+    // arrival order, so a sync's new mail lands together in the store.
+    let mut by_key: Vec<_> = emails.iter().collect();
+    by_key.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut by_arrival = by_key.clone();
+    // Every `Date:` in the fixture is +0000, so text order is time order.
+    by_arrival.sort_by_key(|e| e.received_at.clone());
+    assert_eq!(
+        by_key.iter().map(|e| &e.id).collect::<Vec<_>>(),
+        by_arrival.iter().map(|e| &e.id).collect::<Vec<_>>(),
+    );
 
     // Mailbox role mapping preserved.
     let by_name: HashMap<&str, &serde_json::Value> = mailboxes
@@ -88,7 +104,7 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     // Geordi's message has the attachment.
     let geordi = emails
         .iter()
-        .find(|e| e.id == "briefing-003@enterprise.starfleet")
+        .find(|e| e.message_id.as_deref() == Some("briefing-003@enterprise.starfleet"))
         .expect("geordi present");
     assert!(geordi.has_attachment);
     // Attachment payloads now live inside the `.eml` itself (see
@@ -103,8 +119,10 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     assert!(!geordi_kws.iter().any(|k| k == "$seen"));
     let hayes = emails
         .iter()
-        .find(|e| e.id == "briefing-001@enterprise.starfleet")
+        .find(|e| e.message_id.as_deref() == Some("briefing-001@enterprise.starfleet"))
         .unwrap();
+    // 1853466712473707184 on its `From ` line, in the API's hex.
+    assert_eq!(hayes.id, "19b8d627a801a2b0");
     let kws = &joins.keywords[&hayes.id];
     assert!(kws.iter().any(|k| k == "$flagged"));
     assert!(kws.iter().any(|k| k == "$important"));
@@ -312,7 +330,7 @@ async fn star_trek_mbox_renders_through_render_all() {
     };
 
     // Briefing thread has the attachment materialized.
-    let briefing_tuid = thread_uuid("enterprise", "1000000000000000001");
+    let briefing_tuid = thread_uuid("enterprise", BRIEFING_THREAD);
     let briefing_dir = dir_for(&briefing_tuid);
     let blobs_dir = briefing_dir.join("blobs");
     assert!(blobs_dir.is_dir(), "blobs/ dir missing");
@@ -347,7 +365,7 @@ async fn star_trek_mbox_renders_through_render_all() {
 
     // Risa promo thread prefers the HTML body — `**jewel of the
     // Alpha Quadrant**` appears in the htmd output.
-    let risa_tuid = thread_uuid("enterprise", "2000000000000000002");
+    let risa_tuid = thread_uuid("enterprise", "1853553534566507187");
     let risa_md = std::fs::read_to_string(dir_for(&risa_tuid).join("all.md")).unwrap();
     assert!(
         risa_md.contains("jewel of the Alpha Quadrant"),
@@ -359,7 +377,7 @@ async fn star_trek_mbox_renders_through_render_all() {
     // cid to a `blobs/<hash>.png` link. Regression test for the Fastmail
     // case where the inline image is absent from `attachments` but present
     // in the .eml MIME tree.
-    let bridge_tuid = thread_uuid("enterprise", "4000000000000000004");
+    let bridge_tuid = thread_uuid("enterprise", "1853647906406507188");
     let bridge_dir = dir_for(&bridge_tuid);
     let bridge_md = std::fs::read_to_string(bridge_dir.join("all.md")).unwrap();
     let bridge_blobs = bridge_dir.join("blobs");

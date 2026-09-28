@@ -67,11 +67,21 @@ envelope. One implementation, so `EmailRow::from_jmap_envelope` — and
 therefore every promoted column and the `mailboxIds` / `keywords` join
 inputs — is written by exactly one code path.
 
-**Message identity.** `email_id` is the `Message-ID` header, falling back
-to the content hash (blake3 of the `.eml`) when there is none. Using a
-transport-native id instead (Gmail's hex `id`, JMAP's `Email.id`) would
-fork the id space per transport, so a Takeout export followed by a live
-sync would double the mailbox.
+**Message identity.** `email_id` (`envelope::email_id`) is Gmail's own
+message id wherever the transport has one. The API spells it in hex; a
+Takeout mbox spells it in decimal, as the sender on each message's
+`From ` line (`From 1853466712473707184@xxx Mon Jan 05 …`), with no
+header carrying it. Both become the same 16-digit zero-padded hex, so a
+Takeout export followed by a live sync lands on the same rows. An mbox
+from anywhere else falls back to the `Message-ID` header, then to the
+content hash (blake3 of the `.eml`). JMAP keeps its own `Email.id`.
+
+Gmail's id is preferred over `Message-ID` for two reasons. Its top bits
+are the time Gmail received the message, so the rows one sync writes sit
+together in the store, and a sync rewrites a few pages rather than one
+per message ([`etl/README.md` § "What a write costs"](../../datalib/backend/etl/README.md#what-a-write-costs-the-transaction-is-the-unit-and-the-key-decides-the-size)).
+And a `Message-ID` is not unique: two Gmail messages can carry the same
+one, and keyed by it they collapse into a single row.
 
 **`src/ingest/labels.rs`** — the label vocabulary. Gmail spells one
 label differently depending on how you ask:
@@ -181,8 +191,8 @@ A walk over the whole mailbox (no label filter, not budget-limited) is
 also when deletions `history.list` never reported are found: rows the
 walk did not list are pruned.
 
-Deletions carry Gmail's own message id, but rows are keyed by
-`Message-ID`, so the delete looks the row up in `gmail_messages`. Ingest
+Deletions carry Gmail's own message id, and the delete looks the row
+up in `gmail_messages`, which also says which rows this mode wrote. Ingest
 also stamps `_source: { via, gmailMessageId, gmailThreadId }` into the
 envelope payload as provenance.
 

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Result;
 use datalib_etl::blob_cas::blake3_hex;
 
-use super::super::envelope::{self, TransportFacts};
+use super::super::envelope::{self, GmailId, TransportFacts};
 use super::super::labels::{self, LabelMap};
 use super::super::schema_raw::EmailRow;
 use super::super::K_ONLY_EXTRACT_LABELS;
@@ -206,7 +206,11 @@ pub struct Ingested {
 pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Result<Ingested> {
     let parsed = envelope::parse(&msg.raw)?;
     let blob_id = blake3_hex(&msg.raw);
-    let email_id = envelope::email_id(&parsed, &blob_id);
+    // No fallback to `Message-ID`: a row keyed that way would never meet
+    // the Takeout copy of the same message.
+    let gmail_id = GmailId::from_api(&msg.id)
+        .ok_or_else(|| anyhow::anyhow!("Gmail message id {:?} is not hex", msg.id))?;
+    let email_id = envelope::email_id(Some(gmail_id), &parsed, &blob_id);
     let thread_id = normalize_thread_id(&msg.thread_id);
     let (mailbox_ids, keywords) = index.resolve(account_id, &msg.label_ids);
 

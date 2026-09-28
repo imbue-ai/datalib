@@ -7,9 +7,7 @@ use serde_json::{json, Value};
 /// The per-message facts a transport knows and the bytes do not.
 #[derive(Debug, Clone)]
 pub struct TransportFacts {
-    /// Stable email id — the `Message-ID` header, or the content hash
-    /// when the message has none. Identical across modes, which is what
-    /// makes a Takeout-then-live-sync migration dedupe.
+    /// Stable email id, from [`email_id`].
     pub email_id: String,
     /// CAS key for the `.eml` (its blake3).
     pub blob_id: String,
@@ -82,9 +80,38 @@ pub fn synthesize(raw: &[u8], msg: &Message<'_>, facts: &TransportFacts) -> Valu
     envelope
 }
 
-/// The stable email id for a message: its `Message-ID` header, falling
-/// back to the content hash when it has none.
-pub fn email_id(msg: &Message<'_>, content_hash: &str) -> String {
+/// Gmail's own id for a message. Its top bits are the time Gmail received
+/// the message, so ids sort in arrival order. The API spells it in hex; a
+/// Takeout mbox spells it in decimal on the message's `From ` line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GmailId(u64);
+
+impl GmailId {
+    pub fn from_api(hex: &str) -> Option<Self> {
+        u64::from_str_radix(hex, 16).ok().map(Self)
+    }
+
+    pub fn from_takeout(decimal: &str) -> Option<Self> {
+        decimal.parse().ok().map(Self)
+    }
+
+    /// Zero-padded, so the text sorts as the number does.
+    fn key(self) -> String {
+        format!("{:016x}", self.0)
+    }
+}
+
+/// The stable email id for a message: Gmail's own id when the transport
+/// has one, else the `Message-ID` header, else the content hash.
+///
+/// Gmail's id comes first because the rows a sync writes should sit
+/// together in the store (etl/README.md § "What a write costs"), and
+/// because a `Message-ID` is not unique: two Gmail messages can share one,
+/// and keyed by it they would collapse into a single row.
+pub fn email_id(gmail_id: Option<GmailId>, msg: &Message<'_>, content_hash: &str) -> String {
+    if let Some(g) = gmail_id {
+        return g.key();
+    }
     match msg.message_id() {
         Some(mid) => strip_angle(mid).to_string(),
         None => content_hash.to_string(),
@@ -209,10 +236,43 @@ Make it so.\r\n";
         assert_eq!(env["sentAt"], env["receivedAt"]);
     }
 
+    /// A Takeout import followed by a live sync must land on the same
+    /// rows: the two transports spell one Gmail id differently.
     #[test]
-    fn uses_the_message_id_as_the_stable_id() {
+    fn the_api_and_takeout_spellings_of_one_gmail_id_agree() {
         let msg = parse(EML).unwrap();
-        assert_eq!(email_id(&msg, "fallback"), "abc.123@enterprise.ufp");
+        let api = GmailId::from_api("19b8d627a801a2b0");
+        let takeout = GmailId::from_takeout("1853466712473707184");
+        assert_eq!(api, takeout);
+        assert_eq!(email_id(api, &msg, "hash"), "19b8d627a801a2b0");
+    }
+
+    /// Keyed by `Message-ID`, two Gmail messages that share one were
+    /// merged into a single row.
+    #[test]
+    fn two_gmail_messages_sharing_a_message_id_stay_two_rows() {
+        let msg = parse(EML).unwrap();
+        assert_ne!(
+            email_id(GmailId::from_api("19b8d627a801a2b0"), &msg, "hash"),
+            email_id(GmailId::from_api("19b8d627a801a2b1"), &msg, "hash"),
+        );
+    }
+
+    /// The text has to sort as the number does, or the store's order is
+    /// not arrival order.
+    #[test]
+    fn a_gmail_id_sorts_as_its_number() {
+        let msg = parse(EML).unwrap();
+        let short = email_id(GmailId::from_api("fffffffffffffff"), &msg, "h");
+        let long = email_id(GmailId::from_api("1000000000000000"), &msg, "h");
+        assert_eq!(short, "0fffffffffffffff");
+        assert!(short < long);
+    }
+
+    #[test]
+    fn uses_the_message_id_without_a_gmail_id() {
+        let msg = parse(EML).unwrap();
+        assert_eq!(email_id(None, &msg, "fallback"), "abc.123@enterprise.ufp");
     }
 
     /// A message with no `Message-ID` still needs a stable id, and the
@@ -222,7 +282,7 @@ Make it so.\r\n";
     fn falls_back_to_the_content_hash_without_a_message_id() {
         let raw = b"From: a@b\r\nSubject: no id\r\n\r\nbody\r\n";
         let msg = parse(raw).unwrap();
-        assert_eq!(email_id(&msg, "blake3-of-bytes"), "blake3-of-bytes");
+        assert_eq!(email_id(None, &msg, "blake3-of-bytes"), "blake3-of-bytes");
     }
 
     /// Angle brackets are part of the header syntax, not the identifier.

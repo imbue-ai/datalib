@@ -1,5 +1,6 @@
 //! mbox extractor. Walks a Google Takeout `.mbox` file (RFC 4155 mboxrd
-//! framing, plus Gmail's `X-GM-THRID` / `X-Gmail-Labels`) and lands every
+//! framing; Gmail's message id on each `From ` line, plus its
+//! `X-GM-THRID` / `X-Gmail-Labels` headers) and lands every
 //! message into the shared email raw store as if it had come off a JMAP
 //! server. No body parsing here — render handles that off the `.eml` blob.
 
@@ -24,7 +25,7 @@ use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
 
 use super::db::{EmailRow, RawDb};
-use super::envelope::{self, header_text, strip_angle};
+use super::envelope::{self, header_text, GmailId};
 use super::labels::{mailbox_id, map_label, split_gmail_labels, LabelMap};
 use super::schema_raw::{AccountRow, EmailKeywordRow, EmailMailboxRow, EmlBlobRow};
 
@@ -318,17 +319,23 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut files_processed: usize = 0;
 
     for f in &to_process {
-        for raw in iter_mbox_messages(&f.path)? {
-            let (raw, bytes_consumed) = match raw {
-                Ok((bytes, consumed)) => (bytes, consumed),
+        for message in iter_mbox_messages(&f.path)? {
+            let message = match message {
+                Ok(m) => m,
                 Err(e) => {
                     warn!(event = "mbox_read_failed", path = %f.path.display(), error = %e, "an mbox file could not be read");
                     summary.parse_errors += 1;
                     continue;
                 }
             };
-            opts.progress.inc(bytes_consumed);
-            match accumulator.ingest_message(&raw, &known_blobs, &mut batch, &mut summary) {
+            opts.progress.inc(message.bytes_consumed);
+            match accumulator.ingest_message(
+                &message.raw,
+                message.gmail_id,
+                &known_blobs,
+                &mut batch,
+                &mut summary,
+            ) {
                 Ok(true) => {
                     emails_seen += 1;
                     opts.progress.set_message(&format!("{emails_seen} emails"));
@@ -392,14 +399,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 // ─────────────────────────────────────────────────────────────────────
 // Streaming mbox iterator
 
-/// Iterate `path` yielding one RFC 5322 message at a time, reporting the mbox
-/// bytes consumed since the previous yield so a caller can drive a byte-keyed
-/// progress bar. Envelope `From ` lines are stripped and `>From ` escapes
-/// unquoted. Streams via `BufReader`, so peak RSS stays bounded.
-fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<(Vec<u8>, u64)>>> {
+struct MboxMessage {
+    raw: Vec<u8>,
+    /// From the envelope `From ` line, when it is Takeout's.
+    gmail_id: Option<GmailId>,
+    /// mbox bytes read since the previous message, for a byte-keyed
+    /// progress bar.
+    bytes_consumed: u64,
+}
+
+/// Iterate `path` yielding one RFC 5322 message at a time. Envelope `From `
+/// lines are stripped and `>From ` escapes unquoted. Streams via
+/// `BufReader`, so peak RSS stays bounded.
+fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<MboxMessage>>> {
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut reader = BufReader::with_capacity(1 << 16, file);
-    let mut pending: Option<Vec<u8>> = None;
+    let mut pending: Option<(Vec<u8>, Option<GmailId>)> = None;
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut started = false;
     // Accumulates every byte read from the file and resets at each yield, so
@@ -413,8 +428,14 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<(Vec<u8
                 // EOF; flush any pending message together with the
                 // remaining bytes counted on this last `read_until`
                 // (which returned 0 — nothing to add).
-                let take_bytes = std::mem::take(&mut bytes_since_yield);
-                return pending.take().map(|msg| Ok((msg, take_bytes)));
+                let bytes_consumed = std::mem::take(&mut bytes_since_yield);
+                return pending.take().map(|(raw, gmail_id)| {
+                    Ok(MboxMessage {
+                        raw,
+                        gmail_id,
+                        bytes_consumed,
+                    })
+                });
             }
             Ok(n) => n,
             Err(e) => return Some(Err(e.into())),
@@ -430,11 +451,15 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<(Vec<u8
         }
         if is_from_line(line) {
             let prev = pending.take();
-            pending = Some(Vec::with_capacity(4096));
+            pending = Some((Vec::with_capacity(4096), takeout_gmail_id(line)));
             started = true;
-            if let Some(msg) = prev {
-                let take_bytes = std::mem::take(&mut bytes_since_yield);
-                return Some(Ok((msg, take_bytes)));
+            if let Some((raw, gmail_id)) = prev {
+                let bytes_consumed = std::mem::take(&mut bytes_since_yield);
+                return Some(Ok(MboxMessage {
+                    raw,
+                    gmail_id,
+                    bytes_consumed,
+                }));
             }
             continue;
         }
@@ -442,7 +467,7 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<(Vec<u8
             // Tolerate leading junk before the first `From ` line.
             continue;
         }
-        let target = pending.as_mut().expect("started => Some");
+        let (target, _) = pending.as_mut().expect("started => Some");
         let unescaped = unescape_from_line(line);
         target.extend_from_slice(&unescaped);
         target.push(b'\n');
@@ -452,6 +477,18 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<(Vec<u8
 
 fn is_from_line(line: &[u8]) -> bool {
     line.len() >= 5 && &line[..5] == b"From "
+}
+
+/// Takeout writes Gmail's message id, in decimal, as the sender of each
+/// `From ` line: `From 1853466712473707184@xxx Mon Jan 05 …`. Any other
+/// mbox names a real sender there.
+fn takeout_gmail_id(from_line: &[u8]) -> Option<GmailId> {
+    let sender = from_line.get(5..)?.split(|b| *b == b' ').next()?;
+    let digits = sender.strip_suffix(b"@xxx")?;
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    GmailId::from_takeout(std::str::from_utf8(digits).ok()?)
 }
 
 fn unescape_from_line(line: &[u8]) -> Vec<u8> {
@@ -507,6 +544,7 @@ impl Accumulator {
     fn ingest_message(
         &mut self,
         raw: &[u8],
+        gmail_id: Option<GmailId>,
         known_blobs: &std::collections::HashMap<String, String>,
         pending: &mut PendingBatch,
         summary: &mut FetchSummary,
@@ -522,10 +560,7 @@ impl Accumulator {
         // crate), and hashing every message twice was pure waste.
         let eml_blake3 = blake3_hex(raw);
         let eml_blob_id = eml_blake3.clone();
-        let email_id = match msg.message_id() {
-            Some(mid) => strip_angle(mid).to_string(),
-            None => eml_blob_id.clone(),
-        };
+        let email_id = envelope::email_id(gmail_id, &msg, &eml_blob_id);
         if !self.seen_email_ids.insert(email_id.clone()) {
             return Ok(false);
         }
@@ -1059,16 +1094,37 @@ mod tests {
     #[test]
     fn streaming_iter_yields_each_message() {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
-        let msgs: Vec<Vec<u8>> = iter_mbox_messages(&path)
+        let msgs: Vec<MboxMessage> = iter_mbox_messages(&path)
             .unwrap()
             .collect::<Result<Vec<_>>>()
-            .unwrap()
-            .into_iter()
-            .map(|(bytes, _consumed)| bytes)
-            .collect();
+            .unwrap();
         assert_eq!(msgs.len(), 2);
-        assert!(msgs[0].starts_with(b"X-GM-THRID:"));
-        assert!(msgs[1].starts_with(b"X-GM-THRID:"));
+        assert!(msgs[0].raw.starts_with(b"X-GM-THRID:"));
+        assert!(msgs[1].raw.starts_with(b"X-GM-THRID:"));
+        assert_eq!(msgs[0].gmail_id, GmailId::from_takeout("1111"));
+        assert_eq!(msgs[1].gmail_id, GmailId::from_takeout("2222"));
+    }
+
+    /// Only Takeout's `<digits>@xxx` is a Gmail id; any other mbox puts a
+    /// real sender there, and reading one as an id would key rows by it.
+    #[test]
+    fn reads_a_gmail_id_only_from_a_takeout_from_line() {
+        let id = |line: &str| takeout_gmail_id(line.as_bytes());
+        assert_eq!(
+            id("From 1853466712473707184@xxx Mon Jan 05 09:00:00 +0000 2026"),
+            GmailId::from_api("19b8d627a801a2b0"),
+        );
+        assert_eq!(
+            id("From picard@enterprise.starfleet Mon Jan 05 09:00:00 2026"),
+            None
+        );
+        assert_eq!(
+            id("From 1234@enterprise.starfleet Mon Jan 05 09:00:00 2026"),
+            None
+        );
+        assert_eq!(id("From 12ab@xxx Mon Jan 05 09:00:00 2026"), None);
+        assert_eq!(id("From @xxx Mon Jan 05 09:00:00 2026"), None);
+        assert_eq!(id("From 99999999999999999999@xxx Mon Jan 05 2026"), None);
     }
 
     #[test]
@@ -1081,7 +1137,7 @@ mod tests {
             .collect::<Result<Vec<_>>>()
             .unwrap()
             .into_iter()
-            .map(|(bytes, _consumed)| bytes)
+            .map(|m| m.raw)
             .collect();
         assert_eq!(msgs.len(), 1);
         let s = std::str::from_utf8(&msgs[0]).unwrap();
@@ -1124,7 +1180,8 @@ mod tests {
             .iter()
             .find(|e| e.subject.as_deref() == Some("Make it so"))
             .unwrap();
-        assert_eq!(picard.id, "msg-one@enterprise.starfleet");
+        // Gmail's id from the `From ` line (1111 = 0x457), not the Message-Id.
+        assert_eq!(picard.id, "0000000000000457");
         assert_eq!(picard.thread_id, "1111");
         // .eml is in CAS keyed by emails.blob_id. The path goes
         // emails.blob_id → email_blobs.blake3 → cas_objects.bytes.
