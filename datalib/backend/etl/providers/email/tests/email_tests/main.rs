@@ -14,3 +14,4 @@ mod jmap_render;
 mod live;
 mod playback_roundtrip;
 mod progress_countdown;
+mod support;

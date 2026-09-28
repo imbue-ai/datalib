@@ -18,25 +18,31 @@ export type MenuTarget = {
   kind: MenuKind;
   /// The source type, or null for the index group and its steps.
   type: string | null;
-  /// The step's function (`ingest`, `qmd_index`, …); null off a step.
+  /// The step's function (`ingest`, `qmd_aggregator`, …); null off a step.
   func: string | null;
   runBlocked: string | null;
   editBlocked: string | null;
   revealBlocked: string | null;
   browseBlocked: string | null;
+  /// Browse opens the step's raw store rather than the grid: a download
+  /// step with one, in the desktop app.
+  rawStore: boolean;
   /// Non-null while an open request wants this row — the state in which
   /// Sync reads as Stop.
   stopRequestId: string | null;
-  /// Who paused it; for a group, who paused a step under it.
-  pausedBy: string | null;
+  /// Who turned it off; for a group, who turned off every step under it.
+  turnedOffBy: string | null;
   /// For a group, the step whose status it shows; the log to open.
   statusFrom: string | null;
   revealPath: string | null;
 };
 
+export const RAW_STORE_BROWSE_LABEL = "Browse the downloaded tables";
+
 /// The Browse entry's name — shared with the Actions cell's button, so
 /// the two never say different things.
-export function browseLabel(t: Pick<MenuTarget, "kind" | "type">): string {
+export function browseLabel(t: Pick<MenuTarget, "kind" | "type" | "rawStore">): string {
+  if (t.rawStore) return RAW_STORE_BROWSE_LABEL;
   if (t.kind === "system") return "Browse the log";
   return t.kind === "group" && !t.type ? "Browse every source" : "Browse this data";
 }
@@ -53,8 +59,8 @@ export type MenuAction =
   | "browse"
   | "sync"
   | "stop"
-  | "pause"
-  | "resume"
+  | "turn_off"
+  | "turn_on"
   | "edit"
   | "compare"
   | "rename"
@@ -79,8 +85,6 @@ export type MenuEntry =
     };
 
 export type MenuOptions = {
-  /// Which column was under the pointer, for the entries a cell adds.
-  column: string;
   /// Whether this host can show a path in its file manager at all; the
   /// entry is absent in a plain browser, as the button is.
   canReveal: boolean;
@@ -103,26 +107,38 @@ export function notComparableReason(t: MenuTarget): string | null {
 export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
   if (t.kind === "system") return "The run log is plain SQLite, with no commit history";
-  if (t.func === "qmd_index") return "The QMD index keeps no doltlite store";
+  if (t.func === "qmd_aggregator" || t.func === "keyword_index" || t.func === "embed") {
+    return "The QMD index keeps no doltlite store";
+  }
+  if (t.func === "embedding_map") return "The embedding map keeps no doltlite store";
   return null;
 }
 
 /// Why "Reset (preserve attachments)…" does not apply: a reset empties
 /// what a source downloaded or rendered, and what reads it follows — so
 /// the index, which follows every source, is not reset by hand, and an
-/// applet writes nothing.
+/// applet writes nothing. The embedding map is the exception: each run
+/// starts from the last map, and a reset is how a person asks for one
+/// laid out afresh.
 export function notResettableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet writes no store";
   if (t.stopRequestId) return "Busy — stop the sync first";
-  if (!t.type || t.func === "grid_index" || t.func === "qmd_index") {
+  if (t.kind === "step" && t.func === "embedding_map") return null;
+  if (
+    !t.type ||
+    t.func === "grid_index" ||
+    t.func === "qmd_aggregator" ||
+    t.func === "keyword_index" ||
+    t.func === "embed"
+  ) {
     return "Reset a source; the index follows it";
   }
   return null;
 }
 
-/// Why "Pause" does not apply: only the loop's steps are scheduled.
-export function notPausableReason(t: MenuTarget): string | null {
+/// Why "Turn off" does not apply: only the loop's steps are scheduled.
+export function notSwitchableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet is not scheduled";
   return null;
@@ -159,30 +175,6 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
   const only = targets[0];
   const entries: MenuEntry[] = [];
 
-  // What the cell under the pointer adds, ahead of what the row offers.
-  if (opts.column === "name") {
-    entries.push({
-      action: "rename",
-      name: "Rename…",
-      disabled: !one
-        ? ONE_AT_A_TIME
-        : (notInConfig(only) ?? (only.kind !== "group" ? "Only a group has a name" : null)),
-    });
-    entries.push({
-      action: "copy_id",
-      name: one ? "Copy id" : `Copy ${plural(targets.length, "id")}`,
-      disabled: null,
-    });
-    entries.push({ separator: true });
-  } else if (opts.column === "bytes") {
-    entries.push({
-      action: "copy_path",
-      name: one ? "Copy path" : `Copy ${plural(targets.length, "path")}`,
-      disabled: firstBlocked(targets, (t) => (t.revealPath ? null : "Nothing on disk yet")),
-    });
-    entries.push({ separator: true });
-  }
-
   entries.push({
     action: "browse",
     name: browseLabel(only),
@@ -205,26 +197,41 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
           : firstBlocked(targets, (t) => t.runBlocked),
     });
   }
-  const paused = targets.filter((t) => t.pausedBy).length;
+  const off = targets.filter((t) => t.turnedOffBy).length;
   entries.push({
-    action: paused === targets.length ? "resume" : "pause",
-    name: paused === targets.length ? "Resume" : "Pause",
-    disabled: firstBlocked(targets, notPausableReason),
+    action: off === targets.length ? "turn_on" : "turn_off",
+    name: off === targets.length ? "Turn on" : "Turn off",
+    disabled: firstBlocked(targets, notSwitchableReason),
   });
+  entries.push({ separator: true });
+
   entries.push({
     action: "edit",
     name: "Edit settings…",
     disabled: !one ? ONE_AT_A_TIME : only.editBlocked,
   });
   entries.push({
-    action: "compare",
-    name: "Compare two syncs…",
-    disabled: !one ? ONE_AT_A_TIME : notComparableReason(only),
+    action: "rename",
+    name: "Rename…",
+    disabled: !one
+      ? ONE_AT_A_TIME
+      : (notInConfig(only) ?? (only.kind !== "group" ? "Only a group has a name" : null)),
   });
   entries.push({ separator: true });
+
+  entries.push({
+    action: "history",
+    name: "Show commit history",
+    disabled: firstBlocked(targets, noStoreReason),
+  });
+  entries.push({
+    action: "compare",
+    name: "Compare two versions…",
+    disabled: !one ? ONE_AT_A_TIME : notComparableReason(only),
+  });
   entries.push({
     action: "log",
-    name: "Show log",
+    name: "Show step log",
     disabled: !one
       ? ONE_AT_A_TIME
       : only.kind === "applet"
@@ -235,11 +242,8 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
             ? "No step under this group has run yet"
             : null,
   });
-  entries.push({
-    action: "history",
-    name: "Show commit history",
-    disabled: firstBlocked(targets, noStoreReason),
-  });
+  entries.push({ separator: true });
+
   if (opts.canReveal) {
     entries.push({
       action: "reveal",
@@ -247,7 +251,18 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
       disabled: firstBlocked(targets, (t) => t.revealBlocked),
     });
   }
+  entries.push({
+    action: "copy_path",
+    name: one ? "Copy path" : `Copy ${plural(targets.length, "path")}`,
+    disabled: firstBlocked(targets, (t) => (t.revealPath ? null : "Nothing on disk yet")),
+  });
+  entries.push({
+    action: "copy_id",
+    name: one ? "Copy id" : `Copy ${plural(targets.length, "id")}`,
+    disabled: null,
+  });
   entries.push({ separator: true });
+
   entries.push({
     action: "reset",
     name: "Reset (preserve attachments)…",

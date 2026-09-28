@@ -7,6 +7,7 @@
 //! utilities that are not steps.
 
 mod dispatch;
+mod embedding_map;
 mod events;
 mod exit_watchdog;
 mod function;
@@ -17,6 +18,7 @@ mod introspect;
 mod login;
 mod methods;
 mod probe;
+mod published;
 mod qmd_index;
 mod render;
 mod render_diff;
@@ -77,7 +79,7 @@ struct Cli {
     /// `DATALIB_HTTP_PLAYBACK` for every provider transport.
     #[arg(long)]
     playback_root: Option<PathBuf>,
-    /// `qmd_index` only: directory where qmd caches its embedding model.
+    /// `embed` only: directory where qmd caches its embedding model.
     #[arg(long)]
     models_dir: Option<PathBuf>,
     #[command(flatten)]
@@ -110,8 +112,8 @@ enum Cmd {
         domain: String,
     },
     /// Utility (not a pipeline step): put qmd's pinned GGUF models in
-    /// place, sha256-verified — what the `qmd_index` step does before
-    /// it indexes, runnable ahead of time (an image build, a first-run
+    /// place, sha256-verified — what an `embed` step does before
+    /// it embeds, runnable ahead of time (an image build, a first-run
     /// warmup). Needs no data root.
     PullModels {
         /// Where the models go; default is qmd's own cache,
@@ -149,6 +151,15 @@ enum Cmd {
 /// from a newer config should not take the run down, and the step's own
 /// default is a safe answer. It is logged, though — a fallback that fires
 /// silently is the kind this repo has been burned by.
+/// What a step that did not finish reports: the version its store is
+/// at. Nothing for a command that is not a step.
+async fn published_claims(data_root: &Path) -> Vec<events::OutputClaim> {
+    match StepEnv::from_env() {
+        Ok(env) => published::claims(&env, data_root).await,
+        Err(_) => Vec::new(),
+    }
+}
+
 fn checkpoint_cadence() -> Option<datalib_etl::checkpointer::Cadence> {
     let raw = std::env::var(ENV_CHECKPOINT_CADENCE).ok()?;
     match datalib_dag::config::CheckpointCadence::decode(&raw) {
@@ -315,9 +326,10 @@ async fn main() {
     match run(cli, &data_root, &now, &control, &emitter).await {
         // A run that ended because it was asked to is not a success, even
         // though it committed: it did not finish, and saying so is how the
-        // runner knows not to mark it done. What it committed stands.
-        Ok(_) if stop.requested() => {
-            emitter.outcome(&[], Some(FailureKind::Cancelled));
+        // runner knows not to mark it done. What it committed stands, and
+        // the version it reports is how that reaches its consumers.
+        Ok(outputs) if stop.requested() => {
+            emitter.outcome(&outputs, Some(FailureKind::Cancelled));
             std::process::exit(130);
         }
         // Likewise an error after the stop: the transport refuses new
@@ -325,7 +337,10 @@ async fn main() {
         // flag ends with `Interrupted`. That is the stop, not a failure.
         Err(e) if stop.requested() => {
             tracing::info!("stopped: {e:#}");
-            emitter.outcome(&[], Some(FailureKind::Cancelled));
+            emitter.outcome(
+                &published_claims(&data_root).await,
+                Some(FailureKind::Cancelled),
+            );
             std::process::exit(130);
         }
         Ok(outputs) => {
@@ -335,9 +350,8 @@ async fn main() {
         Err(e) => {
             let kind = hints::classify(&e);
             // A failed-but-incremental step may still have committed
-            // partial output; the runner reads its stores' heads and
-            // sees whatever was published.
-            emitter.outcome(&[], Some(kind));
+            // partial output, and reports what it published.
+            emitter.outcome(&published_claims(&data_root).await, Some(kind));
             // `tracing::error!` alone, never a `status_line!` beside it.
             // Both land on the same stderr, so a second copy is a second
             // row in the run store -- one with no `target`, because a
@@ -453,9 +467,15 @@ async fn run_function(
             writes_the_index_tree(&env, &grid_index::out_rel())?;
             grid_index::run(data_root, &env, Some(now), emitter).await
         }
-        Function::QmdIndex => {
-            writes_the_index_tree(&env, &qmd_index::out_rel())?;
-            qmd_index::run(data_root, &env, models_dir, emitter).await
+        Function::QmdAggregator => {
+            writes_the_index_tree(&env, &qmd_index::aggregator_rel())?;
+            qmd_index::run_aggregator(data_root, &env, emitter).await
+        }
+        Function::KeywordIndex => qmd_index::run_keyword(data_root, &env, emitter).await,
+        Function::Embed => qmd_index::run_embed(data_root, &env, models_dir, emitter).await,
+        Function::EmbeddingMap => {
+            writes_the_index_tree(&env, &embedding_map::out_rel())?;
+            embedding_map::run(data_root, now, emitter).await
         }
     }
 }
@@ -495,9 +515,9 @@ fn version_through_runtime(mut cmd: std::process::Command) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The two index steps have one reader each — the `unified_index`
-/// applet — which finds them from the data root alone, so their trees
-/// are fixed. A config that files them under another group would have
+/// The index steps have one reader each — the `unified_index` applet
+/// — which finds them from the data root alone, so their trees are
+/// fixed. A config that files them under another group would have
 /// the runner tracking a tree nothing ever writes.
 fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
     anyhow::ensure!(

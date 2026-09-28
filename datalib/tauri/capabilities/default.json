@@ -1,13 +1,19 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the app's own windows: core IPC only. `launcher` is the first-run window (launcher-dist/index.html) — it is listed here because a window in no capability gets no IPC at all, and its every button is an `invoke` of one of main.rs's `launcher_*` commands. It is a LOCAL page, so unlike the other two capability files it needs no `remote` block.",
+  "description": "Default capability for the app's own windows: core IPC and the launcher's commands. `launcher` is the first-run window (launcher-dist/index.html) — it is listed here because a window in no capability gets no IPC at all, and its every button is an `invoke` of one of main.rs's `launcher_*` commands. It is a LOCAL page, so unlike the other two capability files it needs no `remote` block. build.rs declares the app's commands, so each is granted by name; with no `remote` block, none of them reaches the main window's page.",
   "windows": [
     "main",
     "launcher",
     "card-*"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "allow-version",
+    "allow-launcher-state",
+    "allow-launcher-open",
+    "allow-launcher-pick",
+    "allow-launcher-create",
+    "allow-launcher-quit"
   ]
 }

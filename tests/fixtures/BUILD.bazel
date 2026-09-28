@@ -1,3 +1,4 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
@@ -420,26 +421,26 @@ py_test(
 )
 
 # Build a QMD (BM25 + embeddings) index over the rendered TNG markdown
-# tree (`:ingested_tng`'s qmd_md.tar) and emit it as an overlay tar that
+# tree (`:ingested_tng`'s qmd_md.tar) with `datalib_qmd_indexer`, the
+# library a sync's qmd steps call, and emit it as an overlay tar that
 # layers onto `:ingested_tng`'s qmd.tar.
 #
 # Output `qmd-index.tar` mirrors qmd.tar's layout: paths rooted at `qmd/`,
 # so extracting both archives into the same directory (e.g. with
 # `tar -x --strip-components=1`) yields a complete root data directory —
-# markdown tree plus `.datalib/qmd/index.sqlite`.
+# markdown tree plus `unified_index/qmd_index/qmd/index.sqlite`.
 #
 # Caveats:
 #   * Needs NO host `node`, no npm registry access, and no network at
 #     all. Node and the qmd package tree are Bazel inputs (see
-#     //third-party/qmd/runtime), which the driver symlinks into a
-#     `DATALIB_RUNTIME_DIR` layout so the indexer resolves them instead
-#     of shelling out to `npx`. The embedding model is a Bazel input too
+#     //third-party/qmd/runtime), handed to the library as paths. The
+#     embedding model is a Bazel input too
 #     (`//third-party/qmd_models:embeddinggemma`), staged into
 #     a models dir inside the sandbox — so this action no longer reads
 #     the host's `~/.cache/qmd/models`, and no longer downloads it on a
 #     machine where that cache is cold (which is every CI run).
 #   * Embeds only. Nothing runs `qmd pull` any more (it re-downloads on
-#     any etag difference against HuggingFace `main`); the indexer needs
+#     any etag difference against HuggingFace `main`); an embed needs
 #     the embedding model already in its models dir, which is what the
 #     Bazel input above supplies.
 #   * SQLite output is NOT byte-stable across runs (timestamps, packing).
@@ -448,6 +449,18 @@ py_test(
 #     whether its outputs are reproducible, so serving a previously
 #     computed index for identical inputs is sound. See the `tags` note.
 QMD_VERSION = "2.8.3"
+
+# The fixture's qmd index, built with the library a sync uses; see
+# build_qmd_index.rs.
+rust_binary(
+    name = "build_qmd_index_bin",
+    srcs = ["build_qmd_index.rs"],
+    edition = "2021",
+    deps = [
+        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
+        "@datalib_crates//:anyhow",
+    ],
+)
 
 genrule(
     name = "ingested_tng_qmd",
@@ -464,19 +477,17 @@ genrule(
         # it is fetched by bazel rather than by qmd, and why its filename
         # has to stay `hf_ggml-org_embeddinggemma-300M-Q8_0.gguf`.
         "//third-party/qmd_models:embeddinggemma",
-        # A `srcs`, not a `tools`, for the reason `:ingested_tng` gives:
-        # as a tool it and every crate under it build a second time in
-        # the exec configuration.
-        "//datalib/backend/qmd_indexer:qmd_indexer_bin",
+        # Drives `datalib_qmd_indexer`, the library a sync's qmd steps
+        # call, and links little else, so only a change to it re-runs
+        # this embed.
+        ":build_qmd_index_bin",
     ],
     outs = ["ingested/qmd-index.tar"],
     tools = [
         "build_qmd_index.py",
         "quiet.sh",
-        # Node itself plus the Bazel-managed qmd package tree. The
-        # driver symlinks these into a `DATALIB_RUNTIME_DIR` layout,
-        # which is what stops the indexer falling back to
-        # `npx -y @tobilu/qmd@<v>`.
+        # Node itself plus the Bazel-managed qmd package tree, which the
+        # library is handed as paths: no `npx`, no host Node.
         "@nodejs_host//:node_bin",
         "//third-party/qmd/runtime:qmd_tree",
         "//third-party/qmd/runtime:qmd_package_dir",
@@ -484,10 +495,9 @@ genrule(
     cmd = " ".join([
         "$(execpath quiet.sh) $(RULEDIR)/qmd_index.log",
         "python3 $(execpath build_qmd_index.py)",
-        "$(execpath //datalib/backend/qmd_indexer:qmd_indexer_bin)",
+        "$(execpath :build_qmd_index_bin)",
         "$(execpath ingested/qmd_md.tar)",
         "$(execpath ingested/qmd-index.tar)",
-        QMD_VERSION,
         "$(execpath @nodejs_host//:node_bin)",
         "$(execpath //third-party/qmd/runtime:qmd_package_dir)",
         "$(execpath //third-party/qmd_models:embeddinggemma)",

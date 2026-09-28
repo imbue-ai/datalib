@@ -1,0 +1,36 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# What the forge providers' downloads (github, gitlab) share: the REST
+# client, and the sync that discovers the change requests a person is
+# on and fetches each one. Ingest side: it does not know
+# `datalib_schema`. Bazel-only (no Cargo.toml).
+rust_library(
+    name = "datalib_etl_forge_ingest_common",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_forge_ingest_common",
+    edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:once_cell",
+        "@datalib_crates//:regex",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "forge_ingest_common_unittests",
+    size = "small",
+    crate = ":datalib_etl_forge_ingest_common",
+    edition = "2021",
+)

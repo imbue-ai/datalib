@@ -2,7 +2,7 @@
 //! carries an account id on every row, and a thread or email id is
 //! unique within that account, so the scope is the account.
 
-use datalib_id::{IdNamespace, Identity};
+use datalib_id::{IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Email;
@@ -11,25 +11,10 @@ pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 pub const KIND_THREAD: &str = "thread";
 pub const KIND_EMAIL: &str = "email";
 
-fn identity(
-    source_id: &str,
-    account_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    date_ms: Option<i64>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        Some(account_id),
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(date_ms),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn thread(source_id: &str, account_id: &str, thread_id: &str) -> Identity {
-    identity(
+    IDS.mint_in(
         source_id,
         account_id,
         KIND_THREAD,
@@ -40,7 +25,7 @@ pub fn thread(source_id: &str, account_id: &str, thread_id: &str) -> Identity {
 
 /// `date_ms` is the email's `received_at` as the item stores it.
 pub fn email(source_id: &str, account_id: &str, email_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(
+    IDS.mint_in(
         source_id,
         account_id,
         KIND_EMAIL,

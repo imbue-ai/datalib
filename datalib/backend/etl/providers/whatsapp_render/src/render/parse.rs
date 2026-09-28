@@ -27,7 +27,7 @@ use super::ids;
 
 /// SQL projection resolving an attachment's `ref_id` — the file's
 /// blake3, which render stamps onto each `NormalizedAttachment` — to
-/// its CAS entry. Consumed by [`BlobBundle::load`] from the per-chat
+/// its CAS entry. Consumed by [`BlobBundle::load_many`] from the per-chat
 /// load below. A row exists only for a file the scan actually saw, so
 /// a half-extracted `Media/` tree simply yields no bytes.
 const ATTACHMENTS_PROJECTION_SQL: &str = "
@@ -423,31 +423,20 @@ async fn parse_async(
         let cas_pool: SqlitePool = datalib_etl::blob_cas::open_cas_reader(&cas_path)
             .await
             .with_context(|| format!("open CAS for render at {}", cas_path.display()))?;
-        for chat in &out {
-            let mut seen: HashSet<String> = HashSet::new();
-            let mut refs: Vec<String> = Vec::new();
-            for bucket in &chat.buckets {
-                for item in &bucket.items {
-                    for att in &item.attachments {
-                        if let Some(r) = att.ref_id.as_deref() {
-                            if seen.insert(r.to_string()) {
-                                refs.push(r.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-            if refs.is_empty() {
-                continue;
-            }
-            let ref_strs: Vec<&str> = refs.iter().map(String::as_str).collect();
-            let bundle =
-                BlobBundle::load(&pool, &cas_pool, ATTACHMENTS_PROJECTION_SQL, &ref_strs).await?;
-            if !bundle.is_empty() {
-                blobs_by_chat.insert(chat.id.clone(), bundle);
-            }
-        }
+        let refs = out.iter().map(|chat| {
+            let refs = chat
+                .buckets
+                .iter()
+                .flat_map(|bucket| &bucket.items)
+                .flat_map(|item| &item.attachments)
+                .filter_map(|att| att.ref_id.as_deref());
+            (chat.id.clone(), refs)
+        });
+        let loaded =
+            BlobBundle::load_many(&pool, &cas_pool, ATTACHMENTS_PROJECTION_SQL, refs).await;
         cas_pool.close().await;
+        blobs_by_chat = loaded?;
+        blobs_by_chat.retain(|_, bundle| !bundle.is_empty());
     }
     pool.close().await;
 

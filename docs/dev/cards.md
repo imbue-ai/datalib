@@ -287,6 +287,13 @@ never reaches for the layout directly. The division of labour:
   card. The layout also decides what `openCard` placement means, what
   `close` takes with it, and whether `setState` reaches the URL.
 
+**A card, not a modal**, for anything a person reads, keeps open or
+clicks through from — a log, a commit history, a table. It sits in the
+layout beside what opened it, lives in the URL, and survives Back. A
+modal dialog is for a question that has to be answered before anything
+else happens: a confirm, a short form that is submitted or cancelled
+(the source wizard, feedback).
+
 Because the contract is the same everywhere, the same card source runs
 unchanged in any layout, and a layout can be added or changed without
 touching cards. Cards are **not** carried across when the user toggles
@@ -351,10 +358,16 @@ card is named by its card again.
 The factories in `ViewLibs` are the public surface card source
 programs against:
 
-- `gridView(opts?: { q?: string })` — search bar + a SlickGrid over
-  `/applet/unified_index/search`. Row click opens the row's document via
-  `host.openCard`; double-click opens it as a standalone
-  single-column page in a new tab. Persists `q`/`sel`/`cols` state.
+- `gridView(opts?: { q?, columns?, name?, url?, placeholder? })` —
+  search bar + a SlickGrid over `/applet/unified_index/search`, or over
+  `url`, another table that pages, sorts and groups the way the search
+  does (the Manage screen's problems cell opens
+  `/applet/unified_index/problems` this way). Each answer says which
+  field names a row, which document a row opens and whether qmd ranks
+  its free text (`RowsSpec`); the qmd columns and ranking appear only
+  for the search. Row click opens the row's document via
+  `host.openCard`; double-click opens it as a standalone single-column
+  page in a new tab. Persists `q`/`sel`/`cols` state.
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
   (`/applet/unified_index/chat/{markdownUuid}`), highlighting and scrolling to
   `sectionUuid`. A different selection is a different card: the grid
@@ -365,6 +378,14 @@ programs against:
 - `documentPickerView()` — parameter-less gallery stand-in for
   `documentView`: lists every rendered document (`/applet/unified_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
+- `umapView(opts?: { q?: string; by?: string })` — the embedding map
+  (`cards/UmapCard.ce.vue`, over the applet's `/embedding_map`): every
+  document qmd embedded, placed by the `embedding_map` step. The search
+  bar takes the grid's grammar and greys out what it does not match
+  (`/embedding_map/matches`); a legend colours by one field and
+  isolates on hover; hovering a point previews it, clicking opens
+  `documentView` beside the card. Persists `q`/`by`/`sel`. The pure
+  half — colours, view, hit-testing — is `cards/embeddingMap.ts`.
 - `galleryView()` — the new-card gallery (see "Titles and dev mode"
   above); replaces itself with whatever the user picks.
 - `agentSeedView(name)` — the in-card hand-off instructions a freshly
@@ -376,10 +397,11 @@ programs against:
   `path`). See "Typed tables" below.
 - `sourcesView()` — the Manage screen as a card: the tree of what
   `config.toml` declares over `GET /api/manage/rows`, drawn by
-  `TableGrid`, with the row actions and the panels they open — the
-  wizard, a group's commit history — teleported to `<body>`. Browse
-  opens a `gridView(...)` beside it through `host.openCards`, and a
-  step's log or the server's a `logView(...)` the same way. The
+  `TableGrid`, with the row actions and the dialogs they open — the
+  wizard, a removal's confirm — teleported to `<body>`. Browse
+  opens a `gridView(...)` beside it through `host.openCards`, as does a
+  problems count, a step's log or the server's a `logView(...)` the
+  same way, and a row's commit history a `historyView(...)`. The
   `/data_sources` route is this card at 1.6× width
   with `configView()` beside it (`MANAGE_STACK` in `router/index.ts`).
 - `logView({ run, step, launch, q, jumpToEnd })` — the run log
@@ -390,6 +412,15 @@ programs against:
   a step or for the server. Selecting a line (a click, or the arrow
   keys) opens `logLineView` via `host.openCards`, the way the grid
   opens a document.
+- `historyView({ trees, title, source, compare })` — the commit
+  history of every doltlite store under some trees
+  (`cards/HistoryCard.ce.vue`, over `/api/pipeline/history`): store,
+  commit and table as a tree, re-read whenever the runner's record
+  moves; a commit's run opens its `logView`. With `source`, two
+  commits of that source's download store can be selected and
+  compared, which adds a diff group to the config and syncs it;
+  `compare: true` opens with the newest two set up. The pairing rules
+  are `config/compareCommits.ts`.
 - `logLineView(seq)` — one log line in full (`cards/LogLineCard.ce.vue`,
   over `/api/log/{seq}`): the message, the fields as a tree
   (`cards/JsonTree.ce.vue`), the source link at the process's commit,
@@ -472,9 +503,10 @@ viewer decides what the icon token looks like. An action is an *id*,
 never a URL — a URL arriving as data would be a capability.
 
 `GET /api/manage/rows` and the `unified_index` applet's `/search` are
-the two producers. The applet resolves the search grid's Provider and
-Source identities itself, from `config.toml` (`applets/src/unified_index/columns.rs`)
-— the configured source's own mark and the group's name — which is
+the two producers. The applet resolves the search grid's Source
+identity itself, from `config.toml` (`applets/src/unified_index/columns.rs`)
+— the group's name, led by the configured source's own mark, as the
+Manage screen's Name cell is — which is
 what keeps renaming a source free of a re-index. The cell styles live
 in `cards/tableGrid.css` rather than a component's `<style>`: a
 `.ce.vue`'s styles attach to the component for the card adapter to

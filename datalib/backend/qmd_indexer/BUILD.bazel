@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
@@ -6,33 +6,15 @@ rust_library(
     name = "datalib_qmd_indexer",
     srcs = ["src/lib.rs"],
     # `include_str!`'d into the crate: the script that drives qmd's
-    # embedding SDK. Not a `srcs` entry — it is data the compiler reads,
+    # SDK. Not a `srcs` entry — it is data the compiler reads,
     # not Rust to compile.
-    compile_data = ["src/js/embed_ndjson.mjs"],
+    compile_data = ["src/js/qmd_sdk.mjs"],
     crate_name = "datalib_qmd_indexer",
     edition = "2021",
-    visibility = ["//datalib:__subpackages__"],
-    # DELIBERATELY AS SMALL AS IT CAN BE, and please keep it that way.
-    #
-    # `:qmd_indexer_bin` is an input to //tests/fixtures:ingested_tng_qmd,
-    # and bazel keys an action on its inputs' digests. So this list is not
-    # just "what the code needs" — transitively, it IS the set of crates
-    # whose next edit re-runs a CPU-only embed of the whole fixture corpus
-    # on CI (61-611s, depending on what else is competing for the
-    # runner's 4 vCPUs). Every entry here, and everything it pulls in, is
-    # a standing tax on unrelated PRs.
-    #
-    # It used to name datalib_core (160 rdeps, 85 test targets),
-    # datalib_unified_index and datalib_obs (tokio, OpenTelemetry, tonic)
-    # — for a version constant, two path joins, a Command builder and
-    # `status_line!`. Those now live in datalib_runtime, which has no
-    # dependencies at all, and datalib_status_line, which has only
-    # indicatif. Both carry a note saying that editing them costs a
-    # re-embed.
-    #
-    # Before adding a crate here: put the helper in `datalib_runtime` (or
-    # re-export it through there) instead. Adding a dep is the move that
-    # quietly undoes all of this.
+    visibility = [
+        "//datalib:__subpackages__",
+        "//tests/fixtures:__pkg__",
+    ],
     deps = [
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/status_line:datalib_status_line",
@@ -43,19 +25,32 @@ rust_library(
 
 rust_test(
     name = "qmd_indexer_unittests",
+    size = "small",
     crate = ":datalib_qmd_indexer",
-    # A test dep, and so free of the digest tax the note above describes:
-    # `:qmd_indexer_bin` links the library, not this target.
     deps = ["@datalib_crates//:tempfile"],
 )
 
-rust_binary(
-    name = "qmd_indexer_bin",
-    srcs = ["src/main.rs"],
+# `Index` against the real qmd — the pinned package run by the pinned
+# node, and the embedding model — on a few small documents per test.
+rust_test(
+    name = "qmd_indexer_tests",
+    size = "small",
+    srcs = ["tests/qmd_indexer_tests.rs"],
+    data = [
+        "@nodejs_host//:node_bin",
+        "//third-party/qmd/runtime:qmd_package_dir",
+        "//third-party/qmd/runtime:qmd_tree",
+        "//third-party/qmd_models:embeddinggemma",
+    ],
     edition = "2021",
-    visibility = ["//visibility:public"],
+    env = {
+        "QMD_TEST_EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+        "QMD_TEST_NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+        "QMD_TEST_PACKAGE_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
+    },
     deps = [
         ":datalib_qmd_indexer",
-        "@datalib_crates//:anyhow",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:tempfile",
     ],
 )

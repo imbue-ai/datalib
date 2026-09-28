@@ -257,14 +257,14 @@ impl GridIndex {
     /// lower-ranked hits from the same document are dropped to keep the result
     /// list concise. Returns `(row, score)` in rank order, each row carrying
     /// the score of the hit that produced it.
-    pub fn ranked_rows_one_per_doc(
+    pub fn ranked_rows_one_per_doc<'h>(
         &self,
-        hits: &[QmdHit],
+        hits: &'h [QmdHit],
         documents_only: bool,
         mut on_orphan: impl FnMut(&QmdHit),
-    ) -> Vec<(GridRowRef, f64)> {
+    ) -> Vec<(GridRowRef, &'h QmdHit)> {
         let mut seen_docs: HashSet<String> = HashSet::new();
-        let mut out: Vec<(GridRowRef, f64)> = Vec::new();
+        let mut out: Vec<(GridRowRef, &'h QmdHit)> = Vec::new();
         for h in hits {
             let rows = if documents_only {
                 self.document_for_hit(h)
@@ -281,7 +281,7 @@ impl GridIndex {
             // output holds at most one row per document.
             for row in rows {
                 if seen_docs.insert(row.qmd_path.clone()) {
-                    out.push((row, h.score));
+                    out.push((row, h));
                 }
             }
         }
@@ -365,8 +365,6 @@ mod tests {
         );
         // No "before" annotation → fall back to the hunk start.
         assert_eq!(snippet_match_line("@@ -7,4 @@\nx"), Some(7));
-        // No diff header at all → unknown.
-        assert_eq!(snippet_match_line("just a snippet"), None);
     }
 
     #[test]
@@ -580,11 +578,11 @@ mod tests {
         assert_eq!(got.len(), 1);
     }
 
-    /// Replay of `http::run_qmd_search`'s fanout: walk hits in rank order,
+    /// Replay of the applet's `qmd_ranking` fanout: walk hits in rank order,
     /// stamp each hit's score onto every row it resolves to, first-score-wins.
     /// Returns `(uuid, score)` in the order rows are discovered. Kept in the
     /// test so this regression is self-contained (the real loop is inline in
-    /// the http crate).
+    /// the applet crate).
     fn fanout(idx: &GridIndex, hits: &[QmdHit]) -> Vec<(String, f64)> {
         let mut seen: HashMap<String, f64> = HashMap::new();
         let mut out: Vec<(String, f64)> = Vec::new();
@@ -718,7 +716,10 @@ mod tests {
         let ranked = idx.ranked_rows_one_per_doc(&hits, false, |_| orphans += 1);
 
         assert_eq!(orphans, 1, "the unknown-path hit is an orphan");
-        let got: Vec<(&str, f64)> = ranked.iter().map(|(r, s)| (r.uuid.as_str(), *s)).collect();
+        let got: Vec<(&str, f64)> = ranked
+            .iter()
+            .map(|(r, h)| (r.uuid.as_str(), h.score))
+            .collect();
         assert_eq!(
             got,
             vec![

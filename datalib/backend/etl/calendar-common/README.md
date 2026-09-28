@@ -46,7 +46,9 @@ and then edited, and the index holds them to that order
 document row); an event is nearly always last edited *before* it
 happens, so its edit stamp in that column would break the order for
 almost every future meeting. When the event was added (`CREATED`) and
-last changed are on the page and in its frontmatter instead.
+last changed are on the page and in its frontmatter instead, and the
+edit stamp is the row's `touched_at`, what newest-first sorts by: an
+event changed today sorts today, not at a start years ahead.
 
 The id is deliberately **not** stamped with that start (`datalib_id`'s
 leading bits): rescheduling a meeting must not re-key it and orphan its

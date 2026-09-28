@@ -5,7 +5,7 @@
 //! would be a better key, but `recipients.identifier` is nullable, and
 //! a scope that is sometimes there re-keys every row the day it appears.
 
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Signal;
@@ -15,28 +15,14 @@ pub const KIND_CHAT: &str = "chat";
 pub const KIND_PERIOD: &str = "chat_period";
 pub const KIND_MESSAGE: &str = "message";
 
-fn identity(
-    source_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    date_ms: Option<i64>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(date_ms),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn chat(source_id: &str, chat_id: &str) -> Identity {
-    identity(source_id, KIND_CHAT, chat_id.to_string(), None)
+    IDS.mint(source_id, KIND_CHAT, chat_id.to_string(), None)
 }
 
 pub fn period(source_id: &str, chat_id: &str, period_key: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_PERIOD,
         composite_key(&[chat_id, period_key]),
@@ -46,7 +32,7 @@ pub fn period(source_id: &str, chat_id: &str, period_key: &str) -> Identity {
 
 /// `date_sent` is both part of the key and the item's stamp.
 pub fn message(source_id: &str, chat_id: &str, author_id: &str, date_sent: i64) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_MESSAGE,
         composite_key(&[chat_id, author_id, &date_sent.to_string()]),

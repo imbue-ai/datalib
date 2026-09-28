@@ -18,10 +18,17 @@ pub const UNIFIED_INDEX_DIR: &str = "unified_index";
 pub const GRID_DIR: &str = "grid_index";
 /// The doltlite database file inside [`GRID_DIR`].
 pub const GRID_DB: &str = "db.doltlite_db";
-/// The `qmd_index` step's tree, relative to [`UNIFIED_INDEX_DIR`]. qmd
-/// itself lays out `qmd/index.sqlite` under it — see
-/// `crate::qmd::qmd_cache_home`.
+/// The qmd index's directory, relative to [`UNIFIED_INDEX_DIR`]: every
+/// qmd step writes the one index under it, which qmd lays out as
+/// `qmd/index.sqlite` — see `crate::qmd::qmd_cache_home`.
 pub const QMD_DIR: &str = "qmd_index";
+
+/// A download step's raw store, inside its tree: entity tables,
+/// per-provider CAS edge tables and the shared sync bookkeeping.
+pub const ENTITIES_DB: &str = "entities.doltlite_db";
+/// The content-addressed blob store beside [`ENTITIES_DB`]: one
+/// `cas_objects` table keyed by blake3 hash.
+pub const BLOBS_DB: &str = "blobs.doltlite_db";
 
 /// Directory of server-served attachment bytes, relative to `system/`.
 pub const MEDIA_DIR: &str = "media";

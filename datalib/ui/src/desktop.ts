@@ -30,7 +30,7 @@
  * `invoke` throws a bare `TypeError` rather than degrading.
  */
 
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { confirm as confirmDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 /** Tauri's IPC bridge, injected only into windows it trusts. */
@@ -85,6 +85,28 @@ export async function revealInFileManager(path: string): Promise<boolean> {
 }
 
 /**
+ * Open a download step's raw store, read-only: in DB Browser for SQLite
+ * when that is what opens `.doltlite_db` files here, otherwise in the
+ * bundled doltlite shell in a terminal. The shell picks, and says which
+ * (`open_raw_store` in `datalib/tauri/src/main.rs`).
+ *
+ * An app command rather than a plugin one, so there is no package to
+ * own the command name; `capabilities/open-raw-stores.json` grants it.
+ */
+export async function openRawStore(
+  path: string,
+): Promise<{ ok: true; openedIn: string } | { ok: false; reason: string }> {
+  const t = internals();
+  if (!t) return { ok: false, reason: "only the desktop app can open a store" };
+  try {
+    const openedIn = (await t.invoke("open_raw_store", { path })) as string;
+    return { ok: true, openedIn };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
+/**
  * The platform's name for "show this file where it lives", so the menu
  * item reads the way the OS does.
  *
@@ -119,6 +141,24 @@ export function filePathFromUrl(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Ask the user to confirm a destructive action; call this, never
+ * `window.confirm`.
+ *
+ * In the app, `window.confirm` is broken beyond a permission: the
+ * dialog plugin's init script replaces it with an async function
+ * that invokes `plugin:dialog|confirm`, a command the plugin does not
+ * register, and the Promise it returns is truthy — `if
+ * (!window.confirm(…)) return` never returns. The plugin's own
+ * `confirm` goes through `plugin:dialog|message`, granted by
+ * `capabilities/confirm-actions.json`. A refused call rejects, and the
+ * action does not happen.
+ */
+export async function confirmAction(message: string): Promise<boolean> {
+  if (!isDesktopApp()) return window.confirm(message);
+  return confirmDialog(message, { kind: "warning" });
 }
 
 /**

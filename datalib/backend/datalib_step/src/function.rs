@@ -28,8 +28,17 @@ pub enum Function {
     RenderMarkdown,
     /// Stack every source's render store into the unified grid table.
     GridIndex,
-    /// Build the qmd search index over every rendered tree.
-    QmdIndex,
+    /// Read every source's `keyword_index` and `embed`: keep the qmd
+    /// index's collections to those sources, and report on the whole.
+    QmdAggregator,
+    /// Bring one source's qmd collection in line with its rendered tree:
+    /// the keyword (BM25) index.
+    KeywordIndex,
+    /// Embed what one source's qmd collection is missing: the vectors
+    /// semantic search reads.
+    Embed,
+    /// Lay the qmd index's document embeddings out on a plane.
+    EmbeddingMap,
 }
 
 impl Function {
@@ -74,6 +83,9 @@ mod tests {
             datalib_etl::layout::RENDER_MARKDOWN_DIR
         );
         assert_eq!(Function::GridIndex.as_str(), datalib_core::layout::GRID_DIR);
-        assert_eq!(Function::QmdIndex.as_str(), datalib_core::layout::QMD_DIR);
+        assert_eq!(
+            Function::EmbeddingMap.as_str(),
+            datalib_unified_index::embedding_map::DIR
+        );
     }
 }

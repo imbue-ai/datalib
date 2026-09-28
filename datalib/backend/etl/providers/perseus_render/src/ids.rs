@@ -5,7 +5,7 @@
 //! and the synthetic one the grid sorts by is not the record's.
 
 use datalib_etl_perseus::WORK_URN;
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Perseus;
 
@@ -14,16 +14,7 @@ pub const KIND_CHAPTER: &str = "chapter";
 pub const KIND_SECTION: &str = "section";
 pub const KIND_SENTENCE: &str = "sentence";
 
-fn identity(source_id: &str, entity_kind: &'static str, natural_key: String) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        None,
-    )
-}
+const IDS: Minter = Minter::unstamped(ID_NAMESPACE);
 
 pub fn passage_urn(edition: Option<&str>, locator: &str) -> String {
     match edition {
@@ -33,7 +24,7 @@ pub fn passage_urn(edition: Option<&str>, locator: &str) -> String {
 }
 
 pub fn book(source_id: &str, book_n: &str) -> Identity {
-    identity(source_id, KIND_BOOK, passage_urn(None, book_n))
+    IDS.mint(source_id, KIND_BOOK, passage_urn(None, book_n), None)
 }
 
 /// One (book, chapter, edition) — each edition variant gets its own
@@ -41,10 +32,11 @@ pub fn book(source_id: &str, book_n: &str) -> Identity {
 /// edition's markdown. `version` is the edition id (`perseus-grc2`,
 /// `1st1K-eng1`, …).
 pub fn chapter(source_id: &str, book_n: &str, ch_n: &str, version: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_CHAPTER,
         passage_urn(Some(version), &format!("{book_n}.{ch_n}")),
+        None,
     )
 }
 
@@ -54,10 +46,11 @@ pub fn chapter(source_id: &str, book_n: &str, ch_n: &str, version: &str) -> Iden
 /// chapter md, so the UI's lookup matches byte-for-byte and the
 /// scroll-and-highlight pane snaps to the section.
 pub fn section(source_id: &str, book_n: &str, ch_n: &str, sec_n: &str, version: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_SECTION,
         passage_urn(Some(version), &format!("{book_n}.{ch_n}.{sec_n}")),
+        None,
     )
 }
 
@@ -74,13 +67,14 @@ pub fn sentence(
     version: &str,
     sent_idx: usize,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_SENTENCE,
         composite_key(&[
             &passage_urn(Some(version), &format!("{book_n}.{ch_n}.{sec_n}")),
             &sent_idx.to_string(),
         ]),
+        None,
     )
 }
 

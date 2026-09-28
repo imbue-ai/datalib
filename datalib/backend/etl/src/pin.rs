@@ -73,8 +73,7 @@ impl Reads<'_> {
 /// commit the diff did not see. This is for the consumers that do no diff at
 /// all, and for a sibling store (a blob CAS) with a HEAD of its own.
 pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
-    let commit = datalib_pin::head(pool).await?;
-    if commit.is_none() {
+    let Some(commit) = datalib_pin::head(pool).await? else {
         // Every caller turns this into "nothing to read". The render paths
         // now skip on it rather than reporting a completed pass over zero
         // rows, but this line is still the only place the difference between
@@ -85,19 +84,19 @@ pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
              same as it being empty",
         );
         return Ok(None);
-    }
+    };
     // The same answer reached the other way. A doltlite file is born with an
     // initialization commit, so HEAD resolves even for a store whose tables
     // have never been committed -- and there every pinned view would be the
     // empty one, which reads as a source that lost all its rows.
-    if !carries_committed_schema(pool).await {
+    if !holds_a_table(pool, &commit).await {
         tracing::warn!(
             store = %store_filename(pool),
             "no commit carries this store's tables: unreadable, not empty",
         );
         return Ok(None);
     }
-    Ok(commit)
+    Ok(Some(commit))
 }
 
 /// The file a pool is against, for a log line.
@@ -105,7 +104,7 @@ fn store_filename(pool: &sqlx::SqlitePool) -> String {
     pool.connect_options().get_filename().display().to_string()
 }
 
-/// Whether any commit in this store carries a schema.
+/// Whether HEAD carries any of this store's tables.
 ///
 /// A doltlite file gets an "Initialize data repository" commit when it is
 /// created, before any DDL — so `dolt_hashof('HEAD')` answers for a store
@@ -113,8 +112,8 @@ fn store_filename(pool: &sqlx::SqlitePool) -> String {
 /// shape, because it does not look like an error anywhere:
 ///
 /// - `head` returns a real hash, so the store reads as pinnable;
-/// - `install_views` finds the tables in `sqlite_master` but no `dolt_at_`
-///   module for them, so every view becomes the empty `WHERE 0` one;
+/// - `install_views` finds the tables in `sqlite_master` but none of them
+///   at that commit, so every view becomes the empty `WHERE 0` one;
 /// - the consumer reads zero rows and reports a *completed* walk;
 /// - and a sweep over what the walk did not produce deletes every
 ///   document the source had.
@@ -122,21 +121,58 @@ fn store_filename(pool: &sqlx::SqlitePool) -> String {
 /// It is reachable: a download that created its tables and wrote rows, then
 /// died before its first commit, leaves exactly this.
 ///
-/// A store that has committed anything has a `dolt_at_<table>` module per
-/// committed table, so their total absence is the signal — whether the
-/// tables are there uncommitted, or not there yet at all. **A file with no
-/// tables counts as unreadable too**: that is the shape an owner's `open`
-/// leaves behind between creating the file and its first `CREATE TABLE`,
-/// and under streaming a consumer opens exactly there. No view gets
-/// created, so the consumer's first read fails with `no such table:
-/// pinned_<t>` — a loud failure over a producer doing nothing wrong.
+/// **A file with no tables counts as unreadable too**: that is the shape an
+/// owner's `open` leaves behind between creating the file and its first
+/// `CREATE TABLE`, and under streaming a consumer opens exactly there. No
+/// view gets created, so the consumer's first read fails with `no such
+/// table: pinned_<t>` — a loud failure over a producer doing nothing wrong.
 pub async fn carries_committed_schema(pool: &sqlx::SqlitePool) -> bool {
-    let modules: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM pragma_module_list WHERE name LIKE 'dolt_at_%'")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-    modules > 0
+    match datalib_pin::head(pool).await {
+        Ok(Some(head)) => holds_a_table(pool, &head).await,
+        _ => false,
+    }
+}
+
+async fn holds_a_table(pool: &sqlx::SqlitePool, pin: &Pin) -> bool {
+    let Ok(tables) = table_names(pool).await else {
+        return false;
+    };
+    for t in &tables {
+        if matches!(exists_at(pool, t, pin).await, Ok(true)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The tables in this connection's schema that a pinned view can be built
+/// over. `sqlite_*` are the engine's own bookkeeping tables; SQLite refuses
+/// to create a view over some of them, and a reader has no business in them.
+async fn table_names(pool: &sqlx::SqlitePool) -> Result<Vec<String>> {
+    let names: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(names.into_iter().filter(|t| is_table_name(t)).collect())
+}
+
+/// Whether `table` is in the tree `pin` names. Asked by reading one row
+/// through `dolt_at_<table>`: doltlite registers those modules on first
+/// use, so `pragma_module_list` does not list a table until something has
+/// read it that way.
+async fn exists_at(pool: &sqlx::SqlitePool, table: &str, pin: &Pin) -> Result<bool> {
+    // Audited: `table` passed `is_table_name`, and `Pin::table` splices a
+    // hash `Pin::at` validated as 40 hex characters.
+    let sql = format!("SELECT 1 FROM {} LIMIT 1", pin.table(table));
+    match sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(_) => Ok(true),
+        Err(e) if is_missing_table(&e, table) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Create one `pinned_<table>` view per table on this connection, and return
@@ -153,38 +189,14 @@ pub async fn carries_committed_schema(pool: &sqlx::SqlitePool) -> bool {
 /// and building views over the bare tables would answer that by handing back
 /// the working set, which is the failure this module exists to prevent.
 ///
-/// **Nothing here may read `dolt_status`.** It looks like a read, but a
-/// reader running it while a writer commits to the same file makes that
-/// `dolt_commit` fail with `commit conflict` — measured by
-/// `a_churning_reader_never_makes_the_writers_commit_fail` in
-/// `tests/doltlite_two_process.rs`; in doltlite 0.50.3 the vtab's filter ends
-/// in `chunkStorePut`, staging the working catalog even on a read-only
-/// connection. Under streaming the writer is live by design, so a reader that
-/// asks whether the store is dirty breaks the producer it is reading.
+/// Every statement here runs beside a live writer, so each is one
+/// `tests/doltlite_two_process.rs` has run a reader with (`etl/README.md`
+/// §"A reader opens read-only and pinned" has the allowlist).
 pub async fn install_views(pool: &sqlx::SqlitePool, pin: &Pin) -> Result<usize> {
-    // `sqlite_*` are the engine's own bookkeeping tables; SQLite refuses to
-    // create a view over some of them, and a reader has no business in them.
-    let names: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-    )
-    .fetch_all(pool)
-    .await?;
-    let tables: Vec<&String> = names.iter().filter(|t| is_table_name(t)).collect();
-    let commit = pin.commit();
-
-    let modules: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_module_list WHERE name LIKE 'dolt_at_%'")
-            .fetch_all(pool)
-            .await?;
-    let pinnable: std::collections::HashSet<&str> = modules
-        .iter()
-        .filter_map(|m| m.strip_prefix("dolt_at_"))
-        .collect();
-
+    let tables = table_names(pool).await?;
     for t in &tables {
-        // A table with no `dolt_at_` module did not exist at this commit, so
-        // its pinned contents are empty. `WHERE 0` keeps the view's columns
-        // while returning nothing.
+        // A table that is not at this commit is empty there. `WHERE 0`
+        // keeps the view's columns while returning nothing.
         //
         // That is only honest because `head` has already refused the store
         // where *nothing* is committed. Here some other table is committed,
@@ -192,8 +204,8 @@ pub async fn install_views(pool: &sqlx::SqlitePool, pin: &Pin) -> Result<usize> 
         // it. Without that check the same branch would quietly turn "this
         // store has never been committed" into "this source has no rows",
         // which is what makes a consumer delete everything.
-        let body = if pinnable.contains(t.as_str()) {
-            format!("SELECT * FROM dolt_at_{t}('{commit}')")
+        let body = if exists_at(pool, t, pin).await? {
+            format!("SELECT * FROM {}", pin.table(t))
         } else {
             format!("SELECT * FROM main.{t} WHERE 0")
         };
@@ -230,8 +242,7 @@ mod view_tests {
 
     use super::*;
 
-    /// Tables `dolt_status` reports dirty. Asked of a *writer's* own pool
-    /// only; `install_views` says why a reader must never run it.
+    /// Tables `dolt_status` reports dirty.
     async fn dirty_table_count(pool: &sqlx::SqlitePool) -> Option<i64> {
         sqlx::query_scalar("SELECT count(*) FROM dolt_status")
             .fetch_one(pool)
@@ -550,8 +561,8 @@ mod view_tests {
     /// The shape that deletes a source: tables written, nothing committed.
     ///
     /// A doltlite file has an initialization commit from birth, so
-    /// `dolt_hashof('HEAD')` answers even here — and every `dolt_at_` module
-    /// is absent, so `install_views` would give each table the empty
+    /// `dolt_hashof('HEAD')` answers even here — and no table is at that
+    /// commit, so `install_views` would give each table the empty
     /// `WHERE 0` view. The consumer then reads zero rows, calls that a
     /// completed walk, and sweeps every document the source had.
     ///

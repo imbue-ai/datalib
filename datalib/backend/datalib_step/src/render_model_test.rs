@@ -355,7 +355,7 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
                 .source_label("Synth")
                 .conversation_uuid(id)
                 .entire_chat(format!("/chat/{id}"))
-                .text(text)
+                .body(text)
                 .markdown_uuid(Some(id.to_string()))
                 // The synthetic document's first row stands for it.
                 .is_document(*uuid == doc.rows[0].0)
@@ -575,7 +575,7 @@ fn docs_of(rendered: &[RenderedMarkdown]) -> BTreeMap<String, Doc> {
             let mut rows: Vec<(String, String)> = md
                 .rows
                 .iter()
-                .map(|r| (r.uuid.clone(), r.text.clone()))
+                .map(|r| (r.uuid.clone(), r.preview.clone()))
                 .collect();
             rows.sort();
             let mut edges: Vec<(String, String)> = md
@@ -634,7 +634,7 @@ async fn index_docs(pool: &SqlitePool) -> BTreeMap<String, Doc> {
     for md in mds {
         let uuid: String = md.try_get(0).unwrap();
         let mut rows: Vec<(String, String)> =
-            sqlx::query("SELECT uuid, text FROM grid_rows WHERE markdown_uuid = ?")
+            sqlx::query("SELECT uuid, preview FROM grid_rows WHERE markdown_uuid = ?")
                 .bind(&uuid)
                 .fetch_all(pool)
                 .await
@@ -1113,4 +1113,42 @@ async fn a_run_over_an_unchanged_store_moves_nothing() {
         "a second run over the same commit committed something"
     );
     world.index.close().await;
+}
+
+/// A render reports its store's HEAD exactly as the store spells it, which
+/// is how a seal spells its commit (`doltlite_raw`'s
+/// `a_seal_and_the_head_read_after_it_name_one_commit_the_same_way`). Spelled
+/// any other way, the index would run once more on every sync, for a commit
+/// it had already read at the seal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_render_reports_its_head_as_the_store_spells_it() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    world
+        .commit(&[
+            Mutation::RenameAuthor("a0".into(), "ann".into()),
+            Mutation::InsertParent(
+                "p1".into(),
+                Parent {
+                    title: "title 1".into(),
+                    author_id: "a0".into(),
+                },
+            ),
+        ])
+        .await;
+    let report = world.render_report(&synth, true).await.unwrap();
+    let store = datalib_etl_render::indexed_markdown::path_for(
+        &datalib_etl::layout::render_markdown_root(&world.data_root, SOURCE),
+    );
+    let head = doltlite_raw::head_commit_at_path(&store).await.unwrap();
+    assert!(head.is_some(), "the render must have committed");
+    let claimed: Vec<String> = crate::render::claims("s/render_markdown", &report)
+        .into_iter()
+        .map(|c| c.version)
+        .collect();
+    assert_eq!(claimed, head.into_iter().collect::<Vec<_>>());
 }

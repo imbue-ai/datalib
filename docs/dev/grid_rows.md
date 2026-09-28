@@ -10,7 +10,9 @@ the backend reads it with one query.
 
 The index holds one more table the grid does not read: `problems`,
 every source's render-store `problems` copied in whole by `grid_index`
-and served by the applet at `/problems` — see
+and served by the applet at `/problems`, which filters, sorts, groups
+(`/problems/groups`) and pages the way `/search` does, through the keys
+declared on `ProblemRow` — see
 [`plans/problem_visibility.md`](plans/problem_visibility.md).
 
 ## Why a union table
@@ -64,12 +66,35 @@ each changed document's row set, and copies the corresponding
 
 ## Consumer side: `datalib/backend/unified_index/src/dolt_repo.rs`
 
-`DoltRepo::search` builds a `WHERE` clause from `ParsedQuery`
-(account/project/before/after/free-text) plus `is_document = 1` or
-`= 0` when the query said `is:document` or `-is:document`, then issues
-a single SELECT against `grid_rows` ordered by `created_at` ASC with a
-document row tie-breaking ahead of the rows inside it. The row mapper
-translates each row into a `SearchRow` for the HTTP API.
+`DoltRepo::search` builds a `WHERE` clause from `ParsedQuery`'s
+structured terms (account/project/before/after/…) plus `is_document = 1`
+or `= 0` when the query said `is:document` or `-is:document`, then
+issues a single SELECT against `grid_rows`, newest first: by
+`touched_at` descending, a document row ahead of the rows inside it at
+the same moment. The row mapper translates each row into a `SearchRow`
+for the HTTP API, with `preview` as its Contents cell.
+
+The keys the search bar takes are declared on `GridRow`'s own columns
+(`#[col(…, search = "convo", uuid)]`, and `search(order = …, range = …,
+qmd)` on the struct), and the derive turns them into a `SearchTable`
+(`datalib_query::table`) that the `WHERE`, the order and the grouping
+are all built from. The grid's own column ids (`source_ref`, `snippet`)
+map onto `grid_rows` columns in `unified_index/src/grid_columns.rs`.
+
+Every read happens inside one read transaction on a read-only
+connection (`DoltRepo::pinned`), so a request sees one commit and the
+plain table's indexes serve it. `grid_rows` carries one index for the
+newest-first order and one per key the search bar filters on, each
+`(key, touched_at_utc, is_document, uuid)`; a key without one walks
+the whole table in order. They are declared on the struct
+(`#[portable_table(index = …)]`) and created only in the unified
+index, not in the render stores that also hold a `grid_rows`.
+`every_filter_key_is_served_by_an_index` fails when a key has none.
+
+Free text never reaches SQL: the applet sends it to qmd, maps the hits
+to rows by `qmd_path` (below), keeps the ones the query's structured
+terms also match (`filter_uuids`), and shows each hit's own matched lines as its Contents cell. With no qmd
+index, a free-text search answers with an error, not a weaker search.
 
 ## Adding a column
 
@@ -80,21 +105,35 @@ translates each row into a `SearchRow` for the HTTP API.
 2. Add the column to each per-provider `render/grid_rows.rs`
    `GridRow` builder.
 3. Update `unified_index/src/dolt_repo.rs` — both the
-   `SEARCH_ROW_COLUMNS` constant and `search_row_from` — and `SearchRow`
-   in `unified_index/src/search.rs` if the column should reach the API.
+   `SEARCH_ROW_COLUMNS` list and `search_row_from`, which name columns
+   by `GridRowColumn` — and `SearchRow` in `unified_index/src/search.rs`
+   if the column should reach the API.
 4. If it should be a grid column, add it to the `SearchRow` type in
    `datalib/ui/src/api.ts` and declare it in `columns()` in
    `datalib/backend/applets/src/unified_index/columns.rs`, with its type
    from `datalib_columns`. The applet declares the columns and the grid
    draws them by type (`cards/typedColumns.ts`, over the renderers in
    `cards/cellRenderers.ts`); a width or a hover the type cannot know
-   goes in `GridCard`'s `columnOverrides`.
-5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
+   goes in `GridCard`'s `columnOverrides`. Map its id to the
+   `grid_rows` column it sorts and filters by in `GridColumn::backing`
+   (`unified_index/src/grid_columns.rs`), and give that column `search`
+   on its `#[col]` so Keep only, Exclude and dropping it on the search
+   bar work; `every_filter_key_is_served_by_an_index` then asks for an
+   index or a place in its `SCANS` list.
+5. Set the new DDL hashes in `BUILTIN_STORE_SHAPES`
+   (`datalib/backend/dag/src/config.rs`). The test
+   `builtin_store_shapes_are_the_ddl_the_step_writes` in `datalib_step`
+   fails until you do, and prints the hash to paste.
+6. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
-Nothing to bump for an existing root: the render store's DDL hash is
-one of the render params (`_store_schema`), so a new column re-renders
-every source on the next run rather than sitting `NULL` on every row
-rendered before it, and the grid index rebuilds itself on any drift.
+On an existing root, a render store and the grid index change shape only
+when the step that writes them runs, and the loop runs a step only when
+it is stale. Step 5 is what makes them stale: each store's shape is in
+its writer's fingerprint, so the next sync re-runs every render step and
+the grid index once, whether or not anything new came in upstream. The
+render step then sees its own DDL hash moved (it is one of the render
+params, `_store_schema`) and re-renders every document into the new
+shape, and the grid index rebuilds itself from the stores.
 
 ## Adding a provider
 
@@ -106,9 +145,9 @@ rendered before it, and the grid index rebuilds itself on any drift.
    `datalib/backend/datalib_step` and to the dispatch table in
    `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
    ingest/render step pair in the config and name the render step in
-   the two fan-ins' `inputs` (the wizard does this for a source it
-   adds); `grid_index` and `qmd_index` read exactly the stores their
-   inputs name.
+   `grid_index`'s `inputs` (the wizard does this for a source it adds,
+   with the source's qmd steps); `grid_index` reads exactly the stores
+   its inputs name.
 3. Add the source label to the consuming bits as needed (icon
    resolution, etc.) — but the query path itself does not change.
 
@@ -210,12 +249,20 @@ Several sources have more than one document kind: Claude's `Chat` and
 `Project`, Notion's `Notion Page` and `Notion Comment Thread`,
 LinkedIn's `Contact` and `LinkedIn Chat`.
 
-### `created_at` and `modified_at`
+### `created_at`, `modified_at` and `touched_at`
 
-Both are the record's own stamps, kept as the source wrote them (see
-the timestamp convention in AGENTS.md); each gets a `_utc` twin and an
-offset column at index time, and `created_at_utc` is what the grid
-sorts on and `before:`/`after:` filter on. The rule for a document
+All three are the record's own stamps, kept as the source wrote them
+(see the timestamp convention in AGENTS.md); each gets a `_utc` twin
+and an offset column at index time. `touched_at_utc` is what the grid
+sorts on, newest first; `created_at_utc` is what `before:`/`after:`
+filter on.
+
+`touched_at` is when the record last changed at its source. The
+builder sets it to `modified_at`, else `created_at`, so a provider sets
+it only when the record's last change is neither. Calendar is the one
+that does: an event's `created_at` is when it happens, often years
+ahead, so its `touched_at` is its edit stamp (Google's `updated`, the
+feed's `LAST-MODIFIED`, else `DTSTAMP`), else when it was added. The rule for a document
 row is the same everywhere: `created_at` is the earliest moment in
 the document and `modified_at` the latest. For a row inside a
 document, `created_at` is its own stamp and `modified_at` is the edit
@@ -295,13 +342,21 @@ GitLab and Notion all mirror a self-identity row and could fill
 `account` from it; their render diff deliberately does not fan out on
 that table, so that is a small design change rather than a one-liner.
 
-### `conversation_name`, `conversation_uuid`, `text`
+### `conversation_name`, `conversation_uuid`, `preview`, `content_hash`
 
 `conversation_uuid` is the row's own `uuid` for thread-level rows
 (claude.chat, chatgpt.chat, slack.thread, github.pr, gitlab.mr, notion.page,
 notion.thread) and the parent's for everything below them.
 
-| provider.kind | conversation_name | text |
+A producer hands the builder the row's whole text (`.body(…)`), and the
+builder keeps two things from it: `preview`, the first 240 characters on
+one line, which is the grid's Contents cell; and `content_hash`, blake3
+of the whole body, so a change past the preview still changes the row.
+The body itself is not stored — the rendered markdown holds it, and
+qmd's index of that markdown is how free text finds it. The table says
+what each producer passes as the body.
+
+| provider.kind | conversation_name | body |
 |---|---|---|
 | claude.chat | `conversations.name` | `summary`, else `name` |
 | claude.message | (parent's) | `messages.text` |
@@ -342,7 +397,12 @@ notion.thread) and the parent's for everything below them.
 | email.thread | `thread_id` |
 | perseus | the locator path (`1`, `1.2`, `1.2.3`) |
 
-### `qmd_path`
+### `qmd_path` and `source_id`
+
+`source_id` is derived from `qmd_path` at index time: its first
+segment, except a storage row (provider `datalib`), which sits under the
+source it measures and is filed under `datalib`
+(`GridRow::derived_source_id`). The `source_id:` filter compares it.
 
 `<source_id>/render_markdown/<renderer-specific tail>`, where `<source_id>`
 is the group's id — its directory under the data root, never the
@@ -384,7 +444,7 @@ Two nullable measurements. What each one measures is decided per
 On a `datalib.*` row, `byte_size` is bytes on disk **as of the last
 render that rewrote the row** — see "Storage rows" below for why that
 is not "now". On a chat-common row it is the message body — the same
-string that lands in `text` — and nothing else: not the attachments,
+string it passes as the body — and nothing else: not the attachments,
 whose sizes only some providers know, and not the raw payload, which
 the renderer never sees. So a conversation's `byte_size` is exactly the
 sum of its message rows', and its `item_count` is exactly how many of

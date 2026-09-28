@@ -29,6 +29,7 @@ function iconFor(token: string | null | undefined, label: string): Element | nul
     const img = document.createElement("img");
     img.src = url;
     img.alt = label;
+    img.title = label;
     img.className = "tg-brand";
     return img;
   }

@@ -30,6 +30,31 @@ const quoted = (v: string) =>
 /// Manage card; picking this server's launch retitles it. The lines
 /// already shown stay until the launch's replace them, so this waits
 /// for that load to finish before anything reads a row.
+/// The log opens at its bottom, on the newest lines, and reads older
+/// pages as it is scrolled up. This scrolls up until there are none left
+/// to read, so the top row is the log's first line — the server's own
+/// start-up — and stays that row while the tail grows below.
+async function scrollLogToStart(dialog: Locator) {
+  const viewport = dialog.locator(".rl-grid .slick-viewport").first();
+  await expect
+    .poll(
+      async () => {
+        await viewport.evaluate((el) => (el.scrollTop = 0));
+        return dialog
+          .page()
+          .evaluate(() =>
+            (
+              window as unknown as { __fwRunLogApi: { hasOlder: () => boolean } }
+            ).__fwRunLogApi.hasOlder(),
+          );
+      },
+      { message: "the log's first line was never read" },
+    )
+    .toBe(false);
+  await viewport.evaluate((el) => (el.scrollTop = 0));
+  await expect(dialog.locator(`${ROWS}[data-row="0"]`)).toBeVisible();
+}
+
 async function openServerLog(page: Page) {
   await page.goto("/data_sources");
   await page.locator(".cards-statusbar").getByRole("button", { name: "Logs" }).click();
@@ -40,8 +65,10 @@ async function openServerLog(page: Page) {
   await expect(mine).toHaveCount(1);
   const value = (await mine.getAttribute("value"))!;
   const launch = value.replace(/^launch:/, "");
+  // Picking the launch writes it into the query the log is read with.
   const loaded = page.waitForResponse(
-    (r) => r.url().includes("/api/log?") && r.url().includes(`process=${launch}`),
+    (r) =>
+      r.url().includes("/api/log?") && decodeURIComponent(r.url()).includes(`process_id:${launch}`),
   );
   await scope.selectOption(value);
   await loaded;
@@ -50,6 +77,10 @@ async function openServerLog(page: Page) {
   await expect(dialog.locator(ROWS).first()).toBeVisible({ timeout: 10_000 });
   return dialog;
 }
+
+/// The launch the server log is open on, as the scope picker holds it.
+const launchOf = async (dialog: Locator) =>
+  (await dialog.getByLabel("Which run or launch").inputValue()).replace(/^launch:/, "");
 
 const lineCount = (page: Page) =>
   page
@@ -79,8 +110,11 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   const scope = dialog.getByLabel("Which run or launch");
   await expect(scope).toHaveValue(/^launch:/);
   await expect(scope.locator("option:checked")).toHaveText(/this server$/);
+  // The launch is a term in the query, beside the level: the query is
+  // the whole of what the panel shows.
+  const launch = await launchOf(dialog);
   const query = dialog.locator(".rl-search");
-  await expect(query).toHaveValue("min_level:info");
+  await expect(query).toHaveValue(`min_level:info process_id:${launch}`);
   const all = await lineCount(page);
   expect(all).toBeGreaterThan(1);
 
@@ -89,8 +123,9 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   // keeping only the first line's own message narrows to a set this
   // test can predict without knowing what the server logged. Not
   // trimmed, for the same reason: the token has to carry the value the
-  // cell holds.
-  const msgCell = dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]');
+  // cell holds. The top line, which the tail arriving below leaves be.
+  await scrollLogToStart(dialog);
+  const msgCell = dialog.locator(`${ROWS}[data-row="0"] .slick-cell[col-id="msg"]`);
   const msg = (await msgCell.textContent()) ?? "";
   expect(msg.trim(), "the first line should have a message").not.toBe("");
   // One right-click is enough: the panel holds the tail back while a
@@ -100,7 +135,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await expect(menuEntry(page, `Exclude all Message=${msg}`)).toBeVisible();
   await keepOnly.click();
 
-  await expect(query).toHaveValue(`min_level:info msg:${quoted(msg)}`);
+  await expect(query).toHaveValue(`min_level:info process_id:${launch} msg:${quoted(msg)}`);
   // A reload empties the count before it refills, so "fewer than all"
   // alone is met mid-way; wait for the narrowed lines to be there.
   await expect
@@ -120,8 +155,10 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await rightClick(dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]'), clear);
   await clear.click();
   await expect(query).toHaveValue("");
-  // With no query at all, every line this launch wrote.
-  await expect.poll(() => lineCount(page)).toBeGreaterThanOrEqual(all);
+  // With no query at all, the whole store's newest lines, and the
+  // picker says so: the launch was a term, and went with the rest.
+  await expect(scope).toHaveValue("*");
+  await expect.poll(() => lineCount(page)).toBeGreaterThan(0);
 
   // The level picker writes its word into the query, where it can be
   // read back, edited or cleared like anything typed.
@@ -131,6 +168,67 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await expect(query).toHaveValue("min_level:warn");
   await level.selectOption("trace");
   await expect(query).toHaveValue("");
+});
+
+// A log longer than a page opens on its newest lines, at the bottom, and
+// reads older ones as it is scrolled up, until its first line is there.
+// The lines are a page's own reports (`POST /api/ui/events`), eight
+// hundred of them, numbered so their order can be read off the grid.
+test("a long log opens on its newest lines and reads older ones as it is scrolled up", async ({
+  page,
+  request,
+}) => {
+  const id = crypto.randomUUID();
+  const started = new Date().toISOString();
+  const report = (from: number) =>
+    Array.from({ length: 400 }, (_, i) => ({
+      at: new Date().toISOString(),
+      name: "navigate",
+      msg: `stardate ${String(from + i).padStart(4, "0")}`,
+    }));
+  for (const [from, closing] of [
+    [1, false],
+    [401, true],
+  ] as const) {
+    const r = await request.post("/api/ui/events", {
+      data: { page: { process_id: id, started_at: started }, events: report(from), closing },
+    });
+    expect(r.status()).toBe(204);
+  }
+  // The store's writer flushes on an interval.
+  await expect
+    .poll(
+      async () =>
+        (await (await request.get(`/api/log?q=process_id:${id}&limit=1000`)).json()).length,
+    )
+    .toBe(800);
+
+  await page.goto("/data_sources");
+  await page.locator(".cards-statusbar").getByRole("button", { name: "Logs" }).click();
+  const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+  await dialog.getByLabel("Which run or launch").selectOption(`launch:${id}`);
+  const msgs = () => dialog.locator(`${ROWS} .slick-cell[col-id="msg"]`).allTextContents();
+
+  await expect.poll(() => lineCount(page)).toBe(500);
+  await expect.poll(async () => (await msgs()).includes("stardate 0800")).toBe(true);
+  expect(await msgs(), "the oldest page was read first").not.toContain("stardate 0001");
+
+  await expect
+    .poll(
+      async () => {
+        await dialog
+          .locator(".rl-grid .slick-viewport")
+          .first()
+          .evaluate((el) => (el.scrollTop = 0));
+        return lineCount(page);
+      },
+      { message: "scrolling up never read the older lines" },
+    )
+    .toBe(800);
+  await scrollLogToStart(dialog);
+  await expect(dialog.locator(`${ROWS}[data-row="0"] .slick-cell[col-id="msg"]`)).toHaveText(
+    "stardate 0001",
+  );
 });
 
 // The log opens on the seven columns a reader wants on every line. The
@@ -200,7 +298,11 @@ test("a line's source links to its file and line at the server's commit", async 
 // narrows the log through the bus.
 test("a selected line opens in full beside the log, and can narrow it", async ({ page }) => {
   const dialog = await openServerLog(page);
-  const first = dialog.locator(ROWS).first();
+  await scrollLogToStart(dialog);
+  // By row, not by the first element: the grid adds a row's element when
+  // it first scrolls in, so the page's order is not the grid's.
+  const row = (n: number) => dialog.locator(`${ROWS}[data-row="${n}"]`);
+  const first = row(0);
   const msg = (await first.locator('.slick-cell[col-id="msg"]').textContent())?.trim() ?? "";
   await first.locator('.slick-cell[col-id="msg"]').click();
 
@@ -222,14 +324,14 @@ test("a selected line opens in full beside the log, and can narrow it", async ({
     .locator(".ll-meta")
     .getByRole("button", { name: /^main$/ })
     .click();
-  await expect(dialog.locator(".rl-search")).toHaveValue("min_level:info thread:main");
+  await expect(dialog.locator(".rl-search")).toHaveValue(
+    `min_level:info process_id:${await launchOf(dialog)} thread:main`,
+  );
 
   // The arrow key moves the selection, and the inspector follows.
-  await dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]').click();
+  await row(0).locator('.slick-cell[col-id="msg"]').click();
   await page.keyboard.press("ArrowDown");
-  const second = (
-    await dialog.locator(ROWS).nth(1).locator('.slick-cell[col-id="msg"]').textContent()
-  )?.trim();
+  const second = (await row(1).locator('.slick-cell[col-id="msg"]').textContent())?.trim();
   await expect(inspector.locator(".ll-msg")).toHaveText(second ?? "");
 });
 
@@ -257,6 +359,11 @@ test("grouped by a column, the lines fold under group rows", async ({ page }) =>
   // A chip for the column takes the placeholder's place in the bar…
   await expect(bar.locator(".slick-dropped-grouping")).toContainText("Level");
   await expect(bar.locator(".slick-draggable-dropzone-placeholder")).toBeHidden();
+  // The first group's row heads the grid.
+  await dialog
+    .locator(".rl-grid .slick-viewport")
+    .first()
+    .evaluate((el) => (el.scrollTop = 0));
   // …and the lines sit under group rows that say what they share and
   // how many there are.
   const group = dialog.locator(".rl-grid .slick-row.slick-group").first();

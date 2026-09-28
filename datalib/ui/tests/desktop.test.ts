@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  confirmAction,
   filePathFromUrl,
   isDesktopApp,
   pickPath,
@@ -204,5 +205,36 @@ describe("pickPath", () => {
       await expect(startAtOf("   ")).resolves.toBeUndefined();
       await expect(startAtOf("backups/WhatsApp")).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("confirmAction", () => {
+  it("is the browser's own confirm outside the app", async () => {
+    const native = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await expect(confirmAction("Remove it?")).resolves.toBe(false);
+    expect(native).toHaveBeenCalledWith("Remove it?");
+  });
+
+  it("waits for the answer in the app, and a Cancel stops the action", async () => {
+    // Guards the remove that went ahead unasked: the plugin's
+    // `window.confirm` returned a truthy Promise before anyone answered.
+    const native = vi.spyOn(window, "confirm");
+    const invoke = fakeTauri(() => Promise.resolve("Cancel"));
+    await expect(confirmAction("Remove it?")).resolves.toBe(false);
+    expect(native).not.toHaveBeenCalled();
+    const [cmd, args] = invoke.mock.calls[0];
+    expect(cmd).toBe("plugin:dialog|message");
+    expect(args).toMatchObject({ message: "Remove it?", kind: "warning", buttons: "OkCancel" });
+  });
+
+  it("is true in the app only on OK", async () => {
+    fakeTauri(() => Promise.resolve("Ok"));
+    await expect(confirmAction("Remove it?")).resolves.toBe(true);
+  });
+
+  it("rejects when the app refuses the dialog, so nothing is removed", async () => {
+    // What a missing tauri/capabilities/confirm-actions.json looks like.
+    fakeTauri(() => Promise.reject(new Error("dialog.message not allowed")));
+    await expect(confirmAction("Remove it?")).rejects.toThrow("not allowed");
   });
 });

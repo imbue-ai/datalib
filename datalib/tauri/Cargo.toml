@@ -36,6 +36,13 @@ anyhow = "1.0"
 # launcher reads and writes that file itself.
 serde_json = "1.0"
 
+# Which app the OS would open a raw store with (`src/raw_store.rs`).
+# Both are already in the lock under tauri-plugin-opener, which turns on
+# the same features bar `NSBundle`.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSURL", "NSString", "NSBundle"] }
+
 [dev-dependencies]
 # `src/launcher.rs`'s unit tests. Also already in the lock.
 tempfile = "3"

@@ -88,7 +88,7 @@ async fn renders_the_weight_page_then_skips_an_unchanged_store() {
     assert_eq!(doc.rows.len(), 2, "1 page row + 1 device row");
     let page_row = doc.rows.iter().find(|r| r.kind == "Garmin Weight").unwrap();
     assert_eq!(page_row.author.as_deref(), Some("Jean-Luc Picard"));
-    assert!(page_row.text.contains("77.6 kg"), "{}", page_row.text);
+    assert!(page_row.preview.contains("77.6 kg"), "{}", page_row.preview);
     assert!(
         page_row
             .created_at
@@ -138,7 +138,7 @@ async fn renders_the_weight_page_then_skips_an_unchanged_store() {
     let texts = |d: &RenderedMarkdown| {
         d.rows
             .iter()
-            .map(|r| (r.uuid.clone(), r.text.clone()))
+            .map(|r| (r.uuid.clone(), r.preview.clone()))
             .collect::<Vec<_>>()
     };
     assert_eq!(texts(&again[0]), texts(doc));

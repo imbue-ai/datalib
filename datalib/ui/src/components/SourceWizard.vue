@@ -74,9 +74,8 @@ const props = defineProps<{
     group: ConfiguredGroup;
     entry: CatalogEntry;
     steps: SourceSteps;
-    /// Whether `unified_index/qmd_index` names this source's render
-    /// step today — the config's way of saying "semantic search covers
-    /// this source".
+    /// Whether this source has its own qmd steps today — the config's
+    /// way of saying "free-text search covers this source".
     qmdIndexed: boolean;
   } | null;
 }>();
@@ -103,9 +102,9 @@ const emit = defineEmits<{
       /// The render step's composed id, for the caller to wire into the
       /// fan-ins. Null for a provider that renders nothing.
       renderId: string | null;
-      /// Whether the render step belongs in `unified_index/qmd_index`'s
-      /// inputs. False leaves the markdown out of semantic search; the
-      /// grid index is not a choice.
+      /// Whether the source gets its `keyword_index` and `embed` steps.
+      /// False leaves the markdown out of free-text search; the grid
+      /// index is not a choice.
       qmdIndex: boolean;
     },
   ): void;
@@ -152,9 +151,9 @@ const renders = computed(() => providerRenders.value && renderWanted.value);
 
 /// Whether this source's markdown goes into the qmd index. On by
 /// default, for the same reason rendering is: a source nobody can
-/// search semantically is a surprise, not a saving. Editing seeds it
-/// from the fan-in's inputs. Embedding is the slow part of a sync, so
-/// off is a real choice for a source whose value is its rows.
+/// search is a surprise, not a saving. Editing seeds it from whether the
+/// source has its qmd steps. Embedding is the slow part of a sync, and
+/// its own step can be turned off from the Manage screen instead.
 const qmdWanted = ref(props.editing ? props.editing.qmdIndexed : true);
 
 /// Does this source reach the qmd index — there is markdown to index,
@@ -618,6 +617,10 @@ async function connectViaLatchkey() {
         const landed = status.account;
         const field = accountField.value;
         if (landed && field) values.value[field.target] = landed;
+        // A failure from before the login is about a credential that
+        // has just been replaced.
+        if (probe.value.state === "failed")
+          probe.value = { state: "idle", message: "", report: null };
         connect.value = {
           state: "ok",
           message: landed
@@ -809,20 +812,20 @@ function submit() {
   <!-- The backdrop deliberately does not close this dialog: a stray
        click beside a half-filled form would discard every field in it
        with nothing to undo it. The × and Cancel are the ways out. -->
-  <div class="wiz-backdrop">
+  <div class="wiz-backdrop dialog-backdrop">
     <div
-      class="wiz"
+      class="wiz dialog"
       role="dialog"
       aria-modal="true"
       :aria-label="isEdit ? 'Edit source' : 'Add data source'"
     >
-      <header class="wiz-head">
+      <header class="wiz-head dialog-head">
         <h2>{{ isEdit ? `Edit ${name || id}` : "Add a data source" }}</h2>
-        <button class="wiz-x" aria-label="Close" @click="emit('close')">×</button>
+        <button class="wiz-x dialog-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
 
       <!-- Stage 1: pick a type -->
-      <div v-if="stage === 'pick'" class="wiz-body">
+      <div v-if="stage === 'pick'" class="wiz-body dialog-body">
         <input
           v-model="query"
           class="wiz-filter"
@@ -859,7 +862,7 @@ function submit() {
       </div>
 
       <!-- Stage 2: configure -->
-      <div v-else-if="chosen" class="wiz-body">
+      <div v-else-if="chosen" class="wiz-body dialog-body">
         <div class="wiz-chosen">
           <img v-if="iconUrl(chosen.icon)" :src="iconUrl(chosen.icon)!" alt="" class="wiz-icon" />
           <div>
@@ -1003,6 +1006,13 @@ function submit() {
               </svg>
               {{ probeHeadline }}
             </p>
+            <!-- The usual cause is a sign-in that expired, and the fix
+                 is the button above rather than the terminal command
+                 the probe's own recipe names. -->
+            <p v-if="canConnect" class="wiz-help">
+              If the sign-in has expired, press <b>Latchkey auth</b> to sign in again, then
+              <b>Test connection</b>.
+            </p>
             <details v-if="probeDetail">
               <summary class="wiz-help">How to fix it</summary>
               <pre class="wiz-probe-detail">{{ probeDetail }}</pre>
@@ -1122,7 +1132,7 @@ function submit() {
               </small>
             </label>
             <label class="wiz-field wiz-inline">
-              <span class="wiz-label">Index the markdown for semantic search</span>
+              <span class="wiz-label">Index the markdown for free-text search</span>
               <input
                 v-model="qmdWanted"
                 type="checkbox"
@@ -1130,11 +1140,12 @@ function submit() {
                 :disabled="!renderWanted"
               />
               <small class="wiz-help">
-                Names this source in <code>unified_index/qmd_index</code>, the index every free-text
-                search goes to: it embeds this source's markdown so a search matches on meaning as
-                well as on words. Embedding is the slow part of a sync. Turn it off and the source
-                keeps its rows, its columns and its filters in the grid, but typing words into the
-                search bar will not find it.<template v-if="!renderWanted">
+                Gives this source two steps of its own that fill its part of the index every
+                free-text search goes to: a keyword index, and embeddings so a search matches on
+                meaning as well as on words. Embedding is the slow part of a sync; its step can be
+                turned off on its own. Turn this off and the source keeps its rows, its columns and
+                its filters in the grid, but typing words into the search bar will not find
+                it.<template v-if="!renderWanted">
                   Nothing to index while rendering is off.</template
                 >
               </small>
@@ -1272,7 +1283,7 @@ function submit() {
         </details>
       </div>
 
-      <footer class="wiz-foot">
+      <footer class="wiz-foot dialog-foot">
         <span v-if="stage === 'configure' && missingRequired.length" class="wiz-foot-note">
           Still needed: {{ missingRequired.join(", ") }}
         </span>
@@ -1290,58 +1301,10 @@ function submit() {
   </div>
 </template>
 
+<style scoped src="./dialog.css"></style>
 <style scoped>
-.wiz-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 6vh 16px;
-  z-index: 50;
-}
 .wiz {
-  background: var(--datalib-bg);
-  color: var(--datalib-fg);
-  border: 1px solid var(--datalib-border);
-  border-radius: 8px;
   width: min(760px, 100%);
-  max-height: 88vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
-}
-.wiz-head,
-.wiz-foot {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
-}
-.wiz-head {
-  border-bottom: 1px solid var(--datalib-border);
-}
-.wiz-foot {
-  border-top: 1px solid var(--datalib-border);
-  justify-content: flex-end;
-}
-.wiz-head h2 {
-  margin: 0;
-  font-size: 17px;
-  flex: 1;
-}
-.wiz-x {
-  background: none;
-  border: none;
-  color: var(--datalib-muted);
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-}
-.wiz-body {
-  padding: 16px 18px;
-  overflow-y: auto;
 }
 
 .wiz-filter,

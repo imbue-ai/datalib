@@ -33,6 +33,18 @@ import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
+import {
+  asking,
+  firstWindow,
+  MARGIN,
+  newestFirst,
+  nextFetch,
+  withNewer,
+  withoutPage,
+  withPage,
+  type PagedWindow,
+} from "@/grid/pagedWindow";
+import { EVERYTHING, scopeOf, withScope, type LogScope as Scope } from "@/grid/logScope";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
 import { type ProcessInfo, type RunInfo, type RunLogLine } from "@/api";
@@ -46,7 +58,12 @@ import {
 } from "./runLogSource";
 import { page as thisPage } from "@/telemetry";
 import { changed, subscribeLive } from "@/live";
-import { compareStamps, formatDateTime, formatRelative } from "@/config/timeFormat";
+import {
+  compareStamps,
+  formatDateTime,
+  formatRelative,
+  formatShortStamp,
+} from "@/config/timeFormat";
 
 const { fetchLog, fetchProcesses, fetchRuns, healthSnapshot } = useApi();
 
@@ -87,18 +104,20 @@ const emit = defineEmits<{
 const ALL_RUNS = "*";
 const LAUNCH_PREFIX = "launch:";
 
-/// The first picker: a run, a launch of the server or a page of the
-/// app, or everything. A run's value is its id; a launch's or a page's
-/// is prefixed, since all are UUIDs.
-const picked = ref(props.launchId ? `${LAUNCH_PREFIX}${props.launchId}` : props.runId);
-const allRuns = computed(() => picked.value === ALL_RUNS);
-const launchId = computed(() =>
-  picked.value.startsWith(LAUNCH_PREFIX) ? picked.value.slice(LAUNCH_PREFIX.length) : null,
+/// What the query narrows the log to (grid/logScope.ts): the pickers
+/// show it, and write it back into the query.
+const scope = computed(() => scopeOf(query.value));
+/// The first picker: a run, a launch of the server or a page of the app,
+/// or everything. A run's value is its id; a launch's or a page's is
+/// prefixed, since all are UUIDs.
+const picked = computed(
+  () =>
+    scope.value.run ??
+    (scope.value.processId ? `${LAUNCH_PREFIX}${scope.value.processId}` : ALL_RUNS),
 );
-const runId = computed(() => (allRuns.value || launchId.value ? null : picked.value));
-/// The second picker, within a run: one of its processes — the runner
-/// or a step's attempt — or the whole run (`null`).
-const processId = ref<string | null>(null);
+const allRuns = computed(() => picked.value === ALL_RUNS);
+const launchId = computed(() => (scope.value.run ? null : scope.value.processId));
+const runId = computed(() => scope.value.run);
 /// The runs the picker offers: the ones this step took part in, newest
 /// first, or every recent run when the panel is not about one step.
 const runs = ref<RunInfo[]>([]);
@@ -115,9 +134,17 @@ const launch = computed(() =>
 /// The processes of the run on screen: its runner and its steps'
 /// attempts, newest first.
 const runProcesses = ref<ProcessInfo[]>([]);
-const currentProcess = computed(
-  () => runProcesses.value.find((p) => p.process_id === processId.value) ?? null,
-);
+/// The second picker: one of the run's processes, the runner by its id
+/// or a step's attempt by its step and number, or the whole run (`null`).
+const currentProcess = computed(() => {
+  const s = scope.value;
+  if (!s.run) return null;
+  return (
+    runProcesses.value.find((p) =>
+      s.step ? p.step === s.step && p.attempt === s.attempt : p.process_id === s.processId,
+    ) ?? null
+  );
+});
 /// Whether what is on screen may still be writing — tail while it
 /// may: by whether the store has closed it, and until the lists say,
 /// a run or launch is taken as still going (tailing a finished one
@@ -155,8 +182,18 @@ const lineCount = ref(0);
 const busy = ref(false);
 const error = ref<string | null>(null);
 const panelEl = ref<HTMLElement | null>(null);
-/// The newest `seq` in the grid, which the next fetch resumes after.
-let lastSeq = 0;
+/// The lines the grid holds: the newest of the log, newest first, grown
+/// at the near end by the tail and at the far end a page at a time as the
+/// reader scrolls up (grid/pagedWindow.ts).
+let win: PagedWindow<RunLogLine, number> | null = null;
+/// Lines per page when opening or scrolling back.
+const LOG_PAGE = 500;
+/// Lines per request while catching up with the tail.
+const TAIL_PAGE = 5000;
+/// Bumped by every fresh load, so an older page asked for before it is
+/// dropped rather than put above lines it does not belong with.
+let generation = 0;
+const bySeq = (l: RunLogLine) => l.seq;
 const boxEl = ref<HTMLDivElement | null>(null);
 // The bundle types its grid and view as optional because they can be
 // asked for before `init`; here neither is handed out before both exist.
@@ -241,6 +278,18 @@ async function untilLetAlone() {
 /// The `seq` of the line the panel opened on, which its cells mark.
 let jumpedTo: number | null = null;
 
+/// Lines written after the newest one held, however many: the tail is
+/// read a page at a time until a page comes back short.
+async function tailLines(): Promise<RunLogLine[]> {
+  const out: RunLogLine[] = [];
+  for (;;) {
+    const after = out[out.length - 1]?.seq ?? win!.rows[0]?.seq ?? 0;
+    const got = await fetchLog({ q: query.value, afterSeq: after, limit: TAIL_PAGE });
+    out.push(...got);
+    if (got.length < TAIL_PAGE) return out;
+  }
+}
+
 async function load(fresh: boolean) {
   if (inflight) {
     if (fresh) freshPending = true;
@@ -248,30 +297,25 @@ async function load(fresh: boolean) {
     return;
   }
   inflight = true;
+  // Nothing held yet, after a first load that failed, say: the tail has
+  // nothing to follow on from.
+  fresh ||= win === null;
   if (fresh) {
-    lastSeq = 0;
+    generation++;
+    win = null;
     lineCount.value = 0;
     busy.value = true;
   }
   error.value = null;
   try {
-    // A step's attempt is shown by subject — what came out of it and
-    // what the runner said about it; a launch or the runner by author.
-    // A step opened before its first attempt started has no process to
-    // pick yet; its lines are still its own by name.
-    const attempt = currentProcess.value?.step ? currentProcess.value : null;
-    const byName = runId.value && !processId.value && props.step && !runProcesses.value.length;
-    const got = await fetchLog({
-      run: runId.value ?? undefined,
-      process: launchId.value ?? (attempt ? undefined : (processId.value ?? undefined)),
-      step: attempt?.step ?? (byName ? props.step! : undefined),
-      attempt: attempt?.attempt ?? undefined,
-      q: query.value,
-      afterSeq: lastSeq,
-    });
+    // A fresh load opens on the newest lines; the older ones come as the
+    // reader scrolls up to them.
+    const got = fresh ? await fetchLog({ q: query.value, limit: LOG_PAGE }) : await tailLines();
     await untilLetAlone();
+    win = fresh
+      ? firstWindow(newestFirst(got, LOG_PAGE, bySeq))
+      : withNewer(win!, [...got].reverse());
     if (got.length > 0) {
-      lastSeq = got[got.length - 1].seq;
       lineCount.value += got.length;
       // The box is shown once there is a count; the grid must be built
       // or resized after that paint, not before it.
@@ -279,8 +323,11 @@ async function load(fresh: boolean) {
       if (!bundle) {
         createGrid(got);
         if (props.jumpToEnd) jumpToEnd(got);
+        else bundle!.slickGrid.scrollRowIntoView(got.length - 1);
       } else if (fresh) {
         bundle.dataset = got;
+        atBottom = true;
+        bundle.slickGrid.scrollRowIntoView(got.length - 1);
       } else {
         // Appended rather than handed over as a new dataset, which would
         // redraw every row and lose the scroll; only the rows the new
@@ -341,6 +388,50 @@ function onScroll(_e: unknown, args: { grid: SlickGrid }) {
   const vp = args.grid.getViewportNode();
   if (!vp) return;
   atBottom = vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 2 * ROW_HEIGHT;
+  void loadOlder();
+}
+
+/// Lines from before the oldest one held, once the reader scrolls near
+/// it. Only while the lines are in the log's own order: sorted by another
+/// column or grouped, the top of the grid is not the oldest line, and the
+/// sort or the groups cover the lines held.
+async function loadOlder() {
+  if (!bundle || !win) return;
+  const grid = bundle.slickGrid;
+  if (grid.getSortColumns().length > 0 || (groupingPlugin?.columnsGroupBy.length ?? 0) > 0) {
+    return;
+  }
+  const top = grid.getViewport().top;
+  const fetch = nextFetch(win, win.rows.length - 1 - top + MARGIN, LOG_PAGE);
+  if (!fetch) return;
+  const asked = generation;
+  win = asking(win, fetch);
+  try {
+    const got = await fetchLog({ q: query.value, beforeSeq: fetch.from, limit: fetch.limit });
+    await untilLetAlone();
+    if (asked !== generation || !win || !bundle) return;
+    // A log page carries no commit (`at` is null on both), so it never
+    // comes back as "moved".
+    win = withPage(win, fetch.from, newestFirst(got, fetch.limit, bySeq)) as typeof win;
+    if (got.length === 0) return;
+    lineCount.value += got.length;
+    const { slickGrid, dataView } = bundle;
+    // The line at the top stays at the top: the older ones go above it,
+    // out of sight until the reader scrolls on.
+    const anchor = (dataView.getItem(slickGrid.getViewport().top) as RunLogLine | undefined)?.seq;
+    keepActiveOnRecord(slickGrid, dataView, () => {
+      redrawChanged(slickGrid, dataView, () => {
+        dataView.beginUpdate();
+        dataView.insertItems(0, got);
+        dataView.endUpdate();
+      });
+      const row = anchor == null ? undefined : dataView.getRowById(anchor);
+      if (row != null) slickGrid.scrollRowToTop(row);
+    });
+  } catch (e) {
+    if (asked === generation && win) win = withoutPage(win, fetch.from);
+    error.value = (e as Error).message;
+  }
 }
 
 function setQuery(q: string) {
@@ -374,23 +465,24 @@ async function loadRuns() {
   }
 }
 
-/// The run's processes, and — on a run just picked, or opened on a
-/// step — which of them to show: the step's newest attempt.
-async function loadProcesses(pickStep: string | null) {
-  if (!runId.value) {
+/// The processes of `run`, newest first, for the second picker.
+async function loadProcesses(run: string | null) {
+  if (!run) {
     runProcesses.value = [];
     return;
   }
   try {
-    runProcesses.value = await fetchProcesses({ run: runId.value, limit: 1000 });
+    runProcesses.value = await fetchProcesses({ run, limit: 1000 });
   } catch {
     runProcesses.value = [];
   }
-  if (pickStep) {
-    processId.value = runProcesses.value.find((p) => p.step === pickStep)?.process_id ?? null;
-  } else if (processId.value && !currentProcess.value) {
-    processId.value = null;
-  }
+}
+
+/// A run, opened on a step: its newest attempt, or the step by name
+/// before it has one.
+function onStep(run: string, step: string): Scope {
+  const newest = runProcesses.value.find((p) => p.step === step);
+  return { ...EVERYTHING, run, step, attempt: newest?.attempt ?? null };
 }
 
 function announce() {
@@ -405,19 +497,39 @@ function announce() {
   );
 }
 
-async function pickScope(ev: Event) {
-  picked.value = (ev.target as HTMLSelectElement).value;
-  processId.value = null;
-  await loadProcesses(props.step);
+/// Show `next` instead of what is on screen: written into the query,
+/// which is what the panel reads.
+function rescope(next: Scope) {
+  query.value = withScope(query.value, next);
   announce();
   void load(true);
 }
 
+async function pickScope(ev: Event) {
+  const value = (ev.target as HTMLSelectElement).value;
+  const next: Scope =
+    value === ALL_RUNS
+      ? EVERYTHING
+      : value.startsWith(LAUNCH_PREFIX)
+        ? { ...EVERYTHING, processId: value.slice(LAUNCH_PREFIX.length) }
+        : { ...EVERYTHING, run: value };
+  await loadProcesses(next.run);
+  rescope(next.run && props.step ? onStep(next.run, props.step) : next);
+}
+
 function pickProcess(ev: Event) {
-  const v = (ev.target as HTMLSelectElement).value;
-  processId.value = v === "" ? null : v;
-  announce();
-  void load(true);
+  const id = (ev.target as HTMLSelectElement).value;
+  const p = runProcesses.value.find((x) => x.process_id === id);
+  const run = scope.value.run;
+  // A step's attempt by subject: what came out of it and what the
+  // runner said about it. The runner by author.
+  rescope(
+    !p
+      ? { ...EVERYTHING, run }
+      : p.step
+        ? { ...EVERYTHING, run, step: p.step, attempt: p.attempt ?? null }
+        : { ...EVERYTHING, run, processId: p.process_id },
+  );
 }
 
 /// How a process reads in its picker: which step and attempt, or the
@@ -434,10 +546,16 @@ function processEnd(p: ProcessInfo): string {
   return "finished";
 }
 
+/// A picker entry's start: relative for "how stale", then the day and
+/// minute, since a dozen runs are all "3 days ago".
+function pickerWhen(iso: string): string {
+  return `${formatRelative(iso, Date.now())} · ${formatShortStamp(iso)}`;
+}
+
 /// How a launch reads: when it started, and whether it is the server
 /// serving this page.
 function launchLabel(l: ProcessInfo): string {
-  const when = formatRelative(l.started_at_utc, Date.now());
+  const when = pickerWhen(l.started_at_utc);
   const state = l.finished_at_utc == null ? "running" : "ended";
   const mine = l.process_id === healthSnapshot()?.process_id ? " · this server" : "";
   return `server started ${when} · ${state}${mine}`;
@@ -446,7 +564,7 @@ function launchLabel(l: ProcessInfo): string {
 /// How a page reads: when it opened, whether it is still open, and
 /// whether it is the one this panel is on.
 function pageLabel(p: ProcessInfo): string {
-  const when = formatRelative(p.started_at_utc, Date.now());
+  const when = pickerWhen(p.started_at_utc);
   const state = p.finished_at_utc == null ? "open" : "closed";
   const mine = p.process_id === thisPage.process_id ? " · this page" : "";
   return `page opened ${when} · ${state}${mine}`;
@@ -462,7 +580,7 @@ function shortRunId(id: string): string {
 /// How a run reads in the picker: when it started, and whether it is
 /// still going — the id itself is in the header for whoever needs it.
 function runLabel(r: RunInfo): string {
-  const when = formatRelative(r.started_at_utc, Date.now());
+  const when = pickerWhen(r.started_at_utc);
   return r.finished_at_utc == null ? `${when} · running` : when;
 }
 
@@ -874,6 +992,9 @@ function createGrid(first: RunLogLine[]) {
   // the grid card exposes the same thing as `__fwGridApi.groupBy`.
   (window as unknown as { __fwRunLogApi?: unknown }).__fwRunLogApi = {
     groupBy: (ids: string[]) => groupingPlugin?.setDroppedGroups(ids),
+    // Whether lines older than the oldest held are still to be read: a
+    // test scrolls up until they are not, and the top is the log's start.
+    hasOlder: () => win !== null && (win.next !== null || win.pending !== null),
   };
 }
 
@@ -884,22 +1005,27 @@ onMounted(async () => {
   // On the window, so a release outside the grid still ends the press.
   window.addEventListener("pointerup", onPointerUp, true);
   window.addEventListener("pointercancel", onPointerUp, true);
-  // The run's processes first, so a step opens on its attempt rather
-  // than on the run and then jumps; the pickers' lists with them, so
-  // the header can say what opened.
-  await Promise.all([loadProcesses(props.step), loadRuns()]);
-  announce();
-  void load(true);
+  // What the panel was opened on, written into its query. The run's
+  // processes first, so a step opens on its attempt rather than on the
+  // run and then jumps; the pickers' lists with them, so the header can
+  // say what opened.
+  const opening: Scope = props.launchId
+    ? { ...EVERYTHING, processId: props.launchId }
+    : props.runId === ALL_RUNS
+      ? EVERYTHING
+      : { ...EVERYTHING, run: props.runId };
+  await Promise.all([loadProcesses(opening.run), loadRuns()]);
+  rescope(opening.run && props.step ? onStep(opening.run, props.step) : opening);
   unsubscribe = subscribeLive(
     {
       root: (e) => {
         if (changed(e, "log") && live.value) void load(false);
         // A step's new attempt is a new process for the picker to offer.
-        if (changed(e, "runs")) void loadProcesses(null);
+        if (changed(e, "runs")) void loadProcesses(runId.value);
       },
       resync: () => {
         void loadRuns();
-        void loadProcesses(null);
+        void loadProcesses(runId.value);
         if (live.value) void load(false);
       },
     },
@@ -970,7 +1096,7 @@ onUnmounted(() => {
       <select
         v-if="runId && runProcesses.length"
         class="rl-run"
-        :value="processId ?? ''"
+        :value="currentProcess?.process_id ?? ''"
         aria-label="Which process of the run"
         @change="pickProcess"
       >

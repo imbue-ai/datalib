@@ -12,25 +12,16 @@
 //! test replays the runner's own arithmetic over the events a run
 //! emits and asserts the count reaches zero once, at the end.
 
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::{Progress, ProgressSink};
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_slack::ingest::{db_path_for, fetch, FetchOptions, RawDb};
-use datalib_etl_slack::synthesize::SlackSynth;
+use datalib_etl_slack::ingest::FetchOptions;
+use datalib_etl_slack::recorded::record_workspace;
 use serde_json::{json, Value};
-use tempfile::tempdir;
-use tokio::sync::Mutex as AsyncMutex;
 
-/// `PLAYBACK_ENV` is process-global, so this cannot run beside the other
-/// playback tests.
-static ENV_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
+use crate::support::{fetch_into, Tree};
 
-const TS_SINCE: &str = "1704067200.000000";
-const CHANNEL_TYPES: &str = "public_channel,private_channel";
 const CHANNELS: [&str; 3] = ["C1", "C2", "C3"];
 const PER_CHANNEL: usize = 4;
 
@@ -82,31 +73,16 @@ impl Recorder {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_count_reaches_zero_once_at_the_end_not_after_the_first_channel() {
-    let _guard = ENV_LOCK.lock().await;
-    let d = tempdir().unwrap();
-    let api = d.path().join("input_raw");
-    let playback = d.path().join("playback");
-    let out = d.path().join("out_raw");
-
-    write_fixtures(&api);
-    SlackSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
+    let t = Tree::new();
+    record_workspace(&t.api, &CHANNELS, messages).unwrap();
+    t.serve();
 
     let recorder = Recorder::default();
-    let db = RawDb::open(&db_path_for(&out)).await.unwrap();
-    let result = fetch(FetchOptions {
-        channels: None,
-        since: "2024-01-01".into(),
-        refresh_window_days: 0,
-        members_only: false,
-        media: false,
-        dms: false,
+    let result = fetch_into(&t.out, |o| FetchOptions {
         progress: Progress::new(Arc::new(recorder.clone())),
-        ..FetchOptions::new(db.clone())
+        ..o
     })
     .await;
-    db.commit_all("test").await.unwrap();
-    db.close().await;
     std::env::remove_var(PLAYBACK_ENV);
 
     let summary = result.expect("slack fetch under playback");
@@ -143,78 +119,15 @@ async fn the_count_reaches_zero_once_at_the_end_not_after_the_first_channel() {
     );
 }
 
-// ── fixtures ────────────────────────────────────────────────────────
-
-fn write_envelope(path: &Path, line: &Value) {
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let mut s = serde_json::to_string(line).unwrap();
-    s.push('\n');
-    std::fs::write(path, s).unwrap();
-}
-
-fn write_fixtures(api: &Path) {
-    write_envelope(
-        &api.join("raw_api/auth.test/run-1.jsonl"),
-        &json!({
-            "method": "auth.test", "params": {},
-            "response": {"ok": true, "user_id": "U1", "team": "Enterprise", "team_id": "T1"},
-        }),
-    );
-    write_envelope(
-        &api.join("raw_api/users.list/run-1.jsonl"),
-        &json!({
-            "method": "users.list",
-            "params": {"limit": "200"},
-            "response": {"ok": true, "members": [
-                {"id": "U1", "name": "picard", "real_name": "Jean-Luc Picard"},
-            ]},
-        }),
-    );
-    write_envelope(
-        &api.join("raw_api/conversations.list/all.jsonl"),
-        &json!({
-            "method": "conversations.list",
-            "params": {
-                "exclude_archived": "true",
-                "limit": "200",
-                "types": CHANNEL_TYPES,
-            },
-            "response": {
-                "ok": true,
-                "channels": CHANNELS.iter().enumerate().map(|(i, id)| json!({
-                    "id": id,
-                    "name": format!("deck-{i}"),
-                    "is_channel": true,
-                    "is_member": true,
-                    "is_archived": false,
-                })).collect::<Vec<_>>(),
-                "has_more": false,
-            },
-        }),
-    );
-    for (i, channel) in CHANNELS.iter().enumerate() {
-        let messages: Vec<Value> = (0..PER_CHANNEL)
-            .map(|m| {
-                json!({
-                    "ts": format!("17356896{:02}.0001{:02}", i, m),
-                    "user": "U1",
-                    "text": format!("message {m} in {channel}"),
-                })
+/// Channel `i`'s page: [`PER_CHANNEL`] messages from Picard.
+fn messages(i: usize, channel: &str) -> Value {
+    (0..PER_CHANNEL)
+        .map(|m| {
+            json!({
+                "ts": format!("17356896{:02}.0001{:02}", i, m),
+                "user": "U1",
+                "text": format!("message {m} in {channel}"),
             })
-            .collect();
-        write_envelope(
-            &api.join(format!("raw_api/conversations.history/{channel}.jsonl")),
-            &json!({
-                "method": "conversations.history",
-                "params": {
-                    "channel": channel,
-                    "include_all_metadata": "true",
-                    "inclusive": "true",
-                    "limit": "200",
-                    "oldest": TS_SINCE,
-                },
-                "response": {"ok": true, "messages": messages, "has_more": false},
-            }),
-        );
-    }
+        })
+        .collect()
 }

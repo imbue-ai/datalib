@@ -54,11 +54,11 @@ const tabLabel = (child: TileNode) =>
       title="drag to move this card"
       @pointerdown="(e) => api.startDrag(node.id, e)"
     />
-    <div class="tiling-chrome" :class="{ 'tiling-chrome--title': !devMode }">
+    <div class="tiling-chrome card-chrome" :class="{ 'card-chrome--title': !devMode }">
       <textarea
         v-if="devMode"
         v-auto-grow
-        class="tiling-source"
+        class="tiling-source card-source"
         rows="1"
         :value="node.source"
         spellcheck="false"
@@ -66,7 +66,7 @@ const tabLabel = (child: TileNode) =>
         @input="growSourceBox($event.target as HTMLTextAreaElement)"
         @keydown.enter.exact.prevent="api.commitSource(node, $event)"
       />
-      <div v-else class="tiling-title">{{ api.titleFor(node) }}</div>
+      <div v-else class="tiling-title card-title">{{ api.titleFor(node) }}</div>
       <CardControls :source="node.source" :ctx="api.ctxFor(node)" />
     </div>
     <!-- Empty slot: the host teleports this leaf's persistent card here
@@ -182,6 +182,7 @@ const tabLabel = (child: TileNode) =>
   </div>
 </template>
 
+<style scoped src="./cardChrome.css"></style>
 <style scoped>
 /* `--tiling-edge` is the shared "chrome" color: container borders and
    the drag grips all use it, so they read as one family. A muted brown
@@ -453,62 +454,6 @@ const tabLabel = (child: TileNode) =>
   background: var(--datalib-accent);
 }
 
-.tiling-chrome {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: flex-start;
-  gap: 0.4rem;
-  padding: 0.3rem 0.5rem;
-  border-bottom: 1px solid #888;
-  background: rgba(0, 0, 0, 0.08);
-}
-.tiling-chrome:focus-within {
-  background: rgba(99, 102, 241, 0.18);
-}
-/* Non-dev: accent-washed title bar, title inked in the accent (see
-   MillerView for the mixing rationale). */
-.tiling-chrome--title {
-  background: color-mix(in srgb, var(--datalib-accent) 16%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--datalib-accent) 55%, transparent);
-  color: color-mix(in srgb, var(--datalib-accent) 70%, var(--datalib-fg));
-}
-.tiling-source {
-  flex: 1 1 auto;
-  font:
-    12px/1.5 ui-monospace,
-    Menlo,
-    monospace;
-  padding: 0.2rem 0.4rem;
-  border: none;
-  border-radius: 3px;
-  background: transparent;
-  color: inherit;
-  min-width: 0;
-  resize: none;
-  overflow: hidden;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-  box-sizing: border-box;
-  display: block;
-}
-.tiling-source:focus {
-  outline: none;
-}
-/* Non-dev chrome: the card's human-readable title where the source
-   box would be. Styled as a heading (proportional, semibold) so it
-   reads as a title, not code; the 18px line box matches the source
-   box's 12px × 1.5 so toggling dev mode doesn't reflow the bar. */
-.tiling-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 18px;
-  padding: 0.2rem 0.4rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 /* Slot the host teleports the card into; a flex container so the
    mounted card fills it. */
 .tiling-card {

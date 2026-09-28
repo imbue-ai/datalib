@@ -98,7 +98,7 @@ fn run() -> Result<()> {
         // this applet only serves the endpoints behind them.
         Which::UnifiedIndex => {
             let port = cli.port.context("-p <port> is required")?;
-            unified_index::serve(port, &params)
+            unified_index::serve(port)
         }
     }
 }

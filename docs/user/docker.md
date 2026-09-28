@@ -170,8 +170,18 @@ inputs = ["gmail/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
+function = "qmd_aggregator"
+inputs = ["gmail/keyword_index", "gmail/embed"]
+
+[[steps]]
+group = "gmail"
+function = "keyword_index"
 inputs = ["gmail/render_markdown"]
+
+[[steps]]
+group = "gmail"
+function = "embed"
+inputs = ["gmail/keyword_index"]
 
 [[applets]]
 group = "unified_index"
@@ -191,7 +201,7 @@ docker run --rm \
   "$IMG" datalib-dag /data/config.toml
 ```
 
-The last step embeds every message for semantic search, which on a
+The `embed` step embeds every message for semantic search, which on a
 laptop CPU takes roughly five to ten minutes per thousand messages. It
 is resumable: Ctrl-C, run the same command again, and it picks up where
 it stopped. Then serve it, mounting the export again so **Sync all**

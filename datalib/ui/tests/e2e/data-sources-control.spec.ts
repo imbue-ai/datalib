@@ -23,6 +23,7 @@ import {
   groupRow,
   pickRowMenu,
   pipelineRow as row,
+  readRow,
   rowMenuEntry,
   settleRow,
   settleRunner,
@@ -126,10 +127,17 @@ const stoppingBtn = (page: Page, rowId: string) =>
 
 /// Start a source from its group's row, and wait for its request to have
 /// been written: `click()` resolves when the event is dispatched, not
-/// when the POST behind it returns.
+/// when the POST behind it returns. Waits on the POST itself, not on the
+/// "Queued a sync for" banner, which comes down when the request closes:
+/// a sync nothing holds (the PDF folder, a released tape) can close
+/// before a check for the banner first looks.
 async function start(page: Page, s: Source) {
+  const written = page.waitForResponse(
+    (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/requests",
+  );
   await syncBtn(page, `group:${s.id}`).click();
-  await expect(page.getByText(/Queued a sync for/)).toBeVisible();
+  const response = await written;
+  expect(response.ok(), `the sync request for ${s.id}: ${response.status()}`).toBe(true);
 }
 
 /// A row's status icon reading `word`, as a locator to wait on.
@@ -146,6 +154,23 @@ async function untilRunning(page: Page, id: string, timeout = 45_000) {
       message: `${id} never reached Running`,
     })
     .toBe("Running");
+}
+
+/// Wait until a download not held by the tape has started: Running, or
+/// already finished a run newer than `before`. A local folder is read in
+/// well under a second on a fast runner, between two samples.
+async function untilStarted(page: Page, id: string, before: string | null, timeout = 45_000) {
+  await expect
+    .poll(
+      async () => {
+        const { status, lastSynced } = await readRow(page, id);
+        if (status === "Running") return "started";
+        const finished = status === "Succeeded" && lastSynced !== before;
+        return finished ? "started" : status;
+      },
+      { timeout, intervals: [200], message: `${id} never started` },
+    )
+    .toBe("started");
 }
 
 /// Wait until a request has closed in one of the given states.
@@ -305,22 +330,18 @@ test.describe("sources run independently", () => {
     await expect(stopBtn(page, `group:${CHATGPT.id}`)).toBeVisible();
 
     // ── 2. add a second source while the first is still going ─────────
-    // Saving the config rewrites the file under a live loop. The loop
-    // read it when this sync began and must not notice; the row must
+    // Saving the config rewrites the file under a live loop, which takes
+    // the new config on without disturbing the first sync: its row must
     // still say Running once the table is remounted from the new config
     // — and with the tape held, it can say nothing else.
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
     await untilRunning(page, ingestOf(CHATGPT), 10_000);
     const claudeWas = await stampsBefore(page, [ingestOf(CLAUDE), renderOf(CLAUDE)]);
     await start(page, CLAUDE);
-    // The second source is taken on at once, and the first is not
-    // disturbed by it. It was added to the config after the loop loaded
-    // it, so it waits, Queued, for the next time the loop loads it — the
-    // end of the first source's sync; a source the loaded config already
-    // has runs beside it at once (the last test in this file).
-    await expect
-      .poll(() => statusOf(page, ingestOf(CLAUDE)), { timeout: 5_000 })
-      .toMatch(/^(Queued|Running)$/);
+    // Added to the config after this sync began, the second source still
+    // runs beside the first rather than behind it (plans/supervisor.md
+    // 4d), and the first is not disturbed by it.
+    await untilRunning(page, ingestOf(CLAUDE), 10_000);
     expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
     await expect(stopBtn(page, `group:${CLAUDE.id}`)).toBeVisible();
     console.log(
@@ -333,11 +354,9 @@ test.describe("sources run independently", () => {
     await untilRunning(page, ingestOf(CHATGPT), 10_000);
     const pdfsWas = await stampsBefore(page, [ingestOf(PDFS), renderOf(PDFS)]);
     await start(page, PDFS);
-    await expect
-      .poll(() => statusOf(page, ingestOf(PDFS)), { timeout: 5_000 })
-      .toMatch(/^(Queued|Running)$/);
+    await untilStarted(page, ingestOf(PDFS), pdfsWas[ingestOf(PDFS)], 10_000);
     expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
-    expect(await statusOf(page, ingestOf(CLAUDE))).toMatch(/^(Queued|Running)$/);
+    expect(await statusOf(page, ingestOf(CLAUDE))).toBe("Running");
 
     // ── every source finishes, in whatever order the loop took them ───
     release();
@@ -526,13 +545,18 @@ test.describe("steering one source among several", () => {
     expect(when[ingestOf(CLAUDE)], `runner: ${JSON.stringify(when)}`).toBe("running");
   });
 
-  test("a backlogged step can be put on ice, and taken off it", async ({ page }) => {
-    // A step paused from its row's menu is not started, and what reads
-    // it waits; the sync of its source runs everything else and closes.
-    // Resumed, the next sync takes it on.
+  test("a backlogged step can be turned off, and turned back on", async ({ page }) => {
+    // A step switched off on its row is not started, and what reads it
+    // waits; the sync of its source runs everything else and closes.
+    // Turned back on from the menu, the next sync takes it on.
     await writeConfigAndOpen(page, [PDFS]);
-    await pickRowMenu(page, row(page, INDEX), "Pause", statusFace(page, INDEX, "Paused"));
-    expect(await statusOf(page, INDEX)).toBe("Paused");
+    const inSyncs = row(page, INDEX).getByRole("switch", { name: "Runs in syncs" });
+    await expect(inSyncs).toHaveAttribute("aria-checked", "true");
+    await expect(inSyncs).toHaveAttribute("title", /^On: it runs in syncs/);
+    await inSyncs.click();
+    await expect(statusFace(page, INDEX, "Off")).toBeVisible();
+    await expect(inSyncs).toHaveAttribute("aria-checked", "false");
+    await expect(inSyncs).toHaveAttribute("title", /^Off: you turned it off/);
 
     const was = await stampsBefore(page, [ingestOf(PDFS), renderOf(PDFS), INDEX]);
     await start(page, PDFS);
@@ -541,13 +565,14 @@ test.describe("steering one source among several", () => {
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
     await untilClosed(page.request, PDFS, ["done"]);
-    expect(await statusOf(page, INDEX)).toBe("Paused");
-    expect(await stampOf(page, INDEX), "a paused step took no part").toBe(was[INDEX]);
+    expect(await statusOf(page, INDEX)).toBe("Off");
+    expect(await stampOf(page, INDEX), "a step turned off took no part").toBe(was[INDEX]);
 
-    await (await rowMenuEntry(page, row(page, INDEX), "Resume").open()).click();
+    await (await rowMenuEntry(page, row(page, INDEX), "Turn on").open()).click();
     await expect
       .poll(() => statusOf(page, INDEX), { timeout: 10_000, intervals: [200] })
-      .not.toBe("Paused");
+      .not.toBe("Off");
+    await expect(inSyncs).toHaveAttribute("aria-checked", "true");
     const again = await stampsBefore(page, [INDEX]);
     await start(page, PDFS);
     const st = await settleRow(page, INDEX, again[INDEX], 120_000);

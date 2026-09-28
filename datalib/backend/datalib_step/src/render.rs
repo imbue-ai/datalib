@@ -125,19 +125,25 @@ pub async fn run(
     // backups (`restic --exclude-caches` etc.) may skip it. No-op until
     // the first render materializes the dir.
     datalib_core::layout::mark_derived_cache(&rendered_root);
-    // The store's HEAD is the tree's content version: doltlite advances
-    // it only when a commit changed something, so a run that rewrote
-    // nothing reports the same string. Without doltlite there is nothing
-    // content-derived to vouch for, and the runner hashes the tree.
-    Ok(report
+    Ok(claims(&env.step, &report))
+}
+
+/// What a render reports: its store's HEAD, the tree's content version.
+/// Doltlite advances it only when a commit changed something, so a run
+/// that rewrote nothing reports the same string, and it is spelled as each
+/// seal spells its commit, so finishing on the commit last sealed moves
+/// nothing downstream. Without doltlite there is nothing content-derived
+/// to vouch for, and every success reads as new.
+pub fn claims(step: &str, report: &RenderReport) -> Vec<OutputClaim> {
+    report
         .head
+        .iter()
         .map(|h| OutputClaim {
-            path: env.step.clone(),
-            version: format!("store:{h}"),
+            path: step.to_string(),
+            version: h.clone(),
             rows: Some(report.unsealed),
         })
-        .into_iter()
-        .collect())
+        .collect()
 }
 
 /// One source's render, as the core takes it: everything the step shell
@@ -889,7 +895,7 @@ mod plan_tests {
             .source_label("Test")
             .conversation_uuid(uuid)
             .entire_chat(format!("/chat/{uuid}"))
-            .text("body")
+            .body("body")
             .markdown_uuid(Some(uuid.to_string()))
             .is_document(true)
             .build()
@@ -1020,7 +1026,7 @@ mod stale_tree_tests {
             .source_label("Test")
             .conversation_uuid(chat_uuid)
             .entire_chat(format!("/chat/{chat_uuid}"))
-            .text("body")
+            .body("body")
             .markdown_uuid(Some(chat_uuid.to_string()))
             .is_document(true)
             .build()
@@ -1218,6 +1224,29 @@ mod stale_tree_tests {
         );
 
         assert_eq!(declared_render_versions(&[]), None);
+    }
+
+    /// The loop re-runs a built-in step when the shape of the store it
+    /// writes moves, by its table in the dag config. A table that lags the
+    /// DDL is the bug it exists to prevent: the step stays up to date, its
+    /// store keeps the old shape, and the grid index cannot read it.
+    #[test]
+    fn builtin_store_shapes_are_the_ddl_the_step_writes() {
+        use datalib_dag::config::builtin_store_shape;
+        for (function, actual) in [
+            (
+                "render_markdown",
+                datalib_etl_render::indexed_markdown::schema_hash(),
+            ),
+            ("grid_index", datalib_etl_render::grid_index::schema_hash()),
+        ] {
+            assert_eq!(
+                builtin_store_shape(function),
+                Some(actual.as_str()),
+                "the store `{function}` writes changed shape: set its entry in \
+                 datalib_dag::config::BUILTIN_STORE_SHAPES to {actual:?}"
+            );
+        }
     }
 
     /// The render store's own DDL hash rides in the params under a key

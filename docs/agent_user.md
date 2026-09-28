@@ -24,9 +24,13 @@ Everything lives under one **data root** directory. A sync is a DAG of
 steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
 `<group>/ingest` step (bring the raw data in) and a
 `<group>/render_markdown` step (raw → markdown + a per-source index
-database), then two shared fan-in steps under the `unified_index`
-group — `grid_index` (SQL index) and `qmd_index` (semantic search
-index). A step's function is the directory it writes:
+database), `grid_index` under the `unified_index` group (the SQL
+index), and, for a searched source, `<group>/keyword_index` and
+`<group>/embed`, which fill that source's collection of the search
+index. `unified_index/qmd_aggregator` runs after every source's pair
+and keeps the search index to the sources it names. A step's function
+is the directory it writes (the qmd steps are the exception: they all
+write the one index file under `unified_index/qmd_index/`):
 
 ```
 <data_root>/
@@ -40,7 +44,7 @@ index). A step's function is the directory it writes:
 │   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
 │   └── qmd_index/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
-    ├── supervisor.sqlite           # sync requests, pauses, and the loop's record (plain SQLite)
+    ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
     ├── api-token                   # this process's bearer token
     ├── feedback.doltlite_db        # filed feedback (nothing regenerates it)
     └── usage.doltlite_db           # bytes-on-disk timeseries
@@ -158,34 +162,35 @@ a shell with no server needed, or over HTTP while the app is up.
 |---|---|---|
 | sync | `datalib-dag <config> --sync <step> --by claude` | `POST /api/requests {"roots": ["<step>"], "by": "claude"}` (no roots: every source) |
 | stop a sync | `datalib-dag stop <config> <request-id> --by claude` | `POST /api/requests/<id>/stop {"by": "claude"}` |
-| pause a step | `datalib-dag pause <config> <step> --by claude` | `POST /api/steps/<step>/pause {"by": "claude"}` (`/` in the id as `%2F`) |
-| resume it | `datalib-dag resume <config> <step>` | `POST /api/steps/<step>/resume` |
+| turn a step off | `datalib-dag turn-off <config> <step> --by claude` | `POST /api/steps/<step>/turn_off {"by": "claude"}` (`/` in the id as `%2F`) |
+| turn it on | `datalib-dag turn-on <config> <step>` | `POST /api/steps/<step>/turn_on` |
 
-`<config>` is `<data_root>/config.toml`. A stop, a pause and a resume
-take effect within a second. A pause stops a step that is running,
-keeps it from starting until it is resumed, and makes whatever reads it
-wait. It does not hold a sync open: a sync whose only work is a paused
-step closes without running it. `POST /api/requests` answers once the
+`<config>` is `<data_root>/config.toml`. A stop, a turn-off and a
+turn-on take effect within a second. Turning a step off (the switch on
+its Manage row) stops it if it is running, skips it in every sync until
+it is turned on, and makes whatever reads it wait. It does not hold a
+sync open: a sync whose only work is a step turned off closes without
+running it. Turning it on starts nothing by itself. `POST /api/requests` answers once the
 loop has taken the request on, with the request's `id`.
 
 **Watching.** `GET /api/requests` lists the open requests, then the
 newest closed ones: each with its `roots`, `by`, and `state` (`open`, or
 how it ended: `done`, `failed`, `stopped`). `datalib-dag status
-<config>` prints the same from the shell, with the pauses and the steps
+<config>` prints the same from the shell, with the steps turned off and the steps
 running now. What each step is doing is in the loop's record, which the
 Manage screen's Status column reads directly:
 
 ```sh
 sqlite3 <data_root>/system/supervisor.sqlite \
-  'select step, state, state_detail, paused_by, request from steps'
+  'select step, state, state_detail, turned_off_by, request from steps'
 ```
 
-`state` is `running`, `waiting` (on what: `state_detail`), `paused`,
+`state` is `running`, `waiting` (on what: `state_detail`), `off`,
 `blocked`, `failed`, or at rest (`idle`, `stale`, `fresh`); `request` is
-the open request it is being run for. Each request and pause records
-who made it, so the screen shows "paused by claude" or "Stop the sync of
-Work Slack, started by claude". **Don't resume or stop what a person
-started without saying so.**
+the open request it is being run for. Each request and each step turned
+off records who did it, so the screen shows "turned off by claude" or
+"Stop the sync of Work Slack, started by claude". **Don't turn on or stop
+what a person started without saying so.**
 
 **Resetting** empties what a source downloaded: every row of its store
 goes (with `+blobs`, its attachments too), and the doltlite history
@@ -222,10 +227,11 @@ Pick the surface that fits the question:
   `unified_index/grid_index/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
   `created_at`, `modified_at`, `author`, `channel`, `conversation_uuid`,
-  `text`, `entire_chat`, etc. `is_document = 1` picks the one row per
-  rendered document — the thread, the conversation, the PR, the page —
-  and leaves out the messages inside them, which is usually the row
-  count you meant.
+  `preview` (the first 240 characters of the row's text; the whole text
+  is in the rendered markdown), `entire_chat`, etc. `is_document = 1`
+  picks the one row per rendered document — the thread, the
+  conversation, the PR, the page — and leaves out the messages inside
+  them, which is usually the row count you meant.
 
   Read it with **`datalib-doltlite`**, which is in the release tarball
   and so sits next to `datalib-dag` in `~/.local/bin` (it is plain
@@ -273,15 +279,26 @@ Pick the surface that fits the question:
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
   `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:
-  `field:value`, `-field:value`, quoted values; fields include
-  `source:`, `source_id:` (`source_name:` is an accepted alias),
-  `kind:`, `channel:`, `author:`, `account:`,
-  `project:`, `before:`/`after:`, `convo:`, `is:document` for the one
-  row per rendered document and `-is:document` for the rows inside
-  them), `GET /api/log?q=…` (the
-  runner's log lines in the same grammar — keys `run:`, `step:`,
+  `field:value`, `-field:value`, quoted values, `field:*` for the rows
+  with any value there and `-field:*` for the rows with none; fields
+  are `source:`, `source_id:` (`source_name:` is an accepted alias),
+  `kind:`, `channel:`, `author:`, `account:`, `project:`, `convo:`,
+  `notion_page:`, `change:`, and a grid column's id for the rest
+  (`org_name:`, `byte_size:`, `created_at:`, …); `before:`/`after:`;
+  `is:document` for the one row per rendered document and
+  `-is:document` for the rows inside them. A key the search does not
+  have is refused by name, in `errors`, rather than ignored. It answers a page: `limit=` rows from `offset=`, with `total`
+  and the `next_offset`; `sort=created_at:desc,author` orders by grid
+  columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`
+  counts the groups, and `within=[["kind","Chat"]]` on `search` lists
+  one group), `GET /api/log?q=…` (the
+  runner's log lines in the same grammar — keys `run:`, `process_id:`,
+  `step:`, `attempt:`,
   `level:`, `stream:`, `target:`, `thread:`, `msg:`; free text is a
-  substring of the line; `run=`/`step=` narrow it, `after_seq=` tails),
+  substring of the line; `run:`, `process_id:`, `step:` and `attempt:`
+  narrow it to a run, a process or a step's attempt; the newest `limit=`
+  lines, oldest first, with `before_seq=` paging back and `after_seq=`
+  tailing),
   `GET /applet/unified_index/docs`, `GET /applet/unified_index/chat/{uuid}`,
   `GET /applet/unified_index/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.

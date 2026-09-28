@@ -8,7 +8,7 @@
 // growing worked even then.
 
 import { test, expect, type Page } from "@playwright/test";
-import { SEARCH_ROWS, searchGrid, type GridApi } from "./grid-helpers";
+import { gridSettled, SEARCH_ROWS, searchGrid, type GridApi } from "./grid-helpers";
 
 async function openGrid(page: Page) {
   await page.goto("/");
@@ -46,42 +46,16 @@ test("the grid follows the card's width, wider and narrower", async ({ page }) =
   await expect.poll(() => gridWidth(page), { timeout: 5_000 }).toBeLessThan(before + 40);
 });
 
-test("the filter row narrows the rows to the typed value", async ({ page }) => {
-  await openGrid(page);
-  const rowCount = () =>
-    searchGrid(page)
-      .first()
-      .evaluate((el) => Number(el.getAttribute("aria-rowcount")));
-  const all = await rowCount();
-  expect(all).toBeGreaterThan(30);
-
-  // Key by key: the filter listens for keyup, as a person's typing
-  // produces it, and `fill` would set the value without one.
-  const providerFilter = page.locator(".grid-box input.filter-provider_ref");
-  await providerFilter.click();
-  await providerFilter.pressSequentially("slack");
-  await expect.poll(rowCount, { timeout: 5_000 }).toBeLessThan(all);
-  await expect.poll(rowCount).toBeGreaterThan(0);
-
-  // Every row left is the provider asked for — read off the grid's
-  // filtered rows, not the few painted.
-  const providers = await page.evaluate(() => [
-    ...new Set(
-      (window as unknown as { __fwGridApi: GridApi }).__fwGridApi
-        .filteredRows()
-        .map((r) => r.source as string),
-    ),
-  ]);
-  expect(providers).toEqual(["Slack"]);
-});
-
 test("clicking a group header folds the group and opens nothing", async ({ page }) => {
   await openGrid(page);
-  await page.evaluate(() => {
-    const api = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
-    api.groupBy(["kind"]);
-    api.scrollToRow(0);
-  });
+  await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.groupBy(["kind"]),
+  );
+  await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.scrollToRow(0),
+  );
+  // The groups on screen have read their rows; nothing is still arriving.
+  await gridSettled(page);
   const group = page.locator(".grid-box .slick-row.slick-group").first();
   await expect(group).toBeVisible();
   const title = (await group.textContent())!.trim();

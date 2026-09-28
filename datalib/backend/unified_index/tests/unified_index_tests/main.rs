@@ -10,3 +10,4 @@ mod fixture_db_snapshot;
 mod qmd_daemon_scope;
 mod qmd_index_state;
 mod qmd_mapping;
+mod qmd_vectors;

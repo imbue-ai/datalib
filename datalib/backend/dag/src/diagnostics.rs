@@ -59,6 +59,7 @@ pub enum EntryKind {
     Group,
     Step,
     Applet,
+    Lock,
 }
 
 impl EntryKind {
@@ -67,6 +68,7 @@ impl EntryKind {
             EntryKind::Group => "group",
             EntryKind::Step => "step",
             EntryKind::Applet => "applet",
+            EntryKind::Lock => "lock",
         }
     }
 }
@@ -101,6 +103,13 @@ impl EntryRef {
             kind: EntryKind::Step,
             index: None,
             id: Some(id.into()),
+        }
+    }
+    pub fn lock(index: usize, name: Option<String>) -> Self {
+        EntryRef {
+            kind: EntryKind::Lock,
+            index: Some(index),
+            id: name,
         }
     }
     pub fn applet(index: usize, id: Option<String>) -> Self {

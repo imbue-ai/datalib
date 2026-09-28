@@ -352,18 +352,18 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
         :data-slot-id="slot.id"
         :style="{ width: (slot.width ?? DEFAULT_WIDTH) + 'px' }"
       >
-        <div class="miller-col-chrome" :class="{ 'miller-col-chrome--title': !devMode }">
+        <div class="miller-col-chrome card-chrome" :class="{ 'card-chrome--title': !devMode }">
           <textarea
             v-if="devMode"
             v-auto-grow
-            class="miller-col-source"
+            class="miller-col-source card-source"
             rows="1"
             :value="slot.source"
             spellcheck="false"
             @input="growSourceBox($event.target as HTMLTextAreaElement)"
             @keydown.enter.exact.prevent="commitSource(slot, $event)"
           />
-          <div v-else class="miller-col-title">
+          <div v-else class="miller-col-title card-title">
             {{ displayTitle(slot.source, slot.title) }}
           </div>
           <CardControls :source="slot.source" :ctx="ctxFor(slot)" />
@@ -381,6 +381,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
   </div>
 </template>
 
+<style scoped src="./cardChrome.css"></style>
 <style scoped>
 .miller-root {
   display: flex;
@@ -423,67 +424,6 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
   height: 100%;
   cursor: col-resize;
   z-index: 1;
-}
-.miller-col-chrome {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: flex-start;
-  gap: 0.4rem;
-  padding: 0.3rem 0.5rem;
-  border-bottom: 1px solid #888;
-  background: rgba(0, 0, 0, 0.08);
-}
-/* Highlight the whole header while the source box is being edited —
-   a tinted box inside the gray bar looks patchy. */
-.miller-col-chrome:focus-within {
-  background: rgba(99, 102, 241, 0.18);
-}
-/* Non-dev: an accent-washed title bar with the title and controls
-   inked in the accent itself. Mixing the accent toward --datalib-fg keeps
-   the ink readable in both themes: it darkens on the light ground and
-   lightens on the dark one. */
-.miller-col-chrome--title {
-  background: color-mix(in srgb, var(--datalib-accent) 16%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--datalib-accent) 55%, transparent);
-  color: color-mix(in srgb, var(--datalib-accent) 70%, var(--datalib-fg));
-}
-.miller-col-source {
-  flex: 1 1 auto;
-  font:
-    12px/1.5 ui-monospace,
-    Menlo,
-    monospace;
-  padding: 0.2rem 0.4rem;
-  border: none;
-  border-radius: 3px;
-  background: transparent;
-  color: inherit;
-  min-width: 0;
-  /* Soft-wrap multi-line source; height is managed by growSourceBox. */
-  resize: none;
-  overflow: hidden;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-  box-sizing: border-box;
-  display: block;
-}
-.miller-col-source:focus {
-  outline: none;
-}
-/* Non-dev chrome: the card's human-readable title where the source
-   box would be. Styled as a heading (proportional, semibold) so it
-   reads as a title, not code; the 18px line box matches the source
-   box's 12px × 1.5 so toggling dev mode doesn't reflow the bar. */
-.miller-col-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 18px;
-  padding: 0.2rem 0.4rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .miller-col-card {
   flex: 1 1 auto;

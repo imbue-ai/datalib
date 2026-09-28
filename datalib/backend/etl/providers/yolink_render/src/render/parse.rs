@@ -1,6 +1,5 @@
 //! Read the whole YoLink raw store into memory for the renderer.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -203,18 +202,4 @@ async fn load_scope_config(pool: &SqlitePool) -> Vec<ScopeConfigRow> {
             updated_at: r.get::<String, _>("updated_at"),
         })
         .collect()
-}
-
-impl ParsedYolink {
-    pub fn series_by_device(&self) -> BTreeMap<&str, Vec<&Series>> {
-        datalib_etl_timeseries_render::series::by_device(&self.series)
-    }
-
-    pub fn latest_ts_ms(&self) -> Option<i64> {
-        datalib_etl_timeseries_render::series::latest_ts_ms(&self.series)
-    }
-
-    pub fn earliest_ts_ms(&self) -> Option<i64> {
-        datalib_etl_timeseries_render::series::earliest_ts_ms(&self.series)
-    }
 }

@@ -1,8 +1,10 @@
 // The one node API the e2e specs need, declared rather than imported.
 declare module "node:fs" {
   export function copyFileSync(src: string, dest: string): void;
+  export function existsSync(path: string): boolean;
+  export function mkdirSync(dir: string, options?: { recursive?: boolean }): void;
   export function readdirSync(dir: string): string[];
   export function readFileSync(file: string, encoding: "utf8"): string;
-  export function rmSync(path: string, options?: { force?: boolean }): void;
+  export function rmSync(path: string, options?: { force?: boolean; recursive?: boolean }): void;
   export function writeFileSync(file: string, data: string): void;
 }

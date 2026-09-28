@@ -14,16 +14,15 @@
 
 use std::sync::Arc;
 
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl::progress::Progress;
-use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_email::ingest::api;
 use datalib_etl_email::ingest::session::Session;
-use datalib_etl_email::ingest::{db_path_for, FetchOptions, RawDb};
+use datalib_etl_email::ingest::FetchOptions;
 use serde_json::{json, Value};
 
-use crate::progress_countdown::Recorder;
+use crate::support::{Mirror, Recorder};
 
 const HOST: &str = "jmap.example.test";
 const API_URL: &str = "https://jmap.example.test/jmap/api/";
@@ -39,22 +38,18 @@ const PHASES: u64 = 5;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fastmail_enumeration_counts_down_from_its_message_count() {
-    let d = tempfile::tempdir().expect("tempdir");
-    let playback = d.path().join("playback");
-    let root = d.path().join("store");
-    std::fs::create_dir_all(&root).expect("create store dir");
-    write_fixtures(&playback);
+    let m = Mirror::new();
+    write_fixtures(&m.playback);
 
     let recorder = Recorder::default();
-    std::env::set_var(PLAYBACK_ENV, &playback);
-    let db = RawDb::open(&db_path_for(&root)).await.expect("open raw db");
-    let mut opts = FetchOptions::new(db.clone());
-    opts.hostname = HOST.to_string();
-    opts.progress = Progress::new(Arc::new(recorder.clone()));
-    let summary = datalib_etl_email::ingest::fetch(opts).await;
-    db.commit_all("test").await.unwrap();
-    db.close().await;
-    std::env::remove_var(PLAYBACK_ENV);
+    let summary = m
+        .run(|db| {
+            let mut opts = FetchOptions::new(db);
+            opts.hostname = HOST.to_string();
+            opts.progress = Progress::new(Arc::new(recorder.clone()));
+            datalib_etl_email::ingest::fetch(opts)
+        })
+        .await;
 
     let summary = summary.expect("jmap fetch under playback");
     assert_eq!(summary.emails_upserted, MESSAGES);

@@ -276,7 +276,7 @@ fn build_grid_row(
         .conversation_name(Some(contact.group_label.clone()))
         .conversation_uuid(contact.group_uuid.clone())
         .entire_chat(format!("/contact/{}", contact.contact_uuid))
-        .text(text)
+        .body(text)
         .qmd_path(Some(md_rel.to_string()))
         .source_url(contact.source_url.clone())
         .upstream_id(contact.external_id.clone())
@@ -406,8 +406,8 @@ mod tests {
             row.source_url.as_deref(),
             Some("https://www.linkedin.com/in/jlp")
         );
-        assert!(row.text.contains("Jean-Luc Picard"));
-        assert!(row.text.contains("Starfleet"));
+        assert!(row.preview.contains("Jean-Luc Picard"));
+        assert!(row.preview.contains("Starfleet"));
         assert_eq!(
             row.conversation_name.as_deref(),
             Some("LinkedIn Connections")

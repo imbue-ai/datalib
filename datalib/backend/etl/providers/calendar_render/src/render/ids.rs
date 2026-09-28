@@ -3,7 +3,7 @@
 //! key. No stamp: an event's time moves when it is rescheduled, and its
 //! id must not.
 
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Calendar;
 
@@ -14,46 +14,40 @@ pub const KIND_EVENT: &str = "event";
 pub const KIND_OCCURRENCE: &str = "occurrence";
 pub const KIND_CALENDAR: &str = "calendar";
 
-fn identity(source_id: &str, entity_kind: &'static str, natural_key: String) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        None,
-    )
-}
+const IDS: Minter = Minter::unstamped(ID_NAMESPACE);
 
 pub fn event(source_id: &str, calendar_id: &str, event_id: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_EVENT,
         composite_key(&[calendar_id, event_id]),
+        None,
     )
 }
 
 /// An iCalendar occurrence, keyed by its series' `UID` and the
 /// `RECURRENCE-ID` it overrides, spelled by `EventTime::key`.
 pub fn ics_occurrence(source_id: &str, calendar_id: &str, uid: &str, recurrence: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_OCCURRENCE,
         composite_key(&[calendar_id, uid, recurrence]),
+        None,
     )
 }
 
 /// A Google occurrence: Google gives each its own event id.
 pub fn google_occurrence(source_id: &str, calendar_id: &str, event_id: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_OCCURRENCE,
         composite_key(&[calendar_id, event_id]),
+        None,
     )
 }
 
 pub fn calendar(source_id: &str, calendar_id: &str) -> Identity {
-    identity(source_id, KIND_CALENDAR, calendar_id.to_string())
+    IDS.mint(source_id, KIND_CALENDAR, calendar_id.to_string(), None)
 }
 
 #[cfg(test)]

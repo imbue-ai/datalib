@@ -183,9 +183,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/pipeline/history", get(history::tree_history))
         .route("/api/requests", get(requests_list).post(request_open))
         .route("/api/requests/{id}/stop", post(request_stop))
-        .route("/api/steps/{id}/pause", post(step_pause))
-        .route("/api/steps/{id}/resume", post(step_resume))
+        .route("/api/steps/{id}/turn_off", post(step_turn_off))
+        .route("/api/steps/{id}/turn_on", post(step_turn_on))
         .route("/api/reset", post(reset_steps))
+        .route("/api/purge", post(purge_groups))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
@@ -404,7 +405,8 @@ async fn proxy_impl(
         // the reason rather than an empty body it would render as "no
         // data" — the same instinct as a failed step's last stderr
         // lines becoming its error message.
-        Ok(Err(e)) => applet_error(StatusCode::BAD_GATEWAY, &e),
+        Ok(Err(applets::ProxyError::TimedOut(e))) => applet_error(StatusCode::GATEWAY_TIMEOUT, &e),
+        Ok(Err(applets::ProxyError::Failed(e))) => applet_error(StatusCode::BAD_GATEWAY, &e),
         Err(e) => applet_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("proxy task: {e}"),
@@ -1393,7 +1395,8 @@ fn scaffold_toml() -> String {
     "\
 # ── the unified index ──────────────────────────────────────────────────
 # A group is one thing on the Manage screen; its steps are what run.
-# Every source's rendered markdown feeds these two: a step's id is
+# Every source feeds these two — the grid reads its rendered markdown,
+# the qmd aggregator its search steps. A step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
 # steps it reads by that id. A step with no `command` is one of
 # datalib's own.
@@ -1409,7 +1412,7 @@ inputs = []
 
 [[steps]]
 group = \"unified_index\"
-function = \"qmd_index\"
+function = \"qmd_aggregator\"
 inputs = []
 
 # The applet that serves the grid: the app has no search, no document
@@ -1479,7 +1482,7 @@ async fn pipeline_storage(
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }
 
-// --- Intent: requests, pauses, resets (`docs/dev/plans/supervisor.md` §2.9) --
+// --- Intent: requests, switches, resets (`docs/dev/plans/supervisor.md` §2.9) --
 
 /// A request as the API serves it.
 #[derive(Debug, Serialize)]
@@ -1544,6 +1547,14 @@ struct ResetRequest {
     by: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PurgeRequest {
+    /// Group ids the config no longer names.
+    groups: Vec<String>,
+    #[serde(default)]
+    by: Option<String>,
+}
+
 type Refusal = (StatusCode, String);
 
 fn internal(e: anyhow::Error) -> Refusal {
@@ -1583,16 +1594,37 @@ async fn request_open(
             format!("the config has no step {unknown:?}"),
         ));
     }
-    let by = req.by.unwrap_or_else(|| "ui".to_string());
     let store = mailbox(&s).await?;
+    // A sync of these steps that is already open is this sync: a second
+    // click is not a second run. (A second request from anywhere else
+    // still is: the loop runs its steps once more when the first ends.)
+    let wanted: std::collections::BTreeSet<&str> = roots.iter().map(String::as_str).collect();
+    let open = store.open_requests().await.map_err(internal)?;
+    if let Some(same) = open.into_iter().find(|r| {
+        r.stop_requested_by.is_none()
+            && r.roots
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>()
+                == wanted
+    }) {
+        return Ok(Json(RequestView::from(same)));
+    }
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
+    let mut listener =
+        datalib_dag::supervisor::announce::Listener::new(store, "POST /api/requests");
     let id = store.open_request(&roots, &by).await.map_err(internal)?;
-    s.sync.wake();
     // Answered once the loop has taken it on, so rows read after this
-    // show its steps as wanted. A loop mid-sync looks every quarter
-    // second; one whose config lacks a root leaves it for the next sync.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while !store.taken_on(&id).await.map_err(internal)? && std::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    // show its steps as wanted. A loop whose config lacks a root leaves
+    // it for the next sync, so the wait is bounded.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !store.taken_on(&id).await.map_err(internal)? {
+        if tokio::time::timeout_at(deadline, listener.next())
+            .await
+            .is_err()
+        {
+            break;
+        }
     }
     Ok(Json(RequestView {
         id,
@@ -1617,13 +1649,12 @@ async fn request_stop(
     }
     let by = by_of(&body)?;
     store.request_stop(&id, &by).await.map_err(internal)?;
-    s.sync.wake();
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/steps/{id}/pause` — the step is not started until resumed,
-/// and one running is stopped; what reads it waits.
-async fn step_pause(
+/// `POST /api/steps/{id}/turn_off` — every sync skips the step until it
+/// is turned on, and one running is stopped; what reads it waits.
+async fn step_turn_off(
     State(s): State<AppState>,
     Path(id): Path<String>,
     body: axum::body::Bytes,
@@ -1636,18 +1667,21 @@ async fn step_pause(
         ));
     }
     let by = by_of(&body)?;
-    mailbox(&s).await?.pause(&id, &by).await.map_err(internal)?;
-    s.sync.wake();
+    mailbox(&s)
+        .await?
+        .turn_off(&id, &by)
+        .await
+        .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/steps/{id}/resume`.
-async fn step_resume(
+/// `POST /api/steps/{id}/turn_on` — syncs include it again; this alone
+/// starts nothing.
+async fn step_turn_on(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, Refusal> {
-    mailbox(&s).await?.resume(&id).await.map_err(internal)?;
-    s.sync.wake();
+    mailbox(&s).await?.turn_on(&id).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1667,6 +1701,21 @@ async fn reset_steps(
         .await
         .map_err(|e| (StatusCode::CONFLICT, e))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/purge` — delete the trees of groups gone from the config.
+/// 204 once they are gone; 202 when a sync in progress holds the delete
+/// until it is over; 409, with the reason, for a group still configured.
+async fn purge_groups(
+    State(s): State<AppState>,
+    Json(req): Json<PurgeRequest>,
+) -> Result<StatusCode, Refusal> {
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
+    match s.sync.purge(&req.groups, &by).await {
+        Ok(supervisor::PurgeAnswer::Done) => Ok(StatusCode::NO_CONTENT),
+        Ok(supervisor::PurgeAnswer::Queued) => Ok(StatusCode::ACCEPTED),
+        Err(why) => Err((StatusCode::CONFLICT, why)),
+    }
 }
 
 async fn sync_stream(
@@ -1839,44 +1888,52 @@ async fn run_log(
     )
 }
 
+/// A parameter this does not take is refused, not ignored: the run, the
+/// process, the step and the attempt are search terms (`run:`,
+/// `process_id:`, `step:`, `attempt:`), and a caller still sending them
+/// as parameters would otherwise get every line back.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LogParams {
-    #[serde(default)]
-    run: Option<String>,
-    /// One process's lines, by its id from `/api/processes`.
-    #[serde(default)]
-    process: Option<String>,
-    #[serde(default)]
-    step: Option<String>,
-    /// With `step`: one attempt of it.
-    #[serde(default)]
-    attempt: Option<i64>,
     /// The search bar, in the grammar every grid shares (`datalib_query`):
-    /// `level:warn -target:sqlx "history"`.
+    /// `level:warn -target:sqlx "history"`, and what the panel's pickers
+    /// write there: `run:`, `process_id:`, `step:`, `attempt:`.
     #[serde(default)]
     q: String,
+    /// The lines after this `seq`: how a panel follows the tail.
     #[serde(default)]
     after_seq: Option<i64>,
+    /// The newest lines before this `seq`: how a panel pages back.
+    #[serde(default)]
+    before_seq: Option<i64>,
     #[serde(default)]
     limit: Option<i64>,
 }
 
-/// `GET /api/log?run=…&step=…&q=…` — log lines, oldest first, across
-/// every run the store holds unless `run` narrows it. Tails the same way
-/// `/api/runs/{run}/log` does. A `q` naming a key a log line does not
-/// have is a 400 with the key spelled out.
+/// `GET /api/log?q=…` — log lines across every run the
+/// store holds unless `run` narrows it: the newest `limit` of them, or the
+/// page `after_seq` or `before_seq` names, oldest first either way. A `q`
+/// naming a key a log line does not have is a 400 with the key spelled
+/// out, and so are both cursors at once.
 async fn log_lines(
     State(s): State<AppState>,
     Query(p): Query<LogParams>,
 ) -> Result<Json<Vec<datalib_runs::LogLine>>, (StatusCode, String)> {
     let limit = p.limit.unwrap_or(5000).clamp(1, 50_000);
+    let cursor = match (p.after_seq, p.before_seq) {
+        (None, None) => datalib_runs::LogCursor::Newest,
+        (Some(seq), None) => datalib_runs::LogCursor::After(seq),
+        (None, Some(seq)) => datalib_runs::LogCursor::Before(seq),
+        (Some(_), Some(_)) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "ask for the lines after_seq or before_seq a line, not both".to_string(),
+            ))
+        }
+    };
     let q = datalib_runs::LogQuery {
-        run: p.run.as_deref(),
-        process: p.process.as_deref(),
-        step: p.step.as_deref(),
-        attempt: p.attempt,
         q: &p.q,
-        after_seq: p.after_seq.unwrap_or(0),
+        cursor,
         limit,
     };
     datalib_runs::log_query(&s.root, &q)
@@ -2040,7 +2097,7 @@ mod tests {
         // nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),
-            ["unified_index/grid_index", "unified_index/qmd_index"]
+            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
         );
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on.
@@ -2060,7 +2117,7 @@ mod tests {
         let fringe = fringe_of(&scaffold_toml());
         assert_eq!(
             fringe,
-            ["unified_index/grid_index", "unified_index/qmd_index"]
+            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
         );
         assert_eq!(configured_source_count(&fringe), 0);
     }

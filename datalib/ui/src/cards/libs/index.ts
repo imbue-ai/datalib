@@ -13,6 +13,8 @@ import { sourcesView } from "./sourcesView";
 import { configView } from "./configView";
 import { logView } from "./logView";
 import { logLineView } from "./logLineView";
+import { historyView } from "./historyView";
+import { umapView } from "./umapView";
 
 // The names in scope when card source is evaluated (cardSource.ts).
 export const viewLibs: ViewLibs = {
@@ -30,6 +32,8 @@ export const viewLibs: ViewLibs = {
   configView,
   logView,
   logLineView,
+  historyView,
+  umapView,
 };
 
 export {
@@ -47,4 +51,6 @@ export {
   configView,
   logView,
   logLineView,
+  historyView,
+  umapView,
 };

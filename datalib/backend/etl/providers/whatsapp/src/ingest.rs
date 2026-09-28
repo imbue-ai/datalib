@@ -10,8 +10,6 @@
 //! `NamedTempFile` dropped at the end, and media are read in place from
 //! `backup_dir/Media/`, which WhatsApp already stores in the clear.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -20,7 +18,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool};
 use sqlx::Connection;
 use std::str::FromStr;
 
-use datalib_etl::blob_cas::{self, BlobCas, CasInsert};
+use datalib_etl::blob_cas::{BlobCas, CasInsert};
 use datalib_etl::doltlite_raw;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
@@ -81,40 +79,10 @@ impl MirrorKnobs {
     }
 }
 
-/// Thin wrapper over the doltlite raw-store pool, mirroring the
-/// `RawDb` pattern every other provider uses. Lets the sync
-/// orchestrator open the pool once at the start of an ingest run
-/// (so SIGINT can flush in-flight stores) and pass the same handle
-/// into `fetch`.
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    /// Media bytes. Opened with the handle rather than from a path
-    /// further down, so there is one opener per store and `close_all`
-    /// reaches it.
-    cas: BlobCas,
-}
-
-impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let pool = doltlite_raw::open(db_path, ALL_DDL).await?;
-        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
+datalib_etl::raw_db! {
+    /// Opened once by the orchestrator at the start of an ingest run (so
+    /// SIGINT can flush in-flight stores) and passed into `fetch`.
+    pub RawDb: CasEntityStore, ALL_DDL
 }
 
 /// Standalone: open, fetch, commit, close. The DAG step goes through

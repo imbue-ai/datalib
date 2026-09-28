@@ -1,6 +1,6 @@
 # The supervisor: steps as managed processes, not as a batch run
 
-**Status: chosen over the join (2026-09-23); slices 0–5 and 7 are built —
+**Status: chosen over the join (2026-09-23); slices 0–5, 4d and 7 are built —
 `datalib-dag` and the server run one loop over requests in
 `system/supervisor.sqlite`, a Manage row reads the loop's record and
 carries Sync, Stop, Pause and Reset, and the dag README describes the
@@ -848,8 +848,8 @@ last.
    - A request for a step the loaded config lacks is left open for the
      next busy period, which loads the config again, when it arrives
      mid-period; one open as a period starts still fails. So a source
-     *added* to the config while a sync runs waits for that sync; one
-     the config already had starts beside it.
+     *added* to the config while a sync runs waited for that sync; one
+     the config already had started beside it. **4d below undoes this.**
    - The loop tells its host when it takes a request on and when it is
      done with one (`RequestEvent`). A stopped request is done once the
      steps only it wanted have exited, so a job reads Stopping until
@@ -932,6 +932,18 @@ last.
    - The Playwright suite only runs in an unfiltered `bazelisk test
      //...` or `bazelisk test //datalib/ui:e2e_test`; the hermetic line's
      `-external` filter drops it. Run it before pushing.
+
+   **4d. Reload while running.** *Built*, after the calendars of
+   2026-09-24 read Queued for the length of a gmail sync. The loop
+   re-reads the config on every mailbox poll (`supervisor/reload.rs`)
+   and carries its state to the new graph by step id, so §2.3's "a
+   source added mid-sync starts now" holds. §3's rules, as built: a
+   running step finishes on its old definition and records it, so the
+   new one runs it again; a step the config drops is *not* interrupted
+   — the loop keeps its graph until nothing running or open needs that
+   step, since a config saved mid-edit would otherwise cost a download.
+   A request for a step no config the loop has taken on names is still
+   set aside for the next period.
 
    **4c. Rows read the supervisor.** *Built.* What the build did beyond,
    or instead of, the brief below:

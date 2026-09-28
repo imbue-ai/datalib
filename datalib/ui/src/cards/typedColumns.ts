@@ -6,13 +6,8 @@
 // no grid. `TableGrid.ce.vue` mounts one over these for the simple
 // hosts; a card with a grid of its own (`GridCard`) calls this and
 // keeps driving its grid itself.
-import type {
-  Column,
-  Formatter,
-  GridOption,
-  GroupingFormatterItem,
-} from "@slickgrid-universal/common";
-import { Editors, Filters } from "@slickgrid-universal/common";
+import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
+import { Editors } from "@slickgrid-universal/common";
 import type { Action, ColumnSpec, Identity, StatusView, Chip, Timeseries } from "@/api";
 import {
   WIDTH,
@@ -44,35 +39,9 @@ export type SlickColumnOptions<T> = {
   /// Every column can be dragged into the grouping bar. Off, no column
   /// carries a `grouping`, and the bar accepts none.
   groupable?: boolean;
-  /// Every column gets a box in the grid's filter row, with the grid's
-  /// operator shorthand (`>5`, `a*`, `<>x`). The grid must have
-  /// `enableFiltering` on, or it refuses the columns.
-  filterable?: boolean;
   /// Per-field refinements a type cannot know — a width, a hover, a
   /// formatter — merged over the typed definition.
   overrides?: Record<string, Partial<Column<T>>>;
-};
-
-/// Grid options a grid drawing `filterable` columns must carry. The
-/// compound number filter's operator dropdown pads each operator to
-/// three characters with `&nbsp;` entities and then, with
-/// `enableHtmlRendering` off, sets them as text — so its blank first
-/// option read `&nbsp;&nbsp;&nbsp;`. Naming every operator already
-/// padded, with no-break spaces, leaves it nothing to add.
-const NBSP = "\u00a0";
-const pad = (op: string) => ({ operatorAlt: op.padEnd(3, NBSP) });
-export const FILTER_GRID_OPTIONS: Pick<GridOption, "compoundOperatorAltTexts"> = {
-  compoundOperatorAltTexts: {
-    numeric: {
-      "": pad(NBSP),
-      "=": pad("="),
-      "<": pad("<"),
-      "<=": pad("<="),
-      ">": pad(">"),
-      ">=": pad(">="),
-      "<>": pad("<>"),
-    },
-  },
 };
 
 /// A group row's title: the column, the value and how many rows share
@@ -141,15 +110,13 @@ function treeCell<T extends Record<string, unknown>>(inner: Formatter<T>): Forma
 }
 
 /// 24×24 Material-ish glyphs for the action ids the viewer knows a
-/// picture for, drawn in `currentColor`. Any other id draws its label.
+/// picture for, drawn in `currentColor`. An action carrying `on` draws
+/// a switch; any other id draws its label.
 const ACTION_ICONS: Record<string, string> = {
   // A table: what Browse opens is this row's data as rows and columns.
   browse: "M3 5h18v4H3V5zm0 6h8v8H3v-8zm10 0h8v8h-8v-8z",
   sync: "M8 5v14l11-7z",
   stop: "M6 6h12v12H6z",
-  pause: "M6 5h4v14H6zm8 0h4v14h-4z",
-  // A bar, then play: carry on from where it was held.
-  resume: "M5 5h3v14H5zm5 0v14l10-7z",
 };
 
 /// The buttons of an `actions` cell. One element per row, kept across
@@ -185,7 +152,13 @@ function actionsFormatter<T extends Record<string, unknown>>(
         b = document.createElement("button");
         b.type = "button";
         const glyph = ACTION_ICONS[a.id];
-        if (glyph) {
+        if (a.on != null) {
+          b.className = "tg-switch";
+          b.setAttribute("role", "switch");
+          const knob = document.createElement("span");
+          knob.className = "tg-switch-knob";
+          b.appendChild(knob);
+        } else if (glyph) {
           b.className = "tg-icon-btn";
           const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
           svg.setAttribute("viewBox", "0 0 24 24");
@@ -207,8 +180,9 @@ function actionsFormatter<T extends Record<string, unknown>>(
         });
         held.buttons.set(a.id, b);
       }
-      if (!ACTION_ICONS[a.id]) b.textContent = a.label;
-      b.title = a.enabled ? a.label : (a.disabled_reason ?? a.label);
+      if (a.on != null) b.setAttribute("aria-checked", String(a.on));
+      else if (!ACTION_ICONS[a.id]) b.textContent = a.label;
+      b.title = a.enabled ? (a.hint ?? a.label) : (a.disabled_reason ?? a.label);
       b.setAttribute("aria-label", a.label);
       b.disabled = !a.enabled;
       b.classList.toggle("danger", !!a.danger);
@@ -268,7 +242,6 @@ export function typedColumns<T extends Record<string, unknown>>(
       // column it is in.
       cellAttrs: { "col-id": f },
       headerCellAttrs: { "col-id": f },
-      ...(opts.filterable ? { filterable: true, filter: { model: Filters.input } } : {}),
       formatter: plain,
       sortComparer: (a, b, dir) => compareText(a, b, dir ?? 1),
       ...(spec.editable && spec.type !== "identity" ? { editor: { model: Editors.text } } : {}),
@@ -355,7 +328,6 @@ export function typedColumns<T extends Record<string, unknown>>(
           return {
             cssClass: "tg-right",
             type: "number",
-            ...(opts.filterable ? { filter: { model: Filters.compoundInputNumber } } : {}),
             formatter: (_r, _c, value) => ({
               text: typeof value === "number" ? formatBytes(value) : "",
               toolTip: typeof value === "number" ? `${value.toLocaleString()} bytes` : "",
@@ -366,7 +338,6 @@ export function typedColumns<T extends Record<string, unknown>>(
           return {
             cssClass: "tg-right",
             type: "number",
-            ...(opts.filterable ? { filter: { model: Filters.compoundInputNumber } } : {}),
             formatter: (_r, _c, value) => ({
               text: typeof value === "number" ? value.toLocaleString() : "",
             }),
@@ -376,7 +347,6 @@ export function typedColumns<T extends Record<string, unknown>>(
           return {
             cssClass: "tg-right",
             type: "number",
-            ...(opts.filterable ? { filter: { model: Filters.compoundInputNumber } } : {}),
             formatter: (_r, _c, value) => ({
               text:
                 typeof value === "number"

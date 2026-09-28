@@ -52,7 +52,7 @@ pub const HISTORY_WINDOW: Duration = Duration::from_secs(5 * 60);
 const SEED_ROWS: usize = 4_000;
 
 /// The file name whose size splits a raw store's total in two.
-const BLOBS_FILE: &str = "blobs.doltlite_db";
+const BLOBS_FILE: &str = datalib_core::layout::BLOBS_DB;
 
 /// One measurement of one tree, as the API hands it out.
 #[derive(Debug, Clone, Serialize)]

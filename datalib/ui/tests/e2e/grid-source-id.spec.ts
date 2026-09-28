@@ -1,9 +1,9 @@
 // The unified index grid's "Source" column, and the `source_id:`
 // filter behind it.
 //
-// The column answers a question the "Provider" column cannot: which
-// *configured source* did this row come from. Two Slack workspaces are
-// one provider and two sources. The value on the row is the source's id
+// The column answers which *configured source* a row came from, led by
+// the mark of the service it mirrors. Two Slack workspaces share the
+// mark and are two sources. The value on the row is the source's id
 // (derived server-side from `qmd_path`); the text in the cell is the
 // `name` that source's steps declare in config.toml, joined
 // client-side. That join is the thing worth an end-to-end test — it

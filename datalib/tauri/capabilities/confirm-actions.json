@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "confirm-actions",
+  "description": "Lets the UI ask before a destructive action — removing a source, a step or a group, resetting a store — through `ui/src/desktop.ts::confirmAction`. Without it every such confirm is refused and the action does not happen. `window.confirm` cannot stand in: in this app the dialog plugin replaces it with an async function that invokes `plugin:dialog|confirm`, which the plugin does not register, and the truthy Promise it returns let every remove go ahead unasked. The plugin's own `confirm` is a `message` dialog with OK/Cancel buttons, so `dialog:allow-message` is the one permission it needs; it also lets `window.alert` work, which is harmless. The `remote` block is REQUIRED for the same reason as in reveal-local-files.json: the UI is loaded from `datalib-http` as an external URL, and Tauri withholds IPC from a remote origin unless it is listed, with the trailing `/**` load-bearing.",
+  "windows": [
+    "main",
+    "card-*"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*/**",
+      "http://localhost:*/**"
+    ]
+  },
+  "permissions": [
+    "dialog:allow-message"
+  ]
+}

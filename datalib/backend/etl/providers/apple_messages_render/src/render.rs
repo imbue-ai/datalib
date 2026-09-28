@@ -17,7 +17,8 @@ use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION};
+use datalib_etl_chat_common::changed_chats;
+use datalib_etl_chat_common::render::{RenderProfile, ENTITY_KIND_CONVERSATION};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction, UpstreamRef,
@@ -93,15 +94,7 @@ fn profile() -> RenderProfile {
     }
 }
 
-/// What one render pass did: the cursor to stamp and every chat it
-/// declared.
-#[derive(Debug, Default)]
-pub struct RenderOutcome {
-    pub rendered: usize,
-    pub skipped: usize,
-    pub new_head: Option<String>,
-    pub buckets: Buckets,
-}
+pub use datalib_etl_chat_common::RenderOutcome;
 
 pub fn render(
     raw_dir: &Path,
@@ -131,51 +124,25 @@ pub fn render(
         })
     })?;
 
-    // The driver names stale buckets by chat uuid; the chats are by guid.
-    let by_uuid: HashMap<String, &str> = all_chats
-        .iter()
-        .map(|c| (c.chat_uuid.clone(), c.id.as_str()))
-        .collect();
-    let narrowed = range.narrow_by(forward.as_ref(), |key| {
-        by_uuid.get(key).map(|g| g.to_string())
+    let mut changed = changed_chats(all_chats, range, forward.as_ref(), |guid| {
+        chat_uuid(source_id, guid)
     });
-    // Named chats first, with no documents: one this run looked at that
-    // has no message left builds no chat, and chat-common never sees it.
-    // The rendered ones follow and replace that.
-    let mut buckets: Buckets = narrowed
-        .render
-        .iter()
-        .flatten()
-        .map(|guid| chat_uuid(source_id, guid))
-        .chain(narrowed.gone.iter().cloned())
-        .map(|key| Bucket {
-            key,
-            inputs: Vec::new(),
-        })
-        .collect();
-    let total = all_chats.len();
-    let chats: Vec<NormalizedChat> = match &narrowed.render {
-        None => all_chats,
-        Some(live) => all_chats
-            .into_iter()
-            .filter(|c| live.contains(&c.id))
-            .collect(),
-    };
     let summary = datalib_etl_chat_common::render_all(
         &profile(),
-        &chats,
+        &changed.chats,
         out_root,
         source_id,
         &HashMap::new(),
         progress,
         on_doc_complete,
     )?;
-    buckets.extend(summary.buckets);
+    changed.buckets.extend(summary.buckets);
     Ok(RenderOutcome {
         rendered: summary.docs_rendered,
-        skipped: total - chats.len(),
+        skipped: changed.skipped,
         new_head,
-        buckets,
+        scan_elapsed: None,
+        buckets: changed.buckets,
     })
 }
 

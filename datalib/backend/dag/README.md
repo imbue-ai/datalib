@@ -42,7 +42,7 @@ environment — `DATALIB_DAG_GROUP`, `DATALIB_DAG_FUNCTION`,
 step with no `command` runs `datalib-step`, which dispatches on that
 environment and writes the tree its id names; that is why a built-in
 step's function is the directory it writes (`ingest`, `render_markdown`,
-`grid_index`, `qmd_index`), and why the loader requires such a step to
+`grid_index`, `qmd_aggregator`, …), and why the loader requires such a step to
 be under a group. The runner never interprets the function itself.
 
 ## The graph is declared, not derived
@@ -82,10 +82,10 @@ The loop runs what open **requests** want. A request is a row in
 `system/supervisor.sqlite` naming its **roots** — the steps a Sync was
 pressed on, or every source step for `datalib-dag` with no `--sync` —
 and who opened it (`by`). Its **scope** is the roots and everything
-downstream of them. Anyone may open one, or ask one to stop, or pause a
-step: that is a row too. Only the process holding `runner-lock` runs the
-loop, and it reads new rows by watching the store's `PRAGMA
-data_version`. A **run** is one busy period of the loop — from taking a
+downstream of them. Anyone may open one, or ask one to stop, or turn a
+step off: that is a row too. Only the process holding `runner-lock` runs the
+loop, and it hears of new rows because whoever writes one announces it
+(below, "What wakes the loop"). A **run** is one busy period of the loop — from taking a
 request on while idle to having none left — and every request served in
 it shares that run's id.
 
@@ -100,7 +100,7 @@ and a run records nothing for it: its `last_run` stays as it was, so a
 `--sync slack` never moves email's "last synced".
 
 **Which step does what is one pure function**, `supervisor/tick.rs`: from
-the graph, the open requests, the pauses and the facts (each sink's
+the graph, the open requests, the steps turned off and the facts (each sink's
 version, what each step last read, what is running), it gives every step
 a state, and the starts, stops and request closures to make.
 `supervisor/round.rs` is the loop that feeds it and acts on it. The
@@ -112,42 +112,52 @@ them:
 | `running` | an invocation is live — or it ran a pass and what it reads has not settled (below) |
 | `waiting` | wanted and due, and held back; `state_detail` says by what |
 | `fresh` | wanted, and up to date |
-| `paused` | someone paused it; `paused_by` says who |
+| `off` | someone turned it off; `turned_off_by` says who |
 | `blocked` | wanted, but a producer it reads has never published and is not going to run |
 | `failed` | its retries ran out and nothing it reads has moved since |
 | `idle`, `stale` | no open request wants it; up to date, or not |
 
-**A wanted step is due** iff it is **stale** — it has never succeeded,
-some input's version differs from the one it consumed at its last
-success, or its own fingerprint (argv, env, declared inputs) differs
-from the one recorded then — or it declares no inputs and has not run
-since this request opened: a source's real input is outside the graph,
-so every request runs it once.
+The tick is level-triggered: every wake-up, whatever caused it,
+recomputes every step from the state as it is, so a burst of wake-ups is
+one look and a lost one costs latency, never a wrong start. **A step
+starts** in a tick, visited in topological order, iff:
 
-A due step waits, and says why, for one of four things:
+1. **it is not running**: one instance of a step at a time;
+2. **it is not turned off**;
+3. **an open request wants it**: some request's scope (its roots and
+   everything downstream) holds it;
+4. **it has not failed for every request that wants it**: its last run
+   failed, after that request opened, on the inputs and definition it has
+   now. A run the loop asked to stop, and that stopped, is neither a
+   failure nor a run: turned on while a request wants it, the step runs
+   again. One that says it failed has failed, whatever it was asked;
+5. **it is due**: it is **stale** (it has never succeeded, an input's
+   version differs from the one it read at its last success, or its
+   fingerprint, meaning argv, env, declared inputs, `code_version` and,
+   for a built-in step, the shape of the store it writes, differs from the
+   one recorded then), or it declares no inputs and has not run since the
+   request opened, since a source's real input is outside the graph;
+6. **no producer it reads holds it**: none is running without streaming
+   (or with this step reading its files, below), and none is about to
+   run, held only by a lock or a reader, since that one would
+   rewrite what this step reads. A producer waiting on its own upstream
+   holds nobody back, so a fan-in never waits for its slowest source;
+7. **it has something to read**: a step with inputs none of whose
+   producers ever published is `blocked`, or waits if one is about to run;
+8. **every lock it would take is free** (below, "What keeps steps apart").
 
-- **its upstream**: a producer it reads is running and does not declare
-  `streams_output`, so what it writes may be half-done, or is about to
-  run, held only by a budget, its sink or a reader. A running producer
-  that streams lets its consumers start on each seal as it lands, and
-  staleness keeps them from running when nothing new has. A producer
-  waiting on its own upstream holds nobody back, so a fan-in never waits
-  for its slowest source.
-- **its sink**: another writer of the same tree is running.
-- **a reader**: a step that reads its tree off disk, not at a pinned
-  commit, is running.
-- **a budget**: each step counts against one of three — `network` for a
-  source, `cpu` for a grouped step with inputs, `index` for one with no
-  group type — so a download waiting out a rate limit never keeps a
-  render from starting. `--parallelism N` is N downloads and N renders;
-  the two index steps may always run beside each other.
+The store shape is in the fingerprint because a derived store takes a
+new shape only when its writer runs. Without it, a build that adds a
+`grid_rows` column leaves every source with nothing new upstream holding
+a render store in the old shape, and the grid index cannot read it.
+`BUILTIN_STORE_SHAPES` in `src/config.rs` names the shape of each
+built-in function's store; a test in `datalib_step` keeps it equal to the
+real DDL.
 
-**A step that reads its inputs off disk never overlaps a writer of
-them.** The loader marks the built-in ones (`UNPINNED_BUILTINS` in
-`config.rs`: the qmd index, which globs render trees' `.md` files, and
-perseus's render, which reads its TEI files): such a step waits for a
-running producer even if it streams, and a writer of what it reads waits
-for it to finish.
+A step that waits says why, in its row's `state_detail`: `waiting for
+a`, `waiting for c, which reads what this writes`, `waiting for lock
+gpu, held by trainer`. Each step writes only the tree its id names, so
+no two steps ever wait on each other as writers of one sink.
 
 Until everything a step reads has settled, its row reads Running between
 passes: the step is not finished, it is waiting for the next seal. A
@@ -169,14 +179,30 @@ again for that request unless something it reads moves.
 `failed`, naming the first step in topological order that failed for it
 or was blocked, or `done`. **A stop** closes it at once as `stopped`, and
 a running step no open request wants any more gets SIGINT; it
-checkpoints and exits, and until it has, its row reads Stopping. **A
-pause** keeps a step from starting and stops it if it is running; a
-paused step a request skipped takes no part and records no run. A pause
-made while the loop is idle reaches the record through
-`Runner::settle`, one tick with nothing open. A request naming a step
-the loaded config lacks — a source added mid-run — waits, with its roots
-recorded as waiting on it, for the next run, which loads the config
-again.
+checkpoints and exits, and until it has, its row reads Stopping. **Turning
+a step off** keeps it from starting and stops it if it is running; a
+step turned off that a request skipped takes no part and records no run.
+**A run the loop stopped is neither a failure nor a run**: turned on while a
+request still wants it, the step runs again. That is a run the loop
+asked to stop, not one that reported `cancelled` on its own, which is a
+failure like any other. A step turned off while the loop is idle reaches the
+record through `Runner::settle`, one tick with nothing open; the idle
+host settles again after every busy period and on a config change, and compares the switches it
+finds later with the ones the settle recorded, not with any it read
+before. A request naming a step
+no config the loop has taken on has waits, with its roots recorded as
+waiting on it, for one that has it.
+
+**The loop re-reads the config while it runs**, when told it changed
+(below, "What wakes the loop"). A source added mid-sync
+starts beside the sync already going, and a step edited mid-sync runs
+under its new definition from its next start. A running step keeps the
+definition it started with and records that one, so the edit leaves it
+stale and it runs again if a request still wants it. A config that drops
+a step still running, or still named by an open request, is taken on once
+the loop is done with that step: a config saved mid-edit must not cost a
+long download. The step environment (`PATH`, log level, checkpoint
+cadence) stays the one the busy period started with.
 
 **A reset** (`datalib-dag --reset`, the app's Reset, `POST /api/reset`)
 empties what a step wrote and records the tree's new version, forgetting
@@ -187,54 +213,102 @@ grid, and its next Sync downloads everything again. The design, and what
 is still to come (two steps writing one tree), is
 [`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
 
-## Versions: read from the store, or reported by the step
+## What keeps steps apart: locks
 
-**A step whose tree holds doltlite stores is versioned by the runner.**
-After every invocation, and at every checkpoint, it reads the commit each
-store's `main` is at (`sink.rs`): `<store file>:<hash>` for each
-`*.doltlite_db` directly in the tree, in name order. That is exactly what
-a pinned reader of the store can see, so it is exactly what a consumer
-reads; what the step reports is not consulted. It is read whether the step
-succeeded or failed, because a writer's `open` publishes a commit its
-crashed predecessor left. Only the stores at the top of the tree count —
-a render tree's per-document directories hold markdown.
+What keeps steps apart is locks, and every one is in the config or
+follows from it:
 
-**Any other step reports one version string per output.** It must be a
-function of the output's **content** — a row-set hash, a cursor's hash —
-so that two runs over the same data report the same string and
-"unchanged" is something the scheduler *derives* rather than something a
-step asserts. A timestamp does not qualify. The value is otherwise opaque:
-the runner only ever compares it for equality.
+- **A sink is a read/write lock.** Its writer holds `write`. A step that
+  reads it off disk (`reads = "files"`) holds `read`: no writer of what
+  it reads runs beside it, in either order. A step that reads at a pinned
+  commit (the default) holds nothing: it reads a snapshot, and the writer
+  may go on writing. Whether a consumer may *start* on a producer that is
+  still running is not a lock but rule 6: only on a producer that
+  declares `streams_output`, so a seal it reads is a whole one.
+- **A named lock** is a `[[locks]]` entry: a `name` and `slots` (default
+  1, a mutex). A step names what it holds: `locks = ["quota"]` takes one
+  slot, `locks = { gpu = "exclusive" }` takes them all. For what the
+  graph does not show: two sources on one account's rate limit, a GPU.
+- **The budgets are three default locks**, `network` (4 slots), `cpu` (4)
+  and `index` (2), which every config has. A step that names no locks
+  holds one of them: `network` for a source, `cpu` for a grouped step
+  with inputs, `index` for any other step with inputs; so a download
+  waiting out a rate limit never keeps a render from starting. A
+  `[[locks]]` entry of the same name resizes one, and `--parallelism N`
+  sets `network` and `cpu` to N, over the config.
 
-An output the step says nothing about is content-hashed instead. That is
-`tree_version`, whose only caller in this crate is `resolve_outputs`, and it
-is only ever reached for a step that just ran — hashing is always correct and always slower, since it
-reads every file under the output. When it fires it says so on the event
-stream: an unreported version costs a full read of the tree, and #225 is the
-case for what a slow path nobody can see costs in the end.
+Neither `locks` nor `reads` is in the fingerprint: they change when a
+step may run, not what it makes. A config edit that changes only them
+is still taken on mid-sync, like any other. The built-in steps that read files are
+marked by the loader (`UNPINNED_BUILTINS` in `config.rs`: the qmd index,
+which globs render trees' `.md` files, and perseus's render, which reads
+its TEI files); any step may say `reads` itself.
 
-The runner never reads a tree to version it on a step's behalf. A step that
-did not run contributes the version recorded for its output last time, or
-`UNKNOWN`. Reading gigabytes to answer a question a step can answer from a
-commit hash — for work this run already decided not to do — is the thing
-that policy exists to prevent.
+## How the loop is proven
 
-**The step's fingerprint is folded into every reported version.** A step
-reports on its content and has no way to know its own definition changed.
-Without folding, a bumped `code_version` re-runs the step (its fingerprint
-moved) while the reported version stays identical, so consumers skip: the
-tree is rebuilt and the index keeps serving what the old definition
-produced. A version read from a store is not folded: a rebuild that
-changes rows is a new commit, and one that changes nothing leaves nothing
-new to read.
+`//datalib/backend/dag:supervisor_harness_test` asks one question: does
+the loop manage processes correctly? A puppet step (`tests/puppet`)
+does only what it is told over a FIFO and acks each instruction; the
+harness (`tests/supervisor_harness`) writes a real `config.toml` of
+puppets, runs the loop in-process under `host::run_idle` as the server
+does, and plays a person through the store. It waits only on what it
+can observe (an ack, a loop event, an announcement), each under a
+deadline, and asserts only what the loop owns: processes started and
+ended, never two of one step at once (checked on every start), each
+request's outcome, each run's recorded status, the versions recorded
+and handed on, the queues. Nothing about what a step wrote. Product
+timers a scenario depends on (stop grace, retry backoff, backstop) are
+parameters it sets; no test sleeps.
 
-`ABSENT` and `UNKNOWN` are compared for equality like any other version,
-which gives the right answer in both directions. A tree that was never
-produced and still isn't compares equal to itself, so a consumer that
-already recorded it is not dirtied; one that existed and was deleted moves
-to a different string, so its consumers re-run. A real version always
-contains a colon (`<fingerprint>:<version>`), so it can never collide with
-either sentinel.
+Beside the scenarios, a seeded random walk over all of it keeps the
+invariants after every episode. A failure prints its seed and the last
+40 things seen; `HARNESS_SEED=<n>` replays one walk,
+`HARNESS_SEEDS=<n>` runs that many (32 by default):
+
+```sh
+bazelisk test //datalib/backend/dag:supervisor_harness_test --test_env=HARNESS_SEED=27
+```
+
+## Versions: reported by the step
+
+**The loop never opens a step's output.** It takes the version a step
+reports, on each seal and in its outcome, and compares it for equality,
+nothing more. That is what keeps it agnostic to what the steps run: a
+doltlite store, a directory of files, or anything else.
+
+**A version should be a function of the output's content**, so that two
+runs over the same data report the same string and "unchanged" is
+something the loop *derives* rather than something a step asserts. A
+doltlite commit hash is one: the store's head moves only when a commit
+changed something. The built-in steps report exactly that, and spell it the
+same way on a seal and in the outcome, so finishing on the commit last
+sealed moves nothing downstream.
+
+**A step that reports no version gets a new one on every success**
+(`<fingerprint>:run-<invocation id>`), so everything that reads it runs
+again, as `make` would with no timestamps to compare. That is always safe
+and sometimes wasteful; the loop says so on the event stream when it
+happens, and a step that wants its readers to skip reports a version.
+
+**A failed or stopped step's reported version stands**: what it committed
+before it ended, its consumers read (`plans/supervisor.md` §2.5).
+`datalib-step` reports its store's head however it ends, so a commit its
+writer published at open, or at the stop, reaches them. One that reports
+nothing moves nothing, since its tree may be half-written. The one thing
+no report can carry: a step killed outright after publishing and before
+saying so reaches its consumers at its next run, not at once.
+
+A step that did not run contributes the version recorded for its output
+last time, or `UNKNOWN`, which compares equal to itself so two runs that
+both know nothing agree.
+
+**The step's fingerprint is folded into every version.** A step reports on
+its content and has no way to know its own definition changed. Without
+folding, a bumped `code_version` re-runs the step (its fingerprint moved)
+while the reported version stays identical, so consumers skip: the tree is
+rebuilt and the index keeps serving what the old definition produced. A
+real version therefore always contains a colon (`<fingerprint>:<version>`)
+and can never collide with `UNKNOWN`.
 
 ## Diagnostics: severity is blast radius, not mood
 
@@ -291,9 +365,9 @@ naming no step) looks exactly like one it did.
   (`http/src/supervisor.rs`), so every `datalib-dag` sync is a client of
   it. A `datalib-dag` is never refused for the lock: a sync is a request
   row in `system/supervisor.sqlite`, so it writes its row and follows it
-  while whoever holds the lock runs it, trying the lock again every half
-  second in case that loop ends first (`supervisor/store.rs`,
-  `docs/dev/plans/supervisor.md` §2.8). Only `--reset`, which empties
+  while whoever holds the lock runs it, trying the lock again whenever
+  anything is announced, its release included, in case that loop ends
+  first (`docs/dev/plans/supervisor.md` §2.8). Only `--reset`, which empties
   stores, needs the root to itself and is refused while a loop runs —
   always, with the app up; the app runs its own resets between syncs.
 - **One server per data root**, which `datalib-http` takes for its own
@@ -333,8 +407,8 @@ taking, so the probe holds the lock for an instant, and a server that has
 not got the lock yet probes on every change under the root — most often
 just as a run starts. A
 `--reset` that finds the lock held therefore keeps trying for two seconds
-before it refuses; a sync that meets a probe follows for half a second and
-takes the lock on its next try.
+before it refuses; and a probe that found the lock free announces that it
+let go, so a sync that met the probe takes the lock at once.
 
 ## Progress: the store takes positions, never deltas
 
@@ -369,15 +443,62 @@ has learned it will do. Announcing no total at all is fine and means
 "size unknown"; the sink then publishes no `queued`, which is not the
 same as publishing zero, because zero means finished.
 
+## What wakes the loop
+
+Nothing on a timer. **Whoever commits to `system/supervisor.sqlite`
+announces it**, the way a step announces a seal. `Store` does, after
+every commit it makes (`request opened <id>`, `turned off <step>`, `record
+saved`, …), and so do the two writers that are not the store: the
+server, when its watch sees `config.toml` move (`config changed`, which
+is what makes the loop re-read its config), and whoever lets go of
+`runner-lock`. `supervisor/announce.rs` is all of it.
+
+A listener is a FIFO in `system/supervisor-listeners/`, named
+`<pid>-<n>.fifo`. An announcement is one line, shorter than a pipe
+writes at once, written to every FIFO there. A FIFO nobody holds open
+belongs to a process that is gone, and the next announcement removes it.
+A listener is made before the state it guards is read, so a line
+announced in between waits in the pipe. The loop, the idle host, the CLI
+following its request, `POST /api/requests` waiting for the loop to take
+its request on, and the UI's change stream each hold one.
+
+**Why not watch the database file.** A file watch fires on writes, not
+commits: in rollback-journal mode SQLite writes the database file during
+a commit, and a large transaction can spill pages before it commits.
+FSEvents says nothing about writes to a file a process holds open, which
+the loop always does. And it needs code per OS. Why FIFOs and not Unix
+sockets: a socket's path is limited to about 104 bytes, and a Bazel
+test's temporary directory is longer than that.
+
+**The backstop.** A listener that has heard nothing for 30 seconds reads
+the store's `PRAGMA data_version`. If the store moved and nothing is
+announced for it by the next look, a writer bypassed `Store` (a `sqlite3`
+shell, an older build): that is logged at ERROR and counted
+(`announce::missed_announcements`), and tests assert the count is zero.
+It is the only timer, and it exists to catch that bug.
+
+A `datalib-dag` running the loop with no server up has nobody watching
+the config, so it takes an edit on at its next busy period, not mid-sync.
+
+The loop's idle side lives once, in `supervisor::host::run_idle`: a busy
+period whenever a request is open, requests asked to stop before any
+period took them closed as `stopped`, the record settled when the
+switches or the config move, then a wait for an announcement, a nudge (in-memory work such as a
+reset) or the host's stop. The server's host and the tests both run it.
+
 ## The record
 
 The loop's memory is its **record**, in `system/supervisor.sqlite` beside
-the requests and pauses (`supervisor/record.rs`). It is plain SQLite, so
-any `sqlite3` reads it, and only the holder of `runner-lock` writes it:
+the requests and the steps turned off (`supervisor/record.rs`). It is plain SQLite in
+rollback-journal mode, so any `sqlite3` reads it, and only the holder of
+`runner-lock` writes it. `supervisor_contention_test` runs seven
+processes on one store (people opening requests, the loop saving, the
+server reading) and checks that every write lands and that the file's
+header says rollback-journal:
 
 | table | one row per | what it holds |
 |---|---|---|
-| `steps` | step | its state now (`state`, `state_detail`, `paused_by`, and the open `request` it serves), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
+| `steps` | step | its state now (`state`, `state_detail`, `turned_off_by`, and the open `request` it serves), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
 | `sinks` | tree a step writes | the version it last published |
 | `runs` | busy period of the loop | when it started and finished |
 | `run_steps` | step the newest run has reached | what it is doing in that run |

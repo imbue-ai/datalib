@@ -2,9 +2,11 @@
 // locators pierce that). The search grid's rows carry `data-row` — the
 // index the grid renders them at — and nothing naming the record, so a
 // row is found by asking the card's grid api (`window.__fwGridApi`,
-// see cards/GridCard.ce.vue) where a uuid's row is. The typed table
+// see cards/GridCard.ce.vue) where a uuid's row is. The grid loads a
+// search a page at a time, so a row further down is sought first. The typed table
 // viewer's rows (the Manage tree, the commit history) carry their key
-// as `data-key`; those helpers are further down.
+// as `data-key`; those helpers are further down. Before writing a spec,
+// read docs/dev/testing.md §"Writing a spec that does not flake".
 
 import { expect, type Locator, type Page } from "@playwright/test";
 
@@ -25,9 +27,14 @@ export const searchMenuItem = (page: Page, name: string | RegExp) =>
 /// The card's grid api on `window.__fwGridApi`, for `page.evaluate`.
 export type GridApi = {
   rowIndexOf: (uuid: string) => number | null;
+  /// Load pages until the row is held; its index, or null.
+  seek: (uuid: string) => Promise<number | null>;
+  /// What a header dropped on the search bar does.
+  dropOnSearch: (colId: string) => void;
+  /// A search, a page, or a group's page on its way.
+  busy: () => boolean;
   uuidAt: (row: number) => string | null;
   rows: () => Record<string, unknown>[];
-  filteredRows: () => Record<string, unknown>[];
   scrollToRow: (row: number) => void;
   scrollToColumn: (id: string) => void;
   isSelected: (uuid: string) => boolean;
@@ -37,6 +44,18 @@ export type GridApi = {
   showColumns: (ids: string[]) => void;
   groupBy: (ids: string[]) => void;
 };
+
+/// Wait until nothing the grid asked for is still on its way.
+export async function gridSettled(page: Page) {
+  await expect
+    .poll(
+      () => page.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.busy()),
+      {
+        message: "the grid never finished loading",
+      },
+    )
+    .toBe(false);
+}
 
 /// The uuid of the first row the grid has, whatever is at the top of
 /// the viewport — a stable handle for a row that a scroll or a sort
@@ -63,9 +82,9 @@ const rowLocator = (page: Page, rowIndex: number): Locator =>
 // column — otherwise the row is there and the cell it came for is not.
 const nudgeRowIntoView = (page: Page, uuid: string, colId?: string): Promise<number | null> =>
   page.evaluate(
-    ({ uuid, colId }) => {
+    async ({ uuid, colId }) => {
       const a = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
-      const row = a.rowIndexOf(uuid);
+      const row = a.rowIndexOf(uuid) ?? (await a.seek(uuid));
       if (row != null) a.scrollToRow(row);
       if (colId) a.scrollToColumn(colId);
       return row;
@@ -84,22 +103,23 @@ const nudgeRowIntoView = (page: Page, uuid: string, colId?: string): Promise<num
 // that has just been resized), waiting alone never converges. So the
 // nudge is inside the poll, and gets repeated until the row is there.
 async function scrollRowIntoView(page: Page, uuid: string, colId?: string): Promise<number> {
-  const rowIndex = await nudgeRowIntoView(page, uuid, colId);
-  expect(rowIndex, `row for uuid=${uuid} found in grid`).not.toBeNull();
+  // The index is read afresh on every try: rows loading above this one,
+  // as they do when the grid is scrolled towards its older end, move it.
+  let rowIndex: number | null = null;
   await expect
     .poll(
       async () => {
-        await nudgeRowIntoView(page, uuid, colId);
-        return rowLocator(page, rowIndex as number).count();
+        rowIndex = await nudgeRowIntoView(page, uuid, colId);
+        return rowIndex == null ? -1 : rowLocator(page, rowIndex).count();
       },
       {
         timeout: 15_000,
         intervals: [100, 250, 250, 500],
-        message: `row ${rowIndex} (uuid=${uuid}) never rendered after being scrolled to`,
+        message: `row uuid=${uuid} was not found, or never rendered after being scrolled to`,
       },
     )
     .toBeGreaterThan(0);
-  return rowIndex as number;
+  return rowIndex as unknown as number;
 }
 
 // Scroll a row into view and act on it, retrying the *pair*.
@@ -310,33 +330,80 @@ export async function pickRowMenu(
   });
 }
 
-/// A row's status. The column paints an icon, so the state is the
-/// icon's accessible name — the same word a person gets by hovering.
-/// Null while the cell is mid-repaint or the row is virtualized away.
-export async function statusOf(page: Page, id: string): Promise<string | null> {
-  const el = pipelineRow(page, id).locator('[col-id="status"] [role="img"]');
-  if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("aria-label");
+/// One drawing of a Pipeline row: every cell a spec reads, taken in one
+/// pass over the DOM so no two values come from different paints. The
+/// server sends a row with its config and the loop's record already
+/// joined, so in a drawn row a null means the value is really absent.
+export type RowReading = {
+  /// The status icon's accessible name — the word a person gets by
+  /// hovering.
+  status: string;
+  /// The exact instants, off the stamp cells' `title`. Not the visible
+  /// "5 minutes ago", which drifts on its own. Null: the step never ran
+  /// (or never succeeded), and the cell shows "—".
+  lastSynced: string | null;
+  lastSuccess: string | null;
+  /// The Bytes label over the sparkline, as drawn. Null: nothing on disk.
+  disk: string | null;
+  /// The Activity chips' title; "" when there are none.
+  activity: string;
+};
+
+/// How long a row may take to be drawn: a remount fetches the rows after
+/// the shell has painted.
+export const ROW_DRAWN = 15_000;
+
+/// A row as drawn right now, or null while it is not drawn: its group is
+/// closed, the page is remounting, or the grid is repainting it. Only for
+/// a poll that treats the null as "not yet"; everything else reads
+/// through `readRow`, which waits it out.
+export async function sampleRow(page: Page, id: string): Promise<RowReading | null> {
+  const [reading] = await pipelineRow(page, id).evaluateAll((rows) =>
+    rows.slice(0, 1).map((row) => {
+      const status = row
+        .querySelector('[col-id="status"] [role="img"]')
+        ?.getAttribute("aria-label");
+      if (!status) return null;
+      const stamp = (col: string) =>
+        row.querySelector(`[col-id="${col}"] [title]`)?.getAttribute("title") ?? null;
+      return {
+        status,
+        lastSynced: stamp("last_synced"),
+        lastSuccess: stamp("last_success"),
+        disk: row.querySelector('[col-id="disk"] .tg-plot-label')?.textContent?.trim() ?? null,
+        activity: row.querySelector('[col-id="activity"] .tg-chips')?.getAttribute("title") ?? "",
+      };
+    }),
+  );
+  return reading ?? null;
 }
 
-/// The exact instant a row last ran, off the Last-synced cell's
-/// `title`. Not the visible text, which reads "5 minutes ago" and
-/// drifts on its own — comparing that across a sync would compare two
-/// clocks rather than two records. Null for a row that has never run,
-/// which renders "—" with no title to read.
+/// A row once it is drawn. Returns the reading the wait matched, never a
+/// fresh read, which could land on the next repaint.
+export async function readRow(page: Page, id: string, timeout = ROW_DRAWN): Promise<RowReading> {
+  let reading: RowReading | null = null;
+  await expect
+    .poll(async () => (reading = await sampleRow(page, id)) !== null, {
+      timeout,
+      intervals: [100, 200],
+      message: `${id} was never drawn: is its group open?`,
+    })
+    .toBe(true);
+  return reading!;
+}
+
+export async function statusOf(page: Page, id: string): Promise<string> {
+  return (await readRow(page, id)).status;
+}
+
+/// Null only for a row that has never run.
 export async function stampOf(page: Page, id: string): Promise<string | null> {
-  return stampIn(page, id, "last_synced");
+  return (await readRow(page, id)).lastSynced;
 }
 
-/// `stampOf` for the Last-success cell.
+/// Null only for a row that has never succeeded.
 export async function lastSuccessOf(page: Page, id: string): Promise<string | null> {
-  return stampIn(page, id, "last_success");
-}
-
-async function stampIn(page: Page, id: string, column: string): Promise<string | null> {
-  const el = pipelineRow(page, id).locator(`[col-id="${column}"] [title]`);
-  if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("title");
+  return (await readRow(page, id)).lastSuccess;
 }
 
 /// States a run will not move a step out of.
@@ -432,25 +499,6 @@ export async function statusLog(page: Page, id: string): Promise<string[]> {
   }, id);
 }
 
-/// A row's status and Last-synced stamp, read from one paint of it. Read
-/// one after the other, the two can come from different paints: a sync
-/// the loop takes on at once can finish between the reads, and "Stopped"
-/// from before it beside the stamp it just wrote reads as that sync
-/// having stopped.
-async function statusAndStampOf(
-  page: Page,
-  id: string,
-): Promise<{ status: string | null; stamp: string | null }> {
-  const [reading] = await pipelineRow(page, id).evaluateAll((rows) =>
-    rows.slice(0, 1).map((row) => ({
-      status:
-        row.querySelector('[col-id="status"] [role="img"]')?.getAttribute("aria-label") ?? null,
-      stamp: row.querySelector('[col-id="last_synced"] [title]')?.getAttribute("title") ?? null,
-    })),
-  );
-  return reading ?? { status: null, stamp: null };
-}
-
 /// Wait for a row to finish a run newer than the one it was showing.
 async function settleRowOnly(
   page: Page,
@@ -462,9 +510,13 @@ async function settleRowOnly(
   await expect
     .poll(
       async () => {
-        const reading = await statusAndStampOf(page, id);
-        last = reading.status ?? "(no status)";
-        const stamp = reading.stamp;
+        // Status and stamp from one paint: read apart, "Stopped" from
+        // before a sync beside the stamp that sync just wrote reads as
+        // the sync having stopped.
+        const reading = await sampleRow(page, id);
+        if (!reading) return "(not drawn)";
+        last = reading.status;
+        const stamp = reading.lastSynced;
         return TERMINAL.test(last) && stamp !== before ? "finished" : `${last} @ ${stamp}`;
       },
       {
@@ -533,18 +585,7 @@ export async function settleRows(
   const out: Record<string, string> = {};
   for (const id of ids) out[id] = await settleRowOnly(page, id, before[id] ?? null, timeout);
   await settleRunner(page, timeout);
-  // The remount paints the shell first and the rows after it; a caller
-  // reading a settled row straight away would read it on the way to
-  // being painted, and see nothing.
-  for (const id of ids) {
-    await expect
-      .poll(() => statusOf(page, id), {
-        timeout,
-        intervals: [200],
-        message: `${id} was not painted again after the remount`,
-      })
-      .not.toBeNull();
-  }
+  for (const id of ids) await readRow(page, id, timeout);
   return out;
 }
 

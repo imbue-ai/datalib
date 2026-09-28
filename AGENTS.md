@@ -59,7 +59,7 @@ merge conflict waiting to happen.
 
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
 - [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell.
-- [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md).
+- [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md). Writing or fixing a Playwright spec: read its §"Writing a spec that does not flake" first.
 - [`docs/dev/ci.md`](docs/dev/ci.md) — CI, its caches and BuildBuddy, and reading a run.
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — how a release is assembled, and testing its steps from a mac.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md), [`runtime_fetch.md`](docs/dev/runtime_fetch.md), [`docker.md`](docs/dev/docker.md) — what ships beside the binaries: the Chrome-impersonating curl, the Node runtime, the container image.
@@ -180,13 +180,13 @@ datalib/
     runtime/       the data-root layout, which build this is
                    (`build_id`), the bundled-Node resolver (the `npx`
                    fallback is opt-in and loud) and the qmd model
-                   pins. Has NO dependencies, deliberately: the qmd
-                   indexer links it, and is an input to the fixture's
-                   embedding action, so anything it links re-runs that
-                   embed on CI.
+                   pins. No dependencies, so anything can link it.
+    qmd_indexer/   `Index`: the qmd index's operations — register the
+                   collections, keyword-index or embed one source — over
+                   qmd's SDK. Tested against the real qmd.
     qmd_models/    puts qmd's pinned GGUFs in place, sha256-verified,
                    so qmd never fetches one itself. Linked by the step
-                   and the applet, never by the indexer (see above).
+                   and the applet.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
     core/          the app stores plus re-exports of `runtime`.
@@ -231,11 +231,17 @@ tree it writes; `inputs` name steps by that id and are the edges; an
 `[[applets]]` entry is a server the gateway spawns. A built-in step has
 no `command` and runs `datalib-step`.
 
-Each source has an `ingest` step and a `render_markdown` step, and two
-fan-in steps under `unified_index` index every render tree their
-`inputs` name: `grid_index` (the SQL index the grid reads) and
-`qmd_index` (semantic search, one collection per group). Both are read
-by the `unified_index` applet; `datalib-http` never opens them. A render
+Each source has an `ingest` step and a `render_markdown` step, and
+`grid_index` under `unified_index` reads every render tree its `inputs`
+name into the SQL index the grid reads. A searched source fills its own
+collection of the qmd index (free-text search) with two more steps of
+its own, `keyword_index` and then `embed`, so the slow embedding can be
+turned off or run by hand per source. `qmd_aggregator` reads every
+source's pair: it retires the collection of any source it does not name
+and reports on the whole, and removing it turns search off.
+`embedding_map` reads the aggregator and lays the embeddings out on a
+plane for the map card (`datalib/backend/embedding_map/README.md`). All of it is read by the
+`unified_index` applet; `datalib-http` never opens them. A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
@@ -245,8 +251,8 @@ config entry the loader cannot use costs that entry and nothing else;
 cannot serve anything from comes back as `app_ready: false` and the UI
 shows `ConfigErrorView`, live in both directions. The http server runs
 the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
-`runner-lock` for its life; a sync, a stop, a pause is a row it writes
-there (`POST /api/requests`, `/api/steps/<id>/pause`); the Manage tab
+`runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
+there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
 edits the config; a
 root with no config gets the launcher and the first-run screen. See
 `docs/dev/step_protocol.md` for writing a step and `docs/dev/applets.md`
@@ -333,11 +339,17 @@ The rules, none optional; the reasons and measurements are in
   the error path too — dropping the handle only schedules the close.
 - **A reader opens read-only and pins a commit** (`open_reader`, then
   `pin`, then `pinned_<t>` views). Render reads its raw store that way and
-  `grid_index` reads every render store that way.
-- **A reader never runs `dolt_status`.** From a read-only connection it
-  fails the writer's commit and loses the rows behind it (#400). Any
-  other statement a reader adds is presumed guilty until
-  `doltlite_two_process_test` has run with it.
+  `grid_index` reads every render store that way. `dolt_at_` uses no
+  secondary index, so a reader that needs one — the search applet —
+  pins with a read transaction on its read-only connection instead
+  (`DoltRepo::pinned`); it costs the writer nothing, measured at full
+  size. A second process that *moves a ref* is a writer, and refuses
+  the real one's seals (`etl/README.md`).
+- **A statement a reader adds is presumed guilty until
+  `doltlite_two_process_test` has run with it.** Looking like a read is
+  not enough: `dolt_status` from a read-only connection failed the
+  writer's commit and lost its rows until doltlite 0.50.10 (#400); the
+  test now holds it safe. The allowlist is in `etl/README.md`.
 - **Never run a store call on a runtime you are about to drop**;
   `indexed_markdown::blocking` keeps one process-wide runtime for that.
 
@@ -459,7 +471,9 @@ sleep that is long enough on a warm mac is short on a loaded CI runner
 (the one on `2cbcc398` was), and a sleep that is long enough on CI
 makes every local run slower than it needs to be. Poll the row, the
 file, the endpoint — with a deadline, so a hang is a failure that
-names what never arrived rather than a timeout with no message.
+names what never arrived rather than a timeout with no message. In the
+Playwright suite, where most of our flakes have been, the rules are in
+[`testing.md`](docs/dev/testing.md) §"Writing a spec that does not flake".
 
 Three neighbours of the same mistake:
 
@@ -484,6 +498,15 @@ Three neighbours of the same mistake:
   say why. `scripts/flaky_tests.py` names the ones that have already
   flaked; a target it lists twice needs one of those two fixes, not a
   re-run.
+
+## Real data stays out of the repo
+
+**Nothing from a person's mirror goes into the tree or onto GitHub**: not
+a fixture, snapshot, test string or comment, and not a commit message, PR
+description or issue. The repo is public, and a force-pushed commit stays
+reachable by its hash. Learn a shape from a real root, then write the test
+in made-up TNG data; counts, sizes and timings are fine to quote, what the
+records say is not.
 
 ## Common commands
 

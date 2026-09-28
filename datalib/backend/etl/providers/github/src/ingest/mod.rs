@@ -3,22 +3,28 @@
 //! `<data_root>/<name>/raw/entities.doltlite_db`; see [`db`] for the schema and
 //! [`datalib_etl::doltlite_raw`] for the design rationale.
 
-pub mod client;
 pub mod db;
 pub mod schema_raw;
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::LatchkeySettings;
-use datalib_time::IsoOffsetTimestamp;
+use async_trait::async_trait;
+use datalib_etl::http::{
+    default_retryability, HttpResponse, HttpService, LatchkeySettings, Retryability,
+};
+use datalib_etl_forge_ingest_common::{
+    get_change_request, sync, walk_children, Forge, ForgeClient, Listed, SyncOptions,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
+use sqlx::SqlitePool;
 
-pub use client::{GitHubClient, GitHubError, BASE, PER_PAGE};
+pub use datalib_etl_forge_ingest_common::PER_PAGE;
 pub use db::{block_on_load_all, db_path_for, LoadedChild, LoadedPullRequest, LoadedRaw, RawDb};
+
+pub const BASE: &str = "https://api.github.com";
 
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_PR: &str = "pull_request";
@@ -92,218 +98,168 @@ pub struct FetchSummary {
     pub requests: u64,
 }
 
-fn since_for_scope(
-    state: &HashMap<String, String>,
-    scope: &str,
-    refresh_window_days: u32,
-    full: bool,
-    prior: Option<&Value>,
-) -> Option<String> {
-    let raw =
-        datalib_etl::scope_state::since_for_scope(state, scope, refresh_window_days, full, prior)?;
-    // Truncate to YYYY-MM-DD. The raw string is RFC 3339 in seconds
-    // precision, so a 10-char prefix is the date portion.
-    Some(raw.get(..10).unwrap_or(&raw).to_string())
-}
-
-async fn fetch_self(client: &GitHubClient, db: &RawDb) -> Result<()> {
-    let (data, _) = client.get(&format!("{BASE}/user")).await?;
-    if !data.is_object() {
-        anyhow::bail!("/user returned non-object");
+/// GitHub's retry classifier. The default one already treats the
+/// *secondary* rate limit (HTTP 429) and 5xx as retryable; GitHub's
+/// *primary* rate limit is instead a `403` with `x-ratelimit-remaining:
+/// 0` plus an `x-ratelimit-reset` epoch telling us when the window
+/// resets. Map that to a retry with the computed wait so the shared loop
+/// respects it.
+fn github_retryability(resp: &HttpResponse) -> Retryability {
+    if resp.status == 403 && resp.header("x-ratelimit-remaining") == Some("0") {
+        let retry_after = resp.header("x-ratelimit-reset").and_then(|reset| {
+            reset.parse::<i64>().ok().map(|ts| {
+                let now = chrono::Utc::now().timestamp();
+                Duration::from_secs(((ts - now).max(0) as u64).saturating_add(1))
+            })
+        });
+        return Retryability::Retry { retry_after };
     }
-    db.upsert_self_identity(&data).await
+    default_retryability(resp)
 }
 
-async fn search_prs(client: &GitHubClient, scope: &str, since: Option<&str>) -> Result<Vec<Value>> {
-    let mut q = format!("is:pr {scope}");
-    if let Some(s) = since {
-        q.push_str(&format!(" updated:>={s}"));
+struct Github<'a> {
+    db: &'a RawDb,
+}
+
+#[async_trait]
+impl Forge for Github<'_> {
+    type Summary = FetchSummary;
+    const ITEM: &'static str = "PR";
+    const SIGIL: char = '#';
+    const SCOPE_CONFIG_KEY: &'static str = "github:download";
+
+    fn pool(&self) -> &SqlitePool {
+        self.db.pool()
     }
-    let url = format!(
-        "{BASE}/search/issues?q={}&per_page={PER_PAGE}&sort=updated&order=desc",
-        urlencoding::encode(&q)
-    );
-    Ok(client.paginate(&url).await?)
-}
 
-/// Outcome of a discovery pass.
-struct Discovery {
-    /// Sorted unique `(repo_full_name, number)` pairs.
-    keys: Vec<(String, u32)>,
-    /// Next-run cursor per scope. Only scopes that actually searched
-    /// appear, so a failed scope keeps its old cursor and retries.
-    new_state: HashMap<String, String>,
-    /// Scopes whose search call failed and were stepped over. Non-zero
-    /// means discovery was incomplete, so a widened window has *not*
-    /// been satisfied and the config must not be recorded — the blob is
-    /// one row for all scopes, so recording it would lose the widening
-    /// for the scopes that never ran.
-    failed_scopes: usize,
-}
+    fn self_url(&self) -> String {
+        format!("{BASE}/user")
+    }
 
-async fn discover_prs(
-    client: &GitHubClient,
-    scopes: &[String],
-    state: &HashMap<String, String>,
-    refresh_window_days: u32,
-    full: bool,
-    prior: Option<&Value>,
-) -> Result<Discovery> {
-    let mut seen: std::collections::BTreeSet<(String, u32)> = Default::default();
-    let mut new_state: HashMap<String, String> = Default::default();
-    let mut failed_scopes = 0usize;
-    for scope in scopes {
-        let since = since_for_scope(state, scope, refresh_window_days, full, prior);
-        tracing::info!(scope, since, "searching PRs");
-        let results = match search_prs(client, scope, since.as_deref()).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!(scope, error = %e, "search failed; skipping scope");
-                failed_scopes += 1;
-                continue;
-            }
-        };
-        for item in &results {
-            let repo_url = item
-                .get("repository_url")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let repo = repo_url.rsplit("/repos/").next().unwrap_or("");
-            let num = item.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
-            if !repo.is_empty() && num > 0 && repo.contains('/') {
-                seen.insert((repo.to_string(), num as u32));
-            }
+    async fn store_self(&self, me: &Value) -> Result<()> {
+        self.db.upsert_self_identity(me).await
+    }
+
+    async fn search(
+        &self,
+        client: &ForgeClient,
+        scope: &str,
+        _me: &Value,
+        since: Option<&str>,
+    ) -> Result<Vec<Value>> {
+        let mut q = format!("is:pr {scope}");
+        if let Some(s) = since {
+            q.push_str(&format!(" updated:>={s}"));
         }
-        new_state.insert(
-            scope.clone(),
-            IsoOffsetTimestamp::now_local().to_rfc3339_secs(),
+        let url = format!(
+            "{BASE}/search/issues?q={}&per_page={PER_PAGE}&sort=updated&order=desc",
+            urlencoding::encode(&q)
         );
-        tracing::info!(scope, count = results.len(), "scope done");
+        Ok(client.paginate(&url).await?)
     }
-    Ok(Discovery {
-        keys: seen.into_iter().collect(),
-        new_state,
-        failed_scopes,
-    })
-}
 
-async fn fetch_one_pr(
-    client: &GitHubClient,
-    db: &RawDb,
-    repo: &str,
-    num: u32,
-    summary: &mut FetchSummary,
-) -> Result<()> {
-    let pr_url = format!("{BASE}/repos/{repo}/pulls/{num}");
-    let (pr_data, _) = match client.get(&pr_url).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!(repo, num, error = %e, "PR meta failed; skipping");
+    /// Search takes a date: the stamp is RFC 3339 in seconds precision,
+    /// so its 10-char prefix is the date.
+    fn since_param(&self, stamp: String) -> String {
+        stamp.get(..10).unwrap_or(&stamp).to_string()
+    }
+
+    /// No `updated_at`: GitHub's listing is not trusted to skip a fetch.
+    fn listed(&self, item: &Value) -> Option<Listed> {
+        let repo_url = item.get("repository_url")?.as_str()?;
+        let repo = repo_url.rsplit("/repos/").next()?;
+        let number = item.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+        (!repo.is_empty() && number > 0 && repo.contains('/')).then(|| Listed {
+            container: repo.to_string(),
+            number: number as u32,
+            updated_at: String::new(),
+        })
+    }
+
+    async fn any_stored(&self) -> Result<bool> {
+        self.db.any_pull_requests().await
+    }
+
+    async fn fetch_one(
+        &self,
+        client: &ForgeClient,
+        cr: &Listed,
+        summary: &mut FetchSummary,
+    ) -> Result<()> {
+        let (repo, num) = (cr.container.as_str(), cr.number);
+        let pr_url = format!("{BASE}/repos/{repo}/pulls/{num}");
+        let Some(pr_data) = get_change_request(client, &pr_url, "PR", cr).await else {
             return Ok(());
-        }
-    };
-    if !pr_data.is_object() {
-        tracing::error!(repo, num, "PR returned non-object");
-        return Ok(());
-    }
-    db.upsert_pull_request(repo, num, &pr_data).await?;
-    summary.new_prs += 1;
+        };
+        self.db.upsert_pull_request(repo, num, &pr_data).await?;
+        summary.new_prs += 1;
 
-    // Each of these three endpoints returns the PR's *whole* child list, so
-    // a child we hold that the list did not mention was deleted on GitHub —
-    // a resolved review thread, a comment its author removed. That is only
-    // true when the walk actually succeeded, which is why the error is
-    // handled here rather than swallowed by `unwrap_or_default`: an empty
-    // list from a failed request is indistinguishable from "all deleted",
-    // and acting on it would wipe every comment on the PR.
-    let ic_url = format!("{BASE}/repos/{repo}/issues/{num}/comments?per_page={PER_PAGE}");
-    if let Some(ids) = walk_children(client, &ic_url, repo, num, "issue comments").await {
-        for c in &ids.payloads {
-            db.upsert_issue_comment(repo, num, c).await?;
-            summary.new_issue_comments += 1;
-        }
-        summary.pruned += db
-            .prune_pr_children("issue_comments", repo, num, &ids.ids)
-            .await?;
-    }
-
-    let r_url = format!("{BASE}/repos/{repo}/pulls/{num}/reviews?per_page={PER_PAGE}");
-    if let Some(ids) = walk_children(client, &r_url, repo, num, "reviews").await {
-        for r in &ids.payloads {
-            db.upsert_pr_review(repo, num, r).await?;
-            summary.new_reviews += 1;
-        }
-        summary.pruned += db
-            .prune_pr_children("pr_reviews", repo, num, &ids.ids)
-            .await?;
-    }
-
-    let rc_url = format!("{BASE}/repos/{repo}/pulls/{num}/comments?per_page={PER_PAGE}");
-    if let Some(ids) = walk_children(client, &rc_url, repo, num, "review comments").await {
-        for c in &ids.payloads {
-            db.upsert_pr_review_comment(repo, num, c).await?;
-            summary.new_review_comments += 1;
-        }
-        summary.pruned += db
-            .prune_pr_children("pr_review_comments", repo, num, &ids.ids)
-            .await?;
-    }
-    Ok(())
-}
-
-/// One PR child list, and the ids it contained.
-struct ChildListing {
-    payloads: Vec<Value>,
-    ids: std::collections::HashSet<String>,
-}
-
-/// Walk a PR's child endpoint. `None` means the walk failed and this run
-/// learned nothing about that list — the caller must neither prune nor
-/// treat the absence as meaningful.
-async fn walk_children(
-    client: &GitHubClient,
-    url: &str,
-    repo: &str,
-    num: u32,
-    what: &str,
-) -> Option<ChildListing> {
-    match client.paginate(url).await {
-        Ok(payloads) => {
-            let ids = payloads
+        // Each of these endpoints returns the PR's *whole* child list, so
+        // a child we hold that the list did not mention was deleted on
+        // GitHub — a resolved review thread, a comment its author removed.
+        for child in CHILDREN {
+            let url = format!("{BASE}/repos/{repo}/{}", (child.path)(num));
+            let Some(listed) = walk_children(client, &url, cr, child.what).await else {
+                continue;
+            };
+            let keep: HashSet<String> = listed
                 .iter()
                 .filter_map(|v| v.get("id").and_then(|i| i.as_i64()))
                 .map(|n| n.to_string())
                 .collect();
-            Some(ChildListing { payloads, ids })
+            self.db
+                .upsert_children(child.table, repo, num, &listed)
+                .await?;
+            *(child.count)(summary) += listed.len();
+            summary.pruned += self
+                .db
+                .prune_pr_children(child.table, repo, num, &keep)
+                .await?;
         }
-        Err(e) => {
-            tracing::warn!(
-                event = "github_child_list_failed",
-                repo, num, list = what, error = %e,
-                "could not list this PR's {what}; leaving what we already hold alone",
-            );
-            None
-        }
+        Ok(())
+    }
+
+    fn record_requests(&self, summary: &mut FetchSummary, requests: u64) {
+        summary.requests = requests;
     }
 }
 
-/// Scope key for this provider's [`datalib_etl::scope_config`] blob.
-/// Discovery scopes share one record because `refresh_window_days` is a
-/// single workspace-wide knob; the per-scope cursors it interacts with
-/// stay in `sync_scope_state`.
-const SCOPE_CONFIG_KEY: &str = "github:download";
-
-/// The subset of [`FetchOptions`] that decides which data lands on disk.
-/// `max_prs` / `targets` / `full_sync` are per-run knobs and one-off
-/// overrides, so recording them would make a smoke run read as a config
-/// change to the next real sync.
-fn scope_config_blob(refresh_window_days: u32) -> Value {
-    datalib_etl::scope_state::refresh_window_blob(refresh_window_days)
+/// One of a PR's child lists: where it is read, the table it lands in,
+/// and the summary count it adds to.
+struct Child {
+    table: &'static str,
+    what: &'static str,
+    path: fn(u32) -> String,
+    count: fn(&mut FetchSummary) -> &mut usize,
 }
 
+const CHILDREN: [Child; 3] = [
+    Child {
+        table: "issue_comments",
+        what: "issue comments",
+        path: |num| format!("issues/{num}/comments?per_page={PER_PAGE}"),
+        count: |s| &mut s.new_issue_comments,
+    },
+    Child {
+        table: "pr_reviews",
+        what: "reviews",
+        path: |num| format!("pulls/{num}/reviews?per_page={PER_PAGE}"),
+        count: |s| &mut s.new_reviews,
+    },
+    Child {
+        table: "pr_review_comments",
+        what: "review comments",
+        path: |num| format!("pulls/{num}/comments?per_page={PER_PAGE}"),
+        count: |s| &mut s.new_review_comments,
+    },
+];
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_router();
-    let db = opts.db.clone();
+    let client = ForgeClient::new(
+        HttpService::Github,
+        github_retryability,
+        opts.latchkey.clone(),
+    );
     let run_config = json!({
         "scopes": opts.scopes,
         "refresh_window_days": opts.refresh_window_days,
@@ -311,88 +267,21 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "targets": opts.targets,
         "full_sync": opts.full_sync,
     });
-    let run = DownloadRun::start(db.pool(), &run_config).await?;
-
-    // Diff the scope-affecting params against the ones that produced the
-    // current cursors. `None` (fresh store, or one written before
-    // `sync_scope_config` existed) means no adjustment — see the module
-    // docs on `scope_config`.
-    let scope_cfg = scope_config_blob(opts.refresh_window_days);
-    let prior_scope_cfg =
-        datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
-
-    let client = GitHubClient::with_latchkey(opts.latchkey.clone());
-    let mut summary = FetchSummary::default();
-    // Whether discovery actually covered every scope this run. Only then
-    // has the run satisfied `refresh_window_days`; see `scope_config`.
-    let discovery_complete = std::sync::atomic::AtomicBool::new(true);
-
-    let work = async {
-        fetch_self(&client, &db).await?;
-
-        let had_prs = db.any_pull_requests().await?;
-        let pr_keys: Vec<(String, u32)> = if !opts.targets.is_empty() {
-            // Explicit targets skip discovery entirely, so this run says
-            // nothing about whether a widened window was covered.
-            discovery_complete.store(false, std::sync::atomic::Ordering::Relaxed);
-            opts.targets.clone()
-        } else {
-            let state = db.load_scope_state().await?;
-            let discovered = discover_prs(
-                &client,
-                &opts.scopes,
-                &state,
-                opts.refresh_window_days,
-                opts.full_sync || !had_prs,
-                prior_scope_cfg.as_ref(),
-            )
-            .await?;
-            if discovered.failed_scopes > 0 {
-                discovery_complete.store(false, std::sync::atomic::Ordering::Relaxed);
-            }
-            // Persist updated state *before* per-PR fetch so a crash
-            // halfway doesn't lose discovery progress.
-            for (k, v) in &discovered.new_state {
-                db.upsert_scope_state(k, v).await?;
-            }
-            discovered.keys
-        };
-        let pr_keys: Vec<(String, u32)> = if let Some(cap) = opts.max_prs {
-            pr_keys.into_iter().take(cap).collect()
-        } else {
-            pr_keys
-        };
-        tracing::info!(count = pr_keys.len(), "PRs to fetch");
-
-        opts.progress.set_length(Some(pr_keys.len() as u64));
-        for (repo, num) in &pr_keys {
-            opts.progress.inc(1);
-            opts.progress.set_message(&format!("{repo}#{num}"));
-            if let Err(e) = fetch_one_pr(&client, &db, repo, *num, &mut summary).await {
-                tracing::error!(repo, num, error = %e, "PR fetch failed; skipping");
-            }
-            if opts.sleep_between > Duration::ZERO {
-                tokio::time::sleep(opts.sleep_between).await;
-            }
-        }
-        Ok::<(), anyhow::Error>(())
-    };
-
-    let result = work.await;
-    summary.requests = client.request_count();
-    // Record the config only once this run has actually satisfied it. A
-    // skipped scope or a targets-only run leaves the prior blob in place
-    // so the next run re-plans the widening.
-    datalib_etl::scope_config::store_if_satisfied(
-        db.pool(),
-        SCOPE_CONFIG_KEY,
-        &scope_cfg,
-        result.is_ok() && discovery_complete.load(std::sync::atomic::Ordering::Relaxed),
+    sync(
+        &Github { db: &opts.db },
+        &client,
+        SyncOptions {
+            scopes: &opts.scopes,
+            refresh_window_days: opts.refresh_window_days,
+            max_items: opts.max_prs,
+            targets: &opts.targets,
+            full_sync: opts.full_sync,
+            sleep_between: opts.sleep_between,
+            progress: &opts.progress,
+            run_config,
+        },
     )
-    .await;
-    run.finish(&result, &summary).await;
-    result?;
-    Ok(summary)
+    .await
 }
 
 pub fn parse_pr_ref(s: &str) -> Result<(String, u32)> {
@@ -425,57 +314,5 @@ mod tests {
         let (r, n) = parse_pr_ref("https://github.com/imbue-ai/mngr/pull/1650").unwrap();
         assert_eq!(r, "imbue-ai/mngr");
         assert_eq!(n, 1650);
-    }
-}
-
-#[cfg(test)]
-mod scope_config_tests {
-    use super::*;
-    use datalib_etl::scope_state::REFRESH_WINDOW_KEY;
-    use serde_json::json;
-
-    #[test]
-    fn blob_records_only_the_refresh_window() {
-        // Per-run budgets and one-off overrides must stay out: a
-        // `--max-prs 5` smoke run must not read as a config change to
-        // the next real sync.
-        // `max_prs` / `full_sync` are per-run overrides; only the
-        // window reaches the blob, so passing it alone is the point.
-        let blob = scope_config_blob(30);
-        assert_eq!(blob, json!({ REFRESH_WINDOW_KEY: 30 }));
-    }
-
-    #[test]
-    fn blob_round_trips_into_the_since_policy() {
-        // The blob this provider writes is the same shape
-        // `since_for_scope` reads back — the pairing the whole scheme
-        // depends on.
-        let blob = scope_config_blob(30);
-        let mut state = std::collections::HashMap::new();
-        state.insert("s".to_string(), "2026-06-01T00:00:00Z".to_string());
-        // Unchanged window: cursor stands.
-        assert_eq!(
-            datalib_etl::scope_state::since_for_scope(&state, "s", 30, false, Some(&blob))
-                .as_deref(),
-            Some("2026-06-01T00:00:00Z")
-        );
-        // Widened to unbounded: filter dropped entirely.
-        assert_eq!(
-            datalib_etl::scope_state::since_for_scope(&state, "s", 0, false, Some(&blob)),
-            None
-        );
-    }
-
-    #[test]
-    fn discovery_is_incomplete_when_a_scope_fails() {
-        // The blob is one row for every scope, so recording it after a
-        // partial discovery would lose the widening for the scopes that
-        // never searched.
-        let d = Discovery {
-            keys: Vec::new(),
-            new_state: Default::default(),
-            failed_scopes: 1,
-        };
-        assert!(d.failed_scopes > 0, "must block recording");
     }
 }

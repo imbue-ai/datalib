@@ -10,76 +10,11 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use datalib_etl::synthesize::Synthesizer;
+use datalib_etl_slack::recorded::record_workspace;
 use datalib_etl_slack::synthesize::SlackSynth;
 use serde_json::{json, Value};
 
-const TS_SINCE: &str = "1704067200.000000";
 const STEP: &str = "work-slack/ingest";
-
-fn write_envelope(path: &Path, line: &Value) {
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let mut s = serde_json::to_string(line).unwrap();
-    s.push('\n');
-    fs::write(path, s).unwrap();
-}
-
-fn write_fixture(api: &Path, channels: &[&str]) {
-    write_envelope(
-        &api.join("raw_api/auth.test/run-1.jsonl"),
-        &json!({
-            "method": "auth.test", "params": {},
-            "response": {"ok": true, "user_id": "U1", "team": "Enterprise", "team_id": "T1"},
-        }),
-    );
-    write_envelope(
-        &api.join("raw_api/users.list/run-1.jsonl"),
-        &json!({
-            "method": "users.list",
-            "params": {"limit": "200"},
-            "response": {"ok": true, "members": [
-                {"id": "U1", "name": "picard", "real_name": "Jean-Luc Picard"},
-            ]},
-        }),
-    );
-    let listed: Vec<Value> = channels
-        .iter()
-        .map(
-            |c| json!({"id": c, "name": c.to_lowercase(), "is_member": true, "is_archived": false}),
-        )
-        .collect();
-    write_envelope(
-        &api.join("raw_api/conversations.list/run-1.jsonl"),
-        &json!({
-            "method": "conversations.list",
-            "params": {
-                "exclude_archived": "true",
-                "limit": "200",
-                "types": "public_channel,private_channel",
-            },
-            "response": {"ok": true, "channels": listed, "has_more": false},
-        }),
-    );
-    for (i, c) in channels.iter().enumerate() {
-        write_envelope(
-            &api.join(format!("raw_api/conversations.history/{c}.jsonl")),
-            &json!({
-                "method": "conversations.history",
-                "params": {
-                    "channel": c,
-                    "include_all_metadata": "true",
-                    "inclusive": "true",
-                    "limit": "200",
-                    "oldest": TS_SINCE,
-                },
-                "response": {
-                    "ok": true,
-                    "messages": [{"ts": format!("1735689600.0001{i:02}"), "user": "U1", "text": format!("in {c}")}],
-                    "has_more": false,
-                },
-            }),
-        );
-    }
-}
 
 fn doltlite(db: &Path, sql: &str) -> Vec<String> {
     let bin = std::env::var_os("DOLTLITE_BIN").expect("DOLTLITE_BIN");
@@ -107,7 +42,10 @@ fn sigint_ends_the_ingest_at_a_channel_boundary_with_a_final_commit() {
     let api = d.path().join("input_raw");
     let playback = d.path().join("playback");
     fs::create_dir_all(&root).unwrap();
-    write_fixture(&api, &["C1", "C2", "C3", "C4", "C5"]);
+    record_workspace(&api, &["C1", "C2", "C3", "C4", "C5"], |i, c| {
+        json!([{"ts": format!("1735689600.0001{i:02}"), "user": "U1", "text": format!("in {c}")}])
+    })
+    .unwrap();
     SlackSynth::new(&api).synthesize(&playback).unwrap();
     let params = d.path().join("params.json");
     fs::write(

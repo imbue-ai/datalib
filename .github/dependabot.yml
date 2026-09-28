@@ -4,8 +4,9 @@
 #
 # Not every lockfile in the tree is here. The backend's Cargo.lock and
 # requirements.txt are inputs to bzlmod extensions, so a bump to either
-# also has to repin MODULE.bazel.lock (`bazel mod deps
-# --lockfile_mode=update`) — which Dependabot cannot do, so every such PR
+# also has to repin MODULE.bazel.lock (`bazelisk build --nobuild //...`;
+# not `bazel mod deps`, which aborts on protobuf's lockfile-less
+# crate_universe use) — which Dependabot cannot do, so every such PR
 # fails at analysis. Those two are bumped by hand (tools/repin_cargo.sh;
 # AGENTS.md § "Python deps"). The tauri Cargo.lock is outside Bazel and
 # stays.

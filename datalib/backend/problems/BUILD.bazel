@@ -20,6 +20,8 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/id:datalib_id",
+        # `search(...)` on a table emits `impl ::datalib_query::table::SearchTable`.
+        "//datalib/backend/query:datalib_query",
         # `PortableTable` emits `impl ::datalib_table::BulkUpsertable`.
         "//datalib/backend/table:datalib_table",
         "@datalib_crates//:anyhow",

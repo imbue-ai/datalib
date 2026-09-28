@@ -93,10 +93,9 @@ async fn two_independent_files_unify_and_diff() {
     assert_ne!(left, right, "the two scans must be distinct commits");
 
     let unified = tmp.path().join("unified.doltlite_db");
-    store::unify(&unified, &left_path, &right_path)
+    let pool = store::unify(&unified, &left_path, &right_path)
         .await
         .unwrap();
-    let pool = store::open_scratch(&unified).await.unwrap();
 
     let diff = fetch_both(&pool, &left, &right).await.unwrap();
     let mut removed: Vec<&str> = diff.removed.iter().map(|e| e.path.as_str()).collect();
@@ -145,10 +144,11 @@ async fn two_independent_files_unify_and_diff() {
     pool.close().await;
 }
 
-/// The trap that made the first Rust port fail, recorded so it cannot
-/// come back silently.
+/// `store::unify` hands back the connection that fetched, so that
+/// connection has to read the tables it fetched. On doltlite before
+/// 0.50.12 it could not: the per-table modules were registered at open.
 #[tokio::test]
-async fn the_fetching_connection_cannot_see_what_it_fetched() {
+async fn the_fetching_connection_sees_what_it_fetched() {
     let tmp = tempfile::tempdir().unwrap();
     let left_path = tmp.path().join("l.doltlite_db");
     let right_path = tmp.path().join("r.doltlite_db");
@@ -172,20 +172,10 @@ async fn the_fetching_connection_cannot_see_what_it_fetched() {
             .unwrap();
     }
 
-    let on_fetching_connection = fetch_both(&pool, &left, &right).await;
-    assert!(
-        on_fetching_connection.is_err(),
-        "the fetching connection unexpectedly saw `files` — if doltlite now \
-         refreshes its vtab registry, drop the reopen in `store::unify`"
-    );
-    pool.close().await;
-
-    // The same file, a new connection: fine.
-    let reopened = store::open_scratch(&scratch).await.unwrap();
-    let diff = fetch_both(&reopened, &left, &right).await.unwrap();
+    let diff = fetch_both(&pool, &left, &right).await.unwrap();
     assert_eq!(diff.removed.len(), 1);
     assert_eq!(diff.added.len(), 1);
-    reopened.close().await;
+    pool.close().await;
 }
 
 /// Two commits in one file need no unification at all.

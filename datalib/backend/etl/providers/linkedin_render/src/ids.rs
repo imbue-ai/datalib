@@ -3,7 +3,7 @@
 //! minted from its export row; a post thread is the post's link. All
 //! provider-global.
 
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Linkedin;
@@ -18,34 +18,20 @@ pub const KIND_SHARE: &str = "share";
 pub const KIND_COMMENT: &str = "comment";
 pub const KIND_POST_ORIGIN: &str = "post_origin";
 
-fn identity(
-    source_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    date_ms: Option<i64>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(date_ms),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 /// No stamp: a connection's `created_at` is the day it was made, but a
 /// "Connected On" of `16 Jun 2026` is a date the export gives without
 /// a time, so the row's stamp is a fabricated midnight and not the
 /// record's own.
 pub fn connection(source_id: &str, url: &str) -> Identity {
-    identity(source_id, KIND_CONNECTION, url.to_string(), None)
+    IDS.mint(source_id, KIND_CONNECTION, url.to_string(), None)
 }
 
 /// A connection row with no profile URL: keyed on name and company so
 /// distinct people do not collapse onto one empty-URL id.
 pub fn connection_without_url(source_id: &str, name: &str, company: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_CONNECTION,
         composite_key(&[name, company]),
@@ -54,7 +40,7 @@ pub fn connection_without_url(source_id: &str, name: &str, company: &str) -> Ide
 }
 
 pub fn connections_group(source_id: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_CONNECTIONS_GROUP,
         "connections".to_string(),
@@ -65,7 +51,7 @@ pub fn connections_group(source_id: &str) -> Identity {
 /// `table` is the export feed (`messages`, `inmail`, …), whose
 /// conversation ids are their own sequences.
 pub fn conversation(source_id: &str, table: &str, conversation_id: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_CONVERSATION,
         composite_key(&[table, conversation_id]),
@@ -74,7 +60,7 @@ pub fn conversation(source_id: &str, table: &str, conversation_id: &str) -> Iden
 }
 
 pub fn message(source_id: &str, table: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_MESSAGE,
         composite_key(&[table, row_id]),
@@ -83,20 +69,20 @@ pub fn message(source_id: &str, table: &str, row_id: &str, date_ms: Option<i64>)
 }
 
 pub fn post(source_id: &str, key: &str) -> Identity {
-    identity(source_id, KIND_POST, key.to_string(), None)
+    IDS.mint(source_id, KIND_POST, key.to_string(), None)
 }
 
 pub fn share(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(source_id, KIND_SHARE, row_id.to_string(), date_ms)
+    IDS.mint(source_id, KIND_SHARE, row_id.to_string(), date_ms)
 }
 
 pub fn comment(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(source_id, KIND_COMMENT, row_id.to_string(), date_ms)
+    IDS.mint(source_id, KIND_COMMENT, row_id.to_string(), date_ms)
 }
 
 /// The placeholder for a post the export left out but commented on.
 pub fn post_origin(source_id: &str, key: &str, date_ms: Option<i64>) -> Identity {
-    identity(source_id, KIND_POST_ORIGIN, key.to_string(), date_ms)
+    IDS.mint(source_id, KIND_POST_ORIGIN, key.to_string(), date_ms)
 }
 
 #[cfg(test)]

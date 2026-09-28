@@ -149,7 +149,7 @@ fn documents_carry_stable_uuids_and_provider_metadata() {
     // conversation_name carries the "<b>.<c> <edition-title>" form;
     // with no CTS the title is the short id.
     assert_eq!(row.conversation_name.as_deref(), Some("1.1 grc2"));
-    assert!(row.text.contains("Θουκυδίδης"));
+    assert!(row.preview.contains("Θουκυδίδης"));
     assert!(row
         .qmd_path
         .as_deref()

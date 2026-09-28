@@ -81,37 +81,20 @@ pub async fn head(pool: &SqlitePool) -> Result<Option<Pin>> {
     commit.map(Pin::at).transpose()
 }
 
-/// Whether this connection has a table it cannot read pinned.
-///
-/// Doltlite registers a `dolt_at_<table>` module per table it finds in
-/// any commit — when the connection opens, and again after that
-/// connection's own `dolt_commit`. A table another process committed
-/// after this connection opened has no module here, and never will:
-/// reading it pinned fails with "no such table: dolt_at_<table>" for as
-/// long as the connection lives. A long-lived reader that finds this
-/// true reopens; a table that is merely uncommitted so far reads the
-/// same way and the reopen is harmless.
-pub async fn has_unpinnable_tables(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
-    let n: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master \
-          WHERE type = 'table' AND name NOT LIKE 'sqlite_%' \
-            AND 'dolt_at_' || name NOT IN (SELECT name FROM pragma_module_list)",
-    )
-    .fetch_one(pool)
-    .await?;
-    Ok(n > 0)
-}
-
-/// True iff `e` is SQLite's "no such table" for `table` read bare or
-/// through its `dolt_at_` module — the fresh-store state, before whatever
-/// owns the table has committed it. Deliberately an exact match on the
-/// one table the query reads, so corruption, bad SQL and missing columns
-/// still surface as errors.
+/// True iff `e` says `table` is not there to read: SQLite's "no such
+/// table" for it bare or for its `dolt_at_` module, or doltlite's "table
+/// not found: <table> at <hash>" for a table the schema has and that
+/// commit does not. The fresh-store state, before whatever owns the table
+/// has committed it. Deliberately a match on the one table the query
+/// reads, so corruption, bad SQL and missing columns still surface as
+/// errors.
 pub fn is_missing_table(e: &sqlx::Error, table: &str) -> bool {
     match e {
         sqlx::Error::Database(db) => {
             let m = db.message();
-            m == format!("no such table: {table}") || m == format!("no such table: dolt_at_{table}")
+            m == format!("no such table: {table}")
+                || m == format!("no such table: dolt_at_{table}")
+                || m.starts_with(&format!("table not found: {table} at "))
         }
         _ => false,
     }
@@ -292,13 +275,11 @@ mod tests {
         assert_eq!(count_at(&r, &first).await.unwrap(), 1);
     }
 
-    /// A table committed after the reader opened cannot be read pinned on
-    /// that connection — the module is registered at open — and the
-    /// reader can tell, and a reopen is the cure. Until the table is
-    /// committed at all it reads as missing, the same as one never
-    /// created.
+    /// A table committed after the reader opened reads pinned on that same
+    /// connection, with no reopen. At a commit from before it existed it
+    /// reads as missing, the same as one never created.
     #[tokio::test]
-    async fn a_table_committed_after_the_reader_opened_needs_a_reopen() {
+    async fn a_table_committed_after_the_reader_opened_reads_without_a_reopen() {
         let td = tempfile::tempdir().unwrap();
         let db = td.path().join("t.doltlite_db");
         let w = writer(&db).await;
@@ -310,7 +291,6 @@ mod tests {
             .await
             .unwrap()
             .expect("a store is born with a commit");
-        assert!(!has_unpinnable_tables(&r).await.unwrap());
         let e = count_at(&r, &born).await.unwrap_err();
         assert!(is_missing_table(&e, "t"), "{e}");
         assert!(!is_missing_table(&e, "u"), "{e}");
@@ -319,22 +299,14 @@ mod tests {
             .execute(&w)
             .await
             .unwrap();
-        assert!(
-            has_unpinnable_tables(&r).await.unwrap(),
-            "created but not committed: no module, and there should not be one"
-        );
         insert(&w, 1).await;
         commit(&w).await.unwrap();
         let first = head(&r).await.unwrap().unwrap();
         assert_ne!(first, born);
-        let e = count_at(&r, &first).await.unwrap_err();
-        assert!(is_missing_table(&e, "t"), "{e}");
-        assert!(has_unpinnable_tables(&r).await.unwrap());
-
-        r.close().await;
-        let r = open_reader(&db).await.unwrap();
-        assert!(!has_unpinnable_tables(&r).await.unwrap());
         assert_eq!(count_at(&r, &first).await.unwrap(), 1);
+        let e = count_at(&r, &born).await.unwrap_err();
+        assert!(is_missing_table(&e, "t"), "{e}");
+        assert!(!is_missing_table(&e, "u"), "{e}");
     }
 
     /// A reader must never be the thing that creates the writer's file.

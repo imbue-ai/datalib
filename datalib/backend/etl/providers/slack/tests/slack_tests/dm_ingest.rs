@@ -1,91 +1,38 @@
 //! Whole-download tests for the `dms` / `dm_conversations` config knobs.
 
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::Path;
 
-use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_slack::ingest::{block_on_load_all, db_path_for, fetch, FetchOptions, RawDb};
-use datalib_etl_slack::synthesize::SlackSynth;
+use datalib_etl_slack::ingest::FetchOptions;
+use datalib_etl_slack::recorded::{
+    record_auth, record_conversations, record_users, History, CHANNEL_TYPES,
+};
 use serde_json::{json, Value};
-use tempfile::tempdir;
-use tokio::sync::Mutex;
 
-/// `PLAYBACK_ENV` is process-global, so these cannot run concurrently.
-static ENV_LOCK: Mutex<()> = Mutex::const_new(());
+use crate::support::{channels_with_messages, fetch_into, msg, Tree};
 
-/// `datetime_to_slack_ts` of 2024-01-01T00:00:00Z — the `oldest` the
-/// downloader emits on a cold start with the default `since`.
-const TS_SINCE: &str = "1704067200.000000";
-
-const CHANNEL_TYPES: &str = "public_channel,private_channel";
 const DM_TYPES: &str = "public_channel,private_channel,im,mpim";
 
-fn write_envelope(path: &Path, line: &Value) {
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let mut s = serde_json::to_string(line).unwrap();
-    s.push('\n');
-    fs::write(path, s).unwrap();
-}
-
 fn write_auth_and_users(api: &Path) {
-    write_envelope(
-        &api.join("raw_api/auth.test/run-1.jsonl"),
-        &json!({
-            "method": "auth.test", "params": {},
-            "response": {"ok": true, "user_id": "U1", "team": "Enterprise", "team_id": "T1"},
-        }),
-    );
-    write_envelope(
-        &api.join("raw_api/users.list/run-1.jsonl"),
-        &json!({
-            "method": "users.list",
-            "params": {"limit": "200"},
-            "response": {"ok": true, "members": [
-                {"id": "U1", "name": "picard", "real_name": "Jean-Luc Picard"},
-                {"id": "U2", "name": "riker", "real_name": "William Riker"},
-                {"id": "U3", "name": "data", "real_name": "Data"},
-            ]},
-        }),
-    );
+    record_auth(api).unwrap();
+    record_users(
+        api,
+        json!([
+            {"id": "U1", "name": "picard", "real_name": "Jean-Luc Picard"},
+            {"id": "U2", "name": "riker", "real_name": "William Riker"},
+            {"id": "U3", "name": "data", "real_name": "Data"},
+        ]),
+    )
+    .unwrap();
 }
 
-fn write_conversations_list(api: &Path, file: &str, types: &str, conversations: Value) {
-    write_envelope(
-        &api.join(format!("raw_api/conversations.list/{file}.jsonl")),
-        &json!({
-            "method": "conversations.list",
-            "params": {
-                "exclude_archived": "true",
-                "limit": "200",
-                "types": types,
-            },
-            "response": {"ok": true, "channels": conversations, "has_more": false},
-        }),
-    );
-}
-
-fn write_history(api: &Path, channel: &str, ts: &str, text: &str) {
-    write_envelope(
-        &api.join(format!("raw_api/conversations.history/{channel}.jsonl")),
-        &json!({
-            "method": "conversations.history",
-            "params": {
-                "channel": channel,
-                "include_all_metadata": "true",
-                "inclusive": "true",
-                "limit": "200",
-                "oldest": TS_SINCE,
-            },
-            "response": {
-                "ok": true,
-                "messages": [{"ts": ts, "user": "U1", "text": text}],
-                "has_more": false,
-            },
-        }),
-    );
+fn write_channels_only(api: &Path) {
+    record_conversations(
+        api,
+        CHANNEL_TYPES,
+        json!([{"id": "C1", "name": "bridge", "is_member": true, "is_archived": false}]),
+    )
+    .unwrap();
 }
 
 fn all_conversations() -> Value {
@@ -112,36 +59,26 @@ fn all_conversations() -> Value {
 /// so the assertion fails instead of a missing fixture producing a
 /// swallowed per-channel warning that looks like a correct skip.
 fn write_all_histories(api: &Path) {
-    write_history(api, "C1", "1735689600.000100", "in the channel");
-    write_history(api, "D1", "1735689600.000200", "dm with riker");
-    write_history(api, "D2", "1735689600.000300", "dm with data");
-    write_history(api, "G1", "1735689600.000400", "group dm");
+    for (channel, ts, text) in [
+        ("C1", "1735689600.000100", "in the channel"),
+        ("D1", "1735689600.000200", "dm with riker"),
+        ("D2", "1735689600.000300", "dm with data"),
+        ("G1", "1735689600.000400", "group dm"),
+    ] {
+        History::cold(channel)
+            .record(api, json!([msg(ts, text)]))
+            .unwrap();
+    }
 }
 
 async fn run_fetch(out: &Path, dms: bool, dm_conversations: Option<Vec<&str>>) {
-    // Open the store here and close it before anything reads it back:
-    // a second live connection to one file makes the `dolt_commit`s
-    // inside `open` fail with "commit conflict".
-    let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let r = fetch(FetchOptions {
-        channels: None,
-        since: "2024-01-01".into(),
-        refresh_window_days: 0,
-        members_only: false,
-        media: false,
+    fetch_into(out, |o| FetchOptions {
         dms,
         dm_conversations: dm_conversations.map(|v| v.into_iter().map(String::from).collect()),
-        ..FetchOptions::new(db.clone())
+        ..o
     })
-    .await;
-    db.commit_all("test").await.unwrap();
-    db.close().await;
-    r.unwrap();
-}
-
-fn channels_with_messages(out: &Path) -> BTreeSet<String> {
-    let raw = block_on_load_all(&db_path_for(out)).expect("load db");
-    raw.messages.iter().map(|m| m.channel_id.clone()).collect()
+    .await
+    .unwrap();
 }
 
 fn set(ids: &[&str]) -> BTreeSet<String> {
@@ -152,49 +89,32 @@ fn set(ids: &[&str]) -> BTreeSet<String> {
 /// DMs off means the request never asks for them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dms_off_never_asks_for_direct_messages() {
-    let _guard = ENV_LOCK.lock().await;
-    let d = tempdir().unwrap();
-    let api = d.path().join("input_raw");
-    let playback = d.path().join("playback");
-    let out = d.path().join("out_raw");
+    let t = Tree::new();
+    write_auth_and_users(&t.api);
+    write_channels_only(&t.api);
+    write_all_histories(&t.api);
 
-    write_auth_and_users(&api);
-    write_conversations_list(
-        &api,
-        "channels-only",
-        CHANNEL_TYPES,
-        json!([{"id": "C1", "name": "bridge", "is_member": true, "is_archived": false}]),
-    );
-    write_all_histories(&api);
+    t.serve();
 
-    SlackSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
+    run_fetch(&t.out, false, None).await;
 
-    run_fetch(&out, false, None).await;
-
-    assert_eq!(channels_with_messages(&out), set(&["C1"]));
+    assert_eq!(channels_with_messages(&t.out), set(&["C1"]));
 }
 
 /// The headline behavior: `dms = true` lists and walks both DM shapes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dms_on_mirrors_direct_and_group_messages() {
-    let _guard = ENV_LOCK.lock().await;
-    let d = tempdir().unwrap();
-    let api = d.path().join("input_raw");
-    let playback = d.path().join("playback");
-    let out = d.path().join("out_raw");
+    let t = Tree::new();
+    write_auth_and_users(&t.api);
+    record_conversations(&t.api, DM_TYPES, all_conversations()).unwrap();
+    write_all_histories(&t.api);
 
-    write_auth_and_users(&api);
-    write_conversations_list(&api, "with-dms", DM_TYPES, all_conversations());
-    write_all_histories(&api);
+    t.serve();
 
-    SlackSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
-
-    run_fetch(&out, true, None).await;
+    run_fetch(&t.out, true, None).await;
 
     assert_eq!(
-        channels_with_messages(&out),
+        channels_with_messages(&t.out),
         set(&["C1", "D1", "D2", "G1"]),
         "dms = true should mirror the channel, both 1:1 DMs and the group DM",
     );
@@ -205,29 +125,23 @@ async fn dms_on_mirrors_direct_and_group_messages() {
 /// fails this.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dm_conversations_narrows_to_the_named_conversations() {
-    let _guard = ENV_LOCK.lock().await;
-    let d = tempdir().unwrap();
-    let api = d.path().join("input_raw");
-    let playback = d.path().join("playback");
-    let out = d.path().join("out_raw");
+    let t = Tree::new();
+    write_auth_and_users(&t.api);
+    record_conversations(&t.api, DM_TYPES, all_conversations()).unwrap();
+    write_all_histories(&t.api);
 
-    write_auth_and_users(&api);
-    write_conversations_list(&api, "with-dms", DM_TYPES, all_conversations());
-    write_all_histories(&api);
-
-    SlackSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
+    t.serve();
 
     // One as a bare id, one as the link `Copy link` hands out.
     run_fetch(
-        &out,
+        &t.out,
         true,
         Some(vec!["D1", "https://enterprise.slack.com/archives/G1"]),
     )
     .await;
 
     assert_eq!(
-        channels_with_messages(&out),
+        channels_with_messages(&t.out),
         set(&["C1", "D1", "G1"]),
         "Riker's 1:1 DM and the group DM were named; Data's 1:1 (D2) was \
          not and must be left alone",
@@ -239,23 +153,17 @@ async fn dm_conversations_narrows_to_the_named_conversations() {
 /// into a match.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dm_conversations_naming_nothing_walks_no_dms() {
-    let _guard = ENV_LOCK.lock().await;
-    let d = tempdir().unwrap();
-    let api = d.path().join("input_raw");
-    let playback = d.path().join("playback");
-    let out = d.path().join("out_raw");
+    let t = Tree::new();
+    write_auth_and_users(&t.api);
+    record_conversations(&t.api, DM_TYPES, all_conversations()).unwrap();
+    write_all_histories(&t.api);
 
-    write_auth_and_users(&api);
-    write_conversations_list(&api, "with-dms", DM_TYPES, all_conversations());
-    write_all_histories(&api);
-
-    SlackSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
+    t.serve();
 
     // A person, not a conversation — the shape the old `dm_users` took.
-    run_fetch(&out, true, Some(vec!["U2", "@riker"])).await;
+    run_fetch(&t.out, true, Some(vec!["U2", "@riker"])).await;
 
-    assert_eq!(channels_with_messages(&out), set(&["C1"]));
+    assert_eq!(channels_with_messages(&t.out), set(&["C1"]));
 }
 
 /// Turning DMs on for an already-synced store has to refetch
@@ -264,32 +172,21 @@ async fn dm_conversations_naming_nothing_walks_no_dms() {
 /// so honoring it would mirror nothing and report success.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turning_dms_on_relists_despite_the_sweep_ttl() {
-    let _guard = ENV_LOCK.lock().await;
-    let d = tempdir().unwrap();
-    let api = d.path().join("input_raw");
-    let playback = d.path().join("playback");
-    let out = d.path().join("out_raw");
+    let t = Tree::new();
+    write_auth_and_users(&t.api);
+    write_channels_only(&t.api);
+    record_conversations(&t.api, DM_TYPES, all_conversations()).unwrap();
+    write_all_histories(&t.api);
 
-    write_auth_and_users(&api);
-    write_conversations_list(
-        &api,
-        "channels-only",
-        CHANNEL_TYPES,
-        json!([{"id": "C1", "name": "bridge", "is_member": true, "is_archived": false}]),
-    );
-    write_conversations_list(&api, "with-dms", DM_TYPES, all_conversations());
-    write_all_histories(&api);
+    t.serve();
 
-    SlackSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
-
-    run_fetch(&out, false, None).await;
-    assert_eq!(channels_with_messages(&out), set(&["C1"]));
+    run_fetch(&t.out, false, None).await;
+    assert_eq!(channels_with_messages(&t.out), set(&["C1"]));
 
     // Run 2, seconds later — well inside MANIFEST_TTL.
-    run_fetch(&out, true, None).await;
+    run_fetch(&t.out, true, None).await;
     assert_eq!(
-        channels_with_messages(&out),
+        channels_with_messages(&t.out),
         set(&["C1", "D1", "D2", "G1"]),
         "the second run must re-list under the wider `types` rather than \
          serve the cached channels-only sweep",
@@ -300,50 +197,34 @@ async fn turning_dms_on_relists_despite_the_sweep_ttl() {
 /// narrowing in this provider — leaves what is already mirrored alone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turning_dms_off_stops_walking_them_without_deleting() {
-    let _guard = ENV_LOCK.lock().await;
-    let d = tempdir().unwrap();
-    let api = d.path().join("input_raw");
-    let playback = d.path().join("playback");
-    let out = d.path().join("out_raw");
-
-    write_auth_and_users(&api);
-    write_conversations_list(&api, "with-dms", DM_TYPES, all_conversations());
-    write_conversations_list(
-        &api,
-        "channels-only",
-        CHANNEL_TYPES,
-        json!([{"id": "C1", "name": "bridge", "is_member": true, "is_archived": false}]),
-    );
-    write_all_histories(&api);
+    let t = Tree::new();
+    write_auth_and_users(&t.api);
+    record_conversations(&t.api, DM_TYPES, all_conversations()).unwrap();
+    write_channels_only(&t.api);
+    write_all_histories(&t.api);
     // Run 2 resumes C1 at its resume cursor (exclusive), which is a
     // different param set and so needs its own fixture.
-    write_envelope(
-        &api.join("raw_api/conversations.history/C1-resume.jsonl"),
-        &json!({
-            "method": "conversations.history",
-            "params": {
-                "channel": "C1",
-                "include_all_metadata": "true",
-                "inclusive": "false",
-                "limit": "200",
-                "oldest": "1735689600.000100",
-            },
-            "response": {"ok": true, "messages": [], "has_more": false},
-        }),
+    History {
+        inclusive: false,
+        ..History::from("C1", "1735689600.000100")
+    }
+    .record(&t.api, json!([]))
+    .unwrap();
+
+    t.serve();
+
+    run_fetch(&t.out, true, None).await;
+    assert_eq!(
+        channels_with_messages(&t.out),
+        set(&["C1", "D1", "D2", "G1"])
     );
-
-    SlackSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
-
-    run_fetch(&out, true, None).await;
-    assert_eq!(channels_with_messages(&out), set(&["C1", "D1", "D2", "G1"]));
 
     // The DM history fixtures are still served, so a run that kept
     // walking them would succeed — the assertion is that it doesn't
     // need to, and that nothing is dropped either.
-    run_fetch(&out, false, None).await;
+    run_fetch(&t.out, false, None).await;
     assert_eq!(
-        channels_with_messages(&out),
+        channels_with_messages(&t.out),
         set(&["C1", "D1", "D2", "G1"]),
         "narrowing must not delete already-mirrored DMs",
     );
