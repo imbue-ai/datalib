@@ -53,6 +53,7 @@ import { openExternal } from "@/externalLinks";
 import { subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
+import { followFrame, isDarkTheme } from "@/grid/gridFrame";
 import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
 import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
@@ -1493,30 +1494,15 @@ const menuItems: (MenuCommandItem | "divider")[] = [
 
 const GROUP_HINT = "Drag columns here to group rows by them — source, then type, say";
 
-function isDark(): boolean {
-  return document.documentElement.dataset.theme === "dark";
-}
-
 function gridOptions(): GridOption {
   return {
     datasetIdPropertyName: rowsSpec?.row_key ?? "uuid",
     // Cells are text, never markup: a row's snippet is the source's own.
     enableHtmlRendering: false,
     enableEmptyDataWarningMessage: false,
-    darkMode: isDark(),
-    enableAutoResize: true,
+    darkMode: isDarkTheme(),
     ...KEEP_COLUMN_WIDTHS,
-    autoResize: {
-      // The frame around the box, not the box: the resizer sizes the
-      // box to what it measures, and a box it also measured would then
-      // stop following the card. The frame is what the card sizes.
-      container: boxEl.value!.parentElement!,
-      calculateAvailableSizeBy: "container",
-      resizeDetection: "container",
-      autoHeight: false,
-      bottomPadding: 0,
-      minHeight: 200,
-    },
+    ...followFrame(boxEl.value!, 200),
     // Tall enough for two lines of clamped snippet text plus padding.
     rowHeight: 52,
     enableTextSelectionOnCells: true,
@@ -1568,6 +1554,11 @@ function gridOptions(): GridOption {
       commandItems: menuItems,
       onBeforeMenuShow: scopes.onBeforeMenuShow,
       onAfterMenuShow: onAfterMenuShowFit,
+      // The grid scrolls itself — a page landing above the viewport holds
+      // the top row in place, a selection is scrolled back to — and a menu
+      // that closed on every scroll closed under the person reading it.
+      // Its entries stay with the row it opened on (`perOpening`).
+      hideMenuOnScroll: false,
     },
   };
 }
@@ -1795,7 +1786,7 @@ function onColumnsShown() {
 let themeWatch: MutationObserver | null = null;
 onMounted(() => {
   createGrid();
-  themeWatch = new MutationObserver(() => vueGrid?.setDarkMode(isDark()));
+  themeWatch = new MutationObserver(() => vueGrid?.setDarkMode(isDarkTheme()));
   themeWatch.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ["data-theme"],

@@ -1,14 +1,17 @@
 # The impersonating curl
 
-Some of the hosts datalib mirrors — `claude.ai` and `chatgpt.com` today
-— sit behind Cloudflare's bot wall, which rejects any client whose TLS
-handshake does not look like a browser's. A stock `curl` gets a
-`403` with `cf-mitigated: challenge`, whatever cookies it carries. So
+Some of the hosts datalib mirrors — `claude.ai` and `chatgpt.com`
+among them — sit behind Cloudflare's bot wall, which rejects any client
+whose TLS handshake does not look like a browser's. A stock `curl` gets
+a `403` with `cf-mitigated: challenge`, whatever cookies it carries. So
 requests to those hosts go out through a curl that presents Chrome's
 TLS and HTTP/2 fingerprint: upstream
 [`curl-impersonate`](https://github.com/lexiforest/curl-impersonate),
 a patched curl with a patched BoringSSL and a built-in
-`--impersonate <browser>` flag.
+`--impersonate <browser>` flag. Which services send the marker that
+asks for it is decided in one place, `HttpService::impersonates` in
+`datalib/backend/etl/src/http.rs`: Claude, ChatGPT, Slack, GitHub and
+GitLab.
 
 The two binaries involved are built and released by
 [`imbue-ai/latchkey-curl-shims`](https://github.com/imbue-ai/latchkey-curl-shims);
@@ -29,9 +32,10 @@ Only the router understands the marker header, so **point
 `LATCHKEY_CURL` at the router, never at the impersonator directly.**
 Pointing it at the impersonator gives you a plain curl that forwards
 the marker header to the third party. Leaving `LATCHKEY_CURL` unset is
-usually right: `datalib_etl::latchkey::ensure_curl_router` finds the
-router in bazel's runfiles, next to the running binary, or on `PATH`,
-and `DATALIB_CURL_ROUTER` names one explicitly.
+usually right: `datalib_etl::latchkey::ensure_curl_router` takes
+`DATALIB_CURL_ROUTER` if set, else finds the router in bazel's
+runfiles, next to the running binary, or on `PATH`, and points
+`LATCHKEY_CURL` at it (not in `LATCHKEY_GATEWAY` mode).
 
 To make one hand-run request impersonate, pass the marker yourself:
 
@@ -69,10 +73,9 @@ In this tree:
    test has both), `//datalib/backend:dist`, release staging, the
    Tauri sidecar list and the Docker image.
 
-Nothing here is compiled. The workflow that used to build the
-impersonator in this repo is gone, and the `curl-impersonate-v*` tags
-that workflow published are history; `tools/workspace_status.sh` still
-ignores them when it derives datalib's own version.
+Nothing here is compiled. The repo's old `curl-impersonate-v*` tags
+are ignored by `tools/workspace_status.sh` when it derives datalib's
+own version.
 
 ## Bumping the pin
 
@@ -93,5 +96,5 @@ profile, a router change:
 The names are the contract. If a release ever renames a binary, the
 sibling lookups in `datalib/backend/etl/src/latchkey.rs` and the copy
 rules in `third-party/latchkey-curl-shims/BUILD.bazel` have to move
-with it, and so do the staged names in `release.yml`, `tauri.conf.json`
-and the Dockerfile.
+with it, and so do the staged names in `release.yml`,
+`datalib/tauri/tauri.conf.json` and `datalib/docker/Dockerfile`.

@@ -3,9 +3,9 @@
 //! `shared` takes one, and one holding it `exclusive` takes all of them,
 //! so `slots = 1` is a mutex and `slots = N` lets N run at once. The
 //! config declares them (`[[locks]]`) and a step names the ones it holds
-//! (`locks = [...]`); a step that names none holds one default lock, which
-//! is what the three budgets were. The tick does the accounting
-//! (`tick.rs`); this is the vocabulary. `dag/README.md` § "Locks".
+//! (`locks = [...]`); a step that names none holds one default lock
+//! ([`default_for`]). The tick does the accounting (`tick.rs`); this is
+//! the vocabulary. `dag/README.md` § "What keeps steps apart: locks".
 
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
@@ -55,7 +55,7 @@ pub struct LockSpec {
 /// A download: one per source a person syncs, so a rate limit on one
 /// keeps no render from starting.
 pub const NETWORK: &str = "network";
-/// A render: a grouped step that reads something.
+/// A render: a step in a group with a `type` that reads something.
 pub const CPU: &str = "cpu";
 /// An index: a step outside any typed group that reads something.
 pub const INDEX: &str = "index";
@@ -87,9 +87,9 @@ pub fn defaults() -> Vec<LockSpec> {
     .collect()
 }
 
-/// The lock a step holds when it names none: `network` for a source,
-/// `cpu` for a grouped step that reads something, `index` for any other
-/// step that reads something.
+/// The lock a step holds when it names none: `network` for a step that
+/// reads nothing (a download), `cpu` for one in a group with a `type`
+/// (a source's render), `index` for any other step that reads something.
 pub fn default_for(spec: &StepSpec) -> &'static str {
     if spec.inputs.is_empty() {
         NETWORK

@@ -11,8 +11,8 @@ use tokio::time::Instant;
 use tracing::{debug, warn};
 
 use datalib_etl::http::{
-    default_retryability, latchkey_curl_classified, parse_retry_after, HttpError, HttpRequest,
-    HttpResponse, HttpService, LatchkeySettings, Retryability,
+    default_retryability, latchkey_curl_classified, parse_retry_after, percent_encode, HttpError,
+    HttpRequest, HttpResponse, HttpService, LatchkeySettings, Retryability,
 };
 
 /// Playback key. `HttpService::Gmail.impersonates()` is false — Google
@@ -343,11 +343,11 @@ fn messages_list_url(
     let mut url = format!("{BASE}/{user_id}/messages?maxResults={page_size}&includeSpamTrash=true");
     if let Some(id) = label_id {
         url.push_str("&labelIds=");
-        url.push_str(&urlencode(id));
+        url.push_str(&percent_encode(id));
     }
     if let Some(token) = page_token {
         url.push_str("&pageToken=");
-        url.push_str(&urlencode(token));
+        url.push_str(&percent_encode(token));
     }
     url
 }
@@ -448,7 +448,7 @@ pub async fn list_history(
     let mut url = format!("{BASE}/{user_id}/history?startHistoryId={start_history_id}");
     if let Some(token) = page_token {
         url.push_str("&pageToken=");
-        url.push_str(&urlencode(token));
+        url.push_str(&percent_encode(token));
     }
     let v = get_json(&url, client).await?;
     Ok(parse_history(&v))
@@ -494,19 +494,6 @@ fn collect_ids(record: &Value, key: &str, out: &mut Vec<String>) {
 fn dedupe(ids: &mut Vec<String>) {
     let mut seen = std::collections::HashSet::new();
     ids.retain(|id| seen.insert(id.clone()));
-}
-
-fn urlencode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
 }
 
 fn str_field(v: &Value, key: &str) -> Option<String> {
@@ -685,11 +672,11 @@ mod tests {
     /// otherwise terminate the parameter or start a new one.
     #[test]
     fn percent_encodes_query_values() {
-        assert_eq!(urlencode("Label_479427920"), "Label_479427920");
-        assert_eq!(urlencode("a&b=c"), "a%26b%3Dc");
-        assert_eq!(urlencode("tok+en/x=="), "tok%2Ben%2Fx%3D%3D");
+        assert_eq!(percent_encode("Label_479427920"), "Label_479427920");
+        assert_eq!(percent_encode("a&b=c"), "a%26b%3Dc");
+        assert_eq!(percent_encode("tok+en/x=="), "tok%2Ben%2Fx%3D%3D");
         // Unreserved characters must survive untouched.
-        assert_eq!(urlencode("-_.~"), "-_.~");
+        assert_eq!(percent_encode("-_.~"), "-_.~");
     }
 
     #[test]

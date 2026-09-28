@@ -1,6 +1,6 @@
 //! `github-ingest` — mirror PRs the user authored / commented on /
-//! was @mentioned in, plus all their comments and reviews. Output is
-//! event-store JSONL under `<out>/<entity>/{created,updated}/events.jsonl`.
+//! was @mentioned in, plus all their comments and reviews, into the
+//! doltlite store at `<out>/entities.doltlite_db`.
 
 use std::path::PathBuf;
 use std::time::Duration;

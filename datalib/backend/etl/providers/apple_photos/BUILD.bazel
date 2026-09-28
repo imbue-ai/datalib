@@ -31,7 +31,6 @@ rust_library(
         "//datalib/backend/etl/providers/apple_photos_config:datalib_etl_apple_photos_config",
         "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:sqlx",
     ],
 )
 
@@ -42,14 +41,12 @@ rust_binary(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         ":datalib_etl_apple_photos",
-        "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/apple_photos_config:datalib_etl_apple_photos_config",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/source_common:datalib_source_common",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
         "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
     ],
 )
 

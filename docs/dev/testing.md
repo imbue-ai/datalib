@@ -84,8 +84,9 @@ insta_update(
 `tests/<name>/main.rs` with a `mod` line per file, one `rust_test`
 named `<name>` over `tests/<name>/*.rs`. Not one target per file: a
 `rust_test` is a whole opt-mode link of everything the crate reaches,
-which is most of what a test here costs, and 207 of them made cold CI
-runs long (`docs/dev/ci.md` § "blast radius" has the measurement).
+which is most of what a test here costs, and a shared-crate edit pays
+it once per target ([`ci.md`](ci.md) § "Reading a run" has the
+measurement).
 
 Two things follow from sharing a process:
 
@@ -93,7 +94,7 @@ Two things follow from sharing a process:
   chosen by an environment variable each test points at its own fixture
   tree, so the provider binaries set `RUST_TEST_THREADS = "1"` and say
   so in `main.rs`. A tracing subscriber is the same story from the
-  other side: `datalib/backend/http`'s three log tests each install the
+  other side: four of `datalib/backend/http`'s modules each install the
   process's only one, so each runs as a slice (below).
 * **insta names a snapshot after the module path.** The goldens live in
   `tests/<name>/snapshots/` and are called
@@ -127,9 +128,11 @@ rust_test_slice(
 
 A slice fails when its filter matches no test, so renaming the module
 cannot leave it green and empty. `datalib/backend/http` is the example:
-four slices over one binary where there were five links. Only a test
+five slices over one binary — four that own the tracing subscriber and
+`applet_tests`, which is `no-sandbox` and `requires-network`. Only a test
 that needs a different `manual` or `external` tag, or a binary of its
-own on purpose, stays a separate `rust_test`.
+own on purpose, stays a separate `rust_test` (`http`'s `shutdown_test`
+runs the real server binary).
 
 ### The `live` module
 
@@ -171,33 +174,17 @@ one binary would be indistinguishable.
 * **`warmup`** — qmd's cold model load, paid once before `chromium`
   and `webkit` start.
 
-### Running one spec, and running it several times
-
-`bazelisk run //datalib/ui:e2e -- <playwright args>` runs the suite
-from the source tree with every backend the config spawns; `--project
-<name>` and `--grep <pattern>` narrow it. To hunt a flake, repeat it:
-
-```bash
-bazelisk run //datalib/ui:e2e -- --project chromium-data-sources-sync --repeat-each 3 --workers 1
-```
-
-**`--repeat-each` needs `--workers 1`.** Without it Playwright spreads
-the copies across workers, and a config-mutating spec then runs beside
-a copy of itself on the same backend and root: the copies rewrite each
-other's config and start each other's syncs, and the failures read as
-the spec's own, not as a collision.
-
-The second one exists because the Tauri desktop app renders in a
+The `webkit` project exists because the Tauri desktop app renders in a
 **WKWebView**, not Chromium, and the two engines disagree about layout in a
 way that has shipped twice. WebKit resolves a child's percentage `height`
 against the parent's *specified* height, so `height: 100%` under a
 flex-sized parent that declares no height of its own computes to `auto` and
-an AG Grid root collapses — to 2px of border in the Manage screen's
-case (now the sources card, `ui/src/cards/SourcesCard.ce.vue`). Chromium
-resolves against the flexed height and looks perfect.
+a grid root collapses — to 2px of border in the sources card's case
+(`ui/src/cards/SourcesCard.ce.vue`). Chromium resolves against the flexed
+height and looks perfect.
 
 **What this means for how you assert.** Every row and header stays in the
-DOM through that collapse, so `.ag-row` locators match, `toHaveCount`
+DOM through that collapse, so row locators match, `toHaveCount`
 passes, and the user sees nothing. A test only catches it if it measures
 geometry — `expectGridPainted` in
 [`/datalib/ui/tests/e2e/grid-helpers.ts`](/datalib/ui/tests/e2e/grid-helpers.ts)
@@ -219,73 +206,63 @@ release; [`run-log.spec.ts`](/datalib/ui/tests/e2e/run-log.spec.ts)
 shows the shape.
 
 Browser binaries are **not** Bazel inputs — chromium and webkit both come
-from the host's `~/Library/Caches/ms-playwright` via `env_inherit = HOME`,
-and `run_e2e.sh` runs `playwright install chromium webkit` first so a cold
-cache self-heals. That network reach is what the target's
+from the host's Playwright cache (`~/Library/Caches/ms-playwright` on a
+mac) via `env_inherit = HOME`, and `run_e2e.sh` runs `playwright install`
+for both first so a cold cache self-heals. That network reach is what the target's
 `requires-network` tag is for. Making the browsers real Bazel inputs is a
 separate project.
 
-### It IS a CI merge gate — and what that cost
+### Running one spec, and running it several times
+
+`bazelisk run //datalib/ui:e2e -- <playwright args>` runs the suite
+from the source tree with every backend the config spawns; `--project
+<name>` and `--grep <pattern>` narrow it. To hunt a flake, repeat it:
+
+```bash
+bazelisk run //datalib/ui:e2e -- --project chromium-data-sources-sync --repeat-each 3 --workers 1
+```
+
+**`--repeat-each` needs `--workers 1`.** Without it Playwright spreads
+the copies across workers, and a config-mutating spec then runs beside
+a copy of itself on the same backend and root: the copies rewrite each
+other's config and start each other's syncs, and the failures read as
+the spec's own, not as a collision.
+
+### It is a CI merge gate
 
 `.github/workflows/test.yml` runs a bare `bazel test ... //...`, so this
-suite gates merges like everything else. It spent a long time excluded
-behind a FIXME, and the story of why is worth keeping, because the note
-went stale in the direction that bites: it said the last thing missing
-was a published image carrying `rsync` and both browsers, and **that had
-been true since `v0.30.1`** (WebKit landed five days after `v0.29.0`,
-and `v0.30.0`'s release run failed, so `v0.30.1` is the first published
-image carrying it). Anyone acting on it would have dropped the
-exclusion and gotten a red gate, because the actual blockers were two
-things the note never mentioned.
+suite gates merges like everything else. Two things make it work in the
+CI image:
 
-* **The qmd GGUFs are not in the image.** The devcontainer image has no
-  `/root/.cache/qmd/models` at all, and
-  `materialize_tng_root.sh` used to require that directory to hold them
-  — `exit 3` if not, deliberately, so a multi-GB HuggingFace download
-  could not masquerade as a hang. CI filled it with a `qmd pull` behind
-  an `actions/cache`. Both halves are gone now: the GGUFs are fetched
-  by a build action (`//third-party/qmd_models`) and reach the
-  materializer (and the fixture's index genrule) as bazel inputs. The
-  action's outputs live in the remote cache, so a run that does not
-  need the bytes never moves them, and one that does takes them from
-  BuildBuddy rather than HuggingFace unless the cache has lost them.
-  The e2e suite runs on the runner itself, so its runfiles *are*
-  downloaded before it starts — which is why it uses
-  `materialize_tng_root_embed_only`: the embedding model is all it
-  loads, and the other two are 1.8 GB. The suite sets
-  `DATALIB_QMD_MODELS_NO_FETCH` so the applet reports them absent
-  instead of fetching them into the fixture root.
-* **`HOME=/github/home`.** GitHub forces that for container steps, while
-  the image bakes its caches under `/root`, so every lookup landed in an
-  empty directory. One `--test_env` flag still redirects the lookup that
-  matters: `PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright`
-  (without it, `run_e2e.sh`'s `playwright install` re-downloads ~400 MB
-  of chromium + webkit every run instead of using the baked cache). The
-  other one, `CLAUDE_MIRROR_HOST_HOME=/root`, went away with the model
-  cache — nothing reads that variable any more.
+* **The qmd GGUFs are bazel inputs.** A build action
+  (`//third-party/qmd_models`) fetches them into the remote cache, and
+  they reach the materializer and the fixture's index genrule as
+  runfiles; the image has no `/root/.cache/qmd/models`. The e2e suite
+  runs on the runner itself, so its runfiles *are* downloaded before it
+  starts — which is why it uses `materialize_tng_root_embed_only`: the
+  embedding model is all it loads, and the other two are 1.8 GB. The
+  suite sets `DATALIB_QMD_MODELS_NO_FETCH` so the applet reports them
+  absent instead of fetching them into the fixture root.
+* **`--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright`.**
+  GitHub forces `HOME=/github/home` for container steps, while the image
+  bakes its browsers under `/root`; without the flag `run_e2e.sh`'s
+  `playwright install` re-downloads ~400 MB of chromium + webkit every
+  run.
 
-The cost is honest and worth naming: the suite is `no-sandbox` +
-`requires-network` and takes ~4 minutes, so unlike the rest of a warm
-`main` run it is real work on the critical path rather than a cache
-replay.
-
-It buys back more than it costs. CI had never run this suite, which is
-easy to miss precisely because a local `bazelisk test //...` does — so
-for its whole life the only thing standing between a UI regression and
-`main` was whoever remembered to run it. [#252](https://github.com/imbue-ai/datalib/pull/252)
-is the worked example: AG Grid 36 restructured the row DOM and 39 tests
-across 18 spec files failed *while the grid rendered perfectly*, and a
-Vite 8 `outDir` change let the `dist` action succeed with an empty
-declared output, which 60 e2e tests reported as "UI bundle not embedded
-in this binary". CI was green through both.
+The suite is `no-sandbox` + `requires-network` + `cpu:4` and takes ~4
+minutes, so unlike the rest of a warm `main` run it is real work on the
+critical path rather than a cache replay. It catches what a build
+cannot: in #252 a Vite 8 `outDir` change let the `dist` action succeed
+with an empty output, and this suite was what said so (60 tests
+reporting "UI bundle not embedded in this binary").
 
 ### It needs a `long` timeout, and that is not slack
 
 The target sets `timeout = "long"` (900s). Bazel's default for a test
 with no `size` or `timeout` is `medium` — **300s** — and this suite does
-not fit in that: 66 tests across two engines behind nine backend
-processes, plus a qmd cold model load that grew to 1.2-1.5 min in qmd
-2.8.3. Measured wall clock is ~70s warm and 200-270s on a loaded machine,
+not fit in that: the suite runs across two engines behind nine backend
+processes, plus a qmd cold model load of 1.2-1.5 min (qmd 2.8.3).
+Measured wall clock is ~70s warm and 200-270s on a loaded machine,
 so the default budget made `bazelisk test //...` flaky in a way that
 pointed at nothing. Bazel enforces the ceiling but does not wait for it,
 so the larger budget costs nothing.
@@ -312,9 +289,8 @@ helper has already waited for.
 [`grid-helpers.ts`](/datalib/ui/tests/e2e/grid-helpers.ts) wait for the
 row to be drawn, then return what that one drawing showed. A `null` from
 `stampOf` therefore means the step never ran, and never that the row was
-not drawn yet. They used to return `null` for both. A read right after
-`settleRunner`'s reload then failed when the test expected a value, and
-*passed without looking at anything* when it expected `null`. Inside a
+not drawn yet; a reader that returned `null` for both would let a test
+that expects `null` pass without looking at anything. Inside a
 poll that has to keep going through a redraw, use `sampleRow`, which
 returns `null` for "not drawn". A step under a closed group is never
 drawn, so call `expandGroup` first; `readRow` says so when it gives up.
@@ -342,9 +318,19 @@ else, wait for that thing instead: `start()` in
 `data-sources-control.spec.ts` waits for the `POST /api/requests`
 response rather than the banner.
 
+**Hold what the page is still loading when the next step can lose to
+it.** A page keeps working after it first paints: the search grid loads
+further pages of rows and scrolls to keep its top row in place when one
+lands. On a fast runner that is over before the test's next step; on a
+loaded one it lands in the middle of it. A menu that closed on every
+grid scroll then closed before the test could click in it.
+`page.route` can hold the request until the step is set up and release
+it after, which turns "usually first" into "always this order" and is
+how `grid-search-bar.spec.ts` checks the menu survives the page.
+
 **Drive the app, not a gesture, when the gesture is not what is under
-test.** A hand-driven header drag failed 23 times in one day until the
-run-log spec grouped through the panel's API instead (`bb3e9904`). When
+test.** A hand-driven header drag failed 23 times in one day; the
+run-log spec groups through the panel's API instead. When
 a click is the subject, retry the click and its visible effect as a pair
 (`pickRowMenu`, `run-log.spec.ts`'s `rightClick`), because the row the
 click landed on can be replaced by a redraw.
@@ -490,10 +476,8 @@ accidental / noise, per cluster).
 
 Start with `--config`. It parses the config, builds the graph, and round-trips
 every step's params against the provider schemas in seconds, without touching
-the network. It is not a complete guard, though: render params are
-`deny_unknown_fields` and so are most download configs, but `email`, `fsindex`,
-`linkedin`, and `sms_backup_restore` are permissive, so a misplaced knob on
-those parses clean and only fails during the live run.
+the network. Every provider's config schema is `deny_unknown_fields`, so a
+misplaced knob fails here rather than during the live run.
 
 The test makes three pipeline runs, each asserting something different:
 
@@ -529,9 +513,6 @@ source and embeds two small ones (whatsapp, google_calendar_window), so
 semantic search reaches those two alone. The qmd index is not
 snapshotted.
 
-This test was ported from the pre-DAG `frankweiler/backend/sync` crate, which
-was deleted in e905d252. The normalization machinery — roughly fifty volatile
-keys, each commented with why it's redacted — carried over verbatim, because it
-operates on the produced data tree and the DAG migration didn't change that
-layout. See the module header of the test for what genuinely had to change.
+The normalization machinery — the volatile keys the snapshots redact, each
+commented with why — is in the test's source.
 

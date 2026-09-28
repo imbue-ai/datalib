@@ -12,7 +12,7 @@ use datalib_etl_contact_common::{
     NormalizedContact,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{Bucket, Buckets, RawRange};
+use datalib_etl_render::inputs::{keys_reading, Bucket, Buckets, RawRange};
 
 use super::ids;
 use super::parse::{ParsedContact, ParsedContacts};
@@ -66,16 +66,12 @@ pub fn render_all(
     // cards, which is why the row alone could never name a document and
     // the mapping goes through the parse.
     let forward = parsed.changed.as_ref().map(|changed| {
-        contacts
-            .iter()
-            .map(|(_, c)| c)
-            .filter(|c| {
-                c.inputs
-                    .iter()
-                    .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
-            })
-            .map(|c| c.contact_uuid.clone())
-            .collect::<std::collections::HashSet<String>>()
+        keys_reading(
+            changed,
+            contacts
+                .iter()
+                .map(|(_, c)| (c.contact_uuid.as_str(), c.inputs.as_slice())),
+        )
     });
     let render = range.narrow(forward.as_ref());
     let mut buckets: Buckets = render

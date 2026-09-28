@@ -11,6 +11,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::RenderProfile;
 use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_chat_common::{render_changed, RenderTarget};
@@ -23,7 +24,7 @@ use datalib_etl_codex::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
 
 use datalib_etl_agent_sessions_render::{
-    canonicalize, clamp, details, fenced, iso_to_ms, item, json_is_empty, project_of, str_of,
+    clamp, details, fenced, item, json_block, project_of, str_of, TRANSCRIPT_BUCKETS_SQL,
 };
 
 use crate::ids;
@@ -138,18 +139,7 @@ async fn scan_diff(
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             global_fanout_tables: &[],
-            bucket_query: "
-                SELECT DISTINCT bucket FROM (
-                    SELECT coalesce(to_transcript_id, from_transcript_id) AS bucket
-                      FROM dolt_diff_records
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-                    UNION
-                    SELECT coalesce(to_id, from_id)
-                      FROM dolt_diff_transcripts
-                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-                )
-                WHERE bucket IS NOT NULL
-            ",
+            bucket_query: TRANSCRIPT_BUCKETS_SQL,
         },
     )
     .await
@@ -597,11 +587,7 @@ fn output_text(output: Option<&Value>) -> (String, bool) {
 /// pretty-printed with sorted keys when it is, verbatim when it is not.
 fn fenced_json_or_text(s: &str, max_bytes: usize) -> String {
     match serde_json::from_str::<Value>(s) {
-        Ok(v) if !json_is_empty(&v) => {
-            let pretty = serde_json::to_string_pretty(&canonicalize(&v)).unwrap_or_default();
-            format!("```json\n{}\n```", clamp(&pretty, max_bytes))
-        }
-        Ok(_) => String::new(),
+        Ok(v) => json_block(&v, max_bytes),
         Err(_) => fenced(&clamp(s, max_bytes)),
     }
 }

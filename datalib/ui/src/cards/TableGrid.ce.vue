@@ -24,6 +24,7 @@ import type {
 import type { ColumnSpec, Timeseries } from "@/api";
 import { calibrationMax } from "@/config/sparkline";
 import { carryLayout, KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
+import { followFrame, isDarkTheme } from "@/grid/gridFrame";
 import { clockFaces, movedCells, type ClockFaces } from "@/grid/clockFaces";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
@@ -257,27 +258,15 @@ function entriesFor(args: { row?: number; cell?: number }): MenuEntry[] {
   return props.menu(anchor, targets, column);
 }
 
-function isDark(): boolean {
-  return document.documentElement.dataset.theme === "dark";
-}
-
 function options(): GridOption {
   const treeField = treeColumnField(props.columns);
   return {
     datasetIdPropertyName: props.rowKey,
     enableHtmlRendering: false,
     enableEmptyDataWarningMessage: false,
-    darkMode: isDark(),
-    enableAutoResize: true,
+    darkMode: isDarkTheme(),
     ...KEEP_COLUMN_WIDTHS,
-    autoResize: {
-      container: boxEl.value!.parentElement!,
-      calculateAvailableSizeBy: "container",
-      resizeDetection: "container",
-      autoHeight: false,
-      bottomPadding: 0,
-      minHeight: 120,
-    },
+    ...followFrame(boxEl.value!, 120),
     rowHeight: 34,
     enableTextSelectionOnCells: true,
     enableCellNavigation: true,
@@ -468,7 +457,7 @@ let themeWatch: MutationObserver | null = null;
 onMounted(() => {
   createGrid();
   clock = setInterval(tickClock, 1000);
-  themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDark()));
+  themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDarkTheme()));
   themeWatch.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ["data-theme"],

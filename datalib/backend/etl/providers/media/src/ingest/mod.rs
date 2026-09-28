@@ -296,45 +296,13 @@ fn identify(path: &Path, size: i64, blake3: &str, opts: &FetchOptions) -> Result
         payload_scheme: payload.as_ref().map(|p| p.scheme.to_string()),
     };
 
-    let audio = m.audio.map(|a| MediaAudioRow {
+    let audio = m.audio.map(|meta| MediaAudioRow {
         blake3: blake3.to_string(),
-        title: a.title,
-        artist: a.artist,
-        album: a.album,
-        album_artist: a.album_artist,
-        composer: a.composer,
-        genre: a.genre,
-        date: a.date,
-        track_no: a.track_no,
-        track_total: a.track_total,
-        disc_no: a.disc_no,
-        disc_total: a.disc_total,
-        bitrate_kbps: a.bitrate_kbps,
-        sample_rate_hz: a.sample_rate_hz,
-        channels: a.channels,
-        bit_depth: a.bit_depth,
+        meta,
     });
-    let visual = m.visual.map(|v| MediaVisualRow {
+    let visual = m.visual.map(|meta| MediaVisualRow {
         blake3: blake3.to_string(),
-        width: v.width,
-        height: v.height,
-        orientation: v.orientation,
-        captured_at: v.captured_at,
-        camera_make: v.camera_make,
-        camera_model: v.camera_model,
-        lens_model: v.lens_model,
-        iso: v.iso,
-        exposure_time: v.exposure_time,
-        f_number: v.f_number,
-        focal_length_mm: v.focal_length_mm,
-        gps_lat: v.gps_lat,
-        gps_lon: v.gps_lon,
-        gps_altitude_m: v.gps_altitude_m,
-        title: v.title,
-        caption: v.caption,
-        frame_rate: v.frame_rate,
-        video_codec: v.video_codec,
-        audio_codec: v.audio_codec,
+        meta,
     });
 
     Ok(Identified {

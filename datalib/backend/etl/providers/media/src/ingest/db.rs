@@ -1,16 +1,12 @@
 //! Doltlite-backed raw store for the `media` provider.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
-use datalib_etl::doltlite_raw as dr;
 use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{
@@ -39,10 +35,7 @@ pub struct PrevCache {
     pub playlists: HashSet<String>,
 }
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-}
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
 /// One scan's worth of rows, accumulated and written together so that
 /// an item and the path pointing at it land in the same transaction.
@@ -75,23 +68,6 @@ impl WriteBatch {
 }
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
     /// What this source already ingested. Must run **before**
     /// [`Self::reset_paths`].
     ///
@@ -103,7 +79,7 @@ impl RawDb {
         let mut cache = PrevCache::default();
 
         let rows = sqlx::query("SELECT id, blake3 FROM media_files")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("load media_files")?;
         for r in rows {
@@ -113,7 +89,7 @@ impl RawDb {
         }
 
         let items = sqlx::query("SELECT blake3 FROM media_items")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("load media_items ids")?;
         for r in items {
@@ -121,7 +97,7 @@ impl RawDb {
         }
 
         let playlists = sqlx::query("SELECT id FROM media_playlists")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("load media_playlists ids")?;
         for r in playlists {
@@ -148,7 +124,7 @@ impl RawDb {
     pub async fn clear_playlist_entries(&self, playlist_id: &str) -> Result<()> {
         sqlx::query("DELETE FROM media_playlist_entries WHERE playlist_id = ?")
             .bind(playlist_id)
-            .execute(&self.pool)
+            .execute(self.pool())
             .await
             .context("clear playlist entries")?;
         Ok(())
@@ -163,7 +139,7 @@ impl RawDb {
             return Ok(0);
         }
         let mut removed = 0u64;
-        let mut tx = self.pool.begin().await.context("begin delete tx")?;
+        let mut tx = self.pool().begin().await.context("begin delete tx")?;
         // Chunked so a library that lost a hundred thousand files does
         // not build one statement with a hundred thousand placeholders.
         for chunk in ids.chunks(datalib_etl::bulk::SQL_CHUNK) {
@@ -191,7 +167,7 @@ impl RawDb {
         row: &MediaScanMetaRow,
         now: &IsoOffsetTimestamp,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
+        let mut tx = self.pool().begin().await.context("begin scan_meta tx")?;
         bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), now)
             .await
             .context("upsert media_scan_meta")?;
@@ -201,7 +177,7 @@ impl RawDb {
 
     pub async fn scan_root(&self) -> Result<Option<PathBuf>> {
         let row = sqlx::query("SELECT abs_root FROM media_scan_meta ORDER BY id LIMIT 1")
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("read media_scan_meta")?;
         Ok(row.map(|r| PathBuf::from(r.get::<String, _>("abs_root"))))
@@ -215,7 +191,7 @@ impl RawDb {
         if b.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin write tx")?;
+        let mut tx = self.pool().begin().await.context("begin write tx")?;
         bulk_upsert_in_tx(&mut tx, &b.items, now)
             .await
             .context("upsert media_items")?;
@@ -241,7 +217,7 @@ impl RawDb {
         if playlists.is_empty() && entries.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin playlist tx")?;
+        let mut tx = self.pool().begin().await.context("begin playlist tx")?;
         bulk_upsert_in_tx(&mut tx, playlists, now)
             .await
             .context("upsert media_playlists")?;

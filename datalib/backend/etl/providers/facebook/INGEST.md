@@ -10,8 +10,8 @@ records, and JSON is the one a program can trust.
 The ingest crate is `datalib_etl_facebook` (this directory); the render
 crate is `datalib_etl_facebook_render`; the config schema is
 `datalib_etl_facebook_config`. The shapes below were read off a real
-export requested on 2026-06-19, and the TNG fixture under
-`tests/fixtures/facebook_tng/` reproduces them file for file.
+export; the TNG fixture under `tests/fixtures/facebook_tng/` reproduces
+every file render reads, in the same shapes and at the same paths.
 
 ## What the export looks like
 

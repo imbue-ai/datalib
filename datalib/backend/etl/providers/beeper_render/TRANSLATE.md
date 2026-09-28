@@ -1,31 +1,35 @@
-# Beeper provider — Translate
+# Beeper render
 
-The Beeper raw store is **multiplexed**: one Matrix sync gives us N
-upstream networks (iMessage, WhatsApp, Signal, …) in a single doltlite
-file. The Translate stage dispatches per-room on the room's inferred
-`bridge_network` so each upstream service can render with its own
-quirks (iMessage tapbacks, WhatsApp reply quoting, Signal disappearing
-messages, …).
+The Beeper raw store is **multiplexed**: one Beeper Texts install
+carries many upstream networks (Signal, Google Chat, WhatsApp, …) in one
+doltlite file, each room tagged with its canonical `network`
+([`../beeper/INGEST.md`](../beeper/INGEST.md)). Render groups the rooms
+by that network and calls chat-common once per network
+(`src/render/normalize.rs`), because the `grid_rows` taxonomy is
+per-network too: the `source_label` is `Beeper:<Network>` (so
+`LIKE 'Beeper:%'` selects everything Beeper delivered and
+`LIKE '%:Signal'` every Signal chat whichever source brought it), and
+the kinds are `<Network> Chat`, `<Network> Message` and
+`<Network> Reaction`. There is no per-network translation: every
+network's events are read from the same bridge-agnostic columns.
 
-## Dispatch
+The markdown layout, `path_prefix`, orphan reactions and `LAYOUT_VERSION`
+are chat-common's ([`chat-common/README.md`](../../chat-common/README.md)).
 
-`translate::translate_room(room, events)` (Milestone C+) matches on
-`room.bridge_network` and delegates to a per-bridge module. Unknown
-networks fall back to `matrix_generic`, which translates from raw
-Matrix event shapes without any bridge-specific knowledge.
+## Documents are room × period
 
-## UUIDs
+A document is one room's events in one period: `month` by default, or
+`day`, `year` or `all`, set by the render step's `period` param. The
+`(room, period)` split is computed in SQL (`src/render/parse.rs`). A
+reaction is filed under its target's period however late it arrived;
+one whose target is not in the store at all is an orphan reaction. A
+reply is drawn as a quoted "in reply to" line naming the upstream id it
+points at. A `HIDDEN` event gets a one-line system note, so a room made
+only of those still renders.
 
-The raw store keys rooms, users and events by their Matrix ids, so a
-`matrix_generic`-translated row keeps its row if it's later replaced by
-a bridge-specific translator. Every rendered id is `render::ids` over
-that Matrix id under the configured source; an event's carries its
-`timestamp_ms` in its leading bits — `docs/dev/entity_ids.md`.
+## Ids
 
-## Status
-
-- **Milestone A**: raw store only. Translate parses the raw store
-  into an in-memory shape and emits zero rendered docs.
-- **Milestone C**: iMessage translator.
-- **Milestone D**: Signal translator.
-- Later milestones: WhatsApp, Telegram, Discord, LinkedIn, …
+The raw store keys rooms, users and events by their Matrix ids. Every
+rendered id is `src/render/ids.rs` over that Matrix id under the
+configured source; an event's carries its `timestamp_ms` in its leading
+bits (`docs/dev/entity_ids.md`).

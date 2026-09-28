@@ -52,7 +52,7 @@ pub enum StoreKind {
     RemoteMedia,
     /// `system/runs/runs.sqlite`: every run's step states, log and metrics.
     Runs,
-    /// `system/supervisor.sqlite`: requests, pauses, and the loop's facts.
+    /// `system/supervisor.sqlite`: requests, steps turned off, and the loop's facts.
     Supervisor,
 }
 

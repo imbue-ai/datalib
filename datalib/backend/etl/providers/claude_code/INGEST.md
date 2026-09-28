@@ -67,10 +67,9 @@ nothing — the same call `airvisual` and `fsindex` made):
   writer composes it and the render's diff buckets on it. The payload
   is the line as written, and everything else a reader wants —
   `sessionId`, `type`, `timestamp`, `parentUuid`, `isSidechain` — is
-  read off it (`payload->>'$.type'`); nothing in the tree queries
-  those in SQL, so there is no index over them yet. Add an expression
-  index over `payload->>'$.…'` the first time a query needs one, not a
-  stored copy.
+  read off it (`payload->>'$.type'`). Nothing in the tree queries
+  those in SQL, so there is no index over them; when a query needs one,
+  add an expression index over `payload->>'$.…'`, not a stored copy.
 
 The bookkeeping lines fold into the transcript row and are not rows of
 their own; `attachment` records are counted and dropped. A content
@@ -115,9 +114,8 @@ A tool result names only the `tool_use_id` it answers; the tool's name
 comes from the matching call in the same transcript.
 
 A subagent's transcript is its own document, titled
-`<its title> — subagent of <parent title>`. Nothing links the two
-documents yet; an `edges` row from the parent's `Agent` call to the
-subagent document is the obvious next step.
+`<its title> — subagent of <parent title>`. No `edges` row links it to
+the parent's `Agent` call.
 
 The grid's `project` column is the last component of the session's
 `cwd` — what a person would call the project. A session bridged to a

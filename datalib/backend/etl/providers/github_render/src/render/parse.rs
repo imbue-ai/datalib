@@ -13,7 +13,9 @@ use serde_json::Value;
 
 use datalib_etl_github::ingest::db::{db_path_for, LoadedChild, LoadedRaw, RawDb};
 
-use datalib_etl_forge_render_common::{ChangeRequest, Comment, Parsed, Section};
+use datalib_etl_forge_render_common::{
+    opt_str, str_field, ChangeRequest, Comment, Parsed, Section,
+};
 
 use super::ids::{KIND_ISSUE_COMMENT, KIND_PR_REVIEW, KIND_PR_REVIEW_COMMENT};
 
@@ -228,14 +230,6 @@ fn push_children(
             state: review.then(|| opt_str(p, "state")).flatten(),
         });
     }
-}
-
-fn str_field(p: &Value, key: &str) -> String {
-    p.get(key).and_then(|v| v.as_str()).unwrap_or("").into()
-}
-
-fn opt_str(p: &Value, key: &str) -> Option<String> {
-    p.get(key).and_then(|v| v.as_str()).map(String::from)
 }
 
 fn login(p: &Value) -> Option<String> {

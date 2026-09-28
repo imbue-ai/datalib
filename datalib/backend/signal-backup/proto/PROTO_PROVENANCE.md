@@ -18,8 +18,8 @@ into, which discards comments and layout, by
 - Pinned commit: `de27343c245b8bc4b19684dcd46df2249532f5c2` (2026-05-19)
 - Roots: `signal.backup.BackupInfo`, `signal.backup.Frame`,
   `signal.backup.local.Metadata`, `signal.backup.local.FilesFrame`.
-  Everything upstream is reachable from those, so nothing is trimmed
-  today; the roots are there so a future upstream addition we do not
+  Everything upstream is reachable from those, so nothing is trimmed;
+  the roots are there so a future upstream addition we do not
   read stays out.
 
 The ingest stores each frame's full JSON (`serde_json::to_string` of
@@ -45,6 +45,7 @@ python3 tools/proto_from_descriptor.py "$work/upstream.pb" datalib/backend/signa
 ```
 
 `protoc` is the one Bazel already fetched:
-`$(bazelisk info output_base)/external/protobuf++protoc+prebuilt_protoc.<os_arch>/bin/protoc`.
+`$(bazelisk info output_base)/external/toolchains_protoc++protoc+toolchains_protoc_hub.<os_arch>/bin/protoc`
+(`<os_arch>` is e.g. `osx_aarch_64` or `linux_x86_64`).
 The upstream download is an input to the generator and must not be
 committed. Then `bazelisk test //datalib/backend/signal-backup/... //datalib/backend/etl/providers/signal/...`.

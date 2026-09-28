@@ -234,6 +234,17 @@ mod tests {
     use datalib_etl_notion::ingest::RawDb;
     use serde_json::json;
 
+    /// Seals the fixture before render reads it, exactly as the download
+    /// step does: render pins HEAD, so an uncommitted row is invisible to
+    /// it, and a test that skipped this would assert against the working
+    /// set. Closed, not dropped: `parse_api_dir` reopens the store.
+    async fn seal_and_close(db: RawDb) {
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test fixture")
+            .await
+            .unwrap();
+        db.close().await;
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn parse_round_trips_pages_and_bodies() {
         let dir = tempfile::tempdir().unwrap();
@@ -254,15 +265,7 @@ mod tests {
         }])
         .await
         .unwrap();
-        // Sealed before render reads it, exactly as the download step does:
-        // render pins HEAD, so an uncommitted row is invisible to it. Without
-        // this the test asserts against the working set, which is the bug the
-        // pinning work exists to remove.
-        datalib_etl::doltlite_raw::commit_run(db.pool(), "test fixture")
-            .await
-            .unwrap();
-        // Closed, not dropped: `parse_api_dir` reopens this store.
-        db.close().await;
+        seal_and_close(db).await;
 
         let parsed = parse_api_dir(&db_file, RawRange::cold()).unwrap();
         assert_eq!(parsed.pages.len(), 1);
@@ -286,15 +289,7 @@ mod tests {
         }])
         .await
         .unwrap();
-        // Sealed before render reads it, exactly as the download step does:
-        // render pins HEAD, so an uncommitted row is invisible to it. Without
-        // this the test asserts against the working set, which is the bug the
-        // pinning work exists to remove.
-        datalib_etl::doltlite_raw::commit_run(db.pool(), "test fixture")
-            .await
-            .unwrap();
-        // Closed, not dropped: `parse_api_dir` reopens this store.
-        db.close().await;
+        seal_and_close(db).await;
         let parsed = parse_api_dir(&db_file, RawRange::cold()).unwrap();
         assert_eq!(parsed.pages.len(), 1);
         assert!(parsed.markdown_by_page.is_empty());

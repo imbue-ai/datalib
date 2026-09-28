@@ -17,7 +17,7 @@ This README is for working on the image itself.
 
 | File             | Purpose                                                                                          |
 |------------------|--------------------------------------------------------------------------------------------------|
-| `Dockerfile`     | Multi-arch Ubuntu 24.04 image. Reads `ARG TARGETARCH` (set by `buildx`) to pick the right tarball. |
+| `Dockerfile`     | Multi-arch Ubuntu 26.04 image. Reads `ARG TARGETARCH` (set by `buildx`) to pick the right tarball. |
 | `entrypoint.sh`  | Bootstraps `LATCHKEY_ENCRYPTION_KEY` from a per-bind-mount key file. PID 1 wrapper under tini.   |
 | `demo/config.toml` | The demo data library baked into the image at `/opt/datalib/demo`. |
 | `stage_demo.sh`  | Copies the demo's fixture inputs + config into a build context (`build_docker.sh` and release.yml both call it). |
@@ -42,13 +42,18 @@ scripts/build_docker.sh
 scripts/build_docker.sh --load
 
 # 3. Build against a specific tagged release.
-scripts/build_docker.sh 0.4.0 --load
+scripts/build_docker.sh X.Y.Z --load
 
-# 4. Build against tarballs you produced locally (e.g. via
-#    `bazelisk build //datalib/backend:dist -c opt` inside
-#    .devcontainer/). The dir must contain BOTH:
-#       datalib-x86_64-unknown-linux-gnu.tar.gz
-#       datalib-aarch64-unknown-linux-gnu.tar.gz
+# 4. Build against assets you produced locally, named like the
+#    release's (the binaries via `bazelisk build //datalib/backend:dist
+#    -c opt` inside .devcontainer/, the runtime via
+#    scripts/release/stage_runtime_asset.sh). The dir must contain, for
+#    BOTH x86_64 and aarch64 (<arch>-unknown-linux-gnu):
+#       datalib-<arch>-unknown-linux-gnu.tar.gz
+#       runtime-<arch>-unknown-linux-gnu.tar.gz (+ .sha256)
+#    CI's "bazel test //..." job uploads the x86_64 binaries tarball as
+#    an artifact for three days (in the release's mode on a `main` push;
+#    at opt-level 1 on a PR).
 scripts/build_docker.sh --tarball-dir /path/to/tarballs --load
 
 # 5. Push to your own registry.
@@ -97,35 +102,20 @@ docker run --rm -v "$tmp:/root/.latchkey" "$IMG" latchkey auth list | grep claud
 rm -rf "$tmp"
 ```
 
-## Image size budget
+## Image size
 
-~2.7 GB total, dominated by the qmd-model layer:
-
-| Layer                              | Approx size |
-|------------------------------------|------------:|
-| `ubuntu:24.04`                     |      ~75 MB |
-| Node 22 + base runtime deps        |     ~200 MB |
-| `latchkey` (npm global)            |      ~30 MB |
-| **qmd GGUFs** (embed + rerank + expand) |  **~2.25 GB** |
-| datalib binaries + the demo library |     ~100 MB |
-| Everything else                    |     <100 MB |
-
-The qmd layer is intentionally placed *before* the binary COPY so
-version bumps to the release tarballs don't invalidate it. Bumping qmd's
-default model URIs (rare) does; see the model-prefetch step in the
-`Dockerfile` for the HF URLs.
+~2.7 GB, dominated by qmd's three GGUF models (~2.25 GB: embed, rerank,
+expand), which `datalib-step pull-models` fetches from their pins
+(`datalib_runtime::qmd::PINNED_MODELS`). That step runs from the
+unpacked tarball, so it comes after the binaries' layer and a new
+tarball re-runs it. The `-slim` tag (`QMD_PREFETCH_MODELS=false`) is
+the same image without the models.
 
 ## When binaries fail to start with a missing-shared-library error
 
-The release binaries are produced by `bazel build
-//datalib/backend:dist -c opt` and dynamic-link against glibc, libm,
-libgcc_s, and (for `datalib-dag` / `datalib-http`) historically
-also libsqlite3. The sqlite dep was removed by switching sqlx's feature
-from `sqlite-unbundled` to `sqlite` so libsqlite3-sys's `bundled` mode
-plus the Bazel `crate.annotation` on it would static-link our doltlite
-build (see `datalib/backend/Cargo.toml`'s sqlx dep comment).
-
-If a future binary regresses to dynamic libsqlite3 (or picks up a new
-dyn dep), the Dockerfile's `datalib-dag --version` smoke and the demo
-ingest fail the image build with
-`error while loading shared libraries: …`, before the image ever ships.
+The gnu release binaries link glibc dynamically and doltlite statically
+(sqlx's `sqlite` feature; see the sqlx comment in
+`datalib/backend/Cargo.toml`). If one picks up a new dynamic
+dependency, the Dockerfile's `datalib-dag --version` smoke and the demo
+ingest fail the image build with `error while loading shared
+libraries: …`, before the image ever ships.

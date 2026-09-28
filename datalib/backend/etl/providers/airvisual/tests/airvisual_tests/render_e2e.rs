@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use datalib_etl::progress::Progress;
+use datalib_etl_airvisual::ingest::parse::Sample;
 use datalib_etl_airvisual::ingest::schema_raw::{
     upsert_samples, AirvisualDeviceRow, AirvisualSampleRow,
 };
@@ -28,18 +29,13 @@ fn sample(
 ) -> AirvisualSampleRow {
     AirvisualSampleRow {
         device_id: device.to_string(),
-        ts_ms,
-        pm25_ugm3: pm25,
-        pm10_ugm3: None,
-        pm1_ugm3: None,
-        aqi_us: None,
-        aqi_cn: None,
-        outdoor_aqi_us: None,
-        outdoor_aqi_cn: None,
-        temperature_c: t,
-        humidity_pct: None,
-        co2_ppm: co2,
-        voc_ppb: None,
+        sample: Sample {
+            ts_ms,
+            pm25_ugm3: pm25,
+            temperature_c: t,
+            co2_ppm: co2,
+            ..Default::default()
+        },
         source_file: "202609_AirVisual_values.txt".into(),
     }
 }

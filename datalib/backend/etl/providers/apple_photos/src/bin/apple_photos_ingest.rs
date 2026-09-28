@@ -6,14 +6,11 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use datalib_etl::doltlite_raw as dr;
-use datalib_etl::progress::{Progress, TracingSink};
-use datalib_etl_apple_photos::ingest::{self, mirror, FetchOptions};
+use datalib_etl_apple_photos::ingest;
 use datalib_etl_apple_photos::processor::mirror_options;
 use datalib_etl_apple_photos_config::ApplePhotosConfig;
 use datalib_obs::{init as init_obs, ObsArgs};
 use datalib_source_common::LocalPath;
-use tracing::info;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -97,31 +94,5 @@ async fn main() -> Result<()> {
     };
     let options = mirror_options(&config)?;
 
-    let pool = mirror::open_mirror(&args.db).await?;
-    let stats = ingest::fetch(FetchOptions {
-        mirror_path: args.db.clone(),
-        pool: Some(pool.clone()),
-        options,
-        progress: Progress::new(std::sync::Arc::new(TracingSink::new("apple_photos"))),
-    })
-    .await?;
-
-    let summary = stats.summary();
-    let commit = dr::commit_run(&pool, &format!("apple_photos: {summary}")).await?;
-    pool.close().await;
-
-    match &commit {
-        Some(hash) => info!(
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            commit = %hash,
-            "{summary}"
-        ),
-        // An unchanged library rewrites every row and still produces no
-        // commit, because every row hashes to the chunk already at HEAD.
-        None => info!(
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            "{summary} (no changes since last run)"
-        ),
-    }
-    Ok(())
+    ingest::fetch_and_commit(&args.db, options, "apple_photos", started).await
 }

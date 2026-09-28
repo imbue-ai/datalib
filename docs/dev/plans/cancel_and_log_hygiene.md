@@ -48,7 +48,7 @@ deleted, and `scope_config` correctly kept the prior record because the
 run had not satisfied its config. All of that inside one second.
 
 The fifteen seconds is `CANCEL_GRACE`
-([`worker.rs:90`](../../../datalib/backend/http/src/worker.rs)) expiring.
+([`worker.rs:90`](https://github.com/imbue-ai/datalib/blob/ba10301fa0f55a886266671bf79ae3562d774922/datalib/backend/http/src/worker.rs)) expiring.
 And the process it expires on behalf of is not killed by it.
 
 **The orphan.** At the time of the second cancel, `unified_index/qmd_index`
@@ -75,7 +75,7 @@ this work ever ran.
 
 **Why.** Three pieces that are each individually reasonable:
 
-- [`worker.rs:479`](../../../datalib/backend/http/src/worker.rs) sends
+- [`worker.rs:479`](https://github.com/imbue-ai/datalib/blob/ba10301fa0f55a886266671bf79ae3562d774922/datalib/backend/http/src/worker.rs) sends
   exactly one `SIGTERM`, then after `CANCEL_GRACE` calls `child.kill()`
   — `SIGKILL`, on `datalib-dag` alone.
 - [`datalib_dag.rs:262`](../../../datalib/backend/dag/src/bin/datalib_dag.rs)
@@ -100,7 +100,7 @@ run. `unified_index/qmd_index` sits at `state = 'running'` in
 `exit_code` nor a `signal`, so the record cannot say how they died.
 
 **And the cancel is invisible in the log.**
-[`worker.rs`](../../../datalib/backend/http/src/worker.rs) has no
+[`worker.rs`](https://github.com/imbue-ai/datalib/blob/ba10301fa0f55a886266671bf79ae3562d774922/datalib/backend/http/src/worker.rs) has no
 `tracing` call anywhere on the cancel path — not for the `SIGTERM`, not
 for the grace expiring, not for the `SIGKILL`. The only trace of a
 cancel in 11,131 lines is the bare `POST …/cancel 204` request line.
@@ -311,7 +311,7 @@ change that makes the orphan impossible rather than merely unlikely —
 without it, a `node` grandchild survives any signal aimed at its parent.
 
 **Log the cancel.** Three `tracing` lines in
-[`worker.rs`](../../../datalib/backend/http/src/worker.rs) — SIGTERM
+[`worker.rs`](https://github.com/imbue-ai/datalib/blob/ba10301fa0f55a886266671bf79ae3562d774922/datalib/backend/http/src/worker.rs) — SIGTERM
 sent, grace expired, SIGKILL sent — each carrying `job` and `pid` as
 fields. The next person reads this off the log card instead of off `ps`.
 
@@ -329,7 +329,7 @@ cannot, that assertion should say out loud what it does not reach.
 Worth having even after PR 1: a `SIGKILL`ed runner can never close its
 run, so `datalib-http` has to. It already has the machinery — the
 startup recovery in
-[`worker.rs`](../../../datalib/backend/http/src/worker.rs) reconciles
+[`worker.rs`](https://github.com/imbue-ai/datalib/blob/ba10301fa0f55a886266671bf79ae3562d774922/datalib/backend/http/src/worker.rs) reconciles
 jobs whose runner died. Extend it to the run store: when the worker
 finishes a job whose `runs.finished_at_utc` is NULL, close the run and
 mark any `step_runs` still `running` as `stopped`.

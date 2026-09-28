@@ -116,7 +116,7 @@ fn unquote(s: &str) -> String {
     out
 }
 
-fn tokenize(s: &str) -> Vec<String> {
+pub fn tokenize(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut in_quote = false;

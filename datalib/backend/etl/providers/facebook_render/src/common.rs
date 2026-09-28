@@ -5,9 +5,12 @@
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::BulkUpsertable as _;
 use datalib_etl_chat_common::render::RenderProfile;
-use datalib_etl_chat_common::types::NormalizedAttachment;
+use datalib_etl_chat_common::types::{
+    ItemKind, NormalizedAttachment, NormalizedChatItem, UpstreamRef,
+};
 use datalib_etl_facebook::ingest::schema_raw::MediaBlobRow;
 use datalib_etl_render::inputs::Inputs;
+use datalib_id::Identity;
 use datalib_schema::providers::Provider;
 use serde_json::Value;
 
@@ -145,6 +148,39 @@ pub fn media_caption(media: &Value, album_name: Option<&str>) -> Option<String> 
     str_field(media, "description")
         .or_else(|| str_field(media, "title").filter(|t| Some(*t) != album_name))
         .map(strip_mentions)
+}
+
+/// One item of a feed, as `author_id` wrote it: an attachment item when
+/// it carries any, else a text one.
+pub fn chat_item(
+    item_id: Identity,
+    author_id: String,
+    author_display: String,
+    date_ms: Option<i64>,
+    text: Option<String>,
+    attachments: Vec<NormalizedAttachment>,
+) -> NormalizedChatItem {
+    NormalizedChatItem {
+        message_uuid: item_id.uuid,
+        author_id,
+        author_display,
+        date_ms,
+        text,
+        kind: if attachments.is_empty() {
+            ItemKind::Text
+        } else {
+            ItemKind::Attachment
+        },
+        attachments,
+        reactions: Vec::new(),
+        system_note: None,
+        source_url: None,
+        kind_label: None,
+        source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
+        is_aside: false,
+        unread: false,
+        problems: Vec::new(),
+    }
 }
 
 fn mime_for(uri: &str) -> Option<String> {

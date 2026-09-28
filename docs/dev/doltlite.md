@@ -10,9 +10,10 @@
 > (`-readonly`) in Terminal — `datalib/tauri/src/raw_store.rs`.
 
 
-Our raw ETL captures (under `<data_root>/<name>/raw/`) and the per-mirror
-backend index (`<data_root>/unified_index/grid_index/db.doltlite_db`) are
-[doltlite](https://github.com/dolthub/doltlite) databases: SQLite with
+Every store the pipeline writes — the raw stores under
+`<data_root>/<group>/ingest/`, each source's render store, and the grid
+index (`<data_root>/unified_index/grid_index/db.doltlite_db`) — is a
+[doltlite](https://github.com/dolthub/doltlite) database: SQLite with
 content-addressed prolly-tree storage and a `git`-shaped commit history
 exposed through SQL. The bazel build statically links doltlite into our
 Rust binaries (see `third-party/doltlite/README.md`), but the
@@ -56,8 +57,8 @@ datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db .dump \
   | sqlite3 grid.sqlite
 ```
 
-That is the whole export. Measured against a real 16 MB grid store on
-2026-09-05: 15 MB of SQL, well under a second each way, and
+That is the whole export. Measured on doltlite 0.50.3 against a real
+16 MB grid store: 15 MB of SQL, well under a second each way, and
 `grid_rows` / `markdowns` / `edges` arrive with their schemas, primary
 keys and indexes intact. It works for the raw stores too — BLOB columns
 come through as hex literals, so a `blobs.doltlite_db` round-trips its
@@ -90,8 +91,8 @@ Two variants worth knowing:
      CREATE TABLE out.grid_rows AS SELECT * FROM main.grid_rows;"
   ```
 
-  Verified 2026-09-05; the result is a file `sqlite3` opens directly.
-  Two caveats, both measured the same day. `-readonly` is missing from
+  Verified on doltlite 0.50.3; the result is a file `sqlite3` opens
+  directly. Two caveats, measured on the same build. `-readonly` is missing from
   that command on purpose — under it the `ATTACH` cannot create the
   output and the next line fails with `unknown database out` — so run
   this against a **copy** of the store rather than adding a second
@@ -157,13 +158,13 @@ the file first and check the branch out in the copy.
 doltlite -readonly slack/ingest/entities.doltlite_db "SELECT * FROM dolt_status;"
 ```
 
-Columns are `(table_name, staged, status)`. A non-empty result used to
-mean "a writer died between its last seal and its next one." The next
-writer's `doltlite_raw::open` discards that working set and starts from
-HEAD — see [Operational notes](#operational-notes). A non-empty
-`dolt_status` against a file you opened with the CLI just means an ETL
-run is mid-flight (or recently was); what you see there will be thrown
-away, not committed.
+Columns are `(table_name, staged, status)`. A read-only connection
+lands on `main`, whose working set a writer never touches (it works on
+`datalib_writer`), so what you see there is rows someone wrote on `main`
+without committing — a writable CLI session, say. What a writer has in
+flight on its own branch, or left there when it died, the next writer's
+`doltlite_raw::open` discards — see
+[A writer's open discards the working set](#a-writers-open-discards-the-working-set).
 
 With `-readonly` it is safe against a store a sync is writing right
 now: `a_reader_asking_dolt_status_never_makes_the_writers_commit_fail`
@@ -288,7 +289,7 @@ doltlite -readonly slack/ingest/entities.doltlite_db \
 Both look like the tool for the question above and neither is. Their
 primary-key pushdown exists only for **integer** keys
 (`doltliteBestIndexIntPkRange` in `doltlite_history.c` and
-`doltlite_blame.c`); every table in this tree keys on a `VARCHAR`, so
+`doltlite_blame.c`); the content tables here key on text, so
 `WHERE id = ?` is applied after each commit's whole table has been
 read. Measured on doltlite 0.50.3 against a 200k-row table with 63
 commits: 20s for either, against ~1s for the `dolt_diff_<table>` walk.
@@ -362,23 +363,20 @@ check a new release's format before bumping.
 
 doltlite's open path walks the prolly chunk store's root pages and
 blake3-hashes each one before any query can run. On a multi-GB raw
-store that's a *lot* of tight inner-loop C code. We learned this the
-hard way: a 3.5GB `slack/ingest/entities.doltlite_db` took **~60 seconds** to open
-from Rust (sqlx blew its 30s `acquire_timeout`, the render phase
-died, the UI grid silently went empty), while the upstream CLI on the
-same file opened it in 2.4 seconds.
+store that's a *lot* of tight inner-loop C code. Built at `-O0`, a
+3.5GB `slack/ingest/entities.doltlite_db` took **~60 seconds** to open
+from Rust — past sqlx's 30s `acquire_timeout`, so the render phase died
+and the grid went empty — while the upstream CLI opened the same file
+in 2.4 seconds.
 
-The diff turned out to be the C compile flags. Bazel's `fastbuild`
-default for `cc_library` is `-O0`, which is a 15-25× hit specifically
-for this workload (prolly-tree page walks + blake3 are pathologically
-sensitive to compiler optimizations). Our `third-party/doltlite/BUILD.bazel`
-now forces `-O2` regardless of `--compilation_mode` — we never step-
-debug doltlite C from Rust anyway, so paying for optimized code under
-fastbuild is a strict win.
+Bazel's `fastbuild` default for `cc_library` is `-O0`, a 15-25× hit for
+this workload (prolly-tree page walks + blake3 are pathologically
+sensitive to compiler optimizations). `third-party/doltlite/BUILD.bazel`
+forces `-O2` regardless of `--compilation_mode`; we never step-debug
+doltlite C from Rust, so optimized code under fastbuild costs nothing.
 
-Other compile-flag lesson learned along the way: don't add
-`-DSQLITE_DEFAULT_FOREIGN_KEYS=1`. The upstream CLI builds without it,
-and any caller that wants FK enforcement should send
+Don't add `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`. The upstream CLI builds
+without it, and a caller that wants FK enforcement sends
 `PRAGMA foreign_keys = ON` after connect (sqlx already does).
 
 The standalone reproducer lives in `//hack/slack_open_debug/`. It

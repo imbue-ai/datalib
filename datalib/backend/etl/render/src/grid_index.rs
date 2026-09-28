@@ -1489,6 +1489,26 @@ mod write_lock_tests {
             .unwrap()
     }
 
+    async fn apply_in_parallel(write_lock: &StdArc<WriteLock>, n_tasks: usize, per_task: usize) {
+        let out_dir = PathBuf::from("/tmp");
+        let mut handles = Vec::with_capacity(n_tasks);
+        for task in 0..n_tasks {
+            let lock = write_lock.clone();
+            let out_dir = out_dir.clone();
+            handles.push(tokio::spawn(async move {
+                for idx in 0..per_task {
+                    let md = mk_md(task, idx);
+                    apply_one(lock.as_ref(), &out_dir, &md)
+                        .await
+                        .unwrap_or_else(|e| panic!("apply_one task={task} idx={idx}: {e:#}"));
+                }
+            }));
+        }
+        for h in handles {
+            h.await.expect("task join");
+        }
+    }
+
     /// Per-call auto-commit mode: N parallel tasks through `apply_one`, each
     /// writing K unique markdowns into one pool. `max_connections=8` so the
     /// pool *could* hand out enough connections for the busy-timeout race;
@@ -1512,25 +1532,8 @@ mod write_lock_tests {
         super::init_schema(&pool).await.expect("init_schema");
 
         let write_lock = WriteLock::new_arc(pool.clone());
-        let out_dir = PathBuf::from("/tmp");
 
-        let mut handles = Vec::with_capacity(N_TASKS);
-        for task in 0..N_TASKS {
-            let lock = write_lock.clone();
-            let out_dir = out_dir.clone();
-            handles.push(tokio::spawn(async move {
-                for idx in 0..PER_TASK {
-                    let md = mk_md(task, idx);
-                    apply_one(lock.as_ref(), &out_dir, &md)
-                        .await
-                        .unwrap_or_else(|e| panic!("apply_one task={task} idx={idx}: {e:#}"));
-                }
-            }));
-        }
-
-        for h in handles {
-            h.await.expect("task join");
-        }
+        apply_in_parallel(&write_lock, N_TASKS, PER_TASK).await;
 
         let grid_n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
             .fetch_one(&pool)
@@ -1571,28 +1574,12 @@ mod write_lock_tests {
         super::init_schema(&pool).await.expect("init_schema");
 
         let write_lock = WriteLock::new_arc(pool.clone());
-        let out_dir = PathBuf::from("/tmp");
 
         // Every apply_one below reuses the held conn and accumulates into the
         // open transaction.
         write_lock.begin_transaction().await.expect("BEGIN");
 
-        let mut handles = Vec::with_capacity(N_TASKS);
-        for task in 0..N_TASKS {
-            let lock = write_lock.clone();
-            let out_dir = out_dir.clone();
-            handles.push(tokio::spawn(async move {
-                for idx in 0..PER_TASK {
-                    let md = mk_md(task, idx);
-                    apply_one(lock.as_ref(), &out_dir, &md)
-                        .await
-                        .unwrap_or_else(|e| panic!("apply_one task={task} idx={idx}: {e:#}"));
-                }
-            }));
-        }
-        for h in handles {
-            h.await.expect("task join");
-        }
+        apply_in_parallel(&write_lock, N_TASKS, PER_TASK).await;
 
         // Before commit: rows aren't visible from a fresh connection
         // (other than the one holding the open tx).

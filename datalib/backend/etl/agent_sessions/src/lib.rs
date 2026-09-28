@@ -17,6 +17,21 @@ use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan::{self, ScannedFile};
 use datalib_etl::progress::Progress;
 
+/// The two tables every agent-session raw store keeps: `transcripts`,
+/// one row per session file, and `records`, one per line it keeps from
+/// that file, which a render's diff buckets on `records.transcript_id`.
+pub const DATA_TABLES: &[&str] = &["transcripts", "records"];
+
+/// An agent-session raw store's DDL, given its two tables' own.
+pub fn raw_ddl(transcripts: String, records: String) -> Vec<String> {
+    vec![
+        transcripts,
+        records,
+        "CREATE INDEX IF NOT EXISTS records_transcript ON records(transcript_id)".to_string(),
+        file_checkpoint::INGESTED_FILES_DDL.to_string(),
+    ]
+}
+
 /// One directory of session files, and the checkpoint scope its reads
 /// are stamped under.
 pub struct SessionTree {

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr};
+use datalib_etl::export_files::files_with_extension;
 use datalib_etl::progress::Progress;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -152,7 +153,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let mut tx = db.pool().begin().await.context("begin linkedin tx")?;
 
-    for path in discover_csvs(&opts.input_path) {
+    for path in files_with_extension(&opts.input_path, "csv") {
         let table = table_name(&opts.input_path, &path);
         if known_file(&table).is_none() {
             warn!(
@@ -357,26 +358,6 @@ fn row_id(table: &str, payload: &Value, id_cols: Option<&[&str]>) -> String {
     Uuid::new_v5(&linkedin_ns(), recipe.as_bytes())
         .as_hyphenated()
         .to_string()
-}
-
-fn discover_csvs(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("csv")) {
-                out.push(p);
-            }
-        }
-    }
-    out.sort();
-    out
 }
 
 fn discover_articles(root: &Path) -> Vec<PathBuf> {

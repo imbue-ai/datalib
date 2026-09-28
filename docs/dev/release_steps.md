@@ -1,6 +1,6 @@
 # The release's steps, run before a tag runs them
 
-**Reference, current as of 2026-09-21.** The code is
+The code is
 [`scripts/release/`](../../scripts/release/), the tests are in
 [`tools/BUILD.bazel`](../../tools/BUILD.bazel) under "release.yml's
 steps", and the workflow is
@@ -8,12 +8,10 @@ steps", and the workflow is
 
 `release.yml` runs only when a `v*` tag is pushed, and a tag's run
 executes the tag's own tree — a re-run cannot pick up a fix. So a step
-that is wrong the first time it runs costs a release: v0.35.0 lost its
-tarballs to three bugs in the `runtime` job, v0.35.1 to one in the
-"Stage tarball" step, and none of the four was visible to `bazel test
-//...` because each lived in an inline `run:` block, or in a script
-only that block called in that way. This page says what now runs
-before a tag and what still cannot.
+that is wrong the first time it runs costs a release (v0.35.0 and
+v0.35.1 each lost their tarballs that way, to bugs in inline `run:`
+blocks no test ran). This page says what runs before a tag and what
+cannot.
 
 ## A patch release never changes a store's shape
 
@@ -50,9 +48,9 @@ in the workflow. They are the part that cannot run anywhere else.
 
 - **`//tools:stage_runtime_test`** runs `stage_runtime_asset.sh` from
   a directory that is not the repo, with the relative `runtime` the
-  workflow passes, then unpacks the asset and runs qmd out of it. On
-  Linux CI this is where node-llama-cpp's fork probe runs — the
-  `--input-type=module` bug of v0.35.0 fails here.
+  workflow passes, then unpacks the asset and runs qmd out of it,
+  checking it reports the pinned `DEFAULT_QMD_VERSION`. On Linux CI
+  this is where node-llama-cpp's fork probe runs.
 - **`//tools:stage_tarball_test`** runs `stage_tarball.sh` for four
   triples (gnu with the CUDA overlay, the two musl ones naming their
   gnu sibling, mac) against the built binaries, unpacks each tarball
@@ -61,18 +59,18 @@ in the workflow. They are the part that cannot run anywhere else.
   six notice files. `cargo-about` cannot run in the sandbox (it needs
   `cargo` and the crate sources), so the test hands
   `third_party_notices.sh` a stub, `tools/fake_cargo_about.sh`, that
-  writes the file `-o` names from the directory it is run in — the one
-  behaviour v0.35.1 tripped on.
+  writes the file `-o` names from the directory it is run in, which is
+  the behaviour a wrong working directory breaks.
 - **`…_bash32_test`** — on a mac, both again under `/bin/bash`, the
   3.2 the macOS runner has, where an empty array is "unbound
   variable" under `-u`. Bazel skips them on Linux
   (`target_compatible_with`); `scripts/lint_repo.py` check 10 refuses
-  the one idiom that bit us in any workflow, since CI has no mac leg.
+  an empty bash array in any workflow step, since CI has no mac leg.
 
-The workflow's other checks that a release still makes on its own
-runner — the binary reports the tag, the musl binaries are fully
-static — stayed inline: they are assertions over a built artifact,
-not steps that make one.
+The workflow's other checks that a release makes on its own runner —
+the binary reports the tag, the musl binaries are fully static — are
+inline: they are assertions over a built artifact, not steps that make
+one.
 
 ## Before a tag: the Linux run from a mac
 
