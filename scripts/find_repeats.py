@@ -8,7 +8,7 @@ at least `--min` words (lowercased, punctuation dropped) that occurs
 twice or more, longest first, with every place it occurs. Comparing
 words rather than lines is the point: a paragraph copied and then
 re-wrapped still matches, which a line-based clone detector misses.
-For code, use one: `npx jscpd@4.0.5 --min-lines 10 datalib`.
+For code, use one: jscpd, run as issue #791 records.
 
 A report is a list of candidates, not a verdict: a sentence a user doc
 repeats so it can stand alone may be right where it is. Vendored code,

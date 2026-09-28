@@ -2,15 +2,12 @@
 //! Support/BeeperTexts/local-<bridge>/megabridge.db`.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 use anyhow::{Context, Result};
-use serde_json::Value;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use super::db::RawDb;
+use super::index_db::query_json;
 use super::FetchSummary;
 
 /// Maps the suffix of a `local-<X>` directory name to the canonical
@@ -33,48 +30,6 @@ fn network_for_local_bridge(local_suffix: &str) -> Option<&'static str> {
         "slack" => "slack",
         _ => return None,
     })
-}
-
-fn sqlite3_bin() -> String {
-    std::env::var("BEEPER_SQLITE3").unwrap_or_else(|_| "sqlite3".to_string())
-}
-
-async fn query_json(db_path: &Path, sql: &str) -> Result<Vec<Value>> {
-    // See index_db::query_json for why we use plain path + -readonly
-    // rather than a `file:?immutable=1` URI — the latter silently
-    // hides WAL contents, which Beeper Texts (a live writer) is
-    // actively populating.
-    let mut child = Command::new(sqlite3_bin())
-        .arg("-json")
-        .arg("-readonly")
-        .arg(db_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("spawn sqlite3")?;
-    {
-        let mut stdin = child.stdin.take().expect("stdin piped");
-        stdin
-            .write_all(sql.as_bytes())
-            .await
-            .context("write SQL to sqlite3 stdin")?;
-    }
-    let output = child.wait_with_output().await.context("wait sqlite3")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "sqlite3 failed (exit={:?}): {}",
-            output.status.code(),
-            stderr.trim()
-        );
-    }
-    if output.stdout.is_empty() {
-        return Ok(Vec::new());
-    }
-    let value: Value = serde_json::from_slice(&output.stdout)
-        .with_context(|| format!("parse sqlite3 -json output ({} bytes)", output.stdout.len()))?;
-    Ok(value.as_array().cloned().unwrap_or_default())
 }
 
 #[derive(Debug, Default)]

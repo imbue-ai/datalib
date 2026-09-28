@@ -251,10 +251,10 @@ CI image:
 
 The suite is `no-sandbox` + `requires-network` + `cpu:4` and takes ~4
 minutes, so unlike the rest of a warm `main` run it is real work on the
-critical path rather than a cache replay. It is also the only thing
-that catches a UI that builds but does not render: #252 is the worked
-example, where 39 tests failed *while the grid rendered perfectly* and
-60 reported an empty UI bundle.
+critical path rather than a cache replay. It catches what a build
+cannot: in #252 a Vite 8 `outDir` change let the `dist` action succeed
+with an empty output, and this suite was what said so (60 tests
+reporting "UI bundle not embedded in this binary").
 
 ### It needs a `long` timeout, and that is not slack
 

@@ -43,7 +43,7 @@ never a global — which is what lets two applet instances both offer
 shadowing the builtin.
 
 Because the source is plain JS, a user-authored card is just a bigger
-expression. An IIFE that composes the factories works today:
+expression. An IIFE that composes the factories works:
 
 ```js
 (() => {
@@ -104,34 +104,31 @@ copies a "wayfinder" prompt, plus a persisted "skip these steps next
 time" opt-out that turns the button into a straight copy.
 
 Card creation is the same gesture in both modes: every layout has an
-"add card" affordance (the miller layout's "+" strip after the last
-column, the tree layout's "+ card" button, the tiling layout's ＋ add
-areas), and it always creates a `galleryView()` card — the **new-card
-gallery** (`datalib/ui/src/cards/libs/galleryView.ts`): a list of
-every titled component with a short description, builtins first
-(sourcesView leading), then every component in the frontend store. A
-store entry's row expands to its qualified name called with its stored
-`component_args`, so one component appears once per namespace with its
-own arguments (`comp.slack_work.channels("slack_work")`,
-`comp.slack_personal.channels(…)`) — and a custom component may take
-arguments here, unlike a builtin, which still needs a
-parameter-less stand-in. Any user-defined component whose `/api/lib`
-entry carries a `description` (listed under its stored `title` when it
-has one), then a "new component, built by an agent" entry that mints a
-fresh alias seeded with `agentSeedView` (the in-card hand-off
-instructions) and repoints the card at it. Agents can later rename the
-placeholder alias (`POST /api/lib/{name}/rename`); the store leaves a
-tombstone and `ShadowCard` rewrites any card still referencing the old
-name. In dev
-mode the gallery additionally shows each entry's source and a footer
-note that source can be typed straight into the chrome bar. Picking an
-entry replaces the gallery card with the chosen component via
-`host.setSource`. Components that need arguments register a
-parameter-less picker instead — `documentView`'s gallery stand-in is
-`documentPickerView()`, which lists every rendered document
-(`/applet/unified_index/docs`) and replaces itself with `documentView("<uuid>")` on
-pick. Cards opened by other cards (`host.openCards`) work the same in
-both modes.
+"add card" affordance (the miller layout's ＋ after the last column,
+the tabs layout's "＋ new card", the tree layout's "+ card" button, the
+tiling layout's ＋ add areas), and it always creates a `galleryView()`
+card — the **new-card gallery**
+(`datalib/ui/src/cards/libs/galleryView.ts`). It lists, each with a
+short description:
+
+1. the builtins, `sourcesView` first;
+2. every titled component in the frontend store, each expanding to its
+   qualified name called with its stored `component_args` — so one
+   component appears once per namespace with its own arguments
+   (`comp.slack_work.channels("slack_work")`,
+   `comp.slack_personal.channels(…)`);
+3. a "build a component with an agent" entry that mints a fresh
+   component seeded with `agentSeedView` (the in-card hand-off
+   instructions) and repoints the card at it.
+
+A builtin in the gallery takes no arguments, so one that needs them
+offers a parameter-less stand-in: `documentView`'s is
+`documentPickerView()`. In dev mode the gallery also shows each entry's
+source and a note that source can be typed straight into the chrome
+bar. Picking an entry replaces the gallery card with the chosen
+component via `host.setSource`. An agent can rename a component
+(`POST /api/lib/{name}/rename`); the store leaves a tombstone and
+`ShadowCard` rewrites any card still referencing the old name.
 
 A card sets its title with `ctx.setTitle`, usually first thing in its
 render — and again whenever a better title emerges, so titles are
@@ -185,8 +182,8 @@ log records. The scope ends at the first `await`, so a function in
 Every card should offer help: what it shows and how to work it, as
 HTML, through `ctx.setHelp` — usually right after `setTitle`. The chrome
 grows a "?" that opens it in a popup over the page (`CardControls.vue`;
-the text is kept per card id in `cards/help.ts`, so all three layouts
-share one mechanism). A card with no help is a card that assumes its
+the text is kept per card id in `cards/help.ts`, so every layout
+shares one mechanism). A card with no help is a card that assumes its
 reader already knows it. The host clears the offer when the card is
 torn down, as it does the title.
 
@@ -254,14 +251,20 @@ type Bus = {
 
 The bus is for **ambient cross-card events** — things any number of
 cards may care about, where the publisher doesn't know (or pick) the
-receiver. It carries no structural operations. The only topic today is
-`edge.hover` (`TOPIC_EDGE_HOVER`): a document card publishes the
-destination of the edge under the cursor
-(`{ markdownUuid, sectionUuid } | null`), and every document card
-subscribes, matching `markdownUuid` against its own doc to put a
-transient highlight on the target span. Payloads cross card boundaries
-as `unknown`; subscribers validate the shape before acting.
-Unsubscribe in the card's teardown.
+receiver. It carries no structural operations. The topics:
+
+- `edge.hover` (`TOPIC_EDGE_HOVER`): a document card publishes the
+  destination of the edge under the cursor
+  (`{ markdownUuid, sectionUuid } | null`), and every document card
+  subscribes, matching `markdownUuid` against its own doc to put a
+  transient highlight on the target span.
+- `config.written` (`TOPIC_CONFIG_WRITTEN`): a card just wrote
+  `config.toml`; `configView` reloads.
+- `log.query`: a log line card's *keep* / *exclude* buttons send a
+  token to the log card's query bar.
+
+Payloads cross card boundaries as `unknown`; subscribers validate the
+shape before acting. Unsubscribe in the card's teardown.
 
 ## How a card and its layout interact
 
@@ -284,7 +287,7 @@ never reaches for the layout directly. The division of labour:
   its toolbar). See "The miller layout and the browser" below.
   Anything past that — resize handles, drag grips, add buttons,
   dividers, tab bars — is layout-specific furniture, invisible to the
-  card. The layout also decides what `openCard` placement means, what
+  card. The layout also decides what `openCards` placement means, what
   `close` takes with it, and whether `setState` reaches the URL.
 
 **A card, not a modal**, for anything a person reads, keeps open or
@@ -366,18 +369,26 @@ programs against:
   field names a row, which document a row opens and whether qmd ranks
   its free text (`RowsSpec`); the qmd columns and ranking appear only
   for the search. Row click opens the row's document via
-  `host.openCard`; double-click opens it as a standalone single-column
+  `host.openCards`; double-click opens it as a standalone single-column
   page in a new tab. Persists `q`/`sel`/`cols` state.
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
   (`/applet/unified_index/chat/{markdownUuid}`), highlighting and scrolling to
   `sectionUuid`. A different selection is a different card: the grid
   opens a fresh card rather than mutating an existing one. Shows
   doc-level outgoing edges and decorates span-level edge sources
-  (see `docs/dev/edges.md`); clicking either opens the destination via
-  `host.openCard`.
+  (see [`edges.md`](edges.md)); clicking either opens the destination
+  via `host.openCards`.
 - `documentPickerView()` — parameter-less gallery stand-in for
   `documentView`: lists every rendered document (`/applet/unified_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
+- `aliasView()` — the component library: every custom component in the
+  frontend store, by qualified name; a click opens it with its stored
+  arguments.
+- `dactalView(opts?: { load?, q? })` — DACTAL's query language and table
+  UI over a working set of search results; see [`dactal.md`](dactal.md).
+- `perseusView()` — a control panel over the Perseus editions: pick
+  versions and a locator, and it opens one reader card per version.
+- `sourceDagView()` — the sources' step graph, live while a sync runs.
 - `umapView(opts?: { q?: string; by?: string })` — the embedding map
   (`cards/UmapCard.ce.vue`, over the applet's `/embedding_map`): every
   document qmd embedded, placed by the `embedding_map` step. The search
@@ -395,15 +406,16 @@ programs against:
 - `tableView({ url })` — the typed table viewer over any endpoint that
   answers `{columns, rows}` (plus `tree: true` when each row carries a
   `path`). See "Typed tables" below.
-- `sourcesView()` — the Manage screen as a card: the tree of what
-  `config.toml` declares over `GET /api/manage/rows`, drawn by
-  `TableGrid`, with the row actions and the dialogs they open — the
-  wizard, a removal's confirm — teleported to `<body>`. Browse
-  opens a `gridView(...)` beside it through `host.openCards`, as does a
-  problems count, a step's log or the server's a `logView(...)` the
-  same way, and a row's commit history a `historyView(...)`. The
-  `/data_sources` route is this card at 1.6× width
-  with `configView()` beside it (`MANAGE_STACK` in `router/index.ts`).
+- `sourcesView()` — the Manage screen as a card
+  (`cards/SourcesCard.ce.vue`): the tree of what `config.toml` declares
+  over `GET /api/manage/rows`, drawn by `TableGrid`, with the row
+  actions and the dialogs they open — the wizard, a removal's confirm —
+  teleported to `<body>`. Through `host.openCards` it opens beside
+  itself a `gridView(...)` for Browse or a problems count, a
+  `logView(...)` for a step's log or the server's, a `historyView(...)`
+  for a row's commit history, and `configView()`. The `/data_sources`
+  route is this card alone at 1.6× width (`MANAGE_STACK` in
+  `router/index.ts`).
 - `logView({ run, step, launch, q, jumpToEnd })` — the run log
   (`components/RunLogPanel.ce.vue` in `cards/LogCard.ce.vue`): one
   process's lines — a step's newest attempt, the runner, a launch of the
@@ -445,9 +457,9 @@ table and nothing more (`tableView`, the sources card); a card that
 drives a grid itself — its own selection, column state in the URL,
 adaptive visibility (`GridCard`) — takes its definitions and keeps its
 own grid. The split is deliberate: a component that owned the grid
-*and* re-exposed the grid's options for the second kind of host was a
-wrapper around a wrapper, and every option it re-exposed was a place
-for the two to disagree.
+*and* re-exposed its options for the second kind of host would be a
+wrapper around a wrapper, with every re-exposed option a place for the
+two to disagree.
 
 ### The grid, and how to swap it
 
@@ -456,9 +468,10 @@ Every grid is SlickGrid, through `@slickgrid-universal/vanilla-bundle`
 card is a custom element, and the wrapper looks its container up on
 `document`, which cannot see into a shadow root; the run log panel
 could use the wrapper (it is teleported to `body`) and uses the bundle
-anyway, so there is one grid API in the tree. AG Grid was here until
-2026-09-17; its Enterprise modules (row grouping, tree data, the side
-bar, the context menu) needed a licence, and this repo is public.
+anyway, so there is one grid API in the tree. Not AG Grid: the
+features the grids use (row grouping, tree data, the context menu) are
+in its Enterprise modules, which need a licence, and this repo is
+public.
 
 The choice is meant to stay reversible, so the grid is kept behind a
 few seams; these are the files that would change if it were swapped
@@ -488,13 +501,15 @@ own layout shape and decodes to nothing when it cannot be read.
 |---|---|---|
 | `text` | a string | as is |
 | `count` | an integer | grouped digits |
+| `number` | a float | a few decimals, right-aligned |
 | `bytes` | an integer | a base-10 size, exact figure on hover |
-| `timestamp` | an ISO stamp | "7 days ago", exact stamp on hover; sorts on the instant |
+| `timestamp` | an ISO stamp about *now* (when something last ran) | "7 days ago", exact stamp on hover; sorts on the instant |
+| `datetime` | an ISO stamp that is the record's (when a message was sent) | the date and time it names; sorts on the instant |
 | `timeseries` | `{value, unit, samples, detail}` | the value over a sparkline, calibrated across the column |
 | `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset |
 | `status` | `{key, label, at, detail, fraction, segments}` | a glyph for the key, the reason on hover, a bar while running |
 | `chips` | `[{kind, text, title}]` | a row of chips |
-| `actions` | `[{id, label, enabled, disabled_reason, danger}]` | buttons; the card supplies the handler for each id, and an id with no handler draws nothing |
+| `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
 | `markdown_uuid` | a uuid or `{id, label}` | the title; click opens the document |
 
 The producer resolves, the viewer presents: an `identity` arrives with

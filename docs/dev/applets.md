@@ -2,18 +2,18 @@
 
 An **applet** is a config-declared program that contributes a piece of
 the app: card components for the frontend, and the HTTP endpoints
-those components read. It is the second kind of entry in
-`config.toml`, alongside `steps`.
+those components read. It is an `[[applets]]` entry in `config.toml`,
+beside `[[groups]]` and `[[steps]]`.
 
 | | step | applet |
 | --- | --- | --- |
 | Lifetime | runs to completion during a sync | long-lived server, spawned on demand |
 | Produces | artifacts on disk | HTTP responses and card components |
 | Scheduled by | `datalib-dag`, from artifact dependencies | the http gateway, from an incoming request |
-| Declares | `command`, `inputs`, `outputs`, `params` | `command`, `params` |
+| Declares | `group` + `function` (or `id`), `command`, `inputs`, `params` | `id`, `command`, `params`, and optionally the `group` its Manage row is filed under |
 
-An applet declares no `inputs`/`outputs` because it is never
-scheduled and owns no artifacts: it reads what steps already wrote.
+An applet declares no `inputs` because it is never scheduled and owns
+no artifacts: it reads what steps already wrote.
 
 ## The config entry
 
@@ -48,7 +48,7 @@ The child also gets four variables:
 | variable | value |
 | --- | --- |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (also the cwd) — the step protocol's spelling, reused deliberately |
-| `DATALIB_APPLET_ID` | this instance's config id, the same value `--applet-id` carries |
+| `DATALIB_APPLET_ID` | this instance's config id |
 | `DATALIB_APPLET_BASE` | `/applet/<id>/`, the prefix the gateway proxies here. An applet that emits absolute URLs must build them from this rather than assuming the mount layout |
 | `DATALIB_APPLET_SECRET` | a secret the gateway minted for this process. **Every request the gateway forwards carries it in an `X-Datalib-Applet-Secret` header, and an applet must refuse a request without it**, and any request whose `Host` is not `127.0.0.1:<its own port>`. The port is loopback, but loopback is not private: any process of the same user can connect, and so can a web page whose hostname resolves to 127.0.0.1. The gateway keeps its routes behind the API token; this is what keeps the applet's port from being a second door to the same data. To run an applet by hand, set the variable to any value and send it. |
 
@@ -57,16 +57,12 @@ prefix (`/applet/<id>/`) and a name injected into card source, and card
 source is evaluated with `new Function`, so a dotted or digit-leading
 id would be a syntax error at render time rather than at config load.
 
-`config::validate_applets` checks this (and id uniqueness) when the
-gateway builds its registry. Note what it does *not* do: the DAG
-runner's `config::load` does not call it, so an invalid applet id does
-not stop a sync. And a rejection currently drops the **whole** applet
-list with a message on stderr rather than the one bad entry — the
-server keeps booting on purpose, because refusing to start would leave
-no way to fix the file. That is worth more now than when it was
-written: search is itself an applet, so a bad entry anywhere in the
-list costs you the grid, and booting anyway is what keeps the Setup tab
-reachable to repair it.
+The config loader checks this, id uniqueness and the reserved `user`
+id (`accept_applets` in `datalib/backend/dag/src/config.rs`). A bad
+entry is dropped and costs only its own applet: the gateway starts the
+rest, logs the diagnostic, and a request for the dropped one answers
+with it. Search is itself an applet, so one bad entry must not cost the
+grid.
 
 ## What a command has to do
 
@@ -109,7 +105,8 @@ it runs, so when it stops — cleanly, on a signal, or on a SIGKILL that
 runs no code at all — the kernel closes that end and the applet's read
 hits EOF. An applet that sees EOF on stdin should exit.
 
-The gateway sets `DATALIB_PARENT_PIPE=1` to say that stdin means this.
+The gateway sets `DATALIB_PARENT_PIPE=0` (the descriptor number, 0
+for stdin) to say that stdin means this.
 Without it, treat stdin as ordinary: an applet run by hand has a
 terminal there, or `/dev/null`, and reading it would swallow input or
 take an instant EOF as bad news.
@@ -117,7 +114,7 @@ take an instant EOF as bad news.
 Honouring this is what stops an applet outliving the gateway. It is not
 merely tidy: an orphan keeps its port and its data root open, nothing
 ever reaps it, and they accumulate — a machine that had been running
-the app and its tests for a week was holding 186 of them (#238). The
+the app and its tests for a week was holding 186 of them. The
 gateway kills its applets on every exit it can still run code for; this
 is the one path where it cannot, so the applet has to notice by itself.
 
@@ -257,8 +254,8 @@ outside the browser without a token, gets a `401`.
 
 The applet's own server needs no token logic either. It binds loopback
 and is reached only through the gateway, which is already past the
-gate; the `DATALIB_APPLET_TOKEN` it receives is a separate, much weaker
-guard against a stray local process (see the runtime contract above).
+gate; the `DATALIB_APPLET_SECRET` it receives is a separate, much
+weaker guard against a stray local process (see the table above).
 
 ## Two instances of one command
 
@@ -358,8 +355,8 @@ seconds for the same grandchild reason.
 
 ## An applet that contributes no components
 
-`unified_index` is the other shape the contract allows and had no
-instance of until now: a server that contributes **endpoints only**. The
+`unified_index` is the other shape the contract allows: a server that
+contributes **endpoints only**. The
 grid, the document view and the document picker are builtins in the app
 bundle, so there is nothing to write into a namespace — the gateway
 still passes `--frontend-dir`, and the applet ignores it.
@@ -384,7 +381,7 @@ writes the indexes, and by `datalib-applet`, which serves them.
 ## Reference implementation
 
 `datalib/backend/applets` — `datalib-applet`, one subcommand per
-applet (today just `slack`), the same shape as `datalib-step`. One
+applet (`slack` and `unified_index`), the same shape as `datalib-step`. One
 binary rather than one per applet keeps the shared machinery in one
 place and ships one file instead of a growing list; adding an applet is
 a subcommand plus a module, not a new crate and five packaging edits.
@@ -413,8 +410,7 @@ opens it with the builtin document view rather than reimplementing all
 of that badly. The first two navigate in place, so a workspace never
 costs more than one column until you open a thread.
 
-An earlier version went straight from channel to document, which picked
-one arbitrary thread and made a 45-message channel look like it held a
-single message — the general lesson being to check what a
-`markdown_uuid` actually identifies before treating it as "the document
-for this thing".
+Going straight from a channel to "its" document would pick one
+arbitrary thread and make a 45-message channel look like it held a
+single message. Check what a `markdown_uuid` actually identifies before
+treating it as "the document for this thing".

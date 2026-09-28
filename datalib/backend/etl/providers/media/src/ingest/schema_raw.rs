@@ -7,6 +7,7 @@ use sqlx::Sqlite;
 use datalib_etl::bulk::BulkUpsertable;
 
 use super::kind::{Container, MediaClass};
+use super::meta::{AudioMeta, VisualMeta};
 
 /// Path-keyed tables, reconciled at the **end** of a scan rather than
 /// truncated at the start.
@@ -256,21 +257,7 @@ impl BulkUpsertable for MediaItemRow {
 #[derive(Debug, Clone)]
 pub struct MediaAudioRow {
     pub blake3: String,
-    pub title: Option<String>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub album_artist: Option<String>,
-    pub composer: Option<String>,
-    pub genre: Option<String>,
-    pub date: Option<String>,
-    pub track_no: Option<i64>,
-    pub track_total: Option<i64>,
-    pub disc_no: Option<i64>,
-    pub disc_total: Option<i64>,
-    pub bitrate_kbps: Option<i64>,
-    pub sample_rate_hz: Option<i64>,
-    pub channels: Option<i64>,
-    pub bit_depth: Option<i64>,
+    pub meta: AudioMeta,
 }
 
 impl BulkUpsertable for MediaAudioRow {
@@ -304,21 +291,21 @@ impl BulkUpsertable for MediaAudioRow {
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.blake3)
-            .bind(self.title.as_deref())
-            .bind(self.artist.as_deref())
-            .bind(self.album.as_deref())
-            .bind(self.album_artist.as_deref())
-            .bind(self.composer.as_deref())
-            .bind(self.genre.as_deref())
-            .bind(self.date.as_deref())
-            .bind(self.track_no)
-            .bind(self.track_total)
-            .bind(self.disc_no)
-            .bind(self.disc_total)
-            .bind(self.bitrate_kbps)
-            .bind(self.sample_rate_hz)
-            .bind(self.channels)
-            .bind(self.bit_depth)
+            .bind(self.meta.title.as_deref())
+            .bind(self.meta.artist.as_deref())
+            .bind(self.meta.album.as_deref())
+            .bind(self.meta.album_artist.as_deref())
+            .bind(self.meta.composer.as_deref())
+            .bind(self.meta.genre.as_deref())
+            .bind(self.meta.date.as_deref())
+            .bind(self.meta.track_no)
+            .bind(self.meta.track_total)
+            .bind(self.meta.disc_no)
+            .bind(self.meta.disc_total)
+            .bind(self.meta.bitrate_kbps)
+            .bind(self.meta.sample_rate_hz)
+            .bind(self.meta.channels)
+            .bind(self.meta.bit_depth)
     }
 }
 
@@ -326,28 +313,7 @@ impl BulkUpsertable for MediaAudioRow {
 #[derive(Debug, Clone)]
 pub struct MediaVisualRow {
     pub blake3: String,
-    pub width: Option<i64>,
-    pub height: Option<i64>,
-    pub orientation: Option<i64>,
-    /// ISO-8601. Carries a UTC offset when the file supplied one and is
-    /// naive when it did not — see [`super::meta`] §"Timestamps" for
-    /// why this one column deviates from the repo-wide convention.
-    pub captured_at: Option<String>,
-    pub camera_make: Option<String>,
-    pub camera_model: Option<String>,
-    pub lens_model: Option<String>,
-    pub iso: Option<i64>,
-    pub exposure_time: Option<String>,
-    pub f_number: Option<f64>,
-    pub focal_length_mm: Option<f64>,
-    pub gps_lat: Option<f64>,
-    pub gps_lon: Option<f64>,
-    pub gps_altitude_m: Option<f64>,
-    pub title: Option<String>,
-    pub caption: Option<String>,
-    pub frame_rate: Option<f64>,
-    pub video_codec: Option<String>,
-    pub audio_codec: Option<String>,
+    pub meta: VisualMeta,
 }
 
 impl BulkUpsertable for MediaVisualRow {
@@ -385,25 +351,25 @@ impl BulkUpsertable for MediaVisualRow {
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments> {
         q.bind(&self.blake3)
-            .bind(self.width)
-            .bind(self.height)
-            .bind(self.orientation)
-            .bind(self.captured_at.as_deref())
-            .bind(self.camera_make.as_deref())
-            .bind(self.camera_model.as_deref())
-            .bind(self.lens_model.as_deref())
-            .bind(self.iso)
-            .bind(self.exposure_time.as_deref())
-            .bind(self.f_number)
-            .bind(self.focal_length_mm)
-            .bind(self.gps_lat)
-            .bind(self.gps_lon)
-            .bind(self.gps_altitude_m)
-            .bind(self.title.as_deref())
-            .bind(self.caption.as_deref())
-            .bind(self.frame_rate)
-            .bind(self.video_codec.as_deref())
-            .bind(self.audio_codec.as_deref())
+            .bind(self.meta.width)
+            .bind(self.meta.height)
+            .bind(self.meta.orientation)
+            .bind(self.meta.captured_at.as_deref())
+            .bind(self.meta.camera_make.as_deref())
+            .bind(self.meta.camera_model.as_deref())
+            .bind(self.meta.lens_model.as_deref())
+            .bind(self.meta.iso)
+            .bind(self.meta.exposure_time.as_deref())
+            .bind(self.meta.f_number)
+            .bind(self.meta.focal_length_mm)
+            .bind(self.meta.gps_lat)
+            .bind(self.meta.gps_lon)
+            .bind(self.meta.gps_altitude_m)
+            .bind(self.meta.title.as_deref())
+            .bind(self.meta.caption.as_deref())
+            .bind(self.meta.frame_rate)
+            .bind(self.meta.video_codec.as_deref())
+            .bind(self.meta.audio_codec.as_deref())
     }
 }
 

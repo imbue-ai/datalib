@@ -13,8 +13,8 @@ storage keep only what changed, and get `dolt_log` /
 `dolt_history_<table>` / `dolt_diff_<table>` over the result. **Read
 that document first.** This one covers only what is Photos-shaped.
 
-**Status: download-only.** Nothing is rendered; see [What render will
-need](#what-render-will-need).
+The source is download-only: nothing is rendered (see [What render
+would need](#what-render-would-need)).
 
 ## What a library looks like
 
@@ -42,16 +42,13 @@ rowid alias, which Photos renumbers on a library repair or an iCloud
 re-sync. Beside it, 32 tables carry `ZUUID`, the stable identifier
 Photos itself uses (it is the name of the file under `originals/`).
 
-Lightroom's `id_global` is declared `UNIQUE NOT NULL`, and the engine's
-original rule keyed on a stable column only when the source had a
-single-column UNIQUE index on it. **Photos never declares `ZUUID`
-UNIQUE** — `ZASSET` has a plain `Z_Asset_byUuidIndex` and nothing more —
-so under that rule every Photos table would have keyed on the rowid.
-
-The engine now has a second way to accept a stable column: on each run,
-for every table where a `stable_key_columns` entry is present but not
-declared UNIQUE, it counts rows, distinct values and non-NULL values,
-and keys on the column when all three agree. Where they do not — a
+The engine keys on a stable column when the source declares a
+single-column UNIQUE index on it, as Lightroom does for `id_global`.
+**Photos never declares `ZUUID` UNIQUE** — `ZASSET` has a plain
+`Z_Asset_byUuidIndex` and nothing more — so the engine checks instead:
+on each run, for every table where a `stable_key_columns` entry is
+present but not declared UNIQUE, it counts rows, distinct values and
+non-NULL values, and keys on the column when all three agree. Where they do not — a
 table whose `ZUUID` is NULL for some rows — it keeps the declared key
 and says so with a warning, rather than either lying or failing the
 run. On the sample library 23 tables key on `ZUUID` this way
@@ -123,13 +120,12 @@ same name.
 
 Under it sit three **shadow tables** — `_node`, `_parent`, `_rowid` —
 holding the R-tree's pages as opaque blobs. `sqlite_master` calls them
-`table`; `PRAGMA table_list` calls them `shadow`, and the engine now
-reads the latter and skips them. They are an index's storage, and the
-engine already drops indexes for the reason its documentation gives: a
-secondary index costs space in every commit and buys a backup nothing.
-The first version of this provider mirrored them; the mirrored rtree
-plus its three shadow tables was the geo data stored twice, one copy of
-it churning on every location edit.
+`table`; `PRAGMA table_list` calls them `shadow`, and the engine reads
+the latter and skips them (`shadow_tables_skipped` in the run summary).
+They are an index's storage, and the engine drops indexes for the reason
+its documentation gives: a secondary index costs space in every commit
+and buys a backup nothing. Mirrored, they would be the geo data stored
+twice, one copy of it churning on every location edit.
 
 A virtual table whose module the engine lacks (an FTS5 table, say) is
 skipped with a warning and counted in `virtual_tables_skipped`. Its
@@ -152,19 +148,11 @@ is always mid-write.
 `~/Pictures/Photos Library.photoslibrary` is a location macOS protects.
 A process without access gets `Operation not permitted` on a plain `ls`
 of the bundle — not a prompt, and not a message that mentions
-permissions.
-
-Measured (2026-09-11, written up in
-[`docs/dev/wizard_file_pickers.md`](/docs/dev/wizard_file_pickers.md)):
-choosing the bundle in a standard **file** open panel grants the app
-access, the grant is recorded against the app rather than the process
-that showed the panel, and child processes inherit it. So in the app
-the picker is the way in, and the wizard's field is `picks: "file"` —
-a folder chooser shows a `.photoslibrary` as a file and cannot select
-it. Whether the grant survives quitting and relaunching the app is not
-measured; Full Disk Access (System Settings → Privacy & Security) is
-the durable fallback, and what a terminal needs to run `datalib-dag`
-against the config directly.
+permissions. In the app, choosing the bundle in the wizard's picker
+grants access; the field is `picks: "file"`, because a folder chooser
+shows a `.photoslibrary` as a file and cannot select it. What was
+measured, and Full Disk Access as the fallback for a terminal:
+[`wizard_file_pickers.md`](/docs/dev/wizard_file_pickers.md#what-the-picker-buys-us-in-macos-permissions).
 
 ## Timestamps
 
@@ -219,9 +207,9 @@ SELECT h.commit_date, a.ZTITLE FROM dolt_history_Z_33ASSETS h
  WHERE h.Z_3ASSETS = (SELECT Z_PK FROM ZASSET WHERE ZUUID = '…');
 ```
 
-## What render will need
+## What render would need
 
-Everything `lightroom/INGEST.md` lists under the same heading, with the
+Everything `lightroom/INGEST.md` lists under "What render will need", with the
 paths already resolved: an asset is `originals/<ZDIRECTORY>/<ZFILENAME>`
 under the bundle, and its edited version is under `resources/renders/`.
 The cheapest way to the pixels is the one already in the tree: a
@@ -231,9 +219,8 @@ dimensions and `payload_blake3` per file, joinable to `ZASSET` on
 
 ## Apple Music is not the same case
 
-Issue #370 asked about Apple Music too. `Music Library.musiclibrary/
-Library.musicdb` is not SQLite: it starts with `hfma`, the iTunes binary
-library format. Only the sidecar `Extras.itdb` is SQLite, holding two
+`Music Library.musiclibrary/Library.musicdb` is not SQLite: it starts
+with `hfma`, the iTunes binary library format. Only the sidecar `Extras.itdb` is SQLite, holding two
 bookkeeping tables. The routes there are Apple's `iTunesLibrary.framework`,
 the XML the app writes under File → Library → Export Library…, or the
 `media` source over `Media.localized/Music/` — which already reads the

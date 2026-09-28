@@ -1,7 +1,6 @@
 # Logging — one store, every process, and how to add a line
 
-Reference for the tree as of #626. The design record, with the
-arguments for each decision, is
+The design record, with the arguments for each decision, is
 [`plans/completed/logs_and_metrics.md`](plans/completed/logs_and_metrics.md);
 the step-side details (pipes, envelopes, flushing, the error tail) are
 in [`step_protocol.md`](step_protocol.md) § "stderr: logging". This
@@ -22,6 +21,7 @@ for the life of the server. The tables:
 | `step_runs` | a step in a run: state, attempt, error, message |
 | `log` | a line |
 | `metrics`, `metric_samples` | a step's numbers — the newest value, and a sparse timeseries |
+| `store_changes` | a part of the store a reader can depend on (`runs`, `step_runs`, `metrics`, a run's lines, the server's lines), with a counter each write bumps |
 
 Every stamp is UTC in a `*_utc` column with the offset the clock was
 in beside it (`tz_offset`); text order is instant order. A line keeps
@@ -43,8 +43,8 @@ at once — on a fresh root, and on one this build has to remake — and
 checks that every line published reaches the store.
 
 One thing this rests on: SQLite's file locking is not dependable on a
-network or file-syncing filesystem. **A data root belongs on local disk**, not on
-an NFS or SMB mount or inside a Dropbox folder.
+network or file-syncing filesystem. **A data root belongs on local
+disk**, not on an NFS or SMB mount or inside a Dropbox folder.
 
 Retention is `[run_history]` in `config.toml`
 ([`configs/dag_example.toml`](../../configs/dag_example.toml)):
@@ -170,13 +170,15 @@ The card tails while what it shows may still be writing.
 GET /api/processes?run=&process=&limit=       the authors, newest first
 GET /api/runs                                 recent runs
 GET /api/runs/{run}/steps                     step_runs + current metrics
+GET /api/runs/{run}/log?step=&after_seq=&limit=  one run's lines, oldest first
 GET /api/log?q=&limit=&after_seq=|before_seq=  lines, oldest first
 GET /api/log/{seq}                            one line, with its process row
 ```
 
-`q` is the whole of what is asked: the panel's pickers write what they
-pick into it as `run:`, `process_id:`, `step:` and `attempt:`, and a
-parameter other than these four is refused. With no cursor the answer is
+On `/api/log`, `q` is the whole of what is asked: the panel's pickers
+write what they pick into it as `run:`, `process_id:`, `step:` and
+`attempt:`, and any parameter but `q`, `limit`, `after_seq` and
+`before_seq` is refused. With no cursor the answer is
 the newest `limit` lines; `before_seq` pages back from the oldest one
 held, and `after_seq` is the tail cursor: remember the last `seq`, ask
 again on the SSE `table_changed: log` frame.
@@ -214,10 +216,8 @@ sqlite3 <root>/system/runs/runs.sqlite \
   frames held while `el` is off screen and delivered, once each, when
   it is back. Every card that refetches on a frame passes its root
   element.
-- **A step flushes per line.** Arrival order is the log's order, and a
-  block-buffered stdout hands the runner its lines in 4KB lumps,
-  minutes late. The runner sets `PYTHONUNBUFFERED=1`; anything else is
-  the step's job.
+- **A step flushes per line** ([`step_protocol.md`](step_protocol.md)
+  § "stderr: logging").
 - **Fields, not interpolation.** `job = %id, "claim failed"` is a
   `fields.job` anyone can filter and group on; `"claim failed for
   {id}"` is a sentence. And a sentence, always: a line whose only

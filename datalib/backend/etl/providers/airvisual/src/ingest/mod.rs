@@ -358,21 +358,10 @@ async fn ingest_one(
     ))
 }
 
-fn sample_row(device: &str, s: parse::Sample, source_file: &str) -> AirvisualSampleRow {
+fn sample_row(device: &str, sample: parse::Sample, source_file: &str) -> AirvisualSampleRow {
     AirvisualSampleRow {
         device_id: device.to_string(),
-        ts_ms: s.ts_ms,
-        pm25_ugm3: s.pm25_ugm3,
-        pm10_ugm3: s.pm10_ugm3,
-        pm1_ugm3: s.pm1_ugm3,
-        aqi_us: s.aqi_us,
-        aqi_cn: s.aqi_cn,
-        outdoor_aqi_us: s.outdoor_aqi_us,
-        outdoor_aqi_cn: s.outdoor_aqi_cn,
-        temperature_c: s.temperature_c,
-        humidity_pct: s.humidity_pct,
-        co2_ppm: s.co2_ppm,
-        voc_ppb: s.voc_ppb,
+        sample,
         source_file: source_file.to_string(),
     }
 }

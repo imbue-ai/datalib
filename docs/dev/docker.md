@@ -89,29 +89,10 @@ DATALIB_DOCKER_IMAGE=ghcr.io/imbue-ai/datalib:latest datalib/docker/doc_test.sh
 
 ## Building locally
 
-```sh
-# Both arches against the latest tagged release, into the buildx cache
-# only: a "does it still build?" smoke.
-scripts/build_docker.sh
-
-# Same, but load the host-native arch into the local daemon so you can
-# `docker run` it.
-scripts/build_docker.sh --load
-
-# Against assets you built yourself, named like the release's: for both
-# x86_64 and aarch64 linux-gnu, `datalib-<triple>.tar.gz` and
-# `runtime-<triple>.tar.gz` with its `.sha256`. CI's "bazel test //..."
-# job uploads the x86_64 binaries tarball as an artifact for three days
-# (in the release's mode on a `main` push; at opt-level 1 on a PR).
-scripts/build_docker.sh --tarball-dir /path/to/tarballs --load
-
-# Push to your own registry.
-REPO=your-fork/datalib IMAGE_NAME=ghcr.io/your-fork/datalib scripts/build_docker.sh --push
-```
-
-Don't run `docker build` on the directory directly: the Dockerfile
-expects `dist/<arch>/*.tar.gz` and `demo/` in its context, and
-`build_docker.sh` is what stages them.
+`scripts/build_docker.sh` stages the build context and runs `docker
+buildx`; [`datalib/docker/README.md`](../../datalib/docker/README.md)
+§ "Building locally" has its modes. Don't run `docker build` on the
+directory directly.
 
 ## Security model
 

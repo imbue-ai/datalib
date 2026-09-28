@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use datalib_etl_chat_common::render::RenderProfile;
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_facebook::ingest::schema_raw::{COMMENTS_TABLE, REACTIONS_TABLE};
 
@@ -15,8 +15,8 @@ use datalib_etl_render::inputs::Inputs;
 use serde_json::Value;
 
 use crate::common::{
-    attachment_entries, data_values, label_value, media_attachment, month_of, profile, str_field,
-    strip_mentions, ts_ms,
+    attachment_entries, chat_item, data_values, label_value, media_attachment, month_of, profile,
+    str_field, strip_mentions, ts_ms,
 };
 use crate::processor::Owner;
 
@@ -60,31 +60,19 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             .collect();
         let date_ms = ts_ms(v, "timestamp");
         let item_id = ids::comment(&owner.source_id, row_id, date_ms);
-        items.push(NormalizedChatItem {
-            message_uuid: item_id.uuid,
-            author_id: if author == owner.name {
-                "me".to_string()
-            } else {
-                author.clone()
-            },
-            author_display: author,
+        let author_id = if author == owner.name {
+            "me".to_string()
+        } else {
+            author.clone()
+        };
+        items.push(chat_item(
+            item_id,
+            author_id,
+            author,
             date_ms,
-            text: (!text.is_empty()).then_some(text),
-            kind: if attachments.is_empty() {
-                ItemKind::Text
-            } else {
-                ItemKind::Attachment
-            },
+            (!text.is_empty()).then_some(text),
             attachments,
-            reactions: Vec::new(),
-            system_note: None,
-            source_url: None,
-            kind_label: None,
-            source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
-            is_aside: false,
-            unread: false,
-            problems: Vec::new(),
-        });
+        ));
     }
     vec![monthly_chat(
         COMMENTS_CHAT,
@@ -156,21 +144,15 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
             let row_ids: Vec<&str> = r.row_ids.iter().map(String::as_str).collect();
             let item_id = ids::reaction(&owner.source_id, &row_ids, Some(ms));
             NormalizedChatItem {
-                message_uuid: item_id.uuid,
-                author_id: "me".to_string(),
-                author_display: owner.name.clone(),
-                date_ms: Some(ms),
-                text: Some(text),
-                kind: ItemKind::Text,
-                attachments: Vec::new(),
-                reactions: Vec::new(),
-                system_note: None,
                 source_url: r.url.clone(),
-                kind_label: None,
-                source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
-                is_aside: false,
-                unread: false,
-                problems: Vec::new(),
+                ..item(
+                    item_id,
+                    "me".to_string(),
+                    owner.name.clone(),
+                    Some(ms),
+                    Some(text),
+                    Vec::new(),
+                )
             }
         })
         .collect();
@@ -284,6 +266,7 @@ fn monthly_chat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl_chat_common::types::ItemKind;
     use serde_json::json;
 
     fn owner() -> Owner {

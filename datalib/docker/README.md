@@ -42,14 +42,18 @@ scripts/build_docker.sh
 scripts/build_docker.sh --load
 
 # 3. Build against a specific tagged release.
-scripts/build_docker.sh 0.4.0 --load
+scripts/build_docker.sh X.Y.Z --load
 
-# 4. Build against assets you produced locally (the binaries via
-#    `bazelisk build //datalib/backend:dist -c opt` inside
-#    .devcontainer/, the runtime via scripts/stage_runtime.sh). The dir
-#    must contain, for BOTH x86_64 and aarch64:
-#       datalib-<triple>-unknown-linux-gnu.tar.gz
-#       runtime-<triple>-unknown-linux-gnu.tar.gz (+ .sha256)
+# 4. Build against assets you produced locally, named like the
+#    release's (the binaries via `bazelisk build //datalib/backend:dist
+#    -c opt` inside .devcontainer/, the runtime via
+#    scripts/release/stage_runtime_asset.sh). The dir must contain, for
+#    BOTH x86_64 and aarch64 (<arch>-unknown-linux-gnu):
+#       datalib-<arch>-unknown-linux-gnu.tar.gz
+#       runtime-<arch>-unknown-linux-gnu.tar.gz (+ .sha256)
+#    CI's "bazel test //..." job uploads the x86_64 binaries tarball as
+#    an artifact for three days (in the release's mode on a `main` push;
+#    at opt-level 1 on a PR).
 scripts/build_docker.sh --tarball-dir /path/to/tarballs --load
 
 # 5. Push to your own registry.

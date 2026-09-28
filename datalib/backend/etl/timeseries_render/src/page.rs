@@ -211,32 +211,15 @@ pub fn render_all(
     let m_uuid = profile.document_uuid(source_id);
     let body = render_markdown(profile, page, source_id, &m_uuid, &rendered_plots);
 
-    let md_path = page_dir.join("index.md");
-    fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
-
-    let md_rel = md_path
-        .strip_prefix(root)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
-    let mut problems: Vec<ProblemRow> = Vec::new();
-    let rows = build_grid_rows(profile, page, source_id, &m_uuid, &md_rel, &mut problems);
-
-    on_doc_complete(RenderedMarkdown {
-        markdown_uuid: m_uuid.clone(),
-        source_id: source_id.to_string(),
-        // Not the raw HEAD: it moves on every ingest, and a row whose
-        // content did not change may carry nothing per-run.
-        upstream_cursor: None,
-        bucket_key: Some(m_uuid.clone()),
-        md_path,
-        render_version: profile.render_version,
-        rows,
-        sections: Vec::new(),
-        edges: Vec::new(),
-        problems,
-    })
-    .with_context(|| format!("on_doc_complete {m_uuid}"))?;
+    write_page(
+        root,
+        source_id,
+        &m_uuid,
+        body,
+        profile.render_version,
+        |md_rel, problems| build_grid_rows(profile, page, source_id, &m_uuid, md_rel, problems),
+        on_doc_complete,
+    )?;
     progress.inc(1);
     if page.head.is_none() {
         tracing::warn!(
@@ -248,6 +231,43 @@ pub fn render_all(
     }
 
     Ok(summary)
+}
+
+pub fn write_page(
+    root: &Path,
+    source_id: &str,
+    m_uuid: &str,
+    body: String,
+    render_version: u32,
+    build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+) -> Result<()> {
+    let md_path = datalib_etl::layout::render_markdown_root(root, source_id).join("index.md");
+    fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
+
+    let md_rel = md_path
+        .strip_prefix(root)
+        .unwrap_or(&md_path)
+        .to_string_lossy()
+        .into_owned();
+    let mut problems: Vec<ProblemRow> = Vec::new();
+    let rows = build_rows(&md_rel, &mut problems);
+
+    on_doc_complete(RenderedMarkdown {
+        markdown_uuid: m_uuid.to_string(),
+        source_id: source_id.to_string(),
+        // Not the raw HEAD: it moves on every ingest, and a row whose
+        // content did not change may carry nothing per-run.
+        upstream_cursor: None,
+        bucket_key: Some(m_uuid.to_string()),
+        md_path,
+        render_version,
+        rows,
+        sections: Vec::new(),
+        edges: Vec::new(),
+        problems,
+    })
+    .with_context(|| format!("on_doc_complete {m_uuid}"))
 }
 
 /// What the markdown needs to know about a plot that got written.

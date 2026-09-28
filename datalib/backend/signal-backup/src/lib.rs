@@ -70,8 +70,7 @@ impl Snapshot {
     /// `raw_records()` instead.
     pub fn frames(&self) -> FrameIter<'_> {
         FrameIter {
-            buf: &self.decrypted_main,
-            offset: 0,
+            records: self.raw_records(),
             skip_header: true,
         }
     }
@@ -123,8 +122,7 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
 
 /// Iterator over length-delimited `Frame`s in the decrypted main blob.
 pub struct FrameIter<'a> {
-    buf: &'a [u8],
-    offset: usize,
+    records: RecordIter<'a>,
     skip_header: bool,
 }
 
@@ -133,20 +131,10 @@ impl Iterator for FrameIter<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if self.offset >= self.buf.len() {
-                return None;
-            }
-            let (len, consumed) = match read_varint(&self.buf[self.offset..]) {
-                Ok(v) => v,
+            let record = match self.records.next()? {
+                Ok(r) => r,
                 Err(e) => return Some(Err(e)),
             };
-            let start = self.offset + consumed;
-            let end = start + len as usize;
-            if end > self.buf.len() {
-                return Some(Err(anyhow!("truncated delimited record")));
-            }
-            let record = &self.buf[start..end];
-            self.offset = end;
             if self.skip_header {
                 // First record is BackupInfo, not Frame — skip it.
                 self.skip_header = false;

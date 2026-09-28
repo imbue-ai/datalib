@@ -2,14 +2,14 @@
 
 The sync engine (`datalib-dag`) runs a DAG of arbitrary commands. Any
 executable can be a step: the runner spawns it, feeds it what it
-declared in the config, and watches its stdout/stderr. Everything beyond "run a program and exit 0/non-0" is an
-*optional* protocol layer — a plain shell script is a valid step, and
+declared in the config, and watches its stdout/stderr. Everything
+beyond "run a program and exit 0/non-0" is an *optional* protocol layer — a plain shell script is a valid step, and
 each layer you adopt buys better incrementality, progress reporting,
 or failure handling.
 
 This doc is the contract from the command's point of view. The
 runner/scheduler side (staleness, retry, what a dropped entry costs)
-is in `datalib/backend/dag/README.md`.
+is in [`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md).
 
 ## The config entry
 
@@ -86,8 +86,8 @@ its id, which arrives in the environment.
 | variable | meaning |
 | --- | --- |
 | `DATALIB_DAG_STEP` | this step's id, and the one tree it writes (`weather/ingest`) |
-| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to — a UUID the loop mints for each busy period (the stretch from idle to busy and back, serving every request that arrives meanwhile), or whatever the caller passed to `datalib-dag` as `--run-id`; a UI job names it as its `parent_job_id`. Every row in `system/runs/runs.sqlite` carries it; stamp it into anything you write that should be joinable back to the run. The built-in steps end every doltlite commit message with ` run=<id>` (`doltlite_raw::stamp_run`), which is how the Manage screen's commit history gets from a commit to its log |
-| `DATALIB_DAG_ATTEMPT` | which invocation of this step within the run, starting at `1`; a retry or a streaming pass counts up |
+| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to — a UUID the loop mints for each busy period (the stretch from idle to busy and back, serving every request that arrives meanwhile), or whatever the caller passed to `datalib-dag` as `--run-id`. Every row in `system/runs/runs.sqlite` carries it; stamp it into anything you write that should be joinable back to the run. The built-in steps end every doltlite commit message with ` run=<id>` (`doltlite_raw::stamp_run`), which is how the Manage screen's commit history gets from a commit to its log |
+| `DATALIB_DAG_ATTEMPT` | which attempt this is, starting at `1`; a retry counts up |
 | `DATALIB_DAG_GROUP` | the group it is filed under (`weather`); unset for a step outside any group |
 | `DATALIB_DAG_GROUP_TYPE` | the group's `type`, when it declares one |
 | `DATALIB_DAG_FUNCTION` | what this step does within its group (`ingest`); unset for a step outside any group |
@@ -96,11 +96,13 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty when there is no last success to compare against (never completed, or the step's own config changed) — do all your work |
 | `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against; an input with no version yet is absent. A version for what you *read*, where the output's own would say less (the qmd index reports a hash of this) |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
-| `DATALIB_DAG_RESET` | set only by `datalib-dag --reset`, and then this invocation is a reset, not a run: see § Reset |
-| `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar: the config's `log_level` (`trace` when unset) for datalib's own crates, third-party crates no lower than `debug`, the noisy ones at `warn`. A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
+| `DATALIB_DAG_RESET` | set only by a reset, and then this invocation is a reset, not a run: see § Reset |
+| `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: the most seconds you should let pass between checkpoints |
+| `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar, built from the config's `log_level` ([`logging.md`](logging.md) § "Where a line comes from"). A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
 
-plus anything in the entry's `env:` map (which wins over the run-wide
-values on collision).
+plus `PATH` (with the binary dir first), `PYTHONUNBUFFERED=1`, and
+anything in the entry's `env` table (which wins over the run-wide values
+on collision).
 
 ## The rules you must follow
 
@@ -256,9 +258,9 @@ good version for both: it moves only when a commit changed something.
 A step that did not run keeps the version recorded for its output last
 time, or `datalib_dag::version::UNKNOWN` if there is none.
 
-Claiming a path you didn't declare in `outputs` is a contract
-violation and fails the step. Exit `0` means success; the outcome
-line is purely informational.
+Reporting on any path but your own tree (`DATALIB_DAG_STEP`) is a
+contract violation and fails the step. Exit `0` means success; the
+outcome line is purely informational.
 
 ### Failure classification
 
@@ -273,11 +275,13 @@ kind* of failure this is, which drives retry policy:
 
 | `failure` | meaning | scheduler reaction |
 | --- | --- | --- |
-| `transient` | network blip, lock contention | retry soon |
-| `rate_limited` | HTTP 429 and friends | retry with backoff |
+| `transient` | network blip, lock contention | retry, up to 3 attempts in all, 1s then 2s apart |
+| `rate_limited` | HTTP 429 and friends | retry, as for `transient` |
 | `auth` | credentials need a human | fail fast |
 | `data` | bad input; retrying won't help | fail fast (default when absent) |
 | `cancelled` | you were interrupted | fail fast, exit code 130 convention |
+
+(`RetryPolicy` in `dag/src/scheduler.rs`.)
 
 `outputs` on a failure outcome reports partial progress you *did*
 commit. The scheduler records those versions, the next run resumes from
@@ -325,8 +329,8 @@ pub fn parse(path: &Path) -> Result<Parsed> {
 
 ## stdin: nothing to read
 
-**Your step is given `/dev/null` on stdin**, as it always has been. Read
-it and you get an immediate end-of-file; there is no input channel.
+**Your step is given `/dev/null` on stdin.** Read it and you get an
+immediate end-of-file; there is no input channel.
 Everything a step is told arrives as environment variables, the
 `--params-file`, and its declared inputs.
 
@@ -336,9 +340,9 @@ Every step is also handed a pipe on file descriptor 3. You can ignore it
 completely — it costs one open descriptor and nothing else. What it is
 for:
 
-The runner normally stops its steps by signalling them: SIGINT on a
-cancel, SIGKILL for anything still running as it exits. Both need the
-runner to be alive to run that code. A runner that is itself SIGKILLed —
+The runner normally stops a step by signalling it: SIGINT, then
+SIGKILL fifteen seconds later if it is still there. Both need the runner
+to be alive to run that code. A runner that is itself SIGKILLed —
 or that aborts, or is taken by the OOM killer — runs nothing, and since
 nothing else ever signals a step, a step that waits to be told would
 carry on with its store open and nobody recording how the run ended.
@@ -358,18 +362,12 @@ In any other language, watch that descriptor for end-of-file yourself.
 
 ### Why fd 3 and not stdin
 
-Other datalib spawners do put this pipe on stdin — the gateway's
-applets, the desktop shell's `datalib-http` — because they know exactly
-what program they are starting. The runner does not: a step is whatever
-`command` says. A program that reads stdin expecting the immediate
-end-of-file `/dev/null` gives would block forever on a pipe nobody ever
-writes to, and a hung step holding its store open is a worse failure
-than the orphan the pipe prevents. So stdin is left alone and the pipe
-goes somewhere a program will only find if it looks.
-
-This is also why there is no configuration for it. There is nothing to
-opt into and nothing to get wrong: the pipe is always there, and
-watching it is your program's business.
+A step is whatever `command` says, and a program that reads stdin
+expecting the immediate end-of-file `/dev/null` gives would block
+forever on a pipe nobody writes to. So stdin is left alone and the pipe
+goes somewhere a program will only find if it looks. There is nothing to
+configure: the pipe is always there, and watching it is your program's
+business. (`datalib_parent_watch`'s crate doc has the general rule.)
 
 ### What to do when it closes
 
@@ -386,8 +384,8 @@ being SIGKILLed: it keeps running until something else stops it.
 
 stderr is yours for humans: every line is captured into the event
 stream as an `info` log. So is every stdout line that is not an
-event. If you exit non-zero, the last few lines a person could not
-find by reading "it failed" — plain lines, and the message of any
+event. If you exit non-zero, the last few stderr lines a person could
+not find by reading "it failed" — plain lines, and the message of any
 structured `warn` or `error` line — become the step's error message;
 structured `info` lines stay in the log. The runner writes that
 message into the log too, as the step's last line at `error` level,
@@ -416,13 +414,8 @@ columns — the line's own timestamp wins over the runner's arrival time
 remaining `fields`) rides along as `fields`. The Manage screen shows
 the sentence, not the envelope, and can still sort by thread.
 
-Every level is kept, `debug` and `trace` included: a built-in step
-logs its own lines down to the level the run's `RUST_LOG` names
-(`datalib_log_filter`; the config's `log_level`, `trace` when unset)
-— a doltlite commit, a batch of rows upserted, a request being
-retried, each with its numbers in the sentence — and the runner stores
-a `DEBUG` envelope as a `debug` row rather than rounding it up to
-`info`.
+Every level is kept, `debug` and `trace` included: the runner stores a
+`DEBUG` envelope as a `debug` row rather than rounding it up to `info`.
 
 **Your attempt is a process.** Every line names the process that
 wrote it, and each attempt of a step is one: the runner records it at
@@ -436,8 +429,9 @@ the log card that reads them: [`logging.md`](logging.md).
 
 ## Reset (optional)
 
-`datalib-dag --reset <step-id>[+<more>]` empties
-what a step wrote so the next run does its work from the start: the
+`datalib-dag --reset <step-id>[+blobs][,<step-id>…]` (or the app's
+Reset, `POST /api/reset`) empties what a step wrote so the next run
+does its work from the start: the
 runner invokes the step once with `DATALIB_DAG_RESET` set to `store`, or
 to whatever followed the `+` (`blobs`: the built-in ingest step's store
 *and* its blob CAS), then forgets the step ever succeeded and records
@@ -454,7 +448,7 @@ then syncs what reads the step, so its documents leave the grid.
 
 ## Signals: graceful cancellation (optional)
 
-On cancellation (Ctrl-C, or the UI's cancel) the runner sends your
+On cancellation (Ctrl-C, the UI's Stop, or the step turned off) the runner sends your
 process **SIGINT** and gives you fifteen seconds. The right response is
 to **stop at your next consistent point, commit there, and exit 130**
 with a `{"event":"outcome","failure":"cancelled"}` line: what you
@@ -541,10 +535,6 @@ providers; beeper/signal `period`, perseus `alignment_pairs`, email
 commits there, and emits versions where it has them (the grid index claims its dolt commit hash). Use it as the
 reference implementation.
 
-The index functions have one reader, the `unified_index` applet,
-which finds them from the data root alone; so their ids are fixed at
-`unified_index/grid_index`, `unified_index/qmd_aggregator` and
-`unified_index/embedding_map`, and `datalib-step` refuses to run them
-under any other. The qmd steps all write the one index file under
-`unified_index/qmd_index/`, a source's `keyword_index` and `embed` to
-the collection named for their group.
+The index functions' ids are fixed at `unified_index/<function>`, and
+the qmd steps share one index file; the rules are in
+[`config_model.md`](config_model.md) § "Naming rules".

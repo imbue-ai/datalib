@@ -34,7 +34,9 @@ is `{channel_id}#{thread_ts}` and its link is the thread's permalink.
 
 `src/render/mrkdwn.rs` converts Slack's mrkdwn dialect to CommonMark:
 
-- bold, italic, strike, code and blockquote, with Slack's boundary rules;
+- `*bold*` → `**bold**` and `~strike~` → `~~strike~~`, with Slack's
+  word-boundary rules; a `>` quote is ended with a blank line. `_italic_`
+  and backticks are already CommonMark;
 - `<@U…>`, `<#C…|name>`, `<!subteam^…>`, `<!here>` / `<!channel>` /
   `<!everyone>`, resolved against the workspace's users and channels;
 - `<https://…|label>` → `[label](url)`;

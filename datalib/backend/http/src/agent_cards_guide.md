@@ -3,8 +3,8 @@
 You were pointed here by a "wayfinder" snippet copied out of the
 datalib UI. It named a **component alias** (e.g. `card_a1b2c3`) and
 asked you either to define it (a new component) or to modify an
-existing one. This doc tells you how. (If your wayfinder is about the
-data-source config instead, read `<origin>/agent/config.md`.)
+existing one. This doc tells you how. (Editing the data-source config
+instead? Read `<origin>/agent/config.md`.)
 
 ## Authentication (do this first)
 
