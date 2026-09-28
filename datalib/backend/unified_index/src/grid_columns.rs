@@ -1,14 +1,11 @@
 //! The search grid's columns, by the ids the grid names them with, and the
-//! `grid_rows` column behind each: what it sorts and groups by, and what
-//! its cells filter on — which is how a sort, a grouping, a cell's
-//! right-click and a column dropped on the search bar each reach a column.
-//! The keys themselves are declared on `GridRow`.
+//! `grid_rows` column behind each (`crate::view`).
 
-use datalib_query::table;
-use datalib_schema::grid_rows::{GridRow, GridRowColumn};
+use datalib_schema::grid_rows::GridRowColumn;
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
-use crate::sort::{Sort, SortBy};
+use crate::sort::SortBy;
+use crate::view::View;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
 #[strum(serialize_all = "snake_case")]
@@ -35,15 +32,15 @@ impl GridColumn {
     pub fn as_str(self) -> &'static str {
         self.into()
     }
+}
 
-    /// `None` for a spelling this build does not know.
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
+impl View for GridColumn {
+    type Column = GridRowColumn;
+
+    fn parse(id: &str) -> Option<Self> {
+        id.parse().ok()
     }
 
-    /// What the column sorts and groups by, and the column its cells
-    /// filter on when a key filters them. A cell that shows a name filters
-    /// on the id behind it.
     fn backing(self) -> (SortBy<GridRowColumn>, Option<GridRowColumn>) {
         use GridRowColumn as G;
         let same = |c| (SortBy::Column(c), Some(c));
@@ -71,32 +68,14 @@ impl GridColumn {
             GridColumn::DiffChangedColumns => same(G::DiffChangedColumns),
         }
     }
-
-    pub fn sorts(self) -> SortBy<GridRowColumn> {
-        self.backing().0
-    }
-
-    pub fn filters(self) -> Option<GridRowColumn> {
-        self.backing().1
-    }
-}
-
-/// An order as the grid spells it: `created_at:desc,author`.
-pub fn grid_order(s: &str) -> Result<Vec<Sort>, String> {
-    Sort::parse_order(s, |id| GridColumn::parse(id).map(GridColumn::sorts))
-}
-
-/// The key that filters a grid column's cells, and the row field holding
-/// the value a term names (the uuid behind a name, the id behind a label).
-pub fn for_column(id: &str) -> Option<(&'static str, &'static str)> {
-    let column = GridColumn::parse(id)?.filters()?;
-    let key = table::key_of::<GridRow>(column)?;
-    Some((key.key, column.as_str()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::{for_column, unkeyed};
+    use datalib_query::table;
+    use datalib_schema::grid_rows::GridRow;
 
     #[test]
     fn every_column_spells_as_it_parses() {
@@ -105,18 +84,9 @@ mod tests {
         }
     }
 
-    /// A column that filters its cells on a column no key compares would
-    /// offer Keep only and Exclude, and they would write nothing.
     #[test]
     fn every_filtered_column_has_a_key() {
-        for column in GridColumn::VARIANTS {
-            if let Some(c) = column.filters() {
-                assert!(
-                    table::key_of::<GridRow>(c).is_some(),
-                    "{column:?} filters on {c:?}, which no key compares"
-                );
-            }
-        }
+        assert_eq!(unkeyed(GridColumn::VARIANTS), Vec::<String>::new());
     }
 
     /// The keys people type, and how each reads its value. They are
@@ -159,12 +129,15 @@ mod tests {
         assert_eq!(key("author"), Some(GridRowColumn::Author));
         assert_eq!(key("source_name"), Some(GridRowColumn::SourceId));
         assert_eq!(key("subj"), None);
-        assert_eq!(for_column("source_ref"), Some(("source_id", "source_id")));
         assert_eq!(
-            for_column("conversation_name"),
+            for_column::<GridColumn>("source_ref"),
+            Some(("source_id", "source_id"))
+        );
+        assert_eq!(
+            for_column::<GridColumn>("conversation_name"),
             Some(("convo", "conversation_uuid"))
         );
-        assert_eq!(for_column("score"), None);
-        assert_eq!(for_column("snippet"), None);
+        assert_eq!(for_column::<GridColumn>("score"), None);
+        assert_eq!(for_column::<GridColumn>("snippet"), None);
     }
 }

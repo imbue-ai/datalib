@@ -6,7 +6,7 @@
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::meta::ParseNestedMeta;
-use syn::{Ident, LitStr, Token, Visibility};
+use syn::{GenericArgument, Ident, LitStr, PathArguments, Token, Type, TypePath, Visibility};
 
 /// A column's search attributes, from its `#[col(...)]` or `#[derived(...)]`.
 #[derive(Default)]
@@ -95,6 +95,24 @@ pub struct Col<'a> {
     pub name: &'a str,
     pub span: Span,
     pub search: &'a ColSearch,
+    /// `<Enum as VariantArray>::VARIANTS` for an `enum` column.
+    pub variants: Option<&'a TokenStream2>,
+}
+
+/// `T` for `Option<T>`, else the type itself.
+pub fn option_inner(ty: &Type) -> &Type {
+    if let Type::Path(TypePath { path, .. }) = ty {
+        if let Some(seg) = path.segments.last() {
+            if seg.ident == "Option" {
+                if let PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(GenericArgument::Type(inner)) = args.args.first() {
+                        return inner;
+                    }
+                }
+            }
+        }
+    }
+    ty
 }
 
 fn variant(column: &str) -> Ident {
@@ -258,12 +276,19 @@ fn expand_search(
             }
             let aliases = &s.aliases;
             let uuid = s.uuid;
+            let vocabulary = match c.variants {
+                Some(variants) => quote! {
+                    ::std::option::Option::Some(|| #variants.iter().map(|v| v.as_str()).collect())
+                },
+                None => quote! { ::std::option::Option::None },
+            };
             keys.push(quote! {
                 ::datalib_query::table::SearchKey {
                     key: #key,
                     aliases: &[#(#aliases),*],
                     column: #enum_name::#v,
                     uuid: #uuid,
+                    vocabulary: #vocabulary,
                 }
             });
         } else if !s.aliases.is_empty() || s.uuid {

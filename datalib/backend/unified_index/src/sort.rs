@@ -93,7 +93,12 @@ pub fn default_order<T: SearchTable>() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grid_columns::grid_order;
+    use crate::grid_columns::GridColumn;
+    use crate::view;
+
+    fn grid_order(s: &str) -> Result<Vec<Sort>, String> {
+        view::order::<GridColumn>(s)
+    }
     use datalib_schema::grid_rows::GridRow;
 
     #[test]

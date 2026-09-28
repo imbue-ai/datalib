@@ -41,7 +41,7 @@ pub trait SearchTable: 'static {
 }
 
 /// `author:picard` compares the `author` column.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug)]
 pub struct SearchKey<C: 'static> {
     pub key: &'static str,
     /// Older spellings, kept because people type them and saved searches
@@ -51,7 +51,20 @@ pub struct SearchKey<C: 'static> {
     /// The value is a uuid, which a term may carry as `slug-uuid`, the
     /// slug only there to be read.
     pub uuid: bool,
+    /// The words the column can hold, when it is a closed set: a word
+    /// outside it is refused with these, never matched against nothing
+    /// (`severity:eror` would read as "no errors").
+    pub vocabulary: Option<fn() -> Vec<&'static str>>,
 }
+
+/// One key per name in a table, so the name is the identity.
+impl<C> PartialEq for SearchKey<C> {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl<C> Eq for SearchKey<C> {}
 
 /// What text outside any `key:` matches.
 #[derive(Debug, PartialEq, Eq)]
