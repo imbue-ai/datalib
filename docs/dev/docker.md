@@ -57,13 +57,15 @@ and grid-indexes them. That run is also the one end-to-end smoke test
 of the shipped pipeline: a tarball whose binaries cannot ingest the
 fixtures fails the image build.
 
-The search index is deliberately not built at image time. The
-config's qmd steps — each source's `keyword_index` and `embed`, and
-`qmd_aggregator` — sit below a `BUILD-TIME CUT` marker that the Dockerfile drops
-for its run and keeps in the shipped file, so the first sync in a
-container builds it. Embedding under the arm64 leg's
-QEMU emulation would add tens of minutes to every release for an index
-that takes about a minute natively.
+The image carries half of the search index. Each source's
+`keyword_index` (qmd's BM25 index, a couple of seconds for the whole
+demo) runs at image time, so a free-text search answers the moment the
+container starts. Its `embed` steps and `qmd_aggregator` sit below a
+`BUILD-TIME CUT` marker that the Dockerfile drops for its run and keeps
+in the shipped file, so the first sync in a container adds the
+embeddings. Embedding under the arm64 leg's QEMU emulation would add
+tens of minutes to every release for an index that takes about a minute
+natively.
 
 ## Checking the walkthrough against an image
 
