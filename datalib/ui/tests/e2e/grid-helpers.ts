@@ -5,7 +5,8 @@
 // see cards/GridCard.ce.vue) where a uuid's row is. The grid loads a
 // search a page at a time, so a row further down is sought first. The typed table
 // viewer's rows (the Manage tree, the commit history) carry their key
-// as `data-key`; those helpers are further down.
+// as `data-key`; those helpers are further down. Before writing a spec,
+// read docs/dev/testing.md §"Writing a spec that does not flake".
 
 import { expect, type Locator, type Page } from "@playwright/test";
 
