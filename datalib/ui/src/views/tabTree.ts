@@ -117,16 +117,22 @@ export function makeTopLevel(tabs: Tab[], id: string): Tab[] {
   return [...rest.slice(0, at), moved, ...rest.slice(at)];
 }
 
-// Close one tab. A collapsed tab takes its hidden subtree with it; an
-// expanded one hands its children up to its own parent, in its place.
-// Returns the new list and the ids that went.
+// Close a tab and everything under it. Returns the new list and the
+// ids that went.
 export function closeTab(tabs: Tab[], id: string): { tabs: Tab[]; closed: Set<string> } {
+  if (!tabs.some((t) => t.id === id)) return { tabs, closed: new Set() };
+  const closed = subtree(tabs, id);
+  return { tabs: tabs.filter((t) => !closed.has(t.id)), closed };
+}
+
+// Close one tab and hand its children up to its own parent, in its
+// place.
+export function closeKeepingChildren(
+  tabs: Tab[],
+  id: string,
+): { tabs: Tab[]; closed: Set<string> } {
   const tab = tabs.find((t) => t.id === id);
   if (!tab) return { tabs, closed: new Set() };
-  if (tab.collapsed) {
-    const closed = subtree(tabs, id);
-    return { tabs: tabs.filter((t) => !closed.has(t.id)), closed };
-  }
   const children = tabs
     .filter((t) => t.parentId === id)
     .map((t) => ({ ...t, parentId: tab.parentId }));

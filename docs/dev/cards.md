@@ -344,9 +344,9 @@ shows opens a new root tab (a miller link of several columns opens
 as a spine).
 
 A card a card opens becomes a new tab under its opener, and stays
-until the person closes it. Closing a tab hands its
-children to its own parent; closing a collapsed one closes its whole
-branch. A row's ⇤ makes the tab top-level, taking what is under it
+until the person closes it. Closing a tab closes everything under it
+too; right-click → Close, keep children closes the tab alone and hands
+its children to its own parent. A row's ⇤ makes the tab top-level, taking what is under it
 along, and its ↗ opens the tab alone in a new browser tab (a new
 window in the app).
 

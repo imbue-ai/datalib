@@ -19,6 +19,7 @@ import { devMode } from "@/devMode";
 import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns";
 import { DEFAULT_SPECS, pageTitle, pathFor, sameSpecs } from "@/views/millerStack";
 import {
+  closeKeepingChildren,
   closeTab,
   makeTopLevel,
   newTab,
@@ -206,9 +207,9 @@ function openRoot(source: string) {
   select(tab.id);
 }
 
-function close(id: string) {
+function close(id: string, keepChildren = false) {
   const before = tabs.value;
-  const { tabs: after, closed } = closeTab(before, id);
+  const { tabs: after, closed } = (keepChildren ? closeKeepingChildren : closeTab)(before, id);
   if (closed.size === 0) return;
   const next = after.length > 0 ? after : [defaultTab()];
   tabs.value = next;
@@ -309,11 +310,14 @@ function nameOf(tab: Tab): string {
   return displayTitle(tab.source, tab.name);
 }
 
-// ---- naming ----
+// ---- the row menu ----
 
 // The right-click menu on a sidebar row, at the pointer.
 const menu = ref<{ tabId: string; x: number; y: number } | null>(null);
 const menuTab = computed(() => (menu.value ? tabById(menu.value.tabId) : undefined));
+const menuHasChildren = computed(
+  () => menuTab.value !== undefined && tabs.value.some((t) => t.parentId === menuTab.value!.id),
+);
 const renamingId = ref<string | null>(null);
 
 function openMenu(tab: Tab, ev: MouseEvent) {
@@ -338,6 +342,13 @@ function onPointerOutsideMenu(ev: PointerEvent) {
 function onMenuKey(ev: KeyboardEvent) {
   if (ev.key === "Escape") closeMenu();
 }
+
+function closeFromMenu(id: string) {
+  closeMenu();
+  close(id, true);
+}
+
+// ---- naming ----
 
 function startRename(id: string) {
   closeMenu();
@@ -492,7 +503,7 @@ function resetSidebarWidth() {
           >
           <button
             class="tabs-action tabs-close"
-            :title="row.tab.collapsed && row.hasChildren ? 'close this branch' : 'close'"
+            :title="row.hasChildren ? 'close this tab and everything under it' : 'close'"
             @click.stop="close(row.tab.id)"
           >
             ✕
@@ -514,6 +525,9 @@ function resetSidebarWidth() {
         :style="{ left: menu.x + 'px', top: menu.y + 'px' }"
       >
         <li role="menuitem" @click="startRename(menuTab.id)">Rename…</li>
+        <li v-if="menuHasChildren" role="menuitem" @click="closeFromMenu(menuTab.id)">
+          Close, keep children
+        </li>
       </ul>
     </nav>
     <section v-if="selected" class="tabs-main">

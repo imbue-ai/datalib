@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  closeKeepingChildren,
   closeTab,
   makeTopLevel,
   newTab,
@@ -114,14 +115,10 @@ describe("closeTab", () => {
   const c = newTab("t4", "c()", "t2");
   const tabs: Tab[] = [grid, a, b, c];
 
-  it("hands an expanded tab's children to its parent, in its place", () => {
+  it("closes an expanded tab's whole subtree, not just the tab", () => {
     const { tabs: next, closed } = closeTab(tabs, "t2");
-    expect([...closed]).toEqual(["t2"]);
-    expect(next.map((t) => [t.id, t.parentId])).toEqual([
-      ["t1", null],
-      ["t3", "t1"],
-      ["t4", "t1"],
-    ]);
+    expect([...closed].sort()).toEqual(["t2", "t3", "t4"]);
+    expect(next.map((t) => t.id)).toEqual(["t1"]);
   });
 
   it("closes a collapsed tab's whole subtree", () => {
@@ -129,6 +126,29 @@ describe("closeTab", () => {
     const { tabs: next, closed } = closeTab(folded, "t2");
     expect([...closed].sort()).toEqual(["t2", "t3", "t4"]);
     expect(next.map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  it("closing a root takes its subtree rather than promoting it to the top level", () => {
+    const other = newTab("t5", "other()", null);
+    const { tabs: next } = closeTab([...tabs, other], "t1");
+    expect(next.map((t) => t.id)).toEqual(["t5"]);
+  });
+});
+
+describe("closeKeepingChildren", () => {
+  const a = newTab("t2", "a()", "t1");
+  const b = newTab("t3", "b()", "t2");
+  const c = newTab("t4", "c()", "t2");
+  const tabs: Tab[] = [grid, a, b, c];
+
+  it("hands the tab's children to its parent, in its place", () => {
+    const { tabs: next, closed } = closeKeepingChildren(tabs, "t2");
+    expect([...closed]).toEqual(["t2"]);
+    expect(next.map((t) => [t.id, t.parentId])).toEqual([
+      ["t1", null],
+      ["t3", "t1"],
+      ["t4", "t1"],
+    ]);
   });
 });
 
