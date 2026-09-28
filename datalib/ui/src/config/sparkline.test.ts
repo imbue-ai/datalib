@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { calibrationMax, sparkline, type Sample } from "./sparkline";
+import { ownRange, sparkline, windowDelta, type Sample } from "./sparkline";
 
 /// A fixed window, so every expectation below is in round numbers:
 /// 100 px wide, 10 px tall, five minutes ending at t=0 by these stamps.
 const NOW = Date.parse("2026-09-02T10:05:00-07:00");
 const WINDOW = 5 * 60 * 1000;
-const BOX = { nowMs: NOW, windowMs: WINDOW, width: 100, height: 10, inset: 0 };
+const BOX = { nowMs: NOW, windowMs: WINDOW, width: 100, height: 10, inset: 0, min: 0 };
 
 function at(minutesAgo: number, value: number): Sample {
   return { at: new Date(NOW - minutesAgo * 60_000).toISOString(), value };
@@ -41,15 +41,6 @@ describe("sparkline", () => {
     expect(s.line).toBe("0,10 100,10 100,0");
   });
 
-  it("shares one scale across rows, so height means size", () => {
-    const big = sparkline([at(1, 1000)], { ...BOX, max: 1000 })!;
-    const small = sparkline([at(1, 10)], { ...BOX, max: 1000 })!;
-    expect(big.line).toBe("0,0 100,0");
-    // 1% of the box: a sliver, not a line at the same height as the
-    // 1000-byte row. That difference is the whole point of calibrating.
-    expect(small.line).toBe("0,9.9 100,9.9");
-  });
-
   it("can plot against a floor, for a series that moves by fractions", () => {
     // 40.0 GB → 40.4 GB. Against zero this is a flat line at the top;
     // against its own range it is the change you wanted to see.
@@ -78,20 +69,38 @@ describe("sparkline", () => {
   });
 });
 
-describe("calibrationMax", () => {
-  it("covers history as well as the present", () => {
-    // The row shrank: its own past is the tallest thing it has to
-    // draw, and a max taken from `bytes` alone would put it off the
-    // top of the box.
-    expect(calibrationMax([{ value: 10, samples: [at(4, 900), at(1, 10)] }])).toBe(900);
+describe("ownRange", () => {
+  it("is the series' own span, not zero to its size", () => {
+    // A 10 MB source that grew by 1 MB fills the box, however small it
+    // is beside a 40 GB neighbour. That is the jump worth seeing.
+    expect(ownRange(11, [at(4, 10), at(1, 11)], NOW, WINDOW)).toEqual({ min: 10, max: 11 });
   });
 
-  it("ignores a row with nothing on disk", () => {
-    expect(
-      calibrationMax([
-        { value: null, samples: [] },
-        { value: 7, samples: [] },
-      ]),
-    ).toBe(7);
+  it("covers the value the window opens at and the present", () => {
+    // The hour-old sample is what the line starts from; the present
+    // has moved past the last recorded sample.
+    expect(ownRange(30, [at(60, 50), at(2, 40)], NOW, WINDOW)).toEqual({ min: 30, max: 50 });
+  });
+
+  it("ignores history the window has slid past", () => {
+    expect(ownRange(5, [at(90, 1000), at(60, 5)], NOW, WINDOW)).toEqual({ min: 4.95, max: 5.05 });
+  });
+
+  it("straddles a series that has not moved", () => {
+    expect(ownRange(0, [at(1, 0)], NOW, WINDOW)).toEqual({ min: 0, max: 1 });
+  });
+});
+
+describe("windowDelta", () => {
+  it("is the present against the value the window opened at", () => {
+    expect(windowDelta(70, [at(60, 50), at(2, 60)], NOW, WINDOW)).toBe(20);
+  });
+
+  it("is zero once every step has slid out of the window", () => {
+    expect(windowDelta(60, [at(60, 50), at(10, 60)], NOW, WINDOW)).toBe(0);
+  });
+
+  it("is null with nothing to compare against", () => {
+    expect(windowDelta(5, [], NOW, WINDOW)).toBeNull();
   });
 });

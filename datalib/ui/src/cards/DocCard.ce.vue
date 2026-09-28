@@ -608,8 +608,9 @@ watch(
         <li v-for="e in docLevelOutgoing" :key="e.edge_uuid">
           <span class="edge-arrow" aria-hidden="true">→</span>
           <!-- Producers should set `label` to the human-readable
-               handle they want shown in the list (e.g. "Greek" /
-               "English" for perseus' cross-language edges). When
+               handle they want shown in the list (perseus labels a
+               cross-edition edge with the counterpart edition's short
+               id, e.g. "perseus-eng2"). When
                absent, we fall back to the destination doc's title
                and finally the bare uuid. When BOTH label and title
                are set we show "label (title)" — label first, since

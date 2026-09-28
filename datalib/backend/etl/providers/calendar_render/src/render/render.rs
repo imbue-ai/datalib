@@ -1,7 +1,7 @@
 //! The raw store's events into [`NormalizedEvent`]s, handed to the
 //! shared calendar renderer.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -11,7 +11,7 @@ use datalib_etl_calendar_common::{
     render_all as cc_render_all, CalendarRenderProfile, NormalizedEvent,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
+use datalib_etl_render::inputs::{keys_reading, Bucket, Buckets, Input, RawRange};
 use datalib_schema::providers::Provider;
 
 use super::parse::Parsed;
@@ -56,15 +56,12 @@ pub fn render_all(
     // document a changed row feeds — a series reads its occurrences'
     // rows, and a CalDAV object is a series and its occurrences at once.
     let forward = parsed.changed.as_ref().map(|changed| {
-        events
-            .iter()
-            .filter(|e| {
-                e.inputs
-                    .iter()
-                    .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
-            })
-            .map(|e| e.event_uuid.clone())
-            .collect::<HashSet<String>>()
+        keys_reading(
+            changed,
+            events
+                .iter()
+                .map(|e| (e.event_uuid.as_str(), e.inputs.as_slice())),
+        )
     });
     let render = range.narrow(forward.as_ref());
     let mut buckets: Buckets = render
@@ -154,6 +151,8 @@ fn source_label(account: Option<&LoadedAccount>) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use datalib_etl_calendar::ical;
     use datalib_etl_calendar::ingest::db::{LoadedCalendar, LoadedIcsObject};

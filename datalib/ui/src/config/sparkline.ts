@@ -23,14 +23,12 @@ export type SparkOpts = {
   /// How much time the plot spans, ms. The left edge is
   /// `nowMs - windowMs`.
   windowMs: number;
-  /// The value the top of the plot stands for.
+  /// The values the bottom and the top of the plot stand for. Every
+  /// series is drawn against its own range (`ownRange`), not against
+  /// zero or a neighbour: a source that jumps should look like it
+  /// jumped, however small it is beside the others.
+  min: number;
   max: number;
-  /// The value the bottom stands for. Zero for a calibrated column,
-  /// where a row's height should mean its size. Non-zero only where
-  /// the question is the *shape* of a change too small to see against
-  /// zero — the whole root's total, which moves by fractions of a
-  /// percent.
-  min?: number;
   width: number;
   height: number;
   /// Half the stroke width, kept clear at the top and bottom so a line
@@ -47,19 +45,13 @@ export function sparkline(samples: Sample[], opts: SparkOpts): Spark | null {
   const { nowMs, windowMs, width, height } = opts;
   if (width <= 0 || height <= 0 || windowMs <= 0) return null;
 
-  const points = samples
-    .map((s) => ({ ms: Date.parse(s.at), value: s.value }))
-    // A stamp we can't read is dropped rather than guessed at: every
-    // one of these was written by us, so an unparsable one means a row
-    // from somewhere else.
-    .filter((p) => Number.isFinite(p.ms))
-    .sort((a, b) => a.ms - b.ms);
+  const points = parsed(samples);
   if (points.length === 0) return null;
 
   const start = nowMs - windowMs;
-  const min = opts.min ?? 0;
+  const { min, max } = opts;
   const inset = opts.inset ?? 0.5;
-  const span = opts.max - min;
+  const span = max - min;
 
   const xOf = (ms: number) => clamp((ms - start) / windowMs, 0, 1) * width;
   const yOf = (v: number) => {
@@ -67,14 +59,7 @@ export function sparkline(samples: Sample[], opts: SparkOpts): Spark | null {
     return height - inset - frac * (height - 2 * inset);
   };
 
-  // The value the window opens at: the newest sample at or before the
-  // left edge, else the first sample we have. Without this a series
-  // whose only sample predates the window would start from nothing.
-  let held = points[0].value;
-  for (const p of points) {
-    if (p.ms > start) break;
-    held = p.value;
-  }
+  let held = opening(points, start);
 
   const out: string[] = [];
   // Consecutive duplicates are dropped: two samples that round to the
@@ -107,14 +92,64 @@ export function sparkline(samples: Sample[], opts: SparkOpts): Spark | null {
   };
 }
 
-/// The largest value a set of series reaches, current values included.
-export function calibrationMax(series: { value: number | null; samples: Sample[] }[]): number {
-  let max = 0;
-  for (const s of series) {
-    if (s.value !== null) max = Math.max(max, s.value);
-    for (const h of s.samples) max = Math.max(max, h.value);
+/// The span a series is drawn against: every value its line reaches
+/// inside the window, and the present. A series that hasn't moved
+/// straddles its value, so it draws through the middle of the box
+/// rather than pinned to an edge.
+export function ownRange(
+  value: number,
+  samples: Sample[],
+  nowMs: number,
+  windowMs: number,
+): { min: number; max: number } {
+  const start = nowMs - windowMs;
+  const points = parsed(samples);
+  const values = [value, ...points.filter((p) => p.ms > start).map((p) => p.value)];
+  if (points.length > 0) values.push(opening(points, start));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (min !== max) return { min, max };
+  return min === 0 ? { min: 0, max: 1 } : { min: min * 0.99, max: max * 1.01 };
+}
+
+/// How far a series moved across the window: the present against the
+/// value the window opened at. Null when there is no sample to compare
+/// against.
+export function windowDelta(
+  value: number,
+  samples: Sample[],
+  nowMs: number,
+  windowMs: number,
+): number | null {
+  const points = parsed(samples);
+  if (points.length === 0) return null;
+  return value - opening(points, nowMs - windowMs);
+}
+
+type Point = { ms: number; value: number };
+
+function parsed(samples: Sample[]): Point[] {
+  return (
+    samples
+      .map((s) => ({ ms: Date.parse(s.at), value: s.value }))
+      // A stamp we can't read is dropped rather than guessed at: every
+      // one of these was written by us, so an unparsable one means a row
+      // from somewhere else.
+      .filter((p) => Number.isFinite(p.ms))
+      .sort((a, b) => a.ms - b.ms)
+  );
+}
+
+/// The value the window opens at: the newest sample at or before the
+/// left edge, else the first sample we have. Without this a series
+/// whose only sample predates the window would start from nothing.
+function opening(points: Point[], start: number): number {
+  let held = points[0].value;
+  for (const p of points) {
+    if (p.ms > start) break;
+    held = p.value;
   }
-  return max;
+  return held;
 }
 
 function clamp(v: number, lo: number, hi: number): number {

@@ -158,7 +158,7 @@ What is unusual is the **operating point**, on two axes:
    store, the render output, the problem log, and the DAG's own
    content-versioning — so consumer cursors, step versions and audit
    history are one mechanism rather than four. See
-   [`data_architecture_parse_and_render.md` §2](../../data_architecture_parse_and_render.md#where-this-is-heading-the-artifact-becomes-a-database)
+   [`data_architecture_parse_and_render.md` §2](../../data_architecture_parse_and_render.md#what-is-still-a-file-the-markdown)
    for the half of that which is still aspiration.
 
 And the benefit that gets undersold: this is normally pitched on

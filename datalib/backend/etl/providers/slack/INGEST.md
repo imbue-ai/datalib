@@ -1,13 +1,15 @@
-# Slack Extract
+# Slack ingest
 
-`slack-ingest` mirrors a Slack workspace into a single doltlite db
-at `<out>/raw/<name>/entities.doltlite_db`. Per-entity tables (channels, users,
-messages, replies, files, and the account's read states, saved items and
-channel bookmarks) are each keyed by their upstream Slack identifier; payloads are stored as JSONB blobs in a `payload` column
-alongside per-run bookkeeping and file/blob bytes. The old
-`<out>/raw_api/<method>/events.jsonl` tree was retired with the
-doltlite port — see
-[`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
+The ingest step of a `slack` group mirrors a Slack workspace into
+`<data_root>/<group>/ingest/entities.doltlite_db`, with the blob CAS
+beside it (`slack-ingest` does the same from the command line). The
+tables (`src/ingest/schema_raw.rs`) are `workspaces`, `users`,
+`channels`, `messages`, `replies_pages`, `slack_attachments` (the edges
+to file bytes in the CAS), and the account's own state:
+`channel_read_states`, `saved_items` and `bookmarks`. Each row is keyed
+by its upstream Slack identifier — a message and a thread by
+`{team}#{channel}#{ts}` — with the response stored as JSONB in
+`payload` and a `<table>_bookkeeping` sidecar beside each table.
 
 ## Auth
 
@@ -31,9 +33,9 @@ tables and nothing else (see "The account's own state" below).
 ### File downloads
 
 File bytes live on `https://files.slack.com/`, which the `slack`
-service's `baseApiUrls` covers as of latchkey 2.11.2. No extra service
-registration is needed — the same `slack` credential signs both
-`slack.com/api/` and `files.slack.com/` requests.
+service's `baseApiUrls` covers. No extra service registration is
+needed: the same `slack` credential signs both `slack.com/api/` and
+`files.slack.com/` requests.
 
 ## API surface used
 
@@ -48,8 +50,8 @@ registration is needed — the same `slack` credential signs both
 | `saved.list`                | The account's "Saved for later" items    |
 | `bookmarks.list`            | A conversation's header bookmarks        |
 
-`shapes.rs` is the shape-of-the-response catalog: which path holds the
-items, what counts as the cursor key, how to dedup.
+`shapes.rs` knows each method's response shape: where its items are and
+what each is keyed by.
 
 The first three are also the whole of `datalib-step probe slack`
 (`src/probe.rs`), which is what the wizard's "Test connection" runs:
@@ -76,15 +78,10 @@ either bare or inside a pasted link — `Copy link` on a DM gives
 `ingest/mod.rs` reads the id out of any of Slack's link shapes. A DM
 has no channel name to match, so folding both into one list would
 silently drop every DM. `dm_conversations` set with `dms = false` is a
-config error, because both silent readings of it are wrong. (An
-earlier `dm_users` named *people* instead, and resolved them through
-the user directory; a conversation id is one string with one meaning,
-so it replaced that outright — a config still carrying `dm_users`
-fails to load rather than mirroring every DM.)
+config error, because both silent readings of it are wrong.
 
 What the surfaces actually look like on the wire (checked against the
-live API 2026-08-31 — worth knowing, because the differences are what
-the code is shaped around):
+live API; the differences are what the code is shaped around):
 
 | Field | `public/private_channel` | `im` (1:1 DM) | `mpim` (group DM) |
 |---|---|---|---|
@@ -95,11 +92,13 @@ the code is shaped around):
 
 Two consequences, both load-bearing:
 
-  * **`members_only` cannot be applied to a DM.** A 1:1 DM has no
-    `is_member` field, so the predicate that selects channels rejects
-    every one of them. On a real workspace this was 99 of 203 DM rows.
-    Hence the `is_dm` column: the `is_member` predicate runs only
-    against `is_dm = 0`. `is_archived` applies to everything.
+  * **The member filter cannot be applied to a DM.** With neither
+    `channels` nor `all_channels` set, the walk keeps only channels the
+    account is a member of (`members_only`). A 1:1 DM has no
+    `is_member` field, so that predicate would reject every one of them
+    — on a real workspace, 99 of 203 DM rows. Hence the `is_dm` column:
+    the `is_member` predicate runs only against `is_dm = 0`.
+    `is_archived` applies to everything.
   * **Both DM shapes reduce to one participant list.** `dm_user_ids`
     stores `user` or `members` verbatim, comma-joined, and
     `dm_counterparts` subtracts the `auth.test` user at read time. One
@@ -130,18 +129,13 @@ Its default also differs by entry point: the `slack-ingest` CLI
 defaults to `DEFAULT_REFRESH_WINDOW_DAYS` (30), while a config-driven
 run (`params.sync`) treats an unset value as 0 — no refresh pass.
 
-## Resume + dedup
+## Resume
 
-The dedup index doubles as the resume cursor:
-
-  * For each channel, take `max(ts)` across all recorded `history`
-    pages and start the next forward pass there.
-  * For the trailing refresh window, re-query that range — the dedup
-    pass collapses no-op refreshes to zero writes.
-
-A page is skipped if every item in it matches a prior capture by
-canonical content hash, so re-running soon after a successful run is
-cheap.
+The stored messages are the resume cursor: each channel's forward pass
+starts after the newest `ts` it holds in `messages`, and a channel with
+none starts at `since`. The trailing refresh window re-queries its range
+on top; a message that did not change is rewritten identically, which
+doltlite stores as no change.
 
 ## Noticing a deleted message
 
@@ -223,8 +217,8 @@ participates in the resume decision.
 | `since` earlier | Walk `[since, min(ts)]` per channel — the window below what's mirrored. The forward resume cursor is untouched. Runs before the reply pass so backfilled thread roots get their replies. |
 | `since` later | No-op |
 | `media` off → on | Re-walk from `since`, including already-mirrored threads: attachment rows only exist for messages walked while the knob was on, and reply attachments are fetched only inside `paginate_replies`. |
-| `blob_size_limit_bytes` raised/lifted, with `media` on | Same re-walk, same reason |
-| `blob_size_limit_bytes` relaxed, with `media` off | No-op — no blobs are fetched either way |
+| `common.blob_size_limit_bytes` raised/lifted, with `media` on | Same re-walk, same reason |
+| `common.blob_size_limit_bytes` relaxed, with `media` off | No-op — no blobs are fetched either way |
 
 Only widenings do work; a narrowed knob leaves an on-disk superset and
 nothing in the pipeline deletes. `channels` and `refresh_window_days` are
@@ -241,10 +235,10 @@ rather than silently mirroring nothing until it expires.
 
 Two rules worth knowing when reading the code:
 
-  * **An absent blob plans no work.** Data roots synced before this
-    existed have no record, and treating that as "unknown, therefore
-    re-download" would backfill every mirror at once on upgrade.
-  * **The blob is recorded only when no channel failed.** Per-channel
+  * **An absent record plans no work.** Treating "no record" as
+    "unknown, therefore re-download" would backfill a whole mirror from
+    a store that simply predates the record.
+  * **The record is written only when no channel failed.** Per-channel
     errors are warned and stepped over, so a run can return `Ok` without
     having covered everything; recording anyway would drop a scheduled
     backfill permanently, since — unlike the resume cursor — bookkeeping
@@ -273,7 +267,7 @@ otherwise), leaves that table as it was, and does not stop the sync.
   account follows (the `conversations.history` copy has neither).
   Those two are volatile on `messages` too
   (`MESSAGE_VOLATILE_PATHS`), so reading a thread is not an edit to its
-  root, and the history copy no longer overwrites the replies copy. A
+  root, and the history copy does not overwrite the replies copy. A
   thread is only re-fetched when it has a new reply, so its mark is as
   fresh as its last reply, not as the last sync.
 - **`saved_items`**, from `saved.list`: in progress, completed and
@@ -288,7 +282,7 @@ otherwise), leaves that table as it was, and does not stop the sync.
   listed (its label is in the channel's `properties.tabs`). A
   conversation is asked only when its `properties.tabs` shows a
   `bookmarks` or `folder` tab, or when we already hold bookmarks for it.
-  On a real workspace (2026-09-24) 75 of 128 channels had no such tab, and
+  On a real workspace 75 of 128 channels had no such tab, and
   none of the 25 of those we asked held a bookmark. Listed at most once
   per `MANIFEST_TTL`, like the channel list. The listing is not paged,
   so it is the conversation's whole set, and a bookmark it no longer
@@ -300,7 +294,7 @@ token with `not_allowed_token_type`, and no List turned up through
 
 Render reads both marks: a top-level message after its conversation's
 `last_read`, or a reply after its followed thread's, renders unread
-(`slack_render/TRANSLATE.md`).
+([`slack_render/TRANSLATE.md`](../slack_render/TRANSLATE.md)).
 
 ## Rate limits
 
@@ -309,12 +303,13 @@ methods, as HTTP `200` with an `{"ok":false,"error":"ratelimited"}`
 body. Both are handled centrally by the shared `latchkey_curl`
 chokepoint — `api::slack_retryability` teaches it to recognize the
 200-body form, after which it honors `Retry-After` / backs off and
-enforces the source's `extract_params` give-up policy. When it gives
-up, the call surfaces as `SlackError::Permanent`.
+enforces the source's `common.download_params` give-up policy. When it
+gives up, the call surfaces as `SlackError::Permanent`.
 
 ## Sample data
 
-A curated [Star Trek: TNG-themed
-fixture](tests/fixtures/slack_api/) demonstrates the raw wire format
-and lives next to the code under test. The Python translator currently
-reads it from this location as well.
+[`tests/fixtures/slack_api/`](tests/fixtures/slack_api/) is a TNG-themed
+capture of the API, one `raw_api/<method>/` tape per method, replayed by
+`:slack_tests` and by the central fixture pipeline.
+[`tests/fixtures/slack_api_v2/`](tests/fixtures/slack_api_v2/README.md)
+is the same workspace one sync later.

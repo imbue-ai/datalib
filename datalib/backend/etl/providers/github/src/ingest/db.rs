@@ -8,7 +8,7 @@ use serde_json::Value;
 use sqlx::Row;
 
 use datalib_etl::bulk::bulk_upsert;
-use datalib_etl_forge_ingest_common::prune_children;
+use datalib_etl_forge_ingest_common::{load_self_identity, prune_children, row_payload};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -26,19 +26,7 @@ impl RawDb {
     }
 
     pub async fn load_self_identity(&self) -> Result<Option<Value>> {
-        // Audited: the only interpolation is a table name this handle
-        // chose -- a literal, or that literal behind `pinned_`.
-        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT json(payload) AS payload FROM {} \
-             WHERE payload IS NOT NULL ORDER BY id LIMIT 1",
-            self.reads().table("self_identity")
-        )))
-        .fetch_optional(self.pool())
-        .await
-        .context("select self_identity")?;
-        let Some(row) = row else { return Ok(None) };
-        let payload: Option<String> = row.try_get("payload").ok();
-        Ok(payload.and_then(|s| serde_json::from_str(&s).ok()))
+        load_self_identity(self.pool(), self.reads()).await
     }
 
     // ── pull_requests ───────────────────────────────────────────────
@@ -101,32 +89,16 @@ impl RawDb {
     }
 
     pub async fn load_pull_requests(&self) -> Result<Vec<LoadedPullRequest>> {
-        // Audited: as `load_self_identity`.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, repo_full_name, pr_number, json(payload) AS payload
-             FROM {} WHERE payload IS NOT NULL ORDER BY id",
-            self.reads().table("pull_requests")
-        )))
-        .fetch_all(self.pool())
-        .await
-        .context("select pull_requests")?;
-        let mut out = Vec::with_capacity(rows.len());
-        for r in rows {
-            let payload_str: String = match r.try_get("payload") {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let Ok(payload) = serde_json::from_str::<Value>(&payload_str) else {
-                continue;
-            };
-            out.push(LoadedPullRequest {
-                id: r.try_get("id").unwrap_or_default(),
-                repo_full_name: r.try_get("repo_full_name").unwrap_or_default(),
-                pr_number: r.try_get::<i64, _>("pr_number").unwrap_or(0) as u32,
-                payload,
-            });
-        }
-        Ok(out)
+        let rows = self.load_children("pull_requests").await?;
+        Ok(rows
+            .into_iter()
+            .map(|c| LoadedPullRequest {
+                id: c.id,
+                repo_full_name: c.repo_full_name,
+                pr_number: c.pr_number,
+                payload: c.payload,
+            })
+            .collect())
     }
 
     pub async fn load_children(&self, table: &str) -> Result<Vec<LoadedChild>> {
@@ -143,11 +115,7 @@ impl RawDb {
             .with_context(|| format!("select {table}"))?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            let payload_str: String = match r.try_get("payload") {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let Ok(payload) = serde_json::from_str::<Value>(&payload_str) else {
+            let Some(payload) = row_payload(&r) else {
                 continue;
             };
             out.push(LoadedChild {

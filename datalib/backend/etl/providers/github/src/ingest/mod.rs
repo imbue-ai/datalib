@@ -1,7 +1,7 @@
 //! GitHub downloader: identity + every authored/commented/@mentioned PR
 //! plus its comments + reviews. Writes a single doltlite database at
-//! `<data_root>/<name>/raw/entities.doltlite_db`; see [`db`] for the schema and
-//! [`datalib_etl::doltlite_raw`] for the design rationale.
+//! `<data_root>/<group>/ingest/entities.doltlite_db`; see [`db`] for the
+//! schema and [`datalib_etl::doltlite_raw`] for the design rationale.
 
 pub mod db;
 pub mod schema_raw;

@@ -300,6 +300,15 @@ fn ordered<'a>(comments: &[&'a Comment]) -> Ordered<'a> {
     }
 }
 
+/// A payload's string field for a provider's parse, empty when absent.
+pub fn str_field(p: &serde_json::Value, key: &str) -> String {
+    p.get(key).and_then(|v| v.as_str()).unwrap_or("").into()
+}
+
+pub fn opt_str(p: &serde_json::Value, key: &str) -> Option<String> {
+    p.get(key).and_then(|v| v.as_str()).map(String::from)
+}
+
 struct Ordered<'a> {
     reviews: Vec<&'a Comment>,
     general: Vec<&'a Comment>,

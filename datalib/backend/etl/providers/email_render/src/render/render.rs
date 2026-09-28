@@ -9,6 +9,7 @@ use super::parse::ParsedEmail;
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
@@ -517,14 +518,6 @@ fn labels_for_email(
         .collect()
 }
 
-/// Parse an ISO-8601 timestamp to unix millis; `None` on anything
-/// unparseable, which the caller records through `own_stamp_ms`.
-fn iso_to_ms(s: &str) -> Option<i64> {
-    datalib_time::parse_strict(s)
-        .ok()
-        .map(|t| t.to_unix_millis())
-}
-
 // Quoted-text folding (the Gmail-style trimmed-quote view)
 
 /// Split a rendered email body into (fresh, quoted) where `quoted` is
@@ -804,31 +797,6 @@ fn autolink_bare_urls(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A missing or malformed `Date` header must produce no timestamp,
-    /// not the epoch. Real mail carries malformed `Date` headers often
-    /// enough that this was a live source of fake-1970 grid rows.
-    #[test]
-    fn iso_to_ms_refuses_to_invent_a_timestamp() {
-        assert_eq!(
-            iso_to_ms("2026-04-14T09:15:00-07:00"),
-            Some(1_776_183_300_000)
-        );
-        for bad in [
-            "",
-            "not a date",
-            // A `Date` header that never made it through RFC 3339.
-            "Tue, 14 Apr 2026 09:15:00 -0700",
-            // Naive — no offset — which we refuse rather than assume.
-            "2026-04-14T09:15:00",
-        ] {
-            assert_eq!(
-                iso_to_ms(bad),
-                None,
-                "iso_to_ms({bad:?}) fabricated a stamp"
-            );
-        }
-    }
 
     #[test]
     fn split_quoted_folds_attribution_and_keeps_fresh() {

@@ -1,100 +1,42 @@
 # JMAP Extract
 
 `jmap-ingest` mirrors a JMAP mail account (RFC 8620 core + RFC 8621
-mail) into a single doltlite db at `<out>.doltlite_db`. Generic across
-JMAP servers — tested against Fastmail (`api.fastmail.com`), works
-against any RFC 8620–conformant server in principle (Stalwart, etc.).
+mail) into a single doltlite raw store. Generic across JMAP servers —
+tested against Fastmail (`api.fastmail.com`), works against any RFC
+8620–conformant server in principle (Stalwart, etc.). The `email`
+source's other two modes, the Gmail API and an mbox file, write the same
+raw schema; [`docs/dev/email_download_modes.md`](/docs/dev/email_download_modes.md)
+covers all three.
 
 Each phase upserts upstream payloads as JSONB into per-type tables;
-attachments and the full RFC5322 `.eml` source for every email land in
-the shared `blobs` table. See `db.rs` for the schema and
+the full RFC 5322 `.eml` source of every email lands in the per-source
+blob CAS (see "The raw store's shape" below). See `src/ingest/schema_raw.rs`
+for the schema and
 [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
 for the rationale behind the table shape.
 
-## Auth (Fastmail)
+## Auth
 
 `jmap-ingest` does not handle credentials directly — it shells out
 to [`latchkey curl`](https://github.com/imbue-ai/latchkey), which
 injects `Authorization: Bearer <token>` on every outbound request
-based on the request's URL host.
+based on the request's URL host. For Fastmail, the steps are in
+[`docs/user/getting_your_data.md`](/docs/user/getting_your_data.md)
+§"Fastmail".
 
-Unlike claude.ai / chatgpt.com, Fastmail's API token is a normal
-user-facing thing: no DevTools snippet, no Cloudflare TLS
-fingerprinting, no rotating session token. The whole flow:
-
-### 1. Create a Fastmail API token
-
-1. Open <https://app.fastmail.com/settings/security/tokens>.
-2. Click **New API token**.
-3. Scopes — the JMAP `urn:ietf:params:jmap:mail` capability needs at
-   minimum **Read-only access to mail**. If you want this provider to
-   round-trip writes in the future (we don't today), grant **Read and
-   write access to mail** instead. Leave Calendar / Contacts /
-   Files unchecked unless you've taught the provider to use them.
-4. Copy the token to the clipboard — it's shown exactly once.
-
-### 2. Register the service(s) with latchkey
-
-Fastmail isn't in latchkey's built-in catalog, so register two
-self-hosted services pointing at the two hosts Fastmail uses — the
-JMAP API endpoint plus the file-content CDN that hosts
-`{downloadUrl}`-resolved blobs:
-
-```sh
-latchkey services register fastmail \
-    --base-api-url="https://api.fastmail.com/"
-latchkey services register fastmail-content \
-    --base-api-url="https://www.fastmailusercontent.com/"
-```
-
-(latchkey's `register` CLI only takes one `--base-api-url` per
-service, so two separate registrations is the workaround. Built-in
-services like `slack` ship with multi-host `baseApiUrls` baked in,
-but user-registered ones don't.)
-
-Attach the same token to both — `pbpaste` reads from your clipboard
-at exec time so the literal token never lands in your shell history:
-
-```sh
-latchkey auth set fastmail         -H "Authorization: Bearer $(pbpaste)"
-latchkey auth set fastmail-content -H "Authorization: Bearer $(pbpaste)"
-```
-
-Latchkey routes by URL host, so requests to `api.fastmail.com` pick
-up the `fastmail` service's credentials, and requests to
-`www.fastmailusercontent.com` pick up `fastmail-content`'s.
-
-### 3. Smoke test
-
-```sh
-# JMAP API host — RFC 8620 says .well-known/jmap may 302; -L follows.
-latchkey curl -sSL https://api.fastmail.com/.well-known/jmap \
-    | jq '.primaryAccounts."urn:ietf:params:jmap:mail"'
-
-# Blob CDN host — pick any blob_id from the emails table once you've
-# done a first run, or just confirm the 401-with-WWW-Authenticate is
-# coming back as 401 (not "No service matches URL"):
-latchkey curl -sSI "https://www.fastmailusercontent.com/jmap/download/u1a2b3c4d/Gtest/x?type=x"
-```
-
-Expect a JMAP account id on the first and an `HTTP/2 …` line on the
-second. If you get a 401 with a Fastmail error body, the token isn't
-being injected — re-check `latchkey services info <name>` for both
-services and confirm the URL host is right.
-
-## Auth (other JMAP servers)
-
-The exact same flow works against any JMAP server — Stalwart Mail
-Server, etc. Pick a service name (latchkey only uses it as a label;
-the URL host is what drives auth routing):
+For another JMAP server (Stalwart, etc.), register a latchkey service
+for its host and store its token (the service name is only a label;
+the URL host drives routing):
 
 ```sh
 latchkey services register mail-example --base-api-url="https://mail.example.com/"
 latchkey auth set mail-example -H "Authorization: Bearer $(pbpaste)"
 ```
 
-Then run with `--hostname mail.example.com`. The JMAP session
-discovery does the rest.
+Blob bytes come from the session's `downloadUrl`, which may be on a
+different host than the API (Fastmail's is `www.fastmailusercontent.com`);
+that host needs a credential too. Then run with
+`--hostname mail.example.com`; session discovery does the rest.
 
 ## Run it
 
@@ -104,25 +46,29 @@ bazelisk run //datalib/backend/etl/providers/email:jmap_ingest -- \
     --hostname api.fastmail.com
 ```
 
-Subsequent runs are incremental — the state token from `Email/changes`
-is persisted per-account in `sync_scope_state`, so only created /
-updated / destroyed emails since the last run get touched. Force a
-full re-enumeration with `--full-resync`.
+The store is `<out>/entities.doltlite_db`. Subsequent runs are
+incremental — the state token from `Email/changes` is persisted
+per-account in `sync_scope_state`, so only created / updated /
+destroyed emails since the last run get touched. Force a full
+re-enumeration with `--full-resync`.
 
-To restrict to specific mailboxes (the JMAP-id, not the human name):
+To restrict to specific mailboxes, name them by their full label path
+(`Work/Projects`), the way `only_extract_labels` does in a config:
 
 ```sh
 jmap-ingest --hostname api.fastmail.com --out ~/backups/fastmail \
-    --only-mailbox-ids "abc123,def456"
+    --only-mailbox-labels "Inbox,Work/Projects"
 ```
 
-A list of mailbox ids comes from the first run's `Mailbox/get`
-response — peek at the resulting db:
+The first run's `Mailbox/get` lands in the `mailboxes` table:
 
 ```sh
-sqlite3 ~/backups/fastmail.doltlite_db \
+bazelisk build //third-party/doltlite:doltlite
+bazel-bin/third-party/doltlite/doltlite ~/backups/fastmail/entities.doltlite_db \
     "SELECT id, name, role FROM mailboxes ORDER BY name"
 ```
+
+Stock `sqlite3` cannot open the file.
 
 ## API surface used
 
@@ -131,11 +77,11 @@ sqlite3 ~/backups/fastmail.doltlite_db \
 | `.well-known/jmap` | Session discovery → `apiUrl`, `downloadUrl`, accounts   |
 | `Mailbox/get`      | Full mailbox list (first run + fallback)                |
 | `Mailbox/changes`  | Incremental: created / updated / destroyed mailbox ids  |
-| `Email/get`        | Per-email detail with bodyValues, attachments, headers  |
+| `Email/get`        | Envelope of every touched email (no body: see below)    |
 | `Email/changes`    | Incremental: created / updated / destroyed email ids    |
 | `Email/query`      | Full enumeration when no state token exists             |
 | `Thread/get`       | Thread membership for every touched threadId            |
-| `downloadUrl`      | Blob bytes (`.eml` source + each attachment's blobId)   |
+| `downloadUrl`      | Each email's `.eml` bytes                               |
 
 ## Incrementality
 
@@ -144,31 +90,31 @@ or first run. Cursors persisted per `(account_id, type_name)` in the
 shared `sync_scope_state` table under `jmap:<account_id>:state:<type>`
 keys. `--full-resync` clears the cursor for this run only; the next
 run re-establishes incremental sync from the post-resync state.
+Widening `only_extract_labels` enumerates the newly admitted mailboxes
+once, since `Email/changes` cannot surface mail that was already there;
+a label path that matches no mailbox is a `problems` row.
 
 Destroyed emails (per `Email/changes`) hard-delete the row, its
-mailbox / keyword / attachment joins, and its bookkeeping. Blobs are
-left in place — another email may share the same `.eml` blob or
-attachment blob, and doltlite's history retains the prior state
+mailbox and keyword joins, its `email_blobs` edge, and their
+bookkeeping. The bytes stay in the CAS — another email may share the
+same `.eml` blob, and doltlite's history retains the prior state
 either way.
 
 ## Rate limits
 
 Fastmail doesn't 429 us in practice — JMAP's batch shape (one
 methodCalls envelope = one HTTP request, regardless of how many
-created/updated ids it carries) keeps the request count tame. There's
-no in-process backoff loop today. If a future server returns 429,
-model the loop on `chatgpt/src/ingest/api.rs`.
+created/updated ids it carries) keeps the request count tame. A 429 or
+502–504 is retried with backoff, honouring `Retry-After`, by the shared
+HTTP layer (`datalib_etl::http::default_retryability`).
 
-## Sample data
+## Tests
 
-No checked-in fixture tree yet — `tests/email_tests/jmap_render.rs`
-builds a small `LoadedRaw` in memory to exercise the renderer. A synth
-+ playback fixture pair (matching the slack/notion pattern) is a
-planned follow-up, and until one exists **nothing exercises the real
-JMAP wire format**: there is no live JMAP test. (There was a
-`jmap_live.rs`, but it was an empty `#[ignore]`d stub carrying a
-snapshot glob and an `.update` target for goldens it never wrote, so
-it was deleted rather than kept as a promise.)
+**Nothing exercises the real JMAP wire format**: there is no JMAP
+fixture, playback test or live test (`playback_roundtrip.rs` is an empty
+placeholder). `tests/email_tests/jmap_render.rs` builds a parsed store in
+memory with real `.eml` bytes and renders it; `jmap_mbox.rs` runs the
+mbox mode end to end over `tests/fixtures/mbox/star_trek.mbox`.
 
 ## The raw store's shape
 
@@ -209,6 +155,7 @@ hash.
 | table | shape |
 |---|---|
 | `accounts`, `mailboxes`, `threads`, `emails` | payload-shaped entity tables, each with a paired `<table>_bookkeeping` sidecar |
+| `gmail_messages` | Gmail API mode only: Gmail's message id → the row it produced |
 | `email_mailboxes`, `email_keywords` | N:M join tables with a synthesized `id` PK, refreshed delete-then-insert per email upsert; no sidecars |
 | `email_blobs` | CAS edge carrying the `.eml` `blake3`, NULL until the bytes land |
 | `ingested_files` | the shared per-file resume cursor (`file_checkpoint`, scope `email/mbox`) |

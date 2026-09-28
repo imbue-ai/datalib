@@ -1,8 +1,8 @@
 # The `email` source's download modes
 
-**Status:** current as of 2026-09-10.
-
-`type: email` has three download modes, all writing one raw schema:
+`type: email` has three download modes, all writing one raw schema. The
+code is `datalib/backend/etl/providers/email/` (download; paths below are
+relative to it), `email_render/` and `email_config/`.
 
 | mode | selected by | for |
 |------|-------------|-----|
@@ -16,16 +16,16 @@ changes when a mode is added. See
 the surrounding ingestion architecture.
 
 Two of the three have a wizard form: **Gmail** and **Fastmail** are
-separate entries in `ui/src/config/catalog.ts`, each writing the table
-that selects its mode. They are not one form with a mode dropdown —
-they authenticate against different latchkey services and want
-different words on screen — and the fact that they share a step type is
-what `variantKey` exists to handle (`docs/dev/plans/source_wizard.md`,
-"What shipped"). The mbox mode has no form: it is a path, and the
-catch-all `email` entry sends you to the config editor.
+separate entries in `datalib/ui/src/config/catalog.ts`, each writing the
+table that selects its mode. They are not one form with a mode dropdown
+— they authenticate against different latchkey services and want
+different words on screen — and `variantKey` is what tells two entries
+of one step type apart. The mbox mode, and a JMAP server other than
+Fastmail, have no form: the catch-all "Email (mbox or other server)"
+entry sends you to the config editor.
 
 Both forms fill their label pickers from `datalib-step probe email`
-(`datalib/backend/etl/providers/email/src/probe.rs`), which reads the
+(`src/probe.rs`), which reads the
 account's real labels — one `users.labels.list` or one `Mailbox/get` —
 and returns them spelled exactly the way `only_extract_labels` matches.
 That spelling is the whole point of the probe — Gmail hands us the same
@@ -34,30 +34,28 @@ table in `src/ingest/labels.rs` is where they are reconciled.
 
 ## 1. Why modes of one source, not separate source types
 
-The tree was already built for it, and not aspirationally:
-
-- `src/ingest/schema_raw.rs:3` — *"The schema is the same regardless of
-  where the data came from."* One set of tables (`accounts`,
-  `mailboxes`, `threads`, `emails`, `email_blobs`, and the two join
-  tables).
-- `src/mailbox_labels.rs:11` is explicitly source-agnostic: it resolves
-  `Parent/Child` label paths the same way for a JMAP `parentId` tree and
-  a flat Gmail label list, so `only_extract_labels` /
-  `only_render_labels` mean the same thing in every mode.
-- The `↗` outlink for Gmail is built from `Message-ID`
-  (`src/render/render.rs:73`), which every mode supplies.
+- `src/ingest/schema_raw.rs` is one schema for every mode: `accounts`,
+  `mailboxes`, `threads`, `emails`, `email_blobs`, the two join tables
+  `email_mailboxes` and `email_keywords`, and `gmail_messages` (Gmail's
+  own id → the row it produced, used only by the Gmail mode).
+- `src/mailbox_labels.rs` resolves `Parent/Child` label paths the same
+  way for a JMAP `parentId` tree and a flat Gmail label list, so
+  `only_extract_labels` / `only_render_labels` mean the same thing in
+  every mode.
+- The `↗` outlink for Gmail is built from `Message-ID` (`gmail_outlink`
+  in the `email_render` crate), which every mode supplies.
 
 Mode selection is **explicit**: `EmailConfig::live_mode()` returns the
-selected transport and errors when more than one live block is set. It
-used to be inferable from `sync:` alone; with a second live mode that
-became untenable, and silently preferring one would mirror a mailbox the
-user didn't ask for. The file-backed mbox mode is deliberately *not* a
-`live_mode` variant — choosing it means probing the filesystem for an
-`.mbox`, which a schema-only config crate must not do.
+selected live transport and errors when both `jmap` and `gmail` are
+set — silently preferring one would mirror a mailbox the user didn't
+ask for. The file-backed mbox mode is deliberately *not* a `live_mode`
+variant — choosing it means probing the filesystem for an `.mbox`,
+which a schema-only config crate must not do; `src/processor.rs` falls
+back to `mbox` when no live block is set.
 
 ## 2. The thing that makes multiple modes worth having
 
-Four transports writing one schema is only worth the trouble if the same
+Three transports writing one schema is only worth the trouble if the same
 mailbox ingested two ways **dedupes rather than doubles**. That is a
 property of three specific pieces of shared code, not of two
 implementations happening to agree:
@@ -85,14 +83,14 @@ label differently depending on how you ask:
 
 Left alone that is two `mailboxes` rows and two `mailbox_id`s for one
 label — the user's Inbox appearing twice in the grid. `canonical_name`
-collapses them onto **Takeout's** spelling, chosen because that is what
-existing raw stores already contain, so nothing on disk has to migrate.
+collapses a system label onto **Takeout's** spelling and passes a user
+label through untouched.
 
-A subtlety worth keeping: **`mailbox_id` does not canonicalize.** Google
-lets you create a *user* label named literally `INBOX`, and
-canonicalizing behind the caller's back merged it with the system inbox.
-Only the caller knows whether Google marked a label `type: system`, so
-canonicalization is the caller's job. A test pins it.
+**`mailbox_id` does not canonicalize.** Google lets you create a *user*
+label named literally `INBOX`, and canonicalizing behind the caller's
+back would merge it with the system inbox. Only the caller knows
+whether Google marked a label `type: system`, so canonicalization is the
+caller's job.
 
 **Thread ids.** Gmail's API `threadId` is hex; Takeout's `X-GM-THRID`
 header is the same 64-bit number in decimal. `normalize_thread_id`
@@ -136,16 +134,12 @@ pick-the-first fallback, so with two stored and none named latchkey
 fails the request as ambiguous rather than mirroring the wrong mailbox.
 
 The setting reaches the wire as `HttpRequest::latchkey`. It is
-deliberately **not** part of `fixture_key`: which identity fetched a
-response doesn't change the response's shape, and folding it in would
-make one user's playback fixtures unusable by another.
-
-> The knob used to be `gmail.account` (then spelled `gmail_api`). It moved because the JMAP
-> mode needs it too (Fastmail is just as capable of holding two
-> accounts), and because the account is latchkey's namespace rather than
-> any one provider's. A config still using the old location fails at
-> load time with the replacement spelled out — it is not silently
-> ignored.
+deliberately **not** part of `fixture_key` (`datalib_etl::http`): which
+identity fetched a response doesn't change the response's shape, and
+folding it in would make one user's playback fixtures unusable by
+another. It is a source-level block rather than a Gmail knob because
+the JMAP mode needs it too; a config that still sets `gmail.account`
+fails at load with the new spelling in the error.
 
 ### Sync
 
@@ -168,23 +162,33 @@ same namespacing discipline as the JMAP path's `jmap:` keys.
   over the newly-added labels, or the whole account when the filter was
   removed. `history.list` only names what *changed*, and mail that
   already sat outside the old labels did not, so without the walk a
-  widened filter mirrors nothing (2026-09-15). The filter the cursor was
+  widened filter mirrors nothing. The filter the cursor was
   taken under is recorded in `sync_scope_config` under `gmail:download`,
   the same mechanism the JMAP mode uses; see
   `docs/dev/data_architecture_ingestion.md` § "When the cursor swallows
   a config change".
 
 The cursor and the recorded filter both advance only when the run
-drained its work — no `message_budget` stop, no failed `messages.get` —
-because either one stored after a partial run tells the next run it is
-caught up.
+drained its work — no `message_budget` stop, no interruption, no
+`messages.get` failure other than a 404 — because either one stored
+after a partial run tells the next run it is caught up, and the next
+run's `history.list` never names a message that merely failed to fetch.
+A held cursor makes the next run re-enumerate, which is cheap:
+`messages.list` is 5 units a page, and every id already in
+`gmail_messages` is skipped before `messages.get`'s 20 are spent.
+
+A walk over the whole mailbox (no label filter, not budget-limited) is
+also when deletions `history.list` never reported are found: rows the
+walk did not list are pruned.
 
 Deletions carry Gmail's own message id, but rows are keyed by
-`Message-ID`, so the mapping is not local. Ingest stamps
-`_source: { via, gmailMessageId, gmailThreadId }` into the envelope
-payload (the same provenance pattern
-`datalib_etl_claude::normalize_to_export_shape` uses) and the delete
-matches on it.
+`Message-ID`, so the delete looks the row up in `gmail_messages`. Ingest
+also stamps `_source: { via, gmailMessageId, gmailThreadId }` into the
+envelope payload as provenance.
+
+Thread rows are rebuilt from the `emails` table for every thread the
+run touched, not from the messages this run fetched — relabeling one
+message of a ten-message thread must not shrink the thread to one.
 
 ### Throughput and the budget
 
@@ -193,9 +197,8 @@ Quota-limited rather than byte-limited:
 - 6000 quota units per user per minute; `messages.get` costs 20 ⇒ **~300
   messages/minute**, regardless of message size.
 - The daily project ceiling (80M units) is not the binding constraint —
-  the per-minute cap holds one account to ~8.6M units/day. Worth knowing
-  anyway: as of 2026-05-01 Google bills for usage past the daily
-  threshold.
+  the per-minute cap holds one account to ~8.6M units/day. Google bills
+  for usage past the daily threshold from 2026-05-01.
 
 `QuotaThrottle` is a leaky bucket priced in **units**, not requests, so a
 mixed workload meters accurately. It is the first line, not the last:
@@ -206,18 +209,20 @@ into it and keep going, the way the Slack provider does.
   HTTP chokepoint (`latchkey_curl_classified` with `gmail_retryability`).
   Google spells the per-user limit two ways — 429 `rateLimitExceeded`
   and **403 `userRateLimitExceeded`** — and a 403 read as an auth error
-  is the trap: it held the cursor and walked on, and the run "succeeded"
+  is the trap: the run would hold the cursor, walk on, and "succeed"
   with every remaining message marked failed. 500 `backendError` is
   retried too, per Google's own guidance; a 403 about scopes, or
   `dailyLimitExceeded`, is not — nothing shorter than a person, or a
   day, fixes those.
-- **A rate-limited request lowers the throttle's ceiling** by a fifth for
-  the rest of the run, to a floor of a quarter of the configured value,
-  and empties the bucket so the retry is not another burst. A long
+- **Rate-limit responses lower the throttle's ceiling** by a fifth for
+  the rest of the run (once per batch of responses seen since the last
+  request), to a floor of a quarter of the configured value, and empty
+  the bucket so the retry is not another burst. A long
   backfill therefore settles under whatever Google actually enforces
   instead of hitting it once a minute.
-- **When the retry loop gives up** — the run's `download` bounds, thirty
-  minutes without a successful request by default — the run stops with
+- **When the retry loop gives up** — the run's `download` bounds
+  (`DownloadParams`: by default thirty minutes without a successful
+  request, or fifty failures in a row) — the run stops with
   an error rather than walking on to fail every remaining id one attempt
   at a time. The sealed batches are already committed and the cursor is
   held, so the next run resumes.
@@ -235,24 +240,41 @@ multipart encoding for no throughput.
 against `messages.get`'s 20, and grouping by `threadId` gives the same
 membership for free.
 
-## 4. Appendix: IMAP was built and removed
+## 4. Traps in the Gmail API
 
-An IMAP mode was prototyped (commit `b9810b70`) and removed. Recording
-why, because the reasoning generalizes to any future non-HTTP provider.
+Each of these fails silently: a single run passes.
 
-### What worked
+- **Filter server-side.** `only_extract_labels` narrows
+  `messages.list?labelIds=`; checking it after `messages.get` would pay
+  20 units for every message in the account to keep a handful. A
+  configured name that matches no label is a download problem; when
+  *none* match, the run fails, because an empty `labelIds` means
+  "everything".
+- **Repeated `labelIds` intersect.** `only_extract_labels` means
+  "carrying **any** of these", and `messages.list` cannot express a
+  union: asking for three labels at once returns the messages carrying
+  all three, usually none — and a run that lists nothing stores its
+  cursor and reports success, so every later run finds nothing new. The
+  enumeration is one walk per label, deduped into one id set
+  (`enumeration_walks` in `src/ingest/gmail_api/mod.rs`), and
+  `api::list_messages` takes one `Option<&str>` label so the combined
+  request cannot be built. A one-label test cannot tell union from
+  intersection; `gmail_label_union` (hermetic) and
+  `gmail_live_two_labels_mirror_their_union` use two.
 
-`async-imap` 0.11 with `default-features = false, features =
-["runtime-tokio"]` pulls in no async-std, no `async-native-tls`, and no
-OpenSSL, and its `Read`/`Write` bounds are tokio's under that feature, so
-a `tokio-rustls` stream drops in with no compat shim. `imap-proto` parses
-`X-GM-MSGID`, `X-GM-THRID`, `X-GM-LABELS`, and MODSEQ natively. None of
-that was the problem.
+## 5. Why there is no IMAP mode
 
-### What didn't: credentials
+An IMAP mode was prototyped and removed (#175). The reason generalizes
+to any non-HTTP provider.
 
-**latchkey is HTTP-only, deliberately and all the way down.** Verified
-against latchkey 3.6.0:
+The client side was not the problem: `async-imap` 0.11 with
+`default-features = false, features = ["runtime-tokio"]` pulls in no
+async-std, no `async-native-tls` and no OpenSSL, takes a `tokio-rustls`
+stream with no compat shim, and `imap-proto` parses `X-GM-MSGID`,
+`X-GM-THRID`, `X-GM-LABELS` and MODSEQ natively.
+
+The credentials were. **latchkey is HTTP-only, deliberately and all the
+way down.** Verified against latchkey 3.6.0:
 
 - `extractUrlFromCurlArguments` returns `null` unless the URL starts with
   `http://` or `https://` — before any service lookup.
@@ -277,52 +299,37 @@ fetcher, not a session client**, and a mailbox mirror needs a session:
 `SELECT` context, CONDSTORE MODSEQ, unsolicited untagged responses, and
 an adaptive fetch loop. A real client has to be its own client — and then
 it needs the credential as *values*, which is precisely what latchkey
-exists to prevent.
+exists to prevent. Capturing them (a shim at `$LATCHKEY_CURL` that
+records argv, or latchkey's library API `ApiCredentialStore.get`)
+defeats latchkey's security property either way.
 
-The prototype got them as values by pointing `$LATCHKEY_CURL` at a shim
-that captured argv. That works, but it depends on two implementation
-details that are not contracts (that `$LATCHKEY_CURL` names the binary
-latchkey spawns, and that credentials arrive in its argv), and more
-importantly it defeats latchkey's actual security property. latchkey does
-expose a supported library API (`ApiCredentialStore.get`) that would have
-been better-mannered, but it is the same hole with better manners.
+The fix would be upstream: a **`latchkey imap-gateway`**, the analogue
+of `latchkey gateway`, that terminates the client connection on
+localhost, does SASL upstream and keeps latchkey in the data path.
+Until something like that exists, datalib does not extract secrets from
+latchkey, and a non-HTTP provider needs a different plan.
 
-### The upstream ask
-
-The shape that would actually fix this is **`latchkey imap-gateway`** —
-the direct analogue of `latchkey gateway`: terminate the client
-connection on localhost, do SASL upstream, keep latchkey in the data path
-for a protocol curl cannot hold open. Until something like that exists,
-datalib should not be in the business of extracting secrets from
-latchkey, and a non-HTTP provider here needs a different plan.
-
-### What survived the removal
-
-The IMAP work paid for itself anyway — `envelope.rs`, `labels.rs`, the
-per-mode cursor namespacing (`RawDb::load_scope` / `save_scope`), and
-`HttpRequest::latchkey_account` all came out of it and are load-bearing
-for the Gmail API mode.
-
-## 5. Testing
+## 6. Testing
 
 Unit tests cover the pure parts (label vocabulary, envelope synthesis,
-history parsing, base64url, the quota throttle). What they cannot cover
-is incremental correctness, so there is a **live test** — the `live`
-module of `tests/email_tests/`, which `bazel test` skips by name:
+history parsing, base64url, the quota throttle). Hermetic tests in
+`tests/email_tests/` replay synthesized Gmail conversations through
+`DATALIB_HTTP_PLAYBACK`: `gmail_label_union`,
+`gmail_widened_labels_backfill` and `gmail_failed_fetch_holds_cursor`.
+Incremental correctness against the real service needs the **live
+test** — the `live` module of `tests/email_tests/`, which the
+`email_tests` target skips with `--skip live::`:
 
 ```sh
 bazelisk run //datalib/backend/etl/providers/email:gmail_live
 ```
 
-It mirrors one label (`$DATALIB_GMAIL_TEST_LABEL`, default `datalib`)
-out of a real account into a tempdir and asserts against **the doltlite
-store the run wrote**, not against log lines — per AGENTS.md, a log line
-tells you what the code said, the store tells you what it did. It
-asserts nothing about specific subjects or senders, only invariants that
-hold for any label.
-
-Two of its assertions exist because they caught real bugs, and neither
-failure is visible from a single run:
+It mirrors one label (`$DATALIB_GMAIL_TEST_LABEL`, default `datalib`;
+the two-label test adds `$DATALIB_GMAIL_TEST_LABEL_2`, default
+`Starred`) out of a real account into a tempdir and asserts against
+**the doltlite store the run wrote**, not against log lines. It asserts
+nothing about specific subjects or senders, only invariants that hold
+for any label. Two of them need more than one run to fail:
 
 - **A second run must be a no-op** spending less than one
   `messages.get` of quota. Observed: 4 units (profile + labels +
@@ -333,64 +340,10 @@ failure is visible from a single run:
 
 ### Known gaps
 
-- **Almost no checked-in wire fixtures.** `tests/email_tests/jmap_render.rs` builds
-  a `LoadedRaw` in memory, and the JMAP surface has no replayed
-  conversation at all — `tests/playback_roundtrip.rs` is still a
-  placeholder. The Gmail side has one: `tests/email_tests/gmail_label_union.rs`
-  synthesizes a small conversation and replays it through
-  `DATALIB_HTTP_PLAYBACK`, but it covers the label filter and nothing
-  else. A full synth + playback pair matching the slack/notion pattern
-  would let the rest of the live test's invariants run in CI too.
+- **The JMAP surface has no replayed conversation.**
+  `tests/email_tests/jmap_render.rs` builds its input in memory, and
+  `tests/email_tests/playback_roundtrip.rs` is a placeholder. A synth +
+  playback pair matching the slack/notion pattern would let the live
+  test's invariants run in CI.
 - **`INGEST.md` is titled "JMAP Extract"** and documents only that
-  mode. It predates the other two.
-- **Render stamps `provider: email`** in QMD frontmatter and
-  `class="msg msg--email"` in the body, whatever mode produced the row —
-  the tag names the source, not the protocol a given mirror used.
-  Pre-existing (the mbox mode has always done it too) and harmless —
-  nothing keys off it — but misleading to read.
-
-## 6. Bugs the first cut had, and what they teach
-
-Recorded because each was invisible from a passing single run:
-
-1. **The label filter was applied client-side.** `only_extract_labels`
-   was checked after `messages.get`, so mirroring an 8-message label out
-   of a 26k-message account would have cost 522k quota units — ~105
-   minutes of throttled fetching — to keep 8 messages. Now
-   `messages.list?labelIds=` narrows it server-side, and a name that
-   matches no label is a hard error, because an empty `labelIds` means
-   "everything".
-2. **Moving it server-side then quietly changed what it meant.**
-   `only_extract_labels` is "carrying **any** of these", and the fix
-   above passed all of them to one `messages.list`. Gmail *intersects*
-   repeated `labelIds`: a config naming three labels asked for the
-   messages carrying all three, which for most label sets is none. The
-   run enumerated nothing, downloaded nothing, stored the `historyId`
-   cursor and reported success — and every later run then went
-   incremental and correctly found nothing new, so the mirror stayed
-   empty and never said why. `messages.list` cannot express a union, so
-   the enumeration is now one walk per label, deduped into one id set
-   (`enumeration_walks` in `src/ingest/gmail_api/mod.rs`), and
-   `api::list_messages` takes `Option<&str>` rather than a slice so the
-   combined request cannot be built again.
-
-   The live test that existed did mirror a label — one label, where an
-   intersection and a union are the same set. Two are needed to tell
-   them apart, which is what `gmail_live_two_labels_mirror_their_union`
-   now does, and `gmail_label_union` covers hermetically by replaying
-   fixtures that model Gmail's intersecting answer.
-3. **A budget-limited run advanced the cursor**, so run 2 went
-   incremental and silently abandoned the rest of the mailbox. Fixed by
-   holding the cursor when `budget_exhausted`, *and* by skipping
-   already-mirrored Gmail ids before spending quota — without the second
-   half the run re-fetches the same prefix forever.
-4. **Incremental runs clobbered thread membership.** Thread rows were
-   built from the messages *this run* fetched, so relabeling one message
-   of a ten-message thread rewrote the thread to contain only that one.
-   Membership is now read back out of the `emails` table.
-5. **Deletes matched on `payload LIKE '%"gmailMessageId":"…"%'`** —
-   O(rows) per deletion and silently dependent on serde's exact key
-   spacing. Replaced by the `gmail_messages` mapping table, which the
-   resumable backfill needed anyway.
-6. **`loaded_blob_ids()` was reloaded per `messages.list` page.** Now
-   once per run.
+  mode.

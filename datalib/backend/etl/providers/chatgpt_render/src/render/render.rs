@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context as _, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms};
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
@@ -316,57 +317,5 @@ fn kind_for_role_and_type(role: Option<&str>, content_type: Option<&str>) -> &'s
             _ => "LLM Response",
         },
         _ => "Tool Call",
-    }
-}
-
-fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => {
-            let mut out: String = c.to_uppercase().collect();
-            for rest in chars {
-                out.extend(rest.to_lowercase());
-            }
-            out
-        }
-    }
-}
-
-/// Parse an ISO-8601 timestamp to unix millis. Accepts `…Z` and explicit
-/// offsets; returns `None` on anything unparseable — the caller records
-/// that through `own_stamp_ms` before falling back to the bumped
-/// previous time.
-fn iso_to_ms(s: &str) -> Option<i64> {
-    // Through `datalib-time`, not `chrono` directly: timestamps are a
-    // cross-source concept and exactly one crate decides how a string
-    // becomes an instant (rule P3 in
-    // `docs/dev/data_architecture_parse_and_render.md`). The export
-    // stamps an explicit offset, so `parse_strict` is the right member.
-    datalib_time::parse_strict(s)
-        .ok()
-        .map(|t| t.to_unix_millis())
-}
-
-#[cfg(test)]
-mod timestamp_tests {
-    use super::*;
-
-    /// The parse helper must answer `None` for anything it cannot read,
-    /// so the caller falls through to inheriting the previous item's
-    /// stamp and — when there is none — to a null `created_at`.
-    #[test]
-    fn iso_to_ms_refuses_to_invent_a_timestamp() {
-        assert_eq!(
-            iso_to_ms("2026-04-14T09:15:00-07:00"),
-            Some(1_776_183_300_000)
-        );
-        for bad in ["", "not a date", "2026-04-14", "2026-04-14T09:15:00"] {
-            assert_eq!(
-                iso_to_ms(bad),
-                None,
-                "iso_to_ms({bad:?}) fabricated a stamp"
-            );
-        }
     }
 }

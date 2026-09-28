@@ -55,10 +55,10 @@ pub const RUNS_DB: &str = "runs.sqlite";
 /// [`RUNS_DIR`] relative to the data root, for whatever keys trees by
 /// that string — the usage walker, the Manage rows.
 pub const RUNS_DIR_REL: &str = "system/runs";
-/// The supervisor's store, relative to `system/`: open requests, pauses,
-/// and what the loop decided about them. Plain SQLite, and the mailbox
-/// through which the UI and the CLI steer one root at once
-/// (`docs/dev/plans/supervisor.md` §2.8).
+/// The supervisor's store, relative to `system/`: open requests, the
+/// steps turned off, and what the loop decided about them. Plain SQLite,
+/// and the mailbox through which the UI and the CLI steer one root at
+/// once (`docs/dev/plans/supervisor.md` §2.8).
 pub const SUPERVISOR_DB: &str = "supervisor.sqlite";
 /// The server's exclusive claim on this root, relative to `system/`.
 /// Held with `flock(2)` for the life of the process; its contents are

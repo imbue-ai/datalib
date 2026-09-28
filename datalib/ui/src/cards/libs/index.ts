@@ -35,22 +35,3 @@ export const viewLibs: ViewLibs = {
   historyView,
   umapView,
 };
-
-export {
-  gridView,
-  documentView,
-  documentPickerView,
-  galleryView,
-  agentSeedView,
-  aliasView,
-  dactalView,
-  perseusView,
-  sourceDagView,
-  tableView,
-  sourcesView,
-  configView,
-  logView,
-  logLineView,
-  historyView,
-  umapView,
-};

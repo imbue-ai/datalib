@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_timeseries_render::page::write_page;
 use datalib_etl_timeseries_render::text::{iso, short_ts, yaml_safe};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
@@ -86,31 +87,15 @@ pub fn render_all(
 
     let m_uuid = document_uuid(source_id);
     let body = render_markdown(parsed, source_id, &m_uuid, plot_file);
-    let md_path = page_dir.join("index.md");
-    fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
-    let md_rel = md_path
-        .strip_prefix(root)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
-
-    let mut problems: Vec<ProblemRow> = Vec::new();
-    let rows = build_grid_rows(parsed, source_id, &m_uuid, &md_rel, &mut problems);
-    on_doc_complete(RenderedMarkdown {
-        markdown_uuid: m_uuid.clone(),
-        source_id: source_id.to_string(),
-        // Not the raw HEAD: it moves on every ingest, and a row whose
-        // content did not change may carry nothing per-run.
-        upstream_cursor: None,
-        bucket_key: Some(m_uuid.clone()),
-        md_path,
-        render_version: RENDER_VERSION,
-        rows,
-        sections: Vec::new(),
-        edges: Vec::new(),
-        problems,
-    })
-    .with_context(|| format!("on_doc_complete {m_uuid}"))?;
+    write_page(
+        root,
+        source_id,
+        &m_uuid,
+        body,
+        RENDER_VERSION,
+        |md_rel, problems| build_grid_rows(parsed, source_id, &m_uuid, md_rel, problems),
+        on_doc_complete,
+    )?;
     progress.inc(1);
     if parsed.head.is_none() {
         tracing::warn!(

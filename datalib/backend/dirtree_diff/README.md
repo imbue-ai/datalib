@@ -2,7 +2,7 @@
 
 `fsindex` records one row per file (path, kind, size, blake3, in
 `files`) and one per directory (path, size, entry count, tree-hash, in
-`dirs`) into a doltlite store. This prototype turns two such scans into
+`dirs`) into a doltlite store. This tool turns two such scans into
 a single self-contained HTML page: the two trees side by side, colour
 coded, with **moves reported as moves** rather than as a delete plus an
 unrelated create.
@@ -47,19 +47,17 @@ wrote diff.html — 1 move(s) (+3 rolled up), 0 modified, 1 added,
 entries inside it are rolled up rather than repeated. Both scans live in
 one 9 KB file.
 
-Both binaries ship. From a source checkout they are
+Both binaries ship in `//datalib/backend:dist`, so a release carries
+them like every other binary. From a source checkout they are
 `bazel-bin/datalib/backend/bin/datalib-fsindex` and
 `…/datalib-dirtree-diff` after `bazelisk build //datalib/backend:bin`.
-
-Ships as `datalib-dirtree-diff` — it is in `//datalib/backend:dist`, so
-a tagged release carries it like every other binary. sqlx links the same
-doltlite amalgamation the rest of the tree does, so there is no CLI to
-locate and no subprocess per query.
+sqlx links the same doltlite amalgamation the rest of the tree does, so
+there is no CLI to locate and no subprocess per query.
 
 ## Can doltlite's prolly diff work across two separate files?
 
 **No, not directly — and it fails in two different ways.** Measured
-against the Bazel-built shell on 2026-09-04:
+against the Bazel-built doltlite shell:
 
 | attempt | result |
 |---|---|
@@ -131,8 +129,7 @@ anything is unified. `#REF` defaults to `HEAD`.
 ### Writing several roots into one file
 
 `fsindex --branch <name>` scans a root into its own branch of a shared
-file, which is the arrangement `schema_raw.rs` describes and what
-`demo.sh` case 2 uses:
+file, which is what `demo.sh` case 2 uses:
 
 ```sh
 datalib-fsindex --db scans.doltlite_db --root ./before --branch before
@@ -144,34 +141,28 @@ standalone runs need no identifier. Pass `--source-id` when you want to
 choose one — the pipeline does, because there a source's identity comes
 from its config entry and outlives any particular path.
 
-`--branch` was broken until recently and is worth knowing about if you
-are reading older notes. `RawDb::checkout_branch` issued MySQL's
-`CALL DOLT_CHECKOUT(?)`, which doltlite's parser rejects
-(`near "CALL": syntax error`); the `-b` fallback used the same spelling,
-so the flag failed outright instead of degrading. doltlite exposes the
-dolt procedures as **functions** — `SELECT dolt_checkout(…)` — the same
-distinction `app_store.rs` documents for `dolt_commit`. Fixed in
-`ingest/db.rs`, with `tests/branch_scan.rs` covering it: every other
-caller in the tree passes `target_doltlite_branch: None`, which is how
-it stayed broken with a green suite.
+The checkout is fsindex's `RawDb::checkout_branch`
+(`etl/providers/fsindex/src/ingest/db.rs`), covered by fsindex's
+`tests/fsindex_tests/branch_scan.rs`. Three facts about doltlite it
+rests on:
 
-Two things that fix depends on, both of them non-obvious:
-
+- **The dolt procedures are functions.** `SELECT dolt_checkout(…)`;
+  MySQL's `CALL DOLT_CHECKOUT(?)` is a syntax error to doltlite's parser.
 - **Order matters in both directions.** A plain checkout of a missing
   branch errors `no such branch or table`; `-b` on an existing one
   errors `branch already exists`. Neither call is idempotent, so the
-  try-then-create order is load-bearing.
+  try-then-create order is load-bearing, and the active branch is read
+  back afterwards.
 - **The active branch is per-connection, not per-file.** A fresh
   connection starts on `main`. sqlx's stock pool would retire the one
   connection carrying the checkout after 30 minutes and silently
-  continue on `main`, so `doltlite_raw::open` now disables
-  `idle_timeout` and `max_lifetime` alongside its existing
-  `max_connections(1)`.
+  continue on `main`, so `doltlite_raw`'s pools disable `idle_timeout`
+  and `max_lifetime` beside `max_connections(1)`.
 
 ## How moves are detected
 
 `fsindex` hashes a directory over a canonical encoding of its immediate
-children (`hash.rs`), so a directory's blake3 covers its whole subtree.
+children (`etl/providers/fsindex/src/ingest/hash.rs`), so a directory's blake3 covers its whole subtree.
 Move a directory and its digest is unchanged — it simply appears at a
 different path.
 
@@ -194,7 +185,7 @@ directory, and the tree-hash guarantees the interiors match exactly.
 The page comes out identical; the rows simply never cross into Rust.
 
 Measured on two 500 000-file scans differing by one 50 000-file
-top-level rename (2026-09-11, warm):
+top-level rename (warm):
 
 | | rows read | wall |
 |---|---|---|
@@ -328,7 +319,8 @@ diff.
 Distinguishing `deleted` from `gone (copy remains)` is not free: it asks
 whether a digest exists *anywhere* on the other side, and neither table
 carries a secondary index on `blake3` (deliberately —
-`STORAGE_NOTES.md` §2 measures what one costs). A directory digest is
+[`STORAGE_NOTES.md`](../etl/providers/fsindex/src/ingest/STORAGE_NOTES.md)
+§2 measures what one costs). A directory digest is
 looked up in `dirs`, which is small enough not to matter; a file digest
 costs a whole-corpus scan of `files` per lookup chunk. It runs only for
 digests the move pairing could not already account for, and it says so
@@ -388,9 +380,7 @@ prove: that two independent files unify and diff across each other.
 Doltlite registers `dolt_diff_<table>` and `dolt_at_<table>` the first
 time a statement names them, so the connection that fetched both scans
 into the empty scratch store can read `files` straight away, and
-`store::unify` hands it back. `store_test.rs` pins that; on a doltlite
-that registered the modules at open, the fetching connection saw
-`no such table: dolt_diff_files` and needed a reopen.
+`store::unify` hands it back. `store_test.rs` pins that.
 
 ## What a subtree move costs, and why
 
@@ -411,9 +401,8 @@ was renamed and nothing else changed:
 | 50 000 | 100 000 | 23 |
 
 Linear in the files, and constant in the directories — which is why
-directories have their own table
-([#276](https://github.com/imbue-ai/datalib/issues/276)) and why this
-tool reads that table first (§"Directories first"). The alternative —
+directories have their own table and why this tool reads that table
+first (§"Directories first"). The alternative —
 an index on `kind` — would not have helped: doltlite pushes no
 predicate into `dolt_diff_<t>` or `dolt_at_<t>`, so a filter saves
 transfer and never the walk, and a secondary index on a TEXT-keyed
@@ -426,9 +415,7 @@ clustered order *is* depth-first tree order, so a subtree is contiguous
 — and it would make every path read a recursive walk. Worth knowing the
 number before anyone reopens that debate.
 
-## Status and limits
-
-Young, and the gaps are known:
+## Limits
 
 - **The page holds every node it renders.** Fine for the thousands;
   `--full-tree` on a multi-million-entry scan will produce an
@@ -442,13 +429,12 @@ Young, and the gaps are known:
   breadcrumb UUID that survives a move *and* an edit; this tool matches
   on content only, so a directory that moved and changed in the same
   pass reads as a delete plus an add. Pairing on `identity_uuid` first
-  would fix that, and is the obvious next step.
+  would fix that.
 - **Duplicate groups are whole-corpus.** The scan is one pass per
-  side and groups in RAM, which is the workflow `schema_raw.rs` intends
-  ("stream the full table into RAM once and index it there"), but it is
-  still O(corpus) and holds every above-threshold row in memory.
-- **Scans are compared as-is.** `scan_meta.options_fingerprint` exists
-  precisely so two scans taken under different `ignore` rules can be
-  told apart; the tool does not read it yet, so comparing two
-  differently-configured scans will report ignored files as added or
-  deleted.
+  side and groups in RAM, which is the workflow `STORAGE_NOTES.md`
+  intends, but it is still O(corpus) and holds every above-threshold
+  row in memory.
+- **Scans are compared as-is.** `scan_meta.options_fingerprint` tells
+  two scans taken under different `ignore` rules apart, but this tool
+  does not read it, so comparing two differently-configured scans
+  reports ignored files as added or deleted.

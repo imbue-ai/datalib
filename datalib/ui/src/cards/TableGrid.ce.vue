@@ -21,16 +21,16 @@ import type {
   SlickEventData,
   TreeToggleStateChange,
 } from "@slickgrid-universal/common";
-import type { ColumnSpec, Timeseries } from "@/api";
-import { calibrationMax } from "@/config/sparkline";
+import type { ColumnSpec } from "@/api";
 import { carryLayout, KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
+import { followFrame, isDarkTheme } from "@/grid/gridFrame";
 import { clockFaces, movedCells, type ClockFaces } from "@/grid/clockFaces";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
 import { treeColumnField, typedColumns } from "./typedColumns";
 import type { TableGridApi } from "./tableGridApi";
-import { fieldsOfType, sparkStepMs } from "./cellRenderers";
+import { fieldsOfType } from "./cellRenderers";
 
 const props = withDefaults(
   defineProps<{
@@ -129,7 +129,6 @@ function syncRows(rows: T[]) {
   if (!sameShape) {
     painted.clear();
     for (const r of rows) painted.set(keyOf(r), JSON.stringify(r));
-    ceilings = ceilingsOf(rows);
     const b = bundle;
     keepActiveOnRecord(b.slickGrid, dataView, () => {
       b.dataset = annotate(rows);
@@ -152,24 +151,7 @@ function syncRows(rows: T[]) {
     dataView.updateItem(key, { ...dataView.getItemById(key), ...r });
   }
   dataView.endUpdate();
-  const next = ceilingsOf(rows);
-  if (next !== ceilings) {
-    ceilings = next;
-    refreshCells(fieldsOfType(props.columns, "timeseries"));
-  }
 }
-
-/// Every sparkline in a column is drawn against the column's largest
-/// row, so a new largest moves every line in it: the column is
-/// repainted, not the rows.
-let ceilings = "";
-function ceilingsOf(rows: T[]): string {
-  const series = fieldsOfType(props.columns, "timeseries").map((f) =>
-    calibrationMax(rows.map((r) => (r[f] as Timeseries | undefined) ?? EMPTY_SERIES)),
-  );
-  return JSON.stringify(series);
-}
-const EMPTY_SERIES: Timeseries = { value: null, unit: "", samples: [] };
 
 /// The cell with an open editor, if any.
 function editingCell(): { row: number; cell: number } | null {
@@ -224,7 +206,6 @@ defineExpose({ api: () => api });
 
 function buildColumns(): Column<T>[] {
   const typed = typedColumns<T>(props.columns, {
-    rows: () => props.rows,
     tree: props.tree,
     windowSecs: props.windowSecs,
     actions: props.actions,
@@ -257,27 +238,15 @@ function entriesFor(args: { row?: number; cell?: number }): MenuEntry[] {
   return props.menu(anchor, targets, column);
 }
 
-function isDark(): boolean {
-  return document.documentElement.dataset.theme === "dark";
-}
-
 function options(): GridOption {
   const treeField = treeColumnField(props.columns);
   return {
     datasetIdPropertyName: props.rowKey,
     enableHtmlRendering: false,
     enableEmptyDataWarningMessage: false,
-    darkMode: isDark(),
-    enableAutoResize: true,
+    darkMode: isDarkTheme(),
     ...KEEP_COLUMN_WIDTHS,
-    autoResize: {
-      container: boxEl.value!.parentElement!,
-      calculateAvailableSizeBy: "container",
-      resizeDetection: "container",
-      autoHeight: false,
-      bottomPadding: 0,
-      minHeight: 120,
-    },
+    ...followFrame(boxEl.value!, 120),
     rowHeight: 34,
     enableTextSelectionOnCells: true,
     enableCellNavigation: true,
@@ -431,7 +400,6 @@ function createGrid() {
   }
   for (const r of props.rows) painted.set(keyOf(r), JSON.stringify(r));
   handed = props.rows.map(keyOf);
-  ceilings = ceilingsOf(props.rows);
   stampRowKeys(b.slickGrid, b.dataView, (item) => keyOf(item as T));
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
   b.slickGrid.onCellChange.subscribe(onCellChange);
@@ -443,22 +411,15 @@ function createGrid() {
   emit("ready", api);
 }
 
-// Some cells go stale with no new data ("5 minutes ago", a sliding
-// sparkline), so they need a clock rather than an event. It ticks every
-// second and repaints only the cells that would draw differently.
+// A "5 minutes ago" cell goes stale with no new data, so it needs a
+// clock rather than an event. It ticks every second and repaints only
+// the cells that would draw differently.
 let faces: ClockFaces = new Map();
 let clock: ReturnType<typeof setInterval> | null = null;
 function tickClock() {
   const timestamps = fieldsOfType(props.columns, "timestamp");
-  const timeseries = fieldsOfType(props.columns, "timeseries");
-  if (timestamps.length === 0 && timeseries.length === 0) return;
-  const cols = {
-    timestamps,
-    timeseries,
-    windowMs: props.windowSecs * 1000,
-    stepMs: sparkStepMs(props.windowSecs),
-  };
-  const next = clockFaces(props.rows, keyOf, cols, Date.now());
+  if (timestamps.length === 0) return;
+  const next = clockFaces(props.rows, keyOf, timestamps, Date.now());
   const moved = movedCells(faces, next);
   faces = next;
   repaintCells(moved);
@@ -468,7 +429,7 @@ let themeWatch: MutationObserver | null = null;
 onMounted(() => {
   createGrid();
   clock = setInterval(tickClock, 1000);
-  themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDark()));
+  themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDarkTheme()));
   themeWatch.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ["data-theme"],

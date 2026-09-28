@@ -1,67 +1,69 @@
 # GitHub Translate
 
-`github-translate` reads the event-store JSONL written by
-`github-ingest` and emits **one markdown document per pull request**,
-plus that document's `grid_rows` for the UI's flat-row view.
+The render step for a `github` source reads the raw store `github-ingest`
+writes and emits **one markdown document per pull request**, plus that
+document's `grid_rows`. The document and its rows are built by
+`datalib/backend/etl/forge-render-common/`, which GitLab shares; this
+crate reads the raw tables into it (`src/render/parse.rs`), mints the ids
+(`src/render/ids.rs`) and sets the GitHub `ForgeProfile`
+(`src/render/mod.rs`).
 
 ```
-<root>/<stanza>/render_markdown/<owner>/<repo>/pr-<num>/
-    index.md                # the unified PR doc
-<root>/<stanza>/render_markdown/indexed_markdown.doltlite_db
+<root>/<source_id>/render_markdown/<owner>/<repo>/pr-<num>/
+    index.md                # the PR's document
+<root>/<source_id>/render_markdown/indexed_markdown.doltlite_db
                             # its rows: one for the PR + one per comment
 ```
 
+A repo with no owner segment is filed under `unknown/<repo>/`.
+
 ## Markdown layout
 
-1. **Front matter** — provider, repo, pr_number, title, state, author,
-   head/base sha+ref, created/updated/merged timestamps.
-2. **Title** — `# {title} (#{num})` + a "View on GitHub" link + a one-line
+1. **Front matter** — `provider`, `repo`, `pr_number`, `title`, `state`,
+   `author`, `created_at`, `updated_at`, `merged_at`, `head_sha`,
+   `base_sha`, `head_ref`, `base_ref`.
+2. **Title** — `{title} (#{num})` as the page title, with a ↗ link to
+   the PR, then a one-line
    `*{state}* — @{author} — \`{head_ref}\` → \`{base_ref}\``.
-3. **Description** — `pull_request.body` as-is, or `*(no description)*`.
-4. **Reviews** — one block per `pr_review`, oldest first. Header carries
-   the reviewer, the review state (`COMMENTED`, `APPROVED`, …), and a
-   `[link]` permalink to `#pullrequestreview-N`.
-5. **General discussion** — `issue_comments`, oldest first. Permalinks
-   to `#issuecomment-N`.
-6. **Inline comments** — `pr_review_comments` grouped by `(path, line)`,
-   then chronologically within each thread. Replies inherit their
-   parent's anchor (so a multi-message thread on `foo.rs:42` stays
-   together even if the diff has moved). Each comment carries a `[link]`
-   permalink to `#discussion_rN`.
+3. **Description** — the PR body as-is, or `*(no description)*`.
+4. **Reviews** — one block per review, oldest first. The header carries
+   the reviewer, the review state (`COMMENTED`, `APPROVED`, …) and a
+   `[link]` to `#pullrequestreview-N`. A review with no body is its
+   header alone.
+5. **General discussion** — issue comments, oldest first, linking to
+   `#issuecomment-N`.
+6. **Inline comments** — review comments grouped under a
+   `` ### `path:line` `` heading, chronological within each thread. A
+   reply sits under its thread's first comment's anchor, so a thread
+   stays together even if the diff has moved. Each links to
+   `#discussion_rN`.
 
-Each comment block is blockquoted, with the header line spelling out
-`**@user** *(state)* *(reply)* @ <ts> — [link](...)`.
+An empty section says so (`*(no reviews)*` and the like). Each comment
+is a header line, `**@user** *(state)* *(reply)* @ <ts> — [link](...)`,
+over its body as a blockquote.
 
 ## Rows
 
-The same `RenderedMarkdown { markdown_uuid, rows, .. }` shape every
-provider emits:
+- The PR's own row comes first (`kind = "GitHub PR"`, `is_document`),
+  its uuid minted by `datalib_id` from (repo, PR number) under the
+  source and stamped with the PR's `created_at`.
+- Then one row per comment, in the document's order (Reviews → General
+  → Inline by `(path, line)`), with `message_index` counting from 0.
 
-- `markdown_uuid` — `datalib_id` over `{repo}#{number}` under the
-  configured source, stamped with the PR's `created_at`. Re-renders
-  that didn't change content produce an identical row set, so the
-  store's commit carries no diff for them.
-- `rows[0]` — the PR row itself (kind = "GitHub PR").
-- `rows[1..]` — one row per comment, in the same order as the rendered
-  doc (Reviews → General → Inline-by-`(path, line)`). `message_index`
-  is the row index *within the doc*; the UI uses
-  `data-msg-index="N"` to scroll the unified doc to the right anchor.
-
-All rows share the same `qmd_path` (the PR's `index.md`),
-`conversation_uuid`, and `document_uuid` (all == the PR UUID).
-`external_id` is the GitHub PR number for the head row and the comment
-or review id for the rest.
+Every row shares the PR's `qmd_path`, `conversation_uuid` and
+`markdown_uuid`. `upstream_id` is (repo, PR number) for the PR's row and
+(repo, comment or review id) for the rest. A row that will not validate
+is dropped and recorded as a problem rather than failing the render.
 
 ## Run it
 
-The translate step is an in-process library (the `render_and_index_md`
-module, called from `datalib-sync`); there is no standalone
-`github-translate` binary and no Bazel target for it. Run a sync to
-exercise it, and rendered docs land under
-`/tmp/github-mirror/<stanza>/render_markdown/...`.
-
-To exercise the renderer in isolation, run its tests:
+Render runs as a source's `render_markdown` step (`datalib-step`); there
+is no standalone binary. To exercise it without a sync:
 
 ```sh
-bazelisk test //datalib/backend/etl/providers/github:github_unittests
+bazelisk test //datalib/backend/etl/providers/github_render:github_render_unittests \
+    //datalib/backend/etl/providers/github:github_tests
 ```
+
+`github_tests` holds the incremental-render and playback round-trip
+tests.

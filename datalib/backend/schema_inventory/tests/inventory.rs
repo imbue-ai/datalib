@@ -7,11 +7,8 @@
 //! this snapshot, so the change arrives in review as an explicit diff
 //! instead of as a silent divergence someone notices months later.
 //!
-//! It is also the one current answer to "what tables are there?", which
-//! is what `docs/dev/grid_rows.md` should be checked against: that file
-//! spent an unknown stretch naming `openai_conversations`,
-//! `claude_conversations` and `slack_workspaces`, none of which have
-//! ever existed.
+//! It is also the one current answer to "what tables are there?": where
+//! prose under `docs/` names a table, this golden is authoritative.
 //!
 //! Regenerate with:
 //!   bazel run //datalib/backend/schema_inventory:inventory.update

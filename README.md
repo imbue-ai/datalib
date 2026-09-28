@@ -23,7 +23,7 @@ Three ways in, from least to most hands-on:
 1. **The desktop app** (macOS, Apple Silicon). Download the `.dmg` from
    the [latest release](https://github.com/imbue-ai/datalib/releases/latest).
    It asks which folder to keep your data in, then opens the app; you
-   add your first source from the **Manage** screen.
+   add your first source from the **Data sources** card.
 2. **The command-line tools** (macOS or Linux). One `curl | sh` installs
    them. The [**first-time user guide**](docs/user/first_time_user.md)
    walks through install, credentials, the config file, and your first
@@ -44,9 +44,10 @@ look before you hand it anything of yours. Building from source is the
 
 datalib is Plain Old Software. Running a sync invokes no cloud AI model and no
 agent, and nothing leaves your machine: the only network traffic is
-datalib reading from the services you configured, plus a one-time
-download of the search models the first time the semantic index is
-built.
+datalib reading from the services you configured, plus one-time
+downloads the first time they are needed: the search models, and (for
+the command-line install) the Node runtime that search and latchkey run
+on.
 
 What it produces, though, is a very valuable pile of private data in one
 place — and most of it was written by other people. Three things follow:
@@ -126,7 +127,8 @@ A source's `type` says *what* is being mirrored (`claude`, `whatsapp`,
 …). Its ingest step says *how*, with one table named for the method:
 `[steps.params.api]` reads the product's own API, `[steps.params.export]`
 an unpacked export, `[steps.params.backup]` a phone backup,
-`[steps.params.fswalk]` a folder on disk. So a `claude` source pulled
+`[steps.params.fswalk]` a folder on disk, and so on (`jmap`, `mbox`,
+`caldav`, …). So a `claude` source pulled
 from the API and one read from an export share a type and differ only
 in that table. Every shape, fully commented, is in
 [`all_sources.toml`](docs/user/config_examples/all_sources.toml).
@@ -145,10 +147,10 @@ executable that speaks a small NDJSON protocol can be a step — see
 [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md).
 
 **The upper layer is the batteries.** For each source above, an `ingest`
-step that brings the raw data in and a `render_markdown` step that turns
-it into readable markdown; then two shared index steps that fan in over
+step that brings the raw data in and, for most, a `render_markdown` step
+that turns it into readable markdown; then the index steps over
 everything rendered — a SQL table of every message and document
-(`grid_rows`) and a semantic search index (built with
+(`grid_rows`) and a keyword and semantic search index (built with
 [qmd](https://github.com/tobi/qmd)). A local web UI, also shipped as a
 desktop app, searches and browses the result. The batteries are Rust;
 the UI is Vue, wrapped in Tauri for the desktop app.
@@ -171,9 +173,9 @@ Two mechanisms carry it here:
 - **Every store keeps its history.** A raw store's commits are the
   syncs; a render store's commits are the renders. `datalib-doltlite`
   reads either at any commit or diffs any two (`dolt_log`, `dolt_diff`),
-  and the Manage screen shows a source's commit history with what each
-  commit did to each table.
-- **A comparison is a source of its own.** "Compare two syncs…" on a
+  and a source's commit history in the app shows what each commit did
+  to each table.
+- **A comparison is a source of its own.** "Compare two versions…" on a
   source makes a *diff group*: the source's own renderer run at both
   commits and subtracted, written as an ordinary source. Its documents
   carry the changes marked — added and removed sections on green and
@@ -208,7 +210,7 @@ back into other apps.
 
 A mirror you can't leave is just another silo, so the exits are plain:
 
-- **Markdown** — `<name>/render_markdown/` is ordinary `.md` files, one
+- **Markdown** — `<source id>/render_markdown/` is ordinary `.md` files, one
   per conversation or document. Nothing to export.
 - **SQL** — `datalib-doltlite` ships with the tools and is a `sqlite3`
   shell that understands the versioned format. One pipe writes a plain

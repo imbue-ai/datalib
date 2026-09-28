@@ -157,15 +157,25 @@
   width: 100%;
   height: 100%;
 }
+/* The present value and its change over the window, over the line. The
+   same in a Manage cell and in the status bar's data-root total. */
 .tg-plot-label {
   position: relative;
-  display: block;
-  text-align: center;
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
   line-height: 18px;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--datalib-fg);
   text-shadow: 0 0 3px var(--datalib-bg);
+}
+/* In the colour of the line that shows it. Not green: growth is not
+   good news and shrinkage is not bad — the sign is the whole message. */
+.tg-plot-delta {
+  color: var(--datalib-accent);
 }
 /* `vector-effect: non-scaling-stroke` is load-bearing: the svg is
    stretched from its 120-unit box to the column's width. */
@@ -350,11 +360,21 @@
 }
 
 /* ── the right-click menu's own entries (see grid/menu.ts) ─────── */
+/* Closer to a native menu than the theme's roomy one: a row a little
+   taller than the text, in the grid's own size. */
+.slick-context-menu {
+  --slick-menu-padding: 4px 0;
+  --slick-menu-item-height: 22px;
+  --slick-menu-line-height: 20px;
+  --slick-menu-item-padding: 0 12px;
+  --slick-menu-item-font-size: 13px;
+  --slick-menu-item-border-radius: 3px;
+}
 /* The line is the separator element's own: the slot is a disabled
    item, and the theme forces a disabled item's border transparent. */
 .slick-menu-item:has(.menu-slot-separator) {
   padding: 0;
-  margin: 4px 0;
+  margin: 3px 0;
   min-height: 0;
   height: 0;
   overflow: visible;

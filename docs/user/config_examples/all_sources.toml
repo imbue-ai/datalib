@@ -940,8 +940,8 @@ device_udid = "fedcba9876543210fedcba9876543210"
 # `plots/`, iframed from the page; they load Plotly from cdn.plot.ly, so
 # viewing them needs network access (the data itself is inlined).
 #
-# Because there is one page, incrementality is just the raw store's HEAD:
-# if the download step appended nothing, the render is a no-op. No knobs.
+# The page names the raw tables it reads as a whole; if none of them
+# changed since the last render, the render is a no-op. No knobs.
 [[steps]]
 group = "yolink"
 function = "render_markdown"

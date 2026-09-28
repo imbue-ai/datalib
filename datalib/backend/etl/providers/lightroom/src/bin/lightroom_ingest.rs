@@ -6,12 +6,9 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use datalib_etl::doltlite_raw as dr;
-use datalib_etl::progress::{Progress, TracingSink};
-use datalib_etl_lightroom::ingest::{self, mirror, FetchOptions, MirrorOptions};
+use datalib_etl_lightroom::ingest::{self, MirrorOptions};
 use datalib_etl_lightroom_config::XMP_COLUMN_PATTERNS;
 use datalib_obs::{init as init_obs, ObsArgs};
-use tracing::info;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -96,32 +93,5 @@ async fn main() -> Result<()> {
         sidecar_tables: Vec::new(),
     };
 
-    let pool = mirror::open_mirror(&args.db).await?;
-    let stats = ingest::fetch(FetchOptions {
-        mirror_path: args.db.clone(),
-        pool: Some(pool.clone()),
-        options,
-        progress: Progress::new(std::sync::Arc::new(TracingSink::new("lightroom"))),
-    })
-    .await?;
-
-    let summary = stats.summary();
-    let commit = dr::commit_run(&pool, &format!("lightroom: {summary}")).await?;
-    pool.close().await;
-
-    match &commit {
-        Some(hash) => info!(
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            commit = %hash,
-            "{summary}"
-        ),
-        // The whole point of the design: an unchanged catalog rewrites
-        // every row and still produces no commit, because every row
-        // hashes to the chunk that is already at HEAD.
-        None => info!(
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            "{summary} (no changes since last run)"
-        ),
-    }
-    Ok(())
+    ingest::fetch_and_commit(&args.db, options, "lightroom", started).await
 }

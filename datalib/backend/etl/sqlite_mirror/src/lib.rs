@@ -8,8 +8,10 @@
 //! decrypts first and keeps a media registry beside the mirror
 //! (`MirrorOptions::sidecar_tables`).
 
+pub mod ingest;
 pub mod mirror;
 pub mod plan;
 
+pub use ingest::{fetch, fetch_and_commit, FetchOptions};
 pub use mirror::{open_mirror, open_sqlite, run, snapshot, MirrorOptions, MirrorStats, Snapshot};
 pub use plan::{KeyOrigin, TableKind};

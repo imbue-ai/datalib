@@ -22,7 +22,9 @@ async function openManager(page: Page) {
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
-test("a row's menu offers every action, grouped, wherever the pointer is", async ({ page }) => {
+test("a row's menu offers the actions for its kind, grouped, wherever the pointer is", async ({
+  page,
+}) => {
   await openManager(page);
   const row = groupRow(page, "unified_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
@@ -35,21 +37,18 @@ test("a row's menu offers every action, grouped, wherever the pointer is", async
     "Edit settings…",
     "Rename…",
     "Show commit history",
-    "Compare two versions…",
     "Show step log",
     "Copy path",
     "Copy id",
-    "Reset (preserve attachments)…",
-    "Reset (drop attachments)…",
     "Remove from config, with everything under it",
   ]);
-  // The index rebuilds from the sources, so it is not reset by hand.
-  await expect(menuEntry(page, "Reset (preserve attachments)…")).toHaveClass(MENU_DISABLED);
+  // Compare and Reset are for a source: the index mirrors nothing to
+  // compare, and it rebuilds from the sources rather than being reset.
   await page.keyboard.press("Escape");
 
   // The Name cell offers the same menu as any other.
   await row.locator('[col-id="name"]').click({ button: "right" });
-  await expect(menuEntries(page)).toHaveCount(13);
+  await expect(menuEntries(page)).toHaveCount(10);
   await page.keyboard.press("Escape");
 });
 
@@ -67,7 +66,9 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
 
   await qmd.locator('[col-id="status"]').click({ button: "right" });
   await expect(menuEntries(page).last()).toHaveText("Remove 2 entries from config");
-  // The one-row actions say so, and a reason names the row it came from.
+  // The one-row actions are left out, and an entry only some rows take
+  // is disabled with a reason naming the row it came from.
+  await expect(menuEntry(page, "Show step log")).toHaveCount(0);
   const history = menuEntry(page, "Show commit history");
   await expect(history).toHaveClass(MENU_DISABLED);
   await expect(history.locator(".slick-menu-content")).toHaveAttribute(

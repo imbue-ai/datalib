@@ -208,19 +208,21 @@ See datalib/backend/etl/providers/notion/INGEST.md for details."
             "\
 Email source: JMAP (Fastmail / generic) auth missing or expired.
 
-  1. Create an API token at https://app.fastmail.com/settings/security/tokens
-     with the 'Read-only access to mail' scope; copy it to the clipboard.
-  2. Register the two host services and attach the token to both
-     (Fastmail serves blob bytes from a separate host):
-       {LK} services register fastmail \\
-           --base-api-url=\"https://api.fastmail.com/\"
-       {LK} services register fastmail-content \\
-           --base-api-url=\"https://www.fastmailusercontent.com/\"
-       {LK} auth set fastmail         -H \"Authorization: Bearer $(pbpaste)\"
-       {LK} auth set fastmail-content -H \"Authorization: Bearer $(pbpaste)\"
-  3. Smoke-test:
-       {LK} curl -sSL https://api.fastmail.com/.well-known/jmap \\
+Fastmail is a built-in latchkey service, covering both its API host
+and the host it serves blob bytes from:
+
+  1. Log in through the browser:
+       {LK} auth browser fastmail
+     Or, for a read-only credential, create an API token at
+     https://app.fastmail.com/settings/security/tokens with the
+     'Read-only access to mail' scope, copy it, and store it:
+       {LK} auth set fastmail -H \"Authorization: Bearer $(pbpaste)\"
+  2. Smoke-test:
+       {LK} curl -sS https://api.fastmail.com/jmap/session \\
            | jq .primaryAccounts
+
+Another JMAP server needs its hosts registered as a latchkey service
+first; see datalib/backend/etl/providers/email/INGEST.md.
 
 For a **Gmail** account, prefer the REST API mode — it needs no service
 registration at all, because latchkey has a built-in `google-gmail`

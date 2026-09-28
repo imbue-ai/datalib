@@ -1,18 +1,19 @@
 # Watching an e2e run
 
 `//datalib/ui:e2e_test` records itself. Every run writes a **Playwright
-HTML report** — the modern form of a "screenshot movie": a per-test
-video, plus a *trace*, which is a scrubbable timeline carrying a full
+HTML report** (`reporter` in `datalib/ui/playwright.config.ts`). For a
+recorded test it holds a *trace* — a scrubbable timeline carrying a full
 DOM snapshot before and after every action, along with the network log,
-the console, and the source line each action came from.
+the console, and the source line each action came from — and, where
+the spec asks for one, a video.
 
-`onboarding-pdf.spec.ts` is recorded **always**, passing or failing
-(`test.use({ video: "on", trace: "on" })` at the top of that file). It
-is the widest UI path the suite has — first run, the wizard twice, the
-Pipeline table, real syncs, the Explore grid — so it doubles as a way to
-*see* what onboarding looks like without building the app. Every other
-spec keeps `retain-on-failure`, so its artifacts appear only when it
-fails.
+`onboarding-pdf.spec.ts` is recorded **always**, video and trace,
+passing or failing (`test.use({ video: "on", trace: "on" })`). It is the
+widest UI path the suite has — first run, the wizard twice, the sources
+table, real syncs, the grid, search — so it doubles as a way to *see*
+what onboarding looks like without building the app. Every other spec
+takes the config's `trace: "retain-on-failure"` and no video, so its
+trace appears only when it fails.
 
 ## Where it lands
 
@@ -25,10 +26,11 @@ bazel-testlogs/datalib/ui/e2e_test/test.outputs/outputs.zip
 
 Outside bazel (`pnpm exec playwright test`) it is `datalib/ui/playwright-report/`.
 
-On CI, a red `bazel test //...` job uploads that zip as the
-`e2e-playwright-report` artifact (kept a week); a green one has no
-report to upload, since every spec but the onboarding one records only
-on failure. Green or red, the job uploads the suite's console log as
+On CI the suite runs in the `bazel test //...` gate
+(`.github/workflows/test.yml`). A red run uploads that zip as the
+`e2e-playwright-report` artifact (kept a week); a green one uploads no
+report. The zip also reaches the BuildBuddy invocation page under
+Artifacts (`--zip_undeclared_test_outputs` in `.bazelrc`). Green or red, the job uploads the suite's console log as
 the `e2e-test-log` artifact (two weeks): Playwright's list of every
 test with its duration, and the specs' `[e2e]` lines. That is where to
 look when the question is what the suite spends its minutes on, not
@@ -62,33 +64,17 @@ A single trace, without the report around it:
 npx playwright show-trace /tmp/e2e/playwright-report/data/<hash>.zip
 ```
 
-## From CI
+## Why the suite has no CI job of its own
 
-Nothing extra is needed, but nothing arrives yet either: `bazel test
-//...` still excludes `//datalib/ui:e2e_test` (see the FIXME in
-`.github/workflows/test.yml`), so no CI job runs this suite today.
-
-When that exclusion comes off, the report rides along for free — the
-gate job builds and runs `e2e_test` like any other target, and
-`--zip_undeclared_test_outputs` puts `outputs.zip` on the BuildBuddy
-invocation page under Artifacts. If a GitHub-Actions artifact is wanted
-on top of that, it is an `actions/upload-artifact` step on the existing
-job pointing at
-`$(bazel info bazel-testlogs)/datalib/ui/e2e_test/test.outputs/outputs.zip`.
-
-A dedicated job to run the suite early was tried and removed. It is not
-worth its own bazel invocation: a second invocation only shares the
-remote cache if its configuration matches the gate's exactly (`-c opt
---config=release --config=ci`, the qmd mount pair), and one that does
-match is redundant with the gate the
-moment e2e rejoins it. The version that did not match rebuilt 2664
-actions with zero cache hits, took 999s against the gate's 143s, and
-then failed building `boring-sys2` for want of `LIBCLANG_PATH`.
+Don't give it one. A second bazel invocation shares the gate's remote
+cache only if its configuration matches the gate's exactly (`-c opt --config=release --config=ci`, the qmd mount
+pair), and one that matches is redundant with the gate. The attempt
+that did not match rebuilt 2664 actions with no cache hits and took
+999s against the gate's 143s.
 
 ## Cost
 
 About 28 MB per run: ~13 MB of trace per recorded test and ~0.4 MB of
 video. The report embeds a copy of everything it references, so it is
-the *only* thing published — `outputDir` is pointed at the test's
-scratch directory, because shipping both put the same trace in the zip
-twice.
+the *only* thing published — `outputDir` points at the test's scratch
+directory (`TEST_TMPDIR`), so the zip does not carry each trace twice.
