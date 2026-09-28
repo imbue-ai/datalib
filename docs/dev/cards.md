@@ -287,6 +287,13 @@ never reaches for the layout directly. The division of labour:
   card. The layout also decides what `openCard` placement means, what
   `close` takes with it, and whether `setState` reaches the URL.
 
+**A card, not a modal**, for anything a person reads, keeps open or
+clicks through from — a log, a commit history, a table. It sits in the
+layout beside what opened it, lives in the URL, and survives Back. A
+modal dialog is for a question that has to be answered before anything
+else happens: a confirm, a short form that is submitted or cancelled
+(the source wizard, feedback).
+
 Because the contract is the same everywhere, the same card source runs
 unchanged in any layout, and a layout can be added or changed without
 touching cards. Cards are **not** carried across when the user toggles
@@ -384,10 +391,11 @@ programs against:
   `path`). See "Typed tables" below.
 - `sourcesView()` — the Manage screen as a card: the tree of what
   `config.toml` declares over `GET /api/manage/rows`, drawn by
-  `TableGrid`, with the row actions and the panels they open — the
-  wizard, a group's commit history — teleported to `<body>`. Browse
-  opens a `gridView(...)` beside it through `host.openCards`, and a
-  step's log or the server's a `logView(...)` the same way. The
+  `TableGrid`, with the row actions and the dialogs they open — the
+  wizard, a removal's confirm — teleported to `<body>`. Browse
+  opens a `gridView(...)` beside it through `host.openCards`, a
+  step's log or the server's a `logView(...)` the same way, and a
+  row's commit history a `historyView(...)`. The
   `/data_sources` route is this card at 1.6× width
   with `configView()` beside it (`MANAGE_STACK` in `router/index.ts`).
 - `logView({ run, step, launch, q, jumpToEnd })` — the run log
@@ -398,6 +406,15 @@ programs against:
   a step or for the server. Selecting a line (a click, or the arrow
   keys) opens `logLineView` via `host.openCards`, the way the grid
   opens a document.
+- `historyView({ trees, title, source, compare })` — the commit
+  history of every doltlite store under some trees
+  (`cards/HistoryCard.ce.vue`, over `/api/pipeline/history`): store,
+  commit and table as a tree, re-read whenever the runner's record
+  moves; a commit's run opens its `logView`. With `source`, two
+  commits of that source's download store can be selected and
+  compared, which adds a diff group to the config and syncs it;
+  `compare: true` opens with the newest two set up. The pairing rules
+  are `config/compareCommits.ts`.
 - `logLineView(seq)` — one log line in full (`cards/LogLineCard.ce.vue`,
   over `/api/log/{seq}`): the message, the fields as a tree
   (`cards/JsonTree.ce.vue`), the source link at the process's commit,

@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
-import type { Column } from "@slickgrid-universal/common";
-import { type Action, type ManageResponse, type ManageRow, type ColumnSpec } from "@/api";
+import { type Action, type ManageResponse, type ManageRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import {
   listGroups,
   listSteps,
   appendSource,
-  buildDiffSource,
   removeSteps,
   describeGroup,
   renameGroup,
@@ -37,18 +35,17 @@ import { ingestLabel } from "@/config/ingestMethods";
 import { copyToClipboard } from "@/clipboard";
 import { browseColumns, browseName, browseQuery } from "@/config/browsePresets";
 import { logSource } from "./libs/logView";
+import { historySource } from "./libs/historyView";
 import { pushToast } from "@/toasts";
-import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import {
   RAW_STORE_BROWSE_LABEL,
+  notComparableReason,
   rowMenu,
   type MenuAction,
   type MenuTarget,
 } from "@/config/rowMenu";
-import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { changed, subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
-import CompareDialog from "@/components/CompareDialog.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 
 const props = defineProps<{ ctx: CardCtx }>();
@@ -67,7 +64,6 @@ const {
   fetchManageRows,
   fetchRequests,
   fetchRuns,
-  fetchTreeHistory,
   openRequest,
   stopRequest,
   turnOffStep,
@@ -116,11 +112,12 @@ search; on a group row, the log of the step its status came from.
 <b>Activity</b> is what a running step has reported: how much is queued ahead of
 it, what it has counted so far, and how many warnings and errors it has logged.</p>
 <p><b>Browse</b>, <b>Sync</b> and the switch are on the row: they are what a row
-does often. <b>Right-click a row</b> for everything it can do — browse, edit, reveal,
-remove, the log, a rename (on the Name cell), <b>Reset</b>, and its
-<b>commit history</b>: every store under it
-is versioned, and the panel lists each commit — when, what it said, what it did to
-each table, and the run that made it — newest first, updating while a sync runs.
+does often. <b>Right-click a row</b> for everything it can do — sync, edit, rename,
+the log, reveal, <b>Reset</b>, remove — and its <b>commit history</b>: every store
+under it is versioned, and the history opens beside this card with each commit — when,
+what it said, what it did to each table, and the run that made it — newest first,
+updating while a sync runs. On a source, <b>Compare two versions</b> opens it ready to
+compare the last two syncs.
 Right-click inside a selection and the menu acts on all of it; outside one, on that
 row alone, without changing the selection. An entry that doesn’t apply stays, greyed,
 and says why on hover.</p>
@@ -538,78 +535,21 @@ function onCellEdit(row: Row, field: string, value: string) {
   if (field === "name" && row.kind === "group") void renameRow(row, value);
 }
 
-// ── A tree's commit history. Every doltlite store keeps its own log —
-// one commit per sync, checkpoint or render pass — and this is the first
-// place the app shows it: one row per commit, with what it did to each
-// table. Read on demand, and re-read while open whenever the runner's
-// record moves, which is the same push that keeps the size column live.
-
-/// The rows whose history is open — several, when several were
-/// selected — or empty when the panel is closed.
-const historyFor = ref<Row[]>([]);
-const historyLines = ref<HistoryRow[]>([]);
-const historyTruncated = ref<string[]>([]);
-const historyBusy = ref(false);
-const historyError = ref<string | null>(null);
-const loadHistory = freshest<{ rows: HistoryRow[]; truncated: string[] } | Error>((v) => {
-  historyBusy.value = false;
-  if (v instanceof Error) historyError.value = v.message;
-  else {
-    historyError.value = null;
-    historyLines.value = v.rows;
-    historyTruncated.value = v.truncated;
-  }
-});
-
-async function fetchHistoryRows(trees: string[]) {
-  try {
-    const hs = await Promise.all(trees.map((t) => fetchTreeHistory(t)));
-    return { rows: historyRows(hs), truncated: truncatedStores(hs) };
-  } catch (e) {
-    return e as Error;
-  }
-}
-
-function openHistory(targets: Row[]) {
-  historyFor.value = targets;
-  historyLines.value = [];
-  historyTruncated.value = [];
-  historyError.value = null;
-  historyBusy.value = true;
-  loadHistory.invalidate();
-  void loadHistory(() => fetchHistoryRows(targets.map((r) => r.id)));
-}
-
-/// While the panel is open, a step that just committed shows up without
-/// a reopen. Cheap enough to do on every `dag` frame: the walk is
-/// bounded and the answer is small.
-function refreshHistory() {
-  const trees = historyFor.value.map((r) => r.id);
-  if (trees.length === 0) return;
-  void loadHistory(() => fetchHistoryRows(trees));
-}
-
-/// What the panel is titled: one row's name, or the names joined.
-const historyTitle = computed(() => historyFor.value.map((r) => r.name.label).join(", "));
-
-/// Where the open rows' history is kept, for the panel's subtitle.
-const historyStoreNote = computed(() => {
-  const rows = historyFor.value;
-  if (rows.length !== 1) return `every store under ${rows.map((r) => `${r.id}/`).join(", ")}`;
-  const [row] = rows;
-  return row.kind === "group" ? `every store under ${row.id}/` : `the stores in ${row.id}/`;
-});
-
-/// A commit names its run, and that run's log is the "how" behind the
-/// commit's "what" — from the run store, so a run started from a
-/// terminal has one too. Filtered to the step that writes the store,
-/// as the Status double-click does.
-function openRunLog(row: HistoryRow) {
-  if (!row.run) return;
-  const step = rows.value.find((r) => r.kind !== "group" && r.id === row.stepId);
-  if (!step) return;
-  historyFor.value = [];
-  void openStepLog(step, row.run);
+/// Rows' commit history, as a card beside this one. On one source it is
+/// also where two of its versions are compared; `compare` opens it with
+/// the newest two set up.
+function openHistory(targets: Row[], compare: boolean) {
+  const [first] = targets;
+  const source =
+    targets.length === 1 && notComparableReason(menuTarget(first)) === null ? first.id : null;
+  props.ctx.host.openCards(
+    historySource({
+      trees: targets.map((r) => r.id),
+      title: targets.map((r) => r.name.label).join(", "),
+      source,
+      compare: compare && source !== null,
+    }),
+  );
 }
 
 // ── The right-click menu. Every action a row offers, in one place,
@@ -678,7 +618,7 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
       if (first.editGroup) await openEdit(first.editGroup);
       return;
     case "compare":
-      compareFor.value = { id: first.id, name: first.name.label };
+      openHistory([first], true);
       return;
     case "rename":
       gridApi?.startEditing(anchor, "name");
@@ -703,7 +643,7 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
       return;
     }
     case "history":
-      openHistory(targets);
+      openHistory(targets, false);
       return;
     case "reveal":
       for (const t of targets) await reveal(t.key);
@@ -730,148 +670,6 @@ async function renameRow(row: Row, name: string) {
     next,
     name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`,
   );
-}
-
-/// The history panel's columns: what each is, by type, and how the
-/// ones a type cannot draw alone are drawn.
-const historyColumns: ColumnSpec[] = [
-  // The tree column: a store, the commits under it, the tables under
-  // each commit. The label is the store's file name, the commit's
-  // message, or the table's name; the level says which it is.
-  { field: "label", header: "Commit", type: "text", default_visible: true, editable: false },
-  // Relative on top, exact underneath — stacked like the size cell,
-  // because a sync commits several times inside one minute and ten
-  // "18 hours ago"s in a row say nothing about their order.
-  { field: "date", header: "When", type: "timestamp", default_visible: true, editable: false },
-  {
-    field: "rows",
-    header: "Rows",
-    type: "count",
-    description: "Rows after this commit — across the data tables, or in the one table",
-    default_visible: true,
-    editable: false,
-  },
-  { field: "added", header: "Added", type: "count", default_visible: true, editable: false },
-  { field: "deleted", header: "Deleted", type: "count", default_visible: true, editable: false },
-  { field: "modified", header: "Modified", type: "count", default_visible: true, editable: false },
-  // The run that made the commit, when the message names one, as the
-  // way to its log: the commit is what the run did, the log is how.
-  { field: "run", header: "Run", type: "text", default_visible: true, editable: false },
-  { field: "hash", header: "Hash", type: "text", default_visible: true, editable: false },
-];
-
-const historyOverrides: Record<string, Partial<Column<HistoryRow>>> = {
-  label: {
-    width: 360,
-    params: {
-      innerFormatter: (_r: number, _c: number, _v: unknown, _col: unknown, row: HistoryRow) => {
-        const wrap = document.createElement("span");
-        wrap.className = `m2-history-label m2-history-${row?.level ?? "commit"}`;
-        wrap.textContent = row?.label ?? "";
-        if (row?.level === "store") {
-          const dir = document.createElement("span");
-          dir.className = "m2-cell-dir";
-          dir.textContent = row.storePath.slice(0, row.storePath.lastIndexOf("/"));
-          wrap.appendChild(dir);
-        }
-        return wrap;
-      },
-    },
-  },
-  date: {
-    width: 170,
-    formatter: (_r, _c, value) => {
-      const wrap = document.createElement("span");
-      if (!value) return wrap;
-      wrap.className = "m2-history-when";
-      const rel = document.createElement("span");
-      rel.textContent = formatRelative(String(value), Date.now());
-      const abs = document.createElement("span");
-      abs.className = "m2-cell-dir";
-      abs.textContent = formatStamp(String(value));
-      wrap.append(rel, abs);
-      return wrap;
-    },
-  },
-  rows: {
-    width: 100,
-    formatter: (_r, _c, value) => formatCount(value as number | null),
-  },
-  added: {
-    width: 90,
-    formatter: (_r, _c, value) => formatDelta(value as number | null, "+"),
-  },
-  deleted: {
-    width: 90,
-    formatter: (_r, _c, value) => formatDelta(value as number | null, "−"),
-  },
-  modified: {
-    width: 96,
-    formatter: (_r, _c, value) => formatDelta(value as number | null, "~"),
-  },
-  run: {
-    width: 120,
-    formatter: (_r, _c, _v, _col, row) => {
-      const wrap = document.createElement("span");
-      if (!row?.run) return wrap;
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "m2-history-run";
-      btn.textContent = row.run.slice(0, 8);
-      btn.title = `Show the log of run ${row.run}`;
-      btn.addEventListener("click", () => void openRunLog(row));
-      wrap.appendChild(btn);
-      return wrap;
-    },
-  },
-  hash: {
-    width: 130,
-    formatter: (_r, _c, value, _col, row) => {
-      const wrap = document.createElement("span");
-      if (row?.level !== "commit" || !value) return { html: wrap, toolTip: "" };
-      const hash = String(value);
-      wrap.className = "m2-history-hash";
-      wrap.textContent = hash.slice(0, 10);
-      wrap.appendChild(copyIdButton(hash, "Copy the commit hash"));
-      return { html: wrap, toolTip: hash };
-    },
-  },
-};
-
-/// The 🆔 button the chat views put beside every uuid, for a commit
-/// hash: the full 40 characters, where the cell shows ten.
-function copyIdButton(id: string, label: string): HTMLButtonElement {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "m2-copy-id";
-  btn.title = `${label} (${id})`;
-  btn.setAttribute("aria-label", label);
-  btn.textContent = "🆔";
-  btn.addEventListener("click", async (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (await copyToClipboard(id)) {
-      btn.textContent = "✓";
-      btn.classList.add("copied");
-    } else {
-      btn.classList.add("copy-failed");
-    }
-    setTimeout(() => {
-      btn.textContent = "🆔";
-      btn.classList.remove("copied", "copy-failed");
-    }, 900);
-  });
-  return btn;
-}
-
-const COUNT_FMT = new Intl.NumberFormat();
-function formatCount(n: number | null | undefined): string {
-  return typeof n === "number" ? COUNT_FMT.format(n) : "";
-}
-/// A zero reads as nothing rather than as "0": a column of zeros with
-/// the odd number in it is easier to scan than a column of numbers.
-function formatDelta(n: number | null | undefined, sign: string): string {
-  return n ? `${sign}${COUNT_FMT.format(n)}` : "";
 }
 
 // ── Which groups are open. Remembered per browser, so a reload — or
@@ -907,13 +705,6 @@ function onRowGroupOpened(row: Row, expanded: boolean) {
     // Storage refused — private mode, quota — and the chevron still
     // works; only the memory across reloads is lost.
   }
-}
-
-/// Escape closes the commit history, which is what a modal owes its
-/// reader.
-function onWindowKeydown(e: KeyboardEvent) {
-  if (e.key !== "Escape") return;
-  if (historyFor.value.length) historyFor.value = [];
 }
 
 function reparse() {
@@ -1086,31 +877,6 @@ async function onWizardSubmit(payload: {
   const ok = await writeConfig(next, current ? `Saved ${shown}.` : `Added ${shown}.`);
   if (!ok) return;
   closeWizard();
-}
-
-// ── "Compare two versions…": a diff group written from a source and two
-// commits of its raw store (docs/dev/plans/completed/diff_renderer.md), wired into
-// the fan-ins like any render step, then its render step synced. Not the
-// source: both commits are already in the store, so a download adds
-// nothing to the diff.
-const compareFor = ref<{ id: string; name: string } | null>(null);
-
-async function onCompareSubmit(payload: {
-  id: string;
-  name: string;
-  source: string;
-  from: string;
-  to: string;
-  maxDocuments: number;
-}) {
-  const built = buildDiffSource(payload);
-  let next = appendSource(configText.value, `${built.groupBody}\n\n${built.stepsBody}`);
-  next = wireIntoFanIns(next, built.renderId);
-  next = setQmdSteps(next, payload.id, "embedded");
-  const ok = await writeConfig(next, `Added ${payload.name}.`);
-  if (!ok) return;
-  compareFor.value = null;
-  await queueSync([built.renderId], payload.name);
 }
 
 // ── Removing. A comparison's tree is computed from two commits its
@@ -1504,7 +1270,6 @@ onMounted(async () => {
   // while a run is in flight, so on an idle root — the usual state —
   // this is the walk that produces the numbers on screen.
   await reloadAll(true);
-  window.addEventListener("keydown", onWindowKeydown);
 
   unsubscribe = subscribeLive(
     {
@@ -1518,10 +1283,7 @@ onMounted(async () => {
         // The loop's record moving is the nearest thing to "a step
         // committed" — nothing watches the stores themselves — and its
         // requests live beside it.
-        if (changed(e, "dag")) {
-          refreshHistory();
-          void retireBanner();
-        }
+        if (changed(e, "dag")) void retireBanner();
         if (e.kind === "config_changed") {
           // Config and record together, for the "Never run" reason above.
           void reloadAll();
@@ -1529,18 +1291,13 @@ onMounted(async () => {
       },
       // A reconnect means we may have slept through a whole run, and the
       // sampler's own last walk with it. Ask for a fresh one.
-      // An open commit history may have slept through commits too.
-      resync: () => {
-        void reloadAll(true);
-        refreshHistory();
-      },
+      resync: () => void reloadAll(true),
     },
     { onScreen: cardEl.value ?? undefined },
   );
 });
 
 onUnmounted(() => {
-  window.removeEventListener("keydown", onWindowKeydown);
   unsubscribe?.();
   unsubscribe = null;
   gridApi = null;
@@ -1656,53 +1413,6 @@ onUnmounted(() => {
          styles live in the head, and a modal belongs over the whole
          page anyway. -->
     <Teleport to="body">
-      <div v-if="historyFor.length" class="m2-logs-backdrop" @click.self="historyFor = []">
-        <div class="m2-logs m2-history" role="dialog" aria-modal="true" aria-label="Commit history">
-          <header class="m2-logs-head">
-            <div>
-              <h3>{{ historyTitle }} — commit history</h3>
-              <p>
-                Each commit in {{ historyStoreNote }}, newest first; open one for what it did to
-                each table.
-                <span v-if="historyTruncated.length">
-                  Only the newest commits are shown for
-                  <code>{{ historyTruncated.join(", ") }}</code
-                  >.
-                </span>
-                <!-- A failed refresh leaves the log already read in place,
-                     and whatever was opened in it. -->
-                <span v-if="historyError && historyLines.length" class="bad">
-                  The last refresh failed ({{ historyError }}); this is the log as last read.
-                </span>
-              </p>
-            </div>
-            <button class="m2-btn" @click="historyFor = []">Close</button>
-          </header>
-
-          <p v-if="historyBusy && historyLines.length === 0" class="m2-logs-note">
-            Reading the commit log…
-          </p>
-          <p v-else-if="historyError && historyLines.length === 0" class="m2-logs-note bad">
-            {{ historyError }}
-          </p>
-          <p v-else-if="historyLines.length === 0" class="m2-logs-note">
-            No doltlite store under <code>{{ historyStoreNote }}</code> yet. A step that has never
-            run has written nothing, and the QMD index keeps no store of its own.
-          </p>
-          <div v-else class="m2-history-grid">
-            <!-- The stores' commit log as a tree: stores open, commits
-               closed until asked. -->
-            <TableGrid
-              :columns="historyColumns"
-              :rows="historyLines"
-              :tree="true"
-              :openByDefault="(r: HistoryRow) => r.level === 'store'"
-              :columnOverrides="historyOverrides"
-            />
-          </div>
-        </div>
-      </div>
-
       <SourceWizard
         v-if="wizardOpen"
         :key="wizardKey"
@@ -1718,14 +1428,6 @@ onUnmounted(() => {
         :check-label="asking.checkLabel"
         confirm-label="Remove"
         @answer="asking.resolve"
-      />
-      <CompareDialog
-        v-if="compareFor"
-        :key="compareFor.id"
-        :source="compareFor"
-        :taken-ids="takenIds"
-        @close="compareFor = null"
-        @submit="onCompareSubmit"
       />
     </Teleport>
   </section>
