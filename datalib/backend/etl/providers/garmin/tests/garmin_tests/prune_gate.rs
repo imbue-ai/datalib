@@ -21,6 +21,12 @@ use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::GarminApi;
 use serde_json::{json, Value};
 
+/// The day every run but a `run_on` believes it is.
+pub(crate) const TODAY: chrono::NaiveDate = match chrono::NaiveDate::from_ymd_opt(2369, 4, 15) {
+    Some(d) => d,
+    None => panic!("a real date"),
+};
+
 /// `PLAYBACK_ENV` is process-global; the tests in this binary take turns.
 pub(crate) static PLAYBACK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -90,6 +96,21 @@ impl Account {
         control: DownloadControl,
         progress: Progress,
     ) -> FetchSummary {
+        self.run_on_with(TODAY, control, progress).await
+    }
+
+    /// A run whose clock reads `today`.
+    pub(crate) async fn run_on(&self, today: chrono::NaiveDate) -> FetchSummary {
+        self.run_on_with(today, DownloadControl::default(), Progress::noop())
+            .await
+    }
+
+    async fn run_on_with(
+        &self,
+        today: chrono::NaiveDate,
+        control: DownloadControl,
+        progress: Progress,
+    ) -> FetchSummary {
         std::env::set_var(PLAYBACK_ENV, &self.playback);
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
         let fast = std::time::Duration::from_millis(1);
@@ -106,7 +127,7 @@ impl Account {
                 db: db.clone(),
                 creds: Credentials::fixed("playback"),
                 api: self.api.clone(),
-                today: chrono::NaiveDate::from_ymd_opt(2369, 4, 15).unwrap(),
+                today,
                 progress,
                 control,
                 sealer: None,
