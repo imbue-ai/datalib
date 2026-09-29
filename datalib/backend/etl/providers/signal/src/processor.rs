@@ -69,8 +69,8 @@ impl DataProcessor for SignalIngest {
         })
         .await?;
         let summary = format!(
-            "recipients={} chats={} chat_items={} media_files={} snapshot={}",
-            s.recipients, s.chats, s.chat_items, s.media_files, s.snapshot,
+            "recipients={} chats={} chat_items={} media_files={} removed={} snapshot={}",
+            s.recipients, s.chats, s.chat_items, s.media_files, s.removed, s.snapshot,
         );
         session.finish(ctx, summary).await
     }

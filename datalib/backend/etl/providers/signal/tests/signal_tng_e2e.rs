@@ -344,6 +344,16 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
 /// exact counts without re-reading the JSON. The PNG attachment hangs
 /// off Picard's "Make it so." message; the rest are plain text.
 fn write_tng_snapshot(root: &Path, png_media_name: &str, png_plaintext_hash: &[u8]) -> Result<()> {
+    let frames = tng_frames(png_plaintext_hash);
+    write_frames(
+        root,
+        "signal-backup-2364-04-09-12-00-00",
+        &frames,
+        png_media_name,
+    )
+}
+
+fn tng_frames(png_plaintext_hash: &[u8]) -> Vec<backup::Frame> {
     let make_it_so = {
         let mut frame = chat_item(100, 1, 12442118940000, "Make it so.", true);
         if let Some(backup::frame::Item::ChatItem(ci)) = frame.item.as_mut() {
@@ -353,7 +363,7 @@ fn write_tng_snapshot(root: &Path, png_media_name: &str, png_plaintext_hash: &[u
         }
         frame
     };
-    let frames = vec![
+    vec![
         recipient_self(1, "Jean-Luc Picard"),
         recipient_contact(2, "Will Riker", 17015550101),
         recipient_contact(3, "Data Soong", 17015550102),
@@ -362,10 +372,18 @@ fn write_tng_snapshot(root: &Path, png_media_name: &str, png_plaintext_hash: &[u
         chat_item(100, 2, 12442118460000, "All decks at green status.", false),
         chat_item(100, 3, 12442118520000, "Sensors detect a vessel.", false),
         make_it_so,
-    ];
+    ]
+}
+
+fn write_frames(
+    root: &Path,
+    dir_name: &str,
+    frames: &[backup::Frame],
+    png_media_name: &str,
+) -> Result<()> {
     let file_names = vec![png_media_name.to_string()];
     write_snapshot(
-        &root.join("signal-backup-2364-04-09-12-00-00"),
+        &root.join(dir_name),
         &SnapshotInput {
             aep: FIXTURE_AEP,
             backup_id: b"makeitsomakeitso",
@@ -376,7 +394,7 @@ fn write_tng_snapshot(root: &Path, png_media_name: &str, png_plaintext_hash: &[u
                 backup_time_ms: 12442118400000,
                 ..Default::default()
             },
-            frames: &frames,
+            frames,
             file_names: &file_names,
         },
     )?;
@@ -450,4 +468,76 @@ fn chat_item(
             ..Default::default()
         })),
     }
+}
+
+async fn fetch_newest(
+    tmp: &Path,
+    snapshot_root: &Path,
+    db: &ingest::RawDb,
+) -> Result<ingest::FetchSummary> {
+    let cache = FingerprintCache::open(&tmp.join("fingerprints.sqlite")).await?;
+    ingest::fetch(FetchOptions {
+        db: db.clone(),
+        cache,
+        snapshot_root: snapshot_root.to_path_buf(),
+        files_root: None,
+        aep_env_var: None,
+        progress: Progress::noop(),
+        control: DownloadControl::default(),
+    })
+    .await
+}
+
+async fn count(db: &ingest::RawDb, table: &str) -> Result<i64> {
+    Ok(
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+            .fetch_one(db.pool())
+            .await?,
+    )
+}
+
+/// A backup is the whole phone, so a message or a contact a newer
+/// snapshot no longer holds was deleted there, and the message's
+/// attachment edge goes with it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_newer_snapshot_without_a_message_deletes_it() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshot_root = tmp.path().join("snapshots");
+    let (png_media_name, png_plaintext_hash) = write_test_attachment(&snapshot_root.join("files"))?;
+    write_tng_snapshot(&snapshot_root, &png_media_name, &png_plaintext_hash)?;
+    // SAFETY: every test in this binary sets the same value.
+    unsafe {
+        std::env::set_var("SIGNAL_BACKUP_PASSPHRASE", FIXTURE_AEP);
+    }
+    let db_path = tmp.path().join("signal").join("entities.doltlite_db");
+    std::fs::create_dir_all(db_path.parent().unwrap())?;
+    let db = ingest::RawDb::open(&db_path).await?;
+
+    fetch_newest(tmp.path(), &snapshot_root, &db).await?;
+    assert_eq!(count(&db, "chat_items").await?, 4);
+    assert_eq!(count(&db, "recipients").await?, 3);
+    assert_eq!(count(&db, "chat_item_attachments").await?, 1);
+
+    // The next backup: Data is gone from the contacts, and "Make it so."
+    // (the message carrying the PNG) was deleted.
+    let mut frames = tng_frames(&png_plaintext_hash);
+    frames.retain(|f| match &f.item {
+        Some(backup::frame::Item::Recipient(r)) => r.id != 3,
+        Some(backup::frame::Item::ChatItem(ci)) => ci.date_sent != 12442118940000,
+        _ => true,
+    });
+    write_frames(
+        &snapshot_root,
+        "signal-backup-2364-04-10-12-00-00",
+        &frames,
+        &png_media_name,
+    )?;
+    let s = fetch_newest(tmp.path(), &snapshot_root, &db).await?;
+    assert!(!s.already_ingested, "{s:?}");
+    assert_eq!(count(&db, "chat_items").await?, 3);
+    assert_eq!(count(&db, "recipients").await?, 2);
+    assert_eq!(count(&db, "chat_item_attachments").await?, 0);
+    assert_eq!(count(&db, "chats").await?, 1);
+    db.close().await;
+    Ok(())
 }

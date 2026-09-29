@@ -3,12 +3,15 @@
 pub mod db;
 pub mod schema_raw;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
 use datalib_etl::control::DownloadControl;
+use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::progress::Progress;
+use datalib_etl::prune;
 use datalib_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
 use serde::Serialize;
 use sqlx::Row;
@@ -66,6 +69,11 @@ pub struct FetchSummary {
     /// log lines; details land on
     /// `chat_item_attachments_bookkeeping.last_error`.
     pub blob_errors: usize,
+    /// Records deleted because this snapshot no longer holds them.
+    pub removed: usize,
+    /// Frames that did not decode. Any one makes the snapshot delete
+    /// nothing, since it could have been any record.
+    pub frame_errors: usize,
     pub snapshot: String,
     /// Blake3 hex of the snapshot (see `schema_raw::SNAPSHOT_BLAKE3_RECIPE_DOC`).
     pub snapshot_blake3: String,
@@ -199,6 +207,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             Ok(f) => f,
             Err(e) => {
                 warn!(event = "signal_frame_decode_error", error = %e, "a backup frame did not decode");
+                summary.frame_errors += 1;
                 continue;
             }
         };
@@ -303,6 +312,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // error annotations).
     flush_attachments(&db, pending_attachments).await?;
 
+    // A backup is the whole phone: what this snapshot no longer holds was
+    // deleted there.
+    if summary.frame_errors == 0 {
+        summary.removed =
+            prune_to_snapshot(&db, &accounts, &recipients, &chats, &chat_items).await?;
+    } else {
+        let held_back = RunProblem::listing(
+            "removed_records",
+            format!(
+                "{} backup frames did not decode, so no record was deleted this run",
+                summary.frame_errors
+            ),
+        );
+        download_problems::report_run(db.pool(), &[held_back]).await;
+    }
+
     db.record_snapshot_ingested(
         &fingerprint,
         &snapshot_blake3,
@@ -313,6 +338,38 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     .context("record snapshot in ingested_backups")?;
 
     Ok(summary)
+}
+
+/// Delete the rows no frame of this snapshot produced, and the attachment
+/// edges of the messages that went. Returns how many records went.
+async fn prune_to_snapshot(
+    db: &RawDb,
+    accounts: &[AccountRow],
+    recipients: &[RecipientRow],
+    chats: &[ChatRow],
+    chat_items: &[ChatItemRow],
+) -> Result<usize> {
+    let mut tx = db.pool().begin().await.context("begin signal prune tx")?;
+    let mut removed = 0;
+    for (table, keep) in [
+        ("account", ids(accounts)),
+        ("recipients", ids(recipients)),
+        ("chats", ids(chats)),
+    ] {
+        removed += prune::prune_scope_in_tx(&mut tx, table, &[], &keep)
+            .await?
+            .len();
+    }
+    let held = chat_items.len();
+    let gone = prune::prune_scope_in_tx(&mut tx, "chat_items", &[], &ids(chat_items)).await?;
+    prune::delete_owned_in_tx(&mut tx, "chat_item_attachments", "chat_item_id", &gone).await?;
+    tx.commit().await.context("commit signal prune tx")?;
+    prune::record("signal chat_items", held + gone.len(), gone.len());
+    Ok(removed + gone.len())
+}
+
+fn ids<T: BulkUpsertable>(rows: &[T]) -> HashSet<String> {
+    rows.iter().map(|r| r.id().to_string()).collect()
 }
 
 fn compute_snapshot_blake3(snapshot_dir: &Path) -> Result<(String, u64)> {
