@@ -247,3 +247,126 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
     })?;
     Ok(())
 }
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let dest = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &dest)?;
+        } else {
+            fs::copy(entry.path(), &dest)?;
+        }
+    }
+    Ok(())
+}
+
+const POSTS_FILE: &str =
+    "your_facebook_activity/posts/your_posts__check_ins__photos_and_videos_1.json";
+
+/// A private copy of the fixture export and a store, synced once.
+async fn synced_copy(tmp: &std::path::Path) -> Result<(PathBuf, RawDb)> {
+    let export = tmp.join("export");
+    copy_tree(&fixture(), &export)?;
+    let raw_dir = tmp.join("raw");
+    fs::create_dir_all(&raw_dir)?;
+    let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+    sync(&export, &db).await?;
+    Ok((export, db))
+}
+
+async fn sync(export: &std::path::Path, db: &RawDb) -> Result<ingest::FetchSummary> {
+    ingest::fetch(FetchOptions {
+        db: db.clone(),
+        input_path: export.to_path_buf(),
+        progress: Progress::noop(),
+        control: Default::default(),
+    })
+    .await
+}
+
+async fn edge_owners(db: &RawDb) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar("SELECT owner_id FROM media_blobs")
+        .fetch_all(db.pool())
+        .await?)
+}
+
+/// A post a newer export no longer holds goes, and so do the edges to its
+/// photos: no edge is left pointing at a record that is gone.
+#[test]
+fn a_post_dropped_from_a_newer_export_takes_its_media_edges() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let (export, db) = synced_copy(tmp.path()).await?;
+        let before = edge_owners(&db).await?.len();
+
+        // Post 1 carries a photo.
+        let path = export.join(POSTS_FILE);
+        let mut posts: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+        posts.as_array_mut().unwrap().remove(1);
+        fs::write(&path, serde_json::to_vec(&posts)?)?;
+        sync(&export, &db).await?;
+
+        assert_eq!(rows(&db, POSTS_TABLE).await.len(), 3);
+        let owners = edge_owners(&db).await?;
+        assert!(
+            owners.len() < before,
+            "{} edges, {before} before",
+            owners.len()
+        );
+        // Every record, in whichever table it landed.
+        let tables: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
+                .fetch_all(db.pool())
+                .await?;
+        let mut records = std::collections::HashSet::new();
+        for table in tables
+            .iter()
+            .filter(|t| *t != "media_blobs" && !t.ends_with("_bookkeeping"))
+        {
+            let ids: Result<Vec<String>, _> =
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM \"{table}\"")))
+                    .fetch_all(db.pool())
+                    .await;
+            records.extend(ids.unwrap_or_default());
+        }
+        for owner in owners {
+            assert!(
+                records.contains(&owner),
+                "edge owned by a gone record: {owner}"
+            );
+        }
+        db.close().await;
+        Ok(())
+    })
+}
+
+/// A file that did not parse says nothing about its table's records, so
+/// the table keeps what that file held last time.
+#[test]
+fn a_file_that_does_not_parse_deletes_nothing_from_its_table() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let (export, db) = synced_copy(tmp.path()).await?;
+        assert_eq!(rows(&db, REACTIONS_TABLE).await.len(), 4);
+
+        fs::write(
+            export.join("your_facebook_activity/comments_and_reactions/likes_and_reactions_1.json"),
+            b"not json",
+        )?;
+        let s = sync(&export, &db).await?;
+        assert_eq!(s.parse_errors, 1);
+        assert_eq!(rows(&db, REACTIONS_TABLE).await.len(), 4);
+        db.close().await;
+        Ok(())
+    })
+}

@@ -17,6 +17,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr};
 use datalib_etl::export_files::files_with_extension;
 use datalib_etl::progress::Progress;
+use datalib_etl::prune;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 use serde::Serialize;
@@ -137,6 +138,10 @@ pub struct FetchSummary {
     pub files: usize,
     pub rows: usize,
     pub parse_errors: usize,
+    /// Records the export no longer holds, deleted.
+    pub removed: usize,
+    /// Media edges of deleted records, or to a `uri` a record stopped naming.
+    pub media_edges_removed: usize,
     /// Media files whose bytes this run put into the CAS.
     pub media_stored: usize,
     /// Media files already in the CAS from an earlier run.
@@ -153,6 +158,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let mut summary = FetchSummary::default();
     let mut by_table: Tables = BTreeMap::new();
+    // A table one of whose files did not parse cannot say which of its
+    // records are gone.
+    let mut unparsed: HashSet<String> = HashSet::new();
 
     for path in files_with_extension(&opts.input_path, "json") {
         let rel = relative(&opts.input_path, &path);
@@ -174,16 +182,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             Err(e) => {
                 warn!(event = "facebook_file_failed", file = %path.display(), table, error = %format!("{e:#}"), "an export file could not be ingested");
                 summary.parse_errors += 1;
+                unparsed.insert(table);
             }
         }
     }
 
+    let mut pruned: Vec<String> = Vec::new();
     let mut tx = db.pool().begin().await.context("begin facebook tx")?;
     for (table, rows) in &by_table {
-        upsert_and_prune(&mut tx, table, rows).await?;
+        let prune = !unparsed.contains(table);
+        pruned.extend(upsert_and_prune(&mut tx, table, rows, prune).await?);
         summary.rows += rows.len();
     }
     tx.commit().await.context("commit facebook tx")?;
+    summary.removed = pruned.len();
 
     // Media after the records are committed: an edge is additive, and a
     // photo that fails to read costs a warning, never the rows.
@@ -198,18 +210,52 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             &mut summary,
         )
         .await?;
+        summary.media_edges_removed = prune_media_edges(&db, &by_table, &pruned).await?;
     }
     Ok(summary)
 }
 
-/// Upsert this run's rows and delete the ones the export no longer
-/// holds, in the caller's transaction, so a commit landing at any point
-/// sees either last run's table or this run's — never an emptied one.
+/// Delete the media edges that are no longer true: a deleted record's, and
+/// those of a record read this run to a `uri` it no longer names. A record
+/// in a table this export did not hold keeps its edges.
+async fn prune_media_edges(db: &RawDb, by_table: &Tables, pruned: &[String]) -> Result<usize> {
+    let mut read: HashSet<&str> = HashSet::new();
+    let mut edges: HashSet<String> = HashSet::new();
+    for rows in by_table.values() {
+        for (id, record) in rows {
+            read.insert(id);
+            let mut uris = Vec::new();
+            collect_uris(record, &mut uris);
+            edges.extend(uris.iter().map(|uri| MediaBlobRow::pk_recipe(id, uri)));
+        }
+    }
+    let pruned: HashSet<&str> = pruned.iter().map(String::as_str).collect();
+    let stored: Vec<(String, String)> = sqlx::query_as("SELECT id, owner_id FROM media_blobs")
+        .fetch_all(db.pool())
+        .await
+        .context("list media_blobs")?;
+    let keep: HashSet<String> = stored
+        .into_iter()
+        .filter(|(id, owner)| {
+            let owner = owner.as_str();
+            !(pruned.contains(owner) || (read.contains(owner) && !edges.contains(id)))
+        })
+        .map(|(id, _)| id)
+        .collect();
+    let gone = prune::prune_scope(db.pool(), MediaBlobRow::TABLE, &[], &keep).await?;
+    Ok(gone.len())
+}
+
+/// Upsert this run's rows and, with `prune`, delete the ones the export no
+/// longer holds, in the caller's transaction, so a commit landing at any
+/// point sees either last run's table or this run's — never an emptied one.
+/// Returns the ids deleted.
 async fn upsert_and_prune(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     rows: &BTreeMap<String, Value>,
-) -> Result<()> {
+    prune: bool,
+) -> Result<Vec<String>> {
     let ddl = dr::wire_payload_table_ddl(table, &[]);
     // Audited: `table` is `canonical_table`'s output — ASCII alphanumerics
     // and `_` only — so it is safe as an identifier; rows are bound.
@@ -225,7 +271,7 @@ async fn upsert_and_prune(
             .with_context(|| format!("list ids in {table}"))?;
     let gone: Vec<&String> = existing
         .iter()
-        .filter(|id| !rows.contains_key(*id))
+        .filter(|id| prune && !rows.contains_key(*id))
         .collect();
     for chunk in gone.chunks(DELETE_CHUNK) {
         let placeholders = vec!["?"; chunk.len()].join(",");
@@ -258,7 +304,7 @@ async fn upsert_and_prune(
             .await
             .with_context(|| format!("insert into {table}"))?;
     }
-    Ok(())
+    Ok(gone.into_iter().cloned().collect())
 }
 
 /// Every `uri` in every record, read off disk into the CAS once. A `uri`
