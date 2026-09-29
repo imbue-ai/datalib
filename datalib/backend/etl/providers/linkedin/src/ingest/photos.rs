@@ -64,6 +64,53 @@ pub struct PhotoSummary {
     pub gave_up: bool,
 }
 
+/// Delete the photo edges of connections the export no longer lists. Only
+/// right after a run that read `connections.csv`: an export without it says
+/// nothing about who is connected. Returns how many connections went.
+pub async fn prune_to_connections(db: &RawDb) -> Result<usize> {
+    let pool = db.pool();
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+    )
+    .bind(CONTACT_PHOTOS_TABLE)
+    .fetch_one(pool)
+    .await
+    .context("look for contact_photos")?;
+    if !exists {
+        return Ok(0);
+    }
+    let keep: std::collections::HashSet<String> = db
+        .load_payloads(datalib_etl::pin::Reads::Own, "connections")
+        .await
+        .context("load connections")?
+        .iter()
+        .map(|p| field(p, "URL"))
+        .filter(|url| !url.is_empty())
+        .map(connection_key)
+        .collect();
+    let owners: Vec<String> = sqlx::query_scalar("SELECT DISTINCT owner_id FROM contact_photos")
+        .fetch_all(pool)
+        .await
+        .context("load contact_photos owners")?;
+    let gone: Vec<String> = owners.into_iter().filter(|o| !keep.contains(o)).collect();
+
+    let mut tx = pool.begin().await.context("begin contact_photos prune")?;
+    for chunk in gone.chunks(datalib_etl::bulk::SQL_CHUNK) {
+        let mut sql = String::from("DELETE FROM contact_photos WHERE owner_id IN (");
+        datalib_etl::bulk::push_placeholder_list(&mut sql, chunk.len());
+        sql.push(')');
+        // Audited: the IN-list is a `?,?,?` run sized from the chunk, and
+        // every owner is bound.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for owner in chunk {
+            q = q.bind(owner);
+        }
+        q.execute(&mut *tx).await.context("prune contact_photos")?;
+    }
+    tx.commit().await.context("commit contact_photos prune")?;
+    Ok(gone.len())
+}
+
 pub async fn fetch_connection_photos(
     db: &RawDb,
     cas: &BlobCas,

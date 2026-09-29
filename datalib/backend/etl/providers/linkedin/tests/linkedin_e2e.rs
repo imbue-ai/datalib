@@ -581,3 +581,74 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
 
     Ok(())
 }
+
+/// A connection a newer export no longer lists takes its photo edge with
+/// it, so the photo stops showing on a contact that is gone.
+#[test]
+fn a_connection_dropped_from_a_newer_export_loses_its_photo() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let export = tmp.path().join("export");
+    fs::create_dir_all(&export)?;
+    build_export(&export)?;
+    let raw_dir = tmp.path().join("raw");
+    fs::create_dir_all(&raw_dir)?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let fetch = || {
+            ingest::fetch(FetchOptions {
+                db: db.clone(),
+                input_path: export.clone(),
+                fetch_photos: false,
+                photo_max_consecutive_failures: 50,
+                progress: Progress::noop(),
+                control: Default::default(),
+            })
+        };
+        fetch().await?;
+        // What the photo sweep would have recorded for both connections.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS contact_photos (id TEXT PRIMARY KEY, \
+             owner_id TEXT NOT NULL, source_url TEXT NOT NULL, blake3 TEXT NULL)",
+        )
+        .execute(db.pool())
+        .await?;
+        for owner in [
+            "https://www.linkedin.com/in/jlp",
+            "https://www.linkedin.com/in/bev",
+        ] {
+            sqlx::query("INSERT INTO contact_photos VALUES (?, ?, ?, NULL)")
+                .bind(owner)
+                .bind(owner)
+                .bind(owner)
+                .execute(db.pool())
+                .await?;
+        }
+
+        fs::write(
+            export.join("Connections.csv"),
+            "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n\
+             Jean-Luc,Picard,https://www.linkedin.com/in/jlp,,Starfleet,Captain,16 Jun 2026\n",
+        )?;
+        fetch().await?;
+        let owners: Vec<String> =
+            sqlx::query_scalar("SELECT owner_id FROM contact_photos ORDER BY owner_id")
+                .fetch_all(db.pool())
+                .await?;
+        assert_eq!(owners, vec!["https://www.linkedin.com/in/jlp".to_string()]);
+
+        // An export without Connections.csv says nothing about who is
+        // connected, so the photos stay.
+        fs::remove_file(export.join("Connections.csv"))?;
+        fetch().await?;
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM contact_photos")
+            .fetch_one(db.pool())
+            .await?;
+        assert_eq!(left, 1);
+        db.close().await;
+        Ok(())
+    })
+}
