@@ -859,8 +859,7 @@ inputs = ["ics-calendar/keyword_index"]
 # Beeper Texts mirror. The `texts` table reads the desktop app's own
 # data dir; pick the chat networks to ingest (at least one required).
 # Poorly supported — nobody is using it, so expect rough edges. It never
-# notices a deletion, and `always_clear_before_ingest` is the wrong fix
-# here (see the provider's INGEST.md).
+# notices a deletion (see the provider's INGEST.md).
 [[groups]]
 id = "beeper"
 type = "beeper"
@@ -1087,10 +1086,8 @@ function = "ingest"
 [steps.params.backup]
 path = "~/backups/SignalBackups"
 aep_env_var = "SIGNAL_BACKUP_PASSPHRASE"   # default if omitted
-[steps.params.common]
-# Each backup is a full snapshot of the phone, so a message missing from
-# the newest one was deleted there.
-always_clear_before_ingest = true
+# Each backup is a full snapshot of the phone: a message or contact the
+# newest one no longer holds leaves the mirror on the next sync.
 
 [[steps]]
 group = "signal"
@@ -1205,10 +1202,9 @@ function = "ingest"
 path = "~/backups/LinkedInDataExport"
 fetch_photos = true
 
-[steps.params.common]
-# Each export is complete. Without this a CSV that LinkedIn stopped
-# including keeps its whole table from the previous export forever.
-always_clear_before_ingest = true
+# Each export is complete for the data it holds: a row a newer CSV no
+# longer has leaves the mirror on the next sync. A CSV missing from the
+# export deletes nothing, since an export can leave a category out.
 [steps.params.common.download_params]
 maximum_sequential_failed_requests = 20
 

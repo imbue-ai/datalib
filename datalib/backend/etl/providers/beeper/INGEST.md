@@ -2,12 +2,10 @@
 
 > **Poorly supported.** Nobody is using this source, so it does not get
 > the attention the others do. In particular it does not notice when
-> something disappears upstream. Don't set
-> `common.always_clear_before_ingest` on it: `index.db` is a cache the
-> desktop app *evicts* from, so absence there does not mean deletion, and
-> wiping before each ingest would throw away real history. Fixing that
-> properly means reconciling against the megabridge files too. Expect
-> rough edges.
+> something disappears upstream, and it cannot prune to what it reads:
+> `index.db` is a cache the desktop app *evicts* from, so absence there
+> does not mean deletion. Fixing that properly means reconciling against
+> the megabridge files too. Expect rough edges.
 
 Beeper Texts (the desktop app) keeps a unified per-account message
 cache at:

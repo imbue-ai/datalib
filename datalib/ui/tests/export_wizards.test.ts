@@ -1,7 +1,7 @@
 // The forms for Google Takeout, LinkedIn, SMS Backup & Restore and
 // `contacts` from .vcf files. What each must get right: write the table
 // that names its ingest method, and read back the configs people have
-// written by hand, which may carry `always_clear_before_ingest`.
+// written by hand.
 import { describe, expect, it } from "vitest";
 import { CATALOG } from "../src/config/catalog";
 import type { CatalogEntry } from "../src/config/catalog";
@@ -41,21 +41,6 @@ function = "render_markdown"
 inputs = ["s/ingest"]
 `);
 
-/// Each input here is a complete snapshot, so a new source drops what
-/// the next export no longer holds unless someone unticks the box.
-describe("the snapshot switch", () => {
-  it("starts on for every file-backed form, and is written", () => {
-    for (const entry of [
-      byType("linkedin"),
-      byType("sms_backup_restore"),
-      byType("contacts", "vcf"),
-    ]) {
-      expect(seedFieldValues(entry)["common.always_clear_before_ingest"], entry.label).toBe(true);
-      expect(toml(entry), entry.label).toContain("always_clear_before_ingest = true");
-    }
-  });
-});
-
 describe("Google Takeout", () => {
   const TAKEOUT = byType("google_takeout");
   const FEEDS = [
@@ -93,25 +78,6 @@ describe("Google Takeout", () => {
     expect(on).toContain("google_voice_include_spam = true");
   });
 
-  /// Every feed drops what a newer export lost, so the wipe would only add
-  /// the partial-export trap.
-  it("starts with the wipe off", () => {
-    expect(seedFieldValues(TAKEOUT)["common.always_clear_before_ingest"]).toBe(false);
-    expect(toml(TAKEOUT)).toContain("always_clear_before_ingest = false");
-  });
-
-  it("can edit a config that still turns the wipe on", () => {
-    const steps = ingestStep(
-      "google_takeout",
-      `[steps.params.common]
-always_clear_before_ingest = true
-
-[steps.params.export]
-path = "~/backups/Takeout"`,
-    );
-    expect(paramsAreRepresentable(steps[0], TAKEOUT)).toEqual({ ok: true });
-  });
-
   it("can edit the config the examples show", () => {
     const steps = ingestStep(
       "google_takeout",
@@ -144,15 +110,12 @@ describe("LinkedIn", () => {
     expect(body).toContain("fetch_photos = true");
   });
 
-  it("can edit a config with the snapshot switch on", () => {
+  it("can edit the config the examples show", () => {
     const steps = ingestStep(
       "linkedin",
       `[steps.params.export]
 path = "~/backups/LinkedInDataExport"
-fetch_photos = true
-
-[steps.params.common]
-always_clear_before_ingest = true`,
+fetch_photos = true`,
     );
     expect(paramsAreRepresentable(steps[0], LINKEDIN)).toEqual({ ok: true });
   });
@@ -171,9 +134,7 @@ describe("SMS Backup & Restore", () => {
     const steps = ingestStep(
       "sms_backup_restore",
       `[steps.params.backup]
-path = "~/backups/SMSBackupRestore"
-[steps.params.common]
-always_clear_before_ingest = true`,
+path = "~/backups/SMSBackupRestore"`,
     );
     expect(paramsAreRepresentable(steps[0], SMS)).toEqual({ ok: true });
   });

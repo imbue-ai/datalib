@@ -38,21 +38,6 @@ pub async fn run(
     let progress = emitter.progress();
     let metrics = datalib_etl::download_metrics::DownloadMetrics::publishing_to(progress.clone());
     let diagnostics = datalib_obs::diagnostics::Diagnostics::new();
-    // The same wipe `datalib-dag --reset` does, asked for by config: a
-    // source whose input is a complete snapshot gets deletions by
-    // re-writing from scratch.
-    if planned.always_clear_before_ingest {
-        tracing::info!(
-            source = %planned.name,
-            "always_clear_before_ingest — emptying this source's store \
-             so anything its input has dropped falls out (the old rows stay in \
-             doltlite history)",
-        );
-        datalib_etl::doltlite_raw::reset_store(&datalib_etl::raw_layout::entities_db(
-            &planned.raw_path,
-        ))
-        .await?;
-    }
     // Every processor in this source's wave writes the one raw store, so the
     // step can only claim what all of them can support. `all` on an empty
     // iterator is `true`, which is why the emptiness check above matters.
