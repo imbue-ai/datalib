@@ -101,6 +101,9 @@ serde_json = "1.0"
 # The config file format, everywhere: the DAG config and every step's
 # `params` subtree.
 toml = "1"
+# Editing a config in place, comments and layout kept: the rewrites that
+# retire a config key (`datalib-migrate-config`).
+toml_edit = "0.25"
 # YAML survives in exactly one place, and it is not the config the
 # pipeline reads: fsindex's per-directory `.fsindex.yaml` breadcrumbs.
 serde_yaml = "0.9"

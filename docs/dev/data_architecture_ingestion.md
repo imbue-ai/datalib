@@ -339,31 +339,40 @@ One thing `removed` does *not* mean: it counts rows **our downloader
 deleted**, not rows the provider stopped serving. Those coincide only
 for a provider that deletes on absence.
 
-### Snapshot inputs: `always_clear_before_ingest`
+### Snapshot inputs
 
-A source whose input is a *complete* snapshot — a Takeout export, a
-phone backup — gets deletion detection for free by not being clever: set `common.always_clear_before_ingest = true`
-and the download empties the source's entity tables and cursors before
-each ingest, then rewrites them from what the input holds now. Anything
-the input dropped is simply not written back. The old rows stay in
-history, so `dolt_diff` still says what went.
-
-Mechanically it is the config-driven form of `datalib-dag --reset`:
-[`ingest.rs`](/datalib/backend/datalib_step/src/ingest.rs) calls the
-same `reset_store` before the provider runs. The blob CAS keeps its
-bytes.
+A source whose input is a *complete* snapshot — an export, a phone
+backup, a folder that is the whole collection — learns what was deleted
+by comparing: what the input holds now is the enumeration, and a stored
+record it does not hold goes. Every such source does this on an ordinary
+sync, and the old rows stay in history, so `dolt_diff` still says what
+went. How a file-backed source knows what changed:
+[`etl/README.md`](/datalib/backend/etl/README.md#answering-did-it-change-for-a-file-backed-source).
 
 The condition is the whole rule: **absence in the input has to mean
-deletion.** For an input that is itself an evicting cache it means "not
-cached here," and the wipe destroys real history — which is why
-[`beeper`](/datalib/backend/etl/providers/beeper/INGEST.md) must not
-use it. A partial export of a normally-complete source is the same trap.
+deletion.** Three things break it, and each source guards against the
+ones it can meet:
 
-Most file-backed sources do not need it: a folder of `.vcf`, `.ics`,
-`.mbox` or SMS backup files, and every Takeout feed, lose what their
-input lost on an ordinary sync
-([`etl/README.md`](/datalib/backend/etl/README.md#answering-did-it-change-for-a-file-backed-source)).
-The Signal and LinkedIn exports still need it.
+- **An input that evicts.** For a cache, absence means "not cached
+  here", which is why [`beeper`](/datalib/backend/etl/providers/beeper/INGEST.md)
+  prunes nothing.
+- **A read that failed.** A file that did not parse, a backup frame that
+  did not decode or a walk that reported an error says nothing about the
+  records it would have held, so the source deletes nothing it could
+  have come from, and says so.
+- **A part the person left out.** An export's request form lets a person
+  pick categories (Takeout's products, LinkedIn's and Facebook's data
+  categories), and one requested without a category looks the same as
+  one whose category was emptied. So a category missing from the export
+  entirely deletes nothing; inside a category that is there, what is
+  missing was deleted.
+
+`always_clear_before_ingest`, a config key that emptied a source's store
+before every ingest, is retired: it fell into the third trap for any
+partial export, and every source it served prunes on its own.
+`datalib-http` takes it out of an old config by itself
+(`datalib_migrate_config::upgrade`). `datalib-dag --reset` is the same
+wipe, asked for once.
 
 A Takeout feed read from one file (Maps reviews and saved places,
 YouTube, Gemini) treats that file as its whole table: re-read, it
@@ -399,8 +408,12 @@ therefore what it can see:
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
 | `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |
 | `chatgpt` | `/conversations`, when the walk reached `total` | conversations |
-| `media`, `fsindex`, `pdf` | truncate-and-refill | structurally |
-| `claude` (`export`), and every source carrying [`always_clear_before_ingest`](#snapshot-inputs-always_clear_before_ingest) | the snapshot is the enumeration | structurally |
+| `fsindex`, `pdf` | truncate-and-refill | structurally |
+| `media` | the scan | the rows of every path the scan did not see |
+| `claude` (`export`) | the export is the enumeration | users, projects, docs and conversations it no longer holds; a missing `users.json` or `projects/` deletes nothing |
+| `signal` | each newly read backup | every record the backup no longer holds, with its attachment edges. Nothing is deleted when a frame did not decode |
+| `linkedin`, `facebook` | each CSV or JSON file the export holds | the rows a present file no longer holds; LinkedIn's photo edges of gone connections, Facebook's media edges of gone records. A missing file deletes nothing, and Facebook prunes no table one of whose files did not parse |
+| `apple_messages`, `apple_photos`, `lightroom`, `whatsapp` | the mirrored SQLite file | structurally: each table is refilled from it |
 | `yolink` | — | nothing; append-only telemetry |
 | `notion`, `beeper` | — | not wired (rework; poorly supported) |
 

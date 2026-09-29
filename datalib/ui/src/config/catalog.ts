@@ -923,15 +923,6 @@ export const CATALOG: CatalogEntry[] = [
           "A folder of .vcf files, read recursively — ~/Downloads/contacts say. A file may " +
           "hold one contact or a whole address book.",
       },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Treat the folder as the whole address book",
-        default: true,
-        help:
-          "Each sync rewrites the mirror from the files in the folder now, so a contact " +
-          "whose file is gone drops out (the store's history keeps it).",
-      },
     ],
   },
   {
@@ -1176,17 +1167,6 @@ export const CATALOG: CatalogEntry[] = [
         label: "Gemini activity",
         default: false,
       },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Empty the mirror before each sync",
-        default: false,
-        help:
-          "Not needed: every feed already drops what a newer export no longer holds " +
-          "(the store's history keeps it). Turned on, each sync empties the mirror and " +
-          "rewrites it from the export, so an export requested without some product " +
-          "loses that product's records.",
-      },
     ],
   },
   {
@@ -1246,17 +1226,6 @@ export const CATALOG: CatalogEntry[] = [
           "The export has no photos. On, each connection's public profile photo is fetched " +
           "from linkedin.com, once per connection — the one part of this source that goes " +
           "online. No login is needed.",
-      },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Treat each export as complete",
-        default: true,
-        help:
-          "Each sync rewrites the mirror from the export as it is now, so a message or " +
-          "connection a newer export no longer holds drops out (the store's history keeps " +
-          "it). Off, a CSV LinkedIn stops including keeps its rows from the last export " +
-          "that had it.",
       },
     ],
   },
@@ -1361,16 +1330,6 @@ export const CATALOG: CatalogEntry[] = [
           "The folder the Android app SMS Backup & Restore writes its sms-*.xml and " +
           "calls-*.xml files to, copied off the phone — ~/Documents/SMSBackupRestore say. " +
           "A single .xml file typed in here works too.",
-      },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Treat the folder as the whole archive",
-        default: true,
-        help:
-          "Each sync rewrites the mirror from the backups in the folder now, so a message " +
-          "no longer in any of them drops out (the store's history keeps it). Leave it off " +
-          "if old backups get pruned from the folder.",
       },
     ],
   },

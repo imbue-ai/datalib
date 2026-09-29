@@ -1,6 +1,6 @@
-//! A config that still has a `qmd_index` step is rewritten by the server
-//! itself, at boot and on a hand edit, with the old
-//! text kept as `config.toml.bak`.
+//! A config in an older shape — a `qmd_index` step, a retired
+//! `always_clear_before_ingest` — is rewritten by the server itself, at
+//! boot and on a hand edit, with the old text kept as `config.toml.bak`.
 
 use datalib_http::ApiToken;
 use std::path::Path;
@@ -101,5 +101,46 @@ async fn a_hand_edit_in_the_old_shape_is_upgraded_while_running() {
     assert_eq!(
         std::fs::read_to_string(tmp.path().join("config.toml.bak")).unwrap(),
         SHARED_QMD_INDEX
+    );
+}
+
+const ALWAYS_CLEAR: &str = r#"# my sources
+[[groups]]
+id = "sms"
+type = "sms_backup_restore"
+
+[[steps]]
+group = "sms"
+function = "ingest"
+[steps.params.backup]
+path = "/nowhere/sms"
+[steps.params.common]
+# The export directory is the whole archive.
+always_clear_before_ingest = true
+
+[[steps]]
+group = "sms"
+function = "render_markdown"
+inputs = ["sms/ingest"]
+"#;
+
+/// The retired wipe switch, which the wizard wrote into every file-backed
+/// source, is taken out at boot rather than refusing the step.
+#[tokio::test]
+async fn boot_drops_the_retired_always_clear_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("config.toml");
+    std::fs::write(&config, ALWAYS_CLEAR).unwrap();
+
+    let _state = boot(tmp.path()).await;
+
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(!text.contains("always_clear_before_ingest"), "{text}");
+    assert!(text.contains("path = \"/nowhere/sms\""), "{text}");
+    let check = datalib_dag::config::check_text(&text);
+    assert!(check.is_clean(), "{:?}\n{text}", check.diagnostics);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("config.toml.bak")).unwrap(),
+        ALWAYS_CLEAR
     );
 }

@@ -14,8 +14,10 @@
 //! params — and, after it, `qmd_steps.rs`: the `qmd_index` fan-in becomes
 //! `qmd_aggregator`, downstream of each source's own qmd steps. That second
 //! rewrite is also the one `datalib-http` makes by itself
-//! (`upgrade_qmd_steps`).
+//! (`upgrade`). So is the last, `always_clear.rs`: it drops the retired
+//! `common.always_clear_before_ingest` key.
 
+pub mod always_clear;
 pub mod convert;
 pub mod qmd_steps;
 
@@ -41,15 +43,19 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if qmd_steps::is_retired(text)? {
         return Ok(LegacyFormat::QmdIndex);
     }
+    if always_clear::is_retired(text)? {
+        return Ok(LegacyFormat::AlwaysClear);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
 pub fn convert(text: &str) -> Result<String> {
     let out = match detect(text)? {
-        LegacyFormat::QmdIndex => text.to_string(),
+        LegacyFormat::QmdIndex | LegacyFormat::AlwaysClear => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = qmd_steps::rewrite(&out)?;
+    let out = always_clear::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -57,19 +63,59 @@ pub fn convert(text: &str) -> Result<String> {
     Ok(out)
 }
 
-/// The rewrite `datalib-http` makes unattended, to a config that still has
-/// a `qmd_index` step, in either earlier shape. `None` when there is
+/// A rewrite `datalib-http` makes by itself, to a config it finds in an
+/// older shape. Each is a text edit that keeps the file as written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Upgrade {
+    /// A `qmd_index` step, in either earlier shape, becomes
+    /// `qmd_aggregator` downstream of each source's own qmd steps.
+    QmdSteps,
+    /// `common.always_clear_before_ingest` is taken out.
+    AlwaysClear,
+}
+
+impl Upgrade {
+    pub fn describe(self) -> &'static str {
+        match self {
+            Upgrade::QmdSteps => {
+                "`qmd_index` is now `qmd_aggregator`, reading each source's own \
+                 keyword_index and embed steps"
+            }
+            Upgrade::AlwaysClear => {
+                "`always_clear_before_ingest` is gone: every source deletes what its \
+                 input no longer holds without emptying its store first"
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Upgraded {
+    pub text: String,
+    pub made: Vec<Upgrade>,
+}
+
+/// The rewrites `datalib-http` makes unattended. `None` when there is
 /// nothing to do, including text that is not TOML: the loader reports
 /// that. Refused when the result would drop an entry the original ran, or
 /// drop more entries than the original, since nobody reviews this rewrite
-/// before it lands. Both, because the original already loses its
-/// `qmd_index`: a count alone misses a custom step lost in its place, and
-/// the lost entries alone miss an added step that does not load.
-pub fn upgrade_qmd_steps(text: &str) -> Result<Option<String>> {
-    if !qmd_steps::is_retired(text).unwrap_or(false) {
+/// before it lands. Both, because the original already loses the entries
+/// in the old shape: a count alone misses a custom step lost in its place,
+/// and the lost entries alone miss an added step that does not load.
+pub fn upgrade(text: &str) -> Result<Option<Upgraded>> {
+    let mut out = text.to_string();
+    let mut made = Vec::new();
+    if qmd_steps::is_retired(&out).unwrap_or(false) {
+        out = qmd_steps::rewrite(&out)?;
+        made.push(Upgrade::QmdSteps);
+    }
+    if always_clear::is_retired(&out).unwrap_or(false) {
+        out = always_clear::rewrite(&out)?;
+        made.push(Upgrade::AlwaysClear);
+    }
+    if made.is_empty() {
         return Ok(None);
     }
-    let out = qmd_steps::rewrite(text)?;
     let before = datalib_dag::config::check_text(text);
     let after = datalib_dag::config::check_text(&out);
     let kept = loaded(&after.cfg);
@@ -88,7 +134,7 @@ pub fn upgrade_qmd_steps(text: &str) -> Result<Option<String>> {
             after.render(std::path::Path::new(datalib_dag::config::CONFIG_FILE_NAME))
         );
     }
-    Ok(Some(out))
+    Ok(Some(Upgraded { text: out, made }))
 }
 
 /// Every entry that reached the graph, by kind and id.
@@ -625,14 +671,39 @@ inputs = ["mail/render_markdown"]
     /// one to report on.
     #[test]
     fn the_unattended_upgrade_rewrites_only_the_shared_qmd_index() {
-        let out = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
+        let up = upgrade(SHARED_QMD_INDEX).unwrap().unwrap();
+        assert_eq!(up.made, vec![Upgrade::QmdSteps]);
+        let out = up.text;
         assert!(out.contains("function = \"keyword_index\""), "{out}");
         assert!(out.contains("function = \"embed\""), "{out}");
         let check = datalib_dag::config::check_text(&out);
         assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
-        assert_eq!(upgrade_qmd_steps(&out).unwrap(), None);
-        assert_eq!(upgrade_qmd_steps("not [ toml").unwrap(), None);
-        assert_eq!(upgrade_qmd_steps("").unwrap(), None);
+        assert_eq!(upgrade(&out).unwrap(), None);
+        assert_eq!(upgrade("not [ toml").unwrap(), None);
+        assert_eq!(upgrade("").unwrap(), None);
+    }
+
+    /// The retired wipe switch goes without a person being asked, and the
+    /// step that carried it loads afterwards.
+    #[test]
+    fn the_unattended_upgrade_drops_always_clear() {
+        let text = SHARED_QMD_INDEX.replace(
+            "[steps.params.mbox]\npath = \"/m\"\n",
+            "[steps.params.mbox]\npath = \"/m\"\n[steps.params.common]\n\
+             always_clear_before_ingest = true\n",
+        );
+        assert_ne!(text, SHARED_QMD_INDEX, "the fixture must carry the key");
+        let up = upgrade(&text).unwrap().unwrap();
+        assert_eq!(up.made, vec![Upgrade::QmdSteps, Upgrade::AlwaysClear]);
+        assert!(
+            !up.text.contains("always_clear_before_ingest"),
+            "{}",
+            up.text
+        );
+        assert!(!up.text.contains("[steps.params.common]"), "{}", up.text);
+        let check = datalib_dag::config::check_text(&up.text);
+        assert!(check.is_clean(), "{:?}\n{}", check.diagnostics, up.text);
+        assert_eq!(detect(&text).unwrap(), LegacyFormat::QmdIndex);
     }
 
     /// A rewrite nobody reviews must not cost an entry the original ran.
@@ -656,7 +727,7 @@ inputs = ["mail/render_markdown"]
             !runs(&qmd_steps::rewrite(&clash).unwrap()),
             "the fixture must make the rewrite drop the custom step"
         );
-        let err = upgrade_qmd_steps(&clash).unwrap_err().to_string();
+        let err = upgrade(&clash).unwrap_err().to_string();
         assert!(err.contains("would not load"), "{err}");
         assert!(err.contains(&format!("step {extra}")), "{err}");
     }

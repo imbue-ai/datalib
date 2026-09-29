@@ -145,12 +145,15 @@ pub struct FetchSummary {
     pub files: usize,
     pub rows: usize,
     pub parse_errors: usize,
+    /// Photo edges of connections the export no longer lists.
+    pub photos_removed: usize,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
+    let mut connections_read = false;
     let mut tx = db.pool().begin().await.context("begin linkedin tx")?;
 
     for path in files_with_extension(&opts.input_path, "csv") {
@@ -167,6 +170,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             Ok(n) => {
                 summary.files += 1;
                 summary.rows += n;
+                connections_read |= table == "connections";
                 opts.progress
                     .set_message(&format!("{table}: {n} rows ({} files)", summary.files));
             }
@@ -198,6 +202,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
 
     tx.commit().await.context("commit linkedin tx")?;
+
+    if connections_read {
+        summary.photos_removed = photos::prune_to_connections(&db).await?;
+    }
 
     // Photo fetch runs after the snapshot is committed (it needs the
     // `connections` rows persisted) and is a no-op unless enabled. Each

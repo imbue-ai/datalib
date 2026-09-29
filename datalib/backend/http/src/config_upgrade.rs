@@ -1,8 +1,9 @@
-//! A config that still has a `qmd_index` step, from before
-//! `qmd_aggregator`, is rewritten in place as soon as the server sees it:
-//! at boot, and whenever the file changes. The text it replaced is kept as
-//! `config.toml.bak`. The rewrite itself is
-//! `datalib_migrate_config::upgrade_qmd_steps`.
+//! A config in a shape the server can bring forward by itself — a
+//! `qmd_index` step from before `qmd_aggregator`, a retired
+//! `always_clear_before_ingest` — is rewritten in place as soon as the
+//! server sees it: at boot, and whenever the file changes. The text it
+//! replaced is kept as `config.toml.bak`. The rewrites themselves are
+//! `datalib_migrate_config::upgrade`.
 
 use std::path::{Path, PathBuf};
 
@@ -10,17 +11,17 @@ use tokio::sync::broadcast;
 
 use crate::watch::{RootEvent, RootFrame};
 
-/// Rewrite the root's config if it is in the old shape, and say so in the
+/// Rewrite the root's config if it is in an older shape, and say so in the
 /// log. Returns where the old text went, when it did.
 pub fn upgrade(root: &Path) -> Option<PathBuf> {
     let path = datalib_dag::config::root_config_path(root);
     let text = std::fs::read_to_string(&path).ok()?;
-    let upgraded = match datalib_migrate_config::upgrade_qmd_steps(&text) {
+    let upgraded = match datalib_migrate_config::upgrade(&text) {
         Ok(Some(upgraded)) => upgraded,
         Ok(None) => return None,
         Err(e) => {
             tracing::error!(
-                "config: {} still has a `qmd_index` step, and was left as it is: {e:#}. \
+                "config: {} is in an older shape, and was left as it is: {e:#}. \
                  `datalib-migrate-config {} --force` shows the rewrite.",
                 path.display(),
                 root.display()
@@ -30,15 +31,16 @@ pub fn upgrade(root: &Path) -> Option<PathBuf> {
     };
     let bak = path.with_extension("toml.bak");
     let written = datalib_dag::config::write_owner_only(&bak, text.as_bytes())
-        .and_then(|()| datalib_dag::config::replace_config(&path, &upgraded));
+        .and_then(|()| datalib_dag::config::replace_config(&path, &upgraded.text));
     if let Err(e) = written {
         tracing::error!("config: could not migrate {}: {e}", path.display());
         return None;
     }
+    let made: Vec<&str> = upgraded.made.iter().map(|u| u.describe()).collect();
     tracing::warn!(
-        "config: migrated {}: `qmd_index` is now `qmd_aggregator`, reading each \
-         source's own keyword_index and embed steps. The previous file is {}.",
+        "config: migrated {}: {}. The previous file is {}.",
         path.display(),
+        made.join("; "),
         bak.display()
     );
     Some(bak)
