@@ -122,6 +122,8 @@ pub enum Retired {
     TypesAndMethodTables,
     /// A `qmd_index` fan-in, from before `qmd_aggregator` (`qmd_steps.rs`).
     QmdIndex,
+    /// A step's `common.always_clear_before_ingest` (`always_clear.rs`).
+    AlwaysClear,
 }
 
 /// Which retired shape this config is in, or `None` when it is already

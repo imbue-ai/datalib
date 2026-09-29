@@ -21,6 +21,9 @@ serde = { workspace = true }
 shlex = "1"
 serde_json = { workspace = true }
 toml = { workspace = true }
+# Bazel-only `datalib_migrate_config` edits configs with it; a Cargo
+# member has to name a crate for crate_universe to render it.
+toml_edit = { workspace = true }
 thiserror = { workspace = true }
 # Workspace tokio lacks `process`/`sync`/`time`/`fs`; features are
 # additive so we add what the scheduler + subprocess runner need.

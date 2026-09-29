@@ -1368,6 +1368,23 @@ fn accept_steps(
             );
             continue;
         }
+        if carries_always_clear(&c.entry) {
+            diags.push(
+                c.diag(
+                    Severity::Rejected,
+                    text,
+                    None,
+                    "`common.always_clear_before_ingest` is gone: every source now deletes \
+                     what its input no longer holds, without emptying its store first",
+                )
+                .with_help(
+                    "the app takes the key out itself when it next reads the file, keeping \
+                     the old one as `config.toml.bak`; from a terminal, \
+                     `datalib-migrate-config <data root> --force`",
+                ),
+            );
+            continue;
+        }
         if is_builtin(&c.entry, "keyword_index")
             && aggregated.as_ref().is_some_and(|a| !a.contains(&id))
         {
@@ -1457,6 +1474,14 @@ fn retired_subcommand(command: &str) -> Option<&str> {
 
 fn is_builtin(e: &StepEntry, function: &str) -> bool {
     e.command.is_none() && e.function.as_deref() == Some(function)
+}
+
+fn carries_always_clear(e: &StepEntry) -> bool {
+    e.params
+        .as_ref()
+        .and_then(|p| p.get("common"))
+        .and_then(|c| c.get("always_clear_before_ingest"))
+        .is_some()
 }
 
 /// Every step a built-in `qmd_aggregator` reads, or `None` in a config
@@ -3886,6 +3911,38 @@ inputs = ["mail/render_markdown"]
             .steps
             .iter()
             .any(|s| s.id == "mail/render_markdown"));
+    }
+
+    /// The retired wipe switch refuses its step and names the rewrite, so
+    /// a config the app has not yet upgraded says what to do from a terminal.
+    #[test]
+    fn a_step_still_carrying_always_clear_is_refused() {
+        let check = check_text(
+            r#"
+[[groups]]
+id = "sms"
+type = "sms_backup_restore"
+
+[[steps]]
+group = "sms"
+function = "ingest"
+[steps.params.common]
+always_clear_before_ingest = true
+
+[[steps]]
+group = "sms"
+function = "render_markdown"
+inputs = ["sms/ingest"]
+"#,
+        );
+        let refused: Vec<&Diagnostic> = check
+            .diagnostics
+            .iter()
+            .filter(|d| d.id() == Some("sms/ingest"))
+            .collect();
+        assert_eq!(refused.len(), 1, "{:?}", check.diagnostics);
+        assert_eq!(refused[0].severity, Severity::Rejected);
+        assert!(refused[0].describe().contains("datalib-migrate-config"));
     }
 
     /// The aggregator keeps the collection set to the sources it reads,
