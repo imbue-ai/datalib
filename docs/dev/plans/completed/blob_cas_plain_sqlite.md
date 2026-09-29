@@ -3,10 +3,11 @@
 **Status: built (2026-09-28), kept as the record.** The reference is
 `datalib/backend/etl/README.md` §"Blob CAS and per-provider edge
 tables". Where the build differs from the text below: `RawStoreHandle`
-gained `versioned_pools()` so `commit_all` leaves the CAS out; the
-refusal prints the conversion command itself, with the real paths,
-rather than pointing at a doc; and `introspect.rs` lists `blobs.sqlite`
-by name, since it had only been counting `*.doltlite_db` files.
+gained `versioned_pools()` so `commit_all` leaves the CAS out, and
+`introspect.rs` lists `blobs.sqlite` by name, since it had only been
+counting `*.doltlite_db` files. §"Existing stores" was built as written
+(#887), then replaced the next day: `BlobCas::open` converts the old
+store itself rather than refusing, so an upgrade needs no shell step.
 
 *The sizes were measured on 2026-09-28 on copies of two stores from
 `~/datalib/stay_alive_1`, with the doltlite 0.50.5 shell; the stores

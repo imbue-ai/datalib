@@ -607,9 +607,12 @@ connection runs `synchronous=FULL` so that order survives a power cut.
 
 **Nothing resets the CAS.** Delete `blobs.sqlite` and reset the ingest
 step together; deleting the file alone leaves edge rows naming bytes
-that are gone, and the download will not refetch them. `BlobCas::open`
-refuses while a `blobs.doltlite_db` from an older build sits beside the
-new file, for the same reason, and its message says how to convert it.
+that are gone, and the download will not refetch them. For the same
+reason `BlobCas::open` converts a `blobs.doltlite_db` an older build
+left: it copies every blob into a temporary plain file, checks the row
+count and byte total, renames it into place and deletes the old store.
+A crash part-way leaves the old store whole and the next open starts
+over.
 
 **Filenames dedupe on the content hash, not on the derived name.** A blob's
 rendered filename has a content-addressed stem and an extension derived from

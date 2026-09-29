@@ -100,44 +100,109 @@ async fn connect(cas_path: &Path, read_only: bool) -> Result<SqlitePool> {
 }
 
 /// Where the CAS lived while it was a doltlite store. Temporary: remove
-/// it, [`refuse_a_doltlite_cas`] and its test in 0.41.
+/// it, [`convert_a_doltlite_cas`] and their tests in 0.41.
 const DOLTLITE_CAS: &str = "blobs.doltlite_db";
 
-/// A new, empty CAS beside a store whose edge rows name every hash would
-/// read as "all fetched" to the download's skip check, and every
-/// attachment would render as missing for good. So an old one stops the
-/// open until a person converts or deletes it.
-fn refuse_a_doltlite_cas(cas_path: &Path) -> Result<()> {
+/// Moves a CAS an older build left in doltlite's format into the plain
+/// file at `cas_path`, then deletes the old one. Left alone, a new empty
+/// CAS beside edge rows that name every hash would read as "all fetched"
+/// to the download's skip check, and every attachment would render as
+/// missing for good.
+///
+/// The copy goes to a temporary file and is renamed into place only once
+/// its row count and byte total match, so a crash leaves the old store
+/// whole and the next open starts over.
+async fn convert_a_doltlite_cas(cas_path: &Path) -> Result<()> {
     let dir = cas_path.parent().unwrap_or_else(|| Path::new("."));
     let old = dir.join(DOLTLITE_CAS);
     if !old.exists() {
         return Ok(());
     }
-    let quoted_dir = format!("'{}'", dir.display().to_string().replace('\'', "'\\''"));
-    anyhow::bail!(
-        "{old} is a blob store in doltlite's format, and this build keeps \
-         blobs in plain SQLite. Either convert it, keeping the bytes (seconds):\n\n  \
-         cd {quoted_dir} && datalib-doltlite {DOLTLITE_CAS} \"{sql}\" && rm -f {DOLTLITE_CAS} \
-         {DOLTLITE_CAS}.lock .{DOLTLITE_CAS}-lock\n\n\
-         or delete it and reset this source's ingest step, and the next sync \
-         fetches every attachment again.",
-        old = old.display(),
-        sql = conversion_sql(Path::new(crate::raw_layout::BLOBS_DB)),
-    )
+    if !cas_path.exists() {
+        copy_doltlite_cas(&old, cas_path).await?;
+    }
+    for leftover in [
+        old.clone(),
+        dir.join(format!("{DOLTLITE_CAS}.lock")),
+        dir.join(format!(".{DOLTLITE_CAS}-lock")),
+    ] {
+        match std::fs::remove_file(&leftover) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("remove {}", leftover.display()));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+async fn copy_doltlite_cas(old: &Path, cas_path: &Path) -> Result<()> {
+    let tmp = cas_path.with_extension("sqlite.tmp");
+    for stale in [tmp.clone(), tmp.with_extension("tmp-journal")] {
+        if stale.exists() {
+            std::fs::remove_file(&stale).with_context(|| format!("remove {}", stale.display()))?;
+        }
+    }
+    // A connection of its own on the old file, not `doltlite_raw::open`:
+    // this reads `main`, where every seal published its blobs, and writes
+    // nothing to the file it reads.
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        // `ATTACH` opens with this connection's flags, and the copy it
+        // attaches does not exist yet. `old` does, so nothing is created here.
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(old)
+                .create_if_missing(true),
+        )
+        .await
+        .with_context(|| format!("open {}", old.display()))?;
+    let copied = async {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(conversion_sql(&tmp)))
+            .execute(&pool)
+            .await
+            .context("copy the blobs")?;
+        // Totals of `length(bytes)` on the new side, not the copied
+        // `byte_len`, so a truncated value cannot pass.
+        let (rows_old, rows_new, bytes_old, bytes_new): (i64, i64, i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM main.cas_objects), \
+                    (SELECT count(*) FROM out.cas_objects), \
+                    (SELECT coalesce(sum(byte_len), 0) FROM main.cas_objects), \
+                    (SELECT coalesce(sum(length(bytes)), 0) FROM out.cas_objects)",
+        )
+        .fetch_one(&pool)
+        .await
+        .context("count the copy")?;
+        if (rows_old, bytes_old) != (rows_new, bytes_new) {
+            anyhow::bail!(
+                "the copy holds {rows_new} blobs of {bytes_new} bytes, \
+                 the old store {rows_old} of {bytes_old}"
+            );
+        }
+        tracing::info!(
+            blobs = rows_new,
+            bytes = bytes_new,
+            from = %old.display(),
+            "converted a doltlite blob store to plain SQLite"
+        );
+        Ok(())
+    }
+    .await;
+    pool.close().await;
+    copied.with_context(|| format!("convert {} to plain SQLite", old.display()))?;
+    std::fs::rename(&tmp, cas_path).with_context(|| format!("move {} into place", tmp.display()))
 }
 
 /// Copies every blob from the doltlite CAS the connection is on into a
-/// new plain CAS at `target`.
+/// new plain CAS at `target`, attached as `out`.
 fn conversion_sql(target: &Path) -> String {
-    let ddl = CAS_OBJECTS_DDL
-        .replace("IF NOT EXISTS cas_objects", "out.cas_objects")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let ddl = CAS_OBJECTS_DDL.replace("IF NOT EXISTS cas_objects", "out.cas_objects");
     format!(
-        "ATTACH '{uri}' AS out; {ddl}; INSERT INTO out.cas_objects \
-         SELECT blake3, byte_len, content_type, bytes FROM cas_objects;",
-        uri = datalib_runtime::plain_sqlite::uri(target),
+        "ATTACH '{uri}' AS out; PRAGMA out.synchronous = FULL; {ddl}; \
+         INSERT INTO out.cas_objects SELECT blake3, byte_len, content_type, bytes FROM main.cas_objects;",
+        uri = datalib_runtime::plain_sqlite::uri(target).replace('\'', "''"),
     )
 }
 
@@ -151,7 +216,7 @@ pub struct BlobCas {
 impl BlobCas {
     /// The download step's handle on its CAS.
     pub async fn open(cas_path: &Path) -> Result<Self> {
-        refuse_a_doltlite_cas(cas_path)?;
+        convert_a_doltlite_cas(cas_path).await?;
         let pool = connect(cas_path, false).await?;
         if let Err(e) = sqlx::query(CAS_OBJECTS_DDL).execute(&pool).await {
             pool.close().await;
@@ -1035,44 +1100,86 @@ mod tests {
         assert_eq!(&head[..16], b"SQLite format 3\0");
     }
 
-    /// A doltlite CAS left by an older build is refused rather than
-    /// shadowed by a new empty one, and the conversion the refusal prints
-    /// carries every blob across.
-    #[tokio::test]
-    async fn a_doltlite_cas_is_refused_and_its_conversion_keeps_every_blob() {
-        let d = tempdir().unwrap();
-        let old_path = d.path().join(DOLTLITE_CAS);
-        let new_path = d.path().join(crate::raw_layout::BLOBS_DB);
-        let old = crate::doltlite_raw::open(&old_path, &[CAS_OBJECTS_DDL])
+    /// A CAS as an older build left it: doltlite, with one blob sealed
+    /// and published, and its writer lock beside it.
+    async fn doltlite_cas_with(dir: &Path, bytes: &[u8]) -> String {
+        let pool = crate::doltlite_raw::open(&dir.join(DOLTLITE_CAS), &[CAS_OBJECTS_DDL])
             .await
             .unwrap();
-        let hash = blake3_hex(b"kept");
-        sqlx::query("INSERT INTO cas_objects VALUES (?, 4, 'text/plain', ?)")
+        let hash = blake3_hex(bytes);
+        sqlx::query("INSERT INTO cas_objects VALUES (?, ?, 'text/plain', ?)")
             .bind(&hash)
-            .bind(&b"kept"[..])
-            .execute(&old)
+            .bind(bytes.len() as i64)
+            .bind(bytes)
+            .execute(&pool)
             .await
             .unwrap();
-
-        let err = format!("{:#}", BlobCas::open(&new_path).await.unwrap_err());
-        assert!(
-            err.contains("datalib-doltlite") && err.contains("reset"),
-            "{err}"
-        );
-        assert!(!new_path.exists(), "no empty CAS beside the old one");
-
-        sqlx::raw_sql(sqlx::AssertSqlSafe(conversion_sql(&new_path)))
-            .execute(&old)
+        crate::doltlite_raw::commit_run(&pool, "download: blobs")
             .await
             .unwrap();
-        old.close().await;
-        std::fs::remove_file(&old_path).unwrap();
+        pool.close().await;
+        hash
+    }
+
+    /// An upgraded root keeps its attachments: the open moves every blob
+    /// into the plain file and deletes the doltlite store and its locks,
+    /// rather than starting an empty CAS the edge rows would lie about.
+    #[tokio::test]
+    async fn a_doltlite_cas_is_converted_once_and_the_old_store_goes() {
+        let d = tempdir().unwrap();
+        let hash = doltlite_cas_with(d.path(), b"kept").await;
+        let new_path = d.path().join(crate::raw_layout::BLOBS_DB);
 
         let cas = BlobCas::open(&new_path).await.unwrap();
         let got = cas.get(&hash).await.unwrap().expect("carried across");
         assert_eq!(got.bytes, b"kept");
         assert_eq!(got.content_type.as_deref(), Some("text/plain"));
         cas.close().await;
+
+        let left: Vec<String> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, [crate::raw_layout::BLOBS_DB], "nothing else left");
+        let head = std::fs::read(&new_path).unwrap();
+        assert_eq!(&head[..16], b"SQLite format 3\0");
+    }
+
+    /// A conversion killed part-way leaves a temporary copy and maybe its
+    /// journal; the next open throws both away and copies again.
+    #[tokio::test]
+    async fn a_conversion_cut_short_starts_over() {
+        let d = tempdir().unwrap();
+        let hash = doltlite_cas_with(d.path(), b"kept").await;
+        std::fs::write(d.path().join("blobs.sqlite.tmp"), b"half a copy").unwrap();
+        std::fs::write(d.path().join("blobs.sqlite.tmp-journal"), b"hot").unwrap();
+
+        let cas = BlobCas::open(&d.path().join(crate::raw_layout::BLOBS_DB))
+            .await
+            .unwrap();
+        assert!(cas.get(&hash).await.unwrap().is_some());
+        cas.close().await;
+        assert!(!d.path().join("blobs.sqlite.tmp").exists());
+        assert!(!d.path().join("blobs.sqlite.tmp-journal").exists());
+    }
+
+    /// A conversion that renamed its copy into place and died before
+    /// deleting the old store is finished by the next open, which keeps
+    /// the new file as it is.
+    #[tokio::test]
+    async fn an_old_store_beside_a_finished_conversion_is_deleted_not_copied() {
+        let d = tempdir().unwrap();
+        let new_path = d.path().join(crate::raw_layout::BLOBS_DB);
+        let cas = BlobCas::open(&new_path).await.unwrap();
+        let kept = cas.put(b"already here", None).await.unwrap();
+        cas.close().await;
+        let stale = doltlite_cas_with(d.path(), b"only in the old store").await;
+
+        let cas = BlobCas::open(&new_path).await.unwrap();
+        assert!(cas.get(&kept).await.unwrap().is_some());
+        assert!(cas.get(&stale).await.unwrap().is_none(), "not copied again");
+        cas.close().await;
+        assert!(!d.path().join(DOLTLITE_CAS).exists());
     }
 
     #[tokio::test(flavor = "multi_thread")]
