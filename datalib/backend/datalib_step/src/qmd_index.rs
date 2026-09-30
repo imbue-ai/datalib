@@ -75,10 +75,11 @@ pub(crate) enum ProgressCall {
 /// before it.
 ///
 /// qmd reports absolute positions and the handle takes deltas, so the
-/// previous reading is the whole state this needs. Progress is counted
-/// in **input bytes**: `total_chunks` climbs as qmd discovers chunks
-/// batch by batch, so a chunk ratio would read wrong — the chunk counts
-/// go in the message, where they are a count rather than a fraction.
+/// previous reading is the whole state this needs. The bar counts
+/// **documents**, which is what the Manage row's queued and done mean
+/// for every other step. The document count moves only now and then
+/// (`EmbedProgress`), so the chunks and bytes go in the message, which
+/// moves on every reading.
 ///
 /// A reading identical to the one before produces nothing. qmd repeats
 /// its final reading, and a step whose message is rewritten with the
@@ -91,15 +92,15 @@ pub(crate) fn embed_progress_calls(
         return Vec::new();
     }
     let mut calls = Vec::new();
-    if prev.map(|p| p.total_bytes) != Some(now.total_bytes) {
-        calls.push(ProgressCall::SetLength(now.total_bytes));
+    if prev.map(|p| p.total_docs) != Some(now.total_docs) {
+        calls.push(ProgressCall::SetLength(now.total_docs));
     }
     // `saturating_sub` rather than an assert: a position that went
     // backwards is qmd's business, and dropping an embed over it would
     // trade a wrong progress bar for a failed index.
     let advanced = now
-        .bytes_processed
-        .saturating_sub(prev.map_or(0, |p| p.bytes_processed));
+        .docs_embedded
+        .saturating_sub(prev.map_or(0, |p| p.docs_embedded));
     if advanced > 0 {
         calls.push(ProgressCall::Inc(advanced));
     }
@@ -117,12 +118,14 @@ fn embed_message(p: EmbedProgress) -> String {
     } else {
         ("KB", 1024.0)
     };
-    let mut msg = format!(
-        "embedding: {} chunks · {:.1}/{:.1} {unit}",
-        p.chunks_embedded,
-        p.bytes_processed as f64 / scale,
-        p.total_bytes as f64 / scale,
-    );
+    let mut msg = format!("embedding: {} chunks", p.chunks_embedded);
+    if p.total_bytes > 0 {
+        msg.push_str(&format!(
+            " · {:.1}/{:.1} {unit}",
+            p.bytes_processed as f64 / scale,
+            p.total_bytes as f64 / scale,
+        ));
+    }
     if p.errors > 0 {
         msg.push_str(&format!(" · {} retrying", p.errors));
     }
@@ -340,6 +343,8 @@ mod tests {
 
     fn at(bytes_processed: u64, total_bytes: u64, chunks_embedded: u64) -> EmbedProgress {
         EmbedProgress {
+            docs_embedded: 0,
+            total_docs: 0,
             chunks_embedded,
             total_chunks: 0,
             bytes_processed,
@@ -348,27 +353,58 @@ mod tests {
         }
     }
 
+    fn docs(docs_embedded: u64, total_docs: u64) -> EmbedProgress {
+        EmbedProgress {
+            docs_embedded,
+            total_docs,
+            ..at(100, 1000, 8)
+        }
+    }
+
     /// The first reading has to declare the total, or the bar has no
-    /// scale — and its bytes are progress already, not a baseline.
+    /// scale — and its documents are progress already, not a baseline.
     #[test]
-    fn the_first_reading_sets_the_length_and_counts_its_own_bytes() {
+    fn the_first_reading_sets_the_length_and_counts_its_own_documents() {
         assert_eq!(
-            embed_progress_calls(None, at(100, 1000, 8)),
+            embed_progress_calls(None, docs(2, 10)),
             vec![
-                ProgressCall::SetLength(1000),
-                ProgressCall::Inc(100),
+                ProgressCall::SetLength(10),
+                ProgressCall::Inc(2),
                 ProgressCall::Message("embedding: 8 chunks · 0.1/1.0 KB".to_string()),
             ]
         );
     }
 
-    /// qmd reports absolute positions; the handle takes deltas. This is
-    /// the conversion, and getting it wrong double-counts every batch.
+    /// The script reports absolute counts; the handle takes deltas. This
+    /// is the conversion, and getting it wrong double-counts every batch.
     #[test]
     fn a_later_reading_increments_by_the_difference() {
-        let calls = embed_progress_calls(Some(at(100, 1000, 8)), at(250, 1000, 20));
-        assert_eq!(calls[0], ProgressCall::Inc(150));
+        let calls = embed_progress_calls(Some(docs(2, 10)), docs(5, 10));
+        assert_eq!(calls[0], ProgressCall::Inc(3));
         assert_eq!(calls.len(), 2, "the total didn't change, so no SetLength");
+    }
+
+    /// The bar is documents, not bytes: the Manage row read "342,810
+    /// queued" for a source of a few hundred documents when it was
+    /// bytes. Bytes moving between two document counts move only the
+    /// message.
+    #[test]
+    fn bytes_alone_do_not_move_the_bar() {
+        let before = EmbedProgress {
+            bytes_processed: 100,
+            ..docs(2, 10)
+        };
+        let after = EmbedProgress {
+            bytes_processed: 900,
+            chunks_embedded: 40,
+            ..before
+        };
+        assert_eq!(
+            embed_progress_calls(Some(before), after),
+            vec![ProgressCall::Message(
+                "embedding: 40 chunks · 0.9/1.0 KB".to_string()
+            )]
+        );
     }
 
     /// qmd emits its final reading twice (observed on every run). A
@@ -376,19 +412,32 @@ mod tests {
     /// redundant message the UI has to redraw.
     #[test]
     fn an_identical_reading_says_nothing() {
-        let same = at(1000, 1000, 60);
+        let same = docs(10, 10);
         assert_eq!(embed_progress_calls(Some(same), same), Vec::new());
     }
 
-    /// Defensive, and deliberately not a panic: a position that went
+    /// Defensive, and deliberately not a panic: a count that went
     /// backwards is qmd's business. Losing an index over a wrong
     /// progress bar would be the worse trade.
     #[test]
-    fn a_position_that_went_backwards_does_not_underflow() {
-        let calls = embed_progress_calls(Some(at(500, 1000, 40)), at(200, 1000, 40));
+    fn a_count_that_went_backwards_does_not_underflow() {
+        let calls = embed_progress_calls(Some(docs(5, 10)), docs(3, 10));
         assert!(
             !calls.iter().any(|c| matches!(c, ProgressCall::Inc(_))),
             "nothing advanced, so nothing should increment: {calls:?}"
+        );
+    }
+
+    /// The script's first reading comes before qmd has said anything, so
+    /// it has documents and no bytes; "0.0/0.0 KB" would say nothing.
+    #[test]
+    fn a_reading_with_no_bytes_yet_leaves_them_out() {
+        assert_eq!(
+            embed_message(EmbedProgress {
+                total_docs: 10,
+                ..EmbedProgress::default()
+            }),
+            "embedding: 0 chunks"
         );
     }
 

@@ -34,14 +34,18 @@ pub fn mask_for_group(group: &str) -> String {
     format!("{group}/render_markdown/**/*.md")
 }
 
-/// How far along the embedding pass is, as qmd's own `EmbedProgress`
-/// reports it (`third-party/qmd/src/store.ts`).
+/// How far along the embedding pass is: qmd's own `EmbedProgress`
+/// (`third-party/qmd/src/store.ts`), plus the documents done, which qmd
+/// does not report and the script counts (`documentCounter`).
 ///
-/// Progress is measured in **input bytes**, not chunks: qmd discovers
-/// the chunk count batch by batch, so `total_chunks` climbs during the
-/// run and a chunk ratio reads wrong while large documents remain.
+/// The documents lag the bytes: the script re-counts them only now and
+/// then, because the count scans the whole index. `total_chunks` is no
+/// measure of the whole either: qmd discovers chunks batch by batch, so
+/// it climbs during the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EmbedProgress {
+    pub docs_embedded: u64,
+    pub total_docs: u64,
     pub chunks_embedded: u64,
     pub total_chunks: u64,
     pub bytes_processed: u64,
@@ -65,11 +69,13 @@ fn n(v: &Value, key: &str) -> u64 {
 }
 
 impl EmbedProgress {
-    /// From the script's `progress` line, whose field names are qmd's, so
-    /// a rename upstream has to fail a test here rather than silently zero
-    /// the numbers.
+    /// From the script's `progress` line, whose byte and chunk field names
+    /// are qmd's, so a rename upstream has to fail a test here rather than
+    /// silently zero the numbers.
     pub fn from_json(v: &Value) -> Self {
         Self {
+            docs_embedded: n(v, "docsEmbedded"),
+            total_docs: n(v, "totalDocs"),
             chunks_embedded: n(v, "chunksEmbedded"),
             total_chunks: n(v, "totalChunks"),
             bytes_processed: n(v, "bytesProcessed"),
@@ -593,16 +599,18 @@ mod tests {
         }
     }
 
-    /// The exact lines a real embed produced, pasted from a run of the
-    /// script against a scratch index. The field names are qmd's
-    /// (`EmbedProgress` in `third-party/qmd/src/store.ts`), so a rename
-    /// upstream has to fail here rather than silently zero the numbers.
+    /// qmd's fields as a real run of the script produced them, with the
+    /// script's document count beside them. The byte and chunk names are
+    /// qmd's (`EmbedProgress` in `third-party/qmd/src/store.ts`), so a
+    /// rename upstream has to fail here rather than silently zero them.
     #[test]
     fn a_real_embed_progress_line_parses_into_its_numbers() {
-        let line = r#"{"event":"progress","chunksEmbedded":32,"totalChunks":60,"bytesProcessed":62171,"totalBytes":116328,"errors":0}"#;
+        let line = r#"{"event":"progress","collection":"bridge","chunksEmbedded":32,"totalChunks":60,"bytesProcessed":62171,"totalBytes":116328,"errors":0,"docsEmbedded":3,"totalDocs":7}"#;
         assert_eq!(
             EmbedProgress::from_json(&progress(line)),
             EmbedProgress {
+                docs_embedded: 3,
+                total_docs: 7,
                 chunks_embedded: 32,
                 total_chunks: 60,
                 bytes_processed: 62171,
@@ -661,6 +669,8 @@ mod tests {
                 r#"{"event":"progress","bytesProcessed":10,"totalBytes":20}"#
             )),
             EmbedProgress {
+                docs_embedded: 0,
+                total_docs: 0,
                 chunks_embedded: 0,
                 total_chunks: 0,
                 bytes_processed: 10,
