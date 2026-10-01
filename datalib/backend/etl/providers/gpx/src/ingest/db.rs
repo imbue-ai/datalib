@@ -38,24 +38,53 @@ pub async fn write_file(
     for (table, rows) in &new.points {
         written.points_added += insert_new(conn, table, rows).await?;
     }
-    let path = match &new.file[0] {
-        Value::Text(p) => p.clone(),
-        other => anyhow::bail!("gpx_files.path must be text, found {other:?}"),
+    let (Value::Text(path), Value::Text(key)) = (&new.file[0], &new.file[1]) else {
+        anyhow::bail!("gpx_files.path and file_key must be text");
     };
-    let old = load_per_file(conn, &path).await?;
+    // Diffed against what the key holds, whichever path it was under: a
+    // renamed file's rows are compared with its old self's.
+    let old = load_key_rows(conn, key).await?;
     for (table, rows) in &new.per_file {
-        let before = old
-            .as_ref()
-            .and_then(|(_, m)| m.get(table.name))
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+        let before = old.get(table.name).map(Vec::as_slice).unwrap_or(&[]);
         let d = rows::diff(table, before, rows);
         delete_keys(conn, table, &d.deletes).await?;
         upsert(conn, table, &d.upserts).await?;
         note_dropped(dropped, table, rows::dropped_ids(before, rows));
     }
+    sqlx::query("DELETE FROM gpx_files WHERE file_key = ? AND path <> ?")
+        .bind(key)
+        .bind(path)
+        .execute(&mut *conn)
+        .await
+        .context("drop the path a renamed file left")?;
     upsert(conn, &FILES, std::slice::from_ref(&new.file)).await?;
     Ok(written)
+}
+
+/// Every stored path and the key its rows are under.
+pub async fn stored_keys(pool: &sqlx::SqlitePool) -> Result<HashMap<String, String>> {
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT path, file_key FROM gpx_files")
+        .fetch_all(pool)
+        .await
+        .context("read gpx_files keys")?;
+    Ok(rows.into_iter().collect())
+}
+
+/// The point ids a stored file's member rows name, of all three kinds.
+pub async fn point_ids(pool: &sqlx::SqlitePool, file_key: &str) -> Result<HashSet<String>> {
+    let mut ids = HashSet::new();
+    for (_, members, column) in MEMBERSHIP {
+        // Audited: table and column are `&'static str`s from `schema_raw`;
+        // the key is bound.
+        let sql = format!("SELECT {column} FROM {} WHERE file_key = ?", members.name);
+        let found: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .bind(file_key)
+            .fetch_all(pool)
+            .await
+            .with_context(|| format!("read {}", members.name))?;
+        ids.extend(found);
+    }
+    Ok(ids)
 }
 
 /// Delete everything a path's file was, but the points: those may be
@@ -195,7 +224,14 @@ async fn load_per_file(
         return Ok(None);
     };
     let file = decode(&FILES, &r)?;
-    let key = file_key_of(&file);
+    let per_file = load_key_rows(conn, &file_key_of(&file)).await?;
+    Ok(Some((file, per_file)))
+}
+
+async fn load_key_rows(
+    conn: &mut SqliteConnection,
+    key: &str,
+) -> Result<HashMap<&'static str, Vec<Row>>> {
     let mut per_file = HashMap::new();
     for table in PER_FILE {
         let order: Vec<&str> = table.columns[..table.key].iter().map(|(c, _)| *c).collect();
@@ -207,7 +243,7 @@ async fn load_per_file(
         );
         // Audited: every name is a `&'static str` from `schema_raw`; the key is bound.
         let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-            .bind(&key)
+            .bind(key)
             .fetch_all(&mut *conn)
             .await
             .with_context(|| format!("read {}", table.name))?;
@@ -218,7 +254,7 @@ async fn load_per_file(
                 .collect::<Result<_>>()?,
         );
     }
-    Ok(Some((file, per_file)))
+    Ok(per_file)
 }
 
 /// Insert the rows whose key is not there yet; a point already stored is

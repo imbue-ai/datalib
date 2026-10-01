@@ -56,11 +56,12 @@ impl DataProcessor for GpxIngest {
         // How well the store holds each file is otherwise invisible; the
         // three counts say at a glance whether every file comes back.
         let summary = format!(
-            "files={} unchanged={} read={} removed={} exact={} equivalent={} lossy={} \
-             points_added={} points_removed={} errors={}",
+            "files={} unchanged={} read={} renamed={} removed={} exact={} equivalent={} \
+             lossy={} points_added={} points_removed={} errors={}",
             s.files,
             s.unchanged,
             s.read,
+            s.renamed,
             s.removed,
             s.exact,
             s.equivalent,

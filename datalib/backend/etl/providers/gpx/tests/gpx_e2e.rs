@@ -278,19 +278,99 @@ async fn a_deleted_file_takes_only_the_points_no_one_else_holds() -> Result<()> 
     Ok(())
 }
 
-/// A renamed file is the same points under a new path.
+/// A renamed file keeps its rows: the commit moves one path row and
+/// nothing else.
 #[tokio::test]
-async fn a_moved_file_keeps_its_points() -> Result<()> {
+async fn a_moved_file_moves_one_row() -> Result<()> {
     let h = Harness::new().await?;
-    h.scan().await?;
+    let (_, before) = h.scan_and_commit("before").await?;
     std::fs::rename(h.root.join(BOZEMAN), h.root.join("bozeman.gpx"))?;
-    let s = h.scan().await?;
+    let (s, after) = h.scan_and_commit("after").await?;
     assert_eq!(
-        (s.read, s.removed, s.points_added, s.points_removed),
-        (1, 1, 0, 0)
+        (
+            s.read,
+            s.renamed,
+            s.removed,
+            s.points_added,
+            s.points_removed
+        ),
+        (1, 1, 0, 0, 0)
+    );
+    assert_eq!(
+        h.diff(&before, &after).await?,
+        counts(&[("gpx_files", &[("added", 1), ("removed", 1)])])
     );
     assert_eq!(h.rebuild(BOZEMAN).await?, None);
     assert!(h.rebuild("bozeman.gpx").await?.is_some());
+    Ok(())
+}
+
+/// The case renames exist for: a file renamed while its metadata is
+/// edited. The bytes differ, so `fsscan` sees a removal and an
+/// addition; the shared points say it is the same file.
+#[tokio::test]
+async fn a_renamed_and_retitled_file_moves_one_row() -> Result<()> {
+    let h = Harness::new().await?;
+    let (_, before) = h.scan_and_commit("before").await?;
+    let src = std::fs::read_to_string(h.root.join(AWAY_TEAM))?;
+    let retitled = src.replacen(
+        "<name>Away team, Presidio</name>",
+        "<name>Away team, Golden Gate</name>",
+        1,
+    );
+    assert_ne!(retitled, src);
+    std::fs::remove_file(h.root.join(AWAY_TEAM))?;
+    std::fs::write(h.root.join("enterprise/golden gate.gpx"), &retitled)?;
+    let (s, after) = h.scan_and_commit("after").await?;
+    assert_eq!((s.read, s.renamed, s.removed, s.points_added), (1, 1, 0, 0));
+    assert_eq!(
+        h.diff(&before, &after).await?,
+        counts(&[("gpx_files", &[("added", 1), ("removed", 1)])])
+    );
+    assert_eq!(
+        h.rebuild("enterprise/golden gate.gpx").await?,
+        Some(retitled)
+    );
+    assert_eq!(h.rebuild(AWAY_TEAM).await?, None);
+    Ok(())
+}
+
+/// A file put back at the path a renamed file left gets a key of its
+/// own, though the renamed file took the key that path was first given.
+#[tokio::test]
+async fn a_file_at_a_renamed_files_old_path_is_a_file_of_its_own() -> Result<()> {
+    let h = Harness::new().await?;
+    h.scan().await?;
+    std::fs::rename(h.root.join(BOZEMAN), h.root.join("bozeman.gpx"))?;
+    h.scan().await?;
+    std::fs::copy(h.root.join("bozeman.gpx"), h.root.join(BOZEMAN))?;
+    let s = h.scan().await?;
+    assert_eq!((s.read, s.renamed, s.points_added), (1, 0, 0));
+    let keys: i64 = sqlx::query_scalar("SELECT count(DISTINCT file_key) FROM gpx_files")
+        .fetch_one(h.db.pool())
+        .await?;
+    assert_eq!(keys, 6);
+    let original = std::fs::read_to_string(h.root.join(BOZEMAN))?;
+    assert_eq!(h.rebuild(BOZEMAN).await?, Some(original.clone()));
+    assert_eq!(h.rebuild("bozeman.gpx").await?, Some(original));
+    Ok(())
+}
+
+/// A file that shares too little with the one that vanished is a new
+/// file, and the vanished one is deleted.
+#[tokio::test]
+async fn an_unrelated_file_does_not_take_a_vanished_files_rows() -> Result<()> {
+    let h = Harness::new().await?;
+    h.scan().await?;
+    let sherwood = "holodeck/2369-03-04 Sherwood.gpx";
+    let src = std::fs::read_to_string(h.root.join(sherwood))?;
+    std::fs::remove_file(h.root.join(BOZEMAN))?;
+    std::fs::write(h.root.join("holodeck/copy.gpx"), &src)?;
+    let s = h.scan().await?;
+    assert_eq!(
+        (s.read, s.renamed, s.removed, s.points_removed),
+        (1, 0, 1, 7)
+    );
     Ok(())
 }
 

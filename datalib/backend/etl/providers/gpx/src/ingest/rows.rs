@@ -37,22 +37,17 @@ pub struct FileRows {
     pub points: Vec<(Table, Vec<Row>)>,
 }
 
-/// What the store keys a file's rows under: short, so a million member
-/// rows do not each repeat a path, and a function of the path alone.
-pub fn file_key(path: &str) -> String {
-    blake3::hash(path.as_bytes()).to_hex()[..16].to_string()
-}
-
 pub struct FileFacts<'a> {
     pub path: &'a str,
+    /// What every per-file row is keyed under; see [`super::rename`].
+    pub file_key: &'a str,
     pub blake3: &'a str,
     pub size: i64,
     pub fidelity: Fidelity,
 }
 
 pub fn to_rows(facts: &FileFacts<'_>, f: &GpxFile) -> Result<FileRows> {
-    let key = file_key(facts.path);
-    let k = || Value::Text(key.clone());
+    let k = || Value::Text(facts.file_key.to_string());
     let (wpt_order, wpt_ords) = PointOrder::of(&f.waypoints);
     let file = vec![
         Value::Text(facts.path.to_string()),
@@ -356,6 +351,7 @@ mod tests {
         let f = model::split(&tree::parse(src).unwrap()).unwrap();
         let facts = FileFacts {
             path: "logs/away.gpx",
+            file_key: "0123456789abcdef",
             blake3: "00",
             size: src.len() as i64,
             fidelity: Fidelity::Exact,

@@ -11,7 +11,8 @@ each:
   week's export that overlaps a day's, adds no point rows.
 - **A small edit is a small diff.** Change one point's elevation and the
   commit holds one point row out, one in, and one member row pointed at
-  the new one.
+  the new one. Rename a file, even while retitling it, and the commit
+  holds one `gpx_files` row out and one in.
 
 The contracts every provider honors are in
 [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
@@ -32,9 +33,10 @@ segments, each a list of `trkpt`s). All three kinds of point are GPX's
 | `gpx_rtes`, `gpx_rte_rtepts` | `(file_key, rte)`, `(…, ord)` | each route, and its points in order |
 | `gpx_trks`, `gpx_trksegs`, `gpx_trkseg_trkpts` | `(file_key, trk)`, `(…, seg)`, `(…, ord)` | each track, its segments, and each segment's points in order |
 
-`file_key` is the first 16 hex digits of the blake3 of the path: short,
-because the member tables repeat it on every row, and a function of the
-path alone, so all of one file's rows sort together.
+`file_key` is 16 hex digits minted when a file is first stored, and kept
+by the file from then on, across renames (§"Renames"). It is short
+because the member tables repeat it on every row, and every per-file
+row leads with it, so all of one file's rows sort together.
 
 **Which rows came from which file** is the member tables: a point
 belongs to every file whose member rows name its id. Every per-file row
@@ -117,6 +119,34 @@ back in schema order.
 Measured on seven real files from four writers (Geo Tracker, Maprika,
 Maprika for Android, My Tracks): all `exact`.
 
+## Renames
+
+A file keeps its `file_key` when it is renamed, so its tracks, segments
+and member rows stay where they are and only its `gpx_files` row moves.
+A file read at a path the store does not hold takes, in order:
+
+1. the key of the path `fsscan` saw it move from, when the bytes are
+   unchanged;
+2. else the key of a file gone from the tree this scan that shares at
+   least half the points of the larger of the two — the one sharing the
+   most, ties to the first by path. This is what catches a rename made
+   while editing the file's metadata, whose bytes differ;
+3. else a new key: a hash of the path and the content, stepped past any
+   key a stored file holds, so a new file at a path a renamed file left
+   does not collide with it.
+
+Either way the file's rows are then diffed against what its key holds,
+so a guess that is wrong costs rows, never correctness: the store ends
+up holding exactly what the file says. Nothing is matched when the walk
+reported errors, since a folder that failed to list looks like files
+that vanished. A copy is never a rename (the original is still there),
+so it gets its own key and its own member rows.
+
+The key therefore depends on the folder's history as well as its
+contents: a store that watched a file being renamed keeps the key the
+old path was given, where a store built fresh from today's folder mints
+one from the new path. The rows under the key are the same either way.
+
 ## What a scan does
 
 `fsscan` walks the folder and hashes only what the host's fingerprint
@@ -126,10 +156,12 @@ file costs a `stat` and writes nothing. For each file that is new,
 changed or moved:
 
 1. Parse it, split it into rows, write it back and measure fidelity.
-2. Insert the point rows not already stored.
-3. Diff the file's per-file rows against what the store holds for its
-   path, and write only what differs.
-4. Stamp the cursor in the same transaction.
+2. Pick its `file_key` (§"Renames").
+3. Insert the point rows not already stored.
+4. Diff the file's per-file rows against what the store holds under its
+   key, and write only what differs.
+5. Stamp the cursor in the same transaction, and forget the old path of
+   a file it took the key of.
 
 Files are written in transactions of about 50,000 points. A file that
 is gone has its per-file rows deleted. Last, every point some file

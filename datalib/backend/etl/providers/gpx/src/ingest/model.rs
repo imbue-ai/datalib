@@ -74,6 +74,24 @@ pub struct GpxFile {
     pub tracks: Vec<Track>,
 }
 
+impl GpxFile {
+    /// Every point id the file names, of all three kinds.
+    pub fn point_ids(&self) -> std::collections::HashSet<String> {
+        let tracks = self
+            .tracks
+            .iter()
+            .flat_map(|t| &t.segments)
+            .flat_map(|s| &s.points);
+        let routes = self.routes.iter().flat_map(|r| &r.points);
+        self.waypoints
+            .iter()
+            .chain(routes)
+            .chain(tracks)
+            .map(|p| p.id.clone())
+            .collect()
+    }
+}
+
 /// How a list of points is ordered in the store. The ordinal is part of
 /// a member row's key, so it is chosen to survive the edits people make:
 /// deleting a stray point from a recorded track moves nothing else.
