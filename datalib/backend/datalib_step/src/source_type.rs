@@ -77,6 +77,8 @@ pub enum SourceType {
     Github,
     Gitlab,
     GoogleTakeout,
+    /// A folder of `.gpx` files: tracks, routes and waypoints.
+    Gpx,
     Lightroom,
     Linkedin,
     Media,
@@ -128,6 +130,7 @@ impl SourceType {
         match self {
             SourceType::Fsindex => Some("files"),
             SourceType::Media => Some("media_files"),
+            SourceType::Gpx => Some("gpx_files"),
             SourceType::Lightroom => Some("Adobe_images"),
             SourceType::ApplePhotos => Some("ZASSET"),
             _ => None,
@@ -209,6 +212,7 @@ mod tests {
                 t,
                 SourceType::ApplePhotos
                     | SourceType::Fsindex
+                    | SourceType::Gpx
                     | SourceType::Lightroom
                     | SourceType::Media
             );

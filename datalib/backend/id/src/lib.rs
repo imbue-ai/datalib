@@ -280,6 +280,16 @@ fn time_prefixed(hash: Uuid, at: Option<i64>) -> Uuid {
     Uuid::from_bytes(b)
 }
 
+/// A raw store's content key in the same layout: a 128-bit content hash
+/// under `at`, so rows keyed by what they hold still sort by time. Not an
+/// entity id — no source, no namespace — so two sources holding the same
+/// content mint the same key, which is the point of keying by content.
+pub fn stamped_hash(hash: [u8; 16], at: Option<i64>) -> Uuid {
+    let mut b = hash;
+    b[8] = 0x80 | (b[8] & 0x3f);
+    time_prefixed(Uuid::from_bytes(b), at)
+}
+
 /// The stamp a datalib-minted id carries in its leading bits, as unix
 /// milliseconds; `None` for a zero stamp or a string that is not a uuid.
 /// What a derived id (an edge, a diff row) copies so it sorts beside the
@@ -550,6 +560,17 @@ mod tests {
             stamp_of(&mint(Some(MAX_STAMP_MS)).to_string()),
             Some(MAX_STAMP_MS)
         );
+    }
+
+    /// A raw content hash comes out a well-formed v8 id, whatever its
+    /// version and variant bits happened to be.
+    #[test]
+    fn a_stamped_hash_is_a_v8_id() {
+        let id = stamped_hash([0xff; 16], Some(1_700_000_000_123));
+        assert_eq!(id.get_version_num(), 8);
+        assert_eq!(id.get_variant(), uuid::Variant::RFC4122);
+        assert_eq!(stamp_of(&id.to_string()), Some(1_700_000_000_123));
+        assert_eq!(stamp_of(&stamped_hash([0xff; 16], None).to_string()), None);
     }
 
     #[test]

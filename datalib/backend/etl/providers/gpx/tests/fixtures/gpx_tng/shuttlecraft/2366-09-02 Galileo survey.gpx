@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<gpx
+ version="1.1"
+ creator="Maprika"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xmlns="http://www.topografix.com/GPX/1/1"
+ xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+<trk>
+<name>Shuttle Galileo survey</name>
+<desc><![CDATA[Distance: 0.4 km
+Warp: none]]></desc>
+<trkseg>
+<trkpt lat="40.75001000000000" lon="-73.98502000000001">
+<ele>46.20001220703125</ele>
+<time>2366-09-02T14:30:00Z</time>
+</trkpt>
+<trkpt lat="40.75022300000001" lon="-73.98484900000001">
+<ele>47.20001220703125</ele>
+<time>2366-09-02T14:30:05Z</time>
+</trkpt>
+<trkpt lat="40.75043600000000" lon="-73.98467800000000">
+<ele>48.20001220703125</ele>
+<time>2366-09-02T14:30:10Z</time>
+</trkpt>
+<trkpt lat="40.75064900000000" lon="-73.98450700000001">
+<ele>49.20001220703125</ele>
+<time>2366-09-02T14:30:15Z</time>
+</trkpt>
+<trkpt lat="40.75086200000001" lon="-73.98433600000000">
+<ele>50.20001220703125</ele>
+<time>2366-09-02T14:30:20Z</time>
+</trkpt>
+</trkseg>
+</trk>
+</gpx>

@@ -1525,6 +1525,33 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   {
+    type: "gpx",
+    label: "GPS tracks",
+    blurb:
+      "Keep a folder of GPX files as rows: every track point and waypoint, and each file whole.",
+    keywords: ["gpx", "gps", "tracks", "routes", "waypoints", "hiking", "cycling", "geo tracker"],
+    kind: "local",
+    icon: "gpx",
+    defaultName: "gpx",
+    nameHint: "GPS tracks",
+    wizard: true,
+    // Download-only: nothing is rendered yet, so no render step.
+    renderStep: false,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your GPX folder",
+        required: true,
+        target: "fswalk.path",
+        label: "GPX folder",
+        help:
+          "Scanned for .gpx files. A point two files share is stored once, and each " +
+          "file can still be written back from the store exactly as it was.",
+      },
+    ],
+  },
+  {
     type: "airvisual",
     method: "export",
     label: "AirVisual",

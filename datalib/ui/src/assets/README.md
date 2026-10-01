@@ -36,7 +36,7 @@ and dark backgrounds and fails one that doesn't show up on either.
   - `yolink.png`: YoLink publishes no vector mark. This is the circle
     logo shop.yosmart.com serves as its favicon.
 - **Generic glyphs** (`apple_photos`, `calendar`, `contacts`, `fsindex`,
-  `media`, `pdf`, `perseus`, `search`, `system`) are
+  `gpx`, `media`, `pdf`, `perseus`, `search`, `system`) are
   [Material Design Icons](https://pictogrammers.com/library/mdi/)
   (Apache-2.0) in a mid grey that reads on both themes. Apple publishes
   no vector app icons, and the rest are not products. `search` marks the

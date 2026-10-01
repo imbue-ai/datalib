@@ -27,6 +27,7 @@ rust_test(
         "//datalib/backend/etl/providers/github:datalib_etl_github",
         "//datalib/backend/etl/providers/gitlab:datalib_etl_gitlab",
         "//datalib/backend/etl/providers/google_takeout:datalib_etl_google_takeout",
+        "//datalib/backend/etl/providers/gpx:datalib_etl_gpx",
         "//datalib/backend/etl/providers/media:datalib_etl_media",
         "//datalib/backend/etl/providers/notion:datalib_etl_notion",
         "//datalib/backend/etl/providers/pdf:datalib_etl_pdf",

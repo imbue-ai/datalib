@@ -389,6 +389,45 @@ pub async fn report_records(pool: &sqlx::SqlitePool, problems: &[RecordProblem])
     }
 }
 
+/// The sweep key's prefix of a [`report_lossy`] row.
+const LOSSY_PREFIX: &str = "lossy:";
+
+/// Records the mirror holds, but not whole: the store could not keep
+/// something the record had. A warning, since the record is there. Like
+/// [`report_records`] it replaces the last run's set, so the caller
+/// passes every such record the store holds, not only the ones this run
+/// wrote. `rule` names the limit that fired, the same on every run.
+pub async fn report_lossy(pool: &sqlx::SqlitePool, rule: &str, problems: &[RecordProblem]) {
+    use datalib_problems::{Outcome, Problem, Severity};
+    for p in problems {
+        tracing::warn!(
+            event = "lossy_record",
+            table = %p.table,
+            id = %p.id,
+            rule,
+            detail = %p.detail,
+            "a record is in the mirror, but not whole",
+        );
+    }
+    let rows: Vec<(String, Outcome, Problem)> = problems
+        .iter()
+        .map(|p| {
+            (
+                format!("{LOSSY_PREFIX}{}:{}", p.table, p.id),
+                Outcome::Nulled,
+                Problem::lossy(rule, None, &p.detail).severity(Severity::Warning),
+            )
+        })
+        .collect();
+    if let Err(e) = replace_prefixed(pool, &[LOSSY_PREFIX], &rows).await {
+        tracing::warn!(
+            error = %format!("{e:#}"),
+            "lossy_record: could not record the records held incompletely; \
+             the Manage row will not show them"
+        );
+    }
+}
+
 /// A configured entry upstream has sent nothing new for a while, named
 /// the way the config names it.
 #[derive(Debug, Clone)]
@@ -597,6 +636,58 @@ mod tests {
         );
         report_silent(&pool, &[]).await;
         assert!(rows(&pool).await.is_empty());
+    }
+
+    /// A record held incompletely is a warning under its rule, apart from
+    /// the records that would not fetch, and each report replaces only
+    /// its own kind.
+    #[tokio::test]
+    async fn a_lossy_record_is_a_warning_beside_the_failures() {
+        use datalib_problems::Severity;
+        let d = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(&d.path().join("l.doltlite_db"), &[])
+            .await
+            .unwrap();
+        let rows = || async {
+            sqlx::query_as::<_, (String, String, Option<String>)>(
+                "SELECT scope_key, severity, rule FROM problems ORDER BY scope_key",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        report_records(
+            &pool,
+            &[RecordProblem::new("gpx_files", "a.gpx", "not UTF-8")],
+        )
+        .await;
+        report_lossy(
+            &pool,
+            "gpx_round_trip",
+            &[RecordProblem::new("gpx_files", "b.gpx", "reordered")],
+        )
+        .await;
+        assert_eq!(
+            rows().await,
+            [
+                (
+                    "lossy:gpx_files:b.gpx".to_string(),
+                    Severity::Warning.as_str().to_string(),
+                    Some("gpx_round_trip".to_string())
+                ),
+                (
+                    "record:gpx_files:a.gpx".to_string(),
+                    Severity::Error.as_str().to_string(),
+                    None
+                ),
+            ]
+        );
+        report_lossy(&pool, "gpx_round_trip", &[]).await;
+        assert_eq!(
+            rows().await.len(),
+            1,
+            "the failure is not this report's to clear"
+        );
     }
 
     /// A run's report replaces the last one's: an entry the config no

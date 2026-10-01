@@ -78,6 +78,8 @@ rust_binary(
         "//datalib/backend/etl/providers/notion_config:datalib_etl_notion_config",
         "//datalib/backend/etl/providers/media:datalib_etl_media",
         "//datalib/backend/etl/providers/media_config:datalib_etl_media_config",
+        "//datalib/backend/etl/providers/gpx:datalib_etl_gpx",
+        "//datalib/backend/etl/providers/gpx_config:datalib_etl_gpx_config",
         "//datalib/backend/etl/providers/pdf:datalib_etl_pdf",
         "//datalib/backend/etl/providers/pdf_render:datalib_etl_pdf_render",
         "//datalib/backend/etl/providers/pdf_config:datalib_etl_pdf_config",

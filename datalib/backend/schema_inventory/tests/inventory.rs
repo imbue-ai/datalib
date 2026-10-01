@@ -133,6 +133,7 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
             "google_takeout/raw",
             datalib_etl_google_takeout::ingest::schema_raw::full_ddl(),
         ),
+        ("gpx/raw", datalib_etl_gpx::ingest::schema_raw::full_ddl()),
         (
             "media/raw",
             datalib_etl_media::ingest::schema_raw::full_ddl(),

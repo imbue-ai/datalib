@@ -136,7 +136,7 @@ its own `path`. There is no global vocabulary — each provider's
 | airvisual, facebook, google_takeout | `export` |
 | linkedin | `export`, plus `export.fetch_photos` |
 | signal, sms_backup_restore, whatsapp | `backup` |
-| fsindex, media, pdf | `fswalk` |
+| fsindex, gpx, media, pdf | `fswalk` |
 | beeper `texts` · apple_messages `database` · apple_photos `library` · claude_code `sessions` · codex `sessions` · perseus `github` | |
 
 That table is `ui/src/config/ingestMethods.json`, the one place to
