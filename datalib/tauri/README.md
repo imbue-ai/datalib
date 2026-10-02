@@ -43,6 +43,11 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 # .app, and launches it. Optional data-root arg skips the folder picker.
 ./run.sh
 ./run.sh ~/Documents/Datalib/Default
+# It signs the bundle before launching it, ad hoc unless
+# DATALIB_CODESIGN_IDENTITY names a signing identity. macOS remembers
+# "allow access to Documents" for a signature that verifies: an ad-hoc
+# one until the next rebuild, a real identity's across rebuilds.
+DATALIB_CODESIGN_IDENTITY="Developer ID Application: …" ./run.sh
 
 # Release bundle → target/release/bundle/macos/Datalib.app. The CLI is
 # pinned by package.json + pnpm-lock.yaml here (never `pnpm dlx`, which

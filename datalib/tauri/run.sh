@@ -49,6 +49,18 @@ target_dir="$(cargo metadata --no-deps --format-version 1 \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 app_bundle="$target_dir/debug/bundle/macos/Datalib.app"
 if [[ -d "$app_bundle" ]]; then
+  # Sign the bundle as one app. `tauri build --debug` leaves only the
+  # linker's ad-hoc signature on the executable, under a per-build
+  # identifier and with nothing sealed, which does not verify; macOS
+  # cannot tie a privacy grant to that, so "Datalib wants to access
+  # Documents" came back on every launch. A whole-bundle signature
+  # under the bundle's identifier verifies, and the grant sticks: until
+  # the next rebuild for an ad-hoc one (it names the executable's
+  # hash), and across rebuilds for a real identity — set
+  # DATALIB_CODESIGN_IDENTITY to one (`security find-identity -v -p
+  # codesigning` lists them).
+  codesign --force --deep --sign "${DATALIB_CODESIGN_IDENTITY:--}" "$app_bundle"
+  codesign --verify --deep --strict "$app_bundle"
   "$here/check-app.sh" "$app_bundle"
   exec open -n "$app_bundle" --args "$@"
 fi
