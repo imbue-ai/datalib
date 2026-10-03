@@ -14,25 +14,32 @@ import { expect, type APIRequestContext, type Locator, type Page } from "@playwr
 // The containers layout: the tabs down the side, and the cards the
 // selected tab shows (every card in it, however deep). A tab shown once
 // stays mounted, hidden and marked ct-hidden-pane; its cards do not
-// count. (Not `:visible`: a card that draws nothing is zero-high.)
-export const SHOWN_CARDS = ".ct-main .ct-card:not(.ct-hidden-pane .ct-card)";
+// count, nor does a card that is the hidden tab itself. (Not
+// `:visible`: a card that draws nothing is zero-high.)
+export const SHOWN_CARDS = ".ct-main .ct-card:not(.ct-hidden-pane, .ct-hidden-pane .ct-card)";
 export const shownCards = (page: Page) => page.locator(SHOWN_CARDS);
 export const tabLabels = (page: Page) => page.locator(".ct-tab .ct-tab-label");
 // The shown card whose source contains `source`.
 export const cardOf = (page: Page, source: string) =>
   page.locator(`${SHOWN_CARDS}[data-card-source*=${JSON.stringify(source)}]`);
-// A card's title, in the header it has outside a solidified container.
+// A card's title, in the header it has inside a container outside a
+// solidified one.
 export const cardTitle = (card: Locator) => card.locator(".ct-card-title");
+// The shown tab's name. A card that fills its tab has no header; its
+// title names the tab.
+export const shownTabName = (page: Page) => page.locator(".ct-tab.is-selected .ct-tab-label");
 
 export const SEARCH_ROWS = ".grid-box .slick-row";
 
-/// The search grid on its default query, documents only. `/` opens on
-/// the Dashboard card now, so a spec about the grid goes here.
-export const GRID = "/gridView()";
+/// The search grid on its default query, documents only, in a Columns
+/// container (the width asks for one), so a row's document opens beside
+/// it. `/` opens on the Dashboard card, so a spec about the grid goes here.
+export const GRID = "/gridView():1";
 
 /// The search grid with its query cleared: every row, the messages
-/// inside a document included. `GRID` opens on documents only.
-export const EVERY_ROW = "/gridView()::q%3D";
+/// inside a document included, in a Columns container as `GRID` is.
+/// `GRID` opens on documents only.
+export const EVERY_ROW = "/gridView():1:q%3D";
 
 /// The Manage header's sync button, whichever way it faces: Sync
 /// everything, or Stop everything while anything syncs.

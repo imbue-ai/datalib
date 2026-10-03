@@ -15,7 +15,7 @@ import { createRouter, createWebHistory } from "vue-router";
 /// library lands: the sources tree alone, at 1.6× the default column
 /// width. The config editor is a click away from that card, not open
 /// beside it — the first thing to do on the screen is add a source.
-export const MANAGE_STACK = encodeColumns([{ code: "sourcesView()", size: 1.6, state: "" }]);
+export const MANAGE_STACK = encodeColumns([{ code: "sourcesView()", state: "" }]);
 
 const router = createRouter({
   history: createWebHistory(),

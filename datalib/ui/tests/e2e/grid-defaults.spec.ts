@@ -4,7 +4,7 @@
 // tabs, so the defaults are checked there too.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { GRID, gridSettled, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { GRID, gridSettled, SEARCH_ROWS, shownTabName, type GridApi } from "./grid-helpers";
 
 async function total(request: APIRequestContext, q: string): Promise<number> {
   const r = await request.get(`/applet/unified_index/search?q=${encodeURIComponent(q)}&limit=1`);
@@ -43,7 +43,7 @@ test("the grid opens one row per document, Contents second", async ({ page, requ
   await page.goto(GRID);
   await expectDefaults(page, request);
   // Named after what it is, not after the term it opens with.
-  await expect(page.locator(".ct-main .ct-card-title").first()).toHaveText("Search");
+  await expect(shownTabName(page)).toHaveText("Search");
 });
 
 /// The default is a term in the search bar, and deleting it shows every

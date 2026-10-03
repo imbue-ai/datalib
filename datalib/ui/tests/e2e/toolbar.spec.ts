@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { cardOf, cardTitle, shownCards, stubClipboard, tabLabels } from "./grid-helpers";
+import { cardOf, shownCards, shownTabName, stubClipboard, tabLabels } from "./grid-helpers";
 
 // The chrome around the cards: the toolbar's search box opens a search
 // card on what was typed, and ⌘K (Ctrl+K) reaches it from anywhere;
@@ -23,7 +23,7 @@ test.describe("toolbar", () => {
     await searchBox(page).press("Enter");
     const card = cardOf(page, 'searchView({"q":"warp"})');
     await expect(card).toBeVisible();
-    await expect(cardTitle(card)).toHaveText("Search: warp");
+    await expect(shownTabName(page)).toHaveText("Search: warp");
     await expect(tabLabels(page)).toHaveCount(2);
     // The box empties, ready for the next search.
     await expect(searchBox(page)).toHaveValue("");
@@ -41,7 +41,7 @@ test.describe("toolbar", () => {
     await page.getByRole("button", { name: "Logs" }).click();
     const col = shownCards(page).filter({ has: page.locator(".rl-panel") });
     await expect(col).toBeVisible({ timeout: 10_000 });
-    await expect(cardTitle(col)).toHaveText("Log · everything");
+    await expect(shownTabName(page)).toHaveText("Log · everything");
     await expect(cardOf(page, "logView()")).toHaveCount(1);
 
     await page.getByRole("button", { name: "Logs" }).click();

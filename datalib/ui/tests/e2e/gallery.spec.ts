@@ -1,20 +1,19 @@
 import { test, expect } from "@playwright/test";
-import { cardOf, cardTitle, GRID, shownCards } from "./grid-helpers";
+import { cardOf, GRID, shownCards, shownTabName, tabLabels } from "./grid-helpers";
 
 // Card creation outside edit mode goes through the new-card gallery: the
-// "+" strip at the end of a Columns container adds a `galleryView()`
-// card — a list of parameter-less components — and picking an entry
+// sidebar's "New card" opens a tab holding a `galleryView()` card — a list of parameter-less components — and picking an entry
 // REPLACES that card via host.setSource. Components that need arguments
 // hide behind a picker: the gallery's "Document" entry opens
 // documentPickerView (a /applet/unified_index/docs listing), which in
 // turn replaces itself with `documentView("<uuid>")` on pick.
 
 test.describe("new-card gallery (outside edit mode)", () => {
-  test("+ strip → gallery → Document → picker → document card", async ({ page }) => {
+  test("New card → gallery → Document → picker → document card", async ({ page }) => {
     await page.goto(GRID);
-    // No source boxes outside edit mode, but the "+" strip is there.
+    // No source boxes outside edit mode.
     await expect(page.locator(".ct-source")).toHaveCount(0);
-    await page.locator(".ct-main .ct-add").click();
+    await page.locator(".ct-new").click();
 
     // The gallery card appears, builtins listed with Dashboard first.
     const galleryRows = page.locator(".gv-row");
@@ -36,31 +35,35 @@ test.describe("new-card gallery (outside edit mode)", () => {
 
   test("gallery's Logs entry becomes a log card over every run", async ({ page }) => {
     await page.goto(GRID);
-    await page.locator(".ct-main .ct-add").click();
+    await page.locator(".ct-new").click();
     await page.locator(".gv-row", { hasText: "Logs" }).first().click();
     const col = shownCards(page).filter({ has: page.locator(".rl-panel") });
     await expect(col).toBeVisible({ timeout: 10_000 });
-    await expect(cardTitle(col)).toHaveText("Log · everything");
+    await expect(shownTabName(page)).toHaveText("Log · everything");
     await expect(cardOf(page, "logView()")).toHaveCount(1);
   });
 
   test("gallery's Unified Search entry becomes a second grid", async ({ page }) => {
     await page.goto(GRID);
-    await page.locator(".ct-main .ct-add").click();
+    await expect(cardOf(page, "gridView()")).toHaveCount(1);
+    const before = await tabLabels(page).count();
+    await page.locator(".ct-new").click();
     // By its exact title: "Unified Search (new)" is the Search card.
     await page
       .locator(".gv-row", { has: page.locator(".gv-title", { hasText: /^Unified Search$/ }) })
       .click();
-    // Two grid cards now: the default one and the freshly picked one.
+    // Two grid cards now, each a tab: the default one, still mounted
+    // behind, and the freshly picked one.
     await expect(page.locator(".grid-box .slickgrid-container")).toHaveCount(2, {
       timeout: 10_000,
     });
-    await expect(cardOf(page, "gridView()")).toHaveCount(2);
+    await expect(cardOf(page, "gridView()")).toHaveCount(1);
+    await expect(tabLabels(page)).toHaveCount(before + 1);
   });
 
   test("the gallery's Dashboard makes the card the Dashboard composite", async ({ page }) => {
     await page.goto(GRID);
-    await page.locator(".ct-main .ct-add").click();
+    await page.locator(".ct-new").click();
     await page
       .locator(".gv-row", { has: page.locator(".gv-title", { hasText: /^Dashboard$/ }) })
       .click();
@@ -72,7 +75,7 @@ test.describe("new-card gallery (outside edit mode)", () => {
 
   test("a Dashboard section is listed only once the gallery shows every view", async ({ page }) => {
     await page.goto(GRID);
-    await page.locator(".ct-main .ct-add").click();
+    await page.locator(".ct-new").click();
     const library = page.locator(".gv-row", {
       has: page.locator(".gv-title", { hasText: /^Your library$/ }),
     });

@@ -161,10 +161,10 @@ onBeforeUnmount(() => {
   flush();
 });
 
-// The cards a URL names (a link, a popped-out card), in a Columns
-// container of their own, so what they open lands beside them as it
-// did when the URL was the whole layout. The tree, not the URL, is
-// what this layout keeps, so once opened the address goes back to "/".
+// The cards a URL names (a link, a popped-out card), as one tab. A
+// single card with no width (what ↗ writes) fills the tab; several
+// cards, or any width, are a Columns container. The tree, not the URL,
+// is what this layout keeps, so once opened the address goes back to "/".
 function routeNode(): TreeNode | null {
   const specs = decodeColumns(route.path);
   if (specs.length === 0) return null;
@@ -172,7 +172,8 @@ function routeNode(): TreeNode | null {
     ...makeCard(newCardId(), s.code, s.state),
     basis: s.size != null ? s.size * DEFAULT_COLUMN : null,
   }));
-  return makeBox(newCardId(), "columns", nodes);
+  const alone = specs.length === 1 && specs[0].size == null;
+  return alone ? nodes[0] : makeBox(newCardId(), "columns", nodes);
 }
 
 function openRoute() {
@@ -279,7 +280,7 @@ function ctxFor(card: CardNode): CardCtx {
     const host: HostCommands = {
       openCards: (...sources) => {
         const nodes = sources.map((s) => makeCard(newCardId(), s));
-        update(openFrom(root.value, cardId, nodes, newCardId()));
+        update(openFrom(root.value, cardId, nodes));
         return nodes.map((n) => n.id);
       },
       hrefFor: (...sources) => chainHref(sources),
@@ -347,8 +348,8 @@ function toggleSolidified(box: BoxNode) {
   update(setSolidified(root.value, box.id, !box.solidified));
 }
 
-function addCard(boxId: string) {
-  update(addChild(root.value, boxId, makeCard(newCardId(), "galleryView()")));
+function addCard(boxId: string, source = "galleryView()") {
+  update(addChild(root.value, boxId, makeCard(newCardId(), source)));
 }
 
 function addBox(boxId: string, layout: Layout) {
@@ -360,16 +361,11 @@ function addBox(boxId: string, layout: Layout) {
 function newTab() {
   addCard(root.value.id);
 }
-// A card opened from the chrome gets a tab holding a Columns container,
-// as a link does (routeNode), so what it opens lands beside it.
+// A card opened from the chrome gets a tab of its own.
 function showCard(source: string) {
   const have = allCards.value.find((c) => c.source === source);
-  if (have) {
-    select(have.id);
-    return;
-  }
-  const tab = makeBox(newCardId(), "columns", [makeCard(newCardId(), source)]);
-  update(addChild(root.value, root.value.id, tab));
+  if (have) select(have.id);
+  else addCard(root.value.id, source);
 }
 defineExpose({ addCard: newTab, showCard });
 

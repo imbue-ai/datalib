@@ -230,16 +230,11 @@ export function reveal(root: TreeNode, id: string): TreeNode {
 // Open `nodes` from `fromId` as a chain: the first opened by the
 // opener's branch, each next one by the one before. Where they go
 // within the landing container is the container's layout's call:
-// columns drop what was right of the opener, tabs take the chain as one
-// new tab — a Columns container `tabId`, so what it opens lands beside
-// it — and the others insert beside it. Returns the tree unchanged
-// when nothing is unsolidified above.
-export function openFrom(
-  root: TreeNode,
-  fromId: string,
-  nodes: TreeNode[],
-  tabId: string,
-): TreeNode {
+// columns drop what was right of the opener, tabs take each card as a
+// tab of its own under the one that opened it, and the others insert
+// beside it. Returns the tree unchanged when nothing is unsolidified
+// above.
+export function openFrom(root: TreeNode, fromId: string, nodes: TreeNode[]): TreeNode {
   const land = landing(root, fromId);
   if (!land || nodes.length === 0) return root;
   const chained = nodes.map((n, i) => ({
@@ -252,9 +247,7 @@ export function openFrom(
     if (box.layout === "columns") {
       children = [...box.children.slice(0, i + 1), ...chained];
     } else if (box.layout === "tabs") {
-      const inner = chained.map((n, k) => ({ ...n, openedBy: k === 0 ? null : n.openedBy }));
-      const tab = { ...makeBox(tabId, "columns", inner), openedBy: land.branchId };
-      children = [...box.children, tab];
+      children = [...box.children, ...chained];
     } else {
       children = [...box.children.slice(0, i + 1), ...chained, ...box.children.slice(i + 1)];
     }
