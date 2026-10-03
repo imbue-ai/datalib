@@ -412,13 +412,31 @@ after a few runs' history, on doltlite 0.11.50:
 | Mirror, collected, `skip_xmp` | **812 KB** |
 | Mirror, *not* collected | 4.0 – 5.2 MB, growing per run |
 
+The same holds at scale. A backups folder of ten catalogs (0.9 to 6.0 GB
+each, about 32 GiB in all; the newest 135 tables and 5.4 million rows),
+ingested in date order and never collected:
+
+| | Size |
+| --- | --- |
+| Mirror, *not* collected | **12.38 GiB** (13,293,589,085 bytes) |
+| Same file after `dolt_gc()` | **7.86 GiB** (8,443,844,496 bytes) |
+| Chunks removed | 783,443 of 1,756,444 (45%) |
+| Time to collect, Apple Silicon laptop | 2 min 41 s |
+
+That is a third of the file, taking the store from about 0.4 of the
+source's size to about 0.25. Collecting a copy of the file is a safe way to
+measure it without touching the store.
+
 `gc = true` runs it at the start of each run, which collects the
 *previous* run's garbage. Same steady-state result, and it happens while
 the working tree is provably clean and outside the commit lifecycle the
 orchestrator owns — but it does mean a brand-new store isn't collected
 until its second run.
 It is **off by default** because gc rewrites the whole file, which is
-time a routine no-op run shouldn't spend. Running it by hand
+time a routine no-op run shouldn't spend. Mirroring a catalog is what
+runs it, once per catalog: a sync that finds nothing new does not, but one
+that replays several backups collects before each, on a store that is
+growing. Running it by hand
 periodically, with no sync running, is a fine alternative:
 
 ```sh
@@ -480,8 +498,12 @@ What three catalogs from different Lightroom generations (2016, 2018,
   whenever rows are added; `AgLibraryImageSyncedAssetData` did before the
   mirror keyed it on its unique index.
 - **The size ratio is not the diff.** A catalog that shrank in the source
-  still grew the store, because a store keeps every version. Part of the
-  growth may also be uncollected garbage; `dolt_gc` (above) reclaims it.
+  still grew the store, because a store keeps every version. And a
+  quieter diff is not a smaller file: keying the sync tables cut the
+  rows modified between weekly backups by about 97% and changed the file
+  by under 0.01%, because those tables are small. On the ten-catalog
+  store above the size was history plus uncollected garbage, and
+  `dolt_gc` (above) reclaimed a third of it.
 
 The counts say *what* changed; only the values say *why*, and this
 recipe deliberately does not read them. The causes above are inferences
