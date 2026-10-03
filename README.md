@@ -37,8 +37,7 @@ Three ways in, from least to most hands-on:
 Cautious? The [Docker image](docs/user/docker.md) keeps the binaries
 and your credentials inside a container that sees only the folders
 you mount, and it comes with a demo library already loaded, so you can
-look before you hand it anything of yours. Building from source is the
-[first-time dev guide](docs/dev/first_time_dev.md).
+look before you hand it anything of yours.
 
 ## Read this before you point an agent at it
 
@@ -63,7 +62,7 @@ place — and most of it was written by other people. Three things follow:
   content. And remember that an agentic harness sends what it reads to a
   model provider: ask yourself whether the people who wrote you those
   messages would be fine with that.
-- **Terms of service.** The Claude.ai and ChatGPT sources talk to the
+- **Terms of service.** The Claude.ai, ChatGPT, and Garmin sources talk to the
   same undocumented web APIs your browser does, using your own session.
   It is your data, but check the terms of the services you use, and know
   that those APIs can change without notice.
@@ -147,14 +146,16 @@ language you like. `datalib-dag` arranges those programs into a graph
 executable that speaks a small NDJSON protocol can be a step — see
 [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md).
 
-**The upper layer is the batteries.** For each source above, an `ingest`
-step that brings the raw data in and, for most, a `render_markdown` step
-that turns it into readable markdown; then the index steps over
-everything rendered — a SQL table of every message and document
-(`grid_rows`) and a keyword and semantic search index (built with
-[qmd](https://github.com/tobi/qmd)). A local web UI, also shipped as a
-desktop app, searches and browses the result. The batteries are Rust;
-the UI is Vue, wrapped in Tauri for the desktop app.
+**The upper layer is the batteries.** For each source above, several pre-made
+processing steps:
+* `ingest`: brings the raw data in
+* `render_markdown`: turn raw JSON or sqlite into readable markdown
+* `qmd_index` (fix the name): ingest the markdown in [qmd](https://github.com/tobi/qmd)'s indexing store.
+* `qmd_vector_index`: Optionally enable semantic search on this data (slow)
+
+There's also a universal search powered by a unified tabular projection
+of this data called `grid_rows` and the indices.
+A local web UI, also shipped as a Tauri desktop app, can manage data sources, syncs, run searches and browses the results.
 
 **The stores are [doltlite](https://github.com/dolthub/doltlite)**:
 SQLite's engine over a versioned, content-addressed file format, so a
@@ -186,7 +187,7 @@ Two mechanisms carry it here:
 
 ## What we are aiming for
 
-Near term, ingest and understand:
+Near term, we want to be able ingest and understand many data sources:
 
 - **Big tent** — popular and unpopular sources alike, discovering each
   one's schema rather than forcing it into ours.
@@ -200,7 +201,7 @@ Near term, ingest and understand:
   between two syncs as a source of its own.
 - **Legible** — render raw data from many schemas into markdown.
 - **Findable** — search by metadata, keywords, and vectors.
-- **Read-only, for now** — ingest-only views of every source.
+- **Read-only (for now)** — ingest-only views of every source.
 
 Longer term: all your data in one place instead of one app per data
 type; your own apps that join data across sources; as much of your data
