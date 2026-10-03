@@ -133,6 +133,12 @@
       "reach": "local"
     }
   ],
+  "gpx": [
+    {
+      "path": "fswalk",
+      "reach": "local"
+    }
+  ],
   "lightroom": [
     {
       "path": "catalog",

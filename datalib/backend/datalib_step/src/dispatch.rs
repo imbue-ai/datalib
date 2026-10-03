@@ -370,6 +370,11 @@ pub fn plan(
             datalib_etl_apple_photos_config::ApplePhotosRenderConfig,
             datalib_etl_apple_photos
         ),
+        SourceType::Gpx => ingest_only!(
+            datalib_etl_gpx_config::GpxConfig,
+            datalib_etl_gpx_config::GpxRenderConfig,
+            datalib_etl_gpx
+        ),
         SourceType::Fsindex => ingest_only!(
             datalib_etl_fsindex_config::FsindexConfig,
             datalib_etl_fsindex_config::FsindexRenderConfig,
@@ -710,6 +715,7 @@ mod tests {
         for (ty, params) in [
             ("media", serde_json::json!({"playlists": false})),
             ("fsindex", serde_json::json!({})),
+            ("gpx", serde_json::json!({})),
         ] {
             let dl = plan(
                 ty,

@@ -1,0 +1,81 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:geotracker="http://ilyabogdanovich.com/gpx/extensions/geotracker" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="Aufgezeichnet mit Geo Tracker für Android">
+  <metadata>
+    <name>Away team, Presidio</name>
+    <author>
+      <name>Lt. Cmdr. Data</name>
+      <link href="https://example.com/data" />
+    </author>
+    <time>2364-04-13T08:00:00Z</time>
+  </metadata>
+  <wpt lat="37.80069" lon="-122.46977">
+    <ele>13.9</ele>
+    <time>2364-04-13T08:00:20Z</time>
+    <name>Tricorder reading</name>
+    <desc>Geschwindigkeit: 0 km/h
+Höhenmeter: 14 m
+Zeit: 08:00</desc>
+  </wpt>
+  <wpt lat="37.80140" lon="-122.46905">
+    <ele>16.8</ele>
+    <time>2364-04-13T08:00:50Z</time>
+    <name>Beam-up point</name>
+    <desc>Riker &amp; Worf waiting</desc>
+  </wpt>
+  <trk>
+    <name>Away team, Presidio</name>
+    <src>Geo Tracker</src>
+    <link href="https://example.com/track" />
+    <extensions>
+      <geotracker:meta>
+        <geotracker:length>192</geotracker:length>
+        <geotracker:duration>50000</geotracker:duration>
+        <geotracker:activity>0</geotracker:activity>
+      </geotracker:meta>
+    </extensions>
+    <trkseg>
+      <trkpt lat="37.80021" lon="-122.47031">
+        <ele>12.4</ele>
+        <time>2364-04-13T08:00:00Z</time>
+        <extensions>
+          <geotracker:meta s="0" />
+        </extensions>
+      </trkpt>
+      <trkpt lat="37.80044" lon="-122.47002">
+        <ele>13.1</ele>
+        <time>2364-04-13T08:00:10Z</time>
+        <extensions>
+          <geotracker:meta c="4.5" s="0.50" />
+        </extensions>
+      </trkpt>
+      <trkpt lat="37.80069" lon="-122.46977">
+        <ele>13.9</ele>
+        <time>2364-04-13T08:00:20Z</time>
+        <extensions>
+          <geotracker:meta c="5.5" s="0.60" />
+        </extensions>
+      </trkpt>
+      <trkpt lat="37.80091" lon="-122.4695">
+        <ele>15.0</ele>
+        <time>2364-04-13T08:00:30Z</time>
+        <extensions>
+          <geotracker:meta c="6.5" s="0.70" />
+        </extensions>
+      </trkpt>
+      <trkpt lat="37.80118" lon="-122.46931">
+        <ele>16.2</ele>
+        <time>2364-04-13T08:00:40Z</time>
+        <extensions>
+          <geotracker:meta c="7.5" s="0.80" />
+        </extensions>
+      </trkpt>
+      <trkpt lat="37.8014" lon="-122.46905">
+        <ele>16.8</ele>
+        <time>2364-04-13T08:00:50Z</time>
+        <extensions>
+          <geotracker:meta c="8.5" s="0.90" />
+        </extensions>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>

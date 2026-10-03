@@ -30,6 +30,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
         SourceType::GoogleTakeout => {
             datalib_etl_google_takeout_config::GoogleTakeoutConfig::METHODS
         }
+        SourceType::Gpx => datalib_etl_gpx_config::GpxConfig::METHODS,
         SourceType::Lightroom => datalib_etl_lightroom_config::LightroomConfig::METHODS,
         SourceType::Airvisual => datalib_etl_airvisual_config::AirvisualConfig::METHODS,
         SourceType::AppleMessages => {
