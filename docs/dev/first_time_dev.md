@@ -254,8 +254,8 @@ Design notes:
   orphaned content is cleaned.
 - **First run is slow** — embedding all chunks for a fresh `<root>` takes
   several minutes on CPU (a one-time cost, roughly 5–10 minutes per thousand
-  unembedded chunks). Each `embed` step reports its progress in bytes; an
-  embed is resumable, so stopping and re-running is safe, and turning one
+  unembedded chunks). Each `embed` step reports its progress in documents,
+  with the chunks and bytes behind them in its message; an embed is resumable, so stopping and re-running is safe, and turning one
   source's `embed` off leaves the rest running. Once the backlog drains,
   re-runs are no-ops (a couple of seconds).
 - **Models cache**: qmd's embedding model (~300 MB) is shared across data

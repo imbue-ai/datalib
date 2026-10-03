@@ -165,7 +165,11 @@ does not carry over to `createStore()` without being re-measured.
     writes them only when `process.stderr.isTTY` (`cli/qmd.ts`), as a
     `\r`-redrawn bar — which is why a piped `qmd embed` says nothing at
     all between its model line and its last one. The step's progress
-    reporting is built on these callbacks (#679).
+    reporting is built on these callbacks (#679). Neither says how many
+    *documents* are done; the script counts those with
+    `getHashesNeedingEmbedding`, which scans every vector in the index
+    (80 ms on a 46k-vector index, measured), so it re-counts only now
+    and then.
 
 12. **Two keyword updates on one index can lose a document's body.**
     Read from the code, not measured. `reindexCollection` (`store.ts`)

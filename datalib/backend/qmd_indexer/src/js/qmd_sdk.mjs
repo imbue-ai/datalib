@@ -98,6 +98,29 @@ async function requireRegistered(store, name) {
   }
 }
 
+// qmd's embed progress counts bytes and chunks, never documents, so the
+// documents done are its own count of what is left, taken again as the
+// run goes. That query scans every vector in the index, so it is re-asked
+// only once the run has gone 20 times as long as the last one took — a
+// twentieth of the run at most, however large the index.
+function documentCounter(store, collection) {
+  const model = store.internal.llm?.embedModelName;
+  const left = () => getHashesNeedingEmbedding(store.internal.db, collection, model);
+  const totalDocs = left();
+  let docsEmbedded = 0;
+  let nextAt = 0;
+  return {
+    read({ fresh = false } = {}) {
+      const start = Date.now();
+      if (fresh || start >= nextAt) {
+        docsEmbedded = Math.max(0, totalDocs - left());
+        nextAt = Date.now() + 20 * (Date.now() - start);
+      }
+      return { docsEmbedded, totalDocs };
+    },
+  };
+}
+
 // `store.embed()` is `generateEmbeddings` minus its `maxDurationMs`, so
 // through it every embed stops itself after 30 minutes and returns as if
 // it had finished (finding 6); `0` turns the cap off. Calling
@@ -109,12 +132,20 @@ async function embed(store, { collections }) {
   for (const collection of collections) await requireRegistered(store, collection);
   const total = { event: "done", documents: 0, chunks: 0, errors: 0 };
   for (const collection of collections) {
+    const docs = documentCounter(store, collection);
+    let qmd = {};
+    const report = (read) => emit({ event: "progress", collection, ...qmd, ...read });
+    report(docs.read());
     const r = await generateEmbeddings(store.internal, {
       collection,
       maxDurationMs: 0,
       // `failures` repeats every failed chunk on every callback.
-      onProgress: ({ failures: _drop, ...p }) => emit({ event: "progress", collection, ...p }),
+      onProgress: ({ failures: _drop, ...p }) => {
+        qmd = p;
+        report(docs.read());
+      },
     });
+    report(docs.read({ fresh: true }));
     total.documents += r.docsProcessed;
     total.chunks += r.chunksEmbedded;
     total.errors += r.errors;
