@@ -1454,6 +1454,30 @@ group = "media"
 function = "render_markdown"
 inputs = ["media/ingest"]
 
+# --- gpx (a folder of GPX files) ----------------------------------------
+
+# File-backed: every `.gpx` file under `fswalk.path` becomes rows. Track
+# points, route points and waypoints are keyed by their content, so a point
+# that two files hold (a copy, a week's export that overlaps a day's) is one
+# row; everything else about a file is kept under its path, and the file can
+# be written back from the store byte for byte. Editing one point in a file
+# changes that point's row and nothing else.
+#
+# DOWNLOAD-ONLY: it renders nothing yet, so there is no render step — query
+# the raw store directly. See datalib/backend/etl/providers/gpx/INGEST.md.
+[[groups]]
+id = "gpx"
+type = "gpx"
+
+[[steps]]
+group = "gpx"
+function = "ingest"
+[steps.params]
+# Gitignore-shaped patterns, on top of any .gitignore files in the tree.
+# ignore = ["**/old/**"]
+[steps.params.fswalk]
+path = "~/GPX"
+
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 
 # File-backed: point `catalog.path` at a `.lrcat`, which is an ordinary

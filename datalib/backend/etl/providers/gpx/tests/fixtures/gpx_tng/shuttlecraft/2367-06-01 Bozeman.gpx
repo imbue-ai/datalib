@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<gpx version="1.1" creator="Maprika for Android" xmlns="http://www.topografix.com/GPX/1/1">
+<trk><name>Driving @ Bozeman</name><trkseg>
+<trkpt lat="45.6700000" lon="-111.0400000"><ele>1460</ele><time>2367-06-01T16:22:59Z</time></trkpt>
+<trkpt lat="45.6701000" lon="-111.0401000"><ele>1461</ele><time>2367-06-01T16:23:01Z</time></trkpt>
+<trkpt lat="45.6702000" lon="-111.0402000"><ele>1462</ele><time>2367-06-01T16:23:03Z</time></trkpt>
+<trkpt lat="45.6703000" lon="-111.0403000"><ele>1463</ele><time>2367-06-01T16:23:05Z</time></trkpt>
+</trkseg><trkseg>
+<trkpt lat="45.6800000" lon="-111.0500000"><ele>1470</ele><time>2367-06-01T16:32:59Z</time></trkpt>
+<trkpt lat="45.6801000" lon="-111.0501000"><ele>1471</ele><time>2367-06-01T16:33:01Z</time></trkpt>
+<trkpt lat="45.6802000" lon="-111.0502000"><ele>1472</ele><time>2367-06-01T16:33:03Z</time></trkpt>
+</trkseg></trk>
+</gpx>

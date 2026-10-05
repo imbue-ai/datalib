@@ -1,0 +1,64 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Made-up GPX files, one per writer style the provider has met: see
+# tests/fixtures/gpx_tng/README.md.
+filegroup(
+    name = "gpx_fixture",
+    srcs = glob(
+        ["tests/fixtures/gpx_tng/**"],
+        allow_empty = False,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_gpx",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_gpx",
+    edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/gpx_config:datalib_etl_gpx_config",
+        "//datalib/backend/id:datalib_id",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:futures",
+        "@datalib_crates//:quick-xml",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "gpx_unittests",
+    size = "small",
+    crate = ":datalib_etl_gpx",
+    edition = "2021",
+)
+
+# End-to-end: scan the fixture files, read each back out of the store,
+# and edit, copy and delete them between scans.
+rust_test(
+    name = "gpx_e2e",
+    size = "medium",
+    srcs = ["tests/gpx_e2e.rs"],
+    data = [":gpx_fixture"],
+    edition = "2021",
+    env = {"GPX_FIXTURE_DIR": "datalib/backend/etl/providers/gpx/tests/fixtures/gpx_tng"},
+    deps = [
+        ":datalib_etl_gpx",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

@@ -539,6 +539,17 @@ Request a Takeout with **Voice** ticked and unpack it — see
 feed of. Set `google_voice = true` beside `export.path`; the spam
 folder stays out unless `google_voice_include_spam = true`.
 
+## GPS tracks
+
+`type = "gpx"` — a folder of `.gpx` files (`fswalk.path`), from any app
+that records or plans tracks. Mirrors every track, route and waypoint;
+download-only, nothing is rendered.
+
+Nothing but a path. Each point is one row however many files hold it,
+so a copy or an overlapping export costs almost nothing, and every file
+can still be written back from the store exactly as it was. Query the
+raw store directly; the provider's `INGEST.md` has the recipes.
+
 ## Lightroom
 
 `type = "lightroom"` — an Adobe Lightroom Classic catalog, the `.lrcat`

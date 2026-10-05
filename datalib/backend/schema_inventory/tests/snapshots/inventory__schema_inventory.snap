@@ -861,6 +861,91 @@ youtube_watch_history_bookkeeping
     volatile_payload
     tz_offset
 
+== gpx/raw ==
+gpx_file_wpts
+    file_key
+    ord
+    wpt_id
+gpx_files
+    path
+    file_key
+    blake3
+    size
+    version
+    creator
+    prolog
+    epilog
+    layout
+    head_xml
+    tail_xml
+    wpt_order
+    fidelity
+gpx_rte_rtepts
+    file_key
+    rte
+    ord
+    rtept_id
+gpx_rtepts
+    id
+    lat
+    lon
+    ele
+    time
+    time_ms
+    attrs_xml
+    rest_xml
+    self_closing
+gpx_rtes
+    file_key
+    rte
+    attrs_xml
+    head_xml
+    tail_xml
+    self_closing
+    point_order
+gpx_trkpts
+    id
+    lat
+    lon
+    ele
+    time
+    time_ms
+    attrs_xml
+    rest_xml
+    self_closing
+gpx_trks
+    file_key
+    trk
+    attrs_xml
+    head_xml
+    tail_xml
+    self_closing
+gpx_trkseg_trkpts
+    file_key
+    trk
+    seg
+    ord
+    trkpt_id
+gpx_trksegs
+    file_key
+    trk
+    seg
+    attrs_xml
+    head_xml
+    tail_xml
+    self_closing
+    point_order
+gpx_wpts
+    id
+    lat
+    lon
+    ele
+    time
+    time_ms
+    attrs_xml
+    rest_xml
+    self_closing
+
 == media/raw ==
 media_audio
     blake3

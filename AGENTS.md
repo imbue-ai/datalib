@@ -170,14 +170,14 @@ datalib/
                    `datalib_schema` sits here or above.
     etl/timeseries_render/ what the time-series render crates share.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
-                   (config schema) per provider. Twelve of the
+                   (config schema) per provider. Thirteen of the
                    file-backed ones scan a local tree through
                    etl/src/fsscan.rs (claude_code and codex by way of
                    etl/agent_sessions/; fsindex has its own walker over
                    etl/src/fswalk.rs); four mirror a SQLite file through
                    etl/sqlite_mirror/; three render time series
-                   (airvisual, yolink, garmin). fsindex, media, lightroom
-                   and apple_photos have no <p>_render.
+                   (airvisual, yolink, garmin). fsindex, media, gpx,
+                   lightroom and apple_photos have no <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
     probe/         the "Test connection" report shape, alone.

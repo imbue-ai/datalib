@@ -78,6 +78,7 @@ const CATALOG: &[Entry] = &[
     e("pdf", None, "PDFs", Some("pdf")),
     e("fsindex", None, "File index", Some("fsindex")),
     e("media", None, "Music, photos & video", Some("media")),
+    e("gpx", None, "GPS tracks", Some("gpx")),
     e("airvisual", None, "AirVisual", Some("airvisual")),
     e("lightroom", None, "Lightroom", Some("lightroom")),
     e("apple_photos", None, "Apple Photos", Some("apple_photos")),
