@@ -5,7 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use datalib_qmd_indexer::{Collection, Embedded, Index, Qmd, UpdateProgress, Updated};
+use datalib_qmd_indexer::{
+    Collection, EmbedProgress, Embedded, Index, Qmd, UpdateProgress, Updated,
+};
 
 fn runfile(var: &str) -> PathBuf {
     let rel = std::env::var(var).unwrap_or_else(|_| panic!("{var} unset: is it on the test rule?"));
@@ -249,6 +251,33 @@ fn an_embed_of_an_unregistered_collection_fails() {
     link_model(&index, work.path());
     let err = index.embed(&["holodeck"], &|_| {}).unwrap_err();
     assert!(format!("{err:#}").contains("is not registered"), "{err:#}");
+}
+
+/// The Manage row's queued and done are the step's bar, and the bar is
+/// documents: qmd itself reports only bytes and chunks, so a bar fed
+/// from those read "342,810 queued" for a few hundred documents. The
+/// script's count starts at none of the collection's two and ends at
+/// both, with qmd's own numbers still on the last reading.
+#[test]
+fn an_embed_reports_its_progress_in_documents() {
+    let root = root_with(LOGS);
+    let index = open(root.path());
+    let work = tempfile::tempdir().unwrap();
+    link_model(&index, work.path());
+    index.keyword_index(&["bridge", "sickbay"], &quiet).unwrap();
+
+    let readings: Mutex<Vec<EmbedProgress>> = Mutex::new(Vec::new());
+    index
+        .embed(&["bridge"], &|p| readings.lock().unwrap().push(p))
+        .unwrap();
+    let readings = readings.into_inner().unwrap();
+
+    let docs = |p: &EmbedProgress| (p.docs_embedded, p.total_docs);
+    assert_eq!(docs(&readings[0]), (0, 2), "{readings:#?}");
+    let last = readings.last().unwrap();
+    assert_eq!(docs(last), (2, 2), "{readings:#?}");
+    assert!(last.chunks_embedded >= 2, "{readings:#?}");
+    assert_eq!(last.bytes_processed, last.total_bytes, "{readings:#?}");
 }
 
 /// One source's embed embeds its own documents and nobody else's; one
