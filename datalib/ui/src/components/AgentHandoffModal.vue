@@ -110,17 +110,18 @@ function onKeydown(ev: KeyboardEvent) {
   justify-content: center;
 }
 .ah-modal {
-  background: var(--datalib-input-bg, #fff);
-  color: var(--datalib-fg, #000);
-  border: 1px solid var(--datalib-border, #ccc);
-  border-radius: 6px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  border: 1px solid var(--datalib-border);
+  border-radius: calc(var(--datalib-radius) + 4px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+  font-family: var(--datalib-font);
   width: min(480px, 90vw);
   padding: 16px 18px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  font-size: 0.9rem;
+  font-size: var(--datalib-font-size);
 }
 .ah-header {
   display: flex;
@@ -128,18 +129,18 @@ function onKeydown(ev: KeyboardEvent) {
   gap: 2px;
 }
 .ah-title {
-  font-size: 1.05rem;
+  font-size: calc(var(--datalib-title-size) + 2px);
   font-weight: 600;
 }
 .ah-component {
-  font-size: 0.8rem;
-  color: var(--datalib-muted, #888);
+  font-size: var(--datalib-font-size-small);
+  color: var(--datalib-muted);
 }
 .ah-component code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  background: var(--datalib-code-bg, #f5f5f5);
+  font-family: var(--datalib-mono);
+  background: var(--datalib-code-bg);
   padding: 0 0.25rem;
-  border-radius: 2px;
+  border-radius: 3px;
 }
 .ah-steps {
   margin: 0;
@@ -152,19 +153,21 @@ function onKeydown(ev: KeyboardEvent) {
 .ah-copy {
   margin-left: 0.3em;
   padding: 2px 10px;
-  border: 1px solid var(--datalib-accent, #4060c0);
-  border-radius: 4px;
-  background: var(--datalib-accent, #4060c0);
-  color: var(--datalib-bg, #fff);
+  border: 1px solid var(--datalib-accent);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-accent);
+  color: var(--datalib-on-accent);
   cursor: pointer;
-  font-size: 0.85rem;
+  font: inherit;
+  font-size: var(--datalib-font-size-small);
+  font-weight: 600;
 }
 .ah-skip {
   display: flex;
   align-items: center;
   gap: 0.45em;
-  font-size: 0.82rem;
-  opacity: 0.75;
+  font-size: var(--datalib-font-size-small);
+  color: var(--datalib-muted);
   cursor: pointer;
 }
 .ah-footer {
@@ -173,11 +176,15 @@ function onKeydown(ev: KeyboardEvent) {
 }
 .ah-done {
   padding: 6px 14px;
-  border: 1px solid var(--datalib-border, #ccc);
-  border-radius: 4px;
-  background: transparent;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
   color: inherit;
   cursor: pointer;
-  font-size: 0.9rem;
+  font: inherit;
+  font-weight: 600;
+}
+.ah-done:hover {
+  background: var(--datalib-hover);
 }
 </style>

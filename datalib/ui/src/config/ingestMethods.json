@@ -7,7 +7,7 @@
   ],
   "apple_messages": [
     {
-      "path": "database",
+      "path": "messages",
       "reach": "local"
     }
   ],
@@ -71,6 +71,10 @@
   ],
   "contacts": [
     {
+      "path": "fastmail",
+      "reach": "origin"
+    },
+    {
       "path": "carddav",
       "reach": "origin"
     },
@@ -132,6 +136,10 @@
   "lightroom": [
     {
       "path": "catalog",
+      "reach": "local"
+    },
+    {
+      "path": "backups",
       "reach": "local"
     }
   ],

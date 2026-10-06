@@ -1,0 +1,19 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+# The doltlite facts datalib depends on (docs/dev/doltlite.md), one test
+# each. Run it after every doltlite bump; a fact that moved fails by name.
+rust_test(
+    name = "doltlite_facts_test",
+    size = "small",
+    srcs = ["doltlite_facts.rs"],
+    data = ["//third-party/doltlite:doltlite"],
+    edition = "2021",
+    env = {
+        "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
+    },
+    deps = [
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

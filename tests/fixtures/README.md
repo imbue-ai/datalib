@@ -183,7 +183,8 @@ is an insta snapshot of exactly that, which is why it can exist at all.
 The **file** cannot be byte-stable, and no amount of `--now` pinning will
 change that: doltlite's own "Initialize data repository" commit and the
 shared layer's "schema: apply DDL" (`doltlite_raw::open`) both take the
-wall clock, and commit hashes chain, so every later hash moves with them.
+wall clock ([`doltlite.md`](/docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility)),
+and commit hashes chain, so every later hash moves with them.
 A source can pin its own commit — `yolink-make-fixture` passes
 `--now` through to `dolt_commit --date` — but not those two. This is a
 property of the store format, not a bug to fix here.
@@ -202,19 +203,14 @@ Bazel keys its action cache on *inputs*, so the residue costs
 reproducibility and cross-machine cache sharing, not day-to-day rebuild
 churn.
 
-**Reading the doltlite_db.** It is not a SQLite *file* — a
-`.doltlite_db` is a prolly-tree store, and a consumer linking stock
-libsqlite3 cannot open one at all (`file is not a database`).
-
-What is true: link doltlite (via `//third-party/doltlite:sqlite3`) and
-a plain `SELECT` works, alongside the full version-control surface. A
-consumer that can only speak stock SQLite wants an export instead —
-`doltlite -readonly <db> .dump | sqlite3 out.sqlite`, see
-[`docs/dev/doltlite.md`](/docs/dev/doltlite.md).
+**Reading the doltlite_db.** Stock libsqlite3 cannot open it. Link
+doltlite (via `//third-party/doltlite:sqlite3`) and a plain `SELECT`
+works, read-only; a consumer that speaks only stock SQLite wants the
+export in [`docs/dev/doltlite.md`](/docs/dev/doltlite.md#getting-the-data-out-export-to-plain-sqlite).
 
 ```rust
 let pool = sqlx::sqlite::SqlitePool::connect(
-    &format!("sqlite://{}", db_path.display())
+    &format!("sqlite://{}?mode=ro", db_path.display())
 ).await?;
 let n: i64 = sqlx::query_scalar("SELECT count(*) FROM grid_rows")
     .fetch_one(&pool).await?;

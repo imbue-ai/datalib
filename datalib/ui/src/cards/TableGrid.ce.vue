@@ -15,22 +15,25 @@ import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
 import type {
   Column,
   GridOption,
+  MultiColumnSort,
   OnBeforeEditCellEventArgs,
   OnCellChangeEventArgs,
   OnDblClickEventArgs,
+  SingleColumnSort,
   SlickEventData,
   TreeToggleStateChange,
 } from "@slickgrid-universal/common";
-import type { ColumnSpec, Timeseries } from "@/api";
-import { calibrationMax } from "@/config/sparkline";
+import type { ColumnSpec } from "@/api";
 import { carryLayout, KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
+import { followFrame, isDarkTheme } from "@/grid/gridFrame";
 import { clockFaces, movedCells, type ClockFaces } from "@/grid/clockFaces";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
+import { hoverWholeRow } from "@/grid/rowHover";
 import { treeColumnField, typedColumns } from "./typedColumns";
 import type { TableGridApi } from "./tableGridApi";
-import { fieldsOfType, sparkStepMs } from "./cellRenderers";
+import { fieldsOfType } from "./cellRenderers";
 
 const props = withDefaults(
   defineProps<{
@@ -42,9 +45,6 @@ const props = withDefaults(
     tree?: boolean;
     /// Which tree rows start open; default all closed.
     openByDefault?: (row: T) => boolean;
-    /// How far back a `timeseries` cell's samples reach, in seconds —
-    /// read from the producer so the plot and the data agree.
-    windowSecs?: number;
     /// What each action id does when its button is pressed. An id with
     /// no handler here draws no button.
     actions?: Record<string, (row: T) => void>;
@@ -60,8 +60,19 @@ const props = withDefaults(
     /// Per-field refinements a type cannot know — a width, a formatter
     /// — merged over the typed definition.
     columnOverrides?: Record<string, Partial<Column<T>>>;
+    /// How many leading columns stay put while the rest scroll sideways.
+    pinnedColumns?: number;
+    /// Pixels per row. Read once, when the grid is built.
+    rowHeight?: number;
   }>(),
-  { rowKey: "key", tree: false, windowSecs: 300, selectable: false, virtualizeRows: true },
+  {
+    rowKey: "key",
+    tree: false,
+    selectable: false,
+    virtualizeRows: true,
+    pinnedColumns: 0,
+    rowHeight: 34,
+  },
 );
 
 const emit = defineEmits<{
@@ -91,14 +102,15 @@ let bundle: Grid | null = null;
 /// own bookkeeping on them), so it is handed copies.
 const PARENT = "treeParentKey";
 const COLLAPSED = "__collapsed";
-/// The order the rows came in, which is the order a tree shows them in
-/// until a header is clicked: the grid sorts a tree by its first
-/// column unless told which column, and this hidden one is the telling.
-const ORDER = "treeOrder";
+/// The order the rows came in, as a hidden column: what the grid shows
+/// until a header is clicked, and what a third click on that header
+/// returns to. A tree needs telling — the grid sorts one by its first
+/// column unless told which column.
+const ORDER = "hostOrder";
 const collapsedByKey = new Map<string, boolean>();
 
 function annotate(rows: T[]): T[] {
-  if (!props.tree) return rows.map((r) => ({ ...r }));
+  if (!props.tree) return rows.map((r, i) => ({ ...r, [ORDER]: i }));
   const keyByPath = new Map<string, string>();
   for (const r of rows) keyByPath.set((r.path as string[]).join("\n"), keyOf(r));
   return rows.map((r, i) => {
@@ -129,7 +141,6 @@ function syncRows(rows: T[]) {
   if (!sameShape) {
     painted.clear();
     for (const r of rows) painted.set(keyOf(r), JSON.stringify(r));
-    ceilings = ceilingsOf(rows);
     const b = bundle;
     keepActiveOnRecord(b.slickGrid, dataView, () => {
       b.dataset = annotate(rows);
@@ -152,24 +163,7 @@ function syncRows(rows: T[]) {
     dataView.updateItem(key, { ...dataView.getItemById(key), ...r });
   }
   dataView.endUpdate();
-  const next = ceilingsOf(rows);
-  if (next !== ceilings) {
-    ceilings = next;
-    refreshCells(fieldsOfType(props.columns, "timeseries"));
-  }
 }
-
-/// Every sparkline in a column is drawn against the column's largest
-/// row, so a new largest moves every line in it: the column is
-/// repainted, not the rows.
-let ceilings = "";
-function ceilingsOf(rows: T[]): string {
-  const series = fieldsOfType(props.columns, "timeseries").map((f) =>
-    calibrationMax(rows.map((r) => (r[f] as Timeseries | undefined) ?? EMPTY_SERIES)),
-  );
-  return JSON.stringify(series);
-}
-const EMPTY_SERIES: Timeseries = { value: null, unit: "", samples: [] };
 
 /// The cell with an open editor, if any.
 function editingCell(): { row: number; cell: number } | null {
@@ -224,14 +218,14 @@ defineExpose({ api: () => api });
 
 function buildColumns(): Column<T>[] {
   const typed = typedColumns<T>(props.columns, {
-    rows: () => props.rows,
     tree: props.tree,
-    windowSecs: props.windowSecs,
     actions: props.actions,
     onOpenDocument: (uuid) => emit("openDocument", uuid),
     overrides: props.columnOverrides,
-  });
-  if (!props.tree) return typed;
+  }).map((c, i) =>
+    // A pinned column hidden would unpin the one after it.
+    i < props.pinnedColumns ? { ...c, excludeFromColumnPicker: true, reorderable: false } : c,
+  );
   return [
     ...typed,
     {
@@ -240,6 +234,8 @@ function buildColumns(): Column<T>[] {
       name: "",
       hidden: true,
       type: "number",
+      // The grid refuses to sort by a column that is not sortable.
+      sortable: true,
       excludeFromColumnPicker: true,
     },
   ];
@@ -257,28 +253,16 @@ function entriesFor(args: { row?: number; cell?: number }): MenuEntry[] {
   return props.menu(anchor, targets, column);
 }
 
-function isDark(): boolean {
-  return document.documentElement.dataset.theme === "dark";
-}
-
 function options(): GridOption {
   const treeField = treeColumnField(props.columns);
   return {
     datasetIdPropertyName: props.rowKey,
     enableHtmlRendering: false,
     enableEmptyDataWarningMessage: false,
-    darkMode: isDark(),
-    enableAutoResize: true,
+    darkMode: isDarkTheme(),
     ...KEEP_COLUMN_WIDTHS,
-    autoResize: {
-      container: boxEl.value!.parentElement!,
-      calculateAvailableSizeBy: "container",
-      resizeDetection: "container",
-      autoHeight: false,
-      bottomPadding: 0,
-      minHeight: 120,
-    },
-    rowHeight: 34,
+    ...followFrame(boxEl.value!, 120),
+    rowHeight: props.rowHeight,
     enableTextSelectionOnCells: true,
     enableCellNavigation: true,
     enableSelection: props.selectable,
@@ -290,10 +274,20 @@ function options(): GridOption {
     autoEdit: false,
     enableSorting: true,
     multiColumnSort: false,
+    // Ascending, descending, then back to the host's order (`onSort`).
+    tristateMultiColumnSort: true,
     enableColumnReorder: true,
     enableHeaderMenu: false,
     enableGridMenu: false,
-    enableColumnPicker: false,
+    // Right-click a header to show or hide a column; a producer may
+    // declare some hidden until asked for.
+    enableColumnPicker: true,
+    columnPicker: { hideForceFitButton: true, hideSyncResizeButton: true },
+    frozenColumn: props.pinnedColumns - 1,
+    // A box narrower than the pinned columns scrolls them with the rest;
+    // the grid's own answer to that is an alert().
+    invalidColumnFreezeWidthCallback: () =>
+      console.warn("TableGrid: too narrow to pin columns; they scroll with the rest"),
     // Folding a tree row goes through the grid's filters, so filtering
     // is on; nothing here is filterable, and the filter row stays hidden.
     enableFiltering: true,
@@ -374,11 +368,29 @@ function writePath(item: unknown, field: string, value: unknown) {
   if (target && typeof target === "object") (target as Record<string, unknown>)[last] = value;
 }
 
-function onDblClick(_e: SlickEventData, args: OnDblClickEventArgs) {
+/// A part of a cell that names a field of its own (`data-field`, as the
+/// badges after a name do) answers a double-click as that field, and
+/// the cell's in-place edit does not open.
+function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
   if (!bundle) return;
   const row = bundle.dataView.getItem(args.row) as T | undefined;
   const column = bundle.slickGrid.getColumns()[args.cell];
-  if (row && column) emit("cellDoubleClick", row, String(column.id));
+  if (!row || !column) return;
+  const target = e.getNativeEvent<MouseEvent>()?.target;
+  const part = target instanceof Element ? target.closest<HTMLElement>("[data-field]") : null;
+  if (part?.dataset.field) {
+    e.preventDefault();
+    emit("cellDoubleClick", row, part.dataset.field);
+    return;
+  }
+  emit("cellDoubleClick", row, String(column.id));
+}
+
+/// A cleared sort leaves the rows in the order it last put them; put
+/// back the order they came in.
+function onSort(_e: SlickEventData, args: SingleColumnSort | MultiColumnSort) {
+  if (!bundle || args.multiColumnSort || args.sortCol) return;
+  bundle.sortService.updateSorting([{ columnId: ORDER, direction: "ASC" }]);
 }
 
 function onTreeToggled(change: TreeToggleStateChange) {
@@ -431,11 +443,12 @@ function createGrid() {
   }
   for (const r of props.rows) painted.set(keyOf(r), JSON.stringify(r));
   handed = props.rows.map(keyOf);
-  ceilings = ceilingsOf(props.rows);
   stampRowKeys(b.slickGrid, b.dataView, (item) => keyOf(item as T));
+  hoverWholeRow(b.slickGrid);
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
   b.slickGrid.onCellChange.subscribe(onCellChange);
   b.slickGrid.onDblClick.subscribe(onDblClick);
+  b.slickGrid.onSort.subscribe(onSort);
   b.instances?.eventPubSubService?.subscribe<TreeToggleStateChange>(
     "onTreeItemToggled",
     onTreeToggled,
@@ -443,22 +456,16 @@ function createGrid() {
   emit("ready", api);
 }
 
-// Some cells go stale with no new data ("5 minutes ago", a sliding
-// sparkline), so they need a clock rather than an event. It ticks every
-// second and repaints only the cells that would draw differently.
+// A "5 minutes ago" cell goes stale with no new data, so it needs a
+// clock rather than an event. It ticks every second and repaints only
+// the cells that would draw differently.
 let faces: ClockFaces = new Map();
 let clock: ReturnType<typeof setInterval> | null = null;
 function tickClock() {
   const timestamps = fieldsOfType(props.columns, "timestamp");
-  const timeseries = fieldsOfType(props.columns, "timeseries");
-  if (timestamps.length === 0 && timeseries.length === 0) return;
-  const cols = {
-    timestamps,
-    timeseries,
-    windowMs: props.windowSecs * 1000,
-    stepMs: sparkStepMs(props.windowSecs),
-  };
-  const next = clockFaces(props.rows, keyOf, cols, Date.now());
+  const statuses = fieldsOfType(props.columns, "status");
+  if (timestamps.length + statuses.length === 0) return;
+  const next = clockFaces(props.rows, keyOf, { timestamps, statuses }, Date.now());
   const moved = movedCells(faces, next);
   faces = next;
   repaintCells(moved);
@@ -468,7 +475,7 @@ let themeWatch: MutationObserver | null = null;
 onMounted(() => {
   createGrid();
   clock = setInterval(tickClock, 1000);
-  themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDark()));
+  themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDarkTheme()));
   themeWatch.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ["data-theme"],

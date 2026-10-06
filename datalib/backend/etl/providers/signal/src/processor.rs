@@ -52,26 +52,26 @@ impl DataProcessor for SignalIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
-            .await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
-            snapshot_root: self.sync.path(),
-            // Default: `<snapshot_root>/files/XX/<name>` — the layout Signal
-            // Android produces. Override via a future SignalSync knob if it
-            // matters.
-            files_root: None,
-            aep_env_var: self.sync.aep_env_var.clone(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
+                snapshot_root: self.sync.path(),
+                // Default: `<snapshot_root>/files/XX/<name>` — the layout Signal
+                // Android produces. Override via a future SignalSync knob if it
+                // matters.
+                files_root: None,
+                aep_env_var: self.sync.aep_env_var.clone(),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "recipients={} chats={} chat_items={} media_files={} snapshot={}",
+                s.recipients, s.chats, s.chat_items, s.media_files, s.snapshot,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "recipients={} chats={} chat_items={} media_files={} snapshot={}",
-            s.recipients, s.chats, s.chat_items, s.media_files, s.snapshot,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

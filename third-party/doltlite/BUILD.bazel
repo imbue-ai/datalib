@@ -27,9 +27,9 @@ filegroup(
 # update one target and miss the other.
 #
 # This must match the version in the `doltlite_amalgamation` /
-# `doltlite_autoconf` URLs in MODULE.bazel; `:cli_version_test` is what
-# actually enforces that, by running the built CLI and comparing.
-DOLTLITE_VERSION = "0.50.3"
+# `doltlite_autoconf` URLs in MODULE.bazel; `//tools:version_pins_test`
+# enforces that.
+DOLTLITE_VERSION = "0.50.14"
 
 # Feature defines shared by the library and the CLI. Both compile
 # against the same amalgamation, so they must agree: `shell.c` has 12
@@ -62,13 +62,8 @@ DOLTLITE_DEFINES = [
     # is built with this flag.
     "-DSQLITE_ENABLE_COLUMN_METADATA",
     "-DSQLITE_THREADSAFE=1",
-    # NOTE: do NOT add `-DSQLITE_DEFAULT_FOREIGN_KEYS=1` here.
-    # Empirically (see hack/slack_open_debug) that flag made
-    # `sqlite3_open_v2` on a multi-GB doltlite store take ~60s
-    # vs ~2s for the upstream CLI binary, which omits it. Callers
-    # that want FK enforcement (we do) should send
-    # `PRAGMA foreign_keys = ON` after connect — sqlx does this
-    # automatically.
+    # Do NOT add `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`: the upstream build
+    # omits it, and sqlx sends `PRAGMA foreign_keys = ON` itself.
 ]
 
 # Silence the noisier doltlite/SQLite build warnings — they live in
@@ -89,12 +84,8 @@ DOLTLITE_WARNING_SUPPRESSIONS = [
 # statically linked into every Rust binary that pulls in sqlx-sqlite
 # (transitively via `libsqlite3-sys`).
 #
-# Single-TU build from the doltlite amalgamation. As of v0.11.53 the
-# amalgamation bundles the SQLite core, the prolly storage engine, the
-# `dolt_commit`/`dolt_log`/… version-control SQL surface, blake3 with
-# runtime SIMD dispatch, the `vec1` vector-search extension, the remote
-# *client* (push/fetch/pull/clone — no remote server), and the SQLite
-# extensions (FTS3/4/5, RTree, session, RBU, stmt vtable) all into one
+# Single-TU build from the doltlite amalgamation: the SQLite core, the
+# prolly storage engine and the `dolt_*` SQL surface in one
 # `doltlite.c`. We rename it
 # to `sqlite3.{c,h}` so libsqlite3-sys's build script — which looks
 # for `sqlite3.h` on $SQLITE3_INCLUDE_DIR and a `libsqlite3.a` on
@@ -140,15 +131,10 @@ cc_library(
     hdrs = ["sqlite3.h"],
     includes = ["."],
     copts = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + [
-        # Force `-O2` regardless of bazel's compilation_mode. doltlite's
-        # open path (prolly-chunk walk + blake3 hashing across every
-        # page on the file's root tree) is unusually loop-bound: at
-        # `-O0` (fastbuild default), `sqlite3_open_v2` against a 3.5GB
-        # raw slack store takes ~60s; at `-O2` it takes ~4s. We never
-        # step-debug doltlite from Rust anyway — it's third-party
-        # amalgamated C — so paying for an optimized build under
-        # fastbuild is a strict win. See hack/slack_open_debug for the
-        # A/B that established this.
+        # Force `-O2` regardless of bazel's compilation_mode: doltlite's
+        # open path is loop-bound C, and at fastbuild's `-O0` a multi-GB
+        # store took ~60s to open (docs/dev/doltlite.md § Operational
+        # notes; hack/slack_open_debug). We never step-debug it.
         "-O2",
         # Position-independent even in the non-PIC archive. rustc bundles
         # this archive into the libsqlite3-sys rlib (the build script's
@@ -178,16 +164,10 @@ cc_library(
 # `doltlite` — the sqlite3-shell CLI, linked against the same
 # amalgamation the Rust binaries use.
 #
-# Why this exists: tests need to inspect doltlite raw stores directly
-# (row counts, `dolt_log` advancement, specific provider entities)
-# rather than grepping the orchestrator's tracing events out of stderr
-# — see //tests/fixtures:ingested_tng_test, which today can only
-# assert on stderr strings because it has no way to open the database
-# it just produced. The Python route (`pip install doltlite`) is a
-# dead end: that package's macOS bootstrap otool-inspects
-# `_sqlite3.__file__`, which doesn't exist on the
-# python-build-standalone interpreters both `uv` and `rules_python`
-# use, where `_sqlite3` is statically built in.
+# Tests open the stores the pipeline wrote with it, and it ships as
+# `datalib-doltlite`: stock `sqlite3` cannot open a `.doltlite_db`. (The
+# `doltlite` Python package does not work under the
+# python-build-standalone interpreters `uv` and `rules_python` use.)
 #
 # `srcs` is the pre-generated `shell.c` from the autoconf tarball; the
 # amalgamation zip is library-only and has no `main()`. `deps` supplies
@@ -205,15 +185,10 @@ cc_binary(
     deps = [":sqlite3"],
 )
 
-# Fails the build if the two MODULE.bazel pins drift apart.
-#
-# `shell.c` comes from @doltlite_autoconf and the library from
-# @doltlite_amalgamation, so nothing in Bazel forces them to be the
-# same doltlite release — a version bump that updates one URL and
-# forgets the other would still build and still link, just producing a
-# CLI whose shell and engine disagree. This runs the real binary and
-# checks it reports DOLTLITE_VERSION, which is the cheapest end-to-end
-# assertion that both halves came from the same release.
+# That the CLI links, runs, and has a real dolt-SQL surface (a shell
+# linked against stock SQLite fails on `dolt_commit`). Its `--version`
+# check compares DOLTLITE_VERSION with itself; pin drift between the two
+# MODULE.bazel archives is `//tools:version_pins_test`'s job.
 sh_test(
     name = "cli_version_test",
     size = "small",

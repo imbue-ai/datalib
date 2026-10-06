@@ -62,34 +62,36 @@ impl DataProcessor for GoogleTakeoutIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
-            .await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
-            db,
-            input_path: self.input_path.clone(),
-            sync: self.sync.clone(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
+                db,
+                input_path: self.input_path.clone(),
+                sync: self.sync.clone(),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "maps(reviews={} saved={} photos={}) youtube(watch={} subs={}) \
+                     chat(groups={} users={} messages={}) gemini(activity={}) \
+                     blobs={} removed={} files_removed={} feeds_failed={}",
+                s.maps_reviews,
+                s.maps_saved_places,
+                s.maps_photos,
+                s.youtube_watch_history,
+                s.youtube_subscriptions,
+                s.chat_groups,
+                s.chat_users,
+                s.chat_messages,
+                s.gemini_activity,
+                s.blobs_stored,
+                s.removed,
+                s.files_removed,
+                s.feeds_failed,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "maps(reviews={} saved={} photos={}) youtube(watch={} subs={}) \
-                 chat(groups={} users={} messages={}) gemini(activity={}) \
-                 blobs={} parse_errors={}",
-            s.maps_reviews,
-            s.maps_saved_places,
-            s.maps_photos,
-            s.youtube_watch_history,
-            s.youtube_subscriptions,
-            s.chat_groups,
-            s.chat_users,
-            s.chat_messages,
-            s.gemini_activity,
-            s.blobs_stored,
-            s.parse_errors,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

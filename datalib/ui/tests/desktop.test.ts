@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  absoluteStart,
+  confirmAction,
   filePathFromUrl,
   isDesktopApp,
   pickPath,
@@ -177,11 +179,16 @@ describe("pickPath", () => {
   });
 
   describe("start directory", () => {
-    const startAtOf = async (startAt: string) => {
-      const invoke = fakeTauri(() => Promise.resolve(null));
-      await pickPath({ ...folder, startAt });
-      return (invoke.mock.calls[0][1] as any).options.defaultPath;
+    /// The dialog's `defaultPath`, with `homeDir()` answering `/Users/tng`.
+    const startOf = async (req: { startAt?: string; startIn?: string }) => {
+      const invoke = fakeTauri((cmd) =>
+        Promise.resolve(cmd === "plugin:path|resolve_directory" ? "/Users/tng" : null),
+      );
+      await pickPath({ ...folder, ...req });
+      const open = invoke.mock.calls.find(([cmd]) => cmd === "plugin:dialog|open");
+      return (open![1] as any).options.defaultPath;
     };
+    const startAtOf = (startAt: string) => startOf({ startAt });
 
     it("opens at an absolute path the user already had", async () => {
       await expect(startAtOf("/Users/x/backups/WhatsApp")).resolves.toBe(
@@ -192,11 +199,36 @@ describe("pickPath", () => {
       );
     });
 
-    it("drops a `~` path, which no one expands on this route", async () => {
+    it("expands a `~` path against the home directory Tauri reports", async () => {
       // Tauri hands defaultPath to the platform dialog verbatim — no
-      // shell — so `~/backups` is a RELATIVE path resolved against the
-      // process cwd, and the dialog would open somewhere arbitrary.
-      await expect(startAtOf("~/backups/WhatsApp")).resolves.toBeUndefined();
+      // shell — so a `~/backups` left as it is would be a RELATIVE path
+      // resolved against the process cwd.
+      await expect(startAtOf("~/backups/WhatsApp")).resolves.toBe("/Users/tng/backups/WhatsApp");
+    });
+
+    it("drops a `~` path when the home directory is refused", async () => {
+      // A capability without core:path:allow-resolve-directory.
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const invoke = fakeTauri((cmd) =>
+        cmd === "plugin:path|resolve_directory"
+          ? Promise.reject(new Error("not allowed"))
+          : Promise.resolve(null),
+      );
+      await pickPath({ ...folder, startIn: "~/Library/Messages" });
+      const open = invoke.mock.calls.find(([cmd]) => cmd === "plugin:dialog|open");
+      expect((open![1] as any).options.defaultPath).toBeUndefined();
+    });
+
+    it("opens at the field's startIn while the field is empty", async () => {
+      await expect(startOf({ startAt: "", startIn: "~/Library/Messages" })).resolves.toBe(
+        "/Users/tng/Library/Messages",
+      );
+    });
+
+    it("prefers the field's own value to its startIn", async () => {
+      await expect(
+        startOf({ startAt: "/Volumes/copy/Messages", startIn: "~/Library/Messages" }),
+      ).resolves.toBe("/Volumes/copy/Messages");
     });
 
     it("drops empty and half-typed values", async () => {
@@ -204,5 +236,45 @@ describe("pickPath", () => {
       await expect(startAtOf("   ")).resolves.toBeUndefined();
       await expect(startAtOf("backups/WhatsApp")).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("absoluteStart", () => {
+  it("expands only a `~` or `~/` prefix, and trims a trailing slash off home", () => {
+    expect(absoluteStart("~", "/Users/tng")).toBe("/Users/tng");
+    expect(absoluteStart("~/x", "/Users/tng/")).toBe("/Users/tng/x");
+    expect(absoluteStart("~someone/x", "/Users/tng")).toBeUndefined();
+    expect(absoluteStart("~/x", undefined)).toBeUndefined();
+  });
+});
+
+describe("confirmAction", () => {
+  it("is the browser's own confirm outside the app", async () => {
+    const native = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await expect(confirmAction("Remove it?")).resolves.toBe(false);
+    expect(native).toHaveBeenCalledWith("Remove it?");
+  });
+
+  it("waits for the answer in the app, and a Cancel stops the action", async () => {
+    // Guards the remove that went ahead unasked: the plugin's
+    // `window.confirm` returned a truthy Promise before anyone answered.
+    const native = vi.spyOn(window, "confirm");
+    const invoke = fakeTauri(() => Promise.resolve("Cancel"));
+    await expect(confirmAction("Remove it?")).resolves.toBe(false);
+    expect(native).not.toHaveBeenCalled();
+    const [cmd, args] = invoke.mock.calls[0];
+    expect(cmd).toBe("plugin:dialog|message");
+    expect(args).toMatchObject({ message: "Remove it?", kind: "warning", buttons: "OkCancel" });
+  });
+
+  it("is true in the app only on OK", async () => {
+    fakeTauri(() => Promise.resolve("Ok"));
+    await expect(confirmAction("Remove it?")).resolves.toBe(true);
+  });
+
+  it("rejects when the app refuses the dialog, so nothing is removed", async () => {
+    // What a missing tauri/capabilities/confirm-actions.json looks like.
+    fakeTauri(() => Promise.reject(new Error("dialog.message not allowed")));
+    await expect(confirmAction("Remove it?")).rejects.toThrow("not allowed");
   });
 });

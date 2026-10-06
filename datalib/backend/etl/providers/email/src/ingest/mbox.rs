@@ -1,9 +1,10 @@
 //! mbox extractor. Walks a Google Takeout `.mbox` file (RFC 4155 mboxrd
-//! framing, plus Gmail's `X-GM-THRID` / `X-Gmail-Labels`) and lands every
+//! framing; Gmail's message id on each `From ` line, plus its
+//! `X-GM-THRID` / `X-Gmail-Labels` headers) and lands every
 //! message into the shared email raw store as if it had come off a JMAP
 //! server. No body parsing here — render handles that off the `.eml` blob.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -16,7 +17,8 @@ use datalib_etl::bulk::{
 use datalib_etl::control::DownloadControl;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
-use datalib_etl::{file_checkpoint, fsscan};
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::{download_problems, file_checkpoint, fsscan};
 use mail_parser::MessageParser;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -24,13 +26,13 @@ use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
 
 use super::db::{EmailRow, RawDb};
-use super::envelope::{self, header_text, strip_angle};
-use super::labels::{mailbox_id, map_label, split_gmail_labels, LabelMap};
+use super::envelope::{self, header_text, GmailId};
+use super::labels::{self, mailbox_id, map_label, split_gmail_labels, LabelMap};
 use super::schema_raw::{AccountRow, EmailKeywordRow, EmailMailboxRow, EmlBlobRow};
 
 /// Maximum emails accumulated in memory before we flush a bulk batch
 /// to disk. Keeps peak RSS bounded while still amortizing doltlite's
-/// per-transaction manifest-mutation cost across many rows.
+/// per-transaction page rewrite across many rows.
 const FLUSH_BATCH: usize = 2000;
 
 /// Account-row data the orchestrator pipes in from the source YAML.
@@ -45,9 +47,9 @@ pub struct MboxAccountConfig {
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     /// `.mbox` file (or directory containing `*.mbox` files).
     pub input_path: PathBuf,
@@ -102,6 +104,12 @@ pub struct FetchSummary {
     pub blobs_skipped: usize,
     pub blobs_oversize: usize,
     pub parse_errors: usize,
+    /// Emails deleted because no mbox file still holds them.
+    pub emails_removed: usize,
+    /// Labels no message in the files carries any more, whose rows went.
+    pub mailboxes_removed: usize,
+    /// `.mbox` files that are gone since the last run.
+    pub files_removed: usize,
 }
 
 /// Scope key for the mbox path's [`datalib_etl::scope_config`]
@@ -226,6 +234,11 @@ impl Adjustments {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_files(opts, found)).await
+}
+
+async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     // One scan finds the `.mbox` files and says which have changed
@@ -241,7 +254,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     for e in &scan.errors {
         warn!(event = "mbox_walk_error", path = %e.path.display(), error = %e.error, "an entry of the mbox directory could not be walked");
     }
-    if scan.files.is_empty() {
+    let cursor = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
+    let changes = scan.changes_since(&cursor);
+    found.extend(scan.walk_problems());
+    if scan.files.is_empty() && !changes.may_have_dropped_records() {
         return Ok(FetchSummary::default());
     }
     let account_id = opts
@@ -263,10 +279,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Which files still need reading. A widened `only_labels` (or any
     // other scope change) re-reads everything: the cursor says the
     // bytes are unchanged, which is true and beside the point — the
-    // question being asked of them changed.
-    let cursor = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
-    let changes = scan.changes_since(&cursor);
-    let to_process: Vec<&fsscan::ScannedFile> = if adjust.reingest_files {
+    // question being asked of them changed. So does a file removed or
+    // rewritten: two mbox files can hold one message, so only a read of
+    // every file says which emails left the input.
+    let read_all = adjust.reingest_files
+        || changes.may_have_dropped_records()
+        || changes.needs_reading().count() == scan.files.len();
+    let to_process: Vec<&fsscan::ScannedFile> = if read_all {
         scan.files.iter().collect()
     } else {
         changes.needs_reading().collect()
@@ -311,24 +330,60 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 .collect(),
         )
     };
-    let mut accumulator = Accumulator::new(account_id.clone(), label_filter);
+    // The label rows already here, by name. A row a Gmail API sync made
+    // carries Google's real label id, and a message filed under that name
+    // lands there rather than on a second, name-keyed row.
+    let held_mailboxes = db.mailbox_names(&account_id).await?;
+    let gmail_prefix = labels::gmail_mailbox_prefix(&account_id);
+    let real_ids: HashMap<String, String> = held_mailboxes
+        .iter()
+        .filter(|(id, _)| id.starts_with(&gmail_prefix))
+        .map(|(id, name)| (name.clone(), id.clone()))
+        .collect();
+    let unfiltered = label_filter.is_none();
+    let mut accumulator = Accumulator::new(account_id.clone(), label_filter, real_ids);
     let mut summary = FetchSummary::default();
     let mut batch = PendingBatch::default();
     let mut emails_seen: u64 = 0;
     let mut files_processed: usize = 0;
+    // A rewritten file is stamped only once the run has pruned what it
+    // dropped: stamped before, the next run would not see it rewritten,
+    // so it would never read every file and prune.
+    let modified: BTreeSet<&str> = changes.modified.iter().map(|f| f.rel.as_str()).collect();
+    let mut stamp_after_prune: Vec<(&fsscan::ScannedFile, Option<FileProblem>)> = Vec::new();
 
     for f in &to_process {
-        for raw in iter_mbox_messages(&f.path)? {
-            let (raw, bytes_consumed) = match raw {
-                Ok((bytes, consumed)) => (bytes, consumed),
+        let messages = match iter_mbox_messages(&f.path) {
+            Ok(messages) => messages,
+            Err(e) => {
+                summary.parse_errors += 1;
+                found.push(file_unread(f, &e));
+                continue;
+            }
+        };
+        files_processed += 1;
+        let mut unparsed = Unparsed::default();
+        let mut read_whole = true;
+        for message in messages {
+            let message = match message {
+                Ok(m) => m,
+                // An error can repeat on every read, so the file ends here
+                // and is read again next run.
                 Err(e) => {
-                    warn!(event = "mbox_read_failed", path = %f.path.display(), error = %e, "an mbox file could not be read");
                     summary.parse_errors += 1;
-                    continue;
+                    found.push(file_unread(f, &e));
+                    read_whole = false;
+                    break;
                 }
             };
-            opts.progress.inc(bytes_consumed);
-            match accumulator.ingest_message(&raw, &known_blobs, &mut batch, &mut summary) {
+            opts.progress.inc(message.bytes_consumed);
+            match accumulator.ingest_message(
+                &message.raw,
+                message.gmail_id,
+                &known_blobs,
+                &mut batch,
+                &mut summary,
+            ) {
                 Ok(true) => {
                     emails_seen += 1;
                     opts.progress.set_message(&format!("{emails_seen} emails"));
@@ -338,8 +393,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
                 Ok(false) => {} // duplicate; skipped
                 Err(e) => {
-                    warn!(event = "mbox_message_failed", error = %e, "a message in an mbox could not be parsed; skipped it");
                     summary.parse_errors += 1;
+                    unparsed.add(&e);
                 }
             }
         }
@@ -348,8 +403,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // this, a Ctrl-C between two files' messages could leave the
         // checkpoint ahead of the data.
         flush_batch(&db, &mut batch, &mut summary).await?;
-        file_checkpoint::record_file_pool(db.pool(), CHECKPOINT_SCOPE, f).await?;
-        files_processed += 1;
+        if !read_whole {
+            continue;
+        }
+        if modified.contains(f.rel.as_str()) {
+            stamp_after_prune.push((f, unparsed.problem()));
+        } else {
+            stamp(&db, f, unparsed.problem()).await?;
+        }
     }
     flush_batch(&db, &mut batch, &mut summary).await?;
 
@@ -380,26 +441,145 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         );
     }
 
-    // Record the config only once this run satisfied it, so a failure
-    // leaves the previous record in place and the next run re-plans.
-    // (Errors above return early, so reaching here means success.)
-    datalib_etl::scope_config::store_if_satisfied(db.pool(), SCOPE_CONFIG_KEY, &scope_cfg, true)
-        .await;
+    // Every message of every file was read: the run knows what the input
+    // holds, so it can say what left it and which configured label
+    // nothing carries.
+    let read_everything = read_all && changes.walk_errors == 0 && summary.parse_errors == 0;
+    if read_everything {
+        // `seen` is every message id the read met, before the label
+        // filter, so narrowing `only_labels` never deletes.
+        summary.emails_removed = db
+            .prune_emails_to(&account_id, &accumulator.seen_email_ids)
+            .await?;
+        // Every message was read and refiled, so a label this run's
+        // own recipe minted that none of them carries is gone from the
+        // export. A label filter hides the rest of the labels, and a
+        // real Gmail id is the API sync's to retire.
+        if unfiltered {
+            let minted: BTreeSet<&str> = accumulator
+                .mailboxes
+                .values()
+                .map(|m| m.id.as_str())
+                .collect();
+            let gone: Vec<(String, Option<String>)> = held_mailboxes
+                .keys()
+                .filter(|id| id.starts_with(labels::NAME_KEYED_PREFIX))
+                .filter(|id| !minted.contains(id.as_str()))
+                .map(|id| (id.clone(), None))
+                .collect();
+            summary.mailboxes_removed = gone.len();
+            let now = datalib_time::IsoOffsetTimestamp::now_local();
+            super::refile_mailboxes(&db, &now, &gone).await?;
+        }
+        let gone = changes.gone();
+        summary.files_removed = gone.len();
+        file_checkpoint::forget_files(db.pool(), CHECKPOINT_SCOPE, &gone).await?;
+        for (f, problem) in stamp_after_prune {
+            stamp(&db, f, problem).await?;
+        }
+        found.config(unmatched_labels(
+            &opts.only_labels,
+            &accumulator.labels_seen,
+        ));
+    } else if read_all && changes.may_have_dropped_records() {
+        found.push(fsscan::Scan::deletions_held_back(summary.parse_errors));
+    }
+
+    // Record the config only once this run satisfied it, so a file it
+    // could not read through leaves the previous record in place and the
+    // next run reads every file again.
+    datalib_etl::scope_config::store_if_satisfied(
+        db.pool(),
+        SCOPE_CONFIG_KEY,
+        &scope_cfg,
+        summary.parse_errors == 0 && changes.walk_errors == 0,
+    )
+    .await;
 
     Ok(summary)
+}
+
+/// What one read of a file could not use, as its `file:` problem row.
+type FileProblem = (datalib_problems::Outcome, datalib_problems::Problem);
+
+/// The messages of one file that would not parse.
+#[derive(Default)]
+struct Unparsed {
+    count: usize,
+    first: Option<String>,
+}
+
+impl Unparsed {
+    fn add(&mut self, e: &anyhow::Error) {
+        self.count += 1;
+        self.first.get_or_insert_with(|| format!("{e:#}"));
+    }
+
+    fn problem(&self) -> Option<FileProblem> {
+        let first = self.first.as_deref()?;
+        Some((
+            datalib_problems::Outcome::Dropped,
+            datalib_problems::Problem::record(
+                datalib_problems::Reason::Undeserializable,
+                &format!(
+                    "{} messages could not be parsed; first: {first}",
+                    self.count
+                ),
+            ),
+        ))
+    }
+}
+
+/// A file the run could not read through, as a `listing:` row. It is not
+/// stamped, so the next run reads it again.
+fn file_unread(f: &fsscan::ScannedFile, e: &anyhow::Error) -> download_problems::RunProblem {
+    download_problems::RunProblem::listing(&format!("mbox {}", f.rel), format!("{e:#}"))
+}
+
+async fn stamp(db: &RawDb, f: &fsscan::ScannedFile, problem: Option<FileProblem>) -> Result<()> {
+    let mut tx = db.pool().begin().await.context("begin mbox stamp tx")?;
+    file_checkpoint::record_file_with_problem(&mut tx, CHECKPOINT_SCOPE, f, problem).await?;
+    tx.commit().await.context("commit mbox stamp tx")
+}
+
+/// The configured labels no message in the files carries.
+fn unmatched_labels(
+    configured: &[String],
+    seen: &BTreeSet<String>,
+) -> Vec<download_problems::DownloadProblem> {
+    configured
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| !seen.contains(*l))
+        .map(|l| {
+            download_problems::DownloadProblem::not_found(
+                K_ONLY_LABELS,
+                l,
+                "no message in the mbox files carries this label",
+            )
+        })
+        .collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────
 // Streaming mbox iterator
 
-/// Iterate `path` yielding one RFC 5322 message at a time, reporting the mbox
-/// bytes consumed since the previous yield so a caller can drive a byte-keyed
-/// progress bar. Envelope `From ` lines are stripped and `>From ` escapes
-/// unquoted. Streams via `BufReader`, so peak RSS stays bounded.
-fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<(Vec<u8>, u64)>>> {
+struct MboxMessage {
+    raw: Vec<u8>,
+    /// From the envelope `From ` line, when it is Takeout's.
+    gmail_id: Option<GmailId>,
+    /// mbox bytes read since the previous message, for a byte-keyed
+    /// progress bar.
+    bytes_consumed: u64,
+}
+
+/// Iterate `path` yielding one RFC 5322 message at a time, ending after
+/// the first read error. Envelope `From ` lines are stripped and `>From `
+/// escapes unquoted. Streams via `BufReader`, so peak RSS stays bounded.
+fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<MboxMessage>>> {
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut reader = BufReader::with_capacity(1 << 16, file);
-    let mut pending: Option<Vec<u8>> = None;
+    let mut pending: Option<(Vec<u8>, Option<GmailId>)> = None;
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut started = false;
     // Accumulates every byte read from the file and resets at each yield, so
@@ -413,8 +593,14 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<(Vec<u8
                 // EOF; flush any pending message together with the
                 // remaining bytes counted on this last `read_until`
                 // (which returned 0 — nothing to add).
-                let take_bytes = std::mem::take(&mut bytes_since_yield);
-                return pending.take().map(|msg| Ok((msg, take_bytes)));
+                let bytes_consumed = std::mem::take(&mut bytes_since_yield);
+                return pending.take().map(|(raw, gmail_id)| {
+                    Ok(MboxMessage {
+                        raw,
+                        gmail_id,
+                        bytes_consumed,
+                    })
+                });
             }
             Ok(n) => n,
             Err(e) => return Some(Err(e.into())),
@@ -430,11 +616,15 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<(Vec<u8
         }
         if is_from_line(line) {
             let prev = pending.take();
-            pending = Some(Vec::with_capacity(4096));
+            pending = Some((Vec::with_capacity(4096), takeout_gmail_id(line)));
             started = true;
-            if let Some(msg) = prev {
-                let take_bytes = std::mem::take(&mut bytes_since_yield);
-                return Some(Ok((msg, take_bytes)));
+            if let Some((raw, gmail_id)) = prev {
+                let bytes_consumed = std::mem::take(&mut bytes_since_yield);
+                return Some(Ok(MboxMessage {
+                    raw,
+                    gmail_id,
+                    bytes_consumed,
+                }));
             }
             continue;
         }
@@ -442,16 +632,36 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<(Vec<u8
             // Tolerate leading junk before the first `From ` line.
             continue;
         }
-        let target = pending.as_mut().expect("started => Some");
+        let (target, _) = pending.as_mut().expect("started => Some");
         let unescaped = unescape_from_line(line);
         target.extend_from_slice(&unescaped);
         target.push(b'\n');
     });
-    Ok(it)
+    // A read error can come back on every read after it, so the stream
+    // ends at the first.
+    Ok(it.scan(false, |failed, item| {
+        if *failed {
+            return None;
+        }
+        *failed = item.is_err();
+        Some(item)
+    }))
 }
 
 fn is_from_line(line: &[u8]) -> bool {
     line.len() >= 5 && &line[..5] == b"From "
+}
+
+/// Takeout writes Gmail's message id, in decimal, as the sender of each
+/// `From ` line: `From 1853466712473707184@xxx Mon Jan 05 …`. Any other
+/// mbox names a real sender there.
+fn takeout_gmail_id(from_line: &[u8]) -> Option<GmailId> {
+    let sender = from_line.get(5..)?.split(|b| *b == b' ').next()?;
+    let digits = sender.strip_suffix(b"@xxx")?;
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    GmailId::from_takeout(std::str::from_utf8(digits).ok()?)
 }
 
 fn unescape_from_line(line: &[u8]) -> Vec<u8> {
@@ -468,8 +678,12 @@ fn unescape_from_line(line: &[u8]) -> Vec<u8> {
 struct Accumulator {
     account_id: String,
     mailboxes: BTreeMap<String, MailboxEntry>,
+    /// Label name → the real Gmail id a row already carries for it.
+    real_ids: HashMap<String, String>,
     threads: BTreeMap<String, Vec<ThreadMember>>,
     seen_email_ids: BTreeSet<String>,
+    /// Every label any message carried, before the label filter.
+    labels_seen: BTreeSet<String>,
     /// When `Some`, only messages carrying a label whose full path is
     /// in this set are ingested (the rest are dropped before any row or
     /// blob lands). `None` = ingest everything. See
@@ -480,6 +694,8 @@ struct Accumulator {
 struct MailboxEntry {
     id: String,
     role: Option<&'static str>,
+    /// The row is the Gmail API sync's, and stays as it wrote it.
+    borrowed: bool,
 }
 
 #[derive(Clone)]
@@ -489,12 +705,18 @@ struct ThreadMember {
 }
 
 impl Accumulator {
-    fn new(account_id: String, label_filter: Option<HashSet<String>>) -> Self {
+    fn new(
+        account_id: String,
+        label_filter: Option<HashSet<String>>,
+        real_ids: HashMap<String, String>,
+    ) -> Self {
         Self {
             account_id,
             mailboxes: BTreeMap::new(),
+            real_ids,
             threads: BTreeMap::new(),
             seen_email_ids: BTreeSet::new(),
+            labels_seen: BTreeSet::new(),
             label_filter,
         }
     }
@@ -507,6 +729,7 @@ impl Accumulator {
     fn ingest_message(
         &mut self,
         raw: &[u8],
+        gmail_id: Option<GmailId>,
         known_blobs: &std::collections::HashMap<String, String>,
         pending: &mut PendingBatch,
         summary: &mut FetchSummary,
@@ -522,10 +745,7 @@ impl Accumulator {
         // crate), and hashing every message twice was pure waste.
         let eml_blake3 = blake3_hex(raw);
         let eml_blob_id = eml_blake3.clone();
-        let email_id = match msg.message_id() {
-            Some(mid) => strip_angle(mid).to_string(),
-            None => eml_blob_id.clone(),
-        };
+        let email_id = envelope::email_id(gmail_id, &msg, &eml_blob_id);
         if !self.seen_email_ids.insert(email_id.clone()) {
             return Ok(false);
         }
@@ -542,6 +762,8 @@ impl Accumulator {
             .and_then(header_text)
             .unwrap_or_default();
         let labels = split_gmail_labels(&label_header);
+        self.labels_seen
+            .extend(labels.iter().map(|l| l.trim().to_string()));
 
         // Label filter: drop the message before any row/blob/thread
         // bookkeeping if none of its labels is in the allow-set. Matched
@@ -642,12 +864,16 @@ impl Accumulator {
         if let Some(entry) = self.mailboxes.get(name) {
             return entry.id.clone();
         }
-        let id = mailbox_id(&self.account_id, name);
+        let (id, borrowed) = match self.real_ids.get(name) {
+            Some(real) => (real.clone(), true),
+            None => (mailbox_id(&self.account_id, name), false),
+        };
         self.mailboxes.insert(
             name.to_string(),
             MailboxEntry {
                 id: id.clone(),
                 role,
+                borrowed,
             },
         );
         id
@@ -658,8 +884,9 @@ impl Accumulator {
 
 /// Everything the next flush will hand to doltlite. Accumulating in memory
 /// and flushing as one entity-pool transaction plus one CAS-pool transaction
-/// is dramatically cheaper than per-row writes: doltlite charges a prolly-tree
-/// manifest mutation per `BEGIN … COMMIT`.
+/// is dramatically cheaper than per-row writes: doltlite rewrites every page a
+/// transaction touched at each `COMMIT` (docs/dev/doltlite.md § "What a write
+/// costs").
 #[derive(Default)]
 struct PendingBatch {
     emails: Vec<EmailRow>,
@@ -754,6 +981,7 @@ async fn flush_account_and_lookups(
     let mailbox_specs: Vec<(String, String, Option<&'static str>, String)> = accumulator
         .mailboxes
         .iter()
+        .filter(|(_, entry)| !entry.borrowed)
         .map(|(name, entry)| {
             let payload = match entry.role {
                 Some(role) => serde_json::json!({
@@ -1059,16 +1287,37 @@ mod tests {
     #[test]
     fn streaming_iter_yields_each_message() {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
-        let msgs: Vec<Vec<u8>> = iter_mbox_messages(&path)
+        let msgs: Vec<MboxMessage> = iter_mbox_messages(&path)
             .unwrap()
             .collect::<Result<Vec<_>>>()
-            .unwrap()
-            .into_iter()
-            .map(|(bytes, _consumed)| bytes)
-            .collect();
+            .unwrap();
         assert_eq!(msgs.len(), 2);
-        assert!(msgs[0].starts_with(b"X-GM-THRID:"));
-        assert!(msgs[1].starts_with(b"X-GM-THRID:"));
+        assert!(msgs[0].raw.starts_with(b"X-GM-THRID:"));
+        assert!(msgs[1].raw.starts_with(b"X-GM-THRID:"));
+        assert_eq!(msgs[0].gmail_id, GmailId::from_takeout("1111"));
+        assert_eq!(msgs[1].gmail_id, GmailId::from_takeout("2222"));
+    }
+
+    /// Only Takeout's `<digits>@xxx` is a Gmail id; any other mbox puts a
+    /// real sender there, and reading one as an id would key rows by it.
+    #[test]
+    fn reads_a_gmail_id_only_from_a_takeout_from_line() {
+        let id = |line: &str| takeout_gmail_id(line.as_bytes());
+        assert_eq!(
+            id("From 1853466712473707184@xxx Mon Jan 05 09:00:00 +0000 2026"),
+            GmailId::from_api("19b8d627a801a2b0"),
+        );
+        assert_eq!(
+            id("From picard@enterprise.starfleet Mon Jan 05 09:00:00 2026"),
+            None
+        );
+        assert_eq!(
+            id("From 1234@enterprise.starfleet Mon Jan 05 09:00:00 2026"),
+            None
+        );
+        assert_eq!(id("From 12ab@xxx Mon Jan 05 09:00:00 2026"), None);
+        assert_eq!(id("From @xxx Mon Jan 05 09:00:00 2026"), None);
+        assert_eq!(id("From 99999999999999999999@xxx Mon Jan 05 2026"), None);
     }
 
     #[test]
@@ -1081,7 +1330,7 @@ mod tests {
             .collect::<Result<Vec<_>>>()
             .unwrap()
             .into_iter()
-            .map(|(bytes, _consumed)| bytes)
+            .map(|m| m.raw)
             .collect();
         assert_eq!(msgs.len(), 1);
         let s = std::str::from_utf8(&msgs[0]).unwrap();
@@ -1124,7 +1373,8 @@ mod tests {
             .iter()
             .find(|e| e.subject.as_deref() == Some("Make it so"))
             .unwrap();
-        assert_eq!(picard.id, "msg-one@enterprise.starfleet");
+        // Gmail's id from the `From ` line (1111 = 0x457), not the Message-Id.
+        assert_eq!(picard.id, "0000000000000457");
         assert_eq!(picard.thread_id, "1111");
         // .eml is in CAS keyed by emails.blob_id. The path goes
         // emails.blob_id → email_blobs.blake3 → cas_objects.bytes.
@@ -1301,6 +1551,381 @@ mod tests {
         let accounts = db.load_accounts().await.unwrap();
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0]["name"], "Work Gmail");
+    }
+
+    fn msg_one() -> &'static str {
+        &TWO_MSG_MBOX[..TWO_MSG_MBOX.find("From 2222@xxx").unwrap()]
+    }
+
+    fn msg_two() -> &'static str {
+        &TWO_MSG_MBOX[TWO_MSG_MBOX.find("From 2222@xxx").unwrap()..]
+    }
+
+    const MSG_THREE: &str = concat!(
+        "From 3333@xxx Thu Jun 04 08:00:00 +0000 2026\n",
+        "X-GM-THRID: 3333\n",
+        "X-Gmail-Labels: Archived\n",
+        "Message-Id: <msg-three@enterprise.starfleet>\n",
+        "From: Worf <worf@enterprise.starfleet>\n",
+        "Subject: Security drill\n",
+        "Date: Thu, 4 Jun 2026 08:00:00 +0000\n",
+        "Content-Type: text/plain; charset=utf-8\n",
+        "\n",
+        "Drill at 0800.\n",
+    );
+
+    async fn stored(db_path: &Path) -> (Vec<String>, Vec<String>) {
+        let db = RawDb::open(db_path).await.unwrap();
+        let emails = sqlx::query_scalar("SELECT id FROM emails ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        let threads = sqlx::query_scalar("SELECT id FROM threads ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        db.close().await;
+        (emails, threads)
+    }
+
+    /// #898: a gone `.mbox` file takes the emails only it held, and the
+    /// last one takes everything.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deleted_mbox_takes_the_emails_only_it_held() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mbox"), msg_one()).unwrap();
+        std::fs::write(dir.path().join("b.mbox"), msg_two()).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let run = || {
+            run_once(&db_path, dir.path(), |db| {
+                FetchOptions::new(db, cache.clone())
+            })
+        };
+        run().await;
+        // 1111 = 0x457, 2222 = 0x8ae.
+        assert_eq!(
+            stored(&db_path).await.0,
+            vec!["0000000000000457", "00000000000008ae"]
+        );
+
+        std::fs::remove_file(dir.path().join("b.mbox")).unwrap();
+        let second = run().await;
+        assert_eq!((second.emails_removed, second.files_removed), (1, 1));
+        assert_eq!(
+            stored(&db_path).await,
+            (vec!["0000000000000457".into()], vec!["1111".into()])
+        );
+
+        std::fs::remove_file(dir.path().join("a.mbox")).unwrap();
+        let third = run().await;
+        assert_eq!(third.emails_removed, 1);
+        assert_eq!(stored(&db_path).await, (vec![], vec![]));
+    }
+
+    /// A newer export written over the old one is the whole mailbox: a
+    /// message it no longer carries was deleted.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rewritten_mbox_drops_what_it_no_longer_holds() {
+        let (dir, path) = write_tmp_mbox(TWO_MSG_MBOX);
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+
+        std::fs::write(&path, msg_one()).unwrap();
+        let second = run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        assert_eq!((second.emails_removed, second.files_removed), (1, 0));
+        assert_eq!(
+            stored(&db_path).await,
+            (vec!["0000000000000457".into()], vec!["1111".into()])
+        );
+        drop(dir);
+    }
+
+    /// Two exports can hold one message; deleting one of them keeps it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deleted_mbox_keeps_what_another_file_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("all.mbox"), TWO_MSG_MBOX).unwrap();
+        std::fs::write(dir.path().join("sent.mbox"), msg_two()).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let run = || {
+            run_once(&db_path, dir.path(), |db| {
+                FetchOptions::new(db, cache.clone())
+            })
+        };
+        run().await;
+
+        std::fs::remove_file(dir.path().join("sent.mbox")).unwrap();
+        let second = run().await;
+        assert_eq!((second.emails_removed, second.files_removed), (0, 1));
+        assert_eq!(stored(&db_path).await.0.len(), 2);
+    }
+
+    /// The re-read that decides what a gone file held counts every message,
+    /// not only those the label filter lets in, so narrowing the filter in
+    /// the same run deletes nothing that is still in a file.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_narrowed_filter_does_not_turn_a_deletion_into_a_purge() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mbox"), TWO_MSG_MBOX).unwrap();
+        std::fs::write(dir.path().join("b.mbox"), MSG_THREE).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        run_once(&db_path, dir.path(), |db| {
+            FetchOptions::new(db, cache.clone())
+        })
+        .await;
+        assert_eq!(stored(&db_path).await.0.len(), 3);
+
+        std::fs::remove_file(dir.path().join("b.mbox")).unwrap();
+        let second = run_once(&db_path, dir.path(), |db| FetchOptions {
+            only_labels: vec!["Sent".into()],
+            ..FetchOptions::new(db, cache.clone())
+        })
+        .await;
+        assert_eq!(second.emails_removed, 1, "only Worf's drill went");
+        assert_eq!(
+            stored(&db_path).await.0,
+            vec!["0000000000000457", "00000000000008ae"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_walk_error_deletes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mbox"), msg_one()).unwrap();
+        std::fs::write(dir.path().join("b.mbox"), msg_two()).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let run = || {
+            run_once(&db_path, dir.path(), |db| {
+                FetchOptions::new(db, cache.clone())
+            })
+        };
+        run().await;
+
+        std::fs::remove_file(dir.path().join("b.mbox")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("nowhere"), dir.path().join("c.mbox")).unwrap();
+        assert_eq!(run().await.emails_removed, 0);
+        assert_eq!(stored(&db_path).await.0.len(), 2);
+    }
+
+    /// A read error can repeat on every read; the stream used to retry it
+    /// forever, and the run with it.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_error_ends_the_stream() {
+        let d = tempfile::tempdir().unwrap();
+        // Opening a directory works; reading it does not.
+        let items: Vec<Result<MboxMessage>> =
+            iter_mbox_messages(d.path()).unwrap().take(3).collect();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].is_err());
+    }
+
+    async fn problems(db_path: &Path) -> Vec<(String, String)> {
+        let db = RawDb::open(db_path).await.unwrap();
+        let rows = sqlx::query_as("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        db.close().await;
+        rows
+    }
+
+    /// `path` made unreadable, or `None` where the test runs as a user
+    /// that reads it anyway (root, in a container).
+    #[cfg(unix)]
+    fn unreadable(path: &Path) -> Option<()> {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if File::open(path).is_ok() {
+            tracing::info!("skipped: this user reads a mode-000 file");
+            return None;
+        }
+        Some(())
+    }
+
+    #[cfg(unix)]
+    fn readable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    /// A folder whose only entry could not be walked has no file to read,
+    /// and the run that returned early for that said nothing of the entry.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_walk_error_with_no_file_to_read_is_still_a_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("c.mbox");
+        std::os::unix::fs::symlink(dir.path().join("nowhere"), &link).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let run = || {
+            run_once(&db_path, dir.path(), |db| {
+                FetchOptions::new(db, cache.clone())
+            })
+        };
+        run().await;
+        assert_eq!(
+            problems(&db_path).await,
+            [("listing:files".to_string(), "fetch_failed".to_string())]
+        );
+
+        std::fs::remove_file(&link).unwrap();
+        run().await;
+        assert!(problems(&db_path).await.is_empty());
+    }
+
+    /// A file that will not open costs that file: the run goes on, says
+    /// so, and reads it again next time.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_file_that_will_not_open_is_a_row_not_a_failed_run() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mbox"), TWO_MSG_MBOX).unwrap();
+        std::fs::write(dir.path().join("b.mbox"), MSG_THREE).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let labels = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        run_once(&db_path, dir.path(), |db| FetchOptions {
+            only_labels: labels(&["Sent"]),
+            ..FetchOptions::new(db, cache.clone())
+        })
+        .await;
+
+        // Unchanged bytes, so only a run that reads every file opens it:
+        // one whose label filter widened.
+        let b = dir.path().join("b.mbox");
+        if unreadable(&b).is_none() {
+            return;
+        }
+        let widened = |db| FetchOptions {
+            only_labels: labels(&["Sent", "Archived"]),
+            ..FetchOptions::new(db, cache.clone())
+        };
+        run_once(&db_path, dir.path(), widened).await;
+        assert_eq!(
+            problems(&db_path).await,
+            [(
+                "listing:mbox b.mbox".to_string(),
+                "fetch_failed".to_string()
+            )]
+        );
+        assert_eq!(
+            stored(&db_path).await.0.len(),
+            1,
+            "Worf's drill is in b.mbox"
+        );
+
+        // The widening is owed until a run reads b.mbox.
+        readable(&b);
+        run_once(&db_path, dir.path(), widened).await;
+        assert!(problems(&db_path).await.is_empty());
+        assert_eq!(stored(&db_path).await.0.len(), 2);
+    }
+
+    /// A message that will not parse is a row on its file, which stands
+    /// until the file is read again.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_message_that_will_not_parse_is_a_row_on_its_file() {
+        // The first `From ` line opens a message with nothing in it.
+        let body = format!("From 9999@xxx Wed Jun 03 22:00:00 +0000 2026\n{TWO_MSG_MBOX}");
+        let (_d, path) = write_tmp_mbox(&body);
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let first = run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        assert_eq!(first.parse_errors, 1);
+        assert_eq!(first.emails_upserted, 2);
+        assert_eq!(
+            problems(&db_path).await,
+            [(
+                "file:email/mbox:trek.mbox".to_string(),
+                "undeserializable".to_string()
+            )]
+        );
+
+        std::fs::write(&path, TWO_MSG_MBOX).unwrap();
+        run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        assert!(problems(&db_path).await.is_empty());
+    }
+
+    /// A rewritten file read on a run that could not read another is not
+    /// stamped: stamped, the next run would not see it rewritten, would not
+    /// read every file, and would never drop what it no longer holds.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_held_back_deletion_happens_once_every_file_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.mbox");
+        let b = dir.path().join("b.mbox");
+        std::fs::write(&a, TWO_MSG_MBOX).unwrap();
+        std::fs::write(&b, MSG_THREE).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        let run = || {
+            run_once(&db_path, dir.path(), |db| {
+                FetchOptions::new(db, cache.clone())
+            })
+        };
+        run().await;
+        assert_eq!(stored(&db_path).await.0.len(), 3);
+
+        std::fs::write(&a, msg_one()).unwrap();
+        if unreadable(&b).is_none() {
+            return;
+        }
+        assert_eq!(run().await.emails_removed, 0);
+        assert_eq!(
+            problems(&db_path)
+                .await
+                .into_iter()
+                .map(|p| p.0)
+                .collect::<Vec<_>>(),
+            ["listing:mbox b.mbox", "listing:removed_records"]
+        );
+
+        readable(&b);
+        assert_eq!(run().await.emails_removed, 1, "Riker's reply left a.mbox");
+        assert!(problems(&db_path).await.is_empty());
+    }
+
+    /// A configured label no message carries is a row, as the other two
+    /// modes make one, and correcting the config clears it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_label_no_message_carries_is_a_row() {
+        let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let cache = test_cache().await;
+        run_once(&db_path, &path, |db| FetchOptions {
+            only_labels: vec!["Sent".into(), "Starbase".into()],
+            ..FetchOptions::new(db, cache.clone())
+        })
+        .await;
+        assert_eq!(
+            problems(&db_path).await,
+            [(
+                "config:only_extract_labels:Starbase".to_string(),
+                "not_found".to_string()
+            )]
+        );
+
+        run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        assert!(problems(&db_path).await.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]

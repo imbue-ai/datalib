@@ -1,0 +1,6 @@
+# The shell builds with the host's cargo, outside bazel, so without this
+# it takes whatever `stable` a machine last updated to. Same version as
+# RUST_VERSION in MODULE.bazel; //tools:version_pins_test keeps them equal.
+[toolchain]
+channel = "1.98.0"
+profile = "minimal"

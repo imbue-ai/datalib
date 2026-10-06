@@ -1,12 +1,14 @@
 //! `YouTube and YouTube Music/history/watch-history.html` walker.
 
+use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::fsscan;
+use datalib_etl::run_problems::RunProblems;
+use datalib_problems::{Problem, Severity};
 
 use anyhow::Result;
-use datalib_etl::file_checkpoint::{self};
+use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
 use serde_json::json;
-use tracing::warn;
 
 use super::db::RawDb;
 use super::mdl_html;
@@ -17,11 +19,22 @@ use datalib_etl::doltlite_raw::WirePayload;
 const FILE_REL: &str = "YouTube and YouTube Music/history/watch-history.html";
 const SCOPE: &str = "google_takeout/youtube_watch_history";
 
-pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Result<usize> {
-    let n = file_checkpoint::ingest_changed(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+pub async fn ingest(
+    db: &RawDb,
+    scan: &fsscan::Scan,
+    progress: &Progress,
+    found: &RunProblems,
+) -> Result<SnapshotCounts> {
+    let mut skipped = None;
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+        let skipped = skipped.insert(Vec::new());
         let html = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeWatchRow> = Vec::new();
-        for cell in mdl_html::iter_cells(&html) {
+        let cells: Vec<&str> = mdl_html::iter_cells(&html).collect();
+        if cells.is_empty() {
+            return Err(super::unknown_layout(FILE_REL, "holds no activity cells"));
+        }
+        for &cell in &cells {
             let anchors = mdl_html::iter_anchors(cell);
             // The first anchor is the video; channel anchor is second
             // when present. We tolerate cells that only have a video.
@@ -30,7 +43,17 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
             };
             let video_id = video_id_from_url(&video_url).unwrap_or_default();
             if video_id.is_empty() {
-                warn!(event = "youtube_watch_skip_no_video_id", url = %video_url, "a watch-history entry has no video id; skipped it");
+                // A community post, an ad's redirect link, an account
+                // page: entries the history lists that are not videos.
+                skipped.push(SkippedRecord {
+                    entry: cell.to_string(),
+                    problem: Problem::lossy(
+                        "youtube_watch_not_a_video",
+                        Some("videoUrl".to_string()),
+                        &video_url,
+                    )
+                    .severity(Severity::Warning),
+                });
                 continue;
             }
             let (channel_url, channel_title) = anchors
@@ -67,10 +90,15 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                 channel_id,
             });
         }
+        super::require_some_read(FILE_REL, cells.len(), rows.len())?;
         Ok(rows)
     })
     .await?;
-    progress.set_message(&format!("youtube_watch_history: {n}"));
+    // `None`: the file was unchanged, and last run's rows still hold.
+    if let Some(skipped) = skipped {
+        found.skipped("youtube_watch_history", skipped);
+    }
+    progress.set_message(&format!("youtube_watch_history: {}", n.written));
     Ok(n)
 }
 

@@ -7,14 +7,30 @@
 //! becomes `urlOpenAIhttps://openai.com` in the rendered markdown,
 //! which is both ugly and breaks the link.
 
+use datalib_etl_render::html::md_link_dest;
+
 const START: char = '\u{e200}';
 const END: char = '\u{e201}';
 const SEP: char = '\u{e202}';
 
+/// ChatGPT's private-use block. `U+E203`/`U+E204` bracket a cited span
+/// and `U+E206` trails it; whatever the wrappers above did not consume
+/// would show as a tofu box, so every character left in the block goes.
+fn is_sentinel(c: char) -> bool {
+    ('\u{e200}'..='\u{e2ff}').contains(&c)
+}
+
 pub fn clean_text(s: &str) -> String {
-    if !s.contains(START) {
+    if !s.chars().any(is_sentinel) {
         return s.to_string();
     }
+    expand_wrappers(s)
+        .chars()
+        .filter(|&c| !is_sentinel(c))
+        .collect()
+}
+
+fn expand_wrappers(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
@@ -41,10 +57,12 @@ pub fn clean_text(s: &str) -> String {
         if parts.len() == 3 && parts[0] == "url" {
             let text = parts[1];
             let href = parts[2];
+            // The text is the model's, so its emphasis stays; only a
+            // bracket, which would end the link early, is escaped.
             out.push('[');
-            out.push_str(text);
+            out.push_str(&text.replace('[', "\\[").replace(']', "\\]"));
             out.push_str("](");
-            out.push_str(href);
+            out.push_str(&md_link_dest(href));
             out.push(')');
         }
         // Other sentinel kinds (filecite, cite, search, …): drop.
@@ -62,6 +80,13 @@ mod tests {
         assert_eq!(clean_text(raw), "test for [OpenAI](https://openai.com).");
     }
 
+    /// A link's text cannot end the link early, nor its target.
+    #[test]
+    fn a_link_in_brackets_stays_one_link() {
+        let raw = "\u{e200}url\u{e202}[1] Ops\u{e202}https://e.invalid/a (b)\u{e201}";
+        assert_eq!(clean_text(raw), "[\\[1\\] Ops](<https://e.invalid/a (b)>)");
+    }
+
     #[test]
     fn filecite_is_stripped() {
         let raw = "Hello.\n\n\u{e200}filecite\u{e202}turn0file0\u{e202}L1-L2\u{e201}";
@@ -76,12 +101,20 @@ mod tests {
     #[test]
     fn unterminated_sentinel_keeps_inner_text() {
         let raw = "trailing \u{e200}url\u{e202}stuff";
-        assert_eq!(clean_text(raw), "trailing url\u{e202}stuff");
+        assert_eq!(clean_text(raw), "trailing urlstuff");
     }
 
     #[test]
     fn multiple_sentinels_in_one_string() {
         let raw = "\u{e200}url\u{e202}A\u{e202}https://a\u{e201} and \u{e200}url\u{e202}B\u{e202}https://b\u{e201}.";
         assert_eq!(clean_text(raw), "[A](https://a) and [B](https://b).");
+    }
+
+    /// A cited span leaves `U+E203`/`U+E204`/`U+E206` behind, which
+    /// showed as tofu boxes after every sentence.
+    #[test]
+    fn stray_span_markers_are_removed() {
+        let raw = "\u{e200}i\u{e202}turn0image0\u{e202}turn0image1\u{e201}Hi.\u{e203}\u{e204} Next.\u{e203} \u{e204}\u{e206}";
+        assert_eq!(clean_text(raw), "Hi. Next. ");
     }
 }

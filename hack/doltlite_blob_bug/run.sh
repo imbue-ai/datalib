@@ -4,7 +4,8 @@
 #
 # Downloads the official doltlite CLI fresh from its canonical release URL
 # (so provenance is self-evident) and drives it against a plain SQLite
-# database written by the system `sqlite3`. No build step, no repo deps.
+# database written by the system `sqlite3`. No build step; the one thing
+# it reads from the repo is the pinned version, from MODULE.bazel.
 #
 #   Usage:    ./run.sh                                  (our pinned version)
 #   Tunables: DOLTLITE_VERSION=0.11.52 ./run.sh          (the last broken one)
@@ -24,16 +25,19 @@
 # were committed. A plain row-at-a-time scan was unaffected, as were
 # doltlite's own tables.
 #
-# Reproduced identically on v0.11.50, v0.11.52 and an older May build, so
-# it was long-standing rather than a recent regression. FIXED upstream in
-# v0.11.53 by https://github.com/dolthub/doltlite/pull/2329, which is what
-# MODULE.bazel pins; run with DOLTLITE_VERSION=0.11.52 to see it fail.
+# Reproduced identically on v0.11.50, v0.11.52 and an older May build.
+# Fixed upstream in v0.11.53 by https://github.com/dolthub/doltlite/pull/2329;
+# run with DOLTLITE_VERSION=0.11.52 to see it fail.
 
 set -uo pipefail
 cd "$(dirname "$0")"
 
-# Keep in step with MODULE.bazel's `doltlite_amalgamation` pin.
-VERSION="${DOLTLITE_VERSION:-0.11.53}"
+PINNED=$(sed -n 's|.*releases/download/v\([0-9.]*\)/doltlite-amalgamation-.*|\1|p' ../../MODULE.bazel 2>/dev/null)
+VERSION="${DOLTLITE_VERSION:-$PINNED}"
+if [[ -z "$VERSION" && -z "${DOLTLITE_BIN:-}" ]]; then
+  echo "no doltlite pin found in MODULE.bazel; set DOLTLITE_VERSION or DOLTLITE_BIN" >&2
+  exit 1
+fi
 WORK="_work"
 mkdir -p "$WORK"
 
@@ -66,7 +70,8 @@ else
   DL="$WORK/${ASSET%.zip}/doltlite"
   chmod +x "$DL"
 fi
-echo "doltlite: $(echo .version | "$DL" :memory: | sed -n '1p')"
+DL_VERSION=$("$DL" :memory: "SELECT dolt_version();")
+echo "doltlite: $DL_VERSION"
 echo
 
 # A plain SQLite file, written by the SYSTEM sqlite3. Three rows, each a
@@ -126,7 +131,7 @@ done
 
 echo
 if (( FAILURES )); then
-  echo "FAIL: $FAILURES measurement(s) came back wrong on doltlite $VERSION."
+  echo "FAIL: $FAILURES measurement(s) came back wrong on doltlite $DL_VERSION."
   exit 1
 fi
-echo "OK: every measurement is 3 on doltlite $VERSION."
+echo "OK: every measurement is 3 on doltlite $DL_VERSION."

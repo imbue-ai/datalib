@@ -169,10 +169,12 @@ py_test(
     data = [
         "//tools/lint:package.json",
         "//.devcontainer:Dockerfile",
+        "//:.github/workflows/release.yml",
         "//:MODULE.bazel",
         "//:requirements.txt",
         "//datalib/backend/runtime:src/node_runtime.rs",
         "//datalib/backend/runtime:src/qmd.rs",
+        "//datalib/tauri:rust-toolchain.toml",
         "//datalib/ui:pnpm-lock.yaml",
         "//tests/fixtures:BUILD.bazel",
         "//third-party/doltlite:BUILD.bazel",

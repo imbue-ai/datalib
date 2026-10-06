@@ -17,7 +17,6 @@ datalib-runtime = { path = "../runtime" }
 datalib-obs = { path = "../obs" }
 datalib-time = { path = "../time" }
 datalib-table = { path = "../table" }
-datalib-qmd-indexer = { path = "../qmd_indexer" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
@@ -27,7 +26,7 @@ chrono = { workspace = true }
 tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
 sqlx = { workspace = true }
 sha2 = { workspace = true }
-blake3 = { version = "1", default-features = false, features = ["std", "pure", "mmap"] }
+blake3 = { version = "1", default-features = false, features = ["std", "rayon"] }
 tempfile = "3"
 # Bazel runfiles lookup, so the shared `latchkey::ensure_curl_router`
 # resolver can find the fetched curl shims under `bazel run` /
@@ -39,9 +38,7 @@ ignore = { workspace = true }
 
 # Observability — the heavy stack (tracing-subscriber, indicatif,
 # OTLP) lives in `datalib-obs`. We keep `tracing` here for the
-# `events` module's `info!`/`debug!` calls and `clap` for the
-# `grid_rows_load` binary.
-clap = { version = "4.5", features = ["derive", "env"] }
+# `events` module's `info!`/`debug!` calls.
 tracing = "0.1"
 # Terminal progress bars. The `indicatif_progress` module wraps these
 # into a `ProgressSink` so every CLI (and sync) renders the same bar

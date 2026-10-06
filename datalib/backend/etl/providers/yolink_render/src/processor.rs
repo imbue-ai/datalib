@@ -4,9 +4,10 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use datalib_etl_timeseries_render::page::skip_if_current;
 use datalib_etl_yolink_config::YolinkRenderConfig;
-use std::path::PathBuf;
+use std::path::Path;
 
 /// Always planned: the driver's reverse lookup says whether the page's
 /// tables moved, so a no-op run costs one `dolt_log()` query.
@@ -14,52 +15,46 @@ pub fn plan_render(
     ctx: PlanContext,
     config: YolinkRenderConfig,
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
-    let name = ctx.name;
-    let raw_path = config.common.raw_path().to_path_buf();
-    Ok(vec![Box::new(YolinkRender {
-        id: format!("yolink/{name}/render"),
-        raw_path,
-        name,
-    })])
+    Ok(plan_source_render(
+        ctx,
+        config.common.raw_path(),
+        YolinkRender,
+    ))
 }
 
-struct YolinkRender {
-    id: String,
-    raw_path: PathBuf,
-    name: String,
-}
+struct YolinkRender;
 
 #[async_trait]
-impl RenderProcessor for YolinkRender {
-    fn id(&self) -> &str {
-        &self.id
+impl SourceRender for YolinkRender {
+    const PROVIDER: &'static str = "yolink";
+
+    fn render_version(&self) -> u32 {
+        crate::render::RENDER_VERSION
     }
 
-    fn render_version(&self) -> Option<u32> {
-        Some(crate::render::RENDER_VERSION)
+    /// A history window that would not fetch is its device's.
+    fn item_of_entity(&self, source_id: &str, table: &str, id: &str) -> Option<String> {
+        use datalib_etl_yolink::ingest::schema_raw::{device_of_window_id, YOLINK_WINDOWS_TABLE};
+        if table != YOLINK_WINDOWS_TABLE {
+            return None;
+        }
+        let device = device_of_window_id(id)?;
+        Some(crate::render::render::device_uuid(source_id, device))
     }
 
-    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+    async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::parse::{inputs, parse};
         use crate::render::render::{document_uuid, render_all};
 
-        let range = ctx.raw_range();
-        let page = document_uuid(&self.name);
-        if let (Some(pin), false) = (range.pin, range.is_stale(&page)) {
-            tracing::info!(
-                event = "yolink_render_skipped",
-                source = %self.name,
-                head = %pin,
-                "nothing the page reads changed since the last render",
-            );
-            ctx.consumed(pin);
-            return Ok(format!("up to date at {pin}"));
+        let page = document_uuid(ctx.name);
+        if let Some(done) = skip_if_current(ctx, Self::PROVIDER, &page) {
+            return Ok(done);
         }
-        let parsed = parse(&self.raw_path, range)
-            .with_context(|| format!("yolink parse {}", self.raw_path.display()))?;
+        let parsed = parse(raw_path, ctx.raw_range())
+            .with_context(|| format!("yolink parse {}", raw_path.display()))?;
         ctx.declare_bucket(&page, &inputs())?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        let s = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
+        let s = render_all(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
             .context("yolink render_all")?;
         if let Some(head) = parsed.head.as_deref() {
             ctx.consumed(head);
@@ -68,5 +63,24 @@ impl RenderProcessor for YolinkRender {
             "devices={} series={} points={} plots={}",
             s.devices, s.series, s.points, s.plots,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datalib_etl_yolink::ingest::schema_raw::window_id_recipe;
+
+    /// A failed window's `problems` row reaches the device it belongs to.
+    #[test]
+    fn a_window_is_its_devices_row() {
+        let item = |table, id| YolinkRender.item_of_entity("src", table, id);
+        let window = window_id_recipe("cargo-bay-2", 1, 2);
+        assert_eq!(
+            item("yolink_windows", &window),
+            Some(crate::render::render::device_uuid("src", "cargo-bay-2"))
+        );
+        assert_eq!(item("yolink_readings", &window), None);
+        assert_eq!(item("yolink_windows", "no-separator"), None);
     }
 }

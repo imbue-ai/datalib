@@ -76,6 +76,17 @@ build --action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 build --host_action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 test --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 
+# That PATH makes `#!/usr/bin/env bash` Homebrew's bash, whose gettext
+# asks CoreFoundation for the preferred languages whenever no LANG is set
+# and a locale variable changes. On macOS 27 that call segfaults now and
+# then; bazel's generate-xml.sh (`LC_ALL=C sed`) hit it and the test was
+# reported FAILED TO BUILD. With LANG set, gettext never asks. Build and
+# tool actions run the same bash off the same PATH, so they get it too,
+# set three ways as PATH is.
+build:macos --action_env=LANG=C.UTF-8
+build:macos --host_action_env=LANG=C.UTF-8
+test:macos --test_env=LANG=C.UTF-8
+
 # There used to be a `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models`
 # here, so the qmd-indexer genrule could read the host's ~2 GB GGUF cache
 # from inside the sandbox instead of re-downloading it. Nothing in the
@@ -435,11 +446,12 @@ build:linux --host_linkopt=-Wl,--as-needed
 
 # rustfmt-check is **always on** for every bazel build/test. This
 # forbids `bazelisk test //...` from running against unformatted code,
-# which would otherwise mean: developer runs tests → fix-up `cargo fmt`
-# at commit time → bazel action cache invalidates → 30-40s of recompile
-# on every commit. With the aspect always active, `bazelisk test //...`
-# fails fast if any file is misformatted; dev runs `cargo fmt`; reruns
-# tests; the test compiles the final formatted bytes; commit hits cache.
+# which would otherwise mean: developer runs tests → formats at commit
+# time → bazel action cache invalidates → 30-40s of recompile on every
+# commit. With the aspect always active, `bazelisk test //...` fails fast
+# if any file is misformatted; dev runs `bazelisk run //:rustfmt --
+# <paths>`; reruns tests; the test compiles the final formatted bytes;
+# commit hits cache.
 #
 # rustfmt check is a fast per-crate action; the cold-cache cost is
 # small and goes entirely to BuildBuddy's remote cache on shared work.

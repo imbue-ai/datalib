@@ -75,16 +75,19 @@ fn build_events(api: &Path, comment_ids: &[i64]) {
 
 async fn run(out_db: &Path) -> usize {
     // The test owns the store: one connection for the download and the
-    // assertions both, because two is what breaks a doltlite file.
+    // assertions both, because the file takes one writer at a time.
     let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
     let out = fetch(FetchOptions {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), crate::tng_now())
     })
     .await;
-    db.commit_all("test").await.unwrap();
+    // As the processor does: only a run that succeeds commits.
+    if out.is_ok() {
+        db.commit_all("test").await.unwrap();
+    }
     db.close().await;
     out.unwrap().pruned
 }
@@ -143,6 +146,9 @@ async fn a_comment_dropped_from_the_listing_is_deleted() {
 ///
 /// Staged by deleting the one playback fixture for the comments endpoint,
 /// so that request — and only that request — misses and errors.
+///
+/// The failure is a warning row on the PR, and the next run that lists
+/// its comments clears it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_listing_prunes_nothing() {
     let _guard = ENV_LOCK.lock().await;
@@ -178,4 +184,35 @@ async fn a_failed_listing_prunes_nothing() {
         vec![101, 102],
         "both comments must survive a listing we could not read",
     );
+    assert_eq!(
+        problems(&out_db).await,
+        [(
+            format!("pull_requests:{REPO}#{NUM}"),
+            "warning".to_string(),
+            "could not list its issue comments".to_string(),
+        )],
+        "the PR is there, its comments are stale, and the reader is told",
+    );
+
+    // The listing answers again: the PR is fetched whole and the row goes.
+    GithubSynth::new(&api).synthesize(&pb).unwrap();
+    run(&out_db).await;
+    assert_eq!(problems(&out_db).await, []);
+}
+
+/// Each `problems` row as (key, severity, the sample's first words).
+async fn problems(out_db: &Path) -> Vec<(String, String, String)> {
+    let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT scope_key, severity, sample FROM problems ORDER BY scope_key")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    db.close().await;
+    rows.into_iter()
+        .map(|(key, severity, sample)| {
+            let head = sample.split(':').next().unwrap_or_default().to_string();
+            (key, severity, head)
+        })
+        .collect()
 }

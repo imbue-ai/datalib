@@ -25,5 +25,14 @@
     "is_archived": false,
     "is_starred": false,
     "default_model_slug": "gpt-5"
+  },
+  {
+    "id": "68fa0004-fake-7000-8000-positronic0004",
+    "title": "Holodeck Cave on Risa",
+    "create_time": 12648643200.0,
+    "update_time": 12648643260.0,
+    "is_archived": false,
+    "is_starred": false,
+    "default_model_slug": "gpt-5"
   }
 ]

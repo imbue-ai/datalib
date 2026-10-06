@@ -1,0 +1,34 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# The embedding map's layout: nearest neighbours, a start seeded from the
+# previous map, UMAP (`umap-rs`), and a fit back onto the previous
+# map's frame. Pure computation; `datalib_step`'s `embedding_map`
+# function reads the vectors and writes the map. See README.md.
+rust_library(
+    name = "datalib_embedding_map",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_embedding_map",
+    edition = "2021",
+    # Optimised in every build, not just `-c opt`: unoptimised, the
+    # layout loop takes about twice as long (~9s against 4.3s on 18.7k
+    # documents), a dev build runs the same step, and the crate is small
+    # enough that the codegen costs nothing. The neighbour search's
+    # kernel is matrixmultiply's, annotated the same way in MODULE.bazel.
+    rustc_flags = ["-Copt-level=3"],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:ndarray",
+        "@datalib_crates//:rayon",
+        "@datalib_crates//:umap-rs",
+    ],
+)
+
+rust_test(
+    name = "embedding_map_unittests",
+    size = "small",
+    crate = ":datalib_embedding_map",
+    edition = "2021",
+    rustc_flags = ["-Copt-level=3"],
+)

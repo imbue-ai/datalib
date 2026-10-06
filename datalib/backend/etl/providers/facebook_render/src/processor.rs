@@ -3,7 +3,7 @@
 //! rendered through the shared chat or contact renderer.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -12,7 +12,7 @@ use datalib_etl::processor::PlanContext;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::render_all as chat_render_all;
 use datalib_etl_chat_common::types::NormalizedChat;
-use datalib_etl_contact_common::{render_all as contact_render_all, NormalizedContact};
+use datalib_etl_contact_common::{render_all as contact_render_all, ContactDoc};
 use datalib_etl_facebook::ingest::schema_raw::{
     ALBUMS_TABLE, COMMENTS_TABLE, FRIENDS_TABLE, OTHER_POSTS_TABLE, POSTS_TABLE, PROFILE_TABLE,
     REACTIONS_TABLE,
@@ -21,7 +21,7 @@ use datalib_etl_facebook::ingest::{db_path_for, RawDb};
 use datalib_etl_facebook_config::FacebookRenderConfig;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Buckets, Input, RawRange};
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
 use serde_json::Value;
 
 use crate::activity::{build_comments, build_reactions, comments_profile, reactions_profile};
@@ -34,13 +34,11 @@ pub fn plan_render(
     ctx: PlanContext,
     config: FacebookRenderConfig,
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
-    let name = ctx.name;
-    let raw_path = config.common.raw_path().to_path_buf();
-    Ok(vec![Box::new(FacebookRender {
-        id: format!("facebook/{name}/render"),
-        raw_path,
-        name,
-    })])
+    Ok(plan_source_render(
+        ctx,
+        config.common.raw_path(),
+        FacebookRender,
+    ))
 }
 
 /// Whose export this is: the configured source it renders under, the
@@ -104,7 +102,7 @@ pub struct Outcome {
 /// The bundle key `render_all` looks a chat's blobs up under.
 const MEDIA_PROJECTION: &str = "SELECT DISTINCT uri AS ref_id, blake3, \
             NULL AS content_type, uri AS upstream_name \
-     FROM pinned_media_blobs \
+     FROM media_blobs \
      WHERE uri IN ({placeholders}) AND blake3 IS NOT NULL";
 
 const ALL_TABLES: &[&str] = &[
@@ -124,7 +122,7 @@ struct Loaded {
     albums: Vec<NormalizedChat>,
     comments: Vec<NormalizedChat>,
     reactions: Vec<NormalizedChat>,
-    friends: Vec<NormalizedContact>,
+    friends: Vec<ContactDoc>,
     /// Per chat id, the media bytes its attachments reference.
     blobs: HashMap<String, BlobBundle>,
     buckets: Buckets,
@@ -156,13 +154,9 @@ pub fn render_source(
             // "no rows", not a failed render.
             let mut tables: HashMap<&str, Vec<(String, Value)>> = HashMap::new();
             for table in ALL_TABLES {
-                let rows = datalib_etl::doltlite_raw::load_payloads_with_id(
-                    db.pool(),
-                    datalib_etl::pin::Reads::At(&pin),
-                    table,
-                )
-                .await
-                .unwrap_or_default();
+                let rows = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), table)
+                    .await
+                    .unwrap_or_default();
                 tables.insert(table, rows);
             }
             let changed = changed_rows(db.pool(), range, &pin, ALL_TABLES).await?;
@@ -183,17 +177,14 @@ pub fn render_source(
 
             let mut blobs = HashMap::new();
             if let Some(cas) = db.cas() {
-                for chat in posts.iter().chain(&albums).chain(&comments) {
-                    let refs = attachment_refs(chat);
-                    if refs.is_empty() {
-                        continue;
-                    }
-                    let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
-                    let bundle = BlobBundle::load(db.pool(), cas.pool(), MEDIA_PROJECTION, &refs)
-                        .await
-                        .with_context(|| format!("load media for {}", chat.id))?;
-                    blobs.insert(chat.id.clone(), bundle);
-                }
+                let refs = posts
+                    .iter()
+                    .chain(&albums)
+                    .chain(&comments)
+                    .map(|chat| (chat.id.clone(), attachment_refs(chat)));
+                blobs = BlobBundle::load_many(db.pool(), cas.pool(), MEDIA_PROJECTION, refs)
+                    .await
+                    .context("load media")?;
             }
             let head = pin.commit().to_string();
             db.close().await;
@@ -274,7 +265,7 @@ fn narrow_chats(
 }
 
 fn narrow_contacts(
-    contacts: &mut Vec<NormalizedContact>,
+    contacts: &mut Vec<ContactDoc>,
     changed: Option<&HashMap<String, HashSet<String>>>,
     range: RawRange<'_>,
 ) -> Buckets {
@@ -282,12 +273,12 @@ fn narrow_contacts(
         contacts
             .iter()
             .filter(|c| touched(&c.inputs, changed))
-            .map(|c| c.contact_uuid.clone())
+            .map(|c| c.doc_uuid.clone())
             .collect::<HashSet<String>>()
     });
     let render = range.narrow(forward.as_ref());
     if let Some(render) = &render {
-        contacts.retain(|c| render.contains(&c.contact_uuid));
+        contacts.retain(|c| render.contains(&c.doc_uuid));
     }
     empty_buckets(render)
 }
@@ -322,32 +313,26 @@ fn attachment_refs(chat: &NormalizedChat) -> Vec<String> {
     refs
 }
 
-struct FacebookRender {
-    id: String,
-    raw_path: PathBuf,
-    name: String,
-}
+struct FacebookRender;
 
 #[async_trait]
-impl RenderProcessor for FacebookRender {
-    fn id(&self) -> &str {
-        &self.id
-    }
+impl SourceRender for FacebookRender {
+    const PROVIDER: &'static str = "facebook";
 
-    fn render_version(&self) -> Option<u32> {
-        Some(RENDER_VERSION)
+    fn render_version(&self) -> u32 {
+        RENDER_VERSION
     }
 
     fn render_params(&self) -> serde_json::Value {
         datalib_etl_chat_common::render::layout_params()
     }
 
-    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+    async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         let mut on_doc = |md| ctx.emit_doc(md);
         let source = Source {
-            raw_dir: &self.raw_path,
+            raw_dir: raw_path,
             out_dir: ctx.root,
-            name: &self.name,
+            name: ctx.name,
             range: ctx.raw_range(),
         };
         let outcome =
@@ -356,12 +341,7 @@ impl RenderProcessor for FacebookRender {
         // the rendered ones, with what they read — in that order, so a
         // bucket no feed rendered ends declared with nothing and its
         // documents go.
-        for bucket in &outcome.buckets {
-            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
-        }
-        if let Some(head) = outcome.new_head.as_deref() {
-            ctx.consumed(head);
-        }
+        ctx.finish(&outcome.buckets, outcome.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

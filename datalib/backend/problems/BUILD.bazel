@@ -11,7 +11,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # docs/dev/plans/problem_visibility.md.
 rust_library(
     name = "datalib_problems",
-    srcs = ["src/lib.rs"],
+    srcs = glob(["src/**/*.rs"]),
     crate_name = "datalib_problems",
     edition = "2021",
     proc_macro_deps = [
@@ -20,12 +20,15 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/id:datalib_id",
+        # `search(...)` on a table emits `impl ::datalib_query::table::SearchTable`.
+        "//datalib/backend/query:datalib_query",
         # `PortableTable` emits `impl ::datalib_table::BulkUpsertable`.
         "//datalib/backend/table:datalib_table",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
+        "@datalib_crates//:tracing",
     ],
 )
 

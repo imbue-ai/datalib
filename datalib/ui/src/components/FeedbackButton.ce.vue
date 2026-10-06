@@ -74,7 +74,7 @@ function onClick() {
   margin: 0 0 0 0.25rem;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   color: inherit;
   font: inherit;
   line-height: 1;
@@ -83,6 +83,7 @@ function onClick() {
 }
 .fb-btn-inline:hover {
   opacity: 1;
-  border-color: var(--datalib-muted, #94a3b8);
+  border-color: var(--datalib-border);
+  background: var(--datalib-hover);
 }
 </style>

@@ -32,6 +32,10 @@ log() { printf '>>> stage-runtime: %s\n' "$*" >&2; }
 # The third-party notices, shipped under Contents/Resources/licenses/
 # (tauri.conf.json lists the directory).
 "$repo_root/scripts/third_party_notices.sh" "$script_dir/licenses"
+# The app icon's fist is Microsoft's Fluent Emoji (MIT); only the .app
+# carries it, so its notice is added here rather than in the shared script.
+mkdir -p "$script_dir/licenses/fluentui-emoji"
+cp "$script_dir/app-icon/LICENSE-fluentui-emoji" "$script_dir/licenses/fluentui-emoji/LICENSE"
 
 # User-facing `latchkey` launcher: bundled node + staged tree +
 # LATCHKEY_CURL pointed at the bundled router curl. Lands next to the

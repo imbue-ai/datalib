@@ -17,7 +17,7 @@ const needed = () =>
 </script>
 
 <template>
-  <section class="newer-root">
+  <section class="newer-root notice">
     <div class="card">
       <h2>This data root was written by a newer datalib</h2>
       <p>
@@ -48,42 +48,11 @@ const needed = () =>
   </section>
 </template>
 
+<style scoped src="./notice.css"></style>
 <style scoped>
-.newer-root {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 2rem 1rem;
-}
 .card {
   width: 100%;
   max-width: 56rem;
-  border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  background: var(--datalib-card-bg);
-  padding: 1.5rem 1.75rem;
-}
-h2 {
-  margin: 0 0 0.75rem;
-  font-size: 1.25rem;
-}
-p {
-  margin: 0.6rem 0;
-  line-height: 1.5;
-}
-code {
-  background: var(--datalib-code-bg);
-  border-radius: 3px;
-  padding: 0.05rem 0.3rem;
-  font-size: 0.9em;
-}
-.root {
-  display: inline-block;
-  overflow-wrap: anywhere;
-}
-.lead {
-  color: var(--datalib-log-error);
 }
 .stores {
   list-style: none;
@@ -96,10 +65,6 @@ code {
 .wrote {
   color: var(--datalib-muted);
   margin-left: 0.5rem;
-  font-size: 0.9rem;
-}
-.cli {
-  color: var(--datalib-muted);
-  font-size: 0.9rem;
+  font-size: var(--datalib-font-size-small);
 }
 </style>

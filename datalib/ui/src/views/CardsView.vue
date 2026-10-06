@@ -1,74 +1,21 @@
 <script setup lang="ts">
-// Routed view for the card surface. Owns the chrome the layouts
-// share — the status bar along the bottom: the data root and its
-// size, the log, then the dev and layout toggles flush right — and
-// keeps each layout host alive across toggles (v-show, not v-if) so
-// switching back doesn't lose its cards. A grid card carries its own
-// row count. Which layout is showing is remembered in this browser.
-import { onBeforeUnmount, onMounted, ref, useTemplateRef } from "vue";
-import MillerView from "@/views/MillerView.vue";
-import TreeView from "@/views/TreeView.vue";
-import TilingView from "@/views/TilingView.vue";
-import TabsView from "@/views/TabsView.vue";
+// Routed view for the card surface: the containers layout, and the
+// status bar along the bottom — the data root and its size, the log,
+// then the density and the edit toggle flush right.
+import { onBeforeUnmount, onMounted, useTemplateRef } from "vue";
+import ContainersView from "@/views/ContainersView.vue";
 import RootStorageBar from "@/components/RootStorageBar.vue";
-import { devMode } from "@/devMode";
+import { editMode } from "@/editMode";
+import { density, larger, smaller } from "@/density";
+import { MAX_STEP, MIN_STEP, STEP, STEPS, onScale, stepIndex } from "@/densityScale";
 import { LOG_CARD, surface, type SurfaceCommands } from "@/surface";
 
-const LAYOUTS = ["columns", "tabs", "tree", "tiling"] as const;
-type Layout = (typeof LAYOUTS)[number];
-const LAYOUT_KEY = "datalib-layout";
-// What a browser that has never picked a layout gets.
-const DEFAULT_LAYOUT: Layout = "tabs";
-
-function storedLayout(): Layout {
-  try {
-    const s = localStorage.getItem(LAYOUT_KEY);
-    return LAYOUTS.find((l) => l === s) ?? DEFAULT_LAYOUT;
-  } catch {
-    return DEFAULT_LAYOUT;
-  }
-}
-
-const layout = ref<Layout>(DEFAULT_LAYOUT);
-const millerMounted = ref(false);
-const tabsMounted = ref(false);
-const treeMounted = ref(false);
-const tilingMounted = ref(false);
-
-function setLayout(next: Layout) {
-  layout.value = next;
-  if (next === "columns") millerMounted.value = true;
-  if (next === "tabs") tabsMounted.value = true;
-  if (next === "tree") treeMounted.value = true;
-  if (next === "tiling") tilingMounted.value = true;
-  try {
-    localStorage.setItem(LAYOUT_KEY, next);
-  } catch {
-    // Blocked storage: the choice lasts as long as the page.
-  }
-}
-
-// A layout mounts the first time it is shown, so a hidden one runs no
-// cards. The tabs layout opens the URL it loads on; mounted later, it
-// keeps the URL another layout wrote out of its tabs.
-const initialLayout = storedLayout();
-setLayout(initialLayout);
-
-// The toolbar's commands go to whichever layout is showing.
-const miller = useTemplateRef<SurfaceCommands>("miller");
-const tabs = useTemplateRef<SurfaceCommands>("tabs");
-const tree = useTemplateRef<SurfaceCommands>("tree");
-const tiling = useTemplateRef<SurfaceCommands>("tiling");
-function active(): SurfaceCommands | null {
-  if (layout.value === "tabs") return tabs.value;
-  if (layout.value === "tree") return tree.value;
-  if (layout.value === "tiling") return tiling.value;
-  return miller.value;
-}
+// The toolbar's commands go to the layout.
+const containers = useTemplateRef<SurfaceCommands>("containers");
 onMounted(() => {
   surface.value = {
-    addCard: () => active()?.addCard(),
-    showCard: (source) => active()?.showCard(source),
+    addCard: () => containers.value?.addCard(),
+    showCard: (source) => containers.value?.showCard(source),
   };
 });
 onBeforeUnmount(() => {
@@ -78,21 +25,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="cards-root">
-    <MillerView
-      v-if="millerMounted"
-      ref="miller"
-      v-show="layout === 'columns'"
-      :active="layout === 'columns'"
-    />
-    <TabsView
-      v-if="tabsMounted"
-      ref="tabs"
-      v-show="layout === 'tabs'"
-      :active="layout === 'tabs'"
-      :open-url-on-mount="initialLayout === 'tabs'"
-    />
-    <TreeView v-if="treeMounted" ref="tree" v-show="layout === 'tree'" />
-    <TilingView v-if="tilingMounted" ref="tiling" v-show="layout === 'tiling'" />
+    <ContainersView ref="containers" />
     <div class="cards-statusbar">
       <RootStorageBar />
       <!-- What the system is doing belongs down here with the data
@@ -101,49 +34,60 @@ onBeforeUnmount(() => {
       <button
         class="cards-logs"
         title="the run log: every line the runner, the steps and the server wrote"
-        @click="active()?.showCard(LOG_CARD)"
+        @click="containers?.showCard(LOG_CARD)"
       >
         Logs
       </button>
-      <button
-        class="cards-dev-toggle"
-        :class="{ 'is-active': devMode }"
-        :aria-pressed="devMode"
-        title="dev mode: show and edit each card's source"
-        @click="devMode = !devMode"
-      >
-        dev
-      </button>
-      <div class="cards-layout-toggle" role="group" aria-label="card layout">
+      <!-- Density: spacing only — rows, controls, padding — packed close
+           or spread out, as the glyphs draw it; text keeps its size. The
+           slider between them sets any step directly. -->
+      <div class="cards-toggle cards-size" role="group" aria-label="density">
         <button
-          :class="{ 'is-active': layout === 'columns' }"
-          title="miller columns (synced to the URL)"
-          @click="setLayout('columns')"
+          aria-label="More compact"
+          title="more compact: tighter spacing, more on screen"
+          :disabled="density <= MIN_STEP"
+          @click="smaller"
         >
-          columns
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 8h16M4 12h16M4 16h16" />
+          </svg>
         </button>
+        <input
+          class="cards-size-slider"
+          type="range"
+          aria-label="Density"
+          :min="MIN_STEP"
+          :max="MAX_STEP"
+          :step="STEP"
+          :value="density"
+          :aria-valuetext="`step ${stepIndex(density) + 1} of ${STEPS}`"
+          :title="`density: step ${stepIndex(density) + 1} of ${STEPS}`"
+          @input="density = onScale(($event.target as HTMLInputElement).value)"
+        />
         <button
-          :class="{ 'is-active': layout === 'tabs' }"
-          title="one card at a time, with a tree of every open card beside it, each under the card that opened it (kept in this browser)"
-          @click="setLayout('tabs')"
+          aria-label="More spacious"
+          title="more spacious: more room between things"
+          :disabled="density >= MAX_STEP"
+          @click="larger"
         >
-          tabs
-        </button>
-        <button
-          :class="{ 'is-active': layout === 'tree' }"
-          title="2D tree (in-memory only, not in the URL)"
-          @click="setLayout('tree')"
-        >
-          tree
-        </button>
-        <button
-          :class="{ 'is-active': layout === 'tiling' }"
-          title="tiling window manager (in-memory only, not in the URL)"
-          @click="setLayout('tiling')"
-        >
-          tiling
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 4h16M4 12h16M4 20h16" />
+          </svg>
         </button>
       </div>
+      <button
+        class="cards-edit-toggle"
+        :class="{ 'is-active': editMode }"
+        :aria-pressed="editMode"
+        aria-label="Edit"
+        title="edit mode: show and edit each card's source, and every container, solidified ones included"
+        @click="editMode = !editMode"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 20h4L19 9l-4-4L4 16z" />
+          <path d="M13.5 6.5l4 4" />
+        </svg>
+      </button>
     </div>
   </div>
 </template>
@@ -154,85 +98,110 @@ onBeforeUnmount(() => {
   flex-direction: column;
   /* Fill whatever the shell's flex layout gives us (everything below
      the header); basis 0 + min-height 0 so intrinsic content height
-     can't stretch the page. Negative margins bleed over the shell's
-     1rem padding on the right and bottom so the status bar sits
-     flush with the viewport bottom; the shell's left padding stays
-     as a gutter. */
+     can't stretch the page. */
   flex: 1 1 0;
   min-height: 0;
-  margin: 0 -1rem -1rem 0;
 }
 .cards-statusbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  /* Bleed over the shell's left padding: the cards keep their gutter,
-     but the status bar spans the full viewport width. */
-  margin-left: -1rem;
-  padding: 0.25rem 1rem;
+  gap: 10px;
+  height: var(--datalib-statusbar-h);
+  box-sizing: border-box;
+  padding: 0 10px;
   border-top: 1px solid var(--datalib-border);
-  background: var(--datalib-card-bg);
-  font-size: 12px;
-  min-height: 1.5rem;
+  background: var(--datalib-sidebar);
+  color: var(--datalib-muted);
+  font-size: var(--datalib-font-size-small);
 }
-.cards-logs {
+.cards-logs,
+.cards-edit-toggle {
   flex: 0 0 auto;
+  height: calc(var(--datalib-control-h) - 6px);
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-surface);
+  color: var(--datalib-fg);
   cursor: pointer;
-  font-size: 12px;
-  padding: 0.1rem 0.5rem;
+  font: inherit;
+  padding: 0 8px;
 }
-.cards-logs:hover {
+.cards-logs:hover,
+.cards-edit-toggle:hover {
   background: var(--datalib-hover);
 }
-/* The dev + layout toggles sit flush right as a cluster — the dev
-   button carries the auto margin. */
-.cards-dev-toggle {
-  flex: 0 0 auto;
-  margin-left: auto;
-  border: 1px solid var(--datalib-border);
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font-size: 12px;
-  padding: 0.1rem 0.5rem;
+.cards-edit-toggle {
+  display: flex;
+  align-items: center;
 }
-.cards-dev-toggle:hover {
-  background: var(--datalib-hover);
+.cards-edit-toggle svg {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
-.cards-dev-toggle.is-active {
+.cards-edit-toggle.is-active {
   background: var(--datalib-accent);
-  color: var(--datalib-bg);
+  border-color: var(--datalib-accent);
+  color: var(--datalib-on-accent);
 }
-.cards-layout-toggle {
+/* The toggles sit flush right as a cluster — the first one carries the
+   auto margin. */
+.cards-size {
+  margin-left: auto;
+  align-items: center;
+}
+.cards-size button {
+  display: flex;
+  align-items: center;
+}
+.cards-size svg {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.cards-size-slider {
+  width: 90px;
+  margin: 0 6px;
+  accent-color: var(--datalib-fg);
+  cursor: pointer;
+}
+.cards-toggle button:disabled {
+  color: var(--datalib-faint);
+  cursor: default;
+}
+.cards-toggle {
   /* Always claim full intrinsic width (never shrink). */
   flex: 0 0 auto;
   display: flex;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   overflow: hidden;
 }
-.cards-layout-toggle button {
+.cards-toggle button {
+  height: calc(var(--datalib-control-h) - 8px);
   border: none;
-  background: transparent;
-  color: inherit;
+  background: var(--datalib-surface);
+  color: var(--datalib-fg);
   cursor: pointer;
-  font-size: 12px;
-  padding: 0.1rem 0.5rem;
+  font: inherit;
+  padding: 0 8px;
 }
-.cards-layout-toggle button + button {
+.cards-toggle button + button {
   border-left: 1px solid var(--datalib-border);
 }
-.cards-layout-toggle button:hover {
+.cards-toggle button:hover:not(:disabled) {
   background: var(--datalib-hover);
 }
-.cards-layout-toggle button.is-active {
-  background: var(--datalib-accent);
-  color: var(--datalib-bg);
+.cards-toggle button.is-active {
+  background: var(--datalib-fg);
+  color: var(--datalib-surface);
 }
 </style>

@@ -125,6 +125,24 @@ pub fn map_label(label: &str) -> LabelMap {
     }
 }
 
+/// What every [`mailbox_id`] starts with.
+pub const NAME_KEYED_PREFIX: &str = "mbox-";
+
+/// A Gmail label's mailbox id: Google's own label id (`INBOX`,
+/// `Label_7`), which survives a rename. Scoped to the account, because
+/// every account has an `INBOX`.
+pub fn gmail_mailbox_id(account_id: &str, gmail_label_id: &str) -> String {
+    format!("{}{gmail_label_id}", gmail_mailbox_prefix(account_id))
+}
+
+/// What every [`gmail_mailbox_id`] of one account starts with.
+pub fn gmail_mailbox_prefix(account_id: &str) -> String {
+    format!("gmail:{account_id}:")
+}
+
+/// The id of a label known only by name — a Takeout mbox's. Prefixed
+/// `mbox-`. Where the store already has a row for the name, with Gmail's
+/// real id, the mbox download files the message there instead.
 pub fn mailbox_id(account_id: &str, label: &str) -> String {
     let mut h = Sha256::new();
     h.update(b"mbox:");
@@ -133,7 +151,7 @@ pub fn mailbox_id(account_id: &str, label: &str) -> String {
     h.update(label.trim().as_bytes());
     let digest = h.finalize();
     let mut out = String::with_capacity(29);
-    out.push_str("mbox-");
+    out.push_str(NAME_KEYED_PREFIX);
     for b in digest.iter().take(12) {
         out.push_str(&format!("{:02x}", b));
     }
@@ -277,6 +295,18 @@ mod tests {
             mailbox_id("acct", &canonical_name("INBOX")),
             mailbox_id("acct", "Inbox"),
         );
+    }
+
+    /// A Gmail label's id is Google's, so a rename keeps it; two
+    /// accounts' `INBOX` stay two mailboxes.
+    #[test]
+    fn a_gmail_mailbox_id_is_googles_label_id_scoped_to_the_account() {
+        assert_eq!(gmail_mailbox_id("a@x", "Label_7"), "gmail:a@x:Label_7");
+        assert_ne!(
+            gmail_mailbox_id("a@x", "INBOX"),
+            gmail_mailbox_id("b@x", "INBOX")
+        );
+        assert!(gmail_mailbox_id("a@x", "INBOX").starts_with(&gmail_mailbox_prefix("a@x")));
     }
 
     #[test]

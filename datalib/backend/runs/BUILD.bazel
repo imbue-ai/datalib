@@ -17,6 +17,7 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/log_filter:datalib_log_filter",
+        "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
@@ -37,6 +38,7 @@ rust_test(
     size = "small",
     crate = ":datalib_runs",
     edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
 )
 
 # One writer of the store, as its own process, for the test below; its

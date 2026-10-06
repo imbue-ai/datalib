@@ -1,9 +1,10 @@
-// What the chrome can ask of the card surface — reveal a card, start
-// a new one — without knowing which layout is showing. CardsView
+// What the chrome can ask of the card surface — reveal a card, open a
+// search — without knowing which layout is showing. CardsView
 // registers the active layout here; off the card surface (the gates)
 // the toolbar navigates to a stack that holds the card instead.
 import { ref } from "vue";
-import router, { MANAGE_STACK, NEW_CARD_STACK } from "@/router";
+import router, { MANAGE_STACK } from "@/router";
+import { encodeColumns } from "@/router/columns";
 
 export const SOURCES_CARD = "sourcesView()";
 export const LOG_CARD = "logView()";
@@ -22,7 +23,10 @@ export function showDataSources() {
   else void router.push(MANAGE_STACK);
 }
 
-export function newCard() {
-  if (surface.value) surface.value.addCard();
-  else void router.push(NEW_CARD_STACK);
+/// The toolbar's search box: a search card on `q`, beside whatever is
+/// showing.
+export function searchFor(q: string) {
+  const source = `searchView(${JSON.stringify({ q })})`;
+  if (surface.value) surface.value.showCard(source);
+  else void router.push(encodeColumns([{ code: source, size: null, state: "" }]));
 }

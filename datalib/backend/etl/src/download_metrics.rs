@@ -42,7 +42,7 @@ impl DownloadMetrics {
 
     pub fn record_api_request(&self) {
         let n = self.api_requests.fetch_add(1, Ordering::Relaxed) + 1;
-        self.sink.metric("api_requests", &[], n as i64);
+        self.sink.metric("api_requests_total", &[], n as i64);
     }
 
     pub fn record_upserts(&self, table: &str, n: u64) {
@@ -56,7 +56,7 @@ impl DownloadMetrics {
             *t
         };
         self.sink
-            .metric("rows_upserted", &[("table", table)], total as i64);
+            .metric("rows_upserted_total", &[("table", table)], total as i64);
     }
 
     pub fn api_requests(&self) -> u64 {
@@ -166,10 +166,10 @@ mod tests {
         assert_eq!(
             *got,
             vec![
-                ("api_requests".to_string(), vec![], 1),
-                ("api_requests".to_string(), vec![], 2),
-                ("rows_upserted".to_string(), table.clone(), 10),
-                ("rows_upserted".to_string(), table, 15),
+                ("api_requests_total".to_string(), vec![], 1),
+                ("api_requests_total".to_string(), vec![], 2),
+                ("rows_upserted_total".to_string(), table.clone(), 10),
+                ("rows_upserted_total".to_string(), table, 15),
             ],
             "a zero-row upsert publishes nothing"
         );

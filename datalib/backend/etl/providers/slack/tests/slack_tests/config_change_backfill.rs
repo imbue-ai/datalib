@@ -1,22 +1,14 @@
-//! Two-run tests for the config-change adjustments.
+//! Two-run tests for a changed `since`: what a run owes is the range
+//! wanted minus the stretches covered, so a wider range is a gap below
+//! what is held, with no record of the config the earlier run had.
 
-use std::fs;
 use std::path::Path;
 
-use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_slack::ingest::{block_on_load_all, db_path_for, fetch, FetchOptions, RawDb};
-use datalib_etl_slack::synthesize::SlackSynth;
+use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
+use datalib_etl_slack::recorded::History;
 use serde_json::{json, Value};
-use tempfile::tempdir;
-use tokio::sync::Mutex;
 
-/// `PLAYBACK_ENV` is process-global, so the scenarios below cannot run
-/// concurrently — each would clobber the others' playback root. Held for
-/// the whole body of each test (a `tokio` mutex, so it survives the
-/// `.await`s).
-static ENV_LOCK: Mutex<()> = Mutex::const_new(());
+use crate::support::{fetch_into, msg, record_general, stored_ts, Tree};
 
 /// `datetime_to_slack_ts` of the corresponding UTC midnight — the exact
 /// `oldest` param the downloader emits for each `since` value.
@@ -28,223 +20,126 @@ const TS_2024: &str = "1704067200.000000";
 const TS_OLD: &str = "1688000000.000000"; // 2023-06-29
 const TS_NEW: &str = "1735689600.000000"; // 2025-01-01
 
-fn write_envelope(path: &Path, line: &Value) {
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let mut s = serde_json::to_string(line).unwrap();
-    s.push('\n');
-    fs::write(path, s).unwrap();
-}
-
-fn write_setup_fixtures(api: &Path) {
-    write_envelope(
-        &api.join("raw_api/auth.test/run-1.jsonl"),
-        &json!({
-            "method": "auth.test", "params": {},
-            "response": {"ok": true, "user_id": "U1", "team": "Enterprise", "team_id": "T1"},
-        }),
-    );
-    write_envelope(
-        &api.join("raw_api/conversations.list/run-1.jsonl"),
-        &json!({
-            "method": "conversations.list",
-            "params": {
-                "exclude_archived": "true",
-                "limit": "200",
-                "types": "public_channel,private_channel",
-            },
-            "response": {
-                "ok": true,
-                "channels": [{"id": "C1", "name": "general", "is_member": true}],
-            },
-        }),
-    );
-    write_envelope(
-        &api.join("raw_api/users.list/run-1.jsonl"),
-        &json!({
-            "method": "users.list",
-            "params": {"limit": "200"},
-            "response": {"ok": true, "members": [{"id": "U1", "name": "alice"}]},
-        }),
-    );
-}
-
-/// One `conversations.history` envelope. Playback keys on the exact
-/// param set, so each distinct `(oldest, latest, inclusive)` triple the
-/// downloader emits needs its own fixture — which is what makes this
-/// test sensitive to the backfill call being made at all.
-fn write_history(
-    api: &Path,
-    run: &str,
-    oldest: &str,
-    latest: Option<&str>,
-    inclusive: bool,
-    messages: Value,
-) {
-    let mut params = json!({
-        "channel": "C1",
-        "include_all_metadata": "true",
-        "inclusive": if inclusive { "true" } else { "false" },
-        "limit": "200",
-        "oldest": oldest,
-    });
-    if let Some(l) = latest {
-        params["latest"] = json!(l);
+/// One `conversations.history` page for `C1`. Each distinct `(oldest,
+/// latest, inclusive)` the downloader sends needs its own, which is what
+/// makes this test sensitive to the backfill call being made at all.
+fn write_history(api: &Path, oldest: &str, latest: Option<&str>, inclusive: bool, messages: Value) {
+    History {
+        latest,
+        inclusive,
+        ..History::from("C1", oldest)
     }
-    write_envelope(
-        &api.join(format!("raw_api/conversations.history/{run}.jsonl")),
-        &json!({
-            "method": "conversations.history",
-            "params": params,
-            "response": {"ok": true, "messages": messages, "has_more": false},
-        }),
-    );
+    .record(api, messages)
+    .unwrap();
 }
 
-fn msg(ts: &str, text: &str) -> Value {
-    json!({"ts": ts, "user": "U1", "text": text})
+/// A history request the tape did not hold fails its channel, which is a
+/// `listing:` row and not a failed run.
+async fn history_problems(out: &Path) -> i64 {
+    let db = RawDb::open(&db_path_for(out)).await.unwrap();
+    let n = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM problems WHERE scope_key LIKE 'listing:conversations.history%'",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    db.close().await;
+    n
 }
 
 async fn run_fetch(out: &Path, since: &str) {
-    // Open the store here and close it before anything reads it back:
-    // a second live connection to one file makes the `dolt_commit`s
-    // inside `open` fail with "commit conflict".
-    let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let r = fetch(FetchOptions {
-        channels: None,
+    fetch_into(out, |o| FetchOptions {
         since: since.into(),
-        refresh_window_days: 0,
-        members_only: false,
-        media: false,
-        ..FetchOptions::new(db.clone())
+        ..o
     })
-    .await;
-    db.commit_all("test").await.unwrap();
-    db.close().await;
-    r.unwrap();
+    .await
+    .unwrap();
 }
 
-fn stored_ts(out: &Path) -> Vec<String> {
-    let raw = block_on_load_all(&db_path_for(out)).expect("load db");
-    let mut ts: Vec<String> = raw.messages.iter().map(|m| m.ts.clone()).collect();
-    ts.sort();
-    ts
-}
-
-/// The headline behavior: widening `since` on an already-synced store
-/// fetches the newly-in-scope window below the oldest stored message.
+/// Widening `since` on an already-synced store fetches the stretch
+/// between the new `since` and the old one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn widened_since_backfills_below_oldest_stored_message() {
-    let _guard = ENV_LOCK.lock().await;
-    let d = tempdir().unwrap();
-    let api = d.path().join("input_raw");
-    let playback = d.path().join("playback");
-    let out = d.path().join("out_raw");
-
-    write_setup_fixtures(&api);
+async fn widened_since_walks_the_stretch_below_what_was_covered() {
+    let t = Tree::new();
+    record_general(&t.api);
     // Run 1, `since: 2024-01-01` — cold start, so `oldest` is the
     // configured since and only the 2025 message is in scope.
+    write_history(&t.api, TS_2024, None, true, json!([msg(TS_NEW, "new")]));
+    // Run 2, `since: 2023-01-01`. Run 1 covered `[2024-01-01, NEW]`, so
+    // two stretches are left:
+    //   - what is newer than `NEW` (exclusive)
+    //   - `[2023-01-01, 2024-01-01]`, below what run 1 covered
+    write_history(&t.api, TS_NEW, None, false, json!([]));
     write_history(
-        &api,
-        "run-1",
-        TS_2024,
-        None,
-        true,
-        json!([msg(TS_NEW, "new")]),
-    );
-    // Run 2, `since: 2023-01-01`. Two calls are expected:
-    //   - the forward walk, resuming at the stored resume cursor (exclusive)
-    //   - the backfill, `[2023-01-01, oldest_stored]` inclusive
-    write_history(&api, "run-2", TS_NEW, None, false, json!([]));
-    write_history(
-        &api,
-        "run-3",
+        &t.api,
         TS_2023,
-        Some(TS_NEW),
+        Some(TS_2024),
         true,
         json!([msg(TS_OLD, "old")]),
     );
 
-    SlackSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
+    t.serve();
 
-    run_fetch(&out, "2024-01-01").await;
+    run_fetch(&t.out, "2024-01-01").await;
     assert_eq!(
-        stored_ts(&out),
+        stored_ts(&t.out),
         vec![TS_NEW.to_string()],
         "run 1 should mirror only the in-scope message",
     );
 
-    run_fetch(&out, "2023-01-01").await;
+    run_fetch(&t.out, "2023-01-01").await;
     assert_eq!(
-        stored_ts(&out),
+        stored_ts(&t.out),
         vec![TS_OLD.to_string(), TS_NEW.to_string()],
         "run 2 widened `since`, so the older message must be backfilled",
     );
+    assert_eq!(history_problems(&t.out).await, 0);
 }
 
-/// The steady state: re-running with the same config plans no work, so
-/// no backfill call is issued. Guards against the adjustment firing on
-/// every run (which would re-walk the whole archive each sync).
+/// The steady state: re-running with the same config asks only for what
+/// is newer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unchanged_since_issues_no_backfill() {
-    let _guard = ENV_LOCK.lock().await;
-    let d = tempdir().unwrap();
-    let api = d.path().join("input_raw");
-    let playback = d.path().join("playback");
-    let out = d.path().join("out_raw");
+    let t = Tree::new();
+    record_general(&t.api);
+    write_history(&t.api, TS_2024, None, true, json!([msg(TS_NEW, "new")]));
+    // Only the walk above `NEW` is served; any other request misses the
+    // tape and is a problem row.
+    write_history(&t.api, TS_NEW, None, false, json!([]));
 
-    write_setup_fixtures(&api);
-    write_history(
-        &api,
-        "run-1",
-        TS_2024,
-        None,
-        true,
-        json!([msg(TS_NEW, "new")]),
-    );
-    // Only the forward walk is served. A backfill call would 404 against
-    // playback and fail the run — which is exactly the assertion.
-    write_history(&api, "run-2", TS_NEW, None, false, json!([]));
+    t.serve();
 
-    SlackSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
+    run_fetch(&t.out, "2024-01-01").await;
+    run_fetch(&t.out, "2024-01-01").await;
 
-    run_fetch(&out, "2024-01-01").await;
-    run_fetch(&out, "2024-01-01").await;
-
-    assert_eq!(stored_ts(&out), vec![TS_NEW.to_string()]);
+    assert_eq!(stored_ts(&t.out), vec![TS_NEW.to_string()]);
+    assert_eq!(history_problems(&t.out).await, 0);
 }
 
 /// Narrowing is a no-op: the store is already a superset, and nothing in
 /// the pipeline deletes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn narrowed_since_keeps_existing_messages_and_issues_no_backfill() {
-    let _guard = ENV_LOCK.lock().await;
-    let d = tempdir().unwrap();
-    let api = d.path().join("input_raw");
-    let playback = d.path().join("playback");
-    let out = d.path().join("out_raw");
-
-    write_setup_fixtures(&api);
+    let t = Tree::new();
+    record_general(&t.api);
     write_history(
-        &api,
-        "run-1",
+        &t.api,
         TS_2023,
         None,
         true,
         json!([msg(TS_OLD, "old"), msg(TS_NEW, "new")]),
     );
-    write_history(&api, "run-2", TS_NEW, None, false, json!([]));
+    write_history(&t.api, TS_NEW, None, false, json!([]));
 
-    SlackSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
+    t.serve();
 
-    run_fetch(&out, "2023-01-01").await;
-    run_fetch(&out, "2024-01-01").await;
+    run_fetch(&t.out, "2023-01-01").await;
+    run_fetch(&t.out, "2024-01-01").await;
 
     assert_eq!(
-        stored_ts(&out),
+        stored_ts(&t.out),
         vec![TS_OLD.to_string(), TS_NEW.to_string()],
         "narrowing must not drop already-mirrored messages",
     );
+    assert_eq!(history_problems(&t.out).await, 0);
 }

@@ -1,28 +1,30 @@
 //! One side of a two-process doltlite concurrency test: a writer that
 //! commits, a reader that pins, a reader that keeps re-opening and pinning
-//! the way `grid_index` does, or a probe that reports a store's committed
-//! state. Driven by `tests/doltlite_two_process.rs`, which is where the
-//! scenarios and the assertions live.
+//! the way `grid_index` does, a reader that holds a transaction as its
+//! snapshot, or a probe that reports a store's committed state. Driven by
+//! `tests/doltlite_two_process.rs`, which is where the scenarios and the
+//! assertions live; `seal-existing` also drives a full-size measurement
+//! (`hack/read_transaction_at_scale/`).
 //!
 //! It is a separate binary because the question under test is what happens
-//! *between processes* — doltlite's working set and its chunk-store lock are
-//! per file, not per connection, so two pools inside one process cannot
-//! stand in for it. The test process itself never opens a store: doltlite
-//! takes its chunk-store lock with BSD `flock`, which a spawned child
-//! inherits (`hack/doltlite_fork_bug/README.md`), so a coordinator that held
-//! a connection while spawning would be measuring that instead.
+//! *between processes*: doltlite's working set lives in the file, and its
+//! lock is SQLite's file lock on a sidecar, which one process's connections
+//! share, so two pools inside one process cannot stand in for it
+//! (`docs/dev/doltlite.md` § "Locks and writers").
 //!
 //! Each role writes one JSON report to `--out` and exits; nothing is printed
 //! to stdout, so a crashed child is distinguishable from a slow one.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_etl::doltlite_raw;
 use datalib_etl::pin::Pin;
 use serde_json::{json, Value};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 const TABLE_DDL: &str = "CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT NULL)";
 
@@ -55,6 +57,11 @@ async fn main() -> Result<()> {
         "reopen" => reopen(&args).await,
         "hold" => hold(&args).await,
         "watch" => watch(&args).await,
+        "txn-read" => txn_read(&args).await,
+        "branch-read" => branch_read(&args).await,
+        "rev-probe" => rev_probe(&args).await,
+        "rev-read" => rev_read(&args).await,
+        "seal-existing" => seal_existing(&args).await,
         other => bail!("unknown role {other:?}"),
     }?;
     write_atomic(&out, &serde_json::to_vec_pretty(&report)?)
@@ -95,16 +102,38 @@ async fn write(args: &Args) -> Result<Value> {
         write_atomic(&args.path("pin-out")?, hash.as_bytes())?;
     }
 
+    // Let readers set themselves up (a reader's branch is made once, ever)
+    // before the contention under test starts.
+    for go in args
+        .0
+        .get("go-when")
+        .into_iter()
+        .flat_map(|v| v.split(','))
+        .filter(|g| !g.is_empty())
+    {
+        await_file(Path::new(go))?;
+    }
     let until = args.opt_path("until");
     let interval = Duration::from_millis(args.num("interval-ms", 100));
     let max_commits = args.num("max-commits", 0) as usize;
+    let txn = Duration::from_millis(args.num("txn-ms", 0));
     let mut commits: Vec<Value> = Vec::new();
     for i in 0..max_commits {
         if until.as_deref().is_some_and(Path::exists) {
             break;
         }
-        match commit_a_chunk(&pool, i).await {
-            Ok(hash) => commits.push(json!({ "hash": hash, "at_ms": now_ms() })),
+        let started = Instant::now();
+        let sealed = if txn.is_zero() {
+            commit_a_chunk(&pool, i).await
+        } else {
+            commit_a_chunk_in_a_held_transaction(&pool, i, txn).await
+        };
+        match sealed {
+            Ok(hash) => commits.push(json!({
+                "hash": hash,
+                "at_ms": now_ms(),
+                "ms": started.elapsed().as_millis() as u64,
+            })),
             Err(e) => errors.push(format!("{e:#}")),
         }
         tokio::time::sleep(interval).await;
@@ -120,6 +149,7 @@ async fn write(args: &Args) -> Result<Value> {
         "commits": commits,
         "committed_rows": committed,
         "errors": errors,
+        "size_after": file_size(&db),
     }))
 }
 
@@ -141,7 +171,7 @@ async fn read(args: &Args) -> Result<Value> {
     let mut samples: Vec<Value> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     for _ in 0..args.num("samples", 12) {
-        match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pinned_entities")
+        match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
             .fetch_one(pool)
             .await
         {
@@ -163,9 +193,9 @@ async fn read(args: &Args) -> Result<Value> {
 }
 
 /// What `grid_index` does to a render store on every streaming pass, in a
-/// loop: open read-only, pin HEAD, install the views, diff, read through the
-/// views, close. Every step is a read, so none of it should cost a writer
-/// anything -- this is the role that finds out.
+/// loop: open read-only at HEAD, diff, read, close. Every step is a read, so none of it should cost a writer
+/// anything -- this is the role that finds out. `--dolt-status` adds a
+/// `SELECT * FROM dolt_status` to every round.
 async fn churn(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let until = args.opt_path("until");
@@ -193,6 +223,14 @@ async fn churn(args: &Args) -> Result<Value> {
             }
         };
         opened += 1;
+        if args.flag("dolt-status") {
+            if let Err(e) = sqlx::query("SELECT * FROM dolt_status")
+                .fetch_all(reader.pool())
+                .await
+            {
+                errors.push(format!("round {round}: dolt_status: {e:#}"));
+            }
+        }
         match one_pinned_pass(&reader, cursor.as_deref()).await {
             Ok(head) => {
                 pinned += 1;
@@ -250,7 +288,13 @@ async fn history(args: &Args) -> Result<Value> {
 async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) -> Result<String> {
     let pool = reader.pool();
     let pin = reader.pin();
-    let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_entities")
+    // `grid_index` asks a render store's shape before it reads anything.
+    anyhow::ensure!(
+        datalib_store_meta::read(pool).await?.is_some(),
+        "no _datalib_meta at {}",
+        pin.commit()
+    );
+    let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entities")
         .fetch_one(pool)
         .await?;
     let _changed: i64 = sqlx::query_scalar(
@@ -562,6 +606,426 @@ async fn watch(args: &Args) -> Result<Value> {
     Ok(json!({ "role": "watch", "samples": samples }))
 }
 
+/// The search applet's snapshot (`docs/dev/plans/paged_grids.md`): a
+/// read-only connection on `main` holding a transaction for `--hold-ms`,
+/// then `COMMIT; BEGIN` onto whatever `main` is by then. Every sample is
+/// tagged with its transaction, so the test can check each one read a
+/// single commit.
+async fn txn_read(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let table = identifier(args.str("table").unwrap_or("entities"))?;
+    let until = args.path("until")?;
+    let hold = Duration::from_millis(args.num("hold-ms", 200));
+    let interval = Duration::from_millis(args.num("interval-ms", 5));
+    let pool = datalib_pin::open_reader(&db)
+        .await
+        .context("open read-only")?;
+    let mut conn = pool.acquire().await.context("acquire")?;
+    write_atomic(&args.path("ready-out")?, b"ready")?;
+
+    let mut samples: Vec<Value> = Vec::new();
+    let mut txn = 0u64;
+    while !until.exists() {
+        sqlx::query("BEGIN")
+            .execute(&mut *conn)
+            .await
+            .context("BEGIN")?;
+        let opened = Instant::now();
+        while opened.elapsed() < hold && !until.exists() {
+            let mut s = sample_on(&mut conn, table)
+                .await
+                .with_context(|| format!("sample in transaction {txn}"))?;
+            s["txn"] = json!(txn);
+            samples.push(s);
+            tokio::time::sleep(interval).await;
+        }
+        sqlx::query("COMMIT")
+            .execute(&mut *conn)
+            .await
+            .context("COMMIT")?;
+        txn += 1;
+    }
+    drop(conn);
+    pool.close().await;
+    Ok(json!({ "role": "txn-read", "samples": samples }))
+}
+
+/// A reader with a branch of its own, `--branch`: a read-write connection
+/// on it, fast-forwarded to `main` with `dolt_merge('main')` every
+/// `--hold-ms`, and plain-table reads in between. Takes none of our writer
+/// lock -- the question is what doltlite's own locking makes of it. Each
+/// sample carries the refresh it followed, so the test can check the
+/// branch held still between two of them. `--refresh` picks the move:
+/// `merge` (the default) or `reset` (`dolt_reset('--hard', 'main')`).
+async fn branch_read(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let branch = args.str("branch")?.to_string();
+    let until = args.path("until")?;
+    let hold = Duration::from_millis(args.num("hold-ms", 100));
+    let interval = Duration::from_millis(args.num("interval-ms", 5));
+    let refresh_sql = match args.str("refresh").unwrap_or("merge") {
+        "merge" => "SELECT dolt_merge('main')",
+        "reset" => "SELECT dolt_reset('--hard', 'main')",
+        other => bail!("unknown --refresh {other:?}"),
+    };
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))?
+        .create_if_missing(false)
+        .busy_timeout(Duration::from_millis(args.num("busy-timeout-ms", 5000)));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(opts)
+        .await
+        .context("open read-write")?;
+    let mut conn = pool.acquire().await.context("acquire")?;
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_branches WHERE name = ?")
+        .bind(&branch)
+        .fetch_one(&mut *conn)
+        .await?;
+    let retry_for = Duration::from_millis(args.num("retry-ms", 30_000));
+    let refresh_budget = Duration::from_millis(args.num("refresh-retry-ms", 0));
+    if exists == 0 {
+        let create = format!("SELECT dolt_branch('{branch}', 'main')");
+        retry_busy(&mut conn, &create, retry_for)
+            .await
+            .0
+            .context("create the reader's branch")?;
+    }
+    sqlx::query("SELECT dolt_connect_branch(?)")
+        .bind(&branch)
+        .execute(&mut *conn)
+        .await?;
+    let active: String = sqlx::query_scalar("SELECT active_branch()")
+        .fetch_one(&mut *conn)
+        .await?;
+    if active != branch {
+        bail!("connected to {active:?}, not {branch:?}");
+    }
+    write_atomic(&args.path("ready-out")?, b"ready")?;
+
+    let mut samples: Vec<Value> = Vec::new();
+    let mut refreshes: Vec<Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut txn = 0u64;
+    while !until.exists() {
+        let started = Instant::now();
+        let (refreshed, attempts) = retry_busy(&mut conn, refresh_sql, refresh_budget).await;
+        let ms = started.elapsed().as_millis() as u64;
+        // A refresh that lost the race to the writer is not a failure: the
+        // reader keeps the snapshot it has and tries again next time.
+        let outcome = match &refreshed {
+            Ok(()) => "ok",
+            Err(e) if format!("{e:#}").contains("locked") => "busy",
+            Err(e) => {
+                errors.push(format!(
+                    "refresh {txn} after {attempts} attempts, {ms} ms: {e:#}"
+                ));
+                "error"
+            }
+        };
+        refreshes.push(json!({
+            "txn": txn,
+            "at_ms": now_ms(),
+            "ms": ms,
+            "attempts": attempts,
+            "outcome": outcome,
+        }));
+        let opened = Instant::now();
+        while opened.elapsed() < hold && !until.exists() {
+            match sample_on(&mut conn, "entities").await {
+                Ok(mut s) => {
+                    s["txn"] = json!(txn);
+                    samples.push(s);
+                }
+                Err(e) => errors.push(format!("sample after refresh {txn}: {e:#}")),
+            }
+            tokio::time::sleep(interval).await;
+        }
+        txn += 1;
+    }
+    let dirty: Vec<String> = sqlx::query_scalar("SELECT table_name FROM dolt_status")
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap_or_default();
+    drop(conn);
+    pool.close().await;
+    Ok(json!({
+        "role": "branch-read",
+        "samples": samples,
+        "refreshes": refreshes,
+        "errors": errors,
+        "dirty_at_end": dirty,
+    }))
+}
+
+/// The writer's side of the full-size measurement: seal an existing store
+/// `--seals` times, each seal changing `--rows` rows of `--table` (a
+/// column toggled between NULL and a value), through `commit_run`, the
+/// same seal every step uses. Opens a plain pool on the writer branch
+/// rather than through `open`, so it runs against a copy of any store
+/// without reconciling that store's schema. A refused seal ends the run:
+/// the measurement is of a writer that is never refused.
+async fn seal_existing(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let table = identifier(args.str("table")?)?;
+    let column = identifier(args.str("column")?)?;
+    let rows = args.num("rows", 1000) as i64;
+    let pool = writer_pool(&db).await.context("open the writer branch")?;
+    let total: i64 =
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+            .fetch_one(&pool)
+            .await?;
+    // Audited: `table` and `column` passed `identifier`, so they are bare
+    // lowercase names; every value is bound.
+    let update = format!(
+        "UPDATE {table} SET {column} = CASE WHEN {column} IS NULL THEN 'x' ELSE NULL END \
+          WHERE rowid IN (SELECT rowid FROM {table} ORDER BY rowid LIMIT ? OFFSET ?)"
+    );
+    let mut commits: Vec<Value> = Vec::new();
+    for i in 0..args.num("seals", 20) as i64 {
+        let started = Instant::now();
+        sqlx::query(sqlx::AssertSqlSafe(update.clone()))
+            .bind(rows)
+            .bind((i * rows) % total.max(1))
+            .execute(&pool)
+            .await
+            .with_context(|| format!("seal {i}: update"))?;
+        let hash = doltlite_raw::commit_run(&pool, &format!("seal {i}"))
+            .await
+            .with_context(|| format!("seal {i}: commit"))?;
+        commits.push(json!({
+            "hash": hash,
+            "at_ms": now_ms(),
+            "ms": started.elapsed().as_millis() as u64,
+        }));
+    }
+    pool.close().await;
+    Ok(json!({ "role": "seal-existing", "commits": commits, "size_after": file_size(&db) }))
+}
+
+/// A one-connection pool that never recycles, on the store's writer
+/// branch. `dolt_connect_branch` rather than `dolt_checkout`, for the
+/// reason `doltlite_raw` gives: it writes nothing.
+async fn writer_pool(db: &Path) -> Result<SqlitePool> {
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))?
+        .create_if_missing(false);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("SELECT dolt_connect_branch(?)")
+                    .bind(doltlite_raw::WRITER_BRANCH)
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(opts)
+        .await?;
+    let active: String = sqlx::query_scalar("SELECT active_branch()")
+        .fetch_one(&pool)
+        .await?;
+    if active != doltlite_raw::WRITER_BRANCH {
+        bail!(
+            "connected to {active:?}, not {:?}",
+            doltlite_raw::WRITER_BRANCH
+        );
+    }
+    Ok(pool)
+}
+
+/// What a reader sees now: the row count, then the commit it read at. The
+/// count goes first because a table read is what reloads the root from
+/// the file (`datalib_pin::head`).
+async fn sample_on(conn: &mut sqlx::SqliteConnection, table: &str) -> Result<Value> {
+    // Audited: `table` passed `identifier`.
+    let count: i64 =
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+            .fetch_one(&mut *conn)
+            .await?;
+    let head: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(json!({ "at_ms": now_ms(), "count": count, "head": head }))
+}
+
+/// A read-only pool on one revision of the store, opened by path:
+/// `<db>@<rev>`. A revision that is not a branch opens detached -- pinned
+/// there, and refusing every write.
+async fn open_revision(db: &Path, rev: &str) -> Result<SqlitePool> {
+    let opts = SqliteConnectOptions::new()
+        .filename(format!("{}@{rev}", db.display()))
+        .create_if_missing(false)
+        .read_only(true);
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(opts)
+        .await
+        .with_context(|| format!("open {}@{rev}", db.display()))
+}
+
+/// What one detached open can and cannot do, statement by statement.
+async fn rev_probe(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let rev = args.str("rev")?;
+    let other = args.str("other").unwrap_or(rev);
+    let pool = match open_revision(&db, rev).await {
+        Ok(p) => p,
+        Err(e) => return Ok(json!({ "role": "rev-probe", "open_error": format!("{e:#}") })),
+    };
+    let mut out = serde_json::Map::new();
+    let probes: [(&str, String); 7] = [
+        ("active_branch", "SELECT quote(active_branch())".into()),
+        ("count", "SELECT COUNT(*) FROM entities".into()),
+        ("hashof_head", "SELECT dolt_hashof('HEAD')".into()),
+        ("plan", "EXPLAIN QUERY PLAN SELECT * FROM entities WHERE id = 'seed-0'".into()),
+        (
+            "diff_to_other",
+            format!(
+                "SELECT COUNT(*) FROM dolt_diff_entities WHERE from_ref = '{rev}' AND to_ref = '{other}'"
+            ),
+        ),
+        ("log", "SELECT COUNT(*) FROM dolt_log()".into()),
+        ("insert", "INSERT INTO entities (id, body) VALUES ('probe', 'x')".into()),
+    ];
+    for (name, sql) in probes {
+        // Audited: `rev` and `other` are hashes the test read from the store.
+        let got = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .fetch_all(&pool)
+            .await
+            .map(|rows| {
+                rows.iter()
+                    .map(|r| {
+                        use sqlx::Row;
+                        (0..r.len())
+                            .map(|i| {
+                                r.try_get::<String, _>(i)
+                                    .or_else(|_| r.try_get::<i64, _>(i).map(|n| n.to_string()))
+                                    .unwrap_or_else(|_| "?".into())
+                            })
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    })
+                    .collect::<Vec<_>>()
+            });
+        out.insert(
+            name.into(),
+            match got {
+                Ok(rows) => json!({ "ok": rows }),
+                Err(e) => json!({ "err": e.to_string() }),
+            },
+        );
+    }
+    pool.close().await;
+    out.insert("role".into(), json!("rev-probe"));
+    Ok(Value::Object(out))
+}
+
+/// The reader that needs no branch: look up `main`'s tip on a read-only
+/// connection, open `<db>@<tip>` read-only and detached, read it for
+/// `--hold-ms`, close, and go again. Each window's samples carry the tip it
+/// opened at.
+async fn rev_read(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let until = args.path("until")?;
+    let hold = Duration::from_millis(args.num("hold-ms", 100));
+    let interval = Duration::from_millis(args.num("interval-ms", 5));
+    write_atomic(&args.path("ready-out")?, b"ready")?;
+    let mut samples: Vec<Value> = Vec::new();
+    let mut opens: Vec<Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut txn = 0u64;
+    while !until.exists() {
+        let started = Instant::now();
+        let tip = match main_tip(&db).await {
+            Ok(tip) => tip,
+            Err(e) => {
+                errors.push(format!("window {txn}: read main's tip: {e:#}"));
+                txn += 1;
+                continue;
+            }
+        };
+        let pool = match open_revision(&db, &tip).await {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(format!("window {txn}: {e:#}"));
+                txn += 1;
+                continue;
+            }
+        };
+        opens.push(json!({ "txn": txn, "ms": started.elapsed().as_millis() as u64 }));
+        let opened = Instant::now();
+        while opened.elapsed() < hold && !until.exists() {
+            match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
+                .fetch_one(&pool)
+                .await
+            {
+                Ok(count) => samples.push(json!({
+                    "txn": txn, "at_ms": now_ms(), "count": count, "head": tip,
+                })),
+                Err(e) => errors.push(format!("sample in window {txn}: {e:#}")),
+            }
+            tokio::time::sleep(interval).await;
+        }
+        pool.close().await;
+        txn += 1;
+    }
+    Ok(json!({ "role": "rev-read", "samples": samples, "opens": opens, "errors": errors }))
+}
+
+async fn main_tip(db: &Path) -> Result<String> {
+    let pool = datalib_pin::open_reader(db).await?;
+    let tip = sqlx::query_scalar::<_, String>("SELECT hash FROM dolt_branches WHERE name = 'main'")
+        .fetch_one(&pool)
+        .await;
+    pool.close().await;
+    Ok(tip?)
+}
+
+/// Run `sql` until it is not refused as busy or `budget` runs out; each try
+/// also waits out the connection's busy timeout. Returns the last outcome and
+/// how many tries it took.
+async fn retry_busy(
+    conn: &mut sqlx::SqliteConnection,
+    sql: &str,
+    budget: Duration,
+) -> (Result<()>, u64) {
+    let started = Instant::now();
+    let mut attempts = 0u64;
+    loop {
+        attempts += 1;
+        // Audited: every caller passes a literal or a branch name the test chose.
+        match sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+            .execute(&mut *conn)
+            .await
+        {
+            Ok(_) => return (Ok(()), attempts),
+            Err(e) if e.to_string().contains("locked") && started.elapsed() < budget => {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Err(e) => return (Err(e.into()), attempts),
+        }
+    }
+}
+
+/// A table or column name from the command line, held to the one shape
+/// that is safe to splice into SQL.
+fn identifier(name: &str) -> Result<&str> {
+    if name.is_empty() || !name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+        bail!("not a plain lowercase identifier: {name:?}");
+    }
+    Ok(name)
+}
+
+fn file_size(path: &Path) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|m| m.len())
+}
+
 /// Wait for a go-file the test writes, giving up rather than hanging the
 /// test's clock.
 fn await_file(path: &Path) -> Result<()> {
@@ -591,6 +1055,37 @@ async fn commit_a_chunk(pool: &sqlx::SqlitePool, chunk: usize) -> Result<String>
     for row in 0..2 {
         insert(pool, &format!("chunk-{chunk}-{row}")).await?;
     }
+    doltlite_raw::commit_run(pool, &format!("chunk {chunk}"))
+        .await?
+        .ok_or_else(|| anyhow!("chunk {chunk} committed nothing"))
+}
+
+/// A render store's checkpoint or a `grid_index` pass: the rows go in one
+/// SQL transaction that stays open for `hold`, then the seal.
+async fn commit_a_chunk_in_a_held_transaction(
+    pool: &sqlx::SqlitePool,
+    chunk: usize,
+    hold: Duration,
+) -> Result<String> {
+    let mut conn = pool.acquire().await.context("acquire")?;
+    sqlx::query("BEGIN")
+        .execute(&mut *conn)
+        .await
+        .context("BEGIN")?;
+    for row in 0..2 {
+        sqlx::query("INSERT OR REPLACE INTO entities (id, body) VALUES (?, ?)")
+            .bind(format!("chunk-{chunk}-{row}"))
+            .bind("x")
+            .execute(&mut *conn)
+            .await
+            .with_context(|| format!("chunk {chunk}: insert"))?;
+    }
+    tokio::time::sleep(hold).await;
+    sqlx::query("COMMIT")
+        .execute(&mut *conn)
+        .await
+        .with_context(|| format!("chunk {chunk}: COMMIT"))?;
+    drop(conn);
     doltlite_raw::commit_run(pool, &format!("chunk {chunk}"))
         .await?
         .ok_or_else(|| anyhow!("chunk {chunk} committed nothing"))

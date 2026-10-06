@@ -1129,6 +1129,130 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     Ok(())
 }
 
+async fn problem_keys(db: &RawDb) -> Result<Vec<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+            .fetch_all(db.pool())
+            .await?,
+    )
+}
+
+fn set_mode(path: &std::path::Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    Ok(())
+}
+
+/// A walk that could not read part of the tree deletes nothing: a file
+/// it did not see may be one it could not see. The run says so in a
+/// `listing:` row, and the next clean walk deletes what is really gone.
+#[tokio::test]
+async fn a_walk_with_errors_deletes_nothing() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    std::fs::remove_file(h.root.join("music/untagged_hum.mp3"))?;
+    std::fs::remove_file(h.root.join("playlists/bridge_ambience.m3u"))?;
+    let dead = h.root.join("music/dead_air.mp3");
+    std::os::unix::fs::symlink(h.root.join("nowhere.mp3"), &dead)?;
+
+    let s = h.scan().await?;
+    assert_eq!(s.removed, 0, "{s:?}");
+    assert!(files(&h.db).await?.contains_key("music/untagged_hum.mp3"));
+    assert_eq!(problem_keys(&h.db).await?, ["listing:files"]);
+
+    std::fs::remove_file(&dead)?;
+    let s = h.scan().await?;
+    assert_eq!(s.removed, 2, "{s:?}");
+    assert_eq!(problem_keys(&h.db).await?, Vec::<String>::new());
+    Ok(())
+}
+
+/// A file evicted to the cloud since the last scan is not read, and not
+/// taken for deleted either: its row stays as the last read left it.
+#[tokio::test]
+async fn a_dataless_file_keeps_its_row() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    let path = h.root.join("music/untagged_hum.mp3");
+    let before = files(&h.db).await?["music/untagged_hum.mp3"].clone();
+
+    // A sparse file: a size and no blocks, which is what an evicted one
+    // looks like from a stat.
+    let len = std::fs::metadata(&path)?.len().max(1 << 20);
+    let f = std::fs::File::create(&path)?;
+    f.set_len(len)?;
+    drop(f);
+    let s = h.scan().await?;
+    if s.dataless_skipped == 0 {
+        // A filesystem that allocates blocks for a sparse file.
+        return Ok(());
+    }
+    assert_eq!(s.removed, 0, "{s:?}");
+    assert_eq!(files(&h.db).await?["music/untagged_hum.mp3"], before);
+    Ok(())
+}
+
+/// A media file or a playlist that would not open is a row, its stored
+/// rows are kept, and the next scan that opens it clears the row.
+#[tokio::test]
+async fn a_file_that_would_not_open_is_a_row_until_it_does() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    let media = h.root.join("music/untagged_hum.mp3");
+    let playlist = h.root.join("playlists/bridge_ambience.m3u");
+    // Forget the item, so the next scan must open the file again; its
+    // bytes are unchanged, so the walk itself does not.
+    let hash = files(&h.db).await?["music/untagged_hum.mp3"].clone();
+    sqlx::query("DELETE FROM media_items WHERE blake3 = ?")
+        .bind(&hash)
+        .execute(h.db.pool())
+        .await?;
+    set_mode(&media, 0o000)?;
+    set_mode(&playlist, 0o000)?;
+    if std::fs::read(&media).is_ok() {
+        // Root reads through any mode; CI's container runs as root.
+        set_mode(&media, 0o644)?;
+        set_mode(&playlist, 0o644)?;
+        return Ok(());
+    }
+    let s = h.scan().await;
+    set_mode(&media, 0o644)?;
+    set_mode(&playlist, 0o644)?;
+    let s = s?;
+    assert_eq!((s.errors, s.removed), (2, 0), "{s:?}");
+    assert_eq!(
+        problem_keys(&h.db).await?,
+        [
+            "record:media_files:music/untagged_hum.mp3",
+            "record:media_playlists:playlists/bridge_ambience.m3u",
+        ]
+    );
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM media_playlists WHERE id = 'playlists/bridge_ambience.m3u'",
+    )
+    .fetch_one(h.db.pool())
+    .await?;
+    assert_eq!(n, 1, "the playlist that would not read keeps its row");
+
+    // A scan that cannot see the file at all does not try it, so its row
+    // stands; the playlist, read again, clears.
+    let aside = h.root.join("untagged_hum.mp3.aside");
+    std::fs::rename(&media, &aside)?;
+    std::os::unix::fs::symlink(h.root.join("nowhere.mp3"), &media)?;
+    h.scan().await?;
+    assert_eq!(
+        problem_keys(&h.db).await?,
+        ["listing:files", "record:media_files:music/untagged_hum.mp3"]
+    );
+    std::fs::remove_file(&media)?;
+    std::fs::rename(&aside, &media)?;
+
+    let s = h.scan().await?;
+    assert_eq!((s.errors, s.items), (0, 1), "{s:?}");
+    assert_eq!(problem_keys(&h.db).await?, Vec::<String>::new());
+    Ok(())
+}
+
 fn id3v2_with_title(title: &str) -> Vec<u8> {
     fn syncsafe(n: u32) -> [u8; 4] {
         [
@@ -1165,5 +1289,54 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
             std::fs::copy(entry.path(), &dst)?;
         }
     }
+    Ok(())
+}
+
+/// A path the scan did not read is not a path that is gone (audit
+/// 2026-10-02 §4). A file now over `max_bytes`, a file evicted to the
+/// cloud (a size and no blocks, which the scan must not read), and a
+/// removed file seen through a walk that reported an error each used to
+/// lose its row.
+#[tokio::test]
+async fn a_path_the_scan_passed_over_keeps_its_row() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    let before = files(&h.db).await?;
+
+    let over = h
+        .scan_with(|o| ingest::FetchOptions {
+            max_bytes: Some(1),
+            ..o
+        })
+        .await?;
+    assert_eq!(over.removed, 0, "{over:?}");
+    assert_eq!(
+        files(&h.db).await?,
+        before,
+        "every file is over max_bytes, none is gone"
+    );
+
+    let evicted = h.root.join("music/ode_to_spot.mp3");
+    let size = std::fs::metadata(&evicted)?.len();
+    std::fs::remove_file(&evicted)?;
+    std::fs::File::create(&evicted)?.set_len(size)?;
+    let dataless = h.scan().await?;
+    assert_eq!(dataless.dataless_skipped, 1, "{dataless:?}");
+    assert_eq!(dataless.removed, 0, "{dataless:?}");
+    assert_eq!(
+        files(&h.db).await?,
+        before,
+        "the evicted file is still there"
+    );
+
+    std::fs::remove_file(h.root.join("music/untagged_hum.mp3"))?;
+    std::os::unix::fs::symlink(h.root.join("nowhere"), h.root.join("music/dangling.mp3"))?;
+    let walked = h.scan().await?;
+    assert_eq!(walked.removed, 0, "{walked:?}");
+    assert!(files(&h.db).await?.contains_key("music/untagged_hum.mp3"));
+    let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+        .fetch_all(h.db.pool())
+        .await?;
+    assert_eq!(problems, vec!["listing:files".to_string()]);
     Ok(())
 }

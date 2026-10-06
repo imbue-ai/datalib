@@ -18,7 +18,7 @@ that reads files carries its own `path`.
 
 Conventions: exports land under `~/backups/`, and `latchkey` is the
 one the datalib installer put on your `PATH` (it runs on the Node
-runtime bundled in the same tarball). Adjust paths to taste and
+runtime `datalib-step pull-runtime` fetches; see the first-time guide). Adjust paths to taste and
 point the matching source in your config at them. Wherever a command
 takes a secret, it is written as `$(pbpaste)`: copy the secret to your
 clipboard, then run the command. Your shell history keeps the harmless
@@ -58,15 +58,17 @@ copy without it, and `name` to override what the device says.
 ## Apple Messages
 
 `type = "apple_messages"` — reads the Messages app's own `chat.db` on a
-Mac, or a copy of it (`database.path`). Mirrors iMessage and SMS chats
+Mac, or a copy of it (`messages.path`). Mirrors iMessage and SMS chats
 with tapbacks; attachments are listed by name, their bytes are not
 copied.
 
-The file is `~/Library/Messages/chat.db`. An iPhone backup's
-`3d0d7e5fb2ce288813306e4d4636395e047a3d28` is the same database and
-works too. macOS protects `~/Library/Messages`: in the app, choose the
-file with the picker — that is what grants Datalib access (Cmd-Shift-G
-in the dialog reaches the folder). From a terminal, the terminal needs
+Point it at the folder, `~/Library/Messages`, or at a `chat.db` file
+directly. An iPhone backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28`
+is the same database and works too. macOS protects `~/Library/Messages`:
+in the app, choose the folder with the picker — that is what grants
+Datalib access (Cmd-Shift-G in the dialog reaches it). Choosing
+`chat.db` alone is not enough, because the database's `chat.db-wal`
+sits beside it and has to be read too. From a terminal, the terminal needs
 Full Disk Access (System Settings → Privacy & Security); an ingest that
 reports "Operation not permitted" is missing that, not the file.
 
@@ -142,8 +144,8 @@ conversations.
 A one-time registration, then a browser login. ChatGPT uses a bearer
 access token rather than a cookie, and latchkey can go and fetch it
 for you. The app's Add Data Source wizard does both from its
-**Latchkey auth** button (and **Test connection** then lists the
-account's conversations to pick from); by hand it is:
+**Sign in with browser** button (and **Load conversations** then lists
+the account's conversations to pick from); by hand it is:
 
 ```sh
 latchkey services register chatgpt \
@@ -259,22 +261,24 @@ mirror.
 
 ## Contacts
 
-`type = "contacts"` — a CardDAV server through latchkey (`carddav`),
-**or** local `.vcf` files (`vcf`). Mirrors your address book.
+`type = "contacts"` — any CardDAV server, such as iCloud or Nextcloud,
+through latchkey (`carddav`), **or** local `.vcf` files (`vcf`).
+Mirrors your address book. Fastmail has a section of its own:
+[Fastmail Contacts](#fastmail-contacts).
 
 - **A `.vcf` export.** Most address books export vCards; point
-  `vcf.path` at a directory of them. No credentials. The directory is
-  the whole address book, so the sample config sets
-  `always_clear_before_ingest = true` to let a missing `.vcf` mean a
-  missing contact.
-- **A CardDAV server.** Credentials go in latchkey under a service
-  whose base URL matches the server. Fastmail's is built in and takes
-  an app password (Settings → Privacy & Security → Integrations → App
-  passwords, with contacts access):
+  `vcf.path` at a directory of them. No credentials. Each file is an
+  address book, so deleting a `.vcf` deletes its contacts on the next
+  sync.
+- **A CardDAV server.** Put it in `carddav.server_url` — the host alone
+  is usually enough, since discovery tries `/.well-known/carddav`. The
+  login is latchkey's: register a service for the server's host
+  (`latchkey services register`), then give it an app password with
+  `latchkey auth set`.
 
-  ```sh
-  latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
-  ```
+An `addressbooks` list of names narrows a server to those address books,
+matched exactly; leave it out for all of them. The wizard's **Test
+connection** lists them to pick from.
 
 ## Email
 
@@ -332,17 +336,24 @@ regional datacenter gets. The browser flow stores an OAuth token:
 latchkey auth browser fastmail
 ```
 
-If you would rather use an API token, create one at
+That login can read, change and send mail: Fastmail offers no
+read-only scope for it. For read-only access, use an API token instead.
+Create one at
 [app.fastmail.com/settings/security](https://app.fastmail.com/settings/security)
-under **Integrations** → **API tokens** → **New API token**, give it
-read access to your mail, copy it, and store it instead:
+under **Integrations** → **API tokens** → **New API token**, tick
+**Read-only access**, copy it, and paste it into the wizard's **Paste a
+credential** form — give it an account name of its own there, or it
+replaces the browser login latchkey already holds. From a terminal:
 
 ```sh
-latchkey auth set fastmail -H "Authorization: Bearer $(pbpaste)"
+latchkey --account you-readonly auth set fastmail -H "Authorization: Bearer $(pbpaste)"
 ```
 
+and name the same account in the source.
+
 Use a `jmap` table with `hostname = "api.fastmail.com"`. Fastmail's
-contacts are a separate route — see [Contacts](#contacts).
+contacts and calendars are separate sources — see [Fastmail
+Contacts](#fastmail-contacts) and [Fastmail Calendar](#fastmail-calendar).
 
 ## Fastmail Calendar
 
@@ -351,31 +362,62 @@ contacts are a separate route — see [Contacts](#contacts).
 
 Fastmail's CalDAV login is built into latchkey as `fastmail-dav`, and
 takes an app password (Settings → Privacy & Security → Integrations →
-App passwords, with calendar access) — not the OAuth login the mail
-source uses:
+App passwords) — not the OAuth login the mail source uses. Set its
+Access to **Calendars (CalDAV)** and tick **Read-only access**, so
+Fastmail refuses any change made with it. The combined "DAV
+(CardDAV/CalDAV/WebDAV)" access has no read-only option, so a read-only
+setup takes one app password for calendars and another for
+[contacts](#fastmail-contacts), each stored under its own account name.
+The wizard asks for it itself (**Paste a key**: your address and
+the app password, stored as `you@fastmail.com calendar`); from a
+terminal it is:
 
 ```sh
-latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
+latchkey --account "you@fastmail.com calendar" auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
 ```
 
-The `fastmail` table needs nothing else; `calendars` narrows it to the
-calendars you name.
+and name the same account in the source. The `fastmail` table needs
+nothing else; `calendars` narrows it to the calendars you name.
+
+## Fastmail Contacts
+
+`type = "contacts"` — Fastmail's address books over CardDAV, through
+latchkey (`fastmail`). Rendered the way [Contacts](#contacts) says.
+
+The same `fastmail-dav` login as [Fastmail Calendar](#fastmail-calendar):
+an app password (Settings → Privacy & Security → Integrations → App
+passwords), not the OAuth login the mail source uses. Set its Access to
+**Contacts (CardDAV)** and tick **Read-only access**: Fastmail then
+refuses every change made with it, so the mirror can read your contacts
+but never alter them. An API token will not work here, even a read-only
+one — Fastmail's CardDAV turns them away with a 401.
+
+The wizard's **Paste a key** form stores it under the name in the
+**Fastmail account** box, `you@fastmail.com contacts` unless you type or
+pick another. latchkey
+keeps one credential per name per service, and Fastmail Contacts and
+Fastmail Calendar share the `fastmail-dav` service, so their two app
+passwords need two different names. From a terminal:
+
+```sh
+latchkey --account "you@fastmail.com contacts" auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
+```
+
+and name the same account in the source. The `fastmail` table needs
+nothing else; `addressbooks` narrows it to the address books you name.
 
 ## Garmin
 
-`type = "garmin"` — Garmin Connect's API, with its own login rather
-than latchkey (`api`). Mirrors per-day health metrics (sleep, heart
+`type = "garmin"` — Garmin Connect's API through latchkey (`api`). Mirrors per-day health metrics (sleep, heart
 rate, stress, body battery, HRV, SpO₂, …), weigh-ins, activities with
 their original FIT files, devices, records, gear, badges, workouts and
 goals; the weigh-ins render as one page with an interactive plot.
 
-Garmin's API wants a bearer minted by a signed request that latchkey
-cannot make, so the provider signs in on its own. Run
-`datalib-step login garmin` once — it asks for your Garmin email,
-password and the MFA code Garmin emails you, and writes a token that
-lasts about a year under `~/.garth` (a token from the `garth` Python
-tool works too). Then add the source from the wizard or from the
-`all_sources.toml` example; `since` says how far back to mirror. The
+latchkey reaches Garmin through its Garmin plugin, which the Add a
+source dialog installs into `~/.latchkey/plugins/garmin` the first time
+you sign in there. Sign in with the browser, or import a token folder
+the `garth` Python tool wrote (`~/.garth`). The sign-in lasts about a
+year. `since` says how far back to mirror. The
 first sync makes one request per metric per day since `since`, so a
 long history takes a while; later syncs re-read only the trailing week.
 
@@ -475,7 +517,13 @@ feed is off until its flag beside `export.path` turns it on
 holds whatever you asked Google for; [Google Chat](#google-chat) and
 [Google Voice](#google-voice) have sections of their own. A Takeout is
 a complete snapshot, so it is also the way to notice what Google has
-deleted since the last one.
+deleted since the last one: unpack a newer export in its place, and
+what it no longer holds leaves the mirror on the next sync. A product
+the newer export does not have at all deletes nothing, so an export
+requested for one product leaves the others alone. The one thing this
+cannot tell apart: a large Takeout comes as several zips, and a product
+unpacked from only some of them looks smaller, not missing, so unpack
+every part.
 
 ## Google Voice
 
@@ -503,6 +551,14 @@ run, every prior state stays queryable through `dolt_history_<table>`
 and `dolt_diff_<table>`, and an unchanged catalog produces no commit.
 Query the raw store directly with `datalib-doltlite`.
 
+`catalog.path` can also be one of Lightroom's backup `.zip` files. And
+`backups.path`, beside the catalog or instead of it, is the folder
+Lightroom writes its backups into (by default a `Backups` folder beside
+the catalog): each backup becomes one commit, oldest first and dated
+when it was taken, so the store holds the catalog's history from before
+you started syncing it. Every later sync adds the backups taken since,
+then mirrors the catalog on top.
+
 ## LinkedIn
 
 `type = "linkedin"` — LinkedIn's "Get a copy of your data" export
@@ -516,9 +572,9 @@ data**, request the full archive, and unzip it when the email arrives
 unzip ~/Downloads/Complete_LinkedInDataExport_*.zip -d ~/backups/LinkedInDataExport
 ```
 
-Point `export.path` at that directory. Each export is complete, so the
-sample config sets `always_clear_before_ingest = true` to let a newer
-export drop what LinkedIn stopped including.
+Point `export.path` at that directory. Each export is complete, so
+`all_sources.toml` sets `always_clear_before_ingest = true` to let a
+newer export drop what LinkedIn stopped including.
 
 ## Local files
 

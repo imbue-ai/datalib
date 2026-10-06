@@ -6,7 +6,7 @@
 
 //! `beeper-inspect` — quick read-only dump of a Beeper doltlite raw
 //! store. Works around the fact that the system `sqlite3` CLI can't
-//! read our doltlite-format files (different record encoding).
+//! read our doltlite-format files (a prolly-tree store, not a SQLite file).
 
 use std::path::PathBuf;
 use std::str::FromStr;

@@ -69,8 +69,8 @@ async fn run_extract(
     sources: Vec<&str>,
 ) -> Result<FetchSummary> {
     // One handle for the whole pass, the way the processor's
-    // `RawStoreSession` holds one: a second live connection to the same
-    // store makes one of the two `dolt_commit`s fail.
+    // `RawStoreSession` holds one: the file takes one writer
+    // at a time.
     let db = ingest::RawDb::open(&ingest::db_path_for(&db_path)).await?;
     let summary = ingest::fetch(FetchOptions {
         db: db.clone(),
@@ -353,11 +353,11 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
     // minted from — is the chat's `external_id`, and the Beeper
     // workspace is its `project`.
     assert!(
-        march.contains("external_id: !tng-data:ba_TNG.local-signal.localhost"),
+        march.contains("external_id: \"!tng-data:ba_TNG.local-signal.localhost\""),
         "{march}"
     );
     assert!(
-        march.contains("project: tng-picard-account-uuid"),
+        march.contains("project: \"tng-picard-account-uuid\""),
         "{march}"
     );
 
@@ -376,5 +376,171 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
         blob_dir.display()
     );
 
+    Ok(())
+}
+
+fn run_sql(db: &Path, sql: &str) -> Result<()> {
+    let sqlite3 = std::env::var("BEEPER_SQLITE3").unwrap_or_else(|_| "sqlite3".to_string());
+    let status = Command::new(&sqlite3).arg(db).arg(sql).status()?;
+    anyhow::ensure!(status.success(), "sqlite3 failed on {sql}");
+    Ok(())
+}
+
+async fn problems(out_db: &Path) -> Result<Vec<(String, String)>> {
+    let db = ingest::RawDb::open(&ingest::db_path_for(out_db)).await?;
+    let rows = sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+        .fetch_all(db.pool())
+        .await?;
+    db.close().await;
+    Ok(rows)
+}
+
+fn row(key: &str, severity: &str) -> (String, String) {
+    (key.to_string(), severity.to_string())
+}
+
+const SCHEMATIC_EDGE: &str =
+    "beeper_media_attachments:$tng-data-003:ba_TNG.local-signal.localhost#0|iconian-schematic.png";
+
+/// A cached file that would not read was upserted like one that did,
+/// which stamped the edge fetched and left no row saying it was not.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_media_file_that_will_not_read_is_a_problem_until_it_does() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let beeper_dir = tmp.path().join("BeeperTexts");
+    materialize_fixture(&beeper_dir)?;
+    let cached = beeper_dir.join("media/localhostlocal-signal/TNGART01");
+    let kept = tmp.path().join("TNGART01");
+    std::fs::rename(&cached, &kept)?;
+    let out_db = tmp.path().join("out.doltlite_db");
+
+    let summary = run_extract(
+        out_db.clone(),
+        beeper_dir.clone(),
+        vec!["signal", "googlechat"],
+    )
+    .await?;
+    assert_eq!(summary.blob_errors, 1);
+    assert_eq!(problems(&out_db).await?, vec![row(SCHEMATIC_EDGE, "error")]);
+
+    std::fs::rename(&kept, &cached)?;
+    run_extract(out_db.clone(), beeper_dir, vec!["signal", "googlechat"]).await?;
+    assert!(problems(&out_db).await?.is_empty());
+    Ok(())
+}
+
+/// A network the config names that no Beeper account is on mirrored
+/// nothing and said nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_network_with_no_account_is_a_config_problem() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let beeper_dir = tmp.path().join("BeeperTexts");
+    materialize_fixture(&beeper_dir)?;
+    let out_db = tmp.path().join("out.doltlite_db");
+
+    run_extract(
+        out_db.clone(),
+        beeper_dir.clone(),
+        vec!["signal", "googlechat", "slack"],
+    )
+    .await?;
+    assert_eq!(
+        problems(&out_db).await?,
+        vec![row("config:sources:slack", "warning")]
+    );
+
+    run_extract(out_db.clone(), beeper_dir, vec!["signal", "googlechat"]).await?;
+    assert!(problems(&out_db).await?.is_empty());
+    Ok(())
+}
+
+/// A bridge database that would not read was a log line, and the events
+/// it should have enriched read as if the bridge had nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bridge_database_that_will_not_read_is_a_phase_problem() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let beeper_dir = tmp.path().join("BeeperTexts");
+    materialize_fixture(&beeper_dir)?;
+    let bridge = beeper_dir.join("local-signal/megabridge.db");
+    let good = std::fs::read(&bridge)?;
+    std::fs::write(&bridge, b"not a database, Number One")?;
+    let out_db = tmp.path().join("out.doltlite_db");
+
+    let summary = run_extract(
+        out_db.clone(),
+        beeper_dir.clone(),
+        vec!["signal", "googlechat"],
+    )
+    .await?;
+    assert_eq!(summary.events_enriched, 0);
+    assert_eq!(
+        problems(&out_db).await?,
+        vec![row("phase:megabridge signal", "error")]
+    );
+
+    std::fs::write(&bridge, good)?;
+    run_extract(out_db.clone(), beeper_dir, vec!["signal", "googlechat"]).await?;
+    assert!(problems(&out_db).await?.is_empty());
+    Ok(())
+}
+
+/// One thread's rows that would not read failed the whole step, and
+/// nothing from any thread landed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_thread_that_will_not_read_is_stepped_over() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let beeper_dir = tmp.path().join("BeeperTexts");
+    materialize_fixture(&beeper_dir)?;
+    run_sql(&beeper_dir.join("index.db"), "DROP TABLE mx_reactions;")?;
+    let out_db = tmp.path().join("out.doltlite_db");
+
+    let summary = run_extract(out_db.clone(), beeper_dir, vec!["signal", "googlechat"]).await?;
+    assert!(summary.events > 0, "the messages still landed");
+    let keys: Vec<String> = problems(&out_db)
+        .await?
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(keys.len(), 3, "{keys:?}");
+    assert!(
+        keys.iter().all(|k| k.starts_with("listing:messages !tng-")),
+        "{keys:?}"
+    );
+    Ok(())
+}
+
+/// An attachment with no id was a log line, and one whose URL scheme
+/// this build does not read was a debug line with no edge at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn attachments_that_cannot_be_copied_are_problems() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let beeper_dir = tmp.path().join("BeeperTexts");
+    materialize_fixture(&beeper_dir)?;
+    let index = beeper_dir.join("index.db");
+    run_sql(
+        &index,
+        "UPDATE mx_room_messages SET message = json_set(message, '$.attachments', \
+         json('[{\"fileName\": \"orders.txt\"}]')) \
+         WHERE eventID = '$tng-data-001:ba_TNG.local-signal.localhost';",
+    )?;
+    run_sql(
+        &index,
+        "UPDATE mx_room_messages SET message = json_set(message, '$.attachments', \
+         json('[{\"id\": \"https://example.com/warp.png\", \"fileName\": \"warp.png\"}]')) \
+         WHERE eventID = '$tng-data-002:ba_TNG.local-signal.localhost';",
+    )?;
+    let out_db = tmp.path().join("out.doltlite_db");
+
+    run_extract(out_db.clone(), beeper_dir, vec!["signal", "googlechat"]).await?;
+    assert_eq!(
+        problems(&out_db).await?,
+        vec![
+            row(
+                "beeper_media_attachments:$tng-data-002:ba_TNG.local-signal.localhost#0|warp.png",
+                "warning"
+            ),
+            row("phase:attachments", "error"),
+        ]
+    );
     Ok(())
 }

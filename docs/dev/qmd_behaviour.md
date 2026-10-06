@@ -1,22 +1,23 @@
 # How qmd behaves when driven from a step
 
-What was measured about `qmd` 2.8.3 (the pin in
-`datalib/backend/runtime/src/qmd.rs`) while designing per-source
-embedding on PR #456, and extended on #679 once the embed pass started
-driving qmd's SDK rather than its CLI. Eleven facts, each measured on a
-mac against the TNG fixture's rendered tree (one qmd collection per
-group, exactly as the shipped `qmd_index` step registers them), with
-the recipe at the end so they can be re-measured after a qmd bump. The
-first nine were measured when the fixture held 16 groups and 79
-documents; findings 1 (its SDK half), 10 and 11 against the 22 groups
-and 111 documents it holds now. File
-references are into `third-party/qmd/src`, the vendored reference
-snapshot (`docs/dev/qmd_vendored.md`); function names are given so a
+Measured facts about `qmd` 2.8.3, which is also the version pinned now
+(`DEFAULT_QMD_VERSION` in `datalib/backend/runtime/src/qmd.rs`, and
+`third-party/qmd/package.json`). Eleven facts, each measured on a mac
+against the TNG fixture's rendered tree (one qmd collection per group,
+exactly as the shipped qmd steps register them), with the recipe at
+the end so they can be re-measured after a qmd bump, and a twelfth read
+from qmd's code and not measured. Findings 2–9 were measured on a
+fixture of 16 groups and 79 documents; findings 1 (its SDK half), 10
+and 11 on one of 22 groups and 111 documents. File references are into
+`third-party/qmd/src`, the vendored reference snapshot
+([`qmd_vendored.md`](qmd_vendored.md)); function names are given so a
 line number that drifts is still findable.
 
-Read this before touching `qmd_indexer/src/lib.rs` or anything that
-drives `qmd embed`. Finding 6 describes how the step **today** can
-report success for work qmd did not do.
+Read this before touching `qmd_indexer/src/lib.rs`,
+`qmd_indexer/src/js/qmd_sdk.mjs` or anything that drives `qmd embed`.
+Finding 6 is why the embed step calls past `store.embed()`. Findings 1
+and 3 are held by `//datalib/backend/qmd_indexer:qmd_indexer_tests`,
+which drives the real qmd through `Index`.
 
 **The CLI and the SDK are not the same program.** `@tobilu/qmd` ships
 both a CLI (`dist/cli/qmd.js`) and a library entry (`dist/index.js`,
@@ -29,7 +30,7 @@ does not carry over to `createStore()` without being re-measured.
 1. **`qmd update` cannot be scoped to a collection *from the CLI*.**
    `updateCollections` (`cli/qmd.ts`) loops over `listCollections(db)` —
    every collection in the store — and there is no `-c` on `update` in
-   2.8.3 or on upstream `main` (checked 2026-09-15). Only `embed` takes
+   2.8.3. Only `embed` takes
    `-c`, and only one name. So a per-source step that shells `qmd
    update` would re-hash every source's files on every run:
    O(sources × corpus), and a step whose declared input is one tree
@@ -51,9 +52,7 @@ does not carry over to `createStore()` without being re-measured.
    scoped to `slack` 8/12/11 ms, unscoped 27/39/29 ms.
 
    So the keyword index **can** be built per source through qmd's own
-   code. That is what finding 2 was a workaround for; #468's
-   "backed out: a writer for another program's tables" is no longer
-   the only route.
+   code, without finding 2's direct writes.
 
 2. **Writing a source's `documents`/`content` rows ourselves works, and
    qmd cannot tell the difference.** `reindexCollection` (`store.ts`)
@@ -69,8 +68,8 @@ does not carry over to `createStore()` without being re-measured.
    UPDATE` upsert qmd's own `insertDocument` uses failed with
    `constraint failed (19)` from the stock sqlite3 3.51 shell, while a
    plain UPDATE and a plain INSERT both worked. A Rust writer for these
-   tables was built on #456 and backed out (see below); the branch has
-   it if it is ever wanted.
+   tables was built on #456 and backed out; the shipped steps use
+   finding 1 instead.
 
 3. **`qmd embed -c <group>` is scoped, and it is the only lever needed
    on the embed side.** Embedding `slack` alone left every other
@@ -100,32 +99,24 @@ does not carry over to `createStore()` without being re-measured.
    lock file is recovered by PID check after a crash (measured: a
    SIGTERM'd embed left the file; the next embed took it and finished).
 
-   The shipped step no longer inherits this. Since #679 it takes the
-   lock itself (`dist/cli/embed-lock.js`, which the SDK does not
-   re-export) and treats a lock it cannot get as a failure, on the
-   grounds that the step owns the index and nothing else should be
-   writing it. The hazard is still qmd's, so anything new that shells
-   `qmd embed` gets it back.
+   The shipped step does not inherit this: `qmd_sdk.mjs` takes the lock
+   itself (`dist/cli/embed-lock.js`, which the SDK does not re-export),
+   and `qmd_indexer` fails the step on the `busy` event it emits when
+   the lock is held, on the grounds that the step owns the index and
+   nothing else should be writing it. The hazard is still qmd's, so
+   anything new that shells `qmd embed` gets it back.
 
 6. **`qmd embed` stops itself after 30 minutes and still exits 0.**
    `DEFAULT_EMBED_MAX_DURATION_MS = 30 * 60 * 1000` (`store.ts`); on the
    cap it prints `⚠ Session expired — skipping remaining document
    batches` and then `✓ Done!` (`cli/qmd.ts`). `--timeout <minutes>`
-   sets it; `0` disables it. **This is a live bug in the shipped step**,
-   and #679 did not fix it: the step now drives the SDK, whose
-   `embed()` forwards `force`, `model`, `collection`, `maxDocsPerBatch`,
-   `maxBatchBytes`, `chunkStrategy` and `onProgress` and **drops
-   `maxDurationMs`** (`index.ts`, the `embed` member), so it always
-   takes the 30-minute default and there is no flag to raise. A root
-   whose first embed needs more than half an hour still reports
-   `Succeeded` with most documents unembedded, and nothing re-runs it
-   until a render moves. Tracked as #617.
-
-   The SDK does make it cheap to fix without reaching past the public
-   entry point: by finding 7 an embed resumes, and `EmbedResult`
-   reports `docsProcessed`, so calling `embed()` in a loop until it
-   returns zero finishes the work. In one process that also pays
-   finding 8's model load once rather than per pass.
+   sets it; `0` disables it. The SDK's `embed()` forwards `force`,
+   `model`, `collection`, `maxDocsPerBatch`, `maxBatchBytes`,
+   `chunkStrategy` and `onProgress` and **drops `maxDurationMs`**
+   (`index.ts`, the `embed` member), so through it every embed takes
+   the 30-minute default. The shipped step therefore calls
+   `generateEmbeddings` from `dist/store.js` directly, with
+   `maxDurationMs: 0` (see "What the shipped steps do", below).
 
 7. **Embedding resumes.** Vectors are committed per batch; an
    interrupted run leaves what it finished, and the pending query counts
@@ -158,10 +149,12 @@ does not carry over to `createStore()` without being re-measured.
     survive — it
     is the registry that goes — but a later scoped `update` then matches
     nothing and silently does no work, which is how this was noticed.
-    The shipped step passes `configPath` only when the file is on disk
-    (`qmd_indexer/src/lib.rs`, `run_embed`); anything else built on the
-    SDK needs the same guard, or `{ dbPath }` alone, which is the
-    DB-only mode that reads `store_collections` and syncs nothing.
+    `embed` and `status` in `qmd_indexer/src/js/qmd_sdk.mjs` open with
+    `{ dbPath }` alone, the DB-only mode that reads `store_collections`
+    and syncs nothing. `register` and `update` pass the file, because
+    they are its writers and register their collections as they open;
+    a file deleted by hand costs the other collections' registration
+    until `qmd_aggregator` next runs, never their documents.
 
 11. **The SDK reports progress the CLI keeps to itself.** `embed`'s
     `onProgress` fires per batch with chunks embedded, bytes processed
@@ -171,8 +164,24 @@ does not carry over to `createStore()` without being re-measured.
     poll qmd's SQLite. The CLI computes the same embed numbers and
     writes them only when `process.stderr.isTTY` (`cli/qmd.ts`), as a
     `\r`-redrawn bar — which is why a piped `qmd embed` says nothing at
-    all between its model line and its last one. #679 is that
-    measurement turned into the step's progress reporting.
+    all between its model line and its last one. The step's progress
+    reporting is built on these callbacks (#679).
+
+12. **Two keyword updates on one index can lose a document's body.**
+    Read from the code, not measured. `reindexCollection` (`store.ts`)
+    runs statement by statement with no transaction around a file: it
+    inserts the file's `content` row, then the `documents` row naming
+    it. And every pass ends with `cleanupOrphanedContent`, which deletes
+    every `content` row no `documents` row names. A second update
+    finishing between the first one's two statements deletes a body the
+    first is about to point at, leaving a document with no content —
+    and since the next update finds its hash unchanged, nothing repairs
+    it. Scoped updates on different collections still share the
+    `content` table, so scoping does not help. The per-source steps
+    therefore hold the runner's one-slot `qmd_keyword` lock, and so does
+    `qmd_aggregator`, which registers collections too: registering
+    through the SDK rewrites `index.yml` whole, and two of those at once
+    would lose one's collection.
 
 One more, about our side rather than qmd's: `QmdDaemon`
 (`unified_index/src/qmd/daemon.rs`) respawns `qmd mcp` whenever
@@ -182,37 +191,28 @@ reloads the model. Whether a live `qmd mcp` sees rows committed after
 it started (WAL says yes; whether qmd caches a document list is the
 question) was not measured.
 
-## What was tried with these, and where it stands
+## What the shipped steps do with these
 
-PR #456 built per-source `<g>/qmd_embed` steps on top of findings 3–7:
-a loop over `qmd embed -c <g> --timeout 0` that re-reads pending
-between invocations rather than trusting the exit code, a `lock` key
-in the runner so two embeds never overlap, and a per-collection gauge
-polled from qmd's SQLite for progress. A first cut also made the
-keyword index per source by writing qmd's tables from Rust (finding 2);
-that worked and was backed out as a third of the change. The PR was
-closed unmerged as larger than the ask deserved; issue #468 is the
-decision record — what was built, what still bothered, and the options
-(trim and merge; a per-source `embed` flag on the one global step; ask
-upstream for `status -c` and `embed --json`). The branch
-`claude/per-source-indexing-embeddings-735411` has the code.
+`qmd_aggregator` keeps the collection set to the sources it reads and
+indexes nothing. Each source has a `keyword_index` step (registers its
+own collection, then `update({collections:[g]})`, finding 1) and an
+`embed` step (embedding scoped to `g`), both driven through
+`qmd_indexer/src/js/qmd_sdk.mjs` and kept apart by the runner's
+one-slot `qmd_keyword` and `qmd_embed` locks
+(`dag/src/supervisor/locks.rs`; findings 5 and 12). Each step is its
+own process, so each pays finding 8's model load; that is the price of
+per-source steps over one loop calling `embed({collection})`.
 
-Findings 1, 10 and 11 move that ground, and #468 should be read with
-them in hand:
+Finding 6 is fixed rather than looped around: the script calls
+`generateEmbeddings` with `maxDurationMs: 0`. Calling `store.embed()`
+until it embeds nothing would never end on a document with a chunk that
+always fails, because `removeIncompleteEmbeddings` drops that
+document's good chunks at the end of each pass.
 
-- **`embed --json` is already there**, as `onProgress` (finding 11).
-  The ~500 lines of embed loop that #468 attributes to qmd's exit-code
-  behaviour, and the per-collection gauge polled from qmd's SQLite,
-  both answer to that callback instead.
-- **The keyword index can be per source without writing qmd's tables**
-  (finding 1). That is the third of the change that was backed out.
-- **A loop over collections need not pay finding 8's model load per
-  collection**, as long as it is one process calling
-  `embed({collection})` repeatedly rather than one process per
-  collection. Per-source *DAG steps* do not get this — they are
-  separate processes, and by finding 5 they still need the runner's
-  `lock`. That asymmetry is the argument for #468's option B over its
-  option A, and it is new.
+The alternative that was built and closed unmerged — a loop over `qmd
+embed -c <g>` re-reading pending between calls, and a Rust writer for
+qmd's tables (finding 2) — is PR #456, with the decision record in
+issue #468.
 
 ## Re-running the measurements
 

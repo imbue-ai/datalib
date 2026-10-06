@@ -113,11 +113,26 @@ impl SourceType {
                 | SourceType::Chatgpt
                 | SourceType::Claude
                 | SourceType::Email
+                | SourceType::Garmin
                 | SourceType::Github
                 | SourceType::Gitlab
                 | SourceType::Notion
                 | SourceType::Slack
         )
+    }
+
+    /// The raw table whose rows are this source's items, for a type
+    /// that renders no documents to count them in. The storage report
+    /// already counts every table, so the number costs nothing. `None`
+    /// for a type whose documents count their own items.
+    pub const fn item_table(self) -> Option<&'static str> {
+        match self {
+            SourceType::Fsindex => Some("files"),
+            SourceType::Media => Some("media_files"),
+            SourceType::Lightroom => Some("Adobe_images"),
+            SourceType::ApplePhotos => Some("ZASSET"),
+            _ => None,
+        }
     }
 
     /// The known types, sorted, for an error message.

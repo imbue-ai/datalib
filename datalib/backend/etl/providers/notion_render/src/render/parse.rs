@@ -65,7 +65,7 @@ pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedNotion> {
     }
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let Some(db) = RawDb::open_reader_at(&db_path, range.pin).await? else {
+            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
                 return Ok(ParsedNotion::default());
             };
             let parsed = load(&db, range).await;
@@ -76,7 +76,7 @@ pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedNotion> {
 }
 
 async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
-    let pin = db.pin().expect("open_reader_at returns a pinned handle");
+    let pin = db.pin().expect("open_reader returns a pinned handle");
     let changed = changed_rows(db.pool(), range, pin, &TABLES).await?;
 
     let user_names = db.load_user_names().await?;
@@ -121,21 +121,15 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
             refs_by_page.entry(a.page_id).or_default().push(a.ref_id);
         }
     }
-    let mut blobs_by_page: HashMap<String, BlobBundle> = HashMap::new();
-    for (page_id, refs) in refs_by_page {
-        let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
-        let bundle = BlobBundle::load(
-            db.pool(),
-            db.cas().pool(),
-            ATTACHMENTS_PROJECTION_SQL,
-            &refs,
-        )
-        .await
-        .with_context(|| format!("load attachments of page {page_id}"))?;
-        if !bundle.is_empty() {
-            blobs_by_page.insert(page_id, bundle);
-        }
-    }
+    let mut blobs_by_page = BlobBundle::load_many(
+        db.pool(),
+        db.cas().pool(),
+        ATTACHMENTS_PROJECTION_SQL,
+        refs_by_page,
+    )
+    .await
+    .context("load attachments")?;
+    blobs_by_page.retain(|_, bundle| !bundle.is_empty());
 
     Ok(ParsedNotion {
         pages,
@@ -230,7 +224,7 @@ const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT ref_id, blake3,
            NULL AS content_type,
            NULL AS upstream_name
-      FROM pinned_notion_attachments notion_attachments
+      FROM notion_attachments
      WHERE ref_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 #[cfg(test)]
@@ -239,6 +233,17 @@ mod tests {
     use datalib_etl_notion::ingest::db::{PageMarkdownUpsert, PageUpsert};
     use datalib_etl_notion::ingest::RawDb;
     use serde_json::json;
+
+    /// Seals the fixture before render reads it, exactly as the download
+    /// step does: render pins HEAD, so an uncommitted row is invisible to
+    /// it, and a test that skipped this would assert against the working
+    /// set. Closed, not dropped: `parse_api_dir` reopens the store.
+    async fn seal_and_close(db: RawDb) {
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "test fixture")
+            .await
+            .unwrap();
+        db.close().await;
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn parse_round_trips_pages_and_bodies() {
@@ -260,15 +265,7 @@ mod tests {
         }])
         .await
         .unwrap();
-        // Sealed before render reads it, exactly as the download step does:
-        // render pins HEAD, so an uncommitted row is invisible to it. Without
-        // this the test asserts against the working set, which is the bug the
-        // pinning work exists to remove.
-        datalib_etl::doltlite_raw::commit_run(db.pool(), "test fixture")
-            .await
-            .unwrap();
-        // Closed, not dropped: `parse_api_dir` reopens this store.
-        db.close().await;
+        seal_and_close(db).await;
 
         let parsed = parse_api_dir(&db_file, RawRange::cold()).unwrap();
         assert_eq!(parsed.pages.len(), 1);
@@ -292,15 +289,7 @@ mod tests {
         }])
         .await
         .unwrap();
-        // Sealed before render reads it, exactly as the download step does:
-        // render pins HEAD, so an uncommitted row is invisible to it. Without
-        // this the test asserts against the working set, which is the bug the
-        // pinning work exists to remove.
-        datalib_etl::doltlite_raw::commit_run(db.pool(), "test fixture")
-            .await
-            .unwrap();
-        // Closed, not dropped: `parse_api_dir` reopens this store.
-        db.close().await;
+        seal_and_close(db).await;
         let parsed = parse_api_dir(&db_file, RawRange::cold()).unwrap();
         assert_eq!(parsed.pages.len(), 1);
         assert!(parsed.markdown_by_page.is_empty());

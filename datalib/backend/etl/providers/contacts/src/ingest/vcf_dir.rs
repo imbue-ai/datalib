@@ -1,6 +1,6 @@
 //! Local-filesystem vCard ingest.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -11,16 +11,17 @@ use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 
-use super::api::{vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
+use super::api::{split_vcards, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
 use super::db::{addressbook_pk, RawDb};
-use super::schema_raw::{synthesized_name_uid, ContactRow};
+use super::schema_raw::{synthesized_name_uid_nth, ContactRow};
 
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     pub input_path: PathBuf,
     /// Host-wide fingerprint cache — the shared answer to "did this
@@ -37,8 +38,11 @@ pub struct FetchSummary {
     pub addressbooks: usize,
     pub contacts_new: usize,
     pub contacts_updated: usize,
-    /// Contacts a re-read `.vcf` file no longer carried, dropped.
+    /// Contacts dropped: those a re-read `.vcf` file no longer carried, and
+    /// every contact of a file that is gone.
     pub contacts_deleted: usize,
+    /// `.vcf` files that are gone, their address books with them.
+    pub files_removed: usize,
     /// `.vcf` files whose contents matched the resume cursor and were
     /// skipped without re-parsing.
     pub files_skipped: usize,
@@ -48,9 +52,14 @@ pub struct FetchSummary {
 /// `file_checkpoint` scope for the local-`.vcf` resume cursor. One
 /// contacts DB serves one source, so a single feed name suffices; each
 /// `.vcf` file is namespaced by its canonical path within the scope.
-const CHECKPOINT_SCOPE: &str = "carddav/vcf";
+const CHECKPOINT_SCOPE: &str = "contacts/vcf";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_folder(opts, found)).await
+}
+
+async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let account_id = opts
@@ -76,7 +85,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     summary.errors += scan.errors.len();
     for e in &scan.errors {
-        warn!(event = "carddav_vcf_walk_error", path = %e.path.display(), error = %e.error, "an entry of the vcf directory could not be walked");
+        warn!(event = "contacts_vcf_walk_error", path = %e.path.display(), error = %e.error, "an entry of the vcf directory could not be walked");
     }
 
     let prev = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
@@ -85,34 +94,44 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.progress.set_length(Some(scan.files.len() as u64));
     opts.progress.inc(changes.unchanged as u64);
 
-    for f in changes.needs_reading() {
+    let mut read: BTreeSet<&str> = BTreeSet::new();
+    found.extend(scan.walk_problems());
+    for f in changes.needs_reading_by_path() {
         opts.progress
             .set_message(&format!("ingesting {}", f.path.display()));
-        match ingest_one(&db, &opts.input_path, &f.path, &account_id, &mut summary).await {
+        match ingest_one(
+            &db,
+            &scan.given_resolved,
+            &f.path,
+            &account_id,
+            &mut summary,
+        )
+        .await
+        {
             Ok(()) => {
                 // Stamp only after a clean ingest, so a crash mid-file
                 // leaves no cursor and the next run re-ingests it.
                 file_checkpoint::record_file_pool(db.pool(), CHECKPOINT_SCOPE, f).await?;
+                read.insert(f.rel.as_str());
             }
+            // Not stamped, so the next run reads it again.
             Err(e) => {
                 summary.errors += 1;
-                warn!(
-                    event = "carddav_vcf_ingest_failed",
-                    path = %f.path.display(),
-                    error = %e,
-                    "a vcf file could not be ingested"
-                );
+                found.listing(&format!("vcf {}", f.rel), format!("{e:#}"));
             }
         }
         opts.progress.inc(1);
     }
 
-    // Through the handle's own CAS, so nothing here opens a second
-    // store. `None` is a reader, which never reaches this path.
-    if let Some(cas) = db.cas() {
-        if let Err(e) = super::photos::lift_photos_to_cas(&db, cas).await {
-            warn!(event = "carddav_vcf_photo_lift_failed", error = %e, "a photo could not be lifted out of its vCard");
-        }
+    // A `.vcf` file is a whole address book, so a file that is gone takes
+    // its address book with it.
+    for rel in changes.gone_by_path(&read) {
+        let href = relative_href(&scan.given_resolved, &scan.root.join(rel));
+        let book_id = addressbook_pk(&account_id, &href);
+        summary.contacts_deleted += db
+            .delete_file_addressbook(&book_id, CHECKPOINT_SCOPE, rel)
+            .await?;
+        summary.files_removed += 1;
     }
     Ok(summary)
 }
@@ -135,10 +154,9 @@ async fn ingest_one(
     let existing = db.contact_uids(&book_id).await?;
     let mut seen: HashSet<String> = HashSet::new();
     let mut rows: Vec<ContactRow> = Vec::new();
-    // Synthesized name-based ids seen so far in *this* file, mapped to a
-    // human label, so we can warn when two distinct cards collapse onto
-    // the same id (e.g. two people named "John Smith").
-    let mut synth_seen: HashMap<String, String> = HashMap::new();
+    // How many cards of each synthesized name this file has had so far,
+    // so a second "John Smith" gets an id of his own.
+    let mut synth_seen: HashMap<String, usize> = HashMap::new();
     for (idx, block) in split_vcards(&body).into_iter().enumerate() {
         let href = if idx == 0 {
             book_href.clone()
@@ -178,7 +196,7 @@ fn contact_uid(
     label: &str,
     idx: usize,
     block: &str,
-    synth_seen: &mut HashMap<String, String>,
+    synth_seen: &mut HashMap<String, usize>,
 ) -> String {
     if let Some(uid) = vcard_uid(block) {
         return uid;
@@ -190,7 +208,7 @@ fn contact_uid(
         .unwrap_or_default();
     if given.trim().is_empty() && family.trim().is_empty() {
         warn!(
-            event = "carddav_vcf_nameless_contact",
+            event = "contacts_vcf_nameless_contact",
             path = %file.display(),
             index = idx,
             "vCard has no UID and no name; keying on file position — \
@@ -198,21 +216,11 @@ fn contact_uid(
         );
         return format!("{label}:{}:{idx}", file_stem_or_anon(file));
     }
-    let uid = synthesized_name_uid(&given, &family);
-    let display_name =
-        vcard_fn(block).unwrap_or_else(|| format!("{given} {family}").trim().to_string());
-    if let Some(prev) = synth_seen.insert(uid.clone(), display_name.clone()) {
-        warn!(
-            event = "carddav_vcf_synth_uid_collision",
-            path = %file.display(),
-            uid = %uid,
-            name = %display_name,
-            collides_with = %prev,
-            "two vCards share a first+last name and collapse onto one \
-             synthesized id; one will overwrite the other",
-        );
-    }
-    uid
+    let nth = synth_seen
+        .entry(synthesized_name_uid_nth(&given, &family, 1))
+        .or_insert(0);
+    *nth += 1;
+    synthesized_name_uid_nth(&given, &family, *nth)
 }
 
 fn addressbook_label(path: &Path) -> String {
@@ -240,31 +248,8 @@ fn relative_href(root: &Path, file: &Path) -> String {
         })
 }
 
-fn split_vcards(body: &str) -> Vec<String> {
-    let normalized = body.replace("\r\n", "\n").replace('\r', "\n");
-    let mut out: Vec<String> = Vec::new();
-    let mut current: Option<String> = None;
-    for line in normalized.lines() {
-        let trimmed = line.trim();
-        if trimmed.eq_ignore_ascii_case("BEGIN:VCARD") {
-            current = Some(String::new());
-        }
-        if let Some(buf) = current.as_mut() {
-            buf.push_str(line);
-            buf.push('\n');
-        }
-        if trimmed.eq_ignore_ascii_case("END:VCARD") {
-            if let Some(buf) = current.take() {
-                out.push(buf);
-            }
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::db::db_path_for;
     use super::*;
 
     /// A fingerprint cache in a throwaway directory, so no test ever
@@ -279,55 +264,22 @@ mod tests {
             .unwrap()
     }
 
-    // Production shape: the processor passes the per-source *directory* as
-    // `db_path`. The inline-photo CAS must land beside that source's entity
-    // db, not one level up in the shared `raw/` root — passing the bare dir
-    // to `cas_path_for`, which derives the sibling via `.parent()`, leaks
-    // the store to `raw/blobs.doltlite_db`.
-    #[tokio::test]
-    async fn inline_photo_cas_lands_in_per_source_dir_not_parent() {
-        // The shared raw root and the per-source dir within it.
-        let raw_root = tempfile::tempdir().unwrap();
-        let source_dir = raw_root.path().join("fastmail_contacts");
-        std::fs::create_dir_all(&source_dir).unwrap();
-
-        // A Google/Fastmail-style export dir with one inline-photo vCard
-        // (Picard's comm-badge mugshot, the PNG from the photo-decode test).
-        let export = tempfile::tempdir().unwrap();
-        let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=";
-        std::fs::write(
-            export.path().join("Bridge.vcf"),
-            format!(
-                "BEGIN:VCARD\nVERSION:3.0\nUID:picard\nFN:Jean-Luc Picard\n\
-                 PHOTO;ENCODING=b;TYPE=PNG:{png_b64}\nEND:VCARD\n"
-            ),
-        )
-        .unwrap();
-
-        // Open the db where the processor would: the entity db inside the dir.
-        let entity_db = db_path_for(&source_dir);
-        let db = RawDb::open(&entity_db).await.unwrap();
-        let summary = fetch(FetchOptions {
+    fn options(db: &RawDb, input: &Path, cache: FingerprintCache) -> FetchOptions {
+        FetchOptions {
             db: db.clone(),
-            input_path: export.path().to_path_buf(),
-            cache: test_cache().await,
+            input_path: input.to_path_buf(),
+            cache,
             account_id_override: None,
             progress: Progress::default(),
             control: DownloadControl::default(),
-        })
-        .await
-        .unwrap();
-        assert_eq!(summary.contacts_new, 1);
+        }
+    }
 
-        assert!(
-            source_dir.join("blobs.doltlite_db").exists(),
-            "photo CAS must sit beside entities.doltlite_db in the source dir",
-        );
-        assert!(
-            !raw_root.path().join("blobs.doltlite_db").exists(),
-            "photo CAS must not leak into the shared raw/ parent",
-        );
-        db.close().await;
+    async fn contact_count(db: &RawDb) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
+            .fetch_one(db.pool())
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -342,23 +294,13 @@ mod tests {
         let db_path = dir.path().join("c.doltlite_db");
         let cache = test_cache().await;
         let db = RawDb::open(&db_path).await.unwrap();
-        let opts = || FetchOptions {
-            db: db.clone(),
-            input_path: dir.path().to_path_buf(),
-            cache: cache.clone(),
-            account_id_override: None,
-            progress: Progress::default(),
-            control: DownloadControl::default(),
-        };
+        let opts = || options(&db, dir.path(), cache.clone());
         let summary = fetch(opts()).await.unwrap();
         assert_eq!(summary.contacts_new, 2);
         assert_eq!(summary.addressbooks, 1);
         assert_eq!(summary.files_skipped, 0);
 
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
+        let n = contact_count(&db).await;
         assert_eq!(n, 2);
 
         // Second run over the unchanged file skips it via the resume
@@ -382,14 +324,7 @@ mod tests {
         let db_path = dir.path().join("c.doltlite_db");
         let cache = test_cache().await;
         let db = RawDb::open(&db_path).await.unwrap();
-        let opts = || FetchOptions {
-            db: db.clone(),
-            input_path: dir.path().to_path_buf(),
-            cache: cache.clone(),
-            account_id_override: None,
-            progress: Progress::default(),
-            control: DownloadControl::default(),
-        };
+        let opts = || options(&db, dir.path(), cache.clone());
         let first = fetch(opts()).await.unwrap();
         assert_eq!(first.contacts_new, 1);
 
@@ -425,6 +360,125 @@ mod tests {
         db.close().await;
     }
 
+    const BRIDGE: &str = "BEGIN:VCARD\nVERSION:3.0\nUID:picard\nFN:Jean-Luc Picard\nEND:VCARD\n";
+    const BORG: &str = "BEGIN:VCARD\nVERSION:3.0\nUID:locutus\nFN:Locutus\nEND:VCARD\n\
+         BEGIN:VCARD\nVERSION:3.0\nUID:hugh\nFN:Hugh\nEND:VCARD\n";
+
+    async fn uids(db: &RawDb) -> Vec<String> {
+        sqlx::query_scalar("SELECT uid FROM contacts ORDER BY uid")
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+    }
+
+    async fn addressbook_hrefs(db: &RawDb) -> Vec<String> {
+        sqlx::query_scalar("SELECT href FROM addressbooks ORDER BY href")
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+    }
+
+    /// #898: deleting a whole `.vcf` file left its contacts in the store.
+    #[tokio::test]
+    async fn a_deleted_file_takes_its_contacts_with_it() {
+        let input = tempfile::tempdir().unwrap();
+        std::fs::write(input.path().join("Bridge.vcf"), BRIDGE).unwrap();
+        std::fs::write(input.path().join("Borg.vcf"), BORG).unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&store.path().join("c.doltlite_db"))
+            .await
+            .unwrap();
+        let cache = test_cache().await;
+        let opts = || options(&db, input.path(), cache.clone());
+        fetch(opts()).await.unwrap();
+        assert_eq!(uids(&db).await, vec!["hugh", "locutus", "picard"]);
+
+        std::fs::remove_file(input.path().join("Borg.vcf")).unwrap();
+        let second = fetch(opts()).await.unwrap();
+        assert_eq!(second.contacts_deleted, 2);
+        assert_eq!(second.files_removed, 1);
+        assert_eq!(uids(&db).await, vec!["picard"]);
+        assert_eq!(addressbook_hrefs(&db).await, vec!["Bridge.vcf"]);
+
+        // The file's cursor entry went with it, so it is not removed twice.
+        let third = fetch(opts()).await.unwrap();
+        assert_eq!(third.files_removed, 0);
+        assert_eq!(third.files_skipped, 1);
+        db.close().await;
+    }
+
+    /// A moved file is an address book at its new path, and none at the old
+    /// — reached through a symlink, because keying against the unresolved
+    /// input once gave `Borg.vcf` and `unimatrix/Borg.vcf` one key, and the
+    /// move deleted what it had just written.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_moved_file_keeps_its_contacts_under_the_new_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let input = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &input).unwrap();
+        std::fs::write(real.join("Borg.vcf"), BORG).unwrap();
+        let db = RawDb::open(&tmp.path().join("c.doltlite_db"))
+            .await
+            .unwrap();
+        let cache = test_cache().await;
+        let opts = || options(&db, &input, cache.clone());
+        fetch(opts()).await.unwrap();
+
+        std::fs::create_dir(real.join("unimatrix")).unwrap();
+        std::fs::rename(real.join("Borg.vcf"), real.join("unimatrix/Borg.vcf")).unwrap();
+        fetch(opts()).await.unwrap();
+        assert_eq!(uids(&db).await, vec!["hugh", "locutus"]);
+        assert_eq!(addressbook_hrefs(&db).await, vec!["unimatrix/Borg.vcf"]);
+        db.close().await;
+    }
+
+    /// A walk that could not read an entry cannot tell a deleted file from
+    /// one it failed to see, so nothing is deleted and the run says why.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_walk_error_deletes_nothing() {
+        let input = tempfile::tempdir().unwrap();
+        std::fs::write(input.path().join("Bridge.vcf"), BRIDGE).unwrap();
+        std::fs::write(input.path().join("Borg.vcf"), BORG).unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&store.path().join("c.doltlite_db"))
+            .await
+            .unwrap();
+        let cache = test_cache().await;
+        let opts = || options(&db, input.path(), cache.clone());
+        fetch(opts()).await.unwrap();
+
+        std::fs::remove_file(input.path().join("Borg.vcf")).unwrap();
+        std::os::unix::fs::symlink(
+            input.path().join("nowhere"),
+            input.path().join("Dangling.vcf"),
+        )
+        .unwrap();
+        let second = fetch(opts()).await.unwrap();
+        assert_eq!(second.contacts_deleted, 0);
+        assert_eq!(uids(&db).await, vec!["hugh", "locutus", "picard"]);
+        let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(problems, vec!["listing:files"]);
+
+        // Once the walk completes, the deletion happens and the problem clears.
+        std::fs::remove_file(input.path().join("Dangling.vcf")).unwrap();
+        let third = fetch(opts()).await.unwrap();
+        assert_eq!(third.contacts_deleted, 2);
+        assert_eq!(uids(&db).await, vec!["picard"]);
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM problems")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(left, 0);
+        db.close().await;
+    }
+
     // Google's vCard export carries no `UID:` — identity rides the
     // first+last name instead. An edit to a *non-name* field must keep
     // the same row (the ship-of-Theseus property the synthesized id
@@ -441,14 +495,7 @@ mod tests {
         let db_path = dir.path().join("c.doltlite_db");
         let cache = test_cache().await;
         let db = RawDb::open(&db_path).await.unwrap();
-        let opts = || FetchOptions {
-            db: db.clone(),
-            input_path: dir.path().to_path_buf(),
-            cache: cache.clone(),
-            account_id_override: None,
-            progress: Progress::default(),
-            control: DownloadControl::default(),
-        };
+        let opts = || options(&db, dir.path(), cache.clone());
         let first = fetch(opts()).await.unwrap();
         assert_eq!(first.contacts_new, 1);
 
@@ -465,19 +512,15 @@ mod tests {
         assert_eq!(second.contacts_new, 0);
         assert_eq!(second.contacts_updated, 1);
 
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
+        let n = contact_count(&db).await;
         assert_eq!(n, 1, "edited contact stayed one row, not two");
         db.close().await;
     }
 
-    // Two UID-less cards sharing a first+last name collapse onto one
-    // synthesized id (the documented collision). We don't lose the file,
-    // but the rows merge — assert the collapse so the behavior is pinned.
+    /// Two UID-less cards sharing a first+last name used to collapse onto
+    /// one synthesized id, and one of the two people was lost.
     #[tokio::test]
-    async fn same_name_uidless_cards_collapse_to_one_row() {
+    async fn same_name_uidless_cards_stay_two_rows() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("Google.vcf"),
@@ -487,23 +530,41 @@ mod tests {
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
         let db = RawDb::open(&db_path).await.unwrap();
-        let summary = fetch(FetchOptions {
-            db: db.clone(),
-            input_path: dir.path().to_path_buf(),
-            cache: test_cache().await,
-            account_id_override: None,
-            progress: Progress::default(),
-            control: DownloadControl::default(),
-        })
-        .await
-        .unwrap();
-        assert_eq!(summary.addressbooks, 1);
-
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
-            .fetch_one(db.pool())
+        let summary = fetch(options(&db, dir.path(), test_cache().await))
             .await
             .unwrap();
-        assert_eq!(n, 1, "same-name cards share a synthesized id");
+        assert_eq!(summary.addressbooks, 1);
+
+        let n = contact_count(&db).await;
+        assert_eq!(n, 2, "same-name cards are two people");
+        db.close().await;
+    }
+
+    /// A file that will not read is a row, and is read again next run.
+    #[tokio::test]
+    async fn a_file_that_will_not_read_is_a_row() {
+        let input = tempfile::tempdir().unwrap();
+        let path = input.path().join("Borg.vcf");
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&store.path().join("c.doltlite_db"))
+            .await
+            .unwrap();
+        let cache = test_cache().await;
+        let opts = || options(&db, input.path(), cache.clone());
+        fetch(opts()).await.unwrap();
+        let problems = || async {
+            sqlx::query_scalar::<_, String>("SELECT scope_key FROM problems")
+                .fetch_all(db.pool())
+                .await
+                .unwrap()
+        };
+        assert_eq!(problems().await, vec!["listing:vcf Borg.vcf"]);
+
+        std::fs::write(&path, BORG).unwrap();
+        fetch(opts()).await.unwrap();
+        assert!(problems().await.is_empty());
+        assert_eq!(uids(&db).await, vec!["hugh", "locutus"]);
         db.close().await;
     }
 
@@ -520,22 +581,12 @@ mod tests {
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
         let db = RawDb::open(&db_path).await.unwrap();
-        let summary = fetch(FetchOptions {
-            db: db.clone(),
-            input_path: dir.path().to_path_buf(),
-            cache: test_cache().await,
-            account_id_override: None,
-            progress: Progress::default(),
-            control: DownloadControl::default(),
-        })
-        .await
-        .unwrap();
-        assert_eq!(summary.contacts_new, 2);
-
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
-            .fetch_one(db.pool())
+        let summary = fetch(options(&db, dir.path(), test_cache().await))
             .await
             .unwrap();
+        assert_eq!(summary.contacts_new, 2);
+
+        let n = contact_count(&db).await;
         assert_eq!(n, 2, "two nameless cards stayed distinct rows");
         db.close().await;
     }

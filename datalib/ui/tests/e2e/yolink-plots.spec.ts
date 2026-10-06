@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { clickRowByUuid } from "./grid-helpers";
+import { GRID, clickRowByUuid, docBody } from "./grid-helpers";
 
 // The yolink page is the only rendered document in the tree whose body
 // is mostly `<iframe>`s. That makes it the only coverage for a seam
@@ -82,14 +82,17 @@ test("the yolink page's plot iframes resolve to backend asset URLs", async ({ pa
   expect(pageRow, "the TNG fixture must contain the yolink page row").toBeTruthy();
   const mdUuid = pageRow!.markdown_uuid ?? pageRow!.uuid;
 
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 15_000 });
   await clickRowByUuid(page, pageRow!.uuid);
 
   // One iframe per physical quantity the fixture covers, each pointing
   // at the asset route rather than at the renderer's relative path.
+  // Inside the document's own frame, which frames the plot pages.
   const plotIframe = (quantity: string) =>
-    page.locator(`iframe[src="/applet/unified_index/asset/${mdUuid}/plots/${quantity}.html"]`);
+    docBody(page).locator(
+      `iframe[src="/applet/unified_index/asset/${mdUuid}/plots/${quantity}.html"]`,
+    );
   for (const quantity of ["temperature", "humidity", "volume"]) {
     await expect(
       plotIframe(quantity),
@@ -97,7 +100,7 @@ test("the yolink page's plot iframes resolve to backend asset URLs", async ({ pa
     ).toHaveCount(1);
   }
   // No un-rewritten relative src survived.
-  await expect(page.locator('iframe[src^="plots/"]')).toHaveCount(0);
+  await expect(docBody(page).locator('iframe[src^="plots/"]')).toHaveCount(0);
 
   // The frame really loaded the generated page — not a 404, not an
   // error document.

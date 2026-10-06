@@ -23,13 +23,13 @@ rust_library(
     ],
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/etl/agent_sessions:datalib_etl_agent_sessions",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/claude_code_config:datalib_etl_claude_code_config",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:tracing",
     ],
 )
 

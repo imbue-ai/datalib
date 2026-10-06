@@ -7,17 +7,82 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::db::ChatMeta;
+use crate::group::{Grouping, Within};
+use crate::problems::ProblemsQuery;
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
+use crate::sort::Sort;
 use datalib_core::repo::RepoError;
 use datalib_schema::edges::EdgeRow;
-use datalib_schema::problems::ProblemRow;
+use datalib_schema::problems::{ProblemRow, ProblemRowColumn};
+
+/// Which rows a search holds, in order, and the commit they were read at
+/// (`None` for a root with no index yet).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Listing {
+    pub uuids: Vec<String>,
+    pub at: Option<String>,
+}
+
+/// A problem and the document it is about: its scope's, when that is a
+/// document, else the document its item is a row of. `None` when it has
+/// neither.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocatedProblem {
+    pub row: ProblemRow,
+    pub markdown_uuid: Option<String>,
+}
 
 /// Reads of the grid index: `grid_rows`, `markdowns`, `edges`.
 #[async_trait]
 pub trait IndexRepo: Send + Sync {
-    async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError>;
+    /// The commit the index is at now, or `None` when it has none yet.
+    async fn head(&self) -> Result<Option<String>, RepoError>;
+
+    /// Every row `query`'s structured terms match, in the group `within`
+    /// names (all of them, for an empty path), as uuids in `sort`'s order,
+    /// or newest first with none. Its free text is qmd's; nothing here
+    /// reads it.
+    async fn ordered_uuids(
+        &self,
+        query: &ParsedQuery,
+        sort: &[Sort],
+        within: &[Within],
+    ) -> Result<Listing, RepoError>;
+
+    /// The rows behind `uuids`, qmd's ranking, that `query`'s structured
+    /// terms match: in `uuids`' order, or `sort`'s when given. A score
+    /// sort is the ranking's own order, reversed for ascending.
+    async fn filter_uuids(
+        &self,
+        query: &ParsedQuery,
+        uuids: &[String],
+        sort: &[Sort],
+        within: &[Within],
+    ) -> Result<Listing, RepoError>;
+
+    /// The groups the rows `query`'s structured terms match fall into, by
+    /// the `grid_rows` columns `by`, and among `among` alone when given
+    /// (qmd's ranking, for free text).
+    async fn group_counts(
+        &self,
+        query: &ParsedQuery,
+        by: &[datalib_schema::grid_rows::GridRowColumn],
+        among: Option<&[String]>,
+    ) -> Result<Grouping, RepoError>;
+
+    /// The rows `uuids` name, in that order; one the index no longer has is
+    /// left out.
+    async fn rows_by_uuids(&self, uuids: &[String]) -> Result<Vec<SearchRow>, RepoError>;
+
+    /// The first `limit` rows `query`'s structured terms match, newest
+    /// first.
+    async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError> {
+        let listing = self.ordered_uuids(query, &[], &[]).await?;
+        let page = &listing.uuids[..limit.min(listing.uuids.len())];
+        self.rows_by_uuids(page).await
+    }
 
     /// Fetch the per-markdown header data (title, account, channel, …)
     /// for the chat preview pane. Returns `Ok(None)` when no row
@@ -48,16 +113,17 @@ pub trait IndexRepo: Send + Sync {
 
     async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError>;
 
-    /// Same shape as [`search`](Self::search), but with a caller-supplied
-    /// ranked uuid list (output of `GridIndex::rows_for_hits`). The free-text
-    /// portion of `q` is ignored — qmd has already done that work. Structured
-    /// filters and date ranges still apply. Output preserves the input order.
-    async fn search_by_uuids(
+    /// Every row that is a whole document, with just what the embedding
+    /// map shows of it. Empty for a root with no index yet.
+    async fn document_rows(&self) -> Result<Vec<MapDocRow>, RepoError>;
+
+    /// The documents a query's structured terms match: the distinct
+    /// `markdown_uuid` behind every matching row, a message's as much as
+    /// a document's. Free text is left out — qmd answers that.
+    async fn matching_documents(
         &self,
         q: &ParsedQuery,
-        uuids: &[String],
-        limit: usize,
-    ) -> Result<Vec<SearchRow>, RepoError>;
+    ) -> Result<std::collections::HashSet<String>, RepoError>;
 
     /// List outgoing edges originating from `markdown_uuid`. Each
     /// returned [`EdgeRowOut`] pairs the raw edge with whatever
@@ -70,6 +136,16 @@ pub trait IndexRepo: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Every source's account of whoever holds each of `handles`, one
+    /// row per document that mentioned them; `people::merge_and_rank`
+    /// makes them one account per source.
+    async fn people_for_handles(
+        &self,
+        _handles: &[String],
+    ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
+        Ok(Vec::new())
+    }
+
     /// List rendered documents (the `markdowns` table), newest first,
     /// for the document-picker card. Returns an empty Vec for an empty
     /// or missing store — like [`grid_row_refs`](Self::grid_row_refs),
@@ -78,15 +154,31 @@ pub trait IndexRepo: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// The index's `problems` matching a parsed query, newest last-seen
-    /// first. Empty for a root with no index, or an index built before
-    /// the table existed.
-    async fn problems(
+    /// Every problem `query` matches, in the group `within` names, as
+    /// their ids in `sort`'s order, or the table's own (last seen first).
+    /// Empty for a root with no index, or an index without the table.
+    async fn problem_keys(
         &self,
-        _query: &crate::problems::ProblemsQuery,
-        _limit: usize,
-    ) -> Result<Vec<ProblemRow>, RepoError> {
+        _query: &ProblemsQuery,
+        _sort: &[Sort<ProblemRowColumn>],
+        _within: &[Within<ProblemRowColumn>],
+    ) -> Result<Listing, RepoError> {
+        Ok(Listing::default())
+    }
+
+    /// The problems `keys` name, in that order; one the index no longer
+    /// has is left out.
+    async fn problems_by_keys(&self, _keys: &[String]) -> Result<Vec<LocatedProblem>, RepoError> {
         Ok(Vec::new())
+    }
+
+    /// The groups the problems `query` matches fall into, by `by`.
+    async fn problem_groups(
+        &self,
+        _query: &ProblemsQuery,
+        _by: &[ProblemRowColumn],
+    ) -> Result<Grouping<LocatedProblem>, RepoError> {
+        Ok(Grouping::default())
     }
 
     /// The problems on one document: the markdown-scoped rows keyed on
@@ -124,6 +216,24 @@ pub struct DocRow {
     pub kind: String,
     pub provider: String,
     pub created_at: Option<String>,
+}
+
+/// One document row as the embedding map draws it: the point's
+/// identity, its label, and what it can be coloured by.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MapDocRow {
+    pub markdown_uuid: String,
+    /// Data-root-relative; what the map's points are keyed by.
+    pub qmd_path: String,
+    pub title: String,
+    pub provider: String,
+    /// The provider's human label ("Slack"), as the grid's `source`.
+    pub source_label: String,
+    pub source_id: String,
+    pub kind: String,
+    pub created_at: Option<String>,
+    pub account: String,
+    pub channel: String,
 }
 
 /// Convenience alias for the dyn-dispatched index handle used by HTTP

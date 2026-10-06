@@ -4,3 +4,4 @@
 mod branch_scan;
 mod extract_smoke;
 mod fsindex_tng_e2e;
+mod partial_failures;

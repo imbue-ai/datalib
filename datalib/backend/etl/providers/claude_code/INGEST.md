@@ -67,24 +67,22 @@ nothing — the same call `airvisual` and `fsindex` made):
   writer composes it and the render's diff buckets on it. The payload
   is the line as written, and everything else a reader wants —
   `sessionId`, `type`, `timestamp`, `parentUuid`, `isSidechain` — is
-  read off it (`payload->>'$.type'`); nothing in the tree queries
-  those in SQL, so there is no index over them yet. Add an expression
-  index over `payload->>'$.…'` the first time a query needs one, not a
-  stored copy.
+  read off it (`payload->>'$.type'`). Nothing in the tree queries
+  those in SQL, so there is no index over them; when a query needs one,
+  add an expression index over `payload->>'$.…'`, not a stored copy.
 
 The bookkeeping lines fold into the transcript row and are not rows of
 their own; `attachment` records are counted and dropped. A content
 record with no `uuid` cannot be keyed and is counted as `unkeyed`. A
-line that is not JSON is counted as `malformed` and stepped over — a
-transcript is only ever appended to, so a torn last line is the
-ordinary case for a session that is open right now.
+line that is not JSON is counted as `malformed` and stepped over.
 
 ## Incrementality
 
 `fsscan` over the root for `*.jsonl`, with `file_checkpoint` holding
 each file's hash under the `claude_code/sessions` scope. A file whose
 hash moved is re-read whole and every row upserted; a row whose payload
-did not change is a no-op to doltlite's content-addressed storage, so
+did not change is no change to doltlite
+([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)), so
 `dolt_diff_records` names only the lines that are actually new, and
 render re-draws only the transcripts they belong to. A file the host
 cache can vouch for costs a `stat`.
@@ -93,6 +91,34 @@ cache can vouch for costs a `stat`.
 sessions on its own schedule (`cleanupPeriodDays`), and outliving that
 is half the point of a mirror. A reset (`datalib-dag --reset`) is the
 way to drop them.
+
+## When part of a read fails
+
+What a sync could not read is a `problems` row, and the rest of the
+sync goes on (the shared walk in `datalib_etl_agent_sessions`, which
+`codex` uses too):
+
+- **Lines stepped over inside a file** — not JSON, no `type`, a
+  content record with no `uuid` — are one row for the file, keyed
+  `file:claude_code/sessions:<path>`, saying how many and which came
+  first. The file is stamped, so the row stands until the file changes
+  and is read again, or is gone from a walk that read the whole tree
+  (its stamp goes then too; the rows read from it stay). **The last line is never counted**: a transcript is
+  only ever appended to, so a torn last line is the ordinary case for a
+  session that is open right now, and the read after it is finished
+  keeps it. Bytes that are not UTF-8 are read as U+FFFD and said in the
+  same row, so one stray byte does not cost the whole file.
+- **A file that could not be opened** is `record:transcripts:<path>`.
+  It is left unstamped, so every sync tries it again and the row goes
+  when one reads it. A sync that cannot see the file at all — it is under
+  an entry the walk could not read, or the root is missing — keeps the
+  row, since nothing tried it.
+- **An entry the walk could not read** (a folder it may not list, a
+  dangling link) is `listing:claude_code/sessions`. The walk is
+  repeated every sync, so the row goes with the first clean one.
+- **The root is not a directory**: the sync fails if nothing was ever
+  read from it; otherwise what is stored stands and the root is
+  `listing:claude_code/sessions`.
 
 ## Render
 
@@ -115,9 +141,8 @@ A tool result names only the `tool_use_id` it answers; the tool's name
 comes from the matching call in the same transcript.
 
 A subagent's transcript is its own document, titled
-`<its title> — subagent of <parent title>`. Nothing links the two
-documents yet; an `edges` row from the parent's `Agent` call to the
-subagent document is the obvious next step.
+`<its title> — subagent of <parent title>`. No `edges` row links it to
+the parent's `Agent` call.
 
 The grid's `project` column is the last component of the session's
 `cwd` — what a person would call the project. A session bridged to a

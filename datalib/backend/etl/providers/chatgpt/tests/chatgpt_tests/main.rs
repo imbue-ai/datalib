@@ -10,3 +10,4 @@ mod chatgpt_translate;
 mod incremental_skip;
 mod live;
 mod playback_roundtrip;
+mod run_problems;

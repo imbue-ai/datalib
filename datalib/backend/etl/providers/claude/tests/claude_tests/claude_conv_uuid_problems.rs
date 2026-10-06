@@ -20,6 +20,12 @@ const ORG: &str = "org-a";
 
 fn seed(api: &std::path::Path, playback: &std::path::Path) {
     fs::create_dir_all(api).unwrap();
+    // The account, so the only rows are the ones this test is about.
+    fs::write(
+        api.join("users.json"),
+        serde_json::to_vec_pretty(&json!([{"uuid": "acct-1"}])).unwrap(),
+    )
+    .unwrap();
     fs::write(
         api.join("conversations.json"),
         serde_json::to_vec_pretty(&json!([{

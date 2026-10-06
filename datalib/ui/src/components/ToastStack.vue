@@ -72,25 +72,28 @@ async function copy(id: number, message: string) {
   align-items: flex-start;
   gap: 0.5rem;
   padding: 0.55rem 0.65rem 0.55rem 0.75rem;
-  border-radius: 6px;
+  border-radius: calc(var(--datalib-radius) + 2px);
   border: 1px solid var(--datalib-border);
-  background: var(--datalib-card-bg);
+  background: var(--datalib-bg);
   color: var(--datalib-fg);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
-  font-size: 0.85rem;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  font-family: var(--datalib-font);
+  font-size: var(--datalib-font-size);
   line-height: 1.35;
 }
 .datalib-toast--error {
-  border-color: #c0392b;
-  background: color-mix(in srgb, #c0392b 12%, var(--datalib-card-bg));
+  border-color: var(--datalib-error-border);
+  background: var(--datalib-error-bg);
+  color: var(--datalib-error-fg);
 }
 .datalib-toast--warn {
-  border-color: #b7791f;
-  background: color-mix(in srgb, #b7791f 12%, var(--datalib-card-bg));
+  border-color: var(--datalib-warn-border);
+  background: var(--datalib-warn-bg);
+  color: var(--datalib-warn-fg);
 }
 .datalib-toast--info {
-  border-color: var(--datalib-accent);
-  background: color-mix(in srgb, var(--datalib-accent) 10%, var(--datalib-card-bg));
+  border-color: color-mix(in srgb, var(--datalib-accent) 45%, var(--datalib-border));
+  background: color-mix(in srgb, var(--datalib-accent) 8%, var(--datalib-bg));
 }
 .datalib-toast__msg {
   flex: 1;
@@ -109,7 +112,7 @@ async function copy(id: number, message: string) {
   opacity: 0.7;
 }
 .datalib-toast__copy {
-  font-size: 0.75rem;
+  font-size: var(--datalib-font-size-small);
   align-self: center;
   white-space: nowrap;
 }

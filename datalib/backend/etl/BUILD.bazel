@@ -22,6 +22,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/flock:datalib_flock",
+        "//datalib/backend/history:datalib_history",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/problems:datalib_problems",
@@ -61,8 +62,9 @@ rust_test(
 
 # One side of the two-process doltlite concurrency test below: a writer, a
 # pinned reader, or a probe. It is a binary rather than a second pool inside
-# the test because doltlite's working set and chunk-store lock are per *file*
-# and shared across processes — two pools in one process do not exercise them.
+# the test because doltlite's working set and write lock belong to the file,
+# shared across processes (docs/dev/doltlite.md § Locks and writers) — two
+# pools in one process do not exercise them.
 # `testonly` and under `tests/`: nothing shipped may link it, and cargo does
 # not pick it up as a bin of this crate.
 rust_binary(
@@ -74,6 +76,7 @@ rust_binary(
         ":datalib_etl",
         "//datalib/backend/history:datalib_history",
         "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",

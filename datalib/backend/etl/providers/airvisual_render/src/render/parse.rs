@@ -102,11 +102,10 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
     let devices = load_devices(pool).await?;
     let series = load_series(pool).await?;
     let files = load_files(pool).await;
-    let sample_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM pinned_airvisual_samples airvisual_samples")
-            .fetch_one(pool)
-            .await
-            .context("count airvisual_samples")?;
+    let sample_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM airvisual_samples")
+        .fetch_one(pool)
+        .await
+        .context("count airvisual_samples")?;
 
     Ok(ParsedAirvisual {
         head: Some(pin.commit().to_string()),
@@ -120,7 +119,7 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
 async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
     let rows = sqlx::query(
         "SELECT id, name, model, mac_address, app_version, system_version, timezone, last_ts_ms \
-           FROM pinned_airvisual_devices airvisual_devices ORDER BY name, id",
+           FROM airvisual_devices ORDER BY name, id",
     )
     .fetch_all(pool)
     .await
@@ -149,7 +148,7 @@ async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
     // own column names; no runtime data reaches the statement.
     let sql = format!(
         "SELECT device_id, ts_ms, {} \
-           FROM pinned_airvisual_samples airvisual_samples ORDER BY device_id, ts_ms",
+           FROM airvisual_samples ORDER BY device_id, ts_ms",
         columns.join(", ")
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
@@ -175,11 +174,9 @@ async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
 }
 
 async fn load_files(pool: &SqlitePool) -> Vec<IngestedFile> {
-    let Ok(rows) = sqlx::query(
-        "SELECT rel_path, size_bytes FROM pinned_ingested_files ingested_files ORDER BY rel_path",
-    )
-    .fetch_all(pool)
-    .await
+    let Ok(rows) = sqlx::query("SELECT rel_path, size_bytes FROM ingested_files ORDER BY rel_path")
+        .fetch_all(pool)
+        .await
     else {
         return Vec::new();
     };
@@ -189,27 +186,4 @@ async fn load_files(pool: &SqlitePool) -> Vec<IngestedFile> {
             size_bytes: r.get::<i64, _>("size_bytes"),
         })
         .collect()
-}
-
-impl ParsedAirvisual {
-    /// A device's display name, or its id when no device row names it.
-    pub fn device_label<'a>(&'a self, id: &'a str) -> &'a str {
-        self.devices
-            .iter()
-            .find(|d| d.id == id)
-            .map(|d| d.name.as_str())
-            .unwrap_or(id)
-    }
-
-    pub fn series_by_device(&self) -> BTreeMap<&str, Vec<&Series>> {
-        datalib_etl_timeseries_render::series::by_device(&self.series)
-    }
-
-    pub fn latest_ts_ms(&self) -> Option<i64> {
-        datalib_etl_timeseries_render::series::latest_ts_ms(&self.series)
-    }
-
-    pub fn earliest_ts_ms(&self) -> Option<i64> {
-        datalib_etl_timeseries_render::series::earliest_ts_ms(&self.series)
-    }
 }

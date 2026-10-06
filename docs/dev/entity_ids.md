@@ -61,12 +61,12 @@ does. Which source a row came from is `markdowns.source_id`.
 
 An id is RFC 9562's version 8: the leading 48 bits are the record's
 `created_at` in unix milliseconds, then the version nibble, then the
-bits of a v5 hash over the four-part recipe. Every store here is a
+bits of a v5 hash over the five-part recipe. Every store here is a
 doltlite prolly tree sorted by primary key, and a write rewrites every
 leaf its keys fall in, so keys that scatter (a plain hash) cost one leaf
-per row and keys that sort by time cost one leaf per batch —
-[`etl/README.md` § "What a write costs"](../../datalib/backend/etl/README.md#what-a-write-costs-the-transaction-is-the-unit-and-the-key-decides-the-size)
-has the measurement (210 MB of history against 25 MB). A sync's new
+per row and keys that sort by time cost one leaf per batch
+([`doltlite.md` § What a write costs](doltlite.md#what-a-write-costs)
+has the measurement). A sync's new
 messages are the newest things in the store, so they land together at
 its right edge. An id with no stamp starts `00000000-0000-8…` and sorts
 to the left edge beside every other unstamped row.
@@ -134,15 +134,10 @@ configured differently?" If it can appear later, it is not the account.
 ### A raw store's keys are the upstream's own
 
 The source id belongs in the *rendered* id and nowhere else. A raw
-store under `<name>/ingest/` keys every row by what the download gave —
-the upstream's id, a `{team}#{channel}#{ts}`, a Matrix event id, a
-profile URL, the bytes' hash — and nothing in a raw store mints an
-entity id; the render mints one from the raw key. Two roots that
-download the same account under different group ids therefore produce
-byte-identical raw stores, and the raw store stays a backup rather than
-a function of how it was asked for.
+store under `<name>/ingest/` keys every row by what the download gave,
+and the render mints the entity id from that raw key;
 [`data_architecture_ingestion.md`](data_architecture_ingestion.md#object-identity-ship-of-theseus-on-uuids)
-has the rule; a render that needs its raw key back (a bucket the
+has the rule. A render that needs its raw key back (a bucket the
 driver named) keeps a map from id to key, as beeper's parse does.
 
 ### Rows datalib itself mints
@@ -209,11 +204,11 @@ what the grid's "Copy upstream ID(s)" action reads.
 
 ## Guardrails
 
-Two checks stand between a bad recipe and silent data loss. (A third,
-`IdClaims`, refused an index run in which two sources claimed one id;
-with the source in every id that cannot happen, and it is gone. Two
-documents of *one* source minting one id still fails the load —
-`grid_index::insert_grid_row` names the document already holding it.)
+Two checks stand between a bad recipe and silent data loss. Beside
+them, the load refuses two documents written in one run that mint the
+same id: `grid_index::insert_grid_row` names the document already
+holding it. (A row whose id an *earlier* run's document holds has
+moved, and the incoming document takes it over.)
 
 1. **`//tests/fixtures:ingested_tng_test`** recomputes every row's uuid
    from its backpointer, its source and its stamp and compares
@@ -267,7 +262,7 @@ round-trip check stands in: a row's uuid has to come back from its
 provider, its source, its account, its kind, its key and its stamp, so
 anything else a recipe folded in fails there.
 
-## Porting status
+## Per provider
 
 Every provider that renders mints through `entity_id`: the
 `IdNamespace` variants are exactly the `grid_rows.provider` tags, the
@@ -297,7 +292,7 @@ back by render as the natural key.
 | github, gitlab | none — the repository / project leads the key: `{repo}#{number}` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
 | google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages |
 | linkedin | none — keyed on the profile URL, the post link, the raw row id | messages, shares, comments |
-| notion | none — page, discussion and comment ids are Notion UUIDs, now the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id | pages, comments — Notion's `created_time` |
+| notion | none — page, discussion and comment ids are Notion UUIDs, the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id | pages, comments — Notion's `created_time` |
 | pdf | none — keyed on the blake3, so two copies within a source are one row | documents and pages, when the Info dictionary dates the file |
 | perseus | none — keyed on the CTS locator and edition | none — a classical text has no stamp of its own |
 | signal | none — keyed on the backup's local ids | messages, on `date_sent` |
@@ -329,7 +324,7 @@ backup, and expect a re-key when you do:
    means `NormalizedChat::upstream_account` (the account, when there is one),
    `RenderProfile::chat_entity_kind`, `source_ref` on every item
    **and every reaction** (reactions get their own grid_rows and are
-   easy to miss — that was a real bug), and `NormalizedDoc::source_ref`
+   easy to miss), and `NormalizedDoc::source_ref`
    on every bucket whose id is not the chat's own — a period of a chat,
    a subagent's transcript. For contact-common providers,
    `ContactRenderProfile::contact_entity_kind` and
@@ -348,8 +343,8 @@ backup, and expect a re-key when you do:
    that already exists: the raw store has not moved, so nothing
    re-renders and the old ids stay.
 
-   Every render processor already returns its constant from
-   `DataProcessor::render_version`, and the render step fails a source
+   Every render processor returns its constant from
+   `RenderProcessor::render_version`, and the render step fails a source
    that writes documents without declaring one — so a *new* provider
    can't inherit the old behaviour by omission, and a wrong constant is
    caught by `//tests/fixtures:ingested_tng_test` rather than by a user
@@ -360,15 +355,11 @@ backup, and expect a re-key when you do:
 Ids change, so anything holding one breaks. Filed feedback pointing at
 old `grid_rows.uuid`s does not survive, and that is not recoverable.
 
-What *is* handled, as of the fix for #216's fallout — neither needs a
-human to delete anything:
+What *is* handled — neither needs a human to delete anything:
 
-- **The index.** `grid_index::init_schema` compares the on-disk
-  `grid_rows` / `markdowns` / `edges` against their DDL and rebuilds all
-  three from the per-source render stores when they disagree. Before
-  that, a root
-  predating the `external_id` → `upstream_id` rename answered every
-  read *and* every write with `no such column: upstream_id`.
+- **The index.** `grid_index::init_schema` compares the on-disk tables
+  against their DDL and, when any disagrees, drops and rebuilds them
+  all from the per-source render stores.
 - **The rendered tree.** The render step discards a tree stamped with a
   foreign `render_version`, cursor included, and re-renders from the
   raw store.
@@ -376,9 +367,3 @@ human to delete anything:
 Both are derived data, so the cost is a re-render plus a re-index. No
 re-download: a raw store's keys are the upstream's own and never move
 with a recipe.
-
-The round-trip check is not a formality. It caught three real bugs
-across the first three ports, each invisible to every other test: a
-composite key spelled `#` in the column and `\x1f` in the recipe; a
-Claude Project stamped `"conversation"` while minted as `"project"`;
-and slack's reaction rows carrying no backpointer at all.

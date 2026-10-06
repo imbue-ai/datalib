@@ -1,0 +1,26 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The config shapes the agent-session sources (claude_code, codex)
+# share. Schema-only and Bazel-only, like a provider's <p>_config crate.
+rust_library(
+    name = "datalib_etl_agent_sessions_config",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_agent_sessions_config",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/source_common:datalib_source_common",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "agent_sessions_config_unittests",
+    size = "small",
+    crate = ":datalib_etl_agent_sessions_config",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:toml",
+    ],
+)

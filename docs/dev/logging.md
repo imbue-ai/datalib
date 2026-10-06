@@ -1,7 +1,6 @@
 # Logging — one store, every process, and how to add a line
 
-Reference for the tree as of #626. The design record, with the
-arguments for each decision, is
+The design record, with the arguments for each decision, is
 [`plans/completed/logs_and_metrics.md`](plans/completed/logs_and_metrics.md);
 the step-side details (pipes, envelopes, flushing, the error tail) are
 in [`step_protocol.md`](step_protocol.md) § "stderr: logging". This
@@ -10,9 +9,9 @@ page is the map.
 ## One store
 
 Everything any datalib process says lands in one file,
-`<data_root>/system/runs/runs.sqlite` — plain SQLite in rollback-journal
-mode (doltlite's plain-SQLite engine refuses WAL), so `sqlite3` opens it
-and two writers share it through SQLite's own locking. The runner writes it during a run; `datalib-http` writes it
+`<data_root>/system/runs/runs.sqlite` — plain SQLite in rollback-journal mode, so
+`sqlite3` opens it and two writers share it through SQLite's own
+locking. The runner writes it during a run; `datalib-http` writes it
 for the life of the server. The tables:
 
 | table | one row per |
@@ -22,6 +21,7 @@ for the life of the server. The tables:
 | `step_runs` | a step in a run: state, attempt, error, message |
 | `log` | a line |
 | `metrics`, `metric_samples` | a step's numbers — the newest value, and a sparse timeseries |
+| `store_changes` | a part of the store a reader can depend on (`runs`, `step_runs`, `metrics`, a run's lines, the server's lines), with a counter each write bumps |
 
 Every stamp is UTC in a `*_utc` column with the offset the clock was
 in beside it (`tz_offset`); text order is instant order. A line keeps
@@ -36,22 +36,34 @@ transaction that wrote nothing, so the writer offers the same batch once
 more before giving up — and when it does give up it says how many lines
 went with it, because a silent loss here is what makes anyone distrust
 the store. Deciding what to *do* with the file is exclusive between
-processes (`runs.sqlite.open-lock`): remaking the store is a delete, and
-doing that under another process's open leaves that process filling an
-inode nobody will ever read. `runs_two_process_test` runs four writers
+processes (`runs.sqlite.open-lock`): two processes that both found an
+old store would each empty it, the second emptying what the first had
+already remade. Remaking empties the file in place and never deletes
+it: a reader that opened the old file would stay on the deleted one,
+where no writer holds a lock, take the new file's journal for a crashed
+writer's and delete it — and the new writer's commit would fail. So
+the remake is SQLite's own reset, under the file's lock like any write
+(`open_or_recreate` in `datalib/backend/runs/src/store.rs`).
+`runs_two_process_test` runs four writers
 at once — on a fresh root, and on one this build has to remake — and
 checks that every line published reaches the store.
 
-One thing this rests on: SQLite's file locking, which is not
-dependable on a network or file-syncing filesystem. **A data root belongs on local disk**, not on
-an NFS or SMB mount or inside a Dropbox folder.
+One thing this rests on: SQLite's file locking is not dependable on a
+network or file-syncing filesystem. **A data root belongs on local
+disk**, not on an NFS or SMB mount or inside a Dropbox folder.
 
 Retention is `[run_history]` in `config.toml`
 ([`configs/dag_example.toml`](../../configs/dag_example.toml)):
 `max_runs` / `max_age_days` for runs and everything that belongs to
 one, `process_log_days` / `process_log_lines` for the lines outside
 any run — the server's and the pages'. The store is not load-bearing:
-one that will not open is remade, and a schema bump remakes it.
+one that will not open is emptied and remade, and a schema bump does
+the same. The old file is copied first to `runs.bak_<UTC stamp>.sqlite`
+beside it, so its lines can still be read with `sqlite3`; nothing
+deletes those copies, so remove them by hand when you are done with
+them. A copy that fails is an ERROR and costs the old lines, never the
+new store. A writer that cannot open it at all is refused at the start,
+with an ERROR saying why, and the caller says nothing will be recorded.
 
 ## Every line has an author
 
@@ -65,12 +77,15 @@ when something saw, and the commit it was built from — what a line's
 |---|---|---|---|
 | `dag` | a run of the runner | itself | it records nothing; the run row closes |
 | `step` | one attempt of one step — or one pass of a streaming consumer, which is spawned once per producer checkpoint; every pass is its own process, all under `attempt 1` | the runner, at spawn and at `wait(2)` | `exit_code` or `signal` |
-| `http` | a launch of the server | itself | it cannot see its own end |
+| `http` | a launch of the server, and what its applets said | itself | it cannot see its own end |
 | `ui` | one load of the app in one browser tab | the server, on the page's behalf | the page says so on `pagehide` |
 
 A line also keeps its **subject** — `run_id`, `step`, `attempt` — which
 is not the same thing: the runner's line "step X failed" is authored by
-the runner and about step X.
+the runner and about step X. A line about a step also carries the step's
+`group_id`, the `[[groups]]` entry it is filed under, as the runner's
+plan said, so a source's lines can be read together whatever step wrote
+them.
 
 The commit belongs to the process, not the store, because lines from
 different builds sit in one file — the server restarts between
@@ -98,6 +113,7 @@ has the server's, since the bundle is embedded in the binary.
 | Rust in the runner or the server | `tracing::info!(target: "…", key = value, "the sentence")` | a row with `target`, `msg`, and the keys as a JSON object in `fields`; `filename` / `line_number` added ([`runs/src/tracing_layer.rs`](../../datalib/backend/runs/src/tracing_layer.rs)) |
 | the runner, about a step — a checkpoint sealed, why it ended, a hint | nothing — the runner writes these itself | `target:datalib_dag::runner` under the step, with the runner as author |
 | Rust in a built-in step (`datalib-step`) | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
+| Rust in an applet (`datalib-applet`) | the same `tracing` call | a JSON envelope on the applet's stderr, which the gateway logs again as the server's line at the envelope's level: `target:datalib_http::applets`, with `applet` naming it and the applet's own target and fields in `applet_target` and `applet_fields`. The row's `filename` / `line_number` are the gateway's; the applet's are inside `applet_fields` ([`applets.md`](applets.md)) |
 | a custom step, any language | print a line on stderr (or a non-event line on stdout) | an `info` row with `stream` set; the last lines before a non-zero exit also become the step's error |
 | the server, per request | nothing — [`http/src/request_log.rs`](../../datalib/backend/http/src/request_log.rs) does it | `target:http.request`: method, path, query, status, `ms`, `bytes`, the `page` that asked, and the `card` and `card_type` when a card asked (`ui/src/cards/cardScope.ts`; `ui.card_open` says what source that card ran); `debug` for a live refetch that succeeded (below), `info` otherwise |
 | the UI | `track("name", { …fields }, { level, msg })` from [`ui/src/telemetry.ts`](../../datalib/ui/src/telemetry.ts) | `target:ui.name` under the page's own process, with the page's clock; batched, `keepalive`, never throws |
@@ -132,10 +148,19 @@ on screen.
   could not project a field — goes through `problems`
   ([`plans/problem_visibility.md`](plans/problem_visibility.md)), which
   travels with the data and reaches the Manage counts and the document
-  banner. A `warn!` reaches nobody who is not reading the log.
+  banner. A `warn!` reaches nobody who is not reading the log, so do
+  not write one beside a problem: the step logs what it stored, once,
+  at its end — one `problems_recorded` line per kind of problem (stage,
+  reason, rule, field) with its `count`, at its loudest row's severity
+  (`error`, `warn`, or `debug` for a finding), and never a row's
+  `sample` or key, which hold the record's own contents. A writer that
+  stores a row it made calls `datalib_problems::note_recorded`; one that
+  copies another step's rows does not. `ingested_tng_test` checks the
+  counts against the rows.
 - **A number** — rows written, requests made, queue depth — is a
-  `metric` event, not a sentence with a number in it. The Activity
-  column and the rates come from `metric_samples`.
+  `metric` event, not a sentence with a number in it. The Manage
+  screen's Queue and ETA and the sync dashboard's charts come from
+  `metric_samples`.
 - **A secret.** The request log drops `?token=`; a line you write must
   not carry a credential either.
 
@@ -145,18 +170,21 @@ on screen.
 so it sits in the URL like any other. **Logs** in the status bar opens
 it on everything (the picker holds the runs, this server's launch and
 earlier ones, and the pages of the app); Manage opens it through
-**Show log** on a step's menu (its newest attempt) and a double-click
+**Show step log** on a step's menu (its newest attempt) and a double-click
 on a Failed row. Selecting a line
 opens `logLineView(seq)` beside it: the whole message, the fields as a
 tree with copy and keep / exclude, the source link at the process's
-commit, both clocks. The grid shows Time, Step, Level, Stream, Source,
-Message and Fields; the columns that would say the same thing on line
+commit, both clocks. The grid shows Time, Group, Step, Level, Stream,
+Source, Message and Fields; the columns that would say the same thing on line
 after line of one process's log — run, process, commit, thread, target
 — start hidden, and the grid menu at the top right puts any of them
 back. The search bar takes the grammar every grid
-shares: the keys are the columns — `run`, `process`, `step`, `level`,
-`stream`, `target`, `thread`, `msg` — plus `min_level:warn` (this
-level and above) and `commit:0fc29cb` (prefix). Right-click a cell to
+shares: the keys are the columns — `run`, `process`, `step`, `group`,
+`level`, `stream`, `target`, `thread`, `msg` — plus `process_id` and `attempt`,
+`min_level:warn` (this level and above) and `commit:0fc29cb` (prefix).
+The pickers above the grid are views of the query: picking a run, a
+launch or a step's attempt writes `run:`, `process_id:` or `step:` and
+`attempt:` into it, and clearing the query shows the whole store. Right-click a cell to
 keep or exclude its value; drag a column header into the bar to group.
 The card tails while what it shows may still be writing.
 
@@ -167,12 +195,18 @@ The card tails while what it shows may still be writing.
 GET /api/processes?run=&process=&limit=       the authors, newest first
 GET /api/runs                                 recent runs
 GET /api/runs/{run}/steps                     step_runs + current metrics
-GET /api/log?run=&process=&step=&attempt=&q=&after_seq=&limit=
+GET /api/runs/{run}/log?step=&after_seq=&limit=  one run's lines, oldest first
+GET /api/log?q=&limit=&after_seq=|before_seq=  lines, oldest first
 GET /api/log/{seq}                            one line, with its process row
 ```
 
-`after_seq` is the tail cursor: remember the last `seq`, ask again on
-the SSE `table_changed: log` frame.
+On `/api/log`, `q` is the whole of what is asked: the panel's pickers
+write what they pick into it as `run:`, `process_id:`, `step:` and
+`attempt:`, and any parameter but `q`, `limit`, `after_seq` and
+`before_seq` is refused. With no cursor the answer is
+the newest `limit` lines; `before_seq` pages back from the oldest one
+held, and `after_seq` is the tail cursor: remember the last `seq`, ask
+again on the SSE `table_changed: log` frame.
 
 **From a shell**, since it is plain SQLite:
 
@@ -182,6 +216,46 @@ sqlite3 <root>/system/runs/runs.sqlite \
      FROM log l LEFT JOIN processes p USING (process_id)
     ORDER BY l.seq DESC LIMIT 50"
 ```
+
+### From outside the app
+
+`GET /metrics` serves the numbers in Prometheus's text exposition
+format, the one every metrics tool reads: Prometheus itself, Grafana's
+agent, an OpenTelemetry collector's Prometheus receiver. It is behind
+the API token like every route, so a scrape sends it as a bearer
+token:
+
+```yaml
+scrape_configs:
+  - job_name: datalib
+    static_configs: [{ targets: ["127.0.0.1:8731"] }]
+    authorization: { credentials_file: <root>/system/api-token }
+```
+
+What it serves (`http/src/prometheus.rs`):
+
+- **`datalib_step_<name>`**: every series a step the config declares
+  has reported, its newest value from the last run it reported in,
+  labelled `step`, `group` and the series' own labels. The type comes
+  from the name: one ending in `_total` is a counter, anything else a
+  gauge (`step_protocol.md` §"stdout: the event protocol" has the naming
+  rules). A step's counters start again from zero each run, which a
+  scraper reads as a counter reset.
+- **`datalib_step_state{state=…}`**: 1 for the state the sync loop last
+  put the step in, 0 for the others — `running`, `failed`, `off`, …
+- **`datalib_step_last_success_timestamp_seconds`**: for an alert on a
+  source that has not synced in a day.
+- **`datalib_tree_bytes{tree=…}`** and **`datalib_root_bytes`**: what
+  the usage sampler last measured.
+
+`//tests/fixtures:metrics_export_e2e_test` scrapes a real server and
+parses the answer with `prometheus_client`, the Prometheus project's
+own parser, so a line a scraper would refuse fails CI.
+
+Its history starts when something begins scraping; the app's own views
+read the run store, which has every run it keeps. Labels are step and
+group ids and what a step labels its series with (a table name, a
+producer), never a record's contents. Log lines do not go out this way.
 
 ## Rules
 
@@ -207,10 +281,8 @@ sqlite3 <root>/system/runs/runs.sqlite \
   frames held while `el` is off screen and delivered, once each, when
   it is back. Every card that refetches on a frame passes its root
   element.
-- **A step flushes per line.** Arrival order is the log's order, and a
-  block-buffered stdout hands the runner its lines in 4KB lumps,
-  minutes late. The runner sets `PYTHONUNBUFFERED=1`; anything else is
-  the step's job.
+- **A step flushes per line** ([`step_protocol.md`](step_protocol.md)
+  § "stderr: logging").
 - **Fields, not interpolation.** `job = %id, "claim failed"` is a
   `fields.job` anyone can filter and group on; `"claim failed for
   {id}"` is a sentence. And a sentence, always: a line whose only

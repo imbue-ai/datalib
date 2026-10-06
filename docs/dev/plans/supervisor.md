@@ -85,9 +85,14 @@ Checked against the tree. Most of the storage-side work is done.
   runners at once (#247)". The storage layer permits exactly the
   concurrency the scheduler forbids. #691 measured the one alternative
   worth asking about — two writers on one file, each on a branch of its
-  own — and most of their operations fail with `database is locked` or
-  `commit conflict`. One writer at a time stays the rule, for a shared
-  sink (§2.1) as much as for anything else.
+  own — and on doltlite 0.50.3 most of their operations failed with
+  `database is locked` or `commit conflict`. **Superseded on doltlite
+  0.50.13:** a shell probe saw them take turns without failing; it has
+  not been measured through `commit_run`
+  ([`doltlite.md`](../doltlite.md#locks-and-writers)). One writer at a
+  time stays the rule regardless, for a shared sink (§2.1) as much as
+  for anything else: `main` moves by force-move, which is right only
+  while one process moves it.
 - **A reader on `main` sees only sealed states** (#690). Every writer
   works on the `datalib_writer` branch and fast-forwards `main` when it
   seals (`publish_to_main`, inside `commit_run`). A reader pins a commit
@@ -128,8 +133,7 @@ Checked against the tree. Most of the storage-side work is done.
 - **Streaming is built for the edges that matter.** `download → render`
   seals per provider boundary for claude, chatgpt, slack and email
   (Gmail and JMAP), and `render → grid_index` runs an index pass per
-  seal, with a seal that lands mid-pass owed exactly one more
-  (`completed/streaming_steps_plan.md` slices 6–7). On the root this doc was
+  seal, with a seal that lands mid-pass owed exactly one more. On the root this doc was
   measured on, `grid_index` passed at 22:06 and 22:10 while the Gmail
   ingest was still running. What is serialized is one index *pass* at a
   time, and a pass is a delta.

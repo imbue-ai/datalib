@@ -32,13 +32,15 @@ instead from `bazel run //:precommit` and as a plain step in
  13. Every source icon is one file in datalib/ui/src/assets/ that both
      catalogs name alike, that shows on the light and the dark theme,
      and that the README's source grid uses rather than a copy.
+ 14. No first-party Rust outside a test renames a temp file into place
+     by hand: `datalib_runtime::atomic` is the one write-then-rename.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
 were regexes standing in for types. The types exist now: a writer's
 handle holds the file's lock for its life, so a second open is refused
-rather than colliding later; `open_reader` pins at open and hands back
-a `Reader`; the shared loaders take a mandatory `Reads`. See
+rather than colliding later; `open_reader` opens one commit, detached
+and read-only, and hands back a `Reader`. See
 datalib/backend/etl/README.md, "Connection pools".
 
 Check 1: why it exists
@@ -102,6 +104,10 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     # ms-playwright browser cache.
     "datalib/ui:e2e_test": (
         "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
+    ),
+    "datalib/ui:e2e_auth_test": (
+        "manual; reuses ~/Library/Caches/ms-playwright and the host's browser, "
+        "which latchkey's own ensure-browser finds"
     ),
     # Applet coverage starts real applet processes and proxies to them
     # over loopback. The store semantics they sit on top of are unit
@@ -318,6 +324,7 @@ def main() -> int:
     rc |= _check_no_floating_npx(root)
     rc |= _check_pools_never_recycle(root)
     rc |= _check_icons(root)
+    rc |= _check_no_hand_rolled_atomic_write(root)
     return rc
 
 
@@ -379,6 +386,13 @@ _CURSOR_WITHOUT_SCOPE_CONFIG: dict[str, str] = {
     # listing, so a widened filter surfaces what it admits on its own.
     # The marker is "when did I last sweep", not a position in a walk.
     "claude": "listing-diff; the sweep marker is not a resume cursor",
+    # No cursor at all: what is owed is the calendar and the listing
+    # minus what the store holds (docs/dev/plans/sync_state.md). What it
+    # writes here pins the window's start and marks a one-time repair.
+    "garmin": "no resume cursor; owed is derived from the store",
+    # History is owed by coverage spans; what it writes here only says
+    # when a listing was last swept.
+    "slack": "sweep markers schedule a listing; history is owed by coverage",
 }
 
 
@@ -965,10 +979,10 @@ def _check_icons(root: Path) -> int:
             )
 
     app_bgs = _APP_BG.findall(
-        (root / "datalib/ui/src/App.vue").read_text(encoding="utf-8")
+        (root / "datalib/ui/src/theme.css").read_text(encoding="utf-8")
     )
     if len(app_bgs) < 2:
-        bad.append("App.vue no longer sets --datalib-bg for a light and a dark theme")
+        bad.append("theme.css no longer sets --datalib-bg for a light and a dark theme")
     else:
         backgrounds = [
             ("the light theme", app_bgs[0], False),
@@ -1021,6 +1035,48 @@ def _check_icons(root: Path) -> int:
     print(
         f"\nAn icon is one file in {_ICON_DIR}/, named by its stem, drawn for both\n"
         "themes; see the README.md beside it.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 14: one write-then-rename -----------------------------------
+#
+# Writing to a temp file and renaming it over the real one was hand-rolled
+# nine times (#995). Five used a fixed temp name, so two writers on one
+# path shared a temp file: one rename found it gone, and a reader could
+# see one writer's bytes cut into the other's. Only two fsynced.
+# `datalib_runtime::atomic` takes a fresh temp name per write and fsyncs
+# before the rename. The signal is the rename itself, of a variable named
+# for a temp file. Tests may still stage a file by hand.
+_HAND_ROLLED_SWAP = re.compile(r"\bfs::rename\(\s*&?\w*(?:tmp|temp)\w*", re.IGNORECASE)
+
+# Renames of a temp that is not a file of bytes, with the reason.
+_SWAP_ALLOWED: dict[str, str] = {
+    "datalib/backend/etl/src/blob_cas.rs": (
+        "the temp is a SQLite database another connection fills through "
+        "ATTACH; there are no bytes to hand to atomic::write"
+    ),
+}
+
+
+def _check_no_hand_rolled_atomic_write(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        if "/tests/" in rel or rel in _SWAP_ALLOWED:
+            continue
+        text = _without_test_module((root / rel).read_text(encoding="utf-8"))
+        for m in _HAND_ROLLED_SWAP.finditer(text):
+            lineno = text.count("\n", 0, m.start()) + 1
+            hits.append(f"  {rel}:{lineno}: {m.group(0)}")
+    if not hits:
+        print("OK: every write-then-rename goes through datalib_runtime::atomic.")
+        return 0
+    print(
+        "ERROR: a temp file renamed into place by hand:\n\n"
+        + "\n".join(hits)
+        + "\n\n  Use `datalib_runtime::atomic::write` (or `write_with` to stream,\n"
+        "  `write_owner_only` for credentials). See lint_repo.py check 14.",
         file=sys.stderr,
     )
     return 1

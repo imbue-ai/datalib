@@ -33,8 +33,8 @@ async fn run_fetch_since(
     out_db: &std::path::Path,
     since: Option<&str>,
 ) -> datalib_etl_chatgpt::ingest::FetchSummary {
-    // Open here and close before the store is read back: a second
-    // live connection to one file makes a `dolt_commit` fail.
+    // Open here and close before the store is read back: the file
+    // takes one writer at a time.
     let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
     let s = fetch(FetchOptions {
         max_pages: None,

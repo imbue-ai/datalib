@@ -78,6 +78,31 @@ pub struct NormalizedReaction {
     pub source_ref: Option<UpstreamRef>,
 }
 
+/// Someone an item was addressed to.
+#[derive(Debug, Clone, Serialize)]
+pub struct Recipient {
+    pub role: RecipientRole,
+    /// As the source showed them: a display name, else the address.
+    pub display: String,
+    pub handle: Option<datalib_handle::Handle>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum RecipientRole {
+    To,
+    Cc,
+}
+
+impl RecipientRole {
+    /// As the recipients line shows it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::To => "To",
+            Self::Cc => "Cc",
+        }
+    }
+}
+
 /// One item in a chat doc — text message, attachment-bearing message,
 /// or system event. The renderer chooses layout based on
 /// `kind` and `attachments`.
@@ -86,10 +111,15 @@ pub struct NormalizedChatItem {
     /// Stable per-item UUID minted by the provider. Used as the section
     /// anchor (`id="m-{uuid}"`) and the message-level grid_row PK.
     pub message_uuid: String,
-    /// Provider-stable identity string. Doesn't have to be
-    /// human-readable.
-    pub author_id: String,
-    /// Pre-resolved author label ("Me", "Will Riker", "+15551234"). The
+    /// Who it was addressed to, where the source says: an email's To and
+    /// Cc. Empty for a chat, whose members are the conversation's.
+    pub recipients: Vec<Recipient>,
+    /// Who said it, as an identifier a contact can be linked to — an
+    /// email address, a phone number, a Slack user. `None` where the
+    /// provider has no such identifier for the author (yet), or the
+    /// author is the account itself.
+    pub author_handle: Option<datalib_handle::Handle>,
+    /// Pre-resolved author label ("Me", "Will Riker", "+12025550123"). The
     /// provider owns the outgoing/incoming rule and any name lookup.
     pub author_display: String,
     /// Unix milliseconds for the item's effective timestamp, or `None`
@@ -101,6 +131,11 @@ pub struct NormalizedChatItem {
     pub kind: ItemKind,
     pub attachments: Vec<NormalizedAttachment>,
     pub reactions: Vec<NormalizedReaction>,
+    /// Where the item is filed upstream — an email's mailboxes and
+    /// labels. Drawn as one `🏷 a · b` line above the body; not part of
+    /// the item's grid text, which is what it says. Empty for every
+    /// provider but email.
+    pub labels: Vec<String>,
     /// Free-form note rendered in italics under the body. Used today
     /// only for system events ("Worf joined", "ephemeral disappearing
     /// messages enabled", …); empty for everything else.
@@ -128,8 +163,8 @@ pub struct NormalizedChatItem {
     /// transcript reads as what was said with the plumbing tucked
     /// away. `false` for anything a person or an assistant actually
     /// said, which is the default for every provider that doesn't set
-    /// it. Layout only: an aside still gets its own anchor and its own
-    /// grid_row.
+    /// it. An aside still gets its own anchor and its own grid_row, but
+    /// is left out of its document row's text.
     pub is_aside: bool,
     /// The account has not read this item upstream, by the provider's
     /// own reckoning — past a conversation's read marker, a mail
@@ -144,6 +179,15 @@ pub struct NormalizedChatItem {
     /// document, keyed to this item, when the grid rows are built. See
     /// [`crate::own_stamp_ms`] for the common case.
     pub problems: Vec<Problem>,
+}
+
+impl NormalizedChatItem {
+    /// One of the things a conversation's `item_count` counts: what a
+    /// person or an assistant said. A tool call, its result and a
+    /// system note are in the transcript but are not messages.
+    pub fn is_message(&self) -> bool {
+        !self.is_aside && !matches!(self.kind, ItemKind::System)
+    }
 }
 
 /// A record's own stamp, or `None` — with the difference between the
@@ -300,6 +344,12 @@ pub struct NormalizedChat {
     pub path_prefix: Option<String>,
     /// Buckets sorted by period_key.
     pub buckets: Vec<NormalizedDoc>,
+    /// The provider's own account of people in this chat: what only its
+    /// raw tables know, such as a Slack profile's title and email. Each
+    /// document carries the ones whose handles its authors wrote under,
+    /// merged with what chat-common saw (`people::document_contacts`).
+    #[serde(skip)]
+    pub contacts: Vec<datalib_contact_schema::DatalibContact>,
     /// Every raw row this chat was built from, found or not — what the
     /// processor declares through `RenderCtx::declare_bucket` so a
     /// change to any of them renders this chat again. Empty only for a

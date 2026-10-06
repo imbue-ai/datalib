@@ -19,7 +19,47 @@ rust_library(
         "//datalib/backend/etl/providers/lightroom_config:datalib_etl_lightroom_config",
         "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:zip",
+    ],
+)
+
+# Inline `#[cfg(test)]` tests: the backups folder's plan and the unzip.
+rust_test(
+    name = "lightroom_unittests",
+    size = "small",
+    crate = ":datalib_etl_lightroom",
+    edition = "2021",
+)
+
+# A folder of backups against the TNG catalog: oldest first, one dated
+# commit each, the ledger, refusals, and a filter change.
+rust_test(
+    name = "backups_folder",
+    size = "small",
+    srcs = ["tests/backups_folder.rs"],
+    crate_name = "backups_folder",
+    data = ["//datalib/backend/etl/sqlite_mirror:tng_catalog"],
+    edition = "2021",
+    env = {
+        "SQLITE_MIRROR_TNG_CATALOG": "$(rootpath //datalib/backend/etl/sqlite_mirror:tng_catalog)",
+        # Seven hours behind UTC, as a POSIX rule so no zoneinfo file is
+        # needed: a commit date that ignored the offset would be off by 7h.
+        "TZ": "UTC+7",
+    },
+    deps = [
+        ":datalib_etl_lightroom",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:zip",
     ],
 )
 

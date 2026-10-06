@@ -82,9 +82,8 @@ pub enum HttpService {
     Carddav,
     Chatgpt,
     Claude,
-    /// Garmin Connect (`connectapi.garmin.com`). Not a latchkey service:
-    /// the provider mints its own bearer from a stored OAuth1 token and
-    /// sends it through [`HttpRequest::bearer`].
+    /// Garmin Connect (`connectapi.garmin.com`), a latchkey service by
+    /// way of its Garmin plugin.
     Garmin,
     Github,
     Gitlab,
@@ -151,13 +150,6 @@ pub struct HttpRequest {
     /// stored account to run as, but providers pass the struct rather
     /// than the field so a new knob reaches all of them at once.
     pub latchkey: LatchkeySettings,
-    /// A bearer token the provider holds itself, for a service latchkey
-    /// does not (Garmin mints one per hour from a stored OAuth1 token).
-    /// Sent as `Authorization: Bearer …` on the wire and deliberately
-    /// **not** part of [`fixture_key`]: it rotates, and a playback
-    /// fixture must match the request regardless of which token was
-    /// live when it was recorded.
-    pub bearer: Option<String>,
 }
 
 impl HttpRequest {
@@ -171,7 +163,6 @@ impl HttpRequest {
             timeout: Duration::from_secs(60),
             bypass_latchkey: false,
             latchkey: LatchkeySettings::default(),
-            bearer: None,
         }
     }
 
@@ -187,7 +178,6 @@ impl HttpRequest {
             timeout: Duration::from_secs(60),
             bypass_latchkey: false,
             latchkey: LatchkeySettings::default(),
-            bearer: None,
         }
     }
 
@@ -208,11 +198,6 @@ impl HttpRequest {
 
     pub fn latchkey(mut self, settings: LatchkeySettings) -> Self {
         self.latchkey = settings;
-        self
-    }
-
-    pub fn bearer(mut self, token: impl Into<String>) -> Self {
-        self.bearer = Some(token.into());
         self
     }
 }
@@ -540,7 +525,15 @@ where
                         });
                     }
                 }
-                playback::lookup(req, &root).await
+                match crate::interrupt::before_request().await {
+                    Some(crate::interrupt::Strike::Interrupted) => {
+                        return Err(HttpError::Interrupted {
+                            service: req.service,
+                            url: req.url.clone(),
+                        });
+                    }
+                    None => playback::lookup(req, &root).await,
+                }
             }
         };
 
@@ -668,9 +661,6 @@ mod live {
         }
         for (k, v) in &req.headers {
             cmd.arg("-H").arg(format!("{}: {}", k, v));
-        }
-        if let Some(token) = &req.bearer {
-            cmd.arg("-H").arg(format!("Authorization: Bearer {token}"));
         }
         // Route CF-fronted providers to the impersonating curl via the
         // router curl's marker header. Only on the latchkey path -- a
@@ -866,6 +856,21 @@ pub fn fixture_key(req: &HttpRequest) -> String {
     format!("{}-{hex}.json", req.method.as_str())
 }
 
+/// Percent-encode a path segment or query value: every byte but RFC
+/// 3986's unreserved ones, as `%XX`.
+pub fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 /// Canonicalize a URL for fixture-key hashing: sort query parameters by
 /// key. Order shouldn't change a server's response, but client code may
 /// emit params in different orders across versions; canonicalizing keeps
@@ -891,7 +896,7 @@ fn canonical_url(url: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Serializes the tests that point `PLAYBACK_ENV` at a fixture dir.
@@ -901,7 +906,7 @@ mod tests {
     /// flip it into live mode — the cause of the intermittent
     /// `retries_429_then_gives_up_per_guard` failures in CI.
     #[allow(clippy::await_holding_lock)]
-    async fn with_playback<T>(
+    pub(crate) async fn with_playback<T>(
         root: &std::path::Path,
         body: impl std::future::Future<Output = T>,
     ) -> T {
@@ -1026,18 +1031,6 @@ mod tests {
             b"{\"q\":\"b\"}".to_vec(),
         );
         assert_ne!(fixture_key(&a), fixture_key(&b));
-    }
-
-    /// A rotating bearer must not move the fixture key, or every playback
-    /// fixture recorded for a self-authenticating provider would miss once
-    /// its token expired.
-    #[test]
-    fn fixture_key_ignores_the_bearer() {
-        let a = HttpRequest::get(HttpService::Garmin, "https://connectapi.garmin.com/x");
-        let b = a.clone().bearer("token-1");
-        let c = a.clone().bearer("token-2");
-        assert_eq!(fixture_key(&a), fixture_key(&b));
-        assert_eq!(fixture_key(&b), fixture_key(&c));
     }
 
     #[tokio::test]

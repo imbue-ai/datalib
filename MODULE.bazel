@@ -4,10 +4,10 @@ Version policy: 7-day burn-in. We avoid versions released in the last 7
 days because hot releases are where regressions hide. When bumping a
 bazel_dep or a toolchain, check the upstream release date and prefer
 the newest version that is at least 7 days old. Today's working
-reference (2026-09-03): rules_python 2.3.2, rules_rust 0.73.0,
-Rust 1.98.0, Bazel 9.2.0. rules_rust 0.74.0 and protobuf 36.1 both
-exist and are both deliberately not taken here: each was published
-inside the burn-in window.
+reference (2026-09-25): rules_python 2.3.2, rules_rust 0.74.0,
+Rust 1.98.0, Bazel 9.2.0. Keep rules_rust new enough to list RUST_VERSION
+in its known_shas.bzl: without a checksum the toolchain download skips
+Bazel's repository cache, so every new worktree fetches it again.
 
 Bazel owns:
   - `datalib/backend/*` Rust crates (Extract/Translate/Load + HTTP)
@@ -25,6 +25,12 @@ module(
     name = "datalib",
     version = "0.0.1",
 )
+
+# Apple's C/C++ toolchain, so a mac builds the doltlite amalgamation with
+# the Xcode clang it has rather than Bazel's autodetected one. Already in
+# the graph at this version through rules_cc; declared first so its
+# toolchains are registered ahead of that autodetected one.
+bazel_dep(name = "apple_support", version = "2.3.0")
 
 # Rules Shell — provides sh_binary etc. (split out of bazel core in Bazel 8/9).
 bazel_dep(name = "rules_shell", version = "0.8.0")
@@ -47,49 +53,23 @@ bazel_dep(name = "platforms", version = "1.1.0")
 # what the root module can *see*, not what the build uses.
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 
-# doltlite amalgamation — a single-translation-unit `doltlite.c` that
-# bundles the SQLite core, the prolly-tree storage engine, the
-# `dolt_commit`/`dolt_log`/… version-control SQL surface, and embedded
-# blake3. Pinned to a sha so the fetch is one-time-per-pin; consumed
-# by `//third-party/doltlite:sqlite3`.
+# doltlite v0.50.14: the amalgamation, a single-file `doltlite.c` with the
+# SQLite core, the prolly-tree engine and the `dolt_*` SQL surface, built
+# by `//third-party/doltlite:sqlite3` into every binary.
 #
-# Prior to v0.11.4 the amalgamation zip was broken — it built stock
-# SQLite without the prolly hooks — so we used to pull the autoconf
-# source tarball and compile every `src/*.c` individually (see git
-# history of //third-party/doltlite/amalgamation.BUILD for the
-# ~300-line file-curation that took). v0.11.4 fixed the amalgamation
-# pipeline, so we're back to the trivial single-file build.
+# An exception to the 7-day burn-in: it was a day old when pinned. It
+# carries dolthub/doltlite#3392, without which a read-only
+# `<store>@<commit>` open refused `IN` and `DISTINCT` — and every reader
+# here opens that way.
 #
-# v0.50.3 is a deliberate exception to the 7-day burn-in above (it
-# was published the day it was pinned), and it is the second one in a
-# row — v0.11.53 before it carried dolthub/doltlite#2329, the fix for
-# the silent large-value corruption we hit building the lightroom
-# mirror (dolthub/doltlite#2327 — every value past the source file's
-# local payload limit collapsed onto the first row's bytes when read
-# out of a plain SQLite file). `hack/doltlite_blob_bug/run.sh` is
-# still the check for that one: 1 distinct blob against the v0.11.52
-# CLI, 3 against v0.11.53 and later.
-#
-# The 0.11.57 → 0.50.0 jump is a renumbering, not 39 minor versions of
-# churn: upstream's own release note for 0.50.0 says "There are no code
-# changes from 0.11.57". What it marks is DoltLite Beta, whose headline
-# claim is storage-format stability — which is the property this repo
-# cares about most, since every `.doltlite_db` under a user's data root
-# has to stay readable. Taking it now rather than in a week is the
-# point: the sooner the data roots are written by a format-stable
-# release, the smaller the set of files written by a pre-Beta one.
-#
-# 0.11.54 through 0.11.57 are real fixes and come along for the ride:
-# index corruption during merges and reverts (including keyless
-# tables), secondary-index corruption when merging tables with explicit
-# integer-PK index terms, and `VACUUM INTO`. `grid_index` merges on
-# every run, so those are ours.
+# What each earlier pin was taken for: docs/dev/doltlite.md § Versions.
+# How to bump: third-party/doltlite/README.md § Upgrading doltlite.
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.3/doltlite-amalgamation-0.50.3.zip"],
-    sha256 = "216ed94387cc7a5c8a07b1a72c412b3a2c8c2d22da6028eede7827fd3a9da639",
-    strip_prefix = "doltlite-amalgamation-0.50.3",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.14/doltlite-amalgamation-0.50.14.zip"],
+    sha256 = "839fbaff26324a30ba183f927e50ebc56211b644dfaa80d0faf7c0bd64da2faa",
+    strip_prefix = "doltlite-amalgamation-0.50.14",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 
@@ -104,14 +84,13 @@ http_archive(
 # file out of it; the rest of the tarball is never compiled.
 #
 # MUST move in lockstep with `doltlite_amalgamation` above: `shell.c`
-# is generated against a specific doltlite version and reports it via
-# `-DDOLTLITE_VERSION`. `//third-party/doltlite:cli_version_test`
-# fails the build if the two pins drift.
+# is generated against a specific doltlite version.
+# `//tools:version_pins_test` fails if the two pins drift.
 http_archive(
     name = "doltlite_autoconf",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.3/doltlite-autoconf-0.50.3.tar.gz"],
-    sha256 = "fbe66215a3f214d92d1edab82d7125df8257690844541f9a75a3bc6435c2d714",
-    strip_prefix = "doltlite-autoconf-0.50.3",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.14/doltlite-autoconf-0.50.14.tar.gz"],
+    sha256 = "c10ec73f7d8f5956911ea10902ea618d5a7ff36ba2a7e3d0a05b0c31b921d03d",
+    strip_prefix = "doltlite-autoconf-0.50.14",
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 
@@ -157,6 +136,30 @@ filegroup(
         ("aarch64-unknown-linux-gnu", "54025b77c407a821f870eaad6f76ad4578e174a936ed6758b92148d9d38a315d"),
         ("x86_64-unknown-linux-musl", "c7cd5e7710d3f1e79f4b7116175afead3eb61cf1c674605f64e9fe910701c0e4"),
         ("aarch64-unknown-linux-musl", "260093c5b7df73a89690101c822924fb8337234f629277e241bcfb8f24d198e3"),
+    ]
+]
+
+# cargo-about, which writes the release's `rust-crates.md` notices
+# (scripts/third_party_notices.sh). A prebuilt release binary, pinned by
+# version and sha256; //third-party/cargo-about picks the one for the
+# host. The Linux builds are static musl, so they run on any libc.
+CARGO_ABOUT_VERSION = "0.9.2"
+
+[
+    http_archive(
+        name = "cargo_about_%s" % triple.replace("-", "_"),
+        urls = ["https://github.com/EmbarkStudios/cargo-about/releases/download/{v}/cargo-about-{v}-{t}.tar.gz".format(
+            v = CARGO_ABOUT_VERSION,
+            t = triple,
+        )],
+        sha256 = sha,
+        strip_prefix = "cargo-about-%s-%s" % (CARGO_ABOUT_VERSION, triple),
+        build_file_content = 'exports_files(["cargo-about"])',
+    )
+    for triple, sha in [
+        ("aarch64-apple-darwin", "ae72f0df0c399a1e96336f696fa55b1b28679fd725632eba8cf8e4568467cc3e"),
+        ("x86_64-unknown-linux-musl", "9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af"),
+        ("aarch64-unknown-linux-musl", "af5169282fb6f84e13471493f405437e43ac517744c9ae12fbe2cdf0a6f0e5a8"),
     ]
 ]
 
@@ -251,7 +254,7 @@ pip.parse(
 use_repo(pip, "py_pip")
 
 # Rust — rules_rust + crate_universe ingesting datalib/backend Cargo workspace.
-bazel_dep(name = "rules_rust", version = "0.73.0")
+bazel_dep(name = "rules_rust", version = "0.74.0")
 
 # Proto / prost — first introduced for `datalib-signal-backup`, which
 # parses Signal-Android's backup format. We use the Bazel-native prost
@@ -281,7 +284,7 @@ bazel_dep(name = "rules_rust", version = "0.73.0")
 bazel_dep(name = "rules_proto", version = "7.1.0")
 bazel_dep(name = "protobuf", version = "36.0.bcr.1", repo_name = "com_google_protobuf")
 bazel_dep(name = "toolchains_protoc", version = "0.6.1")
-bazel_dep(name = "rules_rust_prost", version = "0.73.0")
+bazel_dep(name = "rules_rust_prost", version = "0.74.0")
 
 protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
 protoc.toolchain(
@@ -499,6 +502,16 @@ crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 crate.annotation(
     crate = "datalib-signal-backup",
     gen_build_script = "off",
+)
+
+# The embedding map's nearest-neighbour search is one matrix product
+# after another (datalib/backend/embedding_map), and the product is
+# matrixmultiply's kernel. Optimised in every build, not just `-c opt`:
+# unoptimised it takes 33s where it takes 1.7s on 18.7k documents, and
+# a dev build runs the same step.
+crate.annotation(
+    crate = "matrixmultiply",
+    rustc_flags = ["-Copt-level=3"],
 )
 
 # protoc-gen-prost ships a `protoc-gen-prost` binary that

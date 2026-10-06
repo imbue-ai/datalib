@@ -187,11 +187,11 @@ mod tests {
             "system/feedback.doltlite_db.lock",
             "system/api-token",
             "slack/ingest/entities.doltlite_db",
-            "slack/ingest/blobs.doltlite_db",
+            "slack/ingest/blobs.sqlite",
             "slack/render_markdown/indexed_markdown.doltlite_db",
             "slack/render_markdown/a/b/c.md",
             "unified_index/grid_index/db.doltlite_db",
-            "unified_index/qmd_index/qmd/index.sqlite",
+            "unified_index/qmd_aggregator/qmd/index.sqlite",
             "config.toml",
         ];
         for f in files {
@@ -206,7 +206,6 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                "slack/ingest/blobs.doltlite_db",
                 "slack/ingest/entities.doltlite_db",
                 "slack/render_markdown/indexed_markdown.doltlite_db",
                 "system/feedback.doltlite_db",

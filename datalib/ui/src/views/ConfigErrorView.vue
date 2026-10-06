@@ -11,6 +11,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { checkConfig, saveConfig, type ConfigResponse, type Diagnostic } from "@/api";
 
 const props = defineProps<{ config: ConfigResponse }>();
+const emit = defineEmits<{ (e: "saved"): void }>();
 
 const editor = ref<HTMLTextAreaElement | null>(null);
 const text = ref(props.config.text);
@@ -43,17 +44,31 @@ const worst = computed(
   () => live.value.find((d) => d.severity === "fatal") ?? live.value[0] ?? null,
 );
 
-let checkAt = 0;
+// One check on its way at a time, and the newest text checked when it
+// lands: a request per input event would queue Save behind the rest.
+let checking = false;
+let checkAgain = false;
 async function recheck() {
   dirty.value = true;
-  const mine = ++checkAt;
+  if (checking) {
+    checkAgain = true;
+    return;
+  }
+  checking = true;
   try {
-    const r = await checkConfig(text.value);
-    // Ignore an answer that a later keystroke has already outdated.
-    if (mine === checkAt) live.value = r.diagnostics;
-  } catch {
-    // A failed lint is not worth a message of its own: Save will say
-    // whatever is really wrong, and the stale list is still useful.
+    do {
+      checkAgain = false;
+      const asked = text.value;
+      try {
+        const r = await checkConfig(asked);
+        if (asked === text.value) live.value = r.diagnostics;
+      } catch {
+        // A failed lint is not worth a message of its own: Save will say
+        // whatever is really wrong, and the stale list is still useful.
+      }
+    } while (checkAgain);
+  } finally {
+    checking = false;
   }
 }
 
@@ -80,10 +95,10 @@ async function save() {
       saveError.value = r.error ?? "The config was rejected.";
       return;
     }
-    // Saved clean. Nothing else to do: the write raises
-    // `config_changed`, `App.vue` refetches, `app_ready` comes back
-    // true and this screen goes away by itself.
+    // Saved clean. `App.vue` refetches now rather than on the
+    // `config_changed` the write raises, which waits on the file watcher.
     dirty.value = false;
+    emit("saved");
     await nextTick();
   } catch (e) {
     saveError.value = (e as Error).message;
@@ -107,7 +122,7 @@ function severityLabel(d: Diagnostic): string {
 </script>
 
 <template>
-  <section class="cfg-error">
+  <section class="cfg-error notice">
     <div class="card">
       <template v-if="notAConfig">
         <h2>This config file can’t be read</h2>
@@ -182,57 +197,22 @@ function severityLabel(d: Diagnostic): string {
   </section>
 </template>
 
+<style scoped src="./notice.css"></style>
 <style scoped>
-.cfg-error {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 2rem 1rem;
-}
 .card {
   width: 100%;
   max-width: 56rem;
-  border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  background: var(--datalib-card-bg);
-  padding: 1.5rem 1.75rem;
-}
-h2 {
-  margin: 0 0 0.75rem;
-  font-size: 1.25rem;
-}
-p {
-  margin: 0.6rem 0;
-  line-height: 1.5;
-}
-code {
-  background: var(--datalib-code-bg);
-  border-radius: 3px;
-  padding: 0.05rem 0.3rem;
-  font-size: 0.9em;
-}
-.root {
-  display: inline-block;
-  overflow-wrap: anywhere;
-}
-.lead {
-  color: var(--datalib-log-error);
 }
 .where {
   color: var(--datalib-muted);
   margin-left: 0.4rem;
-}
-.cli {
-  color: var(--datalib-muted);
-  font-size: 0.9rem;
 }
 .diags {
   list-style: none;
   margin: 0.8rem 0;
   padding: 0;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   overflow: hidden;
 }
 .diag {
@@ -240,8 +220,8 @@ code {
   grid-template-columns: 5.5rem 5.5rem 1fr;
   gap: 0.5rem;
   padding: 0.45rem 0.6rem;
-  border-bottom: 1px solid var(--datalib-border);
-  font-size: 0.9rem;
+  border-bottom: 1px solid var(--datalib-border-soft);
+  font-size: var(--datalib-font-size);
   line-height: 1.45;
 }
 .diag:last-child {
@@ -249,7 +229,7 @@ code {
 }
 .loc {
   font: inherit;
-  font-family: ui-monospace, monospace;
+  font-family: var(--datalib-mono);
   background: none;
   border: none;
   padding: 0;
@@ -267,16 +247,16 @@ code {
 }
 .sev-fatal .sev,
 .sev-rejected .sev {
-  color: var(--datalib-log-error);
+  color: var(--datalib-error-fg);
 }
 .sev-blocked .sev {
-  color: var(--datalib-log-warn);
+  color: var(--datalib-warn-fg);
 }
 .sev-warning .sev {
   color: var(--datalib-muted);
 }
 .entry {
-  font-family: ui-monospace, monospace;
+  font-family: var(--datalib-mono);
   color: var(--datalib-muted);
 }
 .help {
@@ -284,27 +264,27 @@ code {
   color: var(--datalib-muted);
 }
 .ok {
-  color: var(--datalib-log-ok);
+  color: var(--datalib-ok);
 }
 .label {
   display: block;
   margin-top: 0.9rem;
   color: var(--datalib-muted);
-  font-size: 0.9rem;
+  font-size: var(--datalib-font-size-small);
 }
 .editor {
   width: 100%;
   box-sizing: border-box;
   min-height: 18rem;
   margin-top: 0.35rem;
-  font-family: ui-monospace, monospace;
-  font-size: 0.85rem;
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size-small);
   line-height: 1.5;
   tab-size: 2;
   background: var(--datalib-input-bg);
   color: var(--datalib-fg);
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   padding: 0.6rem;
   resize: vertical;
 }
@@ -313,26 +293,5 @@ code {
   align-items: center;
   gap: 0.75rem;
   margin-top: 0.75rem;
-}
-.error {
-  color: var(--datalib-log-error);
-}
-button {
-  font: inherit;
-  padding: 0.45rem 0.9rem;
-  border-radius: 4px;
-  border: 1px solid var(--datalib-border);
-  background: var(--datalib-input-bg);
-  color: var(--datalib-fg);
-  cursor: pointer;
-}
-button:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-button.primary {
-  border-color: var(--datalib-accent);
-  color: var(--datalib-accent);
-  font-weight: 600;
 }
 </style>

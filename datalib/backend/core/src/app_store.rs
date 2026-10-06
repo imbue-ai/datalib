@@ -201,12 +201,11 @@ impl AppStore {
 #[async_trait]
 impl AppRepo for AppStore {
     async fn insert_feedback(&self, row: FeedbackRow) -> Result<(), RepoError> {
-        // The INSERT and the `dolt_commit` ride the same connection so
-        // the commit covers exactly the row we just wrote, with no
-        // chance of a concurrent writer's INSERT slipping into the same
-        // dolt_log entry. (The pool may hand a different connection to
-        // a sibling task, which is fine — doltlite's working set is
-        // per-file, not per-connection.)
+        // The INSERT and the `dolt_commit` ride one acquired connection,
+        // the pool's only one, so no sibling task's INSERT can land
+        // between them: doltlite's working set belongs to the branch,
+        // not the connection, and `-Am` would sweep it into this commit
+        // (docs/dev/doltlite.md#branches-head-and-the-working-set).
         let mut conn = self
             .feedback_pool
             .acquire()
@@ -276,6 +275,44 @@ impl AppRepo for AppStore {
         .map_err(|e| RepoError::Internal(e.to_string()))?;
         Ok(rows
             .iter()
+            .map(|r| DiskUsageRow {
+                path: r.try_get("path").unwrap_or_default(),
+                measured_at_utc: r.try_get("measured_at_utc").unwrap_or_default(),
+                tz_offset: r.try_get("tz_offset").ok(),
+                bytes: r.try_get("bytes").unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    async fn disk_usage_between(
+        &self,
+        path: &str,
+        since_utc: &str,
+        until_utc: &str,
+    ) -> Result<Vec<DiskUsageRow>, RepoError> {
+        let before = sqlx::query(
+            "SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage \
+             WHERE path = ? AND measured_at_utc < ? ORDER BY measured_at_utc DESC LIMIT 1",
+        )
+        .bind(path)
+        .bind(since_utc)
+        .fetch_all(&self.usage_pool)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        let during = sqlx::query(
+            "SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage \
+             WHERE path = ? AND measured_at_utc >= ? AND measured_at_utc <= ? \
+             ORDER BY measured_at_utc",
+        )
+        .bind(path)
+        .bind(since_utc)
+        .bind(until_utc)
+        .fetch_all(&self.usage_pool)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        Ok(before
+            .iter()
+            .chain(&during)
             .map(|r| DiskUsageRow {
                 path: r.try_get("path").unwrap_or_default(),
                 measured_at_utc: r.try_get("measured_at_utc").unwrap_or_default(),

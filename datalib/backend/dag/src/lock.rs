@@ -2,16 +2,17 @@
 //! `flock(2)` the kernel releases when the holder dies (`datalib_flock`).
 //!
 //! The runner and the server take separate locks on separate files; the
-//! crate README says why they cannot share one.
+//! crate README says why they cannot share one. Letting go of the runner's
+//! is announced, so a host waiting for it takes it at once.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub use datalib_flock::{FileLock, LockError};
 
-/// The runner's claim. Letting it go is announced, so a process waiting to
-/// run the loop takes it at once rather than at its backstop.
-#[derive(Debug)]
+use crate::supervisor::announce::{announce, listeners_dir, FROM_LOCK, RUNNER_LOCK_RELEASED};
+
+/// `runner-lock`, held. Dropping it lets go and says so.
 pub struct RunnerLock {
     lock: Option<FileLock>,
     listeners: PathBuf,
@@ -20,7 +21,7 @@ pub struct RunnerLock {
 impl Drop for RunnerLock {
     fn drop(&mut self) {
         drop(self.lock.take());
-        crate::supervisor::announce::announce(&self.listeners, "runner-lock released");
+        announce(&self.listeners, FROM_LOCK, RUNNER_LOCK_RELEASED);
     }
 }
 
@@ -54,7 +55,7 @@ fn acquire_runner_within(data_root: &Path, grace: Duration) -> Result<RunnerLock
             claimed => {
                 return claimed.map(|lock| RunnerLock {
                     lock: Some(lock),
-                    listeners: crate::supervisor::announce::listeners_dir(data_root),
+                    listeners: listeners_dir(data_root),
                 })
             }
         }
@@ -62,9 +63,15 @@ fn acquire_runner_within(data_root: &Path, grace: Duration) -> Result<RunnerLock
 }
 
 /// Is a runner holding this root right now? Read-only and racy, as
-/// [`FileLock::is_held`] says; a probe that cannot answer says "held".
+/// [`FileLock::is_held`] says; a probe that cannot answer says "held". A
+/// probe that found it free held it for an instant, and a host that tried
+/// in that instant is told it is free again.
 pub fn runner_is_held(data_root: &Path) -> bool {
-    FileLock::is_held(&data_root.join(RUNNER_LOCK_REL_PATH))
+    let held = FileLock::is_held(&data_root.join(RUNNER_LOCK_REL_PATH));
+    if !held {
+        announce(&listeners_dir(data_root), FROM_LOCK, RUNNER_LOCK_RELEASED);
+    }
+    held
 }
 
 #[cfg(test)]
@@ -108,8 +115,24 @@ mod tests {
     fn a_held_root_is_still_refused() {
         let tmp = tempfile::tempdir().unwrap();
         let _first = acquire_runner(tmp.path()).expect("first claim");
-        let err = acquire_runner_within(tmp.path(), Duration::from_millis(50))
-            .expect_err("a second runner must be refused");
+        let Err(err) = acquire_runner_within(tmp.path(), Duration::from_millis(50)) else {
+            panic!("a second runner must be refused");
+        };
         assert!(err.is_held(), "{err}");
+    }
+
+    /// A host waiting for the lock takes it when it hears this, not on a
+    /// timer.
+    #[tokio::test]
+    async fn letting_go_of_the_lock_is_announced() {
+        use crate::supervisor::announce::Listener;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = crate::supervisor::store::Store::open(tmp.path())
+            .await
+            .unwrap();
+        let mut listener = Listener::new(&store, "test");
+        drop(acquire_runner(tmp.path()).unwrap());
+        assert_eq!(listener.next().await, [RUNNER_LOCK_RELEASED]);
+        try_acquire_runner(tmp.path()).expect("free once it was said to be");
     }
 }

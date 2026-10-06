@@ -15,7 +15,9 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, NormalizedReaction, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_handle::Handle;
 
 use super::mrkdwn::{emojize_shortcodes, resolve_mentions, to_commonmark, Labels};
 use super::{ids, slack_link, ts_to_ms, Message, ParsedSlack};
@@ -41,7 +43,9 @@ use datalib_schema::providers::Provider;
 ///     recipe. The raw store keys messages and threads by
 ///     `{team}#{channel}#{ts}`, so an existing root resets and downloads
 ///     again.
-pub const RENDER_VERSION: u32 = 7;
+/// v9: the author span carries the author's handle as `data-handle`.
+/// v10: each thread carries its authors' Slack profiles (title, email).
+pub const RENDER_VERSION: u32 = 10;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -63,6 +67,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Slack Reaction".to_string(),
         chat_entity_kind: ids::KIND_THREAD,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -225,11 +230,26 @@ fn build_chats(
                 source_ref: None,
                 items,
             }],
+            // Each author's profile, read the way their label was.
+            contacts: authors_of(bucket)
+                .filter_map(|uid| bucket.inputs.lookup("users", &parsed.users).get(uid))
+                .filter_map(|u| u.contact(source_id))
+                .collect(),
             inputs: bucket.inputs.declared(),
         });
         blobs_by_chat.insert(thread_uuid, bucket.blobs.clone());
     }
     (chats, blobs_by_chat)
+}
+
+/// Each user who wrote in the thread, once, in the order they first did.
+fn authors_of(bucket: &super::parse::SlackThreadBucket) -> impl Iterator<Item = &str> {
+    let mut seen = std::collections::HashSet::new();
+    bucket
+        .messages
+        .iter()
+        .filter_map(|m| m.user_id.as_deref())
+        .filter(move |u| seen.insert(*u))
 }
 
 fn build_item(
@@ -259,13 +279,17 @@ fn build_item(
     let date_ms = own_stamp_ms(Some(&m.ts), "ts", ts_to_ms, &mut problems);
     NormalizedChatItem {
         message_uuid: msg_id.uuid.clone(),
-        author_id: m.user_id.clone().unwrap_or_else(|| "unknown".into()),
+        author_handle: m
+            .user_id
+            .as_deref()
+            .and_then(|u| Handle::slack(&m.team_id, u)),
         author_display,
         date_ms,
         text: (!body.trim().is_empty()).then_some(body),
         kind,
         attachments,
         reactions,
+        labels: Vec::new(),
         system_note: None,
         // Per-message permalink (with thread_ts for replies).
         source_url: Some(slack_link(&m.team_id, &m.channel_id, &m.ts, Some(&root.ts))),
@@ -276,6 +300,7 @@ fn build_item(
         )),
         is_aside: false,
         unread,
+        recipients: Vec::new(),
         problems,
     }
 }

@@ -18,10 +18,18 @@ pub const UNIFIED_INDEX_DIR: &str = "unified_index";
 pub const GRID_DIR: &str = "grid_index";
 /// The doltlite database file inside [`GRID_DIR`].
 pub const GRID_DB: &str = "db.doltlite_db";
-/// The `qmd_index` step's tree, relative to [`UNIFIED_INDEX_DIR`]. qmd
-/// itself lays out `qmd/index.sqlite` under it — see
-/// `crate::qmd::qmd_cache_home`.
-pub const QMD_DIR: &str = "qmd_index";
+/// The qmd index's directory, relative to [`UNIFIED_INDEX_DIR`]: the
+/// `qmd_aggregator` step's tree, so its size is counted against that
+/// step. Every qmd step writes the one index under it, which qmd lays
+/// out as `qmd/index.sqlite` — see `crate::qmd::qmd_cache_home`.
+pub const QMD_DIR: &str = "qmd_aggregator";
+
+/// A download step's raw store, inside its tree: entity tables,
+/// per-provider CAS edge tables and the shared sync bookkeeping.
+pub const ENTITIES_DB: &str = "entities.doltlite_db";
+/// The content-addressed blob store beside [`ENTITIES_DB`]: one
+/// `cas_objects` table keyed by blake3 hash, in a plain SQLite file.
+pub const BLOBS_DB: &str = "blobs.sqlite";
 
 /// Directory of server-served attachment bytes, relative to `system/`.
 pub const MEDIA_DIR: &str = "media";
@@ -48,10 +56,10 @@ pub const RUNS_DB: &str = "runs.sqlite";
 /// [`RUNS_DIR`] relative to the data root, for whatever keys trees by
 /// that string — the usage walker, the Manage rows.
 pub const RUNS_DIR_REL: &str = "system/runs";
-/// The supervisor's store, relative to `system/`: open requests, pauses,
-/// and what the loop decided about them. Plain SQLite, and the mailbox
-/// through which the UI and the CLI steer one root at once
-/// (`docs/dev/plans/supervisor.md` §2.8).
+/// The supervisor's store, relative to `system/`: open requests, the
+/// steps turned off, and what the loop decided about them. Plain SQLite,
+/// and the mailbox through which the UI and the CLI steer one root at
+/// once (`docs/dev/plans/supervisor.md` §2.8).
 pub const SUPERVISOR_DB: &str = "supervisor.sqlite";
 /// The server's exclusive claim on this root, relative to `system/`.
 /// Held with `flock(2)` for the life of the process; its contents are

@@ -50,15 +50,8 @@ impl Store {
             mirror_path: self.path.clone(),
             pool: Some(pool.clone()),
             options: MirrorOptions {
-                source_path: catalog.to_path_buf(),
-                snapshot: true,
-                include_tables: vec!["*".to_string()],
-                exclude_tables: Vec::new(),
-                exclude_columns: Vec::new(),
                 stable_key_columns: vec!["id_global".to_string()],
-                primary_keys: BTreeMap::new(),
-                gc: false,
-                sidecar_tables: Vec::new(),
+                ..MirrorOptions::new(catalog)
             },
             progress: Progress::noop(),
         })
@@ -176,6 +169,32 @@ async fn four_catalogs_stack_into_one_store_with_incremental_commits() -> Result
         scalar_i64(&pool, "SELECT COUNT(*) FROM Adobe_images").await,
         7
     );
+    pool.close().await;
+    Ok(())
+}
+
+/// Lightroom declares the key of its sync tables as a composite UNIQUE
+/// index, not a PRIMARY KEY; the mirror keys on it. Without it these
+/// tables diff by position and a row added in the middle reads as a run
+/// of modifications.
+#[tokio::test]
+async fn sync_tables_are_keyed_on_their_unique_index() -> Result<()> {
+    let store = Store::new();
+    ingest_sequence(&store).await?;
+    let pool = store.pool().await?;
+
+    for (table, key) in [
+        ("AgLibraryImageSyncedAssetData", vec!["image", "payloadKey"]),
+        ("AgOzSpaceIds", vec!["ozCatalogId", "ozSpaceId"]),
+        ("MigratedImages", vec!["localId", "ozCatalogId"]),
+    ] {
+        let got: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+                .bind(table)
+                .fetch_all(&pool)
+                .await?;
+        assert_eq!(got, key, "{table}");
+    }
     pool.close().await;
     Ok(())
 }

@@ -122,7 +122,7 @@ export function dismissHandoff(): void {
 
 // "Don't show the instructions again": once set, the corresponding 🤖
 // button copies the wayfinder immediately. Persisted per browser like
-// devMode.
+// editMode.
 function persistedFlag(key: string) {
   const flag = ref(localStorage.getItem(key) === "1");
   watch(flag, (on) => {

@@ -50,10 +50,11 @@ Node programs the tools shell out to — `latchkey`, which holds your
 credentials, and `qmd`, which builds the semantic search index — at
 the exact versions datalib was built and tested with, published beside
 the tarball on the same release and checked against the sha256 the
-tarball carries for it. It lands in `~/.cache/datalib/runtime`, about
-100 MB, once per release. You do not need `node`, `npm` or `npx`
-installed. To fetch it ahead of the first sync (an offline laptop, say),
-run `datalib-step pull-runtime` while online.
+tarball carries for it. It lands in `~/.cache/datalib/runtime`, a
+download of about 100 MB, once per release. You do not need `node`,
+`npm` or `npx` installed. The `latchkey` command does not fetch it
+itself, so step 1 fetches it by hand with `datalib-step pull-runtime`;
+that is also how to fetch it ahead of time for an offline laptop.
 
 ## 1. Install the tools and make a data root (here it's `~/datalib`)
 
@@ -77,8 +78,8 @@ unpacks it into `~/.local/lib/datalib` and links the tools into
 - `datalib-migrate-config` — rewrites a config file from an older
   datalib (step 3).
 
-Also installed: `latchkey` (the credential tool, step 4, running on
-the bundled Node), `datalib-fsindex` and `datalib-dirtree-diff` (a
+Also installed: `latchkey` (the credential tool, step 2, running on
+the fetched Node runtime), `datalib-fsindex` and `datalib-dirtree-diff` (a
 standalone directory scanner and a diff of two scans) and the two
 `latchkey-curl-*` binaries the web-API sources fetch through. If
 `~/.local/bin` isn't already on your `PATH`, the script prints the exact
@@ -109,10 +110,12 @@ and work from there:
 mkdir -p ~/datalib && cd ~/datalib
 ```
 
-Verify the install:
+Verify the install, and fetch the Node runtime `latchkey` needs in the
+next step:
 
 ```sh
 datalib-dag --version
+datalib-step pull-runtime
 ```
 
 ## 2. Get access to some data
@@ -137,8 +140,8 @@ the rest — see [**getting your data**](getting_your_data.md).
 > remain valid.
 
 You don't need to install `latchkey`: the installer put it on your
-`PATH` in step 1, running on the Node runtime that came in the same
-tarball.
+`PATH` in step 1, and `datalib-step pull-runtime` fetched the Node
+runtime it runs on.
 
 ### Option 1: A Google Takeout export (no credentials needed)
 
@@ -254,6 +257,16 @@ group = "claude"
 function = "render_markdown"
 inputs = ["claude/ingest"]
 
+[[steps]]
+group = "claude"
+function = "keyword_index"
+inputs = ["claude/render_markdown"]
+
+[[steps]]
+group = "claude"
+function = "embed"
+inputs = ["claude/keyword_index"]
+
 [[groups]]
 id = "unified_index"
 
@@ -264,8 +277,8 @@ inputs = ["claude/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["claude/render_markdown"]
+function = "qmd_aggregator"
+inputs = ["claude/keyword_index", "claude/embed"]
 
 [[applets]]
 group = "unified_index"
@@ -283,7 +296,8 @@ next one.
 
 You normally don't write this by hand. The app's first-run screen
 writes the index steps and the applet for an empty folder, and the
-**Manage** tab's **Add a source** button fills in a source (next step).
+**Data sources** card's **Add source** button fills in a source (next
+step).
 If you'd rather hand-edit, copy
 [**configs/dag_example.toml**](https://github.com/imbue-ai/datalib/blob/main/configs/dag_example.toml),
 a complete commented example.
@@ -315,9 +329,12 @@ datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml
 ```
 
 It keeps the original beside the result as `config.toml.orig`. Comments
-from the old file don't carry over, so review the result. A much older
-root with only a `config.yaml` is not convertible any more: set it up
-again from the app.
+from the old file don't carry over, so review the result. A config whose
+search is still one shared `qmd_index` step needs none of this: the app
+gives each source its own search steps the first time it reads the
+file, and keeps the old one as `config.toml.bak`. A much older root with
+only a `config.yaml` is not convertible any more: set it up again from
+the app.
 
 Credentials are never in the config — sources that need them ask
 `latchkey` at run time.
@@ -335,8 +352,8 @@ datalib-http ./
 
 It binds to `http://127.0.0.1:8731` by default and opens that URL in
 your browser. On an empty folder the first-run screen offers to write a
-config; the **Manage** tab then lets you add sources, and **Sync all**
-runs the pipeline (`datalib-dag` under the hood).
+config; the **Data sources** card then lets you add sources, and **Sync
+everything** runs the pipeline (`datalib-dag` under the hood).
 
 The URL it opens carries a one-time `?token=…`, the way a Jupyter
 notebook server's does — the local API is authenticated, so that no web
@@ -376,11 +393,17 @@ faster.
   rendered into readable markdown, attachments included.
 - The `grid_index` step: one row per message or document written into
   the SQL store at `<data_root>/unified_index/grid_index/db.doltlite_db`.
-- The `qmd_index` step: builds the semantic search index. **The first
-  run is slow** — embedding takes roughly 5–10 minutes per thousand
-  chunks on CPU, after a one-time download of the models. It's
-  resumable, so Ctrl-C and re-run is safe. Re-runs after the backlog
+- A `keyword_index` and an `embed` step per source: that source's part
+  of free-text search — its words, then its embeddings, which let a
+  search match on meaning. The first `embed` downloads its model once.
+  **The first embed is slow** — roughly 5–10
+  minutes per thousand chunks on CPU. It's resumable, so Ctrl-C and
+  re-run is safe, and one source's `embed` can be turned off on the
+  Data sources card without touching the others. Re-runs after the backlog
   drains take seconds.
+- The `qmd_aggregator` step, once every source's search steps are
+  done: it drops any source no longer in the config from the search
+  index and reports what the index holds.
 
 **On disk afterwards** (with `data_root = "~/datalib"`):
 
@@ -390,7 +413,7 @@ faster.
 ├── claude/                         # one directory per group …
 │   ├── ingest/                     #   the captured raw stores (precious) …
 │   │   ├── entities.doltlite_db
-│   │   └── blobs.doltlite_db
+│   │   └── blobs.sqlite
 │   └── render_markdown/            #   … and the rendered .md tree
 │       └── …
 ├── slack/
@@ -400,18 +423,19 @@ faster.
 │   └── …
 ├── unified_index/                  # the shared indexes, rebuildable
 │   ├── grid_index/db.doltlite_db   #   grid rows + markdowns + edges
-│   └── qmd_index/qmd/index.sqlite  #   the semantic search index
+│   └── qmd_aggregator/qmd/index.sqlite  #   the semantic search index
 └── system/                         # everything that isn't a source
     ├── supervisor.sqlite           # syncs asked for, and which steps are up to date
     ├── api-token                   # the running server's bearer token
-    ├── lock                        # held by the running server
+    ├── lock, runner-lock           # held by the running server
     ├── feedback.doltlite_db        # feedback you filed (nothing regenerates it)
+    ├── remote_media.doltlite_db    # remote media you let a document load
     ├── runs/runs.sqlite            # every run's step states, logs and metrics
     ├── usage.doltlite_db           # bytes on disk over time
-    └── frontend/                   # UI components the applets contribute
+    └── frontend/                   # UI components: the applets', and yours in frontend/user/
 ```
 
-> **Backups:** the bulky **derived** trees — each `<name>/render_markdown/`,
+> **Backups:** the bulky **derived** trees — each `<group>/render_markdown/`,
 > and `unified_index/` — are rebuilt from your raw
 > stores by re-running the pipeline, and each carries a `CACHEDIR.TAG`,
 > so cache-aware backup tools skip them automatically:
@@ -421,9 +445,12 @@ faster.
 > tar --exclude-caches -czf datalib-backup.tgz ~/datalib
 > ```
 >
-> What's left in the backup is exactly what you want to keep: every
-> `<name>/ingest/` store (the captured data), `config.toml`, and
-> `system/` (scheduler state, filed feedback, sync history).
+> What's left in the backup is what you want to keep: every
+> `<group>/ingest/` store (the captured data), `config.toml`, and
+> `system/` (scheduler state, filed feedback, sync history). One
+> exception: `system/frontend/` carries a `CACHEDIR.TAG` too, so the
+> components you or an agent wrote in `system/frontend/user/` are
+> skipped — back that folder up separately if you have any.
 
 A per-step report prints when the run finishes, and a machine-readable
 `run_summary` event lands on `datalib-dag`'s stderr (NDJSON — tee
@@ -441,9 +468,10 @@ your data root:
 datalib-http ./
 ```
 
-It binds to `http://127.0.0.1:8731` by default and opens that URL in
-your browser. Pass `--no-open` if you'd rather click in yourself, and
-set `DATALIB_BIND=127.0.0.1:<port>` to change the listen address.
+It opens your browser when you start it from a terminal; pass
+`--no-open` if you'd rather click in yourself, and set
+`DATALIB_BIND=127.0.0.1:<port>` to change the listen address from
+step 4's default.
 
 The API requires a token (see step 4). With `--no-open` you'll want the
 URL the server prints, which already has it; to reach the API from a
@@ -460,7 +488,7 @@ need it stable across restarts.
 
 ## 6. Re-syncing
 
-Re-run the sync (**Sync all** in the app, or `datalib-dag config.toml`)
+Re-run the sync (**Sync everything** in the app, or `datalib-dag config.toml`)
 whenever you want to pull in what's new. Downloads are incremental and
 the semantic index is content-hashed, so a re-run over an unchanged
 corpus is a fast no-op.
@@ -473,7 +501,7 @@ the `INDEX_PATH` env var:
 
 ```sh
 rt=$(echo ~/.cache/datalib/runtime/*/)
-INDEX_PATH=~/datalib/unified_index/qmd_index/qmd/index.sqlite \
+INDEX_PATH=~/datalib/unified_index/qmd_aggregator/qmd/index.sqlite \
     "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "hello"
 ```
 
@@ -486,7 +514,7 @@ The point of mirroring your data locally is that it stays yours, so it
 is worth knowing the exit before you need it. Two of the three copies
 are already in open formats you can read with no datalib at all:
 
-- **The markdown.** `<name>/render_markdown/` is a tree of ordinary
+- **The markdown.** `<group>/render_markdown/` is a tree of ordinary
   UTF-8 `.md` files, one per conversation or document. Copy it
   anywhere; every text editor and search tool on your machine already
   reads it.
@@ -510,8 +538,10 @@ are already in open formats you can read with no datalib at all:
   ```
 
   The same command works on any `.doltlite_db` under your data root,
-  including the raw per-source stores under `<name>/ingest/`, whose
-  attachment bytes come across intact.
+  including the raw per-source stores under `<group>/ingest/`.
+  Attachments are not in those: their bytes live beside them in
+  `<group>/ingest/blobs.sqlite`, which is plain SQLite already and
+  opens as it is.
 
   What the export gives you is the current state of every table, with
   its schema and indexes. What it leaves behind is the version history
@@ -521,10 +551,14 @@ are already in open formats you can read with no datalib at all:
 
 `datalib-doltlite` is a `sqlite3`-compatible shell, so you can also
 just explore in place — `datalib-doltlite -readonly <file>` drops you
-in a REPL. Pass `-readonly` whenever you are only looking: a second
-writer against a live store can wedge your next sync. If you prefer a
+in a REPL. Pass `-readonly` whenever you are only looking: anything a
+writable session commits is overwritten by your next sync, and a
+transaction it leaves open stalls that sync. If you prefer a
 GUI, a build of DB Browser for SQLite patched to open doltlite files is
-at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS). More
+at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS). In the
+desktop app, **Browse** on a source's download row opens its raw store
+read-only for you — in that DB Browser when it is installed, otherwise
+in `datalib-doltlite` in Terminal. More
 recipes, including the commit history and per-sync diffs, are in
 [`docs/dev/doltlite.md`](../dev/doltlite.md).
 

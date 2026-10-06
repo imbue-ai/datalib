@@ -2,14 +2,42 @@
 // locators pierce that). The search grid's rows carry `data-row` — the
 // index the grid renders them at — and nothing naming the record, so a
 // row is found by asking the card's grid api (`window.__fwGridApi`,
-// see cards/GridCard.ce.vue) where a uuid's row is. The typed table
+// see cards/GridCard.ce.vue) where a uuid's row is. The grid loads a
+// search a page at a time, so a row further down is sought first. The typed table
 // viewer's rows (the Manage tree, the commit history) carry their key
-// as `data-key`; those helpers are further down.
+// as `data-key`; those helpers are further down. Before writing a spec,
+// read docs/dev/testing.md §"Writing a spec that does not flake".
 
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 /// The search grid's rows, wherever it is on the page.
+// The containers layout: the tabs down the side, and the cards the
+// selected tab shows (every card in it, however deep). A tab shown once
+// stays mounted, hidden and marked ct-hidden-pane; its cards do not
+// count. (Not `:visible`: a card that draws nothing is zero-high.)
+export const SHOWN_CARDS = ".ct-main .ct-card:not(.ct-hidden-pane .ct-card)";
+export const shownCards = (page: Page) => page.locator(SHOWN_CARDS);
+export const tabLabels = (page: Page) => page.locator(".ct-tab .ct-tab-label");
+// The shown card whose source contains `source`.
+export const cardOf = (page: Page, source: string) =>
+  page.locator(`${SHOWN_CARDS}[data-card-source*=${JSON.stringify(source)}]`);
+// A card's title, in the header it has outside a solidified container.
+export const cardTitle = (card: Locator) => card.locator(".ct-card-title");
+
 export const SEARCH_ROWS = ".grid-box .slick-row";
+
+/// The search grid on its default query, documents only. `/` opens on
+/// the Dashboard card now, so a spec about the grid goes here.
+export const GRID = "/gridView()";
+
+/// The search grid with its query cleared: every row, the messages
+/// inside a document included. `GRID` opens on documents only.
+export const EVERY_ROW = "/gridView()::q%3D";
+
+/// The Manage header's sync button, whichever way it faces: Sync
+/// everything, or Stop everything while anything syncs.
+export const syncAllButton = (page: Page) =>
+  page.getByRole("button", { name: /^(Sync|Stop|Stopping) everything$/ });
 /// One of its column headers.
 export const searchHeader = (page: Page, colId: string) =>
   page.locator(`.grid-box .slick-header-column[col-id="${colId}"]`);
@@ -25,9 +53,14 @@ export const searchMenuItem = (page: Page, name: string | RegExp) =>
 /// The card's grid api on `window.__fwGridApi`, for `page.evaluate`.
 export type GridApi = {
   rowIndexOf: (uuid: string) => number | null;
+  /// Load pages until the row is held; its index, or null.
+  seek: (uuid: string) => Promise<number | null>;
+  /// What a header dropped on the search bar does.
+  dropOnSearch: (colId: string) => void;
+  /// A search, a page, or a group's page on its way.
+  busy: () => boolean;
   uuidAt: (row: number) => string | null;
   rows: () => Record<string, unknown>[];
-  filteredRows: () => Record<string, unknown>[];
   scrollToRow: (row: number) => void;
   scrollToColumn: (id: string) => void;
   isSelected: (uuid: string) => boolean;
@@ -37,6 +70,18 @@ export type GridApi = {
   showColumns: (ids: string[]) => void;
   groupBy: (ids: string[]) => void;
 };
+
+/// Wait until nothing the grid asked for is still on its way.
+export async function gridSettled(page: Page) {
+  await expect
+    .poll(
+      () => page.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.busy()),
+      {
+        message: "the grid never finished loading",
+      },
+    )
+    .toBe(false);
+}
 
 /// The uuid of the first row the grid has, whatever is at the top of
 /// the viewport — a stable handle for a row that a scroll or a sort
@@ -63,9 +108,9 @@ const rowLocator = (page: Page, rowIndex: number): Locator =>
 // column — otherwise the row is there and the cell it came for is not.
 const nudgeRowIntoView = (page: Page, uuid: string, colId?: string): Promise<number | null> =>
   page.evaluate(
-    ({ uuid, colId }) => {
+    async ({ uuid, colId }) => {
       const a = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
-      const row = a.rowIndexOf(uuid);
+      const row = a.rowIndexOf(uuid) ?? (await a.seek(uuid));
       if (row != null) a.scrollToRow(row);
       if (colId) a.scrollToColumn(colId);
       return row;
@@ -84,22 +129,23 @@ const nudgeRowIntoView = (page: Page, uuid: string, colId?: string): Promise<num
 // that has just been resized), waiting alone never converges. So the
 // nudge is inside the poll, and gets repeated until the row is there.
 async function scrollRowIntoView(page: Page, uuid: string, colId?: string): Promise<number> {
-  const rowIndex = await nudgeRowIntoView(page, uuid, colId);
-  expect(rowIndex, `row for uuid=${uuid} found in grid`).not.toBeNull();
+  // The index is read afresh on every try: rows loading above this one,
+  // as they do when the grid is scrolled towards its older end, move it.
+  let rowIndex: number | null = null;
   await expect
     .poll(
       async () => {
-        await nudgeRowIntoView(page, uuid, colId);
-        return rowLocator(page, rowIndex as number).count();
+        rowIndex = await nudgeRowIntoView(page, uuid, colId);
+        return rowIndex == null ? -1 : rowLocator(page, rowIndex).count();
       },
       {
         timeout: 15_000,
         intervals: [100, 250, 250, 500],
-        message: `row ${rowIndex} (uuid=${uuid}) never rendered after being scrolled to`,
+        message: `row uuid=${uuid} was not found, or never rendered after being scrolled to`,
       },
     )
     .toBeGreaterThan(0);
-  return rowIndex as number;
+  return rowIndex as unknown as number;
 }
 
 // Scroll a row into view and act on it, retrying the *pair*.
@@ -220,7 +266,13 @@ export async function searchAndSettle(
 
 /// The rows of any `TableGrid` on the page — the Manage tree, the
 /// commit history — scoped by a caller that has more than one open.
-export const TABLE_ROWS = ".tg-grid .slick-row";
+/// A grid with pinned columns draws each row in two halves; this is the
+/// half that scrolls, which holds every cell but the pinned Name
+/// (`nameCell`), so a row is still one element.
+export const TABLE_ROWS = ".tg-grid .slick-row:not([data-pinned])";
+/// A row's Name cell, in whichever half of the row the grid draws it.
+export const nameCell = (page: Page, key: string) =>
+  page.locator(`.tg-grid .slick-row[data-key="${key}"] [col-id="name"]`);
 /// The right-click menu the grid appends to <body>, and its entries.
 export const TABLE_MENU = ".slick-context-menu";
 /// An entry by its text — the text beside the icon slot, which reads as
@@ -234,6 +286,17 @@ export const menuEntry = (page: Page, entry: string | RegExp) =>
 export const MENU_DISABLED = /slick-menu-item-disabled/;
 /// A row the grid has selected: its cells carry the class.
 export const SELECTED_ROWS = `${TABLE_ROWS}:has(.slick-cell.selected)`;
+
+/// The config as the server holds it, for a spec to put back when it is
+/// done. Read from the API rather than the editor: the editor fills in
+/// after the card paints, and a read that beats it snapshots nothing —
+/// the spec then writes a config with no applet, and every spec after it
+/// in the file opens on the config-error screen.
+export async function savedConfig(request: APIRequestContext): Promise<string> {
+  const { text } = (await (await request.get("/api/config")).json()) as { text: string };
+  expect(text, "the server should hold a config to put back").toContain("[[applets]]");
+  return text;
+}
 
 /// The config editor (`.m2-editor`) open beside the sources card. `/data_sources` opens the sources card alone, which is
 /// what a person gets; a spec that reads or writes `config.toml`
@@ -257,17 +320,18 @@ export const groupRow = (page: Page, id: string) => pipelineRow(page, `group:${i
 /// table, and a click that lands on the chevron of a row the grid is
 /// about to replace opens nothing; the row that takes its place is
 /// folded again, and a check on its own would wait on it forever.
-export async function expandRow(row: Locator, what: string): Promise<void> {
-  await expect(row, `${what} should have a row`).toBeVisible();
+export async function expandRow(page: Page, key: string, what: string): Promise<void> {
+  const name = nameCell(page, key);
+  await expect(name, `${what} should have a row`).toBeVisible();
   await expect(async () => {
-    const closed = row.locator(".slick-tree-toggle.collapsed");
+    const closed = name.locator(".slick-tree-toggle.collapsed");
     if ((await closed.count()) > 0) await closed.click({ timeout: 1_000 });
-    await expect(row.locator(".slick-tree-toggle.expanded")).toBeVisible({ timeout: 1_000 });
+    await expect(name.locator(".slick-tree-toggle.expanded")).toBeVisible({ timeout: 1_000 });
   }, `${what} never opened`).toPass({ timeout: 15_000, intervals: [100, 250, 500] });
 }
 
 export async function expandGroup(page: Page, id: string): Promise<void> {
-  await expandRow(groupRow(page, id), `group ${id}`);
+  await expandRow(page, `group:${id}`, `group ${id}`);
 }
 
 /// One entry of a Manage row's right-click menu, opened on its Status
@@ -310,33 +374,107 @@ export async function pickRowMenu(
   });
 }
 
-/// A row's status. The column paints an icon, so the state is the
-/// icon's accessible name — the same word a person gets by hovering.
-/// Null while the cell is mid-repaint or the row is virtualized away.
-export async function statusOf(page: Page, id: string): Promise<string | null> {
-  const el = pipelineRow(page, id).locator('[col-id="status"] [role="img"]');
-  if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("aria-label");
+/// One drawing of a Pipeline row: every cell a spec reads, taken in one
+/// pass over the DOM so no two values come from different paints. The
+/// server sends a row with its config and the loop's record already
+/// joined, so in a drawn row a null means the value is really absent.
+export type RowReading = {
+  /// The status icon's accessible name — the word a person gets by
+  /// hovering.
+  status: string;
+  /// The exact instants, off the stamps' `title`. Not the visible
+  /// "5 minutes ago", which drifts on its own. `lastSynced` is the stamp
+  /// beside the Last update glyph, which on a step is its last sync.
+  /// Null: the step never ran (or never succeeded), or its column is
+  /// hidden — `lastSuccessOf` shows it first.
+  lastSynced: string | null;
+  lastSuccess: string | null;
+  /// The Bytes label over the sparkline, as drawn. Null: nothing on disk.
+  disk: string | null;
+  /// The Queue and ETA cells as drawn — a figure, or a word such as
+  /// "stalled"; "" when blank.
+  queue: string;
+  eta: string;
+};
+
+/// The time beside the Last update glyph; absent on a row that never ran.
+export const LAST_UPDATE_AT = '[col-id="status"] .tg-status-at';
+
+/// How long a row may take to be drawn: a remount fetches the rows after
+/// the shell has painted.
+export const ROW_DRAWN = 15_000;
+
+/// A row as drawn right now, or null while it is not drawn: its group is
+/// closed, the page is remounting, or the grid is repainting it. Only for
+/// a poll that treats the null as "not yet"; everything else reads
+/// through `readRow`, which waits it out.
+export async function sampleRow(page: Page, id: string): Promise<RowReading | null> {
+  const [reading] = await pipelineRow(page, id).evaluateAll(
+    (rows, at) =>
+      rows.slice(0, 1).map((row) => {
+        const status = row
+          .querySelector('[col-id="status"] [role="img"]')
+          ?.getAttribute("aria-label");
+        if (!status) return null;
+        const quantity = (el: Element, col: string) => {
+          const text = el.querySelector(`[col-id="${col}"] .tg-quantity`)?.textContent?.trim();
+          return !text || text === "—" ? "" : text;
+        };
+        const stamp = (col: string) =>
+          row.querySelector(`[col-id="${col}"] [title]`)?.getAttribute("title") ?? null;
+        return {
+          status,
+          lastSynced: row.querySelector(at)?.getAttribute("title") ?? null,
+          lastSuccess: stamp("last_success"),
+          disk: row.querySelector('[col-id="disk"] .tg-plot-value')?.textContent?.trim() ?? null,
+          queue: quantity(row, "queue"),
+          eta: quantity(row, "eta"),
+        };
+      }),
+    LAST_UPDATE_AT,
+  );
+  return reading ?? null;
 }
 
-/// The exact instant a row last ran, off the Last-synced cell's
-/// `title`. Not the visible text, which reads "5 minutes ago" and
-/// drifts on its own — comparing that across a sync would compare two
-/// clocks rather than two records. Null for a row that has never run,
-/// which renders "—" with no title to read.
+/// A row once it is drawn. Returns the reading the wait matched, never a
+/// fresh read, which could land on the next repaint.
+export async function readRow(page: Page, id: string, timeout = ROW_DRAWN): Promise<RowReading> {
+  let reading: RowReading | null = null;
+  await expect
+    .poll(async () => (reading = await sampleRow(page, id)) !== null, {
+      timeout,
+      intervals: [100, 200],
+      message: `${id} was never drawn: is its group open?`,
+    })
+    .toBe(true);
+  return reading!;
+}
+
+export async function statusOf(page: Page, id: string): Promise<string> {
+  return (await readRow(page, id)).status;
+}
+
+/// Null only for a row that has never run.
 export async function stampOf(page: Page, id: string): Promise<string | null> {
-  return stampIn(page, id, "last_synced");
+  return (await readRow(page, id)).lastSynced;
 }
 
-/// `stampOf` for the Last-success cell.
+/// A column the Sources card hides until asked for, shown through the
+/// header's right-click picker.
+export async function showColumn(page: Page, field: string) {
+  const header = (col: string) => page.locator(`.tg-grid .slick-header-column[col-id="${col}"]`);
+  if ((await header(field).count()) > 0) return;
+  await header("status").click({ button: "right" });
+  const picker = page.locator(".slick-column-picker");
+  await picker.locator("label", { has: page.locator(`input[data-columnid="${field}"]`) }).click();
+  await picker.locator("button.close").click();
+  await expect(header(field)).toHaveCount(1);
+}
+
+/// Null only for a row that has never succeeded.
 export async function lastSuccessOf(page: Page, id: string): Promise<string | null> {
-  return stampIn(page, id, "last_success");
-}
-
-async function stampIn(page: Page, id: string, column: string): Promise<string | null> {
-  const el = pipelineRow(page, id).locator(`[col-id="${column}"] [title]`);
-  if ((await el.count()) === 0) return null;
-  return await el.first().getAttribute("title");
+  await showColumn(page, "last_success");
+  return (await readRow(page, id)).lastSuccess;
 }
 
 /// States a run will not move a step out of.
@@ -432,25 +570,6 @@ export async function statusLog(page: Page, id: string): Promise<string[]> {
   }, id);
 }
 
-/// A row's status and Last-synced stamp, read from one paint of it. Read
-/// one after the other, the two can come from different paints: a sync
-/// the loop takes on at once can finish between the reads, and "Stopped"
-/// from before it beside the stamp it just wrote reads as that sync
-/// having stopped.
-async function statusAndStampOf(
-  page: Page,
-  id: string,
-): Promise<{ status: string | null; stamp: string | null }> {
-  const [reading] = await pipelineRow(page, id).evaluateAll((rows) =>
-    rows.slice(0, 1).map((row) => ({
-      status:
-        row.querySelector('[col-id="status"] [role="img"]')?.getAttribute("aria-label") ?? null,
-      stamp: row.querySelector('[col-id="last_synced"] [title]')?.getAttribute("title") ?? null,
-    })),
-  );
-  return reading ?? { status: null, stamp: null };
-}
-
 /// Wait for a row to finish a run newer than the one it was showing.
 async function settleRowOnly(
   page: Page,
@@ -462,9 +581,13 @@ async function settleRowOnly(
   await expect
     .poll(
       async () => {
-        const reading = await statusAndStampOf(page, id);
-        last = reading.status ?? "(no status)";
-        const stamp = reading.stamp;
+        // Status and stamp from one paint: read apart, "Stopped" from
+        // before a sync beside the stamp that sync just wrote reads as
+        // the sync having stopped.
+        const reading = await sampleRow(page, id);
+        if (!reading) return "(not drawn)";
+        last = reading.status;
+        const stamp = reading.lastSynced;
         return TERMINAL.test(last) && stamp !== before ? "finished" : `${last} @ ${stamp}`;
       },
       {
@@ -495,7 +618,7 @@ export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
     )
     .toBe(false);
   await page.reload();
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expect(syncAllButton(page)).toBeVisible();
 }
 
 /// Resolves once the wall clock is in a later second than when it was
@@ -533,18 +656,7 @@ export async function settleRows(
   const out: Record<string, string> = {};
   for (const id of ids) out[id] = await settleRowOnly(page, id, before[id] ?? null, timeout);
   await settleRunner(page, timeout);
-  // The remount paints the shell first and the rows after it; a caller
-  // reading a settled row straight away would read it on the way to
-  // being painted, and see nothing.
-  for (const id of ids) {
-    await expect
-      .poll(() => statusOf(page, id), {
-        timeout,
-        intervals: [200],
-        message: `${id} was not painted again after the remount`,
-      })
-      .not.toBeNull();
-  }
+  for (const id of ids) await readRow(page, id, timeout);
   return out;
 }
 
@@ -566,4 +678,35 @@ export async function settle(
   timeout = ROW_SETTLE,
 ): Promise<string> {
   return (await settleRows(page, [id], { [id]: before }, timeout))[id];
+}
+
+/** A document card's rendered body. It is drawn inside the card's
+ *  own frame (`src/cards/docFrame.ts`), so a page-level locator
+ *  does not reach it. `scope` narrows to one card when several are open. */
+export function docBody(scope: Page | Locator): Locator {
+  return scope.frameLocator("iframe.doc-frame").locator("body.chat-body");
+}
+
+/** `selector` in whichever document frame holds it, waiting until one
+ *  does. One locator cannot reach across frames, and each document card
+ *  has its own frame. */
+export async function inDocFrame(page: Page, selector: string, timeout = 10_000): Promise<Locator> {
+  let hit: Locator | null = null;
+  await expect
+    .poll(
+      async () => {
+        for (const f of page.frames()) {
+          if (f === page.mainFrame()) continue;
+          const loc = f.locator(selector);
+          if ((await loc.count().catch(() => 0)) > 0) {
+            hit = loc;
+            return true;
+          }
+        }
+        return false;
+      },
+      { timeout, message: `no document frame holds ${selector}` },
+    )
+    .toBe(true);
+  return hit!;
 }

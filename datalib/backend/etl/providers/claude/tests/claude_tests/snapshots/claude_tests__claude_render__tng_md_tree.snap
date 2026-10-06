@@ -1,23 +1,23 @@
 ---
-source: datalib/backend/etl/providers/claude/tests/claude_render.rs
+source: datalib/backend/etl/providers/claude/tests/claude_tests/claude_render.rs
 expression: bundle
 ---
 === claude_export/render_markdown/00000000-0000-83ab-b990-357eea87eda5/all.md ===
 ---
-title: "Claude Project · Stellar Cartography (all)"
+title: "Claude Project · Stellar Cartography"
 provider: claude
 source_label: "Claude"
 chat_uuid: 00000000-0000-83ab-b990-357eea87eda5
 markdown_uuid: 00000000-0000-83ab-b990-357eea87eda5
 period: all
 display: "Stellar Cartography"
-account: jlpicard@enterprise.starfleet.test
-project: Stellar Cartography
-external_id: 70000002-1701-4d00-8000-000000000702
+account: "jlpicard@enterprise.starfleet.test"
+project: "Stellar Cartography"
+external_id: "70000002-1701-4d00-8000-000000000702"
 item_count: 3
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-83ab-b990-357eea87eda5">Claude Project · Stellar Cartography (all) <a class="source-link" href="https://claude.ai/project/70000002-1701-4d00-8000-000000000702" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-83ab-b990-357eea87eda5">Claude Project · Stellar Cartography <a class="source-link" href="https://claude.ai/project/70000002-1701-4d00-8000-000000000702" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-00000000-0000-8d8c-ac00-6fb14cf03f13" data-section-uuid="00000000-0000-8d8c-ac00-6fb14cf03f13" class="msg msg--claude">
 
@@ -52,19 +52,19 @@ Bearings are given from the ship's current heading, not from galactic north.
 
 === claude_export/render_markdown/00000000-0000-84d9-a07c-75bb3c93c654/all.md ===
 ---
-title: "Poisoned: a message with an unreadable stamp (all)"
+title: "Poisoned: a message with an unreadable stamp"
 provider: claude
 source_label: "Claude"
 chat_uuid: 00000000-0000-84d9-a07c-75bb3c93c654
 markdown_uuid: 00000000-0000-84d9-a07c-75bb3c93c654
 period: all
 display: "Poisoned: a message with an unreadable stamp"
-account: jlpicard@enterprise.starfleet.test
-external_id: c0000006-1701-4d00-8000-00000000c006
+account: "jlpicard@enterprise.starfleet.test"
+external_id: "c0000006-1701-4d00-8000-00000000c006"
 item_count: 2
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-84d9-a07c-75bb3c93c654">Poisoned: a message with an unreadable stamp (all) <a class="source-link" href="https://claude.ai/chat/c0000006-1701-4d00-8000-00000000c006" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-84d9-a07c-75bb3c93c654">Poisoned: a message with an unreadable stamp <a class="source-link" href="https://claude.ai/chat/c0000006-1701-4d00-8000-00000000c006" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b75c4b3-d900-834f-9ccd-cd06aca1f1fc" data-section-uuid="0b75c4b3-d900-834f-9ccd-cd06aca1f1fc" class="msg msg--claude">
 
@@ -85,20 +85,20 @@ Stardate 47988.1. The chronometer is on ship's time.
 
 === claude_export/render_markdown/00000000-0000-856b-944c-412bf8dca640/all.md ===
 ---
-title: "Klingon Diplomatic Greeting Drafting (all)"
+title: "Klingon Diplomatic Greeting Drafting"
 provider: claude
 source_label: "Claude"
 chat_uuid: 00000000-0000-856b-944c-412bf8dca640
 markdown_uuid: 00000000-0000-856b-944c-412bf8dca640
 period: all
 display: "Klingon Diplomatic Greeting Drafting"
-account: jlpicard@enterprise.starfleet.test
-project: Bridge Operations
-external_id: c0000003-1701-4d00-8000-00000000c003
-item_count: 6
+account: "jlpicard@enterprise.starfleet.test"
+project: "Bridge Operations"
+external_id: "c0000003-1701-4d00-8000-00000000c003"
+item_count: 4
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-856b-944c-412bf8dca640">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-856b-944c-412bf8dca640">Klingon Diplomatic Greeting Drafting <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b75b540-c500-844a-b73a-e6dbe1ab76d7" data-section-uuid="0b75b540-c500-844a-b73a-e6dbe1ab76d7" class="msg msg--claude">
 
@@ -187,19 +187,19 @@ Perfect. Make it so.
 
 === claude_export/render_markdown/00000000-0000-882d-b21e-5e54f3f20dbb/all.md ===
 ---
-title: "Borg Encryption Signature Lookup (all)"
+title: "Borg Encryption Signature Lookup"
 provider: claude
 source_label: "Claude"
 chat_uuid: 00000000-0000-882d-b21e-5e54f3f20dbb
 markdown_uuid: 00000000-0000-882d-b21e-5e54f3f20dbb
 period: all
 display: "Borg Encryption Signature Lookup"
-account: jlpicard@enterprise.starfleet.test
-external_id: c0000005-1701-4d00-8000-00000000c005
-item_count: 6
+account: "jlpicard@enterprise.starfleet.test"
+external_id: "c0000005-1701-4d00-8000-00000000c005"
+item_count: 2
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-882d-b21e-5e54f3f20dbb">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-882d-b21e-5e54f3f20dbb">Borg Encryption Signature Lookup <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b75bf56-8e80-873d-9a5d-3ddfc58937d2" data-section-uuid="0b75bf56-8e80-873d-9a5d-3ddfc58937d2" class="msg msg--claude">
 
@@ -277,7 +277,9 @@ ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
 
 <details><summary>Tool result: starfleet_db_query</summary>
 
+```
 Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.
+```
 
 </details>
 
@@ -288,19 +290,19 @@ Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulatio
 
 === claude_export/render_markdown/00000000-0000-8b06-828d-f59d39f6190d/all.md ===
 ---
-title: "Tricorder Image Diagnostic (all)"
+title: "Tricorder Image Diagnostic"
 provider: claude
 source_label: "Claude"
 chat_uuid: 00000000-0000-8b06-828d-f59d39f6190d
 markdown_uuid: 00000000-0000-8b06-828d-f59d39f6190d
 period: all
 display: "Tricorder Image Diagnostic"
-account: bcrusher@enterprise.starfleet.test
-external_id: c0000004-1701-4d00-8000-00000000c004
+account: "bcrusher@enterprise.starfleet.test"
+external_id: "c0000004-1701-4d00-8000-00000000c004"
 item_count: 2
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8b06-828d-f59d39f6190d">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8b06-828d-f59d39f6190d">Tricorder Image Diagnostic <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b75ba14-bb40-877f-bf26-28fc93d65eef" data-section-uuid="0b75ba14-bb40-877f-bf26-28fc93d65eef" class="msg msg--claude">
 
@@ -323,20 +325,20 @@ The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depress
 
 === claude_export/render_markdown/00000000-0000-8da1-84c9-7ed998e5bd85/all.md ===
 ---
-title: "Claude Project · Bridge Operations (all)"
+title: "Claude Project · Bridge Operations"
 provider: claude
 source_label: "Claude"
 chat_uuid: 00000000-0000-8da1-84c9-7ed998e5bd85
 markdown_uuid: 00000000-0000-8da1-84c9-7ed998e5bd85
 period: all
 display: "Bridge Operations"
-account: jlpicard@enterprise.starfleet.test
-project: Bridge Operations
-external_id: 70000001-1701-4d00-8000-000000000701
+account: "jlpicard@enterprise.starfleet.test"
+project: "Bridge Operations"
+external_id: "70000001-1701-4d00-8000-000000000701"
 item_count: 4
 ---
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8da1-84c9-7ed998e5bd85">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8da1-84c9-7ed998e5bd85">Claude Project · Bridge Operations <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
 <div id="m-0b5016d5-ce80-8aa2-8c03-406059b607f4" data-section-uuid="0b5016d5-ce80-8aa2-8c03-406059b607f4" class="msg msg--claude">
 

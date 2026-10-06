@@ -1,26 +1,34 @@
-//! Read-only account probe: "can these credentials reach this
-//! mailbox, and what labels does it have?" The report's shape is
-//! shared with every other probeable provider — see
-//! `datalib_probe`.
+//! Read-only account probe. Asked for the account: "can these
+//! credentials reach this mailbox, and whose is it?" Asked for its
+//! labels or mailboxes — one listing either way, which a picker of
+//! either kind filters — that as well. The report's shape is shared
+//! with every other probeable provider — see `datalib_probe`.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
 use datalib_etl_email_config::{EmailConfig, EmailLiveMode, DEFAULT_QUOTA_UNITS_PER_MINUTE};
-use datalib_probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
+use datalib_probe::{ProbeAccount, ProbeAsk, ProbeItem, ProbeItemKind, ProbeList, ProbeReport};
 
 use crate::ingest::gmail_api::api as gmail;
 use crate::ingest::labels::{self, LabelMap};
 use crate::ingest::{api, session::Session};
 use crate::mailbox_labels::{self, MailboxNode};
 
-pub async fn probe(config: &EmailConfig) -> Result<ProbeReport> {
+/// A mailbox listing is one request on either protocol, so there is
+/// no progress to report.
+pub async fn probe(config: &EmailConfig, ask: ProbeAsk) -> Result<ProbeReport> {
     config.validate()?;
+    let list = match ask {
+        ProbeAsk::Account => false,
+        ProbeAsk::List(ProbeList::Labels | ProbeList::Mailboxes) => true,
+        ProbeAsk::List(other) => bail!("an email source has no `{}` list", other.as_str()),
+    };
     match config.live_mode()? {
         Some(EmailLiveMode::GmailApi(gmail_cfg)) => {
-            probe_gmail(gmail_cfg.user_id(), &config.latchkey_settings).await
+            probe_gmail(gmail_cfg.user_id(), &config.latchkey_settings, list).await
         }
-        Some(EmailLiveMode::Jmap(sync)) => probe_jmap(sync, &config.latchkey_settings).await,
+        Some(EmailLiveMode::Jmap(sync)) => probe_jmap(sync, &config.latchkey_settings, list).await,
         None => Err(anyhow!(
             "this email source has no live download mode, so there is no connection to test. \
              Set `gmail` for a Gmail account or `jmap.hostname` for a JMAP server; an \
@@ -34,6 +42,7 @@ pub async fn probe(config: &EmailConfig) -> Result<ProbeReport> {
 async fn probe_gmail(
     user_id: &str,
     latchkey: &datalib_etl::http::LatchkeySettings,
+    list: bool,
 ) -> Result<ProbeReport> {
     // Two requests, so a throttle would never wait; it exists here only
     // to mint the client every request needs.
@@ -41,6 +50,20 @@ async fn probe_gmail(
     let profile = gmail::get_profile(user_id, &client)
         .await
         .context("Gmail users.getProfile")?;
+    let account = ProbeAccount {
+        id: profile.email_address.clone(),
+        address: Some(profile.email_address),
+        display_name: None,
+        message_estimate: profile.messages_total,
+    };
+    if !list {
+        return Ok(ProbeReport {
+            mode: "gmail".to_string(),
+            account,
+            items: Vec::new(),
+            notes: Vec::new(),
+        });
+    }
     let raw = gmail::list_labels(user_id, &client)
         .await
         .context("Gmail users.labels.list")?;
@@ -74,12 +97,7 @@ async fn probe_gmail(
 
     Ok(ProbeReport {
         mode: "gmail".to_string(),
-        account: ProbeAccount {
-            id: profile.email_address.clone(),
-            address: Some(profile.email_address),
-            display_name: None,
-            message_estimate: profile.messages_total,
-        },
+        account,
         items,
         notes: vec![
             "Gmail reports no per-label message counts without a request per label, so the \
@@ -94,6 +112,7 @@ async fn probe_gmail(
 async fn probe_jmap(
     sync: &datalib_etl_email_config::EmailSync,
     latchkey: &datalib_etl::http::LatchkeySettings,
+    list: bool,
 ) -> Result<ProbeReport> {
     if sync.hostname.trim().is_empty() {
         return Err(anyhow!(
@@ -105,6 +124,32 @@ async fn probe_jmap(
         .await
         .with_context(|| format!("JMAP session discovery against {}", sync.hostname))?;
     let account_id = session.pick_account(sync.account_id.as_deref())?;
+
+    let name = session
+        .accounts
+        .iter()
+        .find(|(id, _)| *id == account_id)
+        .and_then(|(_, v)| v.get("name"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let account = ProbeAccount {
+        id: account_id.clone(),
+        // JMAP's account `name` is a display name that on Fastmail
+        // happens to be the address; report it as both rather than
+        // asserting it is one or the other.
+        address: name.clone(),
+        display_name: name,
+        message_estimate: None,
+    };
+    if !list {
+        return Ok(ProbeReport {
+            mode: "jmap".to_string(),
+            account,
+            items: Vec::new(),
+            notes: Vec::new(),
+        });
+    }
 
     let resp = api::call(
         &session,
@@ -143,29 +188,9 @@ async fn probe_jmap(
         .collect();
     dedupe_and_sort(&mut items);
 
-    let account = session
-        .accounts
-        .iter()
-        .find(|(id, _)| *id == account_id)
-        .map(|(_, v)| v.clone());
-    let name = account
-        .as_ref()
-        .and_then(|v| v.get("name"))
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-
     Ok(ProbeReport {
         mode: "jmap".to_string(),
-        account: ProbeAccount {
-            id: account_id,
-            // JMAP's account `name` is a display name that on Fastmail
-            // happens to be the address; report it as both rather than
-            // asserting it is one or the other.
-            address: name.clone(),
-            display_name: name,
-            message_estimate: None,
-        },
+        account,
         items,
         notes: Vec::new(),
     })
@@ -228,7 +253,7 @@ mod tests {
         let err = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(probe(&cfg))
+            .block_on(probe(&cfg, ProbeAsk::Account))
             .expect_err("mbox has no connection to test")
             .to_string();
         assert!(err.contains("no live download mode"), "{err}");
@@ -245,7 +270,7 @@ mod tests {
         let err = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(probe(&cfg))
+            .block_on(probe(&cfg, ProbeAsk::Account))
             .expect_err("an empty hostname cannot be probed")
             .to_string();
         assert!(err.contains("jmap.hostname"), "{err}");

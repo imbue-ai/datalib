@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Result;
 use datalib_etl::blob_cas::blake3_hex;
 
-use super::super::envelope::{self, TransportFacts};
+use super::super::envelope::{self, GmailId, TransportFacts};
 use super::super::labels::{self, LabelMap};
 use super::super::schema_raw::EmailRow;
 use super::super::K_ONLY_EXTRACT_LABELS;
@@ -43,25 +43,48 @@ impl LabelIndex {
         self.by_id.get(id).is_some_and(|l| l.is_system)
     }
 
+    /// `(mailbox id, name, role)` for every label that files mail.
     pub fn mailboxes(&self, account_id: &str) -> Vec<(String, String, Option<&'static str>)> {
-        let mut out: BTreeMap<String, (String, Option<&'static str>)> = BTreeMap::new();
-        for label in self.by_id.values() {
-            let LabelMap::Mailbox { role } = self.map(&label.id) else {
-                continue;
-            };
-            let canonical = if label.is_system {
-                labels::canonical_name(&label.name)
-            } else {
-                label.name.clone()
-            };
-            out.insert(
-                labels::mailbox_id(account_id, &canonical),
-                (canonical, role),
-            );
-        }
-        out.into_iter()
-            .map(|(id, (name, role))| (id, name, role))
+        self.by_id
+            .values()
+            .filter_map(|label| {
+                let LabelMap::Mailbox { role } = self.map(&label.id) else {
+                    return None;
+                };
+                Some((
+                    labels::gmail_mailbox_id(account_id, &label.id),
+                    self.path(&label.id),
+                    role,
+                ))
+            })
             .collect()
+    }
+
+    /// What this run does to the account's mailbox rows, given the ids it
+    /// already holds. A row keyed by the label's *name* — an older build's,
+    /// or a Takeout import's — moves onto the label's id; a Gmail row whose
+    /// label is gone is emptied. A name-keyed row Gmail no longer lists
+    /// stays as it is: nothing says what became of it.
+    pub fn plan_mailboxes(&self, account_id: &str, held: &BTreeSet<String>) -> MailboxPlan {
+        let rows = self.mailboxes(account_id);
+        let listed: BTreeSet<&str> = rows.iter().map(|(id, _, _)| id.as_str()).collect();
+        let mut moves: BTreeMap<String, Option<String>> = BTreeMap::new();
+        for (id, name, _) in &rows {
+            let by_name = labels::mailbox_id(account_id, name);
+            if held.contains(&by_name) {
+                moves.entry(by_name).or_insert_with(|| Some(id.clone()));
+            }
+        }
+        let prefix = labels::gmail_mailbox_prefix(account_id);
+        for id in held {
+            if id.starts_with(&prefix) && !listed.contains(id.as_str()) {
+                moves.insert(id.clone(), None);
+            }
+        }
+        MailboxPlan {
+            rows,
+            moves: moves.into_iter().collect(),
+        }
     }
 
     fn map(&self, id: &str) -> LabelMap {
@@ -80,15 +103,9 @@ impl LabelIndex {
         let mut keywords: BTreeSet<String> = BTreeSet::new();
         let mut is_unread = false;
         for id in label_ids {
-            let name = self.name(id);
             match self.map(id) {
                 LabelMap::Mailbox { .. } => {
-                    let canonical = if self.is_system(id) {
-                        labels::canonical_name(&name)
-                    } else {
-                        name
-                    };
-                    let mid = labels::mailbox_id(account_id, &canonical);
+                    let mid = labels::gmail_mailbox_id(account_id, id);
                     if !mailbox_ids.contains(&mid) {
                         mailbox_ids.push(mid);
                     }
@@ -170,18 +187,28 @@ impl LabelIndex {
     }
 
     pub fn label_paths(&self, label_ids: &[String]) -> Vec<String> {
-        label_ids
-            .iter()
-            .map(|id| {
-                let name = self.name(id);
-                if self.is_system(id) {
-                    labels::canonical_name(&name)
-                } else {
-                    name
-                }
-            })
-            .collect()
+        label_ids.iter().map(|id| self.path(id)).collect()
     }
+
+    /// The name a person reads for a label: Takeout's spelling of a system
+    /// label, a user label's own name.
+    fn path(&self, id: &str) -> String {
+        let name = self.name(id);
+        if self.is_system(id) {
+            labels::canonical_name(&name)
+        } else {
+            name
+        }
+    }
+}
+
+/// See [`LabelIndex::plan_mailboxes`].
+#[derive(Debug, Default)]
+pub struct MailboxPlan {
+    /// `(mailbox id, name, role)` to upsert.
+    pub rows: Vec<(String, String, Option<&'static str>)>,
+    /// `(from, to)`: refile every email under `from` onto `to`, or off it.
+    pub moves: Vec<(String, Option<String>)>,
 }
 
 pub fn normalize_thread_id(gmail_thread_id: &str) -> String {
@@ -195,8 +222,6 @@ pub fn normalize_thread_id(gmail_thread_id: &str) -> String {
 pub struct Ingested {
     pub row: EmailRow,
     pub email_id: String,
-    pub thread_id: String,
-    pub received_at: String,
     pub blob_id: String,
     pub raw: Vec<u8>,
     /// Canonical label paths, for the extract-time label filter.
@@ -206,7 +231,11 @@ pub struct Ingested {
 pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Result<Ingested> {
     let parsed = envelope::parse(&msg.raw)?;
     let blob_id = blake3_hex(&msg.raw);
-    let email_id = envelope::email_id(&parsed, &blob_id);
+    // No fallback to `Message-ID`: a row keyed that way would never meet
+    // the Takeout copy of the same message.
+    let gmail_id = GmailId::from_api(&msg.id)
+        .ok_or_else(|| anyhow::anyhow!("Gmail message id {:?} is not hex", msg.id))?;
+    let email_id = envelope::email_id(Some(gmail_id), &parsed, &blob_id);
     let thread_id = normalize_thread_id(&msg.thread_id);
     let (mailbox_ids, keywords) = index.resolve(account_id, &msg.label_ids);
 
@@ -250,8 +279,6 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
     Ok(Ingested {
         row,
         email_id,
-        thread_id,
-        received_at,
         blob_id,
         raw: msg.raw.clone(),
         label_paths: index.label_paths(&msg.label_ids),
@@ -289,12 +316,94 @@ mod tests {
         ])
     }
 
-    /// The dedup property, at the level that matters: the API's `INBOX`
-    /// and Takeout's `Inbox` must resolve to the same mailbox id.
+    /// A message is filed by Google's label id, never by the label's
+    /// name, so renaming a label moves no email.
     #[test]
-    fn resolves_system_labels_onto_the_shared_mailbox_ids() {
-        let (mailboxes, _) = index().resolve("acct", &["INBOX".into()]);
-        assert_eq!(mailboxes, vec![labels::mailbox_id("acct", "Inbox")]);
+    fn files_a_message_under_googles_label_id() {
+        let (mailboxes, _) = index().resolve("acct", &["INBOX".into(), "Label_7".into()]);
+        assert_eq!(
+            mailboxes,
+            vec![
+                labels::gmail_mailbox_id("acct", "INBOX"),
+                labels::gmail_mailbox_id("acct", "Label_7"),
+            ]
+        );
+    }
+
+    /// A renamed label keeps its row and changes its name; nothing is
+    /// refiled.
+    #[test]
+    fn a_rename_is_a_new_name_on_the_same_row() {
+        let before = index();
+        let after = LabelIndex::new(vec![
+            label("INBOX", "INBOX", true),
+            label("Label_7", "Work/Clients", false),
+        ]);
+        let held: BTreeSet<String> = before
+            .mailboxes("acct")
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        let plan = after.plan_mailboxes("acct", &held);
+        let row = plan
+            .rows
+            .iter()
+            .find(|(id, _, _)| id == &labels::gmail_mailbox_id("acct", "Label_7"))
+            .unwrap();
+        assert_eq!(row.1, "Work/Clients");
+        assert!(
+            !plan.moves.iter().any(|(from, _)| from.ends_with("Label_7")),
+            "{:?}",
+            plan.moves
+        );
+    }
+
+    /// A label deleted in Gmail empties its row: every email comes off it.
+    #[test]
+    fn a_deleted_label_is_refiled_to_nothing() {
+        let held: BTreeSet<String> = index()
+            .mailboxes("acct")
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        let after = LabelIndex::new(vec![label("INBOX", "INBOX", true)]);
+        let plan = after.plan_mailboxes("acct", &held);
+        assert!(plan
+            .moves
+            .contains(&(labels::gmail_mailbox_id("acct", "Label_7"), None)));
+        assert!(!plan
+            .moves
+            .iter()
+            .any(|(from, _)| from == &labels::gmail_mailbox_id("acct", "INBOX")));
+    }
+
+    /// A row keyed by name — an older build's, or a Takeout import's — for
+    /// a label Gmail still lists moves onto the label's id. One Gmail no
+    /// longer lists is left alone, and so is another account's row.
+    #[test]
+    fn moves_name_keyed_rows_onto_the_label_id() {
+        let held: BTreeSet<String> = [
+            labels::mailbox_id("acct", "Inbox"),
+            labels::mailbox_id("acct", "Work/Projects"),
+            labels::mailbox_id("acct", "Long Gone"),
+            labels::gmail_mailbox_id("other", "Label_1"),
+        ]
+        .into();
+        let plan = index().plan_mailboxes("acct", &held);
+        assert_eq!(plan.moves, {
+            let mut want = vec![
+                (
+                    labels::mailbox_id("acct", "Inbox"),
+                    Some(labels::gmail_mailbox_id("acct", "INBOX")),
+                ),
+                (
+                    labels::mailbox_id("acct", "Work/Projects"),
+                    Some(labels::gmail_mailbox_id("acct", "Label_7")),
+                ),
+            ];
+            want.sort();
+            want
+        });
     }
 
     #[test]
@@ -304,8 +413,8 @@ mod tests {
             &["INBOX".into(), "STARRED".into(), "Label_7".into()],
         );
         assert_eq!(mailboxes.len(), 2, "STARRED is a keyword, not a mailbox");
-        assert!(mailboxes.contains(&labels::mailbox_id("acct", "Inbox")));
-        assert!(mailboxes.contains(&labels::mailbox_id("acct", "Work/Projects")));
+        assert!(mailboxes.contains(&labels::gmail_mailbox_id("acct", "INBOX")));
+        assert!(mailboxes.contains(&labels::gmail_mailbox_id("acct", "Label_7")));
         assert_eq!(keywords, vec!["$flagged", "$seen"]);
     }
 
@@ -397,7 +506,10 @@ mod tests {
     #[test]
     fn keeps_an_unknown_label_as_a_mailbox() {
         let (mailboxes, _) = index().resolve("acct", &["Label_999".into()]);
-        assert_eq!(mailboxes, vec![labels::mailbox_id("acct", "Label_999")]);
+        assert_eq!(
+            mailboxes,
+            vec![labels::gmail_mailbox_id("acct", "Label_999")]
+        );
     }
 
     /// Hex (API) and decimal (Takeout `X-GM-THRID`) are the same number;

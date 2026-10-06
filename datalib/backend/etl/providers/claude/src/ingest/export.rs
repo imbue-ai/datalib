@@ -8,6 +8,7 @@ use anyhow::{bail, Context, Result};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_run::DownloadRun;
+use datalib_etl::run_problems::{self, RunProblems};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
@@ -25,9 +26,9 @@ const DELETE_CHUNK: usize = 400;
 #[derive(Debug, Clone)]
 pub struct IngestOptions {
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     /// The unpacked export directory (`common.input_path`).
     pub input_path: PathBuf,
@@ -46,16 +47,24 @@ pub struct IngestSummary {
     pub project_docs: usize,
     /// Rows dropped because the export no longer mentions them.
     pub pruned: usize,
+    /// Conversations and projects the export holds with no `uuid`, so
+    /// with nothing to store them under.
+    pub without_uuid: usize,
 }
 
 #[instrument(skip_all, fields(export = %opts.input_path.display()))]
 pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_export(opts, found)).await
+}
+
+async fn read_export(opts: IngestOptions, found: RunProblems) -> Result<IngestSummary> {
     let db = opts.db.clone();
 
     let run_config = serde_json::json!({ "input_path": opts.input_path });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
     let mut summary = IngestSummary::default();
-    let result = ingest_all(&db, &opts, &mut summary).await;
+    let result = ingest_all(&db, &opts, &mut summary, &found).await;
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
@@ -63,7 +72,12 @@ pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
 
 /// The whole snapshot in one transaction: a half-written export is
 /// never what render sees.
-async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummary) -> Result<()> {
+async fn ingest_all(
+    db: &RawDb,
+    opts: &IngestOptions,
+    summary: &mut IngestSummary,
+    found: &RunProblems,
+) -> Result<()> {
     let dir = &opts.input_path;
     // Read every file before opening the transaction, so a malformed
     // one fails the run without having touched the store.
@@ -104,6 +118,8 @@ async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummar
     }
 
     summary.conversations = upsert_conversations(&mut tx, &conversations, &now).await?;
+    summary.without_uuid = conversations.len() - summary.conversations
+        + projects.as_ref().map_or(0, |p| p.len() - summary.projects);
     summary.pruned += prune_to(&mut tx, "conversations", &ids_of(&conversations, "uuid")).await?;
     opts.progress.set_message(&format!(
         "{} conversations, {} projects, {} knowledge docs",
@@ -111,6 +127,15 @@ async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummar
     ));
 
     tx.commit().await.context("commit export ingest tx")?;
+    if summary.without_uuid > 0 {
+        found.phase(
+            "export",
+            format!(
+                "{} conversations or projects in the export have no uuid; they were not stored",
+                summary.without_uuid
+            ),
+        );
+    }
     if summary.pruned > 0 {
         // Loud on purpose: this is the one path that removes stored
         // rows, and "the export got smaller" is worth seeing.
@@ -231,10 +256,6 @@ async fn upsert_conversations(
     let mut rows = Vec::with_capacity(convs.len());
     for c in convs {
         let Some(id) = str_field(c, "uuid") else {
-            warn!(
-                event = "claude_export_conversation_without_uuid",
-                "a conversation in the export has no uuid; skipped it"
-            );
             continue;
         };
         rows.push(ConversationRowSchema {
@@ -265,10 +286,6 @@ async fn upsert_projects(
     let mut doc_rows: Vec<ProjectDocRow> = Vec::new();
     for p in projects {
         let Some(project_uuid) = str_field(p, "uuid") else {
-            warn!(
-                event = "claude_export_project_without_uuid",
-                "a project in the export has no uuid; skipped it"
-            );
             continue;
         };
         for d in docs_of(p) {
@@ -382,8 +399,7 @@ mod tests {
     }
 
     /// One store per test, opened once and handed to every `ingest`
-    /// call: a second live connection to the same file would make one
-    /// of the two `dolt_commit`s fail.
+    /// call: the file takes one writer at a time.
     async fn open_raw(raw: &Path) -> RawDb {
         RawDb::open(&db_path_for(raw)).await.unwrap()
     }
@@ -555,6 +571,42 @@ mod tests {
         let err = format!("{err:#}");
         assert!(err.contains("conversations.json"), "{err}");
         assert!(err.contains("input_path"), "{err}");
+        db.close().await;
+    }
+
+    /// A conversation the export holds with no uuid was a `warn!` and
+    /// nothing on the Manage row.
+    #[tokio::test]
+    async fn records_without_a_uuid_are_a_phase_row() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        let mut nameless = conv("c2", "Second");
+        nameless.as_object_mut().unwrap().remove("uuid");
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First"), nameless]),
+        );
+        let db = open_raw(raw.path()).await;
+        let s = ingest(opts(&db, ex.path())).await.unwrap();
+        assert_eq!((s.conversations, s.without_uuid), (1, 1));
+        let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(keys, ["phase:export"]);
+
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First")]),
+        );
+        ingest(opts(&db, ex.path())).await.unwrap();
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM problems")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(left, 0, "a clean export clears it");
         db.close().await;
     }
 }

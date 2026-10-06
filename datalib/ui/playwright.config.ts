@@ -317,7 +317,7 @@ function spawnBackend(name: string, root: string, env: Record<string, string> = 
   return { name, child, urlFile, log };
 }
 
-// The announced URL is `<origin>/data_sources?token=<DATALIB_TOKEN>`; the specs want
+// The announced URL is `<origin>/?token=<DATALIB_TOKEN>`; the specs want
 // the origin. Absent, empty and short of the whole token all read the
 // same way here — as "not yet", so a torn read is one more turn of the
 // poll rather than a truncated port number that parses.
@@ -450,14 +450,16 @@ export default defineConfig({
   snapshotPathTemplate: "{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{ext}",
   use: {
     baseURL: BACKEND_URL,
-    // The specs drive the columns layout (`.miller-col-*`, a URL of
-    // several columns); the app opens on tabs. A spec about another
-    // layout picks it with an init script (tabs-rename.spec.ts).
+    // Specs running side by side share a library, so the layout is
+    // neither read from nor written to it (ContainersView's UNSAVED_KEY):
+    // every page starts on the Dashboard plus what its URL names.
+    // containers.spec.ts, about keeping the layout, clears this and has a
+    // library of its own.
     storageState: {
       cookies: [],
       origins: SERVERS.map((s) => ({
         origin: s.url,
-        localStorage: [{ name: "datalib-layout", value: "columns" }],
+        localStorage: [{ name: "datalib-layout-unsaved", value: "1" }],
       })),
     },
     headless: true,
@@ -515,18 +517,22 @@ export default defineConfig({
         /score-sort-order\.spec\.ts/,
         /selected-message-outline\.spec\.ts/,
         /qmd-index-columns\.spec\.ts/,
-        /miller-reveal\.spec\.ts/,
+        /column-reveal\.spec\.ts/,
         /yolink-plots\.spec\.ts/,
         /gallery\.spec\.ts/,
         // The sandboxed DACTAL iframe: an opaque origin loading module
         // scripts, which WebKit and Chromium have disagreed about.
         /dactal-sandbox\.spec\.ts/,
+        // The document frame that runs no script; the desktop app is WebKit.
+        /document-sandbox\.spec\.ts/,
         // /data_sources — the sources card's Pipeline table, and the
         // commit-history grid it opens in a modal.
         /data-sources-grid\.spec\.ts/,
         /data-sources-history\.spec\.ts/,
         // The run-log panel's grid, menu and drag-to-group bar.
         /run-log\.spec\.ts/,
+        // WebKit alone activates a <label> after a drag-select in it.
+        /wizard-help-select\.spec\.ts/,
       ],
     },
   ],

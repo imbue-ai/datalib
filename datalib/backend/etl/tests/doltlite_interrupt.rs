@@ -75,7 +75,7 @@ async fn seen(db: &Path) -> BTreeMap<String, i64> {
     let Some(reader) = doltlite_raw::open_reader(db, None).await.unwrap() else {
         return BTreeMap::new();
     };
-    let rows: Vec<(String, i64)> = sqlx::query_as("SELECT id, n FROM pinned_rows")
+    let rows: Vec<(String, i64)> = sqlx::query_as("SELECT id, n FROM rows")
         .fetch_all(reader.pool())
         .await
         .unwrap();

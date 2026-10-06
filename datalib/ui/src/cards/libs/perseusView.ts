@@ -5,10 +5,10 @@
 // published edition/translation (`grc2`, `eng1`, `eng6`, `fre1`,
 // `ger2`, …) — and a collapsible hierarchy of locators (book → chapter
 // → section). Clicking any locator opens one reader panel per enabled
-// version via `ctx.host.openCards(…)` — in the miller layout that lands
-// the panels as columns to the right of this one (and re-clicking swaps
-// them out), which is the scaife "open the same passage side-by-side in
-// every version" gesture.
+// version via `ctx.host.openCards(…)` — in a Columns container that
+// lands the panels as columns to the right of this one (and re-clicking
+// swaps them out), which is the scaife "open the same passage
+// side-by-side in every version" gesture.
 import { cardApi } from "../cardApi";
 import type { CardRender } from "../types";
 
@@ -94,18 +94,18 @@ export function perseusView(): CardRender {
     ctx.setTitle("Perseus reader");
     const style = document.createElement("style");
     style.textContent = `
-      .sv { font: 13px/1.5 ui-monospace, Menlo, monospace; color: var(--datalib-fg, inherit); height: 100%; overflow: auto; }
-      .sv-head { padding: 8px 12px; opacity: .7; border-bottom: 1px solid var(--datalib-border, #8884); font-weight: 600; }
-      .sv-versions { display: flex; gap: .4rem; padding: 8px 12px; border-bottom: 1px solid var(--datalib-border, #8884); flex-wrap: wrap; }
-      .sv-ver { border: 1px solid var(--datalib-border, #8886); border-radius: 999px; padding: 2px 10px; cursor: pointer; background: transparent; color: inherit; font: inherit; opacity: .55; }
-      .sv-ver[aria-pressed="true"] { opacity: 1; background: var(--datalib-hover, rgba(99,102,241,.18)); border-color: rgba(99,102,241,.6); }
+      .sv { font: var(--datalib-font-size)/1.5 var(--datalib-mono); color: var(--datalib-fg, inherit); height: 100%; overflow: auto; }
+      .sv-head { padding: 8px 12px; opacity: .7; border-bottom: 1px solid var(--datalib-border-soft); font-weight: 600; }
+      .sv-versions { display: flex; gap: .4rem; padding: 8px 12px; border-bottom: 1px solid var(--datalib-border-soft); flex-wrap: wrap; }
+      .sv-ver { border: 1px solid var(--datalib-border); border-radius: 999px; padding: 2px 10px; cursor: pointer; background: transparent; color: inherit; font: inherit; opacity: .55; }
+      .sv-ver[aria-pressed="true"] { opacity: 1; background: color-mix(in srgb, var(--datalib-accent) 14%, transparent); border-color: var(--datalib-accent); }
       .sv-tree { padding: 4px 0 16px; }
       .sv-row { display: flex; align-items: baseline; gap: .35rem; padding: 3px 12px; cursor: pointer; white-space: nowrap; }
-      .sv-row:hover { background: var(--datalib-hover, rgba(127,127,127,.12)); }
+      .sv-row:hover { background: var(--datalib-hover); }
       .sv-tw { flex: 0 0 1.1em; opacity: .5; text-align: center; border-radius: 3px; }
       .sv-tw.leaf { opacity: 0; }
       .sv-tw.toggle { cursor: pointer; }
-      .sv-tw.toggle:hover { opacity: 1; background: var(--datalib-hover, rgba(127,127,127,.2)); }
+      .sv-tw.toggle:hover { opacity: 1; background: var(--datalib-hover); }
       .sv-label { overflow: hidden; text-overflow: ellipsis; }
       .sv-book > .sv-label { font-weight: 600; }
       .sv-empty { padding: 16px 12px; opacity: .5; white-space: normal; }

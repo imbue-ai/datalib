@@ -17,9 +17,11 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use datalib_etl::control::DownloadControl;
+use datalib_etl::download_problems::RecordProblem;
 use datalib_etl::fingerprint_cache::{CachedTree, Fingerprint, FingerprintCache};
 use datalib_etl::fswalk::StampKind;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 
 pub use db::RawDb;
 
@@ -45,9 +47,9 @@ const PROGRESS_INTERVAL_MS: u64 = 500;
 
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     pub source_id: String,
     pub root: PathBuf,
@@ -134,6 +136,11 @@ async fn forget_deleted(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Re
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| scan_tree(opts, found)).await
+}
+
+async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let total_start = Instant::now();
     let db = opts.db.clone();
     if let Some(branch) = opts.target_doltlite_branch.as_deref() {
@@ -195,7 +202,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let (
         mut summary,
-        walker_errors,
+        mut walker_errors,
         counters,
         phase_walk,
         phase_write_total,
@@ -218,7 +225,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // all in the same pre-commit working tree, so it lands in the one
     // scan commit the orchestrator makes.
     if !opts.no_stamp {
-        summary.stamped_directories = stamp_directories(&db, &opts.root).await?;
+        summary.stamped_directories =
+            stamp_directories(&db, &opts.root, &mut walker_errors).await?;
         if summary.stamped_directories > 0 {
             warn!(
                 event = "fsindex_stamping_active",
@@ -288,24 +296,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     db.write_scan_meta(&scan_meta, &now).await?;
     let phase_scan_meta = scan_meta_start.elapsed();
 
-    // Walker errors (unreadable entries, non-utf8 names, …). fsindex
-    // has no `_bookkeeping` sidecar to record them in — and there's no
-    // retry model that would consult one. They're logged here and
-    // counted in the `fsindex_phase_breakdown` event (`stat_errors`,
-    // `read_errors`, `non_utf8_paths`), which is all the durable
-    // evidence the scanner needs.
-    for err in &walker_errors {
-        warn!(event = "fsindex_entry_error", id = %err.id, error = %err.message, "an entry could not be recorded");
+    // Every run re-walks the whole tree, so this run's set is the whole
+    // truth and replaces the last one's.
+    one_per_entry(&mut walker_errors);
+    found.records_failed(
+        walker_errors
+            .iter()
+            .map(|e| RecordProblem::new(e.table, &e.id, &e.message)),
+    );
+    for table in ["files", "dirs"] {
+        found.records_tried_all(table);
     }
 
-    // NB: the commit + gc happen in the ORCHESTRATOR (the standalone
-    // binary), not here. Order is load-bearing: `dolt_commit` must run
-    // BEFORE `dolt_gc` on a given connection. Running gc first and then
-    // committing on the same sqlx connection fails with "failed to
-    // flush" at scale (reproduced at 1M rows; fine at 100k). Committing
-    // first records the working set; gc then reclaims the per-batch
-    // chunk novelty against the committed tree. `fetch` stays
-    // commit-free per the framework's commit-lifecycle rule.
+    // The commit and gc happen in the standalone binary, not here:
+    // `fetch` stays commit-free per the framework's commit-lifecycle rule.
 
     let total_elapsed = total_start.elapsed();
 
@@ -383,15 +387,10 @@ async fn streaming_pipeline(
     let stop_progress = Arc::new(AtomicBool::new(false));
 
     // ── Writer task ──────────────────────────────────────────────────
-    // One sqlite transaction PER BATCH. We deliberately do NOT fold the
-    // whole scan into a single transaction: doltlite buffers an open
-    // transaction's working-set delta in memory, and a single tx over a
-    // multi-million-row tree OOMs (confirmed at 4.5M rows × the table
-    // set). Per-batch flushing bounds that buffer. The cost is
-    // write-amplification (each sqlite COMMIT lays down fresh prolly
-    // chunk novelty), reclaimed by the `dolt_gc` the orchestrator runs
-    // after the single `dolt_commit`. `BATCH_SIZE` (see walker) is the
-    // knob that trades memory against amplification.
+    // One SQL transaction per batch, so our own batch buffers stay
+    // bounded. Each transaction rewrites the pages it touches
+    // (docs/dev/doltlite.md § "What a write costs"); the gc after the
+    // scan's single `dolt_commit` reclaims them.
     let writer_db = db.clone();
     let writer_cache = cache.clone();
     let writer_now = now.clone();
@@ -575,11 +574,25 @@ async fn streaming_pipeline(
     ))
 }
 
+/// Keeps the first error each entry had, so the summary's `errors` counts
+/// entries: the walk and the stamping pass can both fail on one folder's
+/// options file.
+fn one_per_entry(errors: &mut Vec<walker::WalkerError>) {
+    let mut seen = std::collections::HashSet::new();
+    errors.retain(|e| seen.insert((e.table, e.id.clone())));
+}
+
 /// Post-write stamping pass. The scan has already streamed every row
 /// into `files` and `dirs`; here we walk `dirs` and, for any one
 /// whose `.fsindex.yaml` cascade enables `stamp_me_with_uuid`, ensure
-/// it carries a UUID breadcrumb and `UPDATE` its `identity_uuid`.
-async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> {
+/// it carries a UUID breadcrumb and `UPDATE` its `identity_uuid`. A
+/// folder whose breadcrumb will not read or write is an error of its
+/// own and the rest are still stamped.
+async fn stamp_directories(
+    db: &RawDb,
+    root: &std::path::Path,
+    errors: &mut Vec<walker::WalkerError>,
+) -> Result<usize> {
     let mut count = 0_usize;
     for id in db.dir_ids().await? {
         let dir = if id.is_empty() {
@@ -591,7 +604,13 @@ async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> 
         if !cascade.effective().stamp_me_with_uuid {
             continue;
         }
-        let mut yaml = options::load_at(&dir)?.unwrap_or_default();
+        let mut yaml = match options::load_at(&dir) {
+            Ok(y) => y.unwrap_or_default(),
+            Err(e) => {
+                errors.push(stamp_error(&id, e));
+                continue;
+            }
+        };
         let uuid = match &yaml.identity {
             Some(identity) => identity.uuid.clone(),
             None => {
@@ -607,8 +626,10 @@ async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> 
                     stamper_version: 1,
                     originally_at,
                 });
-                options::write_breadcrumb(&dir, &yaml)
-                    .with_context(|| format!("write breadcrumb {}", dir.display()))?;
+                if let Err(e) = options::write_breadcrumb(&dir, &yaml) {
+                    errors.push(stamp_error(&id, e));
+                    continue;
+                }
                 info!(event = "fsindex_stamped", path = %dir.display(), uuid = %uuid, "stamped a directory with a uuid");
                 count += 1;
                 uuid
@@ -617,6 +638,14 @@ async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> 
         db.set_identity_uuid(&id, &uuid).await?;
     }
     Ok(count)
+}
+
+fn stamp_error(id: &str, e: anyhow::Error) -> walker::WalkerError {
+    walker::WalkerError {
+        table: "dirs",
+        id: id.to_string(),
+        message: format!("could not stamp: {e:#}"),
+    }
 }
 
 fn new_uuid() -> String {

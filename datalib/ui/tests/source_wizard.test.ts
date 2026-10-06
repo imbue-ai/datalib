@@ -44,3 +44,23 @@ describe("SourceWizard dismissal", () => {
     expect(cancel.emitted("close")).toHaveLength(1);
   });
 });
+
+describe("SourceWizard requiresOneOf", () => {
+  /// Lightroom's catalog and backups folder are each optional, but a
+  /// source with neither reads nothing, so the form holds Add until one
+  /// of them is filled in and says which it wants.
+  it("holds Add until one of the fields is filled, and names them", async () => {
+    const wiz = open();
+    const tile = wiz.findAll("button.wiz-tile").find((t) => t.text().includes("Lightroom"));
+    await tile!.trigger("click");
+    const add = () => wiz.findAll("button").find((b) => b.text() === "Add source")!;
+
+    expect(add().attributes("disabled")).toBeDefined();
+    expect(wiz.find(".wiz-foot-note").text()).toContain("Catalog file or Backups folder");
+
+    const paths = wiz.findAll("input.wiz-path");
+    expect(paths).toHaveLength(2);
+    await paths[1].setValue("/Users/x/Pictures/Lightroom/Backups");
+    expect(add().attributes("disabled")).toBeUndefined();
+  });
+});

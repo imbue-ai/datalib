@@ -7,6 +7,7 @@
 //! utilities that are not steps.
 
 mod dispatch;
+mod embedding_map;
 mod events;
 mod exit_watchdog;
 mod function;
@@ -14,9 +15,9 @@ mod grid_index;
 mod hints;
 mod ingest;
 mod introspect;
-mod login;
 mod methods;
 mod probe;
+mod published;
 mod qmd_index;
 mod render;
 mod render_diff;
@@ -26,6 +27,7 @@ mod reset;
 mod source;
 mod source_type;
 mod synth;
+mod topo_sort_config;
 
 #[cfg(test)]
 mod config_examples_test;
@@ -77,7 +79,7 @@ struct Cli {
     /// `DATALIB_HTTP_PLAYBACK` for every provider transport.
     #[arg(long)]
     playback_root: Option<PathBuf>,
-    /// `qmd_index` only: directory where qmd caches its embedding model.
+    /// `embed` only: directory where qmd caches its embedding model.
     #[arg(long)]
     models_dir: Option<PathBuf>,
     #[command(flatten)]
@@ -86,32 +88,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Utility (not a pipeline step): ask a provider what these
-    /// credentials can reach, and print one JSON object on stdout.
-    /// Writes nothing and needs no data root.
+    /// Utility (not a pipeline step): ask a provider which account
+    /// these credentials reach — and, with `--list`, one list a picker
+    /// offers — and print one JSON object on stdout. Progress goes to
+    /// stderr while a list pages. Writes nothing and needs no data root.
     Probe {
         /// Source type (`slack`, `claude`, …): the provider to ask.
         source_type: String,
-    },
-    /// Utility (not a pipeline step): sign in to a service that holds
-    /// its own credential rather than a latchkey one, and store it
-    /// where that source's ingest step reads it. Interactive.
-    Login {
-        /// Source type; only `garmin` has a login of its own.
-        source_type: String,
-        /// Where to write the token files (garmin: `~/.garth`).
+        /// The list to load as well: `channels`, `conversations`,
+        /// `labels`, `mailboxes`, `calendars` or `addressbooks`.
         #[arg(long)]
-        token_dir: Option<String>,
-        /// Account email, else prompted for.
-        #[arg(long)]
-        email: Option<String>,
-        /// `garmin.com`, or `garmin.cn` for a China-region account.
-        #[arg(long, default_value = "garmin.com")]
-        domain: String,
+        list: Option<String>,
     },
     /// Utility (not a pipeline step): put qmd's pinned GGUF models in
-    /// place, sha256-verified — what the `qmd_index` step does before
-    /// it indexes, runnable ahead of time (an image build, a first-run
+    /// place, sha256-verified — what an `embed` step does before
+    /// it embeds, runnable ahead of time (an image build, a first-run
     /// warmup). Needs no data root.
     PullModels {
         /// Where the models go; default is qmd's own cache,
@@ -127,6 +118,18 @@ enum Cmd {
     /// every sync does on its first `qmd` or `latchkey`, runnable ahead
     /// of time. Needs no data root.
     PullRuntime,
+    /// Utility (not a pipeline step): rewrite a config file in the order
+    /// data flows — each step below the steps it reads, each group's
+    /// entries together — moving an entry only when it has to, and
+    /// its comments with it. The previous text is kept as `<file>.bak`.
+    /// Needs no data root.
+    TopoSortConfig {
+        /// The config file: `<data root>/config.toml`.
+        path: PathBuf,
+        /// Only say whether it is in order: exit 1 if not, and write nothing.
+        #[arg(long)]
+        check: bool,
+    },
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
     /// for one source from a raw fixture tree (`--params-file` naming a
     /// `{"fixture_path": …}`), for later replay via `--playback-root`.
@@ -149,6 +152,15 @@ enum Cmd {
 /// from a newer config should not take the run down, and the step's own
 /// default is a safe answer. It is logged, though — a fallback that fires
 /// silently is the kind this repo has been burned by.
+/// What a step that did not finish reports: the version its store is
+/// at. Nothing for a command that is not a step.
+async fn published_claims(data_root: &Path) -> Vec<events::OutputClaim> {
+    match StepEnv::from_env() {
+        Ok(env) => published::claims(&env, data_root).await,
+        Err(_) => Vec::new(),
+    }
+}
+
 fn checkpoint_cadence() -> Option<datalib_etl::checkpointer::Cadence> {
     let raw = std::env::var(ENV_CHECKPOINT_CADENCE).ok()?;
     match datalib_dag::config::CheckpointCadence::decode(&raw) {
@@ -183,8 +195,8 @@ async fn main() {
     // owns no tree, claims no outputs and must leave stdout holding
     // exactly one JSON object, so an `outcome` event line after it
     // would corrupt the only thing its caller reads.
-    if let Some(Cmd::Probe { source_type }) = &cli.cmd {
-        probe::run_cli(source_type, cli.params_file.as_deref()).await;
+    if let Some(Cmd::Probe { source_type, list }) = &cli.cmd {
+        probe::run_cli(source_type, list.as_deref(), cli.params_file.as_deref()).await;
     }
     // `pull-models` likewise: nothing here is a step.
     if let Some(Cmd::PullModels { models_dir }) = &cli.cmd {
@@ -242,15 +254,9 @@ async fn main() {
             }
         }
     }
-    // `login` likewise: it talks to a terminal, not to the runner.
-    if let Some(Cmd::Login {
-        source_type,
-        token_dir,
-        email,
-        domain,
-    }) = &cli.cmd
-    {
-        login::run_cli(source_type, token_dir.as_deref(), email.as_deref(), domain).await;
+    // `topo-sort-config` likewise: it reads and writes one file.
+    if let Some(Cmd::TopoSortConfig { path, check }) = &cli.cmd {
+        std::process::exit(topo_sort_config::run_cli(path, *check));
     }
 
     let step_id = std::env::var(ENV_STEP).unwrap_or_else(|_| "step".to_string());
@@ -312,12 +318,19 @@ async fn main() {
         stop: stop.clone(),
     };
 
-    match run(cli, &data_root, &now, &control, &emitter).await {
+    let result = {
+        // Dropped on a panic's unwind too, so a step that dies still says
+        // what it recorded.
+        let _log = LogRecordedProblems;
+        run(cli, &data_root, &now, &control, &emitter).await
+    };
+    match result {
         // A run that ended because it was asked to is not a success, even
         // though it committed: it did not finish, and saying so is how the
-        // runner knows not to mark it done. What it committed stands.
-        Ok(_) if stop.requested() => {
-            emitter.outcome(&[], Some(FailureKind::Cancelled));
+        // runner knows not to mark it done. What it committed stands, and
+        // the version it reports is how that reaches its consumers.
+        Ok(outputs) if stop.requested() => {
+            emitter.outcome(&outputs, Some(FailureKind::Cancelled));
             std::process::exit(130);
         }
         // Likewise an error after the stop: the transport refuses new
@@ -325,7 +338,10 @@ async fn main() {
         // flag ends with `Interrupted`. That is the stop, not a failure.
         Err(e) if stop.requested() => {
             tracing::info!("stopped: {e:#}");
-            emitter.outcome(&[], Some(FailureKind::Cancelled));
+            emitter.outcome(
+                &published_claims(&data_root).await,
+                Some(FailureKind::Cancelled),
+            );
             std::process::exit(130);
         }
         Ok(outputs) => {
@@ -335,9 +351,8 @@ async fn main() {
         Err(e) => {
             let kind = hints::classify(&e);
             // A failed-but-incremental step may still have committed
-            // partial output; the runner reads its stores' heads and
-            // sees whatever was published.
-            emitter.outcome(&[], Some(kind));
+            // partial output, and reports what it published.
+            emitter.outcome(&published_claims(&data_root).await, Some(kind));
             // `tracing::error!` alone, never a `status_line!` beside it.
             // Both land on the same stderr, so a second copy is a second
             // row in the run store -- one with no `target`, because a
@@ -352,6 +367,16 @@ async fn main() {
             }
             std::process::exit(1);
         }
+    }
+}
+
+/// Every problem this step stored, logged once at its end at the row's
+/// severity (`datalib_problems::log_recorded`).
+struct LogRecordedProblems;
+
+impl Drop for LogRecordedProblems {
+    fn drop(&mut self) {
+        datalib_schema::problems::log_recorded();
     }
 }
 
@@ -372,13 +397,15 @@ async fn run(
         // Handled in `main` before the step machinery starts; see
         // there for why it cannot come through the outcome path.
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
-        Some(Cmd::Login { .. }) => unreachable!("login is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
         Some(Cmd::PullRuntime) => unreachable!("pull-runtime is answered in main"),
+        Some(Cmd::TopoSortConfig { .. }) => {
+            unreachable!("topo-sort-config is answered in main")
+        }
         None => {
             let env = StepEnv::from_env()?;
             if let Ok(part) = std::env::var(ENV_RESET) {
-                return reset::run(&env, data_root, &part).await;
+                return reset::run(&env, data_root, &part, emitter).await;
             }
             run_function(
                 env,
@@ -451,11 +478,17 @@ async fn run_function(
         }
         Function::GridIndex => {
             writes_the_index_tree(&env, &grid_index::out_rel())?;
-            grid_index::run(data_root, &env, Some(now), emitter).await
+            grid_index::run(data_root, &env, Some(now), emitter, &control.stop).await
         }
-        Function::QmdIndex => {
-            writes_the_index_tree(&env, &qmd_index::out_rel())?;
-            qmd_index::run(data_root, &env, models_dir, emitter).await
+        Function::QmdAggregator => {
+            writes_the_index_tree(&env, &qmd_index::aggregator_rel())?;
+            qmd_index::run_aggregator(data_root, &env, emitter).await
+        }
+        Function::KeywordIndex => qmd_index::run_keyword(data_root, &env, emitter).await,
+        Function::Embed => qmd_index::run_embed(data_root, &env, models_dir, emitter).await,
+        Function::EmbeddingMap => {
+            writes_the_index_tree(&env, &embedding_map::out_rel())?;
+            embedding_map::run(data_root, now, emitter).await
         }
     }
 }
@@ -495,9 +528,9 @@ fn version_through_runtime(mut cmd: std::process::Command) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The two index steps have one reader each — the `unified_index`
-/// applet — which finds them from the data root alone, so their trees
-/// are fixed. A config that files them under another group would have
+/// The index steps have one reader each — the `unified_index` applet
+/// — which finds them from the data root alone, so their trees are
+/// fixed. A config that files them under another group would have
 /// the runner tracking a tree nothing ever writes.
 fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
     anyhow::ensure!(

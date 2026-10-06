@@ -30,7 +30,8 @@
  * `invoke` throws a bare `TypeError` rather than degrading.
  */
 
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { homeDir } from "@tauri-apps/api/path";
+import { confirm as confirmDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 /** Tauri's IPC bridge, injected only into windows it trusts. */
@@ -84,6 +85,78 @@ export async function revealInFileManager(path: string): Promise<boolean> {
   }
 }
 
+/** The open library and the others the top bar's menu offers. */
+export interface LibraryMenu {
+  current: string | null;
+  others: { name: string; path: string; found: boolean }[];
+}
+
+/**
+ * What the library menu lists (`library_menu` in
+ * `datalib/tauri/src/main.rs`). Null outside the app, or when the
+ * capability (`capabilities/switch-libraries.json`) does not reach this
+ * page.
+ */
+export async function libraryMenu(): Promise<LibraryMenu | null> {
+  const t = internals();
+  if (!t) return null;
+  try {
+    return (await t.invoke("library_menu")) as LibraryMenu;
+  } catch (e) {
+    console.warn("library_menu failed", e);
+    return null;
+  }
+}
+
+/**
+ * Close this library and open another. The window this runs in closes
+ * with it, so on success nothing comes back; a refusal (the folder is
+ * no longer a library) comes back as its message.
+ */
+export async function switchLibrary(path: string): Promise<string | null> {
+  const t = internals();
+  if (!t) return "only the desktop app can switch libraries";
+  try {
+    await t.invoke("library_switch", { path });
+    return null;
+  } catch (e) {
+    return String(e);
+  }
+}
+
+/** Close this library and go back to the libraries screen. */
+export async function showLibraries(): Promise<void> {
+  const t = internals();
+  if (!t) return;
+  try {
+    await t.invoke("libraries_show");
+  } catch (e) {
+    console.warn("libraries_show failed", e);
+  }
+}
+
+/**
+ * Open a download step's raw store, read-only: in DB Browser for SQLite
+ * when that is what opens `.doltlite_db` files here, otherwise in the
+ * bundled doltlite shell in a terminal. The shell picks, and says which
+ * (`open_raw_store` in `datalib/tauri/src/main.rs`).
+ *
+ * An app command rather than a plugin one, so there is no package to
+ * own the command name; `capabilities/open-raw-stores.json` grants it.
+ */
+export async function openRawStore(
+  path: string,
+): Promise<{ ok: true; openedIn: string } | { ok: false; reason: string }> {
+  const t = internals();
+  if (!t) return { ok: false, reason: "only the desktop app can open a store" };
+  try {
+    const openedIn = (await t.invoke("open_raw_store", { path })) as string;
+    return { ok: true, openedIn };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
 /**
  * The platform's name for "show this file where it lives", so the menu
  * item reads the way the OS does.
@@ -122,6 +195,24 @@ export function filePathFromUrl(url: string): string | null {
 }
 
 /**
+ * Ask the user to confirm a destructive action; call this, never
+ * `window.confirm`.
+ *
+ * In the app, `window.confirm` is broken beyond a permission: the
+ * dialog plugin's init script replaces it with an async function
+ * that invokes `plugin:dialog|confirm`, a command the plugin does not
+ * register, and the Promise it returns is truthy — `if
+ * (!window.confirm(…)) return` never returns. The plugin's own
+ * `confirm` goes through `plugin:dialog|message`, granted by
+ * `capabilities/confirm-actions.json`. A refused call rejects, and the
+ * action does not happen.
+ */
+export async function confirmAction(message: string): Promise<boolean> {
+  if (!isDesktopApp()) return window.confirm(message);
+  return confirmDialog(message, { kind: "warning" });
+}
+
+/**
  * What a picker invocation did. Three outcomes, not two: canceling and
  * being denied look identical to a caller that only gets `string |
  * null`, and they need opposite responses — cancel must leave the
@@ -143,8 +234,10 @@ export interface PathPickRequest {
   picks: "file" | "dir";
   /** Dialog title. Name the thing being chosen, not the widget. */
   title: string;
-  /** Where to open. Ignored unless it looks like a real path (below). */
+  /** Where to open: the field's current value, when it names a place. */
   startAt?: string;
+  /** Where to open when `startAt` does not: the field's `startIn`. */
+  startIn?: string;
   /** For `picks: "file"`, extensions to filter on, without the dot. */
   extensions?: string[];
 }
@@ -170,7 +263,7 @@ export async function pickPath(req: PathPickRequest): Promise<PathPick> {
       title: req.title,
       directory: req.picks === "dir",
       multiple: false,
-      defaultPath: startDirectory(req.startAt),
+      defaultPath: await startDirectory([req.startAt, req.startIn]),
       filters:
         req.picks === "file" && req.extensions?.length
           ? [{ name: "Supported files", extensions: req.extensions }]
@@ -188,20 +281,43 @@ export async function pickPath(req: PathPickRequest): Promise<PathPick> {
   }
 }
 
+async function startDirectory(candidates: (string | undefined)[]): Promise<string | undefined> {
+  let home: string | undefined;
+  if (candidates.some((c) => c?.trim().startsWith("~"))) {
+    try {
+      home = await homeDir();
+    } catch (e) {
+      // The capability lacks `core:path:allow-resolve-directory`: a `~`
+      // path is then no start at all, and the dialog opens where it likes.
+      console.warn("home directory unavailable", e);
+    }
+  }
+  for (const c of candidates) {
+    const at = absoluteStart(c, home);
+    if (at) return at;
+  }
+  return undefined;
+}
+
 /**
- * Sanitize a typed path into something worth opening the dialog at.
+ * A typed path as something worth opening the dialog at, or nothing.
  *
- * The field this comes from is free text, so it may hold a half-typed
- * path or a `~` prefix. Tauri passes `defaultPath` to the platform
- * dialog verbatim — no shell is involved, so nothing expands `~`, and
- * a literal `~/backups` is a *relative* path that resolves against the
- * process's working directory. Handing that over opens the dialog
- * somewhere arbitrary, which is worse than not asking for a start
- * directory at all.
+ * The field is free text, so it may hold a half-typed path or a `~`
+ * prefix. Tauri passes `defaultPath` to the platform dialog verbatim —
+ * no shell is involved, so nothing expands `~`, and a literal
+ * `~/backups` is a *relative* path that resolves against the process's
+ * working directory. That opens the dialog somewhere arbitrary, which
+ * is worse than not asking for a start directory at all.
  */
-function startDirectory(typed: string | undefined): string | undefined {
+export function absoluteStart(
+  typed: string | undefined,
+  home: string | undefined,
+): string | undefined {
   const t = typed?.trim();
-  if (!t || t.startsWith("~")) return undefined;
+  if (!t) return undefined;
+  if (t === "~" || t.startsWith("~/")) {
+    return home ? home.replace(/\/+$/, "") + t.slice(1) : undefined;
+  }
   // POSIX absolute, or a Windows drive/UNC path.
   return t.startsWith("/") || /^[A-Za-z]:[\\/]/.test(t) || t.startsWith("\\\\") ? t : undefined;
 }

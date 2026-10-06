@@ -101,21 +101,13 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
     let weigh_ins = load_weigh_ins(pool).await?;
     let devices = load_devices(pool).await?;
     let metrics = load_metric_counts(pool).await?;
-    let activities = scalar(
-        pool,
-        "SELECT COUNT(*) FROM pinned_garmin_activities garmin_activities",
-    )
-    .await?;
+    let activities = scalar(pool, "SELECT COUNT(*) FROM garmin_activities").await?;
     let activity_files = scalar(
         pool,
-        "SELECT COUNT(*) FROM pinned_garmin_activity_files garmin_activity_files WHERE blake3 IS NOT NULL",
+        "SELECT COUNT(*) FROM garmin_activity_files WHERE blake3 IS NOT NULL",
     )
     .await?;
-    let items = scalar(
-        pool,
-        "SELECT COUNT(*) FROM pinned_garmin_items garmin_items",
-    )
-    .await?;
+    let items = scalar(pool, "SELECT COUNT(*) FROM garmin_items").await?;
     Ok(ParsedGarmin {
         head: Some(pin.commit().to_string()),
         display_name,
@@ -138,7 +130,7 @@ async fn scalar(pool: &SqlitePool, sql: &'static str) -> Result<i64> {
 
 async fn load_account(pool: &SqlitePool) -> Result<(Option<String>, Option<String>)> {
     let row = sqlx::query(
-        "SELECT json(payload) AS payload FROM pinned_garmin_account garmin_account \
+        "SELECT json(payload) AS payload FROM garmin_account \
          WHERE id = 'social_profile'",
     )
     .fetch_optional(pool)
@@ -158,7 +150,7 @@ async fn load_account(pool: &SqlitePool) -> Result<(Option<String>, Option<Strin
 async fn load_weigh_ins(pool: &SqlitePool) -> Result<Vec<WeighIn>> {
     let rows = sqlx::query(
         "SELECT id, calendar_date, timestamp_gmt, weight_g, source_type, json(payload) AS payload \
-           FROM pinned_garmin_weigh_ins garmin_weigh_ins \
+           FROM garmin_weigh_ins \
           WHERE weight_g IS NOT NULL AND timestamp_gmt IS NOT NULL \
           ORDER BY timestamp_gmt, id",
     )
@@ -188,7 +180,7 @@ async fn load_weigh_ins(pool: &SqlitePool) -> Result<Vec<WeighIn>> {
 async fn load_devices(pool: &SqlitePool) -> Result<Vec<Device>> {
     let rows = sqlx::query(
         "SELECT id, product_display_name, json(payload) AS payload \
-           FROM pinned_garmin_devices garmin_devices ORDER BY id",
+           FROM garmin_devices ORDER BY id",
     )
     .fetch_all(pool)
     .await
@@ -215,7 +207,7 @@ async fn load_metric_counts(pool: &SqlitePool) -> Result<Vec<MetricCount>> {
     let rows = sqlx::query(
         "SELECT metric, COUNT(*) AS days, \
                 SUM(CASE WHEN json(payload) <> 'null' THEN 1 ELSE 0 END) AS with_data \
-           FROM pinned_garmin_daily garmin_daily GROUP BY metric ORDER BY metric",
+           FROM garmin_daily GROUP BY metric ORDER BY metric",
     )
     .fetch_all(pool)
     .await
@@ -233,5 +225,13 @@ async fn load_metric_counts(pool: &SqlitePool) -> Result<Vec<MetricCount>> {
 impl ParsedGarmin {
     pub fn latest_weigh_in(&self) -> Option<&WeighIn> {
         self.weigh_ins.last()
+    }
+
+    /// The page's item count: every day of a metric Garmin had data
+    /// for, every weigh-in and every activity. A day Garmin answered
+    /// with nothing is a row, but not a measurement.
+    pub fn measurements(&self) -> i64 {
+        let days: i64 = self.metrics.iter().map(|m| m.days_with_data).sum();
+        days + self.weigh_ins.len() as i64 + self.activities
     }
 }

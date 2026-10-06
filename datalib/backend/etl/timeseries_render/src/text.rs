@@ -62,14 +62,6 @@ pub fn pretty_json(raw: &str) -> String {
     }
 }
 
-pub fn yaml_safe(s: &str) -> String {
-    if s.chars().any(|c| ":#[]{}&*?,|>'\"%@`\n".contains(c)) {
-        format!("\"{}\"", s.replace('"', "\\\""))
-    } else {
-        s.to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

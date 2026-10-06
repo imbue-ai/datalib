@@ -13,9 +13,26 @@ import { sourcesView } from "./sourcesView";
 import { configView } from "./configView";
 import { logView } from "./logView";
 import { logLineView } from "./logLineView";
+import { historyView } from "./historyView";
+import { umapView } from "./umapView";
+import { syncDashboardView } from "./syncDashboardView";
+import {
+  latestActivityView,
+  libraryView,
+  needsYouView,
+  sourcesOverviewView,
+  syncStatusView,
+} from "./dashboardSections";
+import { searchView } from "./searchView";
 
 // The names in scope when card source is evaluated (cardSource.ts).
 export const viewLibs: ViewLibs = {
+  syncStatusView,
+  needsYouView,
+  libraryView,
+  sourcesOverviewView,
+  latestActivityView,
+  searchView,
   gridView,
   documentView,
   documentPickerView,
@@ -30,21 +47,7 @@ export const viewLibs: ViewLibs = {
   configView,
   logView,
   logLineView,
-};
-
-export {
-  gridView,
-  documentView,
-  documentPickerView,
-  galleryView,
-  agentSeedView,
-  aliasView,
-  dactalView,
-  perseusView,
-  sourceDagView,
-  tableView,
-  sourcesView,
-  configView,
-  logView,
-  logLineView,
+  historyView,
+  umapView,
+  syncDashboardView,
 };

@@ -155,6 +155,19 @@ async function copyLine() {
       <pre class="ll-msg">{{ line.msg }}</pre>
 
       <dl class="ll-meta">
+        <template v-if="line.group_id">
+          <dt>group</dt>
+          <dd>
+            <button
+              class="ll-chip"
+              type="button"
+              title="Keep only this group"
+              @click="narrowBy('group', line.group_id!, false)"
+            >
+              {{ line.group_id }}
+            </button>
+          </dd>
+        </template>
         <template v-if="line.step">
           <dt>step</dt>
           <dd>
@@ -238,7 +251,7 @@ async function copyLine() {
   overflow-y: auto;
   padding: 0.75rem 1rem;
   box-sizing: border-box;
-  font-size: 13px;
+  font-size: var(--datalib-font-size);
 }
 .ll-empty {
   color: var(--datalib-muted);
@@ -273,26 +286,26 @@ async function copyLine() {
   color: var(--datalib-muted);
 }
 .ll-target {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--datalib-mono);
 }
 .ll-when {
   color: var(--datalib-muted);
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   margin-left: auto;
 }
 .ll-copy,
 .ll-chip {
   border: 1px solid var(--datalib-border);
-  border-radius: 3px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-bg);
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   padding: 1px 6px;
   cursor: pointer;
 }
 .ll-chip {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--datalib-mono);
 }
 .ll-copy:hover,
 .ll-chip:hover {
@@ -302,10 +315,10 @@ async function copyLine() {
   margin: 0 0 0.75rem;
   padding: 0.5rem 0.65rem;
   background: var(--datalib-code-bg);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--datalib-mono);
   font-size: 12.5px;
   line-height: 1.45;
 }
@@ -314,7 +327,7 @@ async function copyLine() {
   grid-template-columns: max-content 1fr;
   gap: 4px 12px;
   margin: 0 0 0.75rem;
-  font-size: 12.5px;
+  font-size: var(--datalib-font-size);
 }
 .ll-meta dt {
   color: var(--datalib-muted);
@@ -333,9 +346,10 @@ async function copyLine() {
 }
 .ll-h {
   margin: 0.25rem 0 0.35rem;
-  font-size: 0.8rem;
+  font-size: var(--datalib-font-size-small);
+  font-weight: 600;
   color: var(--datalib-muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.4px;
 }
 </style>

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { actOnRowByUuid, expectGridPainted } from "./grid-helpers";
+import { GRID, actOnRowByUuid, expectGridPainted } from "./grid-helpers";
 
 // What this test pins:
 //   The Contents column in the search grid must render long snippets at
@@ -36,7 +36,7 @@ test("Contents column clamps to exactly two lines with ellipsis", async ({ page,
     "fixture must contain at least one row with a long snippet to exercise the clamp",
   ).toBeTruthy();
 
-  await page.goto("/");
+  await page.goto(GRID);
   await expect(page.locator(".grid-box .slick-row").first()).toBeVisible({ timeout: 10_000 });
   // A collapsed grid keeps its rows in the DOM but paints nothing, and
   // a nudge into a zero-height viewport scrolls nowhere. Assert the

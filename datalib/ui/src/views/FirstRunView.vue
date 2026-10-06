@@ -36,7 +36,7 @@ async function initialize() {
 </script>
 
 <template>
-  <section class="first-run">
+  <section class="first-run notice">
     <div class="card">
       <h2>Set up a data library</h2>
       <p>
@@ -70,28 +70,10 @@ async function initialize() {
   </section>
 </template>
 
+<style scoped src="./notice.css"></style>
 <style scoped>
-.first-run {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 2rem 1rem;
-}
 .card {
   max-width: 42rem;
-  border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  background: var(--datalib-card-bg);
-  padding: 1.5rem 1.75rem;
-}
-h2 {
-  margin: 0 0 0.75rem;
-  font-size: 1.25rem;
-}
-p {
-  margin: 0.6rem 0;
-  line-height: 1.5;
 }
 ul {
   margin: 0.4rem 0 1rem;
@@ -101,47 +83,16 @@ ul {
 li {
   margin: 0.3rem 0;
 }
-code {
-  background: var(--datalib-code-bg);
-  border-radius: 3px;
-  padding: 0.05rem 0.3rem;
-  font-size: 0.9em;
-}
-/* The data root path can be long; let it wrap rather than widen the card. */
-.root {
-  display: inline-block;
-  overflow-wrap: anywhere;
-}
 .cmd {
   background: var(--datalib-code-bg);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
+  font-family: var(--datalib-mono);
   padding: 0.6rem 0.75rem;
   overflow-x: auto;
   margin: 0;
 }
 .label {
   color: var(--datalib-muted);
-  font-size: 0.9rem;
-}
-.error {
-  color: var(--datalib-log-error);
-}
-button {
-  font: inherit;
-  padding: 0.45rem 0.9rem;
-  border-radius: 4px;
-  border: 1px solid var(--datalib-border);
-  background: var(--datalib-input-bg);
-  color: var(--datalib-fg);
-  cursor: pointer;
-}
-button:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-button.primary {
-  border-color: var(--datalib-accent);
-  color: var(--datalib-accent);
-  font-weight: 600;
+  font-size: var(--datalib-font-size-small);
 }
 </style>

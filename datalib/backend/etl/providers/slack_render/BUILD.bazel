@@ -15,6 +15,8 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/contact_schema:datalib_contact_schema",
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/providers/slack:datalib_etl_slack",
         "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",

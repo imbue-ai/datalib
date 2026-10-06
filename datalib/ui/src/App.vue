@@ -9,14 +9,17 @@ import ConfigErrorView from "@/views/ConfigErrorView.vue";
 import NewerRootView from "@/views/NewerRootView.vue";
 import { fetchConfig, type ConfigResponse } from "@/api";
 import { subscribeLive } from "@/live";
-import { newCard, showDataSources } from "@/surface";
+import CommandBox from "@/components/CommandBox.vue";
+import LibraryCrumb from "@/components/LibraryCrumb.vue";
 import { isDesktopApp } from "@/desktop";
 
 // The app window has no browser chrome, so it draws the two buttons a
 // tab would have; the browser keeps its own.
 const desktop = isDesktopApp();
-const goBack = () => history.back();
-const goForward = () => history.forward();
+// On macOS the desktop app's page runs under the title bar (the Tauri
+// shell's `under_title_bar`): the toolbar is the title bar, so it leaves
+// the window buttons room and its empty areas move the window.
+const underTitleBar = desktop && /Mac/.test(navigator.platform);
 
 // The gate in front of the whole app, for the three states where showing
 // the app would be a lie.
@@ -85,27 +88,37 @@ onUnmounted(() => stop?.());
 
 <template>
   <main class="datalib-shell" data-feedback-root>
-    <!-- The toolbar: the two places a person starts from. -->
-    <nav v-if="!gate" class="datalib-toolbar" aria-label="Cards">
-      <template v-if="desktop">
-        <button class="datalib-tool" title="back (⌘[)" @click="goBack">←</button>
-        <button class="datalib-tool" title="forward (⌘])" @click="goForward">→</button>
-      </template>
-      <button class="datalib-tool" @click="showDataSources">Data sources</button>
-      <button class="datalib-tool" @click="newCard">＋ New card</button>
-      <div class="datalib-spacer" />
-      <!-- Lightweight sync indicator in the toolbar's flexible space —
-           appearing/disappearing never shifts the page layout. -->
-      <SyncProgressChrome />
+    <!-- The toolbar: the app and
+         library names, and the search box. -->
+    <nav
+      v-if="!gate"
+      class="datalib-toolbar"
+      :class="{ 'datalib-toolbar--titlebar': underTitleBar }"
+      aria-label="App"
+      data-tauri-drag-region
+    >
+      <div class="datalib-toolbar-start" data-tauri-drag-region>
+        <LibraryCrumb :config-path="config?.path ?? null" />
+      </div>
+      <div class="datalib-toolbar-sync" data-tauri-drag-region><SyncProgressChrome /></div>
+      <div class="datalib-toolbar-search"><CommandBox /></div>
     </nav>
 
-    <FirstRunView
-      v-if="gate === 'first-run' && config"
-      :config="config"
-      @initialized="onInitialized"
-    />
-    <NewerRootView v-else-if="gate === 'newer-root' && config" :config="config" />
-    <ConfigErrorView v-else-if="gate === 'config-error' && config" :config="config" />
+    <!-- The gates had the shell's padding before the cards went
+         edge to edge; they keep it here. -->
+    <div v-if="gate" class="datalib-gate">
+      <FirstRunView
+        v-if="gate === 'first-run' && config"
+        :config="config"
+        @initialized="onInitialized"
+      />
+      <NewerRootView v-else-if="gate === 'newer-root' && config" :config="config" />
+      <ConfigErrorView
+        v-else-if="gate === 'config-error' && config"
+        :config="config"
+        @saved="refresh"
+      />
+    </div>
     <div v-if="cardsShown" v-show="!gate" class="datalib-cards">
       <RouterView />
     </div>
@@ -122,97 +135,64 @@ onUnmounted(() => stop?.());
   display: contents;
 }
 
-:root {
-  color-scheme: light dark;
-  --datalib-bg: #ffffff;
-  --datalib-fg: #1a1a1a;
-  --datalib-muted: #6b6b6b;
-  --datalib-border: #d8d8d8;
-  --datalib-input-bg: #ffffff;
-  --datalib-code-bg: #f4f4f4;
-  --datalib-hover: #f0f0f0;
-  --datalib-accent: #2563eb;
-  --datalib-card-bg: #fafafa;
-  /* Log severity highlights: dark shades on the light background… */
-  --datalib-log-error: #991b1b;
-  --datalib-log-warn: #854d0e;
-  --datalib-log-ok: #166534;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --datalib-bg: #1a1b1e;
-    --datalib-fg: #e6e6e6;
-    --datalib-muted: #9aa0a6;
-    --datalib-border: #2f3136;
-    --datalib-input-bg: #232428;
-    --datalib-code-bg: #2a2b2f;
-    --datalib-hover: #2a2b2f;
-    --datalib-accent: #6ea8fe;
-    --datalib-card-bg: #232428;
-    /* …and light shades on the dark background. */
-    --datalib-log-error: #f87171;
-    --datalib-log-warn: #facc15;
-    --datalib-log-ok: #4ade80;
-  }
-}
-
-html,
-body,
-#app {
-  background: var(--datalib-bg);
-  color: var(--datalib-fg);
-  margin: 0;
-  min-height: 100vh;
-}
-
-body {
-  font-family: system-ui, sans-serif;
-}
-
-a {
-  color: var(--datalib-accent);
-}
-
 .datalib-shell {
   /* Viewport-pinned flex column: the toolbar takes its natural height
      and the routed view flexes into the rest, so full-height views
-     (MillerView) reach the bottom without guessing the chrome height.
+     (the card layout) reach the bottom without guessing the chrome height.
      min-height (not height) so taller views (sync) still
      scroll the page normally. */
   display: flex;
   flex-direction: column;
   min-height: 100vh;
   box-sizing: border-box;
+}
+.datalib-gate {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
   padding: 1rem;
 }
-/* A band across the top: tinted, hairline below, full-bleed by
-   countering the shell's 1rem padding. */
 .datalib-toolbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  margin: -1rem -1rem 0.75rem;
-  padding: 0.4rem 1rem;
-  background: var(--datalib-card-bg);
+  gap: 4px;
+  height: var(--datalib-toolbar-h);
+  box-sizing: border-box;
+  padding: 0 10px;
+  background: var(--datalib-ground);
   border-bottom: 1px solid var(--datalib-border);
 }
-.datalib-spacer {
-  flex: 1;
+/* The title bar's height, whatever the density: the window buttons are
+   placed once, when the window opens, at this bar's middle. So its
+   controls keep their step-0 height too; taller ones crowd a 40px bar. */
+.datalib-toolbar--titlebar {
+  --datalib-control-h: 24px;
+  height: 40px;
+  padding-left: 92px;
+  -webkit-user-select: none;
+  user-select: none;
 }
-.datalib-tool {
-  padding: 0.25rem 0.75rem;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--datalib-fg);
-  font: inherit;
-  line-height: 1.4;
-  cursor: pointer;
+/* The search box at the right end. As the window narrows the search
+   box shrinks first, from 440px to its min-width (its far larger
+   flex-shrink leaves it nearly all the shrinking); past that the
+   crumb's library name ellipsizes. The desktop shell's minimum window
+   width (MIN_WINDOW_WIDTH in datalib/tauri/src/main.rs) keeps both in
+   view. */
+.datalib-toolbar-start {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
-.datalib-tool:hover {
-  background: var(--datalib-hover);
-  border-color: var(--datalib-border);
+.datalib-toolbar-sync {
+  flex: 0 0 auto;
+  display: flex;
+}
+.datalib-toolbar-search {
+  flex: 0 1000 440px;
+  min-width: 180px;
+  display: flex;
 }
 </style>

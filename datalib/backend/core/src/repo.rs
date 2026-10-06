@@ -44,6 +44,18 @@ pub trait AppRepo: Send + Sync {
         Err(RepoError::ReadOnly)
     }
 
+    /// One tree's samples from `since_utc` to `until_utc`, oldest first,
+    /// led by the newest one before `since_utc`: the series is compacted,
+    /// so that one is what the tree weighed when the range opened.
+    async fn disk_usage_between(
+        &self,
+        _path: &str,
+        _since_utc: &str,
+        _until_utc: &str,
+    ) -> Result<Vec<DiskUsageRow>, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
     // --- Remote media: the allow-list and the download CAS's index ----
 
     async fn list_remote_allows(&self) -> Result<Vec<RemoteMediaAllowRow>, RepoError> {

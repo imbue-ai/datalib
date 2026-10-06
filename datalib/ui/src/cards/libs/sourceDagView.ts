@@ -35,12 +35,12 @@ export function sourceDagView(): CardRender {
     ctx.setTitle("Pipeline DAG");
     const style = document.createElement("style");
     style.textContent = `
-      .dv { font: 12px/1.4 ui-monospace, Menlo, monospace; color: var(--datalib-fg, inherit); }
-      .dv-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border, #8884); font-family: system-ui, sans-serif; }
+      .dv { font: 12px/1.4 var(--datalib-mono); color: var(--datalib-fg, inherit); }
+      .dv-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border-soft); font-family: var(--datalib-font); }
       .dv-scroll { overflow: auto; }
-      .dv-error { padding: 16px 12px; color: #c0392b; white-space: pre-wrap; }
+      .dv-error { padding: 16px 12px; color: var(--datalib-error-fg); white-space: pre-wrap; }
       .dv-empty { padding: 16px 12px; opacity: .5; }
-      .dv-node { fill: var(--datalib-bg, #fff); stroke: var(--datalib-border, #888); rx: 6px; }
+      .dv-node { fill: var(--datalib-bg); stroke: var(--datalib-border); rx: 6px; }
       .dv-node.todo { stroke-dasharray: 3 3; }
       .dv-node.running { fill: #d4a01755; stroke: #d4a017; animation: dv-flash 1s ease-in-out infinite; }
       .dv-node.done { fill: #2e8b5733; stroke: #2e8b57; }
@@ -50,8 +50,8 @@ export function sourceDagView(): CardRender {
       @keyframes dv-flash { 0%, 100% { fill-opacity: 1; } 50% { fill-opacity: .35; } }
       .dv-label { fill: currentColor; }
       .dv-sub { fill: currentColor; opacity: .5; font-size: 10px; }
-      .dv-edge { fill: none; stroke: var(--datalib-border, #888); stroke-width: 1.2; opacity: .7; }
-      .dv-legend { display: flex; gap: 1rem; padding: 6px 12px; opacity: .7; font-family: system-ui, sans-serif; font-size: 11px; border-top: 1px solid var(--datalib-border, #8882); }
+      .dv-edge { fill: none; stroke: var(--datalib-border); stroke-width: 1.2; opacity: .7; }
+      .dv-legend { display: flex; gap: 1rem; padding: 6px 12px; opacity: .7; font-family: var(--datalib-font); font-size: var(--datalib-font-size-small); border-top: 1px solid var(--datalib-border-soft); }
       .dv-dot { display: inline-block; width: .6em; height: .6em; border-radius: 2px; margin-right: .3em; }
     `;
     root.appendChild(style);

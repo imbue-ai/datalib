@@ -23,24 +23,45 @@ pub fn to_hex(h: &Blake3) -> String {
     s
 }
 
-/// Files at or above this size use `Hasher::update_mmap`; smaller files
-/// stream via `update_reader`. blake3 upstream guidance: mmap wins for
-/// large files because the kernel pages in lazily and one userspace
-/// copy is avoided; for tiny files the mmap setup cost dominates. 16
-/// MiB is the threshold blake3's own `b3sum` CLI uses.
-const MMAP_THRESHOLD: u64 = 16 * 1024 * 1024;
+/// Files at or above this size are hashed on every core, read in
+/// [`BIG_READ_CHUNK`] pieces so a caller can report how far along it is.
+/// Below it the thread hand-off costs more than it saves.
+const PARALLEL_THRESHOLD: u64 = 16 * 1024 * 1024;
+const BIG_READ_CHUNK: usize = 8 * 1024 * 1024;
 
 pub fn hash_file(path: &Path, size: u64) -> Result<Blake3> {
+    hash_file_reporting(path, size, |_| {})
+}
+
+/// [`hash_file`], calling `on_bytes` with the running byte count after
+/// each chunk of a large file (small files report once, when done).
+pub fn hash_file_reporting(
+    path: &Path,
+    size: u64,
+    mut on_bytes: impl FnMut(u64),
+) -> Result<Blake3> {
+    use std::io::Read as _;
     let mut hasher = blake3::Hasher::new();
-    if size >= MMAP_THRESHOLD {
-        hasher
-            .update_mmap(path)
-            .with_context(|| format!("mmap-hash {}", path.display()))?;
-    } else {
-        let f = File::open(path).with_context(|| format!("open for hash {}", path.display()))?;
+    let mut f = File::open(path).with_context(|| format!("open for hash {}", path.display()))?;
+    if size < PARALLEL_THRESHOLD {
         hasher
             .update_reader(f)
             .with_context(|| format!("hash {}", path.display()))?;
+        on_bytes(size);
+    } else {
+        let mut buf = vec![0u8; BIG_READ_CHUNK];
+        let mut done = 0u64;
+        loop {
+            let n = f
+                .read(&mut buf)
+                .with_context(|| format!("read {}", path.display()))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update_rayon(&buf[..n]);
+            done += n as u64;
+            on_bytes(done);
+        }
     }
     Ok(*hasher.finalize().as_bytes())
 }
@@ -61,9 +82,9 @@ pub enum StampKind {
     /// filesystems), so only `(mtime, size)` are compared. Less safe,
     /// but it is Unison's own behavior on those filesystems.
     NoStamp,
-    /// "The previous run was interrupted mid-hash of this path." Forces
-    /// a rehash regardless of what the triple says. Set before opening
-    /// the file, cleared once the hash is durably written.
+    /// Forces a rehash regardless of what the triple says. Nothing
+    /// writes it; a stored `stamp_kind` this build does not recognise
+    /// reads as this ([`StampKind::from_str_or_rescan`]).
     Rescan,
 }
 
@@ -193,9 +214,12 @@ pub struct WalkError {
     pub error: String,
 }
 
+/// `max_depth: Some(1)` walks `root`'s own entries and opens no folder
+/// beneath it.
 pub fn walk_files<F>(
     root: &Path,
     extra_ignores: &[String],
+    max_depth: Option<usize>,
     accept: F,
 ) -> Result<(Vec<WalkedFile>, Vec<WalkError>)>
 where
@@ -208,7 +232,8 @@ where
         .git_ignore(true)
         .git_global(false)
         .git_exclude(false)
-        .parents(false);
+        .parents(false)
+        .max_depth(max_depth);
 
     if !extra_ignores.is_empty() {
         let mut ov = ignore::overrides::OverrideBuilder::new(root);
@@ -378,7 +403,7 @@ mod tests {
         std::fs::write(d.path().join("sub/b.pdf"), b"y").unwrap();
         std::fs::write(d.path().join("sub/deep/c.txt"), b"z").unwrap();
 
-        let (files, errs) = walk_files(d.path(), &[], |p| {
+        let (files, errs) = walk_files(d.path(), &[], None, |p| {
             p.extension().and_then(|e| e.to_str()) == Some("pdf")
         })
         .unwrap();
@@ -401,7 +426,7 @@ mod tests {
             // A directory link that would otherwise recurse forever.
             std::os::unix::fs::symlink(d.path(), d.path().join("loop")).unwrap();
         }
-        let (files, _) = walk_files(d.path(), &[], |p| {
+        let (files, _) = walk_files(d.path(), &[], None, |p| {
             p.extension().and_then(|e| e.to_str()) == Some("pdf")
         })
         .unwrap();
@@ -417,7 +442,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(d.path().join("nope.pdf"), d.path().join("dead.pdf")).unwrap();
-        let (files, errors) = walk_files(d.path(), &[], |p| {
+        let (files, errors) = walk_files(d.path(), &[], None, |p| {
             p.extension().and_then(|e| e.to_str()) == Some("pdf")
         })
         .unwrap();
@@ -435,7 +460,7 @@ mod tests {
         std::fs::write(d.path().join("keep.pdf"), b"x").unwrap();
         std::fs::write(d.path().join("skipme/no.pdf"), b"y").unwrap();
 
-        let (files, _) = walk_files(d.path(), &["skipme/**".into()], |p| {
+        let (files, _) = walk_files(d.path(), &["skipme/**".into()], None, |p| {
             p.extension().and_then(|e| e.to_str()) == Some("pdf")
         })
         .unwrap();

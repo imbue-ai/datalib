@@ -11,14 +11,19 @@ const target = (over: Partial<MenuTarget> = {}): MenuTarget => ({
   editBlocked: null,
   revealBlocked: null,
   browseBlocked: null,
-  stopRequestId: null,
-  pausedBy: null,
+  rawStore: false,
+  stopRequestIds: [],
+  turnedOffBy: null,
   statusFrom: "slack/render_markdown",
+  dashboardGroup: "slack",
   revealPath: "/data/slack",
   ...over,
 });
 
-const opts = { column: "status", canReveal: true, revealLabel: "Reveal in Finder" };
+const opts = { canReveal: true, revealLabel: "Reveal in Finder" };
+
+const has = (menu: MenuEntry[], action: string) =>
+  menu.some((m) => !m.separator && m.action === action);
 
 function entry(menu: MenuEntry[], action: string) {
   const e = menu.find((m) => !m.separator && m.action === action);
@@ -27,72 +32,127 @@ function entry(menu: MenuEntry[], action: string) {
 }
 
 describe("rowMenu", () => {
-  it("offers every row action, enabled, for one ordinary group", () => {
+  it("offers every row action, enabled, for one ordinary group, grouped by what it touches", () => {
     const menu = rowMenu([target()], opts);
-    const actions = menu.filter((m) => !m.separator).map((m) => !m.separator && m.action);
+    const actions = menu.map((m) => (m.separator ? "—" : m.action));
     expect(actions).toEqual([
       "browse",
       "sync",
-      "pause",
+      "turn_off",
+      "—",
       "edit",
+      "rename",
+      "—",
+      "history",
       "compare",
       "log",
-      "history",
+      "dashboard",
+      "—",
       "reveal",
+      "copy_path",
+      "copy_id",
+      "—",
       "reset",
-      "reset_blobs",
       "remove",
     ]);
     for (const m of menu) if (!m.separator) expect(m.disabled).toBeNull();
   });
 
-  it("keeps an entry that does not apply, disabled with the reason", () => {
-    const menu = rowMenu([target({ kind: "applet", func: null, statusFrom: null })], opts);
-    expect(entry(menu, "history").disabled).toBe("An applet writes no store");
-    expect(entry(menu, "log").disabled).toBe("An applet runs no step");
+  it("leaves out an entry for another kind of row, and greys one that cannot run now", () => {
+    const applet = rowMenu([target({ kind: "applet", func: null, statusFrom: null })], opts);
+    expect(has(applet, "history")).toBe(false);
+    expect(has(applet, "log")).toBe(false);
     expect(
-      entry(rowMenu([target({ kind: "step", func: "qmd_index" })], opts), "history").disabled,
-    ).toBe("The QMD index keeps no doltlite store");
+      has(rowMenu([target({ kind: "applet", dashboardGroup: null })], opts), "dashboard"),
+    ).toBe(false);
+    expect(has(rowMenu([target({ kind: "step", func: "qmd_aggregator" })], opts), "history")).toBe(
+      false,
+    );
     expect(
       entry(rowMenu([target({ runBlocked: "Not in the pipeline" })], opts), "sync").disabled,
     ).toBe("Not in the pipeline");
+    expect(entry(rowMenu([target({ statusFrom: null })], opts), "log").disabled).toBe(
+      "No step under this group has run yet",
+    );
   });
 
-  it("offers Reset on a source and its steps, and says why not elsewhere", () => {
+  /// Left-out entries once left their separators behind: a menu that
+  /// opened on a line, or showed two lines with nothing between them.
+  it("draws no separator first, last, or twice in a row", () => {
+    const shapes = [
+      [target({ kind: "applet", func: null, statusFrom: null })],
+      [
+        target({
+          id: "system",
+          name: "System",
+          kind: "system",
+          type: null,
+          statusFrom: null,
+          dashboardGroup: null,
+        }),
+      ],
+      [target(), target({ id: "b" })],
+    ];
+    for (const targets of shapes) {
+      const lines = rowMenu(targets, { ...opts, canReveal: false }).map((m) => !!m.separator);
+      expect(lines[0]).toBe(false);
+      expect(lines[lines.length - 1]).toBe(false);
+      lines.slice(1).forEach((line, i) => expect(line && lines[i]).toBe(false));
+    }
+  });
+
+  it("offers Reset on a source and its steps, and nowhere else", () => {
     const index = target({ id: "unified_index", type: null, statusFrom: null });
-    expect(entry(rowMenu([index], opts), "reset").disabled).toBe(
-      "Reset a source; the index follows it",
-    );
-    const busy = target({ stopRequestId: "req-1" });
+    expect(has(rowMenu([index], opts), "reset")).toBe(false);
+    const busy = target({ stopRequestIds: ["req-1"] });
     expect(entry(rowMenu([busy], opts), "reset").disabled).toBe("Busy — stop the sync first");
     const ingest = target({ kind: "step", func: "ingest" });
-    expect(entry(rowMenu([ingest], opts), "reset_blobs").disabled).toBeNull();
+    expect(entry(rowMenu([ingest], opts), "reset").disabled).toBeNull();
     const render = target({ kind: "step", func: "render_markdown" });
     expect(entry(rowMenu([render], opts), "reset").disabled).toBeNull();
-    expect(entry(rowMenu([render], opts), "reset_blobs").disabled).toBe(
-      "Only the download step keeps attachments",
-    );
     const diff = target({ type: "diff" });
     expect(entry(rowMenu([diff], opts), "reset").disabled).toBeNull();
-    expect(entry(rowMenu([diff], opts), "reset_blobs").disabled).toBe(
-      "A comparison downloads nothing",
-    );
+  });
+
+  it("offers Reset on the embedding map, the one index step a person resets", () => {
+    const map = target({
+      id: "unified_index/embedding_map",
+      kind: "step",
+      type: null,
+      func: "embedding_map",
+    });
+    expect(entry(rowMenu([map], opts), "reset").disabled).toBeNull();
+    const qmd = target({
+      id: "unified_index/qmd_aggregator",
+      kind: "step",
+      type: null,
+      func: "qmd_aggregator",
+    });
+    expect(has(rowMenu([qmd], opts), "reset")).toBe(false);
   });
 
   it("offers the system row its log and its path, and nothing that edits the config", () => {
     const menu = rowMenu(
-      [target({ id: "system", name: "System", kind: "system", type: null, statusFrom: null })],
+      [
+        target({
+          id: "system",
+          name: "System",
+          kind: "system",
+          type: null,
+          statusFrom: null,
+          dashboardGroup: null,
+        }),
+      ],
       opts,
     );
+    expect(menu.map((m) => (m.separator ? "—" : m.action))).toEqual([
+      "browse",
+      "—",
+      "reveal",
+      "copy_path",
+      "copy_id",
+    ]);
     expect(entry(menu, "browse").name).toBe("Browse the log");
-    expect(entry(menu, "browse").disabled).toBeNull();
-    expect(entry(menu, "reveal").disabled).toBeNull();
-    expect(entry(menu, "compare").disabled).toBe("Not a config entry");
-    expect(entry(menu, "remove").disabled).toBe("Not a config entry");
-    expect(entry(menu, "log").disabled).toBe("The log is what Browse opens here");
-    expect(entry(menu, "history").disabled).toBe(
-      "The run log is plain SQLite, with no commit history",
-    );
     // Several rows with the system row among them: the reason names it.
     const mixed = rowMenu(
       [target(), target({ id: "system", name: "System", kind: "system" })],
@@ -101,78 +161,64 @@ describe("rowMenu", () => {
     expect(entry(mixed, "remove").disabled).toBe("System: Not a config entry");
   });
 
-  it("limits the one-row actions when several rows are targeted, and names the row a reason came from", () => {
+  it("names Browse for what it opens on a download step with a raw store", () => {
+    const step = { kind: "step" as const, func: "ingest", id: "slack/ingest" };
+    expect(entry(rowMenu([target(step)], opts), "browse").name).toBe("Browse this data");
+    expect(entry(rowMenu([target({ ...step, rawStore: true })], opts), "browse").name).toBe(
+      "Browse the downloaded tables",
+    );
+  });
+
+  it("leaves out the one-row actions when several rows are targeted, and names the row a reason came from", () => {
     const menu = rowMenu([target(), target({ id: "mail", name: "Mail", editBlocked: "x" })], opts);
-    expect(entry(menu, "browse").disabled).toBe("One row at a time");
-    expect(entry(menu, "edit").disabled).toBe("One row at a time");
-    expect(entry(menu, "log").disabled).toBe("One row at a time");
+    for (const action of ["browse", "edit", "rename", "compare", "log", "dashboard"]) {
+      expect(has(menu, action)).toBe(false);
+    }
     expect(entry(menu, "history").disabled).toBeNull();
     expect(entry(menu, "remove").name).toBe("Remove 2 entries from config");
     const blocked = rowMenu([target(), target({ id: "mail", name: "Mail", kind: "applet" })], opts);
     expect(entry(blocked, "history").disabled).toBe("Mail: An applet writes no store");
   });
 
-  it("offers Compare on a source, and says why not on anything else", () => {
+  it("offers Compare on a source and nothing else", () => {
     expect(entry(rowMenu([target()], opts), "compare").disabled).toBeNull();
-    expect(
-      entry(rowMenu([target({ kind: "step", func: "ingest" })], opts), "compare").disabled,
-    ).toBe("Compare a source, not a step under it");
-    expect(entry(rowMenu([target({ type: null })], opts), "compare").disabled).toBe(
-      "The index mirrors nothing to compare",
-    );
-    expect(entry(rowMenu([target({ type: "diff" })], opts), "compare").disabled).toBe(
-      "Already a comparison — make another from its source",
-    );
-    expect(entry(rowMenu([target(), target({ id: "b" })], opts), "compare").disabled).toBe(
-      "One row at a time",
-    );
+    expect(has(rowMenu([target({ kind: "step", func: "ingest" })], opts), "compare")).toBe(false);
+    expect(has(rowMenu([target({ type: null })], opts), "compare")).toBe(false);
+    expect(has(rowMenu([target({ type: "diff" })], opts), "compare")).toBe(false);
   });
 
   it("turns Sync into Stop only when every target is claimed", () => {
-    expect(entry(rowMenu([target({ stopRequestId: "r1" })], opts), "stop").name).toBe(
+    expect(entry(rowMenu([target({ stopRequestIds: ["r1"] })], opts), "stop").name).toBe(
       "Stop the sync",
     );
     const mixed = rowMenu(
-      [target({ stopRequestId: "r1" }), target({ id: "mail", name: "Mail" })],
+      [target({ stopRequestIds: ["r1"] }), target({ id: "mail", name: "Mail" })],
       opts,
     );
     expect(entry(mixed, "sync").disabled).toMatch(/already syncing/);
   });
 
-  it("offers Resume only when every target is paused, and Pause on nothing unscheduled", () => {
-    expect(entry(rowMenu([target({ pausedBy: "claude" })], opts), "resume").disabled).toBeNull();
-    const mixed = rowMenu([target({ pausedBy: "ui" }), target({ id: "mail" })], opts);
-    expect(entry(mixed, "pause").disabled).toBeNull();
-    expect(entry(rowMenu([target({ kind: "applet" })], opts), "pause").disabled).toBe(
-      "An applet is not scheduled",
-    );
+  it("offers Turn on only when every target is off, and Turn off on nothing unscheduled", () => {
+    expect(
+      entry(rowMenu([target({ turnedOffBy: "claude" })], opts), "turn_on").disabled,
+    ).toBeNull();
+    const mixed = rowMenu([target({ turnedOffBy: "ui" }), target({ id: "mail" })], opts);
+    expect(entry(mixed, "turn_off").disabled).toBeNull();
+    expect(has(rowMenu([target({ kind: "applet" })], opts), "turn_off")).toBe(false);
   });
 
-  it("adds the cell's own entries ahead of the row's", () => {
-    const name = rowMenu([target()], { ...opts, column: "name" });
-    expect(name[0]).toMatchObject({ action: "rename", disabled: null });
-    expect(name[1]).toMatchObject({ action: "copy_id", name: "Copy id" });
-    expect(name[2]).toEqual({ separator: true });
-    expect(
-      entry(rowMenu([target({ kind: "step" })], { ...opts, column: "name" }), "rename").disabled,
-    ).toBe("Only a group has a name");
-    const bytes = rowMenu([target(), target({ id: "b", name: "B", revealPath: null })], {
-      ...opts,
-      column: "bytes",
-    });
-    expect(bytes[0]).toMatchObject({
-      action: "copy_path",
+  it("offers Rename on a group, and the copies wherever the pointer is", () => {
+    expect(has(rowMenu([target({ kind: "step" })], opts), "rename")).toBe(false);
+    const two = rowMenu([target(), target({ id: "b", name: "B", revealPath: null })], opts);
+    expect(entry(two, "copy_path")).toMatchObject({
       name: "Copy 2 paths",
       disabled: "B: Nothing on disk yet",
     });
-    expect(rowMenu([target()], opts).some((m) => !m.separator && m.action === "rename")).toBe(
-      false,
-    );
+    expect(entry(two, "copy_id")).toMatchObject({ name: "Copy 2 ids", disabled: null });
   });
 
   it("omits Reveal where the host cannot reveal", () => {
-    const menu = rowMenu([target()], { ...opts, canReveal: false });
-    expect(menu.some((m) => !m.separator && m.action === "reveal")).toBe(false);
+    expect(has(rowMenu([target()], { ...opts, canReveal: false }), "reveal")).toBe(false);
   });
 
   it("names the trees that keep no store", () => {

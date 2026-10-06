@@ -8,14 +8,16 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
-  searchAndSettle,
-  SEARCH_ROWS,
-  TABLE_ROWS,
-  searchHeader,
+  cardOf,
+  expandGroup,
   type GridApi,
   MANAGE_WITH_CONFIG,
-  expandGroup,
   pipelineRow,
+  savedConfig,
+  SEARCH_ROWS,
+  searchAndSettle,
+  searchHeader,
+  TABLE_ROWS,
 } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
@@ -87,9 +89,9 @@ async function browse(page: Page, groupId: string, expectQuery: string) {
 // failure — leaving sources in the config would take later specs down.
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
   await openManage(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
   await writeConfig(page, `${original.replace(/\s*$/, "")}\n${GROUPS}`);
 });
 
@@ -102,13 +104,12 @@ test("a source's row opens that source, with its type's columns", async ({ page 
   await openManage(page);
   await browse(page, "slack", "source_id:slack is:document");
 
-  // The card stack IS the URL, which is what makes a browse
-  // bookmarkable and shareable rather than a transient view.
-  await expect(page).toHaveURL(/source_id%3Aslack/);
+  // The browse is a card of its own, on that source's query.
+  await expect(cardOf(page, "source_id:slack")).toBeVisible();
 
   // The card is named for what it holds, not for its query, and keeps
   // that name while the person searches inside it (checked below).
-  const name = page.locator(".miller-col-title").last();
+  const name = page.locator(".ct-main .ct-card-title").last();
   await expect(name).toHaveText(/ documents$/);
 
   // Every row came from this source, and every row is a document: one
@@ -166,8 +167,9 @@ test("a different type gets a different column set", async ({ page }) => {
 test("the index group browses every source", async ({ page }) => {
   test.setTimeout(120_000);
   await openManage(page);
-  // No filter: the index group's browse is every source at once.
-  await browse(page, "unified_index", "");
+  // No source filter: the index group's browse is every source's
+  // documents at once, the grid the app opens on.
+  await browse(page, "unified_index", "is:document");
 
   // The column that separates sources is the one that earns its place
   // here — the opposite of a per-source browse: the rows come from more
@@ -196,7 +198,7 @@ test("a step's row opens its source, as its group's row does", async ({ page }) 
   await step.click();
   await expect(page.locator(SEARCH)).toBeVisible({ timeout: 30_000 });
   await expect(page.locator(SEARCH)).toHaveValue("source_id:slack is:document");
-  await expect(page).toHaveURL(/source_id%3Aslack/);
+  await expect(cardOf(page, "source_id:slack")).toBeVisible();
 });
 
 /// A source that renders nothing has no rows at all — not even the

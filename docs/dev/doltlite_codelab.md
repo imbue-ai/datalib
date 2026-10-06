@@ -82,7 +82,7 @@ SELECT dolt_tag('v1-initial');
 
 `dolt_commit` returns a hash — that's our first commit. `dolt_tag` pins the name `v1-initial` to it so we never have to type the hash again. Like git, `-A` stages everything.
 
-> **Talking point:** A `doltlite` database file is *also* a versioned repository. No external `.git` directory, no daemon — just one file.
+> **Talking point:** A `doltlite` database file is *also* a versioned repository. No external `.git` directory, no daemon — just one file (and an empty `.fruits.db-lock` beside it that doltlite uses for locking).
 
 ---
 
@@ -137,7 +137,7 @@ SELECT tag_name, date       FROM dolt_tags;
 ```
 ╭──────────────────────────────────────────┬────────────────────────────╮
 │               commit_hash                │          message           │
-├──────────────────────────────────────────┼────────────────────────────┤
+╞══════════════════════════════════════════╪════════════════════════════╡
 │ …                                        │ rebuild from scratch       │
 │ …                                        │ tweak fruits               │
 │ …                                        │ initial fruits             │
@@ -145,7 +145,7 @@ SELECT tag_name, date       FROM dolt_tags;
 ╰──────────────────────────────────────────┴────────────────────────────╯
 ╭────────────┬─────────────────────╮
 │  tag_name  │        date         │
-├────────────┼─────────────────────┤
+╞════════════╪═════════════════════╡
 │ v1-initial │ …                   │
 │ v2-tweaked │ …                   │
 │ v3-rebuilt │ …                   │
@@ -169,29 +169,25 @@ SELECT * FROM dolt_diff_stat   ('v1-initial', 'v2-tweaked');
 
 ## Step 6 — Row-level diff: `v1-initial` → `v2-tweaked`
 
-Every versioned table `T` gets a virtual companion table `dolt_diff_T` with `to_*` and `from_*` columns for every column in `T`, plus `to_commit`, `from_commit`, and `diff_type`.
-
-One wrinkle: `from_commit` / `to_commit` store the resolved *hash*, not the tag name, so we look the tag up inline with a scalar subquery against `dolt_tags`. (You can't wrap this in a `CREATE VIEW` — `doltlite`'s safe mode disallows joining two virtual tables in a view definition.)
+Every versioned table `T` gets a companion `dolt_diff_T` with `to_*` and `from_*` columns for every column in `T`, plus `to_commit`, `from_commit`, and `diff_type`. Pass it two refs — tags, branches or hashes — and it returns the rows that differ between them. (The `from_commit` / `to_commit` columns hold the resolved hashes, not the tag names.)
 
 ```sql
 SELECT diff_type, from_name, from_qty, from_description,
                   to_name,   to_qty,   to_description
-FROM   dolt_diff_fruits
-WHERE  from_commit = (SELECT tag_hash FROM dolt_tags WHERE tag_name = 'v1-initial')
-  AND  to_commit   = (SELECT tag_hash FROM dolt_tags WHERE tag_name = 'v2-tweaked');
+FROM   dolt_diff_fruits('v1-initial', 'v2-tweaked');
 ```
 
 ```
-╭───────────┬───────────┬──────────┬──────────────────┬─────────┬────────┬──────────────────╮
-│ diff_type │ from_name │ from_qty │ from_description │ to_name │ to_qty │  to_description  │
-├───────────┼───────────┼──────────┼──────────────────┼─────────┼────────┼──────────────────┤
-│ modified  │ apple     │       10 │ crisp and sweet  │ apple   │     15 │ crisp and sweet  │
-│ removed   │ banana    │        5 │ soft and mild    │         │        │                  │
-│ added     │           │          │                  │ kiwi    │      7 │ fuzzy and tart   │
-╰───────────┴───────────┴──────────┴──────────────────┴─────────┴────────┴──────────────────╯
+╭───────────┬───────────┬──────────┬──────────────────┬─────────┬────────┬─────────────────╮
+│ diff_type │ from_name │ from_qty │ from_description │ to_name │ to_qty │ to_description  │
+╞═══════════╪═══════════╪══════════╪══════════════════╪═════════╪════════╪═════════════════╡
+│ modified  │ apple     │       10 │ crisp and sweet  │ apple   │     15 │ crisp and sweet │
+│ removed   │ banana    │        5 │ soft and mild    │         │        │                 │
+│ added     │           │          │                  │ kiwi    │      7 │ fuzzy and tart  │
+╰───────────┴───────────┴──────────┴──────────────────┴─────────┴────────┴─────────────────╯
 ```
 
-> **Talking point:** the diff is a *queryable relation*. You can `JOIN`, `WHERE`, `GROUP BY` it like any other table — try `WHERE diff_type = 'modified'` to audit every cell change in a release.
+> **Talking point:** the diff is a *queryable relation*. You can `JOIN`, `WHERE`, `GROUP BY` it like any other table — try `WHERE diff_type = 'modified'` to audit every cell change in a release — or save it as a `CREATE VIEW`.
 
 ---
 
@@ -202,16 +198,14 @@ This is the headline result. We dropped the whole table and re-inserted rows by 
 ```sql
 SELECT diff_type, from_name, from_qty, from_description,
                   to_name,   to_qty,   to_description
-FROM   dolt_diff_fruits
-WHERE  from_commit = (SELECT tag_hash FROM dolt_tags WHERE tag_name = 'v2-tweaked')
-  AND  to_commit   = (SELECT tag_hash FROM dolt_tags WHERE tag_name = 'v3-rebuilt')
+FROM   dolt_diff_fruits('v2-tweaked', 'v3-rebuilt')
 ORDER  BY diff_type, COALESCE(from_name, to_name);
 ```
 
 ```
 ╭───────────┬───────────┬──────────┬──────────────────┬───────────┬────────┬────────────────────╮
 │ diff_type │ from_name │ from_qty │ from_description │  to_name  │ to_qty │   to_description   │
-├───────────┼───────────┼──────────┼──────────────────┼───────────┼────────┼────────────────────┤
+╞═══════════╪═══════════╪══════════╪══════════════════╪═══════════╪════════╪════════════════════╡
 │ added     │           │          │                  │ blueberry │     50 │ small and tangy    │
 │ added     │           │          │                  │ mango     │     12 │ tropical and sweet │
 │ modified  │ apple     │       15 │ crisp and sweet  │ apple     │     99 │ orchard fresh      │
@@ -236,17 +230,29 @@ One query, two commits apart, full accounting of net change.
 
 ## Step 9 — Time travel by reading old state
 
-You're not stuck looking at diffs — you can read a table *as it was*:
+You're not stuck looking at diffs — you can read a table *as it was* at any tag, branch or commit:
 
 ```sql
--- snapshot from v1-initial
-SELECT to_name AS name, to_color AS color, to_qty AS qty, to_description AS description
-FROM   dolt_diff_fruits
-WHERE  to_commit = (SELECT tag_hash FROM dolt_tags WHERE tag_name = 'v1-initial')
-  AND  diff_type = 'added';
+SELECT * FROM dolt_at_fruits('v1-initial');
 ```
 
-(For the general case you'd typically check out a branch at that tag, but for a quick peek the diff table is enough.)
+```
+╭────────┬────────┬─────┬─────────────────╮
+│  name  │ color  │ qty │   description   │
+╞════════╪════════╪═════╪═════════════════╡
+│ apple  │ red    │  10 │ crisp and sweet │
+│ banana │ yellow │   5 │ soft and mild   │
+│ grape  │ purple │  20 │ tiny and juicy  │
+╰────────┴────────┴─────┴─────────────────╯
+```
+
+To open the whole database at that tag instead, quit the shell and open the tag by path. It is a read-only snapshot: every table as it was, and `active_branch()` is `NULL` because no branch is checked out.
+
+```bash
+doltlite -readonly 'fruits.db/v1-initial' "SELECT count(*) FROM fruits;"   # 3
+```
+
+(`dolt_checkout('v1-initial')` refuses a tag; `dolt_checkout('-b', 'old', 'v1-initial')` makes a branch there if you want to write.)
 
 ---
 
@@ -259,7 +265,9 @@ In ~30 lines of SQL you:
 3. **Diffed** any two tags at three resolutions: summary, stat, and row-level — all as ordinary tables you can `SELECT` from, addressed by human-readable names.
 4. **Preserved row identity across a destructive `DROP TABLE`**, because the primary key — not the physical storage — defines what "the same row" means.
 
-The whole repository is one file. `cp fruits.db backup.db` is a clone. Email it to a colleague and they have the full history *and* the tags.
+The whole repository is one file. With the shell closed, `cp fruits.db backup.db` is a clone. Email it to a colleague and they have the full history *and* the tags.
+
+What the engine does underneath — branches, locking, what a read-only connection may do — is in [`doltlite.md`](doltlite.md).
 
 ---
 

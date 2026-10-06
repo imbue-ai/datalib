@@ -1,0 +1,51 @@
+# The cargo-about binary for the host, copied out of the pinned release
+# archive MODULE.bazel fetches. `scripts/third_party_notices.sh` builds
+# this and runs it from bazel-bin; it cannot run as a build action
+# because it needs cargo and the network to fetch crate sources.
+#
+# Only the platforms the release ships have a binary; on any other host
+# the target is incompatible, so `bazelisk build //...` skips it.
+
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+
+config_setting(
+    name = "darwin_aarch64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+copy_file(
+    name = "cargo_about",
+    src = select({
+        ":darwin_aarch64": "@cargo_about_aarch64_apple_darwin//:cargo-about",
+        ":linux_x86_64": "@cargo_about_x86_64_unknown_linux_musl//:cargo-about",
+        ":linux_aarch64": "@cargo_about_aarch64_unknown_linux_musl//:cargo-about",
+    }),
+    out = "cargo-about",
+    is_executable = True,
+    target_compatible_with = select({
+        ":darwin_aarch64": [],
+        ":linux_x86_64": [],
+        ":linux_aarch64": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:public"],
+)

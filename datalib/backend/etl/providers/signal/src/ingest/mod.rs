@@ -9,10 +9,12 @@ use anyhow::{anyhow, Context, Result};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
 use datalib_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
 use serde::Serialize;
 use sqlx::Row;
-use tracing::{info, warn};
+use tracing::info;
 
 pub use db::{db_path_for, RawDb};
 pub use schema_raw::{AccountRow, ChatItemRow, ChatRow, RecipientRow};
@@ -22,9 +24,9 @@ const DEFAULT_AEP_ENV: &str = "SIGNAL_BACKUP_PASSPHRASE";
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     /// Directory containing one or more `signal-backup-YYYY-MM-DD-HH-MM-SS/`
     /// snapshot subdirs. The newest (lexicographically — Signal's
@@ -62,9 +64,8 @@ pub struct FetchSummary {
     /// short-circuited without touching disk.
     pub blobs_skipped: usize,
     /// Attachments we couldn't decrypt/read (file missing, MAC fail,
-    /// LocatorInfo without a local key, …). Surfaces as warn-level
-    /// log lines; details land on
-    /// `chat_item_attachments_bookkeeping.last_error`.
+    /// LocatorInfo without a local key, …). Each is a `problems` row on
+    /// its `chat_item_attachments` edge.
     pub blob_errors: usize,
     pub snapshot: String,
     /// Blake3 hex of the snapshot (see `schema_raw::SNAPSHOT_BLAKE3_RECIPE_DOC`).
@@ -76,6 +77,14 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let pool = opts.db.pool().clone();
+    // Not the run's stop flag: the walk does not stop, so even a stopped
+    // run read every frame, and the snapshot it stamps is never read again.
+    let never_stops = StopFlag::new();
+    run_problems::collecting(&pool, &never_stops, |found| read_snapshot(opts, found)).await
+}
+
+async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let aep_env_var = opts
@@ -122,6 +131,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             note = "skipping decrypt + walk; `datalib-dag --reset` this step to re-ingest",
             "this snapshot was ingested before; nothing to do"
         );
+        // Nothing was read, so what its one read could not decode stands.
+        found.cut_short();
         return Ok(FetchSummary {
             snapshot: snapshot_dir
                 .file_name()
@@ -194,11 +205,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .collect()
     };
 
+    // Frames that would not decode: their records are missing from this
+    // snapshot's ingest, and it is not read again.
+    let mut undecoded: Vec<String> = Vec::new();
     for frame in snap.frames() {
         let frame = match frame {
             Ok(f) => f,
             Err(e) => {
-                warn!(event = "signal_frame_decode_error", error = %e, "a backup frame did not decode");
+                undecoded.push(e.to_string());
                 continue;
             }
         };
@@ -303,6 +317,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // error annotations).
     flush_attachments(&db, pending_attachments).await?;
 
+    // The next snapshot is read whole, so its report replaces this one.
+    if let Some(first) = undecoded.first() {
+        found.phase(
+            "frames",
+            format!(
+                "{} backup frame(s) did not decode, so their records are missing \
+                 until a newer backup reads; first: {first}",
+                undecoded.len()
+            ),
+        );
+    }
+
     db.record_snapshot_ingested(
         &fingerprint,
         &snapshot_blake3,
@@ -381,31 +407,28 @@ fn ingest_attachment(
     pending: &mut PendingAttachments,
     summary: &mut FetchSummary,
 ) {
-    let Some(ptr) = att.pointer.as_ref() else {
-        return;
-    };
-    let Some(li) = ptr.locator_info.as_ref() else {
-        return;
-    };
-    let Some(local_key_bytes) = li.local_key.as_deref() else {
-        return;
-    };
-    if local_key_bytes.len() != 64 {
-        return;
-    }
-    let plaintext_hash = match li.integrity_check.as_ref() {
-        Some(backup::file_pointer::locator_info::IntegrityCheck::PlaintextHash(h))
-            if !h.is_empty() =>
-        {
-            h.clone()
-        }
-        _ => return,
-    };
-    let mut local_key = [0u8; 64];
-    local_key.copy_from_slice(local_key_bytes);
-
-    let media_name = local_media_name(&plaintext_hash, &local_key);
     let attachment_id = schema_raw::chat_item_attachment_id_recipe(chat_item_pk, slot_idx);
+    let (plaintext_hash, local_key) = match locate(att) {
+        Ok(found) => found,
+        // Nothing to retry: the bytes are not in this backup. The edge
+        // carries the attachment's own id for a ref, having no media name.
+        Err(why) => {
+            pending.rows.push(schema_raw::ChatItemAttachmentRow {
+                id: attachment_id.clone(),
+                chat_item_id: chat_item_pk.to_string(),
+                ref_id: attachment_id.clone(),
+                blake3: None,
+            });
+            pending.errors.push(datalib_etl::blob_cas::BlobNotFetched {
+                ref_id: attachment_id,
+                detail: format!("the backup does not carry this attachment's bytes: {why}"),
+                reason: datalib_problems::Reason::NotFound,
+            });
+            summary.blob_errors += 1;
+            return;
+        }
+    };
+    let media_name = local_media_name(&plaintext_hash, &local_key);
 
     // Skip-check: if a prior run already decrypted this media_name
     // (anywhere in any chat_item), we know the blake3 without
@@ -428,13 +451,6 @@ fn ingest_attachment(
     let enc = match std::fs::read(&enc_path) {
         Ok(b) => b,
         Err(e) => {
-            warn!(
-                event = "signal_attachment_missing",
-                media_name = %media_name,
-                path = %enc_path.display(),
-                error = %e,
-                "an attachment the backup names is not there"
-            );
             pending.rows.push(schema_raw::ChatItemAttachmentRow {
                 id: attachment_id.clone(),
                 chat_item_id: chat_item_pk.to_string(),
@@ -453,12 +469,6 @@ fn ingest_attachment(
     let plaintext = match decrypt_attachment(&enc, &local_key) {
         Ok(p) => p,
         Err(e) => {
-            warn!(
-                event = "signal_attachment_decrypt_failed",
-                media_name = %media_name,
-                error = %e,
-                "an attachment could not be decrypted"
-            );
             pending.rows.push(schema_raw::ChatItemAttachmentRow {
                 id: attachment_id.clone(),
                 chat_item_id: chat_item_pk.to_string(),
@@ -482,10 +492,30 @@ fn ingest_attachment(
     });
     pending.cas_items.push(DecryptedCas {
         blake3,
-        content_type: ptr.content_type.clone(),
+        content_type: att.pointer.as_ref().and_then(|p| p.content_type.clone()),
         bytes: plaintext,
     });
     summary.blobs += 1;
+}
+
+/// The plaintext hash and local key an attachment's bytes are found and
+/// decrypted by, or why the backup has none. Signal leaves them out for
+/// an attachment the device never downloaded.
+fn locate(att: &backup::MessageAttachment) -> Result<(Vec<u8>, [u8; 64]), &'static str> {
+    let ptr = att.pointer.as_ref().ok_or("no file pointer")?;
+    let li = ptr.locator_info.as_ref().ok_or("no locator")?;
+    let local_key_bytes = li.local_key.as_deref().ok_or("no local key")?;
+    let local_key: [u8; 64] = local_key_bytes
+        .try_into()
+        .map_err(|_| "a local key that is not 64 bytes")?;
+    match li.integrity_check.as_ref() {
+        Some(backup::file_pointer::locator_info::IntegrityCheck::PlaintextHash(h))
+            if !h.is_empty() =>
+        {
+            Ok((h.clone(), local_key))
+        }
+        _ => Err("no plaintext hash"),
+    }
 }
 
 /// End-of-fetch flush. Delegates to the shared
@@ -507,7 +537,7 @@ async fn flush_attachments(db: &RawDb, pending: PendingAttachments) -> Result<()
         db.pool(),
         db.cas(),
         &cas_inserts,
-        &pending.rows,
+        pending.rows,
         &pending.errors,
     )
     .await

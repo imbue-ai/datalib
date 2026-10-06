@@ -31,7 +31,7 @@ struct Args {
     #[arg(long, default_value_t = 30)]
     refresh_window_days: u32,
 
-    /// Safety cap on MR count.
+    /// Most MRs to fetch this run; the rest are left to later runs.
     #[arg(long)]
     max_mrs: Option<usize>,
 
@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
         targets,
         full_sync: args.full,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), datalib_time::IsoOffsetTimestamp::now_local())
     };
 
     let span = info_span!("gitlab_ingest", out = %args.out.display());

@@ -7,7 +7,7 @@
 use datalib_etl::doltlite_raw::{WirePayload, WirePayloadRow};
 use datalib_etl_macros::WirePayloadRow;
 
-pub const DATA_TABLES: &[&str] = &["transcripts", "records"];
+pub use datalib_etl_agent_sessions::DATA_TABLES;
 
 /// The file-cursor scopes this provider owns: one per directory under
 /// the Codex home that holds rollouts.
@@ -56,16 +56,8 @@ pub struct RecordRow {
     pub line_no: i64,
 }
 
-pub const RECORDS_TRANSCRIPT_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS records_transcript ON records(transcript_id)";
-
 pub fn full_ddl() -> Vec<String> {
-    vec![
-        TranscriptRow::ddl(),
-        RecordRow::ddl(),
-        RECORDS_TRANSCRIPT_INDEX_DDL.to_string(),
-        datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
-    ]
+    datalib_etl_agent_sessions::raw_ddl(TranscriptRow::ddl(), RecordRow::ddl())
 }
 
 #[cfg(test)]

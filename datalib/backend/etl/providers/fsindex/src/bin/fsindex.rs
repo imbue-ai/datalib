@@ -113,12 +113,9 @@ async fn main() -> Result<()> {
         summary.errors,
     ));
 
-    // Orchestrator tail: commit THEN gc, in that order. `dolt_commit`
-    // first seals the working set into one `dolt_log` entry (a scan left
-    // uncommitted is what the next open discards); `dolt_gc`
-    // then reclaims the per-batch chunk novelty against the committed
-    // tree. The reverse order (gc-then-commit on one connection) fails
-    // with "failed to flush" at scale — see `ingest::fetch`.
+    // Commit, then gc. The commit seals the scan into one `dolt_log`
+    // entry (a scan left uncommitted is what the next open discards);
+    // gc then reclaims the pages the per-batch transactions left behind.
     let finished_at = IsoOffsetTimestamp::now_local().to_rfc3339();
     let scan_secs = started.elapsed().as_secs_f64();
     let commit_ms = db

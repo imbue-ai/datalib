@@ -59,27 +59,27 @@ impl DataProcessor for ChatgptIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
-            .await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            latchkey: self.latchkey.clone(),
-            max_pages: self.sync.max_pages.map(|v| v as usize),
-            limit: self.sync.limit.map(|v| v as usize),
-            sleep_between: Duration::ZERO,
-            since: self.sync.since.clone(),
-            conv_uuids: self.sync.conv_uuids.clone(),
-            now: Some(ctx.now.to_string()),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
-            sealer: Some(session.sealer()),
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |sealer| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                latchkey: self.latchkey.clone(),
+                max_pages: self.sync.max_pages.map(|v| v as usize),
+                limit: self.sync.limit.map(|v| v as usize),
+                sleep_between: Duration::ZERO,
+                since: self.sync.since.clone(),
+                conv_uuids: self.sync.conv_uuids.clone(),
+                now: Some(ctx.now.to_string()),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+                sealer: Some(sealer),
+            })
+            .await?;
+            Ok(format!(
+                "fetched={} skipped={} out_of_scope={} errors={} listing={} pruned={} requests={}",
+                s.fetched, s.skipped, s.out_of_scope, s.errors, s.listing, s.pruned, s.requests,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "fetched={} skipped={} out_of_scope={} errors={} listing={} pruned={} requests={}",
-            s.fetched, s.skipped, s.out_of_scope, s.errors, s.listing, s.pruned, s.requests,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

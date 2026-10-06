@@ -12,6 +12,8 @@ use datalib_etl_chat_common::types::{
     NormalizedReaction, OrphanReactions, UpstreamRef,
 };
 use datalib_etl_chat_common::RenderProfile;
+use datalib_etl_chat_common::TextFormat;
+use datalib_etl_render::html::{escape_md_block, md_code_span};
 use datalib_etl_render::inputs::Inputs;
 use datalib_schema::providers::Provider;
 
@@ -87,6 +89,7 @@ pub fn profile_for(network: &str) -> RenderProfile {
         // below the second, and its `created_at` has always said so.
         stamp_precision: ids::STAMP_PRECISION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -120,6 +123,7 @@ fn to_chat(source_id: &str, room: &Room, doc: &DocBucket, inputs: &Inputs) -> No
         .collect();
 
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: inputs.declared(),
         id: bundle_key(doc),
         chat_uuid: ids::room(source_id, &room.native_room_id).uuid,
@@ -170,21 +174,10 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
     let attachments: Vec<NormalizedAttachment> =
         m.blobs.iter().map(|b| to_attachment(m, b)).collect();
 
-    // A reply keeps the bridge id it points at. We do not link it to the
-    // target's anchor: the native↔matrix id bridge makes that fiddly
-    // when the target lives in a different period file.
-    let reply_line = m
-        .reply_to_native_event_id
-        .as_deref()
-        .map(|id| format!("> ↪ in reply to `{id}`"));
-    let body = match (
-        reply_line,
-        m.text_content.as_deref().filter(|s| !s.is_empty()),
-    ) {
-        (Some(r), Some(t)) => Some(format!("{r}\n\n{t}")),
-        (Some(r), None) => Some(r),
-        (None, t) => t.map(str::to_string),
-    };
+    let body = message_body(
+        m.reply_to_native_event_id.as_deref(),
+        m.text_content.as_deref(),
+    );
 
     if m.is_hidden() {
         // Membership changes, encryption setup, transcript-exclude
@@ -193,26 +186,28 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         // kept out of the chat row's search text.
         return NormalizedChatItem {
             message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
-            author_id: m.sender_uuid.clone().unwrap_or_default(),
+            author_handle: None,
             author_display: m.sender_label.clone().unwrap_or_default(),
             date_ms: Some(m.timestamp_ms),
             text: None,
             kind: ItemKind::System,
             attachments: Vec::new(),
             reactions,
+            labels: Vec::new(),
             system_note: Some(hidden_summary(m)),
             source_url: None,
             kind_label: Some(kind_for_message(&room.network, &m.event_type)),
             source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         };
     }
 
     NormalizedChatItem {
         message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
-        author_id: m.sender_uuid.clone().unwrap_or_default(),
+        author_handle: None,
         author_display: m.sender_label.clone().unwrap_or_default(),
         date_ms: Some(m.timestamp_ms),
         text: body,
@@ -223,12 +218,14 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         },
         attachments,
         reactions,
+        labels: Vec::new(),
         system_note: None,
         source_url: None,
         kind_label: Some(kind_for_message(&room.network, &m.event_type)),
         source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }
@@ -264,6 +261,20 @@ fn to_reaction(source_id: &str, r: &Event) -> NormalizedReaction {
         emoji: r.reaction_emoji.clone().unwrap_or_else(|| "?".into()),
         date_ms: Some(r.timestamp_ms),
         source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, r.native_event_id.clone())),
+    }
+}
+
+/// A message's markdown: what was typed, escaped, under a line naming
+/// the message it replies to. The reply keeps the bridge id it points
+/// at rather than linking the target's anchor: the native↔matrix id
+/// bridge makes that fiddly when the target lives in another period's
+/// file.
+fn message_body(reply_to: Option<&str>, text: Option<&str>) -> Option<String> {
+    let reply_line = reply_to.map(|id| format!("> ↪ in reply to {}", md_code_span(id)));
+    let typed = text.filter(|s| !s.is_empty()).map(escape_md_block);
+    match (reply_line, typed) {
+        (Some(r), Some(t)) => Some(format!("{r}\n\n{t}")),
+        (r, t) => r.or(t),
     }
 }
 
@@ -307,5 +318,23 @@ pub fn network_label(network: &str) -> &str {
         "facebook" => "Facebook",
         "sms" => "SMS",
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_message_in_markup_renders_escaped_under_its_reply_line() {
+        assert_eq!(
+            message_body(Some("$evt`1"), Some("<script>x</script> & co")).as_deref(),
+            Some("> ↪ in reply to `` $evt`1 ``\n\n&lt;script&gt;x&lt;/script&gt; &amp; co")
+        );
+        assert_eq!(
+            message_body(None, Some("# Engage")).as_deref(),
+            Some("\\# Engage")
+        );
+        assert_eq!(message_body(None, Some("")), None);
     }
 }

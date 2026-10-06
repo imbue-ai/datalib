@@ -121,6 +121,8 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 # A py_test's interpreter runs with safe-path on, which leaves this
@@ -162,13 +164,37 @@ FIXTURE_WHATSAPP_KEY = "0" * 64
 PRESEEDED_RAW = {"yolink"}
 
 
-def main() -> int:
-    dag_bin = Path(sys.argv[1]).resolve()
-    step_bin = Path(sys.argv[2]).resolve()
-    signal_make_fixture_bin = Path(sys.argv[3]).resolve()
-    whatsapp_make_fixture_bin = Path(sys.argv[4]).resolve()
-    now = sys.argv[5]
-    data_root = Path(sys.argv[6]).resolve()
+@dataclass
+class Prepared:
+    """A workspace ready to sync, and what a driver needs to sync it."""
+
+    workspace: Path
+    dag_bin: Path
+    http_bin: Path | None
+    bindir: Path
+    now: str
+    env: dict[str, str]
+    sources: list[str]
+    ingest_ids: list[str]
+    # `(diffs, count)` → the DAG's config text and a materialized root's.
+    config_texts: Callable[..., tuple[str, str]]
+    reset: bool
+    carddav_work: Path
+    carddav_v2: Path
+    playback_live: Path
+    playback_v2: Path
+
+
+def prepare(argv: list[str]) -> Prepared:
+    """Everything a person has before they open the app: the export
+    trees, the playback tapes that stand in for the services, the step
+    binary, and the config texts they would build in the wizard."""
+    dag_bin = Path(argv[1]).resolve()
+    step_bin = Path(argv[2]).resolve()
+    signal_make_fixture_bin = Path(argv[3]).resolve()
+    whatsapp_make_fixture_bin = Path(argv[4]).resolve()
+    now = argv[5]
+    data_root = Path(argv[6]).resolve()
     (
         anth_fx,
         cgpt_fx,
@@ -184,17 +210,17 @@ def main() -> int:
         gtk_fx,
         linkedin_fx,
         sms_fx,
-    ) = (Path(p).resolve() for p in sys.argv[7:21])
-    yolink_make_fixture_bin = Path(sys.argv[21]).resolve()
-    yolink_spec = Path(sys.argv[22]).resolve()
-    pdf_fx = Path(sys.argv[23]).resolve()
-    garmin_spec = Path(sys.argv[24]).resolve()
-    airvisual_fx = Path(sys.argv[25]).resolve()
-    facebook_fx = Path(sys.argv[26]).resolve()
-    claude_code_fx = Path(sys.argv[27]).resolve()
-    codex_fx = Path(sys.argv[28]).resolve()
-    calendar_fx = Path(sys.argv[29]).resolve()
-    http_bin = Path(sys.argv[30]).resolve() if len(sys.argv) > 30 else None
+    ) = (Path(p).resolve() for p in argv[7:21])
+    yolink_make_fixture_bin = Path(argv[21]).resolve()
+    yolink_spec = Path(argv[22]).resolve()
+    pdf_fx = Path(argv[23]).resolve()
+    garmin_spec = Path(argv[24]).resolve()
+    airvisual_fx = Path(argv[25]).resolve()
+    facebook_fx = Path(argv[26]).resolve()
+    claude_code_fx = Path(argv[27]).resolve()
+    codex_fx = Path(argv[28]).resolve()
+    calendar_fx = Path(argv[29]).resolve()
+    http_bin = Path(argv[30]).resolve() if len(argv) > 30 else None
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -207,6 +233,13 @@ def main() -> int:
     raw_root = data_root / "raw"
     raw_root.mkdir(exist_ok=True)
     playback = workspace / "playback"
+    # The host's fingerprint cache is keyed by absolute path, and every
+    # path here is a sandbox that is gone by the next run: in the real
+    # cache each would stay as a dead row. The root holds its own.
+    own_cache_env = {
+        **os.environ,
+        "DATALIB_CACHE_DIR": str(workspace / "fingerprint_cache"),
+    }
 
     # Contacts are ingested twice: once from the checked-in address
     # books, once after `carddav_tng_v2/` is copied over them, so the
@@ -345,7 +378,7 @@ def main() -> int:
     # skip and write nothing — invoked anyway for symmetry, exactly
     # like the old whole-config synth pass.
     print(f"[run_sync_pipeline] synth → {playback}", flush=True)
-    step_env = {**os.environ, "DATALIB_DAG_DATA_ROOT": str(workspace)}
+    step_env = {**own_cache_env, "DATALIB_DAG_DATA_ROOT": str(workspace)}
     for name, (type_str, synth_input, _extract_input) in sources.items():
         source: dict = {"fixture_path": str(synth_input)}
         if type_str == "linkedin":
@@ -486,6 +519,10 @@ params = {params}
         # The fan-in names its inputs; there is no glob to stand in for
         # "every render step".
         rendered_list = ", ".join(rendered)
+        groups = [r.strip('"').split("/")[0] for r in rendered]
+        qmd_list = ", ".join(
+            f'"{g}/{f}"' for g in groups for f in ("keyword_index", "embed")
+        )
         blocks.append(
             f"""[[groups]]
 id = "unified_index"
@@ -513,15 +550,19 @@ inputs = [{rendered_list}]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = [{rendered_list}]"""
+function = "qmd_aggregator"
+inputs = [{qmd_list}]"""
         )
+        # Each source fills its own qmd collection: a keyword index and
+        # its embeddings. The index arrives pre-built here too.
+        for group in groups:
+            root_blocks.append(
+                f'[[steps]]\ngroup = "{group}"\nfunction = "keyword_index"\n'
+                f'inputs = ["{group}/render_markdown"]\n\n'
+                f'[[steps]]\ngroup = "{group}"\nfunction = "embed"\n'
+                f'inputs = ["{group}/keyword_index"]'
+            )
         return dag_text, "\n\n".join(root_blocks) + "\n"
-
-    def write_config(diffs: dict[str, tuple[str, str]]) -> None:
-        dag_text, root_text = config_texts(diffs)
-        driver.build_config([dag_text])
-        (workspace / "config_body.toml").write_text(root_text)
 
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand
@@ -564,15 +605,43 @@ inputs = [{rendered_list}]"""
     playback_live = workspace / "playback_live"
     point_playback(playback_live, playback)
     pipeline_env = {
-        **os.environ,
+        **own_cache_env,
         "DATALIB_HTTP_PLAYBACK": str(playback_live),
         "SIGNAL_BACKUP_PASSPHRASE": FIXTURE_SIGNAL_AEP,
         "WHATSAPP_BACKUP_DECRYPTION_KEY": FIXTURE_WHATSAPP_KEY,
     }
+    return Prepared(
+        workspace=workspace,
+        dag_bin=dag_bin,
+        http_bin=http_bin,
+        bindir=bindir,
+        now=now,
+        env=pipeline_env,
+        sources=list(sources),
+        ingest_ids=ingest_ids,
+        config_texts=config_texts,
+        reset=reset,
+        carddav_work=carddav_work,
+        carddav_v2=carddav_v2,
+        playback_live=playback_live,
+        playback_v2=playback_v2,
+    )
+
+
+def main() -> int:
+    fx = prepare(sys.argv)
+    workspace = fx.workspace
+    config_texts = fx.config_texts
+
+    def write_config(diffs: dict[str, tuple[str, str]]) -> None:
+        dag_text, root_text = config_texts(diffs)
+        driver.build_config([dag_text])
+        (workspace / "config_body.toml").write_text(root_text)
+
     driver = (
-        HttpDriver(http_bin, workspace, bindir, now, pipeline_env)
-        if http_bin
-        else CliDriver(dag_bin, workspace, bindir, now, pipeline_env)
+        HttpDriver(fx.http_bin, workspace, fx.bindir, fx.now, fx.env)
+        if fx.http_bin
+        else CliDriver(fx.dag_bin, workspace, fx.bindir, fx.now, fx.env)
     )
     try:
         # One save per source added, as the app's wizard does it; the last
@@ -581,7 +650,7 @@ inputs = [{rendered_list}]"""
         # them, or the index drops their rows.
         diffs = _load_diff_pairs(workspace)
         driver.build_config(
-            [config_texts({}, k)[0] for k in range(1, len(sources))]
+            [config_texts({}, k)[0] for k in range(1, len(fx.sources))]
             + [config_texts(diffs)[0]]
         )
         (workspace / "config_body.toml").write_text(config_texts(diffs)[1])
@@ -589,16 +658,21 @@ inputs = [{rendered_list}]"""
         # `INGESTED_TNG_RESET=1` is the env-var pass-through used by
         # ingested_tng_test's multi-run case: empty every raw store, then
         # run the pipeline as usual.
-        if reset:
-            driver.reset(ingest_ids)
+        if fx.reset:
+            driver.reset(fx.ingest_ids)
+            snapshot = os.environ.get("INGESTED_TNG_AFTER_RESET")
+            if snapshot:
+                Path(snapshot).write_text(
+                    json.dumps(_latest_problem_counts(workspace, fx.ingest_ids))
+                )
         driver.sync()
 
         _run_pipeline_twice_and_diff(
             workspace,
-            carddav_work,
-            carddav_v2,
-            playback_live,
-            playback_v2,
+            fx.carddav_work,
+            fx.carddav_v2,
+            fx.playback_live,
+            fx.playback_v2,
             driver,
             write_config,
         )
@@ -624,10 +698,11 @@ def _run_pipeline_twice_and_diff(
     """Give two raw stores a second commit, then a diff group for each.
 
     The first pipeline run has ingested `carddav_tng` and replayed
-    `slack_api`. Lay `carddav_tng_v2` over the contacts working copy,
-    point playback at the tree synthesized from `slack_api_v2`, and sync
-    both chains again: the contacts ingest re-reads the changed file (one
-    card added, one removed, one edited) and the Slack ingest replays the
+    `slack_api`. Make the contacts working copy `carddav_tng_v2`, point
+    playback at the tree synthesized from `slack_api_v2`, and sync both
+    chains again: the contacts ingest re-reads the changed file (one card
+    added, one removed, one edited) and drops the deleted `Maquis.vcf`'s
+    two, and the Slack ingest replays the
     second capture (a message added, one edited with a reaction, a thread
     grown by a reply). Then write a diff group per source with its two
     commits and sync the chains once more, so the render trees are there
@@ -643,6 +718,12 @@ def _run_pipeline_twice_and_diff(
         print("[run_sync_pipeline] diff groups already rendered", flush=True)
         return
     before = {s: _ingest_commit(workspace, s) for s in DIFF_GROUPS}
+    # The second address books are the whole folder: a book v2 does not
+    # have (`Maquis.vcf`) is deleted, and its contacts must leave the
+    # store (#898).
+    for f in carddav_work.glob("*.vcf"):
+        if not (carddav_v2 / f.name).exists():
+            f.unlink()
     for f in carddav_v2.glob("*.vcf"):
         shutil.copy(f, carddav_work / f.name)
     chains = [f"{s}/ingest" for s in DIFF_GROUPS]
@@ -665,9 +746,32 @@ def _run_pipeline_twice_and_diff(
         print(f"[run_sync_pipeline] {s} diff {a[:12]}..{b[:12]}", flush=True)
     # `--sync` names source steps; each diff step is downstream of its
     # source's ingest and runs as part of that chain. The Slack ingest's
-    # incremental request has no tape in either tree now, which it
-    # reports and skips, and the store does not move.
+    # incremental requests now ask past everything v2 holds, and v2
+    # answers each with an empty page, so the store does not move.
     driver.sync(chains)
+
+
+def _latest_problem_counts(
+    workspace: Path, steps: list[str]
+) -> dict[str, dict[str, int]]:
+    """`step -> {labels: value}`: each step's newest `problems` sample,
+    picked the way `datalib_runs::latest_metric` picks what the Manage
+    screen's Problems cell shows."""
+    store = workspace / "system" / "runs" / "runs.sqlite"
+    con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            "SELECT m.step, m.labels, m.value FROM metrics m "
+            "JOIN runs r ON r.run_id = m.run_id WHERE m.name = 'problems' "
+            "ORDER BY m.step, m.labels, r.started_at_utc DESC, r.rowid DESC"
+        ).fetchall()
+    finally:
+        con.close()
+    out: dict[str, dict[str, int]] = {}
+    for step, labels, value in rows:
+        if step in steps:
+            out.setdefault(step, {}).setdefault(labels, value)
+    return out
 
 
 def _diff_pairs_file(workspace: Path) -> Path:
@@ -684,10 +788,9 @@ def _load_diff_pairs(workspace: Path) -> dict[str, tuple[str, str]]:
 
 def _ingest_commit(workspace: Path, source_id: str) -> str:
     """A source's raw store's HEAD, as the loop recorded it after the
-    ingest step: the `entities.doltlite_db:<hash>` in the step's sink
-    version in `system/supervisor.sqlite`, read from the store's `main`
-    (`datalib_dag::sink::read_version`). The supervisor store is plain
-    SQLite, so the stdlib opens it."""
+    ingest step: the step reports its entities store's head, and the loop
+    records it as `<fingerprint>:<head>` in `system/supervisor.sqlite`.
+    The supervisor store is plain SQLite, so the stdlib opens it."""
     step = f"{source_id}/ingest"
     db = sqlite3.connect(workspace / "system" / "supervisor.sqlite")
     try:
@@ -697,7 +800,7 @@ def _ingest_commit(workspace: Path, source_id: str) -> str:
     if row is None:
         raise SystemExit(f"no sink version recorded for {step}")
     version = row[0]
-    m = re.search(r"entities\.doltlite_db:([0-9a-f]+)", version)
+    m = re.fullmatch(r"[0-9a-f]+:([0-9a-f]+)", version)
     if m is None:
         raise SystemExit(f"no entities commit in {version!r} for {step}")
     return m.group(1)
@@ -752,9 +855,8 @@ def _source_config(
         # the whole workspace, which in playback is the fixture tree.
         source["api"] = {"roots": [notion_seed]} if notion_seed else {}
     elif type_str == "slack":
-        # Disable media so extract doesn't fall back to the direct
-        # `latchkey curl -v` path for file downloads (not on PATH in
-        # the bazel sandbox, and the fixtures don't exercise media).
+        # Disable media: the synthesizer writes no playback fixture for
+        # a file's bytes, so every file would be a failed fetch.
         #
         # `dms` is ON here even though it is off by default, because
         # this is the pipeline that exercises the real download step
@@ -763,7 +865,10 @@ def _source_config(
         # `im` / `mpim` envelope at all. Leaving it off would mean the
         # DM surfaces are in the fixture but never mirrored, rendered,
         # indexed, or asserted on.
-        source["api"] = {"media": False, "dms": True}
+        #
+        # No refresh pass: its window is measured from the wall clock,
+        # so its request would differ by the day and miss the tape.
+        source["api"] = {"media": False, "dms": True, "refresh_window_days": 0}
     elif type_str == "beeper":
         # `sources` here is the canonical-network list that filters
         # which rooms get ingested. `path` points at the materialized
@@ -816,15 +921,18 @@ def _source_config(
         # phase.
         source["export"] = {"path": str(input_path), "fetch_photos": True}
     elif type_str == "google_takeout":
-        # Opt into the rendering feeds: Google Chat and Google Voice
-        # (incl. its Spam folder, to exercise that path). The other
-        # feeds stay off for the central pipeline (their extract is
-        # covered by the provider's own fixture_walk test).
+        # Opt into the rendering feeds, Google Chat and Google Voice
+        # (incl. its Spam folder, to exercise that path), and two that do
+        # not render but whose fixture holds entries the ingest skips, so
+        # their problems rows travel the real pipeline. The other feeds
+        # stay off (their extract is the provider's fixture_walk test).
         source["export"] = {
             "path": str(input_path),
             "google_chat": True,
             "google_voice": True,
             "google_voice_include_spam": True,
+            "youtube_watch_history": True,
+            "maps_saved_places": True,
         }
     elif type_str == "sms_backup_restore":
         source["backup"] = {"path": str(input_path)}
@@ -855,8 +963,7 @@ def _source_config(
         source["fswalk"] = {"path": str(input_path)}
     elif type_str == "garmin":
         # `since` is the spec's; the walk's `today` is the pipeline's
-        # `--now`, which the spec matches too. The token dir is never
-        # read under playback.
+        # `--now`, which the spec matches too.
         source["api"] = {"since": "2369-04-01"}
     else:
         source["api"] = {}

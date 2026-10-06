@@ -158,7 +158,7 @@ What is unusual is the **operating point**, on two axes:
    store, the render output, the problem log, and the DAG's own
    content-versioning — so consumer cursors, step versions and audit
    history are one mechanism rather than four. See
-   [`data_architecture_parse_and_render.md` §2](../../data_architecture_parse_and_render.md#where-this-is-heading-the-artifact-becomes-a-database)
+   [`data_architecture_parse_and_render.md` §2](../../data_architecture_parse_and_render.md#what-is-still-a-file-the-markdown)
    for the half of that which is still aspiration.
 
 And the benefit that gets undersold: this is normally pitched on
@@ -179,8 +179,11 @@ diff out of nothing. Any new rule of that kind — canonical field order,
 stable float formatting, excluded volatile fields — is protecting this
 property, and should say so.
 
-**Nothing reclaims space.** doltlite never deletes, so every
-intermediate keeps its full history. That is exactly right for the raw
+**Nothing reclaims space.** A deleted row stays reachable from the
+commits before it, so every intermediate keeps its full history.
+Doltlite can give the space back — squash the history, then
+`dolt_gc()` ([`doltlite.md`](../../doltlite.md#disk-space-and-dolt_gc))
+— but nothing here does. That is exactly right for the raw
 store, which is the irreplaceable copy — and there it is not merely
 tolerable but the point, because keeping the old value is what lets us
 say *the provider deleted this*, which a plain overwrite-in-place mirror
@@ -189,7 +192,7 @@ can never say (see
 It is much harder to justify for
 *derived* intermediates, where it means unbounded growth on the
 artifacts we care least about preserving. Iceberg has snapshot expiry
-and Delta has `VACUUM`; we have nothing.
+and Delta has `VACUUM`; we have no policy that uses the squash.
 
 **This is a deliberate deferral, not an oversight** (decided
 2026-09-04). The mitigation is cheap precisely because the data is
@@ -343,10 +346,12 @@ yet, there is nothing to sell.
 Two design calls: **type coercion is the whole game** (real exports
 declare an int and emit `"312"`, mix date-only with offset-bearing and
 `Z` timestamps across sibling sources), and **doltlite or plain
-SQLite** — doltlite buys `dolt_diff`, costs the never-deletes property
-that collides with retention. Recommendation: `store =
-"doltlite" | "sqlite"`, default doltlite, document the tension rather
-than pretending a prune reclaims disk.
+SQLite** — doltlite buys `dolt_diff`, costs history that collides with
+retention: a prune reclaims disk only once the history is squashed and
+gc'd, which drops the commits a consumer's cursor may name.
+Recommendation: `store = "doltlite" | "sqlite"`, default doltlite,
+document the tension rather than pretending a prune alone reclaims
+disk.
 
 ### Surface C — the pipeline's own view
 

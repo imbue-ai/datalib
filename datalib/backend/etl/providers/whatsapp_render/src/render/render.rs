@@ -9,6 +9,7 @@ use datalib_etl::blob_cas::BlobBundle;
 
 use datalib_etl::doltlite_raw;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_chat_common::{
     render::{Bucket, Buckets, RenderProfile},
     NormalizedChat,
@@ -25,7 +26,9 @@ use datalib_schema::providers::Provider;
 /// the configured source, every row carries its backpointer, and a message's
 /// id carries its stamp in its leading bits (`datalib_id`'s v8 layout).
 /// Every uuid moved, `chat_uuid` among them.
-pub const RENDER_VERSION: u32 = 9;
+/// v11: the author span carries the author's handle as `data-handle`.
+/// v12: a `+1` number without ten digits after the 1 has no handle.
+pub const RENDER_VERSION: u32 = 12;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 
@@ -39,6 +42,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "WhatsApp Reaction".to_string(),
         chat_entity_kind: super::ids::KIND_CHAT,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 

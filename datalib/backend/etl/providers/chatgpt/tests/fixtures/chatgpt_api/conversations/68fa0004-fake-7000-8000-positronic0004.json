@@ -1,0 +1,78 @@
+{
+  "title": "Holodeck Cave on Risa",
+  "create_time": 12648643200.0,
+  "update_time": 12648643260.0,
+  "conversation_id": "68fa0004-fake-7000-8000-positronic0004",
+  "is_archived": false,
+  "is_starred": false,
+  "default_model_slug": "gpt-5",
+  "current_node": "msg-fake-risa-0002",
+  "mapping": {
+    "client-created-root": {
+      "id": "client-created-root",
+      "message": null,
+      "parent": null,
+      "children": [
+        "msg-fake-risa-0001"
+      ]
+    },
+    "msg-fake-risa-0001": {
+      "id": "msg-fake-risa-0001",
+      "message": {
+        "id": "msg-fake-risa-0001",
+        "author": {
+          "role": "user",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648643200.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "What is Holodeck Cave on Risa like?"
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "client-created-root",
+      "children": [
+        "msg-fake-risa-0002"
+      ]
+    },
+    "msg-fake-risa-0002": {
+      "id": "msg-fake-risa-0002",
+      "message": {
+        "id": "msg-fake-risa-0002",
+        "author": {
+          "role": "assistant",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648643260.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "\ue200i\ue202turn0image0\ue202turn0image1\ue202turn0image2\ue201I'm not aware of any lounge named \"Holodeck Cave\" on Risa.\ue203\ue204\ue200cite\ue202turn0search0\ue201 However, Risa is home to several notable resorts that offer unique experiences:\n\n**Ten Forward Annex**: Located in the central plaza of Risa, the annex is a lounge with a synthesizer bar and a viewport onto the pleasure planet's twin moons.\ue203\ue204 \ue203Guests can book a table by the window.\ue204\ue206\n\n**Jamaharon Springs**: Situated at the northern tip of the island, the springs open onto the sea. See \ue200url\ue202the Risa tourism board\ue202https://example.com/risa\ue201 for hours.\ue203\ue204 \ue203Visitors can soak in the warm rock pools.\ue204\ue206\n\n\ue203If you have a specific resort in mind, feel free to ask!\ue204\ue206"
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {
+          "model_slug": "gpt-5"
+        },
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-risa-0001",
+      "children": []
+    }
+  }
+}

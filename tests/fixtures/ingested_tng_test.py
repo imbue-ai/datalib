@@ -42,6 +42,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tomllib
 import unittest
 import uuid as uuidlib
 from datetime import datetime
@@ -110,13 +111,21 @@ MAX_STAMP_MS = (1 << 48) - 1
 # reason, rule) and nothing else, which is why they can be written down.
 # The columns are `_problems()`'s, `|`-joined by the doltlite shell.
 #
-# Two are what the fixture's own gaps look like once a download records
+# Most are what the fixture's own gaps look like once a download records
 # what it could not fetch instead of only logging it: an attachment
-# whose bytes the claude fixture never had, and the facebook video that
-# is deliberately absent from the export. The third is the one record
-# built to fail: conversation `c0000006`'s reply carries
-# `created_at = "stardate 47988.1"`, which the claude renderer records as
-# a nulled `created_at` on that message.
+# whose bytes the claude fixture never had, the facebook video that is
+# deliberately absent from the export, the PDF built to be corrupt.
+# One is the record built to fail: conversation `c0000006`'s reply
+# carries `created_at = "stardate 47988.1"`, which the claude renderer
+# records as a nulled `created_at` on that message. Google Takeout's
+# three are entries shaped like a real export's: an attachment its
+# message names and the export lacks, a watch-history entry that is not
+# a video, a saved place whose URL has no place id.
+#
+# A fetch row about an attachment names the grid row of what owns it,
+# so the screen can open it: the conversation for claude (minted from
+# the raw key), the message for Takeout (looked up by its upstream id,
+# since the message's uuid carries a date the raw key does not).
 POISONED_PROBLEM = (
     "6df47df9-b6ad-5372-942e-5db5e4d068bb"  # problem_uuid
     "|warning|parse|markdown"
@@ -129,21 +138,54 @@ POISONED_PROBLEM = (
 )
 CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "7e0bd203-7160-5b88-9b5a-40f601984129"
-    "|warning|fetch|entity"
+    "|error|fetch|entity"
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
-    "|||fetch_failed|no bytes"
+    "|00000000-0000-89b3-8bed-0eecc97d45ce"  # conversation c0000004's row
+    "||fetch_failed|no recorded response: GET https://claude.ai/api/fake/files/f0000001-1701-4d00-80…"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
-    "22997b9d-2f29-5ffc-a555-7ab9b876a337"
+    "1c9f7753-ba2d-5a9e-8fbb-b9b6a0d5ad13"
     "|warning|fetch|entity"
     "|media_blobs:459de207-00ca-5ade-a05e-095a6835da4d"
     "#your_facebook_activity/posts/media/videos/600000000000001.mp4"
-    "|||fetch_failed|media file not in the export"
+    "|||not_found|media file not in the export: No such file or directory (os error 2)"
+)
+PDF_THAT_WILL_NOT_IDENTIFY = (
+    "7b765789-41e7-536c-9392-2facf510901a"
+    "|error|fetch|entity"
+    "|record:pdf_paths:holodeck/corrupt.pdf"
+    "|||fetch_failed|classify: Invalid PDF structure"
+)
+TAKEOUT_POST_NOT_A_VIDEO = (
+    "50d82e65-dc5d-522f-afdd-0ded04b3d8f0"
+    "|warning|fetch|entity"
+    "|skipped:youtube_watch_history:e81888464c90ec04"
+    "||videoUrl|deliberate_loss|https://www.youtube.com/post/UgkxTenForward"
+)
+TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT = (
+    "c662c0a8-aa0a-5a9c-a618-a9f36e2d47d5"
+    "|warning|fetch|entity"
+    "|chat_attachments:TNG-BRIDGE/T2/T2#risa-shore-leave.png"
+    "|0195683a-d140-87f9-bdf6-234da6d6880c"  # Riker's message
+    "||not_found|risa-shore-leave.png is not in the export"
+)
+TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
+    "dd770a87-9dab-5b1f-8e08-7bb609755c6f"
+    "|error|fetch|entity"
+    "|skipped:maps_saved_places:51f2c2edc22052ee"
+    "||google_maps_url|no_identity"
+    "|http://maps.google.com/?q=Quark%27s+Bar,+Deep+Space+Nine"
 )
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
     "facebook": [FACEBOOK_VIDEO_NOT_IN_EXPORT],
+    "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
+    "google-takeout": [
+        TAKEOUT_POST_NOT_A_VIDEO,
+        TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT,
+        TAKEOUT_SAVED_PLACE_WITHOUT_KEY,
+    ],
 }
 
 
@@ -283,6 +325,10 @@ def _argv():
 # plus five minutes, same day, so anything the driver keys on the date
 # (garmin's window) agrees between the runs.
 FIVE_MINUTES_ON = "2369-04-15T00:05:00+00:00"
+# Run 3's: later again, as a real clock would be. The Manage screen takes
+# a step's newest count by its run's start, so a reset stamped before
+# run 2 would lose to run 2's count however right its own was.
+TEN_MINUTES_ON = "2369-04-15T00:10:00+00:00"
 
 
 # A full pipeline run prints ~0.5 MB of runner events, and bazel drops a
@@ -323,6 +369,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         cls.fixture_paths = argv[7:]
 
         cls.workspace = Path(os.environ["TEST_TMPDIR"]) / "sync_workspace"
+        cls._after_reset_file = Path(os.environ["TEST_TMPDIR"]) / "after_reset.json"
         cls.workspace.mkdir(parents=True, exist_ok=True)
 
         runfiles_root = os.environ.get("TEST_SRCDIR")
@@ -332,6 +379,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
             cls.cwd = Path.cwd()
 
     # ── doltlite store access ───────────────────────────────────────
+
+    def _ingest_steps(self) -> list[str]:
+        """Every download step the pipeline's config declares."""
+        config = tomllib.loads((self.workspace / "dag.toml").read_text())
+        return sorted(
+            f"{s['group']}/ingest"
+            for s in config.get("steps", [])
+            if s.get("function") == "ingest"
+        )
 
     @property
     def _index_db(self) -> Path:
@@ -476,24 +532,24 @@ class IngestedTngPipelineTest(unittest.TestCase):
         return {status: int(n) for status, n in (r.split("|") for r in rows)}
 
     def _diff_rows_by_text(self, group: str, needle: str) -> list[tuple[str, str, str]]:
-        """A diff group's rows whose text contains `needle`:
+        """A diff group's rows whose preview contains `needle`:
         (kind, status, changed columns)."""
         rows = self._query(
             self._index_db,
             "SELECT g.kind || '|' || g.diff_status || '|' || coalesce(g.diff_changed_columns, '') "
             "FROM grid_rows g JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
-            f"WHERE m.source_id = '{group}' AND g.text LIKE '%{needle}%' ORDER BY g.kind;",
+            f"WHERE m.source_id = '{group}' AND g.preview LIKE '%{needle}%' ORDER BY g.kind;",
         )
         return [tuple(r.split("|", 2)) for r in rows]  # type: ignore[misc]
 
     def _markdown(self, group: str, needle: str) -> str:
-        """A group's one document whose rows' text carries `needle`, off
-        the tree."""
+        """A group's one document whose rows' preview carries `needle`,
+        off the tree."""
         qmd_path = self._scalar(
             self._index_db,
             "SELECT DISTINCT g.qmd_path FROM grid_rows g JOIN markdowns m "
             "ON g.markdown_uuid = m.markdown_uuid "
-            f"WHERE m.source_id = '{group}' AND g.text LIKE '%{needle}%';",
+            f"WHERE m.source_id = '{group}' AND g.preview LIKE '%{needle}%';",
         )
         return (self.workspace / qmd_path).read_text()
 
@@ -830,8 +886,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         env = {**os.environ}
         if reset:
             env["INGESTED_TNG_RESET"] = "1"
+            env["INGESTED_TNG_AFTER_RESET"] = str(self._after_reset_file)
         else:
             env.pop("INGESTED_TNG_RESET", None)
+            env.pop("INGESTED_TNG_AFTER_RESET", None)
         argv = [
             sys.executable,
             self.driver_script,
@@ -930,14 +988,94 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [],
             "every source that rendered must also have measured itself",
         )
+        # Who a handle is, as each source that mentions it says: the
+        # rows a chip reads. One address, three sources, one name — Slack's
+        # through its profile, which ties his Slack user to the address.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.source_id || '|' || c.name "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "WHERE h.handle = 'email:picard@enterprise.starfleet' ORDER BY 1;",
+            ),
+            [
+                "google-takeout|Jean-Luc Picard",
+                "slack|Jean-Luc Picard",
+                "tng_email|Jean-Luc Picard",
+            ],
+            "the people the index knows by Picard's address",
+        )
+        # One number written two ways — the address book's vCard 4 `tel:`
+        # URI with dashes, the SMS backup's and Google Voice's bare digits
+        # — is one handle, so a link made through either reaches both.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.source_id || '|' || c.name || '|' "
+                "|| json_extract(j.value, '$.value') "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key, "
+                "json_each(c.contact_json, '$.handles') j "
+                "WHERE h.handle = 'tel:+12025550101' "
+                "AND json_extract(j.value, '$.handle') = h.handle ORDER BY 1;",
+            ),
+            [
+                "google-takeout|Jean-Luc Picard|+12025550101",
+                "sms-backup-restore|Jean-Luc Picard|+12025550101",
+                "tng_contacts|Jean-Luc Picard|tel:+1-202-555-0101",
+            ],
+            "the people the index knows by Picard's number, as each wrote it",
+        )
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.source_id FROM source_contacts c ORDER BY 1;",
+            ),
+            [
+                "facebook",
+                "google-takeout",
+                "linkedin",
+                "signal",
+                "slack",
+                "sms-backup-restore",
+                "tng_contacts",
+                "tng_email",
+                "whatsapp",
+            ],
+            "every source that knows people put them in the index",
+        )
         self.assertEqual(
             self._diff_shape(CONTACTS_DIFF_GROUP),
             {
                 "Data": ("removed", ""),
-                "Jean-Luc Picard": ("modified", "modified_at|text"),
+                "Jean-Luc Picard": (
+                    "modified",
+                    "content_hash|modified_at|preview|touched_at",
+                ),
+                "Kalita": ("removed", ""),
+                "Ro Laren": ("removed", ""),
                 "Worf": ("added", ""),
             },
             "the contacts diff between the two fixture commits",
+        )
+        # #898: the second sync deleted `Maquis.vcf`, and its contacts left
+        # the source with it; `Borg.vcf`, untouched, kept all four.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT coalesce(g.author, '') || '|' || g.channel FROM grid_rows g "
+                "JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
+                "WHERE m.source_id = 'tng_contacts' "
+                "AND g.channel IN ('Borg', 'Maquis') ORDER BY g.author;",
+            ),
+            [
+                "Hugh|Borg",
+                "Locutus of Borg|Borg",
+                "Seven of Nine|Borg",
+                "drone.4.of.12@unimatrix01.borg|Borg",
+            ],
+            "the source's Borg and Maquis contacts after the second sync",
         )
         self.assertEqual(
             self._scalar(
@@ -949,7 +1087,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "0",
             "diff_status is NULL on every real source's rows",
         )
-        picard = self._markdown(CONTACTS_DIFF_GROUP, "NCC-1701-E")
+        picard = self._markdown(CONTACTS_DIFF_GROUP, "Jean-Luc Picard")
         self.assertIn('<div class="diff-modified">', picard)
         self.assertIn("<del>NCC-1701-D</del><ins>NCC-1701-E</ins>", picard)
         self.assertIn(
@@ -979,8 +1117,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._diff_rows_by_text(SLACK_DIFF_GROUP, "raising shields"),
             [
-                ("Slack Message", "modified", "byte_size|text"),
-                ("Slack Thread", "modified", "byte_size|text"),
+                ("Slack Message", "modified", "byte_size|content_hash|preview"),
+                ("Slack Thread", "modified", "byte_size|content_hash|preview"),
             ],
             "the edited message names its text (and its length), and its thread follows",
         )
@@ -988,7 +1126,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._diff_rows_by_text(SLACK_DIFF_GROUP, "Warbird, decloaking"),
             [
                 ("Slack Message", "added", ""),
-                ("Slack Thread", "modified", "byte_size|item_count|modified_at|text"),
+                (
+                    "Slack Thread",
+                    "modified",
+                    "byte_size|content_hash|item_count|modified_at|preview|touched_at",
+                ),
             ],
             "the reply added to the grown thread, whose own row grew with it",
         )
@@ -1114,15 +1256,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
             f"a placeholder; got {placeholders}",
         )
 
-        # Exactly three records in the TNG fixture may land in the problem
-        # sink: the one built to, and the two its downloads cannot fetch
-        # (`EXPECTED_PROBLEMS`). Every renderer drops-and-records a row
+        # Only the records in `EXPECTED_PROBLEMS` may land in the problem
+        # sink: the one built to fail, and the ones its downloads cannot
+        # fetch or skip. Every renderer drops-and-records a row
         # it cannot build instead of failing the step, which is what
         # stops one bad record from poisoning `grid_index` for every
         # other source — but the same change means a projection that
         # quietly started dropping rows would no longer show up as a
         # failure anywhere. Here it does: any row outside the expected
-        # three is a regression and the message names it. The poisoned
+        # rows is a regression and the message names it. The poisoned
         # row is what proves the sink works end to end — through the
         # real render, into the source's store, and copied into the
         # index — and every id is pinned so a later run mints the same
@@ -1132,7 +1274,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             problems1,
             EXPECTED_PROBLEMS,
             "the TNG fixture renders clean apart from its poisoned reply "
-            "and the two things its downloads cannot fetch; any other row "
+            "and the entries its downloads cannot fetch or skip; any other row "
             "here means a projection started dropping or nulling data",
         )
         self.assertEqual(
@@ -1140,6 +1282,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             sorted(row for rows in EXPECTED_PROBLEMS.values() for row in rows),
             "grid_index copies every source's problems into the index",
         )
+        self._assert_problems_reach_the_log(EXPECTED_PROBLEMS)
 
         # ── id-space guardrails ─────────────────────────────────
         # Every row uuid is unique. The PK makes this true by
@@ -1357,7 +1500,19 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # ingested_backups row, so the cursor MUST NOT short-circuit. (If
         # the reset were silently dropped, this run would behave like
         # run 2.)
-        run3 = self._run_pipeline(reset=True)
+        run3 = self._run_pipeline(reset=True, now=TEN_MINUTES_ON)
+        # Between the reset and the sync: every download store is empty,
+        # so every Problems cell must read zero. A reset that reported no
+        # count left the one from before it standing — claude-api's and
+        # facebook's fetch warnings here — until the step's next run.
+        after_reset = json.loads(self._after_reset_file.read_text())
+        zero = {"severity=error": 0, "severity=warning": 0}
+        self.assertEqual(
+            {step: after_reset.get(step) for step in self._ingest_steps()},
+            {step: zero for step in self._ingest_steps()},
+            "right after a reset, each download's Problems cell counts its "
+            "emptied store",
+        )
         self.assertNotIn(
             EV_SIGNAL_ALREADY_INGESTED,
             run3.stderr,
@@ -1647,6 +1802,47 @@ class IngestedTngPipelineTest(unittest.TestCase):
             if docs:
                 rendered[step] = rendered.get(step, 0) + docs
         return rendered
+
+    def _assert_problems_reach_the_log(self, expected: dict[str, list[str]]) -> None:
+        """Every problem a step stores reaches its log at the row's level.
+
+        Once, most writers stored a row and logged nothing, and the rest
+        logged every row as a `warn!`. Each step now logs one
+        `problems_recorded` line per kind of problem with its `count`, at
+        its loudest row's level, and never a row's sample. So in run 1,
+        where every row is new, a source's counts at `error` and at
+        `warn` add up to its error and warning rows: a writer that skips
+        `datalib_problems::note_recorded`, or a level that drifts, fails
+        here by name.
+        """
+        store = self.workspace / "system" / "runs" / "runs.sqlite"
+        con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        try:
+            lines = con.execute(
+                "SELECT group_id, level, fields FROM log "
+                "WHERE run_id = (SELECT run_id FROM runs ORDER BY rowid LIMIT 1) "
+                "AND json_extract(fields, '$.event') = 'problems_recorded'"
+            ).fetchall()
+        finally:
+            con.close()
+        logged: dict[tuple[str, str], int] = {}
+        for group, level, fields in lines:
+            key = (group, level)
+            logged[key] = logged.get(key, 0) + json.loads(fields)["count"]
+            self.assertNotIn(
+                "sample", json.loads(fields), "a log line carries a sample"
+            )
+        stored: dict[tuple[str, str], int] = {}
+        for source, rows in expected.items():
+            for row in rows:
+                level = {"error": "error", "warning": "warn"}[row.split("|")[1]]
+                stored[(source, level)] = stored.get((source, level), 0) + 1
+        self.assertEqual(
+            logged,
+            stored,
+            "problems_recorded counts in run 1, per (source, level), against "
+            "the rows each source stored",
+        )
 
     # How often one message may repeat within one step attempt at `info`
     # or above before it counts as spam. The number is a policy, not a

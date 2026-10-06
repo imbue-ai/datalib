@@ -125,6 +125,10 @@ pub struct LogRow {
     /// step.
     #[col(sql = "VARCHAR(255)")]
     pub step: Option<String>,
+    /// The `[[groups]]` entry `step` is filed under, as the runner's plan
+    /// said; `None` for a line with no step, or a step outside any group.
+    #[col(sql = "VARCHAR(255)")]
+    pub group_id: Option<String>,
     /// Which invocation of the step within the run; 0 when unknown.
     #[col(sql = "INT")]
     pub attempt: i64,

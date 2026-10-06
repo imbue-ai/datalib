@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use datalib_etl_codex_config::CodexConfig;
+use datalib_etl_codex_config::{CodexConfig, DEFAULT_CODEX_HOME};
 
 use crate::ingest;
 
@@ -18,7 +18,7 @@ pub fn plan_ingest(ctx: PlanContext, config: CodexConfig) -> Result<Vec<Box<dyn 
     let input_path = config
         .sessions
         .ok_or_else(|| anyhow!("codex source {name} missing its `sessions` table"))?
-        .path();
+        .path_or(DEFAULT_CODEX_HOME);
     Ok(vec![Box::new(CodexIngest {
         id: format!("codex/{name}/ingest"),
         raw_path,
@@ -41,27 +41,17 @@ impl DataProcessor for CodexIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
-            db,
-            input_path: self.input_path.clone(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        ctx.run_store(db.pool().clone(), None, |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
+                db,
+                input_path: self.input_path.clone(),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(s.line())
         })
-        .await?;
-        let summary = format!(
-            "files={} read={} threads={} subagents={} records={} malformed_lines={} \
-             not_transcripts={} unreadable={}",
-            s.files,
-            s.files_read,
-            s.threads,
-            s.subagents,
-            s.records,
-            s.malformed_lines,
-            s.not_transcripts,
-            s.unreadable,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

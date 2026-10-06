@@ -1,16 +1,22 @@
 // The unified index grid's "Source" column, and the `source_id:`
 // filter behind it.
 //
-// The column answers a question the "Provider" column cannot: which
-// *configured source* did this row come from. Two Slack workspaces are
-// one provider and two sources. The value on the row is the source's id
+// The column answers which *configured source* a row came from, led by
+// the mark of the service it mirrors. Two Slack workspaces share the
+// mark and are two sources. The value on the row is the source's id
 // (derived server-side from `qmd_path`); the text in the cell is the
 // `name` that source's steps declare in config.toml, joined
 // client-side. That join is the thing worth an end-to-end test — it
 // crosses the backend, the config file and the grid, and it is the
 // reason renaming a source never needs a re-index.
 import { test, expect, type Page } from "@playwright/test";
-import { actOnRowByUuid, searchAndSettle, MANAGE_WITH_CONFIG } from "./grid-helpers";
+import {
+  GRID,
+  actOnRowByUuid,
+  searchAndSettle,
+  MANAGE_WITH_CONFIG,
+  savedConfig,
+} from "./grid-helpers";
 
 const SOURCE_CELLS = '.grid-box .slick-row [col-id="source_ref"]';
 
@@ -21,7 +27,7 @@ async function distinctSourceCells(page: Page): Promise<string[]> {
 }
 
 async function openGrid(page: Page) {
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 }
 
@@ -41,10 +47,10 @@ async function writeConfig(page: Page, text: string): Promise<void> {
 // spec down with it.
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
   await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {

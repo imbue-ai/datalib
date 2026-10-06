@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use datalib_dag::scheduler::ResetTarget;
 
 // `DATALIB_VERSION` is `git describe` at build time under Bazel
 // release stamping (see BUILD.bazel `rustc_env_files`); dev builds and
@@ -23,11 +22,9 @@ const VERSION_RESOLVED: &str = {
     }
 };
 use datalib_dag::events::FanOutSink;
-use datalib_dag::supervisor::announce::Listener;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
-use datalib_dag::supervisor::tick::Budgets;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 use strum::{EnumString, IntoStaticStr};
 use tracing_subscriber::layer::SubscriberExt;
@@ -60,21 +57,24 @@ async fn main() -> Result<()> {
     })
     .map_err(|e| anyhow::anyhow!("{e}"))?;
     const USAGE: &str = "usage: datalib-dag <config.toml> [--binary-dir DIR] \
-         [--sync STEP_ID[,STEP_ID…]]… [--reset STEP_ID[+blobs][,…]]… [--now RFC3339] \
+         [--sync STEP_ID[,STEP_ID…]]… [--reset STEP_ID[,STEP_ID…]]… [--now RFC3339] \
          [--run-id ID] [--parallelism N] [--by WHO]\n       \
          datalib-dag --check <config.toml>\n\n\
-         --reset empties what a step wrote (its store; `+blobs` an ingest step's blob \
-         CAS with it), keeping its doltlite history, so the next run does its work \
+         --reset empties what a step wrote (its store; an ingest step's blob CAS keeps \
+         its bytes), keeping its doltlite history, so the next run does its work \
          from the start. Alone, that is all the invocation does; with --sync it runs \
          first.\n\n\
+         --sync runs the named steps and everything downstream of them. A source step \
+         (one with no inputs) always runs; any other runs only if it is out of date, \
+         and nothing upstream of it runs.\n\n\
          A sync is a request in <root>/system/supervisor.sqlite, tagged --by (default \
          `cli`). If another process is already running the loop on this root — the app, \
          or another datalib-dag — this one hands it the request and follows it; either \
          way it exits with the request's outcome. Ctrl-C asks for this request to stop.\n\n\
-         datalib-dag status <config.toml>                          open requests, pauses, running steps\n\
+         datalib-dag status <config.toml>                          open requests, steps off, running steps\n\
          datalib-dag stop <config.toml> <request-id> [--by WHO]    ask a request to stop\n\
-         datalib-dag pause <config.toml> <step-id> [--by WHO]      keep a step from running\n\
-         datalib-dag resume <config.toml> <step-id>                lift a pause\n\n\
+         datalib-dag turn-off <config.toml> <step-id> [--by WHO]   skip a step in every sync; stop it if running\n\
+         datalib-dag turn-on <config.toml> <step-id>               include it in syncs again\n\n\
          Each writes a row and returns; whoever runs the loop acts on it within a second.";
     if let Some(verb) = std::env::args().nth(1).as_deref().and_then(Verb::parse) {
         return run_verb(verb, std::env::args().skip(2).collect(), USAGE).await;
@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
     let mut now: Option<String> = None;
     let mut run_id: Option<String> = None;
     let mut parallelism: Option<usize> = None;
-    let mut reset: Vec<ResetTarget> = Vec::new();
+    let mut reset: Vec<String> = Vec::new();
     let mut check_only = false;
     let mut by = "cli".to_string();
     let mut args = std::env::args().skip(1);
@@ -112,7 +112,7 @@ async fn main() -> Result<()> {
             }
             "--reset" => {
                 let v = args.next().context("--reset needs a step id")?;
-                reset.extend(v.split(',').map(|s| ResetTarget::parse(s.trim())));
+                reset.extend(v.split(',').map(|s| s.trim().to_string()));
             }
             "--check" => check_only = true,
             "--by" => by = args.next().context("--by needs a name")?,
@@ -197,17 +197,13 @@ async fn main() -> Result<()> {
     let cfg = checked.cfg;
     let graph = checked.graph;
 
-    if !sync_only.is_empty() {
-        let fringe = graph.fringe_ids();
-        for id in &sync_only {
-            if !fringe.contains(&id.as_str()) {
-                bail!(
-                    "--sync {id:?}: not a source step (a step with no inputs). \
-                     Available: {}",
-                    fringe.join(", ")
-                );
-            }
-        }
+    if let Some(id) = sync_only.iter().find(|id| !graph.by_id.contains_key(*id)) {
+        let mut known: Vec<&str> = graph.steps.iter().map(|s| s.id.as_str()).collect();
+        known.sort();
+        bail!(
+            "--sync {id:?}: no such step. Available: {}",
+            known.join(", ")
+        );
     }
 
     // `--reset` empties stores, so it needs the root to itself: it is
@@ -366,7 +362,7 @@ async fn main() -> Result<()> {
             .stop_on(stop_rx)
             .reload_from(Arc::new(ConfigFile::new(&config_path)));
         if let Some(p) = parallelism {
-            runner.budgets = Budgets::from_parallelism(p);
+            runner = runner.parallelism(p);
         }
         if !reset.is_empty() {
             runner.reset(&graph, &reset).await?;
@@ -433,12 +429,11 @@ enum Taken {
 }
 
 /// Take the loop, or follow the request while someone else runs it. The
-/// lock is tried again at every announcement, not just once: the loop
-/// that was running may end between our look and our request landing,
-/// and then nobody is left to serve it but us. Closing a request is
-/// announced, and so is letting the lock go.
+/// lock is tried again on every announcement, not just once: the loop that
+/// was running may end between our look and our request landing, and then
+/// nobody is left to serve it but us. Its release is announced.
 async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Taken> {
-    let mut listener = Listener::new(store, "datalib-dag following a request").await;
+    let mut listener = datalib_dag::supervisor::announce::Listener::new(store, "datalib-dag");
     let mut announced = false;
     loop {
         match datalib_dag::lock::try_acquire_runner(data_root) {
@@ -466,7 +461,7 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
                     }
                     return Ok(Taken::Closed(closed));
                 }
-                listener.next(store).await;
+                listener.next().await;
             }
             Err(e) => return Err(e.into()),
         }
@@ -506,8 +501,11 @@ fn exit_code(outcome: Option<RequestOutcome>, dropped_entries: usize) -> i32 {
 enum Verb {
     Status,
     Stop,
-    Pause,
-    Resume,
+    // A person may still type what these were called before the switch.
+    #[strum(to_string = "turn-off", serialize = "pause")]
+    TurnOff,
+    #[strum(to_string = "turn-on", serialize = "resume")]
+    TurnOn,
 }
 
 impl Verb {
@@ -558,7 +556,7 @@ async fn run_verb(verb: Verb, args: Vec<String>, usage: &str) -> Result<()> {
                 }
             }
         }
-        Verb::Pause => {
+        Verb::TurnOff => {
             let step = &positional[1];
             if !checked.graph.by_id.contains_key(step) {
                 let mut ids: Vec<&str> = checked.graph.by_id.keys().map(String::as_str).collect();
@@ -568,21 +566,21 @@ async fn run_verb(verb: Verb, args: Vec<String>, usage: &str) -> Result<()> {
                     ids.join(", ")
                 );
             }
-            match store.paused().await?.get(step) {
-                Some(who) => vec![format!("{step} is already paused, by {who}")],
+            match store.turned_off().await?.get(step) {
+                Some(who) => vec![format!("{step} is already off, turned off by {who}")],
                 None => {
-                    store.pause(step, &by).await?;
-                    vec![format!("paused {step}")]
+                    store.turn_off(step, &by).await?;
+                    vec![format!("turned off {step}")]
                 }
             }
         }
-        Verb::Resume => {
+        Verb::TurnOn => {
             let step = &positional[1];
-            match store.paused().await?.get(step) {
-                None => vec![format!("{step} was not paused")],
+            match store.turned_off().await?.get(step) {
+                None => vec![format!("{step} was not off")],
                 Some(who) => {
-                    store.resume(step).await?;
-                    vec![format!("resumed {step}, which {who} had paused")]
+                    store.turn_on(step).await?;
+                    vec![format!("turned on {step}, which {who} had turned off")]
                 }
             }
         }
@@ -595,7 +593,7 @@ async fn run_verb(verb: Verb, args: Vec<String>, usage: &str) -> Result<()> {
     Ok(())
 }
 
-/// One line per open request and per pause, in a shape a script can split
+/// One line per open request and per step turned off, in a shape a script can split
 /// on two spaces.
 async fn status_lines(store: &Store) -> Result<Vec<String>> {
     let mut lines = Vec::new();
@@ -611,8 +609,8 @@ async fn status_lines(store: &Store) -> Result<Vec<String>> {
             r.roots.join(",")
         ));
     }
-    for (step, who) in store.paused().await? {
-        lines.push(format!("paused {step}  by {who}"));
+    for (step, who) in store.turned_off().await? {
+        lines.push(format!("off {step}  by {who}"));
     }
     for inv in store.running_invocations().await? {
         lines.push(format!(
@@ -621,7 +619,7 @@ async fn status_lines(store: &Store) -> Result<Vec<String>> {
         ));
     }
     if lines.is_empty() {
-        lines.push("nothing open, nothing paused, nothing running".to_string());
+        lines.push("nothing open, nothing off, nothing running".to_string());
     }
     Ok(lines)
 }

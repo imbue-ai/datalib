@@ -200,6 +200,8 @@ pub fn full_ddl() -> Vec<String> {
         // have not moved is not read again.
         datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
+    // What CalDAV's / CardDAV's listings owe the store across runs.
+    out.extend(datalib_etl::dav::state::DDL.map(str::to_string));
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

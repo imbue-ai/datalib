@@ -16,6 +16,12 @@ pub const ENV_SECRET: &str = "DATALIB_APPLET_SECRET";
 /// present header names.
 pub const SECRET_HEADER: &str = "x-datalib-applet-secret";
 
+/// Names a document this applet serves as one it wrote itself, so the
+/// gateway gives it the policy of that kind instead of the inert one
+/// every other document gets. Mirrors `APPLET_DOCUMENT_HEADER` and the
+/// `DocumentKind` spellings in `datalib_http`.
+pub const DOCUMENT_HEADER: &str = "x-datalib-document";
+
 pub struct Gate {
     secret: String,
     /// `127.0.0.1:<port>`, the only `Host` a request may carry. A page

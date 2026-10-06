@@ -36,6 +36,12 @@ pub enum Meta {
         /// `["slack_work"]` yields `comp.<ns>.<name>("slack_work")`.
         #[serde(default)]
         component_args: Vec<serde_json::Value>,
+        /// What the UI draws beside the card's title: a glyph name from
+        /// the UI's set (`ui/src/cards/icons.ts`), a mark in
+        /// `ui/src/assets/`, or an image as a `data:image/…` URL. Absent
+        /// draws the generic component glyph.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
     },
     /// This name no longer holds a component; it moved, within this
     /// same namespace. The UI follows the chain to repoint cards.
@@ -284,7 +290,7 @@ mod tests {
             &ns,
             "tetris.json",
             &format!(
-                r#"{{"title":"Tetris","description":"A game.","component_hash":"{hash}","component_args":[]}}"#
+                r#"{{"title":"Tetris","description":"A game.","component_hash":"{hash}","component_args":[],"icon":"game"}}"#
             ),
         );
 
@@ -296,11 +302,13 @@ mod tests {
                 title,
                 component_hash,
                 component_args,
+                icon,
                 ..
             } => {
                 assert_eq!(title, "Tetris");
                 assert_eq!(component_hash, &hash);
                 assert!(component_args.is_empty());
+                assert_eq!(icon.as_deref(), Some("game"));
             }
             other => panic!("expected a component, got {other:?}"),
         }

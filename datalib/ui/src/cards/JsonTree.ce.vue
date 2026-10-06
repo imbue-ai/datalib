@@ -105,8 +105,8 @@ async function copy() {
 
 <style>
 .jt {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size);
   line-height: 1.5;
 }
 .jt-row {
@@ -148,7 +148,7 @@ async function copy() {
 }
 .jt-number,
 .jt-boolean {
-  color: var(--datalib-log-ok);
+  color: var(--datalib-ok);
 }
 .jt-actions {
   margin-left: auto;
@@ -160,16 +160,17 @@ async function copy() {
 }
 .jt-btn {
   border: 1px solid var(--datalib-border);
-  border-radius: 3px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-bg);
   color: var(--datalib-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--datalib-font-size-small);
   padding: 0 5px;
   cursor: pointer;
 }
 .jt-btn:hover {
   color: inherit;
+  background: var(--datalib-hover);
 }
 .jt-children {
   margin-left: 1.1em;

@@ -20,9 +20,11 @@ use axum::{
     Router,
 };
 use datalib_core::repo::{DynAppRepo, RepoError};
+use datalib_dag::config::owner_only_options;
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -30,6 +32,7 @@ pub mod applets;
 pub mod auth;
 pub mod binaries;
 pub mod boot;
+pub mod config_upgrade;
 pub mod connect;
 mod embed;
 pub mod frontend;
@@ -38,10 +41,14 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod plugins;
+pub mod probe;
+pub mod prometheus;
 pub mod remote_media;
 pub mod request_log;
 pub mod supervisor;
 pub mod ui_events;
+pub mod ui_state;
 pub mod usage;
 pub mod watch;
 
@@ -155,19 +162,32 @@ pub fn router(state: AppState) -> Router {
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/config/init", post(init_config))
         // Credentials and connection testing for the Add-a-source
-        // wizard. See `connect.rs` — all three shell out, deliberately.
+        // wizard. See `connect.rs` — each shells out to latchkey or
+        // datalib-step, deliberately.
         .route("/api/latchkey/{service}", get(connect::get_service))
         .route(
             "/api/latchkey/{service}/connect",
             post(connect::start_connect),
         )
         .route(
+            "/api/latchkey/{service}/credential",
+            post(connect::set_credential),
+        )
+        .route(
             "/api/latchkey/connect/{id}/status",
             get(connect::connect_status),
         )
-        .route("/api/probe", post(connect::probe))
+        .route("/api/probe", post(probe::start_probe))
+        .route("/api/probe/{id}", get(probe::probe_status))
         .route("/api/dag", get(get_dag))
         .route("/api/manage/rows", get(manage::get_manage_rows))
+        // Prometheus's own path, so a scrape config needs nothing but the
+        // address and the token.
+        .route("/metrics", get(prometheus::get_metrics))
+        .route(
+            "/api/manage/groups/{id}/dashboard",
+            get(manage::get_dashboard),
+        )
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/api/lib/{name}/rename", post(rename_lib))
         .route("/agent/cards.md", get(agent_cards_guide))
@@ -183,9 +203,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/pipeline/history", get(history::tree_history))
         .route("/api/requests", get(requests_list).post(request_open))
         .route("/api/requests/{id}/stop", post(request_stop))
-        .route("/api/steps/{id}/pause", post(step_pause))
-        .route("/api/steps/{id}/resume", post(step_resume))
+        .route("/api/steps/{id}/turn_off", post(step_turn_off))
+        .route("/api/steps/{id}/turn_on", post(step_turn_on))
         .route("/api/reset", post(reset_steps))
+        .route("/api/purge", post(purge_groups))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
@@ -193,6 +214,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/{run}/log", get(run_log))
         .route("/api/log", get(log_lines))
         .route("/api/ui/events", post(ui_events::post_events))
+        .route(
+            "/api/ui/state/{name}",
+            get(ui_state::get_state).put(ui_state::put_state),
+        )
         .route("/api/sync/stream", get(sync_stream))
         .route("/api/frontend", get(get_frontend))
         // Remote media a document was let load (remote_media.rs): the
@@ -404,7 +429,8 @@ async fn proxy_impl(
         // the reason rather than an empty body it would render as "no
         // data" — the same instinct as a failed step's last stderr
         // lines becoming its error message.
-        Ok(Err(e)) => applet_error(StatusCode::BAD_GATEWAY, &e),
+        Ok(Err(applets::ProxyError::TimedOut(e))) => applet_error(StatusCode::GATEWAY_TIMEOUT, &e),
+        Ok(Err(applets::ProxyError::Failed(e))) => applet_error(StatusCode::BAD_GATEWAY, &e),
         Err(e) => applet_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("proxy task: {e}"),
@@ -415,15 +441,23 @@ async fn proxy_impl(
 /// An applet's answer, as the browser gets it. What an applet serves is
 /// data — a rendered plot page, an attachment out of a render tree — and
 /// a document among it must not run in the app's origin, where it would
-/// hold the session: it gets the same sandbox the DACTAL page does.
+/// hold the session: it gets the sandbox policy of the kind the applet
+/// names, and runs nothing when it names none. A script or wasm file
+/// goes out as bytes, so the app page's `script-src 'self'` cannot run
+/// one a sender attached.
 fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
     let mut resp = Response::builder()
         .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
     if embed::is_scriptable_document(&r.content_type) {
-        resp = resp.header(header::CONTENT_SECURITY_POLICY, embed::DOCUMENT_SANDBOX_CSP);
+        resp = resp.header(header::CONTENT_SECURITY_POLICY, r.document.csp());
     }
-    resp.header(header::CONTENT_TYPE, r.content_type)
+    let content_type = if embed::is_executable(&r.content_type) {
+        "application/octet-stream".to_string()
+    } else {
+        r.content_type
+    };
+    resp.header(header::CONTENT_TYPE, content_type)
         .body(Body::from(r.body))
         .unwrap_or_else(|_| applet_error(StatusCode::BAD_GATEWAY, "malformed applet response"))
 }
@@ -455,6 +489,10 @@ pub struct PutLibRequest {
     /// and the reason `documentPickerView` had to exist as a stand-in.
     #[serde(default)]
     pub component_args: Option<Vec<serde_json::Value>>,
+    /// The icon the layouts draw beside the card's name (see
+    /// `frontend::Meta`), same keep/clear semantics as `title`.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 /// What a write returns: the name, the content hash, and the metadata
@@ -549,20 +587,22 @@ async fn put_lib(
         Some(v) if v.trim().is_empty() => None,
         Some(v) => Some(v),
     };
-    let (prior_title, prior_desc, prior_args) = match prior {
+    let (prior_title, prior_desc, prior_args, prior_icon) = match prior {
         Some(frontend::Meta::Component {
             title,
             description,
             component_args,
+            icon,
             ..
-        }) => (Some(title), Some(description), Some(component_args)),
-        _ => (None, None, None),
+        }) => (Some(title), Some(description), Some(component_args), icon),
+        _ => (None, None, None, None),
     };
     let meta = frontend::Meta::Component {
         title: merge(req.title, prior_title).unwrap_or_default(),
         description: merge(req.description, prior_desc).unwrap_or_default(),
         component_hash: hash.clone(),
         component_args: req.component_args.or(prior_args).unwrap_or_default(),
+        icon: merge(req.icon, prior_icon),
     };
     // Writing the metadata also retires any tombstone at this name: the
     // name holds a real component again.
@@ -920,24 +960,8 @@ async fn put_config(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    // One temp name per write, or two PUTs landing together write one
-    // file and the second rename finds it gone. The `.tmp` suffix is what
-    // the root watcher ignores, so it stays.
-    let tmp = path.with_file_name(format!(
-        "config.{}.{}.tmp",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    if let Err(e) = write_owner_only(&tmp, req.text.as_bytes()) {
-        tracing::error!("put_config: write {}: {e}", tmp.display());
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    if let Err(e) = std::fs::rename(&tmp, &path) {
-        let _ = std::fs::remove_file(&tmp);
-        tracing::error!("put_config: rename {}: {e}", path.display());
+    if let Err(e) = datalib_runtime::atomic::write_owner_only(&path, req.text.as_bytes()) {
+        tracing::error!("put_config: write {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     reload_applets(&s).await;
@@ -970,69 +994,40 @@ pub struct InitConfigResponse {
 /// makes the check and the write one operation.
 async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigResponse>, StatusCode> {
     let path = s.config_path();
-
-    if let Some(parent) = path.parent() {
-        datalib_core::layout::create_data_root(parent).map_err(|e| {
-            tracing::error!("init_config: mkdir {}: {e}", parent.display());
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let created = write_starter_config(&s.root).map_err(|e| {
+        tracing::error!("init_config: {}: {e}", path.display());
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    if created {
+        reload_applets(&s).await;
     }
+    Ok(Json(InitConfigResponse {
+        created,
+        path: path.display().to_string(),
+        text: std::fs::read_to_string(&path).unwrap_or_default(),
+        error: None,
+    }))
+}
 
-    let text = scaffold_toml();
-    // `create_new` is the whole point: the existence check and the
-    // write are one syscall, so this can never overwrite a config that
-    // arrived between them.
+/// Write the starter `config.toml` into `root`, creating the root, unless
+/// a config is already there. True when this call wrote it.
+/// `POST /api/config/init` and `datalib-http --init` both come here.
+///
+/// `create_new` is the whole point: the existence check and the write
+/// are one syscall, so this can never overwrite a config that arrived
+/// between them.
+pub fn write_starter_config(root: &std::path::Path) -> std::io::Result<bool> {
+    use std::io::Write;
+    datalib_core::layout::create_data_root(root)?;
+    let path = datalib_dag::config::root_config_path(root);
     match owner_only_options().create_new(true).open(&path) {
         Ok(mut f) => {
-            use std::io::Write;
-            f.write_all(text.as_bytes()).map_err(|e| {
-                tracing::error!("init_config: write {}: {e}", path.display());
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-            drop(f);
-            reload_applets(&s).await;
-            Ok(Json(InitConfigResponse {
-                created: true,
-                path: path.display().to_string(),
-                text,
-                error: None,
-            }))
+            f.write_all(scaffold_toml().as_bytes())?;
+            Ok(true)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(Json(InitConfigResponse {
-            created: false,
-            path: path.display().to_string(),
-            text: std::fs::read_to_string(&path).unwrap_or_default(),
-            error: None,
-        })),
-        Err(e) => {
-            tracing::error!("init_config: create {}: {e}", path.display());
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
     }
-}
-
-/// `OpenOptions` for a file only this user may read. The config holds
-/// every source's credentials, so it is never left at the umask's mercy.
-fn owner_only_options() -> std::fs::OpenOptions {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts
-}
-
-/// Create (or truncate) `path` owner-only and write `bytes` to it. A
-/// file that already exists keeps its mode: `mode` applies at creation.
-fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut f = owner_only_options()
-        .create(true)
-        .truncate(true)
-        .open(path)?;
-    f.write_all(bytes)
 }
 
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
@@ -1087,26 +1082,26 @@ pub struct DagStepProgress {
     /// The step's own words: "conversations.list", "3 of 9 channels".
     pub msg: Option<String>,
     /// Current value per metric series, keyed `name` or `name{labels}`
-    /// (`rows_upserted{table=slack_messages}`). `done` and `queued` are
+    /// (`rows_upserted_total{table=slack_messages}`). `done_total` and `queued` are
     /// the two the runner derives for a step that reports the simple
     /// `progress_length` / `progress_inc` form.
     pub metrics: std::collections::BTreeMap<String, i64>,
     /// `warn` and `error` log lines so far this run.
     pub errors: i64,
-    /// Per series, the change per second between its two newest samples
-    /// — only for a series that has two, so a number here is measured,
-    /// never assumed.
-    pub rates: std::collections::BTreeMap<String, f64>,
     /// For a running step: seconds since any of its metrics last moved
     /// (since it started, if none ever did). Long means "not advancing";
     /// `log_age_secs` says whether it is at least still talking.
     pub progress_age_secs: Option<i64>,
     /// For a running step: seconds since it last logged a line.
     pub log_age_secs: Option<i64>,
+    /// How fast the step's queues have been worked off lately, for an
+    /// estimate of when they empty. `None` until a `queued` series has
+    /// a sample.
+    pub queue_drain: Option<manage::QueueDrain>,
     pub updated_at_utc: String,
 }
 
-fn series_key(name: &str, labels: &str) -> String {
+pub(crate) fn series_key(name: &str, labels: &str) -> String {
     if labels.is_empty() {
         name.to_string()
     } else {
@@ -1114,14 +1109,14 @@ fn series_key(name: &str, labels: &str) -> String {
     }
 }
 
-fn secs_between(earlier: &str, later: &str) -> Option<f64> {
+pub(crate) fn secs_between(earlier: &str, later: &str) -> Option<f64> {
     let a = datalib_time::parse_strict(earlier).ok()?.inner();
     let b = datalib_time::parse_strict(later).ok()?.inner();
     Some((b - a).num_microseconds()? as f64 / 1_000_000.0)
 }
 
 /// A run's per-step numbers, keyed by step, from a store snapshot, with
-/// rates and ages derived as of `now` (UTC, ISO).
+/// ages and queue drains derived as of `now` (UTC, ISO).
 fn progress_by_step(
     snap: &datalib_runs::Snapshot,
     now: &str,
@@ -1151,9 +1146,9 @@ fn progress_by_step(
                     msg: p.msg.clone(),
                     metrics: Default::default(),
                     errors: snap.errors.get(&p.step).copied().unwrap_or(0),
-                    rates: Default::default(),
                     progress_age_secs: age(last_move),
                     log_age_secs: age(snap.last_log_at.get(&p.step).map(String::as_str)),
+                    queue_drain: None,
                     updated_at_utc: p.updated_at_utc.clone(),
                 },
             )
@@ -1164,21 +1159,15 @@ fn progress_by_step(
             p.metrics.insert(series_key(&m.name, &m.labels), m.value);
         }
     }
-    // Two newest samples per series, oldest first: the rate is their
-    // slope. One sample is a point, not a line, so it says nothing.
-    for pair in snap.recent_samples.windows(2) {
-        let (a, b) = (&pair[0], &pair[1]);
-        if a.step != b.step || a.name != b.name || a.labels != b.labels {
-            continue;
-        }
-        let Some(dt) = secs_between(&a.ts_utc, &b.ts_utc).filter(|dt| *dt > 0.0) else {
-            continue;
-        };
-        if let Some(p) = by_step.get_mut(&b.step) {
-            p.rates.insert(
-                series_key(&b.name, &b.labels),
-                (b.value - a.value) as f64 / dt,
-            );
+    for st in &snap.steps {
+        if let Some(p) = by_step.get_mut(&st.step) {
+            let history: Vec<&datalib_runs::MetricSampleRow> = snap
+                .queue_history
+                .iter()
+                .filter(|m| m.step == st.step)
+                .collect();
+            p.queue_drain =
+                manage::queue_drain(&history, &p.metrics, st.started_at_utc.as_deref(), now);
         }
     }
     by_step
@@ -1253,9 +1242,9 @@ pub struct DagRecord {
     /// step id → the errors and warnings its store held the last time
     /// it counted, in whichever run that was.
     pub problems: std::collections::HashMap<String, manage::ProblemCounts>,
-    /// step id → how many documents its store held the last time it
-    /// counted. Only render steps report it.
-    pub documents: std::collections::HashMap<String, i64>,
+    /// step id → the Items cell: what its store held the last time it
+    /// counted, and the series behind that. Only render steps report it.
+    pub items: std::collections::HashMap<String, datalib_columns::Timeseries>,
 }
 
 /// An open run in the record while nothing is running is a run that died,
@@ -1297,8 +1286,13 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
 
     let problems =
         manage::counts_by_step(&datalib_runs::latest_metric(root, datalib_problems::METRIC).await);
-    let documents = manage::documents_by_step(
+    let (since, _) = datalib_time::IsoOffsetTimestamp::now_local()
+        .bump_micros(-(manage::ITEMS_WINDOW.as_micros() as i64))
+        .to_utc_and_offset();
+    let items = manage::items_by_step(
+        &datalib_runs::latest_metric(root, datalib_metrics::ITEMS).await,
         &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await,
+        &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await,
     );
 
     DagRecord {
@@ -1307,7 +1301,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         steps: state.steps,
         progress,
         problems,
-        documents,
+        items,
     }
 }
 
@@ -1324,7 +1318,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         steps: records,
         progress,
         problems: _,
-        documents: _,
+        items: _,
     } = dag_record(&s.root, &s.sync).await;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
@@ -1386,17 +1380,27 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 /// rendered markdown feeds. Non-empty on purpose — the two index steps
 /// are source-independent and belong in every pipeline. They start with
 /// no inputs, which is a valid graph that indexes nothing; adding a
-/// source appends its render step's id here (the UI's "Add a source"
-/// flow does that for you). `data_root` is omitted: it defaults to this
-/// file's own directory, keeping the root self-contained.
+/// source adds its render step's id here (the UI's "Add a source"
+/// flow does that for you, and writes the source above this block).
+/// `data_root` is omitted: it defaults to this file's own directory,
+/// keeping the root self-contained.
 fn scaffold_toml() -> String {
     "\
 # ── the unified index ──────────────────────────────────────────────────
 # A group is one thing on the Manage screen; its steps are what run.
-# Every source's rendered markdown feeds these two: a step's id is
+# Every source feeds these two — the grid reads its rendered markdown,
+# the qmd aggregator its search steps. A step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
 # steps it reads by that id. A step with no `command` is one of
 # datalib's own.
+#
+# Sources go above this block: a [[groups]] entry with a `type`, then
+# its steps. The file then reads in the order data flows, each step
+# below the steps it reads, which is where the Sources screen writes
+# them and the order it lists them in. The runner follows `inputs`,
+# not the file. Anything above the first [[…]] header is a top-level
+# key (data_root, binary_dir), not part of an entry. See
+# <origin>/agent/config.md.
 
 [[groups]]
 id = \"unified_index\"
@@ -1409,7 +1413,7 @@ inputs = []
 
 [[steps]]
 group = \"unified_index\"
-function = \"qmd_index\"
+function = \"qmd_aggregator\"
 inputs = []
 
 # The applet that serves the grid: the app has no search, no document
@@ -1422,12 +1426,6 @@ inputs = []
 group = \"unified_index\"
 id = \"unified_index\"
 command = \"datalib-applet unified_index\"
-
-# Sources go below: a [[groups]] entry with a `type`, then its steps.
-# Anything you add above the first [[…]] header is a top-level key
-# (data_root, binary_dir), not part of an entry. See
-# <origin>/agent/config.md.
-# ───────────────────────────────────────────────────────────────────────
 "
     .to_string()
 }
@@ -1479,7 +1477,7 @@ async fn pipeline_storage(
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }
 
-// --- Intent: requests, pauses, resets (`docs/dev/plans/supervisor.md` §2.9) --
+// --- Intent: requests, switches, resets (`docs/dev/plans/supervisor.md` §2.9) --
 
 /// A request as the API serves it.
 #[derive(Debug, Serialize)]
@@ -1538,8 +1536,16 @@ struct OpenRequest {
 
 #[derive(Debug, Deserialize)]
 struct ResetRequest {
-    /// Step ids, each optionally `+blobs`.
+    /// Step ids.
     targets: Vec<String>,
+    #[serde(default)]
+    by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PurgeRequest {
+    /// Group ids the config no longer names.
+    groups: Vec<String>,
     #[serde(default)]
     by: Option<String>,
 }
@@ -1565,12 +1571,14 @@ async fn requests_list(State(s): State<AppState>) -> Result<Json<Vec<RequestView
     Ok(Json(rows.into_iter().map(RequestView::from).collect()))
 }
 
-/// `POST /api/requests` — sync `roots` and everything downstream of them.
-/// Refused, with the reason, when the config cannot run or lacks a root.
+/// `POST /api/requests` — sync `roots` and everything downstream of them,
+/// as one request per group the roots belong to, so each source's sync
+/// can be stopped without stopping the others'. Refused, with the reason,
+/// when the config cannot run or lacks a root.
 async fn request_open(
     State(s): State<AppState>,
     Json(req): Json<OpenRequest>,
-) -> Result<Json<RequestView>, Refusal> {
+) -> Result<Json<Vec<RequestView>>, Refusal> {
     let checked = supervisor::load_config(&s.root).map_err(|e| (StatusCode::CONFLICT, e))?;
     let roots = if req.roots.is_empty() {
         source_ids(&checked)
@@ -1583,25 +1591,71 @@ async fn request_open(
             format!("the config has no step {unknown:?}"),
         ));
     }
-    let by = req.by.unwrap_or_else(|| "ui".to_string());
     let store = mailbox(&s).await?;
-    let id = store.open_request(&roots, &by).await.map_err(internal)?;
-    s.sync.wake();
-    // Answered once the loop has taken it on, so rows read after this
-    // show its steps as wanted. A loop mid-sync looks every quarter
-    // second; one whose config lacks a root leaves it for the next sync.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while !store.taken_on(&id).await.map_err(internal)? && std::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
+    let open = store.open_requests().await.map_err(internal)?;
+    let mut listener =
+        datalib_dag::supervisor::announce::Listener::new(store, "POST /api/requests");
+    let mut answer = Vec::new();
+    let mut opened = Vec::new();
+    for roots in by_group(&checked.graph, roots) {
+        // A sync of these steps that is already open is this sync: a
+        // second click is not a second run. (A second request from
+        // anywhere else still is: the loop runs its steps once more when
+        // the first ends.)
+        let wanted: BTreeSet<&str> = roots.iter().map(String::as_str).collect();
+        let same = open.iter().find(|r| {
+            r.stop_requested_by.is_none()
+                && r.roots.iter().map(String::as_str).collect::<BTreeSet<_>>() == wanted
+        });
+        if let Some(same) = same {
+            answer.push(RequestView::from(same.clone()));
+            continue;
+        }
+        let id = store.open_request(&roots, &by).await.map_err(internal)?;
+        opened.push(id.clone());
+        answer.push(RequestView {
+            id,
+            roots,
+            by: by.clone(),
+            state: "open",
+            stop_requested_by: None,
+            failed_step: None,
+        });
     }
-    Ok(Json(RequestView {
-        id,
-        roots,
-        by,
-        state: "open",
-        stop_requested_by: None,
-        failed_step: None,
-    }))
+    // Answered once the loop has taken them on, so rows read after this
+    // show their steps as wanted. A loop whose config lacks a root leaves
+    // it for the next sync, so the wait is bounded.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    for id in &opened {
+        while !store.taken_on(id).await.map_err(internal)? {
+            if tokio::time::timeout_at(deadline, listener.next())
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    }
+    Ok(Json(answer))
+}
+
+/// `roots` split by the group each step belongs to, groups in the order
+/// they first appear.
+fn by_group(graph: &datalib_dag::Graph, roots: Vec<String>) -> Vec<Vec<String>> {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for root in roots {
+        let group = graph
+            .by_id
+            .get(&root)
+            .and_then(|&i| graph.steps[i].group.clone())
+            .unwrap_or_else(|| root.clone());
+        match groups.iter_mut().find(|(g, _)| *g == group) {
+            Some((_, of)) => of.push(root),
+            None => groups.push((group, vec![root])),
+        }
+    }
+    groups.into_iter().map(|(_, of)| of).collect()
 }
 
 /// `POST /api/requests/{id}/stop` — asking, not doing: the loop stops the
@@ -1617,13 +1671,12 @@ async fn request_stop(
     }
     let by = by_of(&body)?;
     store.request_stop(&id, &by).await.map_err(internal)?;
-    s.sync.wake();
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/steps/{id}/pause` — the step is not started until resumed,
-/// and one running is stopped; what reads it waits.
-async fn step_pause(
+/// `POST /api/steps/{id}/turn_off` — every sync skips the step until it
+/// is turned on, and one running is stopped; what reads it waits.
+async fn step_turn_off(
     State(s): State<AppState>,
     Path(id): Path<String>,
     body: axum::body::Bytes,
@@ -1636,18 +1689,21 @@ async fn step_pause(
         ));
     }
     let by = by_of(&body)?;
-    mailbox(&s).await?.pause(&id, &by).await.map_err(internal)?;
-    s.sync.wake();
+    mailbox(&s)
+        .await?
+        .turn_off(&id, &by)
+        .await
+        .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/steps/{id}/resume`.
-async fn step_resume(
+/// `POST /api/steps/{id}/turn_on` — syncs include it again; this alone
+/// starts nothing.
+async fn step_turn_on(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, Refusal> {
-    mailbox(&s).await?.resume(&id).await.map_err(internal)?;
-    s.sync.wake();
+    mailbox(&s).await?.turn_on(&id).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1667,6 +1723,21 @@ async fn reset_steps(
         .await
         .map_err(|e| (StatusCode::CONFLICT, e))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/purge` — delete the trees of groups gone from the config.
+/// 204 once they are gone; 202 when a sync in progress holds the delete
+/// until it is over; 409, with the reason, for a group still configured.
+async fn purge_groups(
+    State(s): State<AppState>,
+    Json(req): Json<PurgeRequest>,
+) -> Result<StatusCode, Refusal> {
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
+    match s.sync.purge(&req.groups, &by).await {
+        Ok(supervisor::PurgeAnswer::Done) => Ok(StatusCode::NO_CONTENT),
+        Ok(supervisor::PurgeAnswer::Queued) => Ok(StatusCode::ACCEPTED),
+        Err(why) => Err((StatusCode::CONFLICT, why)),
+    }
 }
 
 async fn sync_stream(
@@ -1788,9 +1859,9 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
                 msg: None,
                 metrics: Default::default(),
                 errors: 0,
-                rates: Default::default(),
                 progress_age_secs: None,
                 log_age_secs: None,
+                queue_drain: None,
                 updated_at_utc: st.updated_at_utc.clone(),
             }),
         })
@@ -1839,44 +1910,52 @@ async fn run_log(
     )
 }
 
+/// A parameter this does not take is refused, not ignored: the run, the
+/// process, the step and the attempt are search terms (`run:`,
+/// `process_id:`, `step:`, `attempt:`), and a caller still sending them
+/// as parameters would otherwise get every line back.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LogParams {
-    #[serde(default)]
-    run: Option<String>,
-    /// One process's lines, by its id from `/api/processes`.
-    #[serde(default)]
-    process: Option<String>,
-    #[serde(default)]
-    step: Option<String>,
-    /// With `step`: one attempt of it.
-    #[serde(default)]
-    attempt: Option<i64>,
     /// The search bar, in the grammar every grid shares (`datalib_query`):
-    /// `level:warn -target:sqlx "history"`.
+    /// `level:warn -target:sqlx "history"`, and what the panel's pickers
+    /// write there: `run:`, `process_id:`, `step:`, `attempt:`.
     #[serde(default)]
     q: String,
+    /// The lines after this `seq`: how a panel follows the tail.
     #[serde(default)]
     after_seq: Option<i64>,
+    /// The newest lines before this `seq`: how a panel pages back.
+    #[serde(default)]
+    before_seq: Option<i64>,
     #[serde(default)]
     limit: Option<i64>,
 }
 
-/// `GET /api/log?run=…&step=…&q=…` — log lines, oldest first, across
-/// every run the store holds unless `run` narrows it. Tails the same way
-/// `/api/runs/{run}/log` does. A `q` naming a key a log line does not
-/// have is a 400 with the key spelled out.
+/// `GET /api/log?q=…` — log lines across every run the
+/// store holds unless `run` narrows it: the newest `limit` of them, or the
+/// page `after_seq` or `before_seq` names, oldest first either way. A `q`
+/// naming a key a log line does not have is a 400 with the key spelled
+/// out, and so are both cursors at once.
 async fn log_lines(
     State(s): State<AppState>,
     Query(p): Query<LogParams>,
 ) -> Result<Json<Vec<datalib_runs::LogLine>>, (StatusCode, String)> {
     let limit = p.limit.unwrap_or(5000).clamp(1, 50_000);
+    let cursor = match (p.after_seq, p.before_seq) {
+        (None, None) => datalib_runs::LogCursor::Newest,
+        (Some(seq), None) => datalib_runs::LogCursor::After(seq),
+        (None, Some(seq)) => datalib_runs::LogCursor::Before(seq),
+        (Some(_), Some(_)) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "ask for the lines after_seq or before_seq a line, not both".to_string(),
+            ))
+        }
+    };
     let q = datalib_runs::LogQuery {
-        run: p.run.as_deref(),
-        process: p.process.as_deref(),
-        step: p.step.as_deref(),
-        attempt: p.attempt,
         q: &p.q,
-        after_seq: p.after_seq.unwrap_or(0),
+        cursor,
         limit,
     };
     datalib_runs::log_query(&s.root, &q)
@@ -1889,58 +1968,78 @@ async fn log_lines(
 mod tests {
     use super::*;
 
-    /// A document an applet serves is sandboxed on the way out; JSON is
-    /// left alone. The header, not the body, is what a browser reads.
+    fn proxied(content_type: &str, document: embed::DocumentKind) -> Response<Body> {
+        proxied_response(applets::ProxyResponse {
+            status: 200,
+            content_type: content_type.into(),
+            document,
+            body: b"<script>1</script>".to_vec(),
+        })
+    }
+
+    fn header_of(r: &Response<Body>, name: header::HeaderName) -> Option<&str> {
+        r.headers().get(name).and_then(|v| v.to_str().ok())
+    }
+
+    /// A document an applet serves is sandboxed on the way out, under the
+    /// policy of the kind it names — none means data, which runs
+    /// nothing. JSON is left alone. The header, not the body, is what a
+    /// browser reads.
     #[test]
     fn proxied_documents_are_sandboxed_and_data_is_not() {
-        let html = proxied_response(applets::ProxyResponse {
-            status: 200,
-            content_type: "text/html; charset=utf-8".into(),
-            body: b"<script>1</script>".to_vec(),
-        });
+        let html = proxied("text/html; charset=utf-8", embed::DocumentKind::Data);
         assert_eq!(html.status(), StatusCode::OK);
-        let csp = html
-            .headers()
-            .get(header::CONTENT_SECURITY_POLICY)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        assert!(csp.starts_with("sandbox "), "{csp:?}");
-        assert!(!csp.contains("allow-same-origin"), "{csp:?}");
         assert_eq!(
-            html.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
-            "nosniff"
+            header_of(&html, header::CONTENT_SECURITY_POLICY),
+            Some(embed::DocumentKind::Data.csp())
+        );
+        assert_eq!(
+            header_of(&html, header::X_CONTENT_TYPE_OPTIONS),
+            Some("nosniff")
         );
 
-        let json = proxied_response(applets::ProxyResponse {
-            status: 200,
-            content_type: "application/json".into(),
-            body: b"{}".to_vec(),
-        });
-        assert!(json
-            .headers()
-            .get(header::CONTENT_SECURITY_POLICY)
-            .is_none());
+        let plot = proxied("text/html", embed::DocumentKind::Plot);
         assert_eq!(
-            json.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
-            "nosniff"
+            header_of(&plot, header::CONTENT_SECURITY_POLICY),
+            Some(embed::DocumentKind::Plot.csp())
+        );
+
+        let json = proxied("application/json", embed::DocumentKind::Data);
+        assert!(header_of(&json, header::CONTENT_SECURITY_POLICY).is_none());
+        assert_eq!(
+            header_of(&json, header::X_CONTENT_TYPE_OPTIONS),
+            Some("nosniff")
         );
     }
 
-    /// The rate is the slope of a series' two newest samples; the ages
-    /// are how long a running step has gone without a metric moving and
-    /// without logging — the two together being #136's "busy but not
+    /// A `.js` a sender attached is served as bytes: under `nosniff` a
+    /// `<script src>` refuses it, so the app page's `script-src 'self'`
+    /// cannot be turned into a way to run it (audit 2026-10-02, P3).
+    #[test]
+    fn proxied_scripts_are_not_runnable() {
+        for ct in [
+            "text/javascript",
+            "application/javascript",
+            "application/wasm",
+        ] {
+            let r = proxied(ct, embed::DocumentKind::Data);
+            assert_eq!(
+                header_of(&r, header::CONTENT_TYPE),
+                Some("application/octet-stream"),
+                "{ct}"
+            );
+        }
+        let css = proxied("text/css", embed::DocumentKind::Data);
+        assert_eq!(header_of(&css, header::CONTENT_TYPE), Some("text/css"));
+    }
+
+    /// The ages are how long a running step has gone without a metric
+    /// moving and without logging — the two together being #136's "busy but not
     /// advancing" (long progress age, short log age) as distinct from
     /// "silent" (both long). A finished step has no ages.
     #[test]
-    fn rates_and_ages_are_derived_from_the_snapshot() {
-        use datalib_runs::{MetricRow, MetricSampleRow, StepRunRow};
-        let sample = |step: &str, name: &str, ts: &str, value: i64| MetricSampleRow {
-            step: step.into(),
-            name: name.into(),
-            ts_utc: ts.into(),
-            value,
-            ..Default::default()
-        };
+    fn ages_are_derived_from_the_snapshot() {
+        use datalib_runs::{MetricRow, StepRunRow};
         let snap = datalib_runs::Snapshot {
             run_id: Some("r".into()),
             steps: vec![
@@ -1958,7 +2057,7 @@ mod tests {
             ],
             metrics: vec![MetricRow {
                 step: "a/ingest".into(),
-                name: "rows_upserted".into(),
+                name: "rows_upserted_total".into(),
                 labels: "table=t".into(),
                 value: 700,
                 updated_at_utc: "2026-09-14T10:01:00.000000+00:00".into(),
@@ -1970,34 +2069,11 @@ mod tests {
             )]
             .into_iter()
             .collect(),
-            recent_samples: vec![
-                sample(
-                    "a/ingest",
-                    "rows_upserted",
-                    "2026-09-14T10:00:50.000000+00:00",
-                    500,
-                ),
-                sample(
-                    "a/ingest",
-                    "rows_upserted",
-                    "2026-09-14T10:01:00.000000+00:00",
-                    700,
-                ),
-                // A lone sample is a point, not a slope.
-                sample(
-                    "a/ingest",
-                    "api_requests",
-                    "2026-09-14T10:01:00.000000+00:00",
-                    9,
-                ),
-            ],
             ..Default::default()
         };
         let by = progress_by_step(&snap, "2026-09-14T10:03:00.000000+00:00");
         let a = &by["a/ingest"];
-        assert_eq!(a.metrics["rows_upserted{table=t}"], 700);
-        assert_eq!(a.rates.get("rows_upserted"), Some(&20.0), "{:?}", a.rates);
-        assert!(!a.rates.contains_key("api_requests"));
+        assert_eq!(a.metrics["rows_upserted_total{table=t}"], 700);
         assert_eq!(
             a.progress_age_secs,
             Some(120),
@@ -2010,6 +2086,61 @@ mod tests {
             (None, None),
             "not running"
         );
+    }
+
+    /// The queue's series go through the real writer, the real store and
+    /// the snapshot's query into the drain the ETA reads. The counter's
+    /// value when the window opened is what makes the pace right: if the
+    /// query ever stopped returning `dequeued_total` samples — a name
+    /// spelled two ways — the drain would read the run's whole 140 as
+    /// taken off in two minutes, and this fails.
+    #[tokio::test]
+    async fn the_eta_reads_the_queue_series_the_runner_writes() {
+        use datalib_metrics::{DEQUEUED, QUEUED};
+        let root = tempfile::tempdir().unwrap();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        let ago = |secs: i64| now.bump_micros(-secs * 1_000_000).to_utc_and_offset().0;
+        {
+            let w = datalib_runs::RunWriter::start(
+                root.path(),
+                "r",
+                &ago(300),
+                None,
+                datalib_runs::Retention::default(),
+            )
+            .unwrap();
+            w.step(datalib_runs::StepRunRow {
+                step: "s".into(),
+                state: "running".into(),
+                attempt: 1,
+                started_at_utc: Some(ago(300)),
+                updated_at_utc: ago(300),
+                ..Default::default()
+            });
+            let metric = |name: &str, value: i64, at: String| datalib_runs::MetricRow {
+                step: "s".into(),
+                name: name.into(),
+                labels: "from=p".into(),
+                value,
+                updated_at_utc: at,
+                ..Default::default()
+            };
+            w.metric(metric(QUEUED, 10, ago(200)));
+            w.metric(metric(DEQUEUED, 100, ago(200)));
+            // Sampled on its own flush, so the later values are samples
+            // of their own rather than coalescing with these.
+            w.flush().await;
+            w.metric(metric(QUEUED, 60, ago(30)));
+            w.metric(metric(DEQUEUED, 140, ago(30)));
+        }
+        let snap = datalib_runs::snapshot(root.path()).await;
+        let by = progress_by_step(&snap, &now_utc());
+        let drain = by["s"]
+            .queue_drain
+            .expect("a queue with samples has a drain");
+        assert!(drain.counted, "{drain:?}");
+        assert_eq!((drain.taken, drain.queued_then), (40, 10), "{drain:?}");
+        assert!((119.0..130.0).contains(&drain.secs), "{drain:?}");
     }
 
     fn fringe_of(text: &str) -> Vec<String> {
@@ -2040,7 +2171,7 @@ mod tests {
         // nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),
-            ["unified_index/grid_index", "unified_index/qmd_index"]
+            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
         );
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on.
@@ -2060,7 +2191,7 @@ mod tests {
         let fringe = fringe_of(&scaffold_toml());
         assert_eq!(
             fringe,
-            ["unified_index/grid_index", "unified_index/qmd_index"]
+            ["unified_index/grid_index", "unified_index/qmd_aggregator"]
         );
         assert_eq!(configured_source_count(&fringe), 0);
     }

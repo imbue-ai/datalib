@@ -1,9 +1,10 @@
 // Which cells of a table the clock alone has changed. A `timestamp`
-// cell reads "5 minutes ago" and a `timeseries` sparkline slides left
-// as time passes, so both go stale with no new data. The grid repaints
+// cell reads "5 minutes ago", and a `status` cell says the same of when
+// it got there, so both go stale with no new data. The grid repaints
 // those cells, and only those, when their face here moves: repainting
 // a row rebuilds its buttons under the pointer.
-import type { Sample } from "@/config/sparkline";
+// A `timeseries` sparkline is not on the clock: it redraws when a new
+// measurement arrives, like the status bar's.
 import { formatRelative } from "@/config/timeFormat";
 
 /// One string per clock-driven cell, keyed `<row key>\n<field>`. A cell
@@ -12,11 +13,8 @@ export type ClockFaces = Map<string, string>;
 
 export type ClockColumns = {
   timestamps: string[];
-  timeseries: string[];
-  /// How far back a sparkline reaches, ms.
-  windowMs: number;
-  /// How long the clock takes to move a sparkline by a pixel, ms.
-  stepMs: number;
+  /// Status cells, whose stamp is the status's `at`.
+  statuses: string[];
 };
 
 export function clockFaces<T extends Record<string, unknown>>(
@@ -31,20 +29,12 @@ export function clockFaces<T extends Record<string, unknown>>(
     for (const f of cols.timestamps) {
       faces.set(`${key}\n${f}`, formatRelative((row[f] as string | null) ?? null, now));
     }
-    for (const f of cols.timeseries) {
-      const samples = (row[f] as { samples?: Sample[] } | null)?.samples ?? [];
-      faces.set(`${key}\n${f}`, sparkFace(samples, cols, now));
+    for (const f of cols.statuses) {
+      const at = (row[f] as { at?: string | null } | null)?.at ?? null;
+      faces.set(`${key}\n${f}`, formatRelative(at, now));
     }
   }
   return faces;
-}
-
-/// A line with a step inside the window moves a pixel every `stepMs`.
-/// One whose every step is older is flat, and stays flat.
-function sparkFace(samples: Sample[], cols: ClockColumns, now: number): string {
-  const start = now - cols.windowMs;
-  const moving = samples.some((s) => Date.parse(s.at) >= start);
-  return moving ? String(Math.floor(now / cols.stepMs)) : "flat";
 }
 
 /// The cells whose face differs between two readings, as row key and

@@ -17,7 +17,7 @@ use datalib_etl::progress::Progress;
 use datalib_schema::providers::Provider;
 use datalib_time::RecordStampPrecision;
 
-use crate::render::{render_all, RenderProfile, ENTITY_KIND_CONVERSATION};
+use crate::render::{render_all, RenderProfile, TextFormat, ENTITY_KIND_CONVERSATION};
 use crate::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,
@@ -36,6 +36,7 @@ pub fn sample_profile() -> RenderProfile {
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         stamp_precision: RecordStampPrecision::Seconds,
         render_version: 1,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -70,19 +71,21 @@ pub fn write_samples(out_dir: &Path) -> Result<Vec<String>> {
 fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: uuid.to_string(),
-        author_id: author.to_string(),
+        author_handle: None,
         author_display: author.to_string(),
         date_ms: Some(at),
         text: Some(body.to_string()),
         kind: ItemKind::Text,
         attachments: vec![],
         reactions: vec![],
+        labels: Vec::new(),
         system_note: None,
         source_url: None,
         kind_label: None,
         source_ref: None,
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }
@@ -97,6 +100,7 @@ fn aside(uuid: &str, at: i64, body: &str) -> NormalizedChatItem {
 
 fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedChat {
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: Vec::new(),
         id: id.to_string(),
         chat_uuid: id.to_string(),

@@ -16,6 +16,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
         "//datalib/backend/etl/providers/facebook:datalib_etl_facebook",
         "//datalib/backend/etl/providers/facebook_config:datalib_etl_facebook_config",

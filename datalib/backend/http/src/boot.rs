@@ -44,7 +44,7 @@ pub async fn build_state(
             tracing::error!("{n}");
         }
         let (root_tx, _) = tokio::sync::broadcast::channel(64);
-        let _watching = crate::watch::spawn((*root).clone(), root_tx.clone());
+        crate::watch::spawn((*root).clone(), root_tx.clone());
         return Ok(AppState {
             root: root.clone(),
             app: Arc::new(NewerRootRepo(newer_root.clone())),
@@ -78,7 +78,12 @@ pub async fn build_state(
     // `crate::watch`. Started before the loop so a sync that begins
     // during startup is already being reported on.
     let (root_tx, _) = tokio::sync::broadcast::channel(64);
-    let _watching = crate::watch::spawn((*root).clone(), root_tx.clone());
+    crate::watch::spawn((*root).clone(), root_tx.clone());
+
+    // Before the loop, so its first read is of the current shape.
+    let data_root = (*root).clone();
+    tokio::task::spawn_blocking(move || crate::config_upgrade::upgrade(&data_root)).await?;
+    crate::config_upgrade::watch((*root).clone(), root_tx.subscribe());
 
     let sync = supervisor::SyncControl::new(root.clone());
     tokio::spawn(supervisor::run(supervisor::HostConfig {

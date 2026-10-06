@@ -101,8 +101,8 @@ fn seed(api: &std::path::Path, playback: &std::path::Path, project_updated_at: &
 }
 
 /// Opens the store, runs one download through it, and closes it before
-/// returning. Every caller reads the store afterwards, and a second
-/// live connection to one file makes a `dolt_commit` fail.
+/// returning. Every caller reads the store afterwards, and the file
+/// takes one writer at a time.
 async fn run(
     raw: &std::path::Path,
     api: &std::path::Path,

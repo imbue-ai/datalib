@@ -55,11 +55,13 @@ A store has two kinds of commit and they do different work:
 - A **SQL transaction** is the *atomicity* unit. It is all-or-nothing:
   a crash mid-transaction rolls it back, and a committed one is in the
   store's working set from then on. It is also how writes are batched
-  — doltlite charges about 50ms per auto-committed statement, so a
-  loop of bare statements is ruinous (see the comment on
-  `build_grid_index`).
+  — outside one, every statement is a transaction of its own and
+  rewrites the pages it touches
+  ([`doltlite.md`](../doltlite.md#what-a-write-costs)). **Superseded on
+  doltlite 0.50.13:** this said about 50 ms per statement; it is now
+  under a millisecond, so batching is about pages, not time.
 - A **doltlite commit** is the *publication* unit. It names a snapshot
-  a reader can pin through `dolt_at_`, and `dolt_diff` between two of
+  a reader can open read-only and detached, and `dolt_diff` between two of
   them is the record of what changed. It seals whatever SQL
   transactions have landed in the working set since the previous one.
 
@@ -132,7 +134,7 @@ them off.
    source holds nothing — and a consumer of it deletes accordingly.
    The only thing a consumer skips is a store it *cannot read*: no
    file, no commit, no doltlite extension. That is P1 of the
-   [sink contract](completed/streaming_steps_plan.md#the-sink-contract), and it
+   [sink contract](../../../datalib/backend/dag/README.md#what-a-sink-owes-its-consumers), and it
    is the one guard that stays.
 
 Two things stop being modes:
@@ -268,7 +270,16 @@ and small.
    is too slow, the fallback is copy-into-staging then swap in one
    transaction, which needs a check that doltlite handles `ALTER TABLE
    … RENAME` with its history intact. Keyless tables cannot upsert and
-   are already undiffable: refuse them at DDL time.
+   are already undiffable: refuse them at DDL time. **Answered on
+   doltlite 0.50.13, on a synthetic 74k-row store, not the lightroom
+   fixture:** an upsert of every row unchanged took 0.42 s and left
+   nothing to commit; the blob bug does not reappear
+   (`hack/doltlite_blob_bug/run.sh` copies by `INSERT … SELECT` into
+   keyed tables); and the swap works — `DROP TABLE t` then `ALTER TABLE
+   t_staging RENAME TO t` in one transaction diffs as only the rows that
+   changed, because the diff goes by table name. Renaming to a name that
+   did not exist before shows every row as added
+   ([`doltlite.md`](../doltlite.md#diffs)).
 3. **Render: documents in transactions, cursor in the store.** *Built.*
    the documents between two checkpoints share one SQL transaction
    (`begin_batch`/`commit_batch`, closed right before each

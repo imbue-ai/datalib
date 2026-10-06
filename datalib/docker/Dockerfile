@@ -140,7 +140,7 @@ RUN set -eux; \
 # Pre-fetch qmd's three pinned GGUF models (embedding + query-expansion
 # + reranker, ~2.25 GB) into qmd's cache (`~/.cache/qmd/models`), each
 # from its pinned HuggingFace revision and sha256-verified — the same
-# table the `qmd_index` step checks on every sync, so a rebuilt image
+# table the `embed` step and the search applet check, so a rebuilt image
 # with the same pins lands the same bytes.
 #
 # `QMD_PREFETCH_MODELS=false` skips it, which is what makes the
@@ -173,10 +173,12 @@ RUN chmod 0755 /usr/local/bin/datalib-entrypoint.sh
 # first-time user through it, and datalib/docker/doc_test.sh checks
 # that walkthrough against the built image.
 #
-# The config's semantic-index step sits below a BUILD-TIME CUT marker
-# and is dropped for this run (embedding under the arm64 leg's QEMU
-# emulation would cost every release tens of minutes); the shipped
-# config keeps it, so the first sync in a container builds the index.
+# Each source's keyword (BM25) index is built here too, so free-text
+# search works the moment the demo starts. The embed steps and the
+# aggregator sit below a BUILD-TIME CUT marker and are dropped for this
+# run (embedding under the arm64 leg's QEMU emulation would cost every
+# release tens of minutes); the shipped config keeps them, so the first
+# sync in a container adds the embeddings.
 # `--now` is pinned to the fixture's own era so the bookkeeping reads
 # in fixture time rather than in build time, like the test fixture.
 #
@@ -192,6 +194,7 @@ RUN set -eux; \
     datalib-dag /opt/datalib/demo/config.toml --now 2369-04-15T00:00:00+00:00; \
     mv /opt/datalib/demo/config.full.toml /opt/datalib/demo/config.toml; \
     datalib-dag --check /opt/datalib/demo/config.toml; \
+    test -s /opt/datalib/demo/unified_index/qmd_aggregator/qmd/index.sqlite; \
     datalib-doltlite -readonly /opt/datalib/demo/unified_index/grid_index/db.doltlite_db \
         "SELECT provider, count(*) FROM grid_rows GROUP BY 1;" \
         | tee /dev/stderr | grep -q .

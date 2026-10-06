@@ -36,6 +36,7 @@ use datalib_dag::config::AppletEntry;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::embed::DocumentKind;
 use crate::watch::{RootEvent, RootFrame};
 
 /// The applet's own id, as the gateway knows it. The reference applet
@@ -56,6 +57,13 @@ pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
 /// process and to a web page that resolves its own hostname to 127.0.0.1.
 pub const ENV_APPLET_SECRET: &str = "DATALIB_APPLET_SECRET";
 pub const APPLET_SECRET_HEADER: &str = "X-Datalib-Applet-Secret";
+
+/// What an applet calls a document it serves, when it is one of the
+/// kinds [`crate::embed::DocumentKind`] names: the applet knows which of
+/// its files it wrote itself. A document without it is data and runs
+/// nothing. `datalib_applet::gate::DOCUMENT_HEADER` is the other
+/// spelling.
+pub const APPLET_DOCUMENT_HEADER: &str = "X-Datalib-Document";
 
 /// The prefix of the one line an applet prints to **stdout** once it
 /// has written its components and bound its port: the readiness
@@ -178,8 +186,13 @@ fn tail_lines(s: &str, n: usize) -> String {
 /// The one place a config change reaches the registry from outside a
 /// request: the root watcher says `config.toml` moved, the registry
 /// reconciles. A lagged receiver reloads too — a change may be in the
-/// gap, and a reload of an unchanged file costs a `stat`.
-pub fn watch_config(registry: Arc<AppletRegistry>, mut rx: broadcast::Receiver<RootFrame>) {
+/// gap, and a reload of an unchanged file costs a `stat`. The receiver
+/// counts the reloads finished, for a caller that has to know one was.
+pub fn watch_config(
+    registry: Arc<AppletRegistry>,
+    mut rx: broadcast::Receiver<RootFrame>,
+) -> tokio::sync::watch::Receiver<u64> {
+    let (reloaded_tx, reloaded) = tokio::sync::watch::channel(0);
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -190,12 +203,14 @@ pub fn watch_config(registry: Arc<AppletRegistry>, mut rx: broadcast::Receiver<R
                 | Err(broadcast::error::RecvError::Lagged(_)) => {
                     let registry = registry.clone();
                     let _ = tokio::task::spawn_blocking(move || registry.reload()).await;
+                    reloaded_tx.send_modify(|n| *n += 1);
                 }
                 Ok(_) => {}
                 Err(broadcast::error::RecvError::Closed) => return,
             }
         }
     });
+    reloaded
 }
 
 /// The applets from `config.toml`, the frontend store they write into,
@@ -441,7 +456,7 @@ impl AppletRegistry {
         path_and_query: &str,
         content_type: Option<&str>,
         body: &[u8],
-    ) -> Result<ProxyResponse, String> {
+    ) -> Result<ProxyResponse, ProxyError> {
         // Configured but not running is a different failure from not
         // configured at all, and the message says which.
         let port = match self.supervisor.port(id) {
@@ -453,7 +468,7 @@ impl AppletRegistry {
                     .ok()
                     .and_then(|s| s.errors.get(id).cloned())
                     .unwrap_or_else(|| "it is not running".to_string());
-                return Err(format!("applet {id:?}: {why}"));
+                return Err(ProxyError::Failed(format!("applet {id:?}: {why}")));
             }
             // Not in the list. That has two very different causes, and
             // they used to produce the same message: the applet really
@@ -463,13 +478,15 @@ impl AppletRegistry {
             // truth is "your config.toml has a syntax error" sends
             // people looking in exactly the wrong place.
             None => {
-                return Err(match config_load_error(&self.data_root, id) {
-                    Some(why) => format!(
-                        "applet {id:?} is unavailable because {} could not be loaded: {why}",
-                        datalib_dag::config::root_config_path(&self.data_root).display()
-                    ),
-                    None => format!("no applet {id:?}"),
-                })
+                return Err(ProxyError::Failed(
+                    match config_load_error(&self.data_root, id) {
+                        Some(why) => format!(
+                            "applet {id:?} is unavailable because {} could not be loaded: {why}",
+                            datalib_dag::config::root_config_path(&self.data_root).display()
+                        ),
+                        None => format!("no applet {id:?}"),
+                    },
+                ))
             }
         };
         forward(
@@ -480,6 +497,10 @@ impl AppletRegistry {
             body,
             Some(&self.secret),
         )
+        .map_err(|e| match e {
+            ProxyError::TimedOut(why) => ProxyError::TimedOut(format!("applet {id:?} {why}")),
+            other => other,
+        })
     }
 }
 
@@ -591,10 +612,7 @@ fn load_entries(
             // whether a step or an applet names it.
             let dir = datalib_dag::config::resolve_binary_dir(&checked.cfg, binary_dir.as_deref());
             // `checked.cfg.applets` is already only the entries that
-            // loaded. This used to be all-or-nothing — one bad applet
-            // entry logged "config rejected, none will load" and the
-            // whole app went dark, which is 00633dd5 and the reason
-            // #209 exists. A dropped entry now costs its own applet.
+            // loaded: a bad entry costs its own applet and no other.
             for d in checked.diagnostics.iter().filter(|d| {
                 d.entry.as_ref().map(|e| e.kind) == Some(datalib_dag::EntryKind::Applet)
                     || d.severity == datalib_dag::Severity::Fatal
@@ -714,9 +732,7 @@ impl Supervisor {
             std::thread::spawn(move || {
                 let reader = std::io::BufReader::new(stderr);
                 for line in reader.lines().map_while(Result::ok) {
-                    // Relayed as this server's line about the applet,
-                    // the way the runner relays a step's stderr.
-                    tracing::info!(applet = %id, "{line}");
+                    relay_applet_line(&id, &line);
                     if let Ok(mut t) = tail.lock() {
                         t.push(line);
                         // Bounded: this lives as long as the applet.
@@ -752,7 +768,7 @@ impl Supervisor {
                         }
                         // Anything else on stdout is just output. An
                         // applet is not required to keep it clean.
-                        None => tracing::info!(applet = %id, "{line}"),
+                        None => relay_applet_line(&id, &line),
                     }
                 }
                 if !announced {
@@ -828,7 +844,16 @@ impl Supervisor {
             Ok(None) => Some(r.port),
             _ => {
                 if let Some(mut dead) = map.remove(id) {
-                    let _ = dead.child.wait();
+                    let status = dead
+                        .child
+                        .wait()
+                        .map_or_else(|e| format!("wait failed: {e}"), |s| s.to_string());
+                    tracing::error!(
+                        applet = %id,
+                        pid = dead.child.id(),
+                        %status,
+                        "the applet exited; it starts again when the config next changes"
+                    );
                 }
                 None
             }
@@ -878,9 +903,13 @@ impl Drop for Supervisor {
 
 // The proxy
 
+#[derive(Debug)]
 pub struct ProxyResponse {
     pub status: u16,
     pub content_type: String,
+    /// Read from [`APPLET_DOCUMENT_HEADER`]; a value this build does not
+    /// know reads as [`DocumentKind::Data`], the stricter policy.
+    pub document: DocumentKind,
     pub body: Vec<u8>,
 }
 
@@ -922,6 +951,28 @@ pub fn encode_path(decoded: &str) -> String {
     out
 }
 
+/// Why a request did not reach the applet and back. A timeout is its own
+/// kind because it is the gateway giving up on a live applet, not the
+/// applet failing, and the caller answers it with 504 rather than 502.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProxyError {
+    TimedOut(String),
+    Failed(String),
+}
+
+impl std::fmt::Display for ProxyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProxyError::TimedOut(msg) | ProxyError::Failed(msg) => f.write_str(msg),
+        }
+    }
+}
+
+/// How long the gateway waits for the applet's next bytes — including
+/// the first, which is the whole search for an applet that builds its
+/// answer before sending it.
+const APPLET_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub fn forward(
     port: u16,
     method: &str,
@@ -929,23 +980,44 @@ pub fn forward(
     content_type: Option<&str>,
     body: &[u8],
     secret: Option<&str>,
-) -> Result<ProxyResponse, String> {
+) -> Result<ProxyResponse, ProxyError> {
+    forward_within(
+        port,
+        method,
+        path_and_query,
+        content_type,
+        body,
+        secret,
+        APPLET_READ_TIMEOUT,
+    )
+}
+
+fn forward_within(
+    port: u16,
+    method: &str,
+    path_and_query: &str,
+    content_type: Option<&str>,
+    body: &[u8],
+    secret: Option<&str>,
+    read_timeout: Duration,
+) -> Result<ProxyResponse, ProxyError> {
+    let failed = ProxyError::Failed;
     // The caller encodes; this is the check that it did, because the
     // request below is written by hand.
     if path_and_query
         .bytes()
         .any(|b| matches!(b, b'\r' | b'\n' | b' '))
     {
-        return Err(format!(
+        return Err(failed(format!(
             "refusing to forward a malformed target {path_and_query:?}"
-        ));
+        )));
     }
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
-        .map_err(|e| format!("connect 127.0.0.1:{port}: {e}"))?;
+        .map_err(|e| failed(format!("connect 127.0.0.1:{port}: {e}")))?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .map_err(|e| e.to_string())?;
+        .set_read_timeout(Some(read_timeout))
+        .map_err(|e| failed(e.to_string()))?;
 
     let mut req = format!(
         "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n"
@@ -966,19 +1038,35 @@ pub fn forward(
     req.push_str("\r\n");
     stream
         .write_all(req.as_bytes())
-        .map_err(|e| format!("write request: {e}"))?;
+        .map_err(|e| failed(format!("write request: {e}")))?;
     if !body.is_empty() {
         stream
             .write_all(body)
-            .map_err(|e| format!("write body: {e}"))?;
+            .map_err(|e| failed(format!("write body: {e}")))?;
     }
-    stream.flush().map_err(|e| e.to_string())?;
+    stream.flush().map_err(|e| failed(e.to_string()))?;
 
     let mut raw = Vec::new();
-    stream
-        .read_to_end(&mut raw)
-        .map_err(|e| format!("read response: {e}"))?;
-    parse_response(&raw)
+    if let Err(e) = stream.read_to_end(&mut raw) {
+        return Err(read_error(&e, raw.len(), read_timeout));
+    }
+    parse_response(&raw).map_err(failed)
+}
+
+/// A read timeout reaches us as `WouldBlock` on Unix ("Resource
+/// temporarily unavailable", os error 35 on macOS) and `TimedOut` on
+/// Windows; neither spelling tells a person what happened.
+fn read_error(e: &std::io::Error, got: usize, waited: Duration) -> ProxyError {
+    use std::io::ErrorKind::{TimedOut, WouldBlock};
+    if !matches!(e.kind(), WouldBlock | TimedOut) {
+        return ProxyError::Failed(format!("read response: {e}"));
+    }
+    let secs = waited.as_secs_f64();
+    ProxyError::TimedOut(if got == 0 {
+        format!("did not answer within {secs}s")
+    } else {
+        format!("sent {got} bytes and then nothing for {secs}s")
+    })
 }
 
 fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
@@ -997,18 +1085,55 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| format!("applet response has no status: {status_line:?}"))?;
     let mut content_type = "application/octet-stream".to_string();
+    let mut document = DocumentKind::Data;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-type") {
+            let k = k.trim();
+            if k.eq_ignore_ascii_case("content-type") {
                 content_type = v.trim().to_string();
+            } else if k.eq_ignore_ascii_case(APPLET_DOCUMENT_HEADER) {
+                document = DocumentKind::parse(v.trim()).unwrap_or_default();
             }
         }
     }
     Ok(ProxyResponse {
         status,
         content_type,
+        document,
         body,
     })
+}
+
+/// Logs one line an applet wrote as this server's line about it, the way
+/// the runner relays a step's: a tracing-JSON line at its own level, with
+/// the applet's target and fields beside it; anything else at `info`.
+fn relay_applet_line(id: &str, line: &str) {
+    use datalib_dag::events::LogLevel;
+    let Some(e) = datalib_dag::subprocess::parse_envelope(line) else {
+        tracing::info!(applet = %id, "{line}");
+        return;
+    };
+    let target = e.target.as_deref();
+    let fields = e.fields.map(|f| serde_json::Value::Object(f).to_string());
+    let fields = fields.as_deref();
+    let msg = &e.msg;
+    match e.level {
+        LogLevel::Error => {
+            tracing::error!(applet = %id, applet_target = target, applet_fields = fields, "{msg}")
+        }
+        LogLevel::Warn => {
+            tracing::warn!(applet = %id, applet_target = target, applet_fields = fields, "{msg}")
+        }
+        LogLevel::Info => {
+            tracing::info!(applet = %id, applet_target = target, applet_fields = fields, "{msg}")
+        }
+        LogLevel::Debug => {
+            tracing::debug!(applet = %id, applet_target = target, applet_fields = fields, "{msg}")
+        }
+        LogLevel::Trace => {
+            tracing::trace!(applet = %id, applet_target = target, applet_fields = fields, "{msg}")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1093,10 +1218,83 @@ mod tests {
     #[test]
     fn forward_refuses_an_unencoded_target() {
         let err = match forward(1, "GET", "/x\r\nEvil: 1", None, b"", None) {
-            Err(e) => e,
+            Err(e) => e.to_string(),
             Ok(_) => panic!("a target with CR/LF in it was forwarded"),
         };
         assert!(err.contains("malformed"), "{err}");
+    }
+
+    /// An applet that accepts and then says nothing. The request is read
+    /// before anything is written, so the gateway's write never fails.
+    fn silent_applet(prefix: &'static [u8]) -> (u16, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf);
+            sock.write_all(prefix).unwrap();
+            // Hold the socket open until the gateway hangs up.
+            let _ = sock.read(&mut buf);
+        });
+        (port, handle)
+    }
+
+    /// The error that reached the grid as "read response: Resource
+    /// temporarily unavailable (os error 35)" — the gateway's own read
+    /// timeout, which must say so and be told apart from a failure.
+    #[test]
+    fn a_silent_applet_is_a_timeout_that_says_how_long() {
+        let (port, applet) = silent_applet(b"");
+        let err = forward_within(
+            port,
+            "GET",
+            "/search",
+            None,
+            b"",
+            None,
+            Duration::from_millis(200),
+        )
+        .expect_err("nothing was sent");
+        assert_eq!(
+            err,
+            ProxyError::TimedOut("did not answer within 0.2s".into())
+        );
+        applet.join().unwrap();
+    }
+
+    #[test]
+    fn an_applet_that_stalls_mid_answer_says_how_far_it_got() {
+        let (port, applet) = silent_applet(b"HTTP/1.1 200 OK\r\n");
+        let err = forward_within(
+            port,
+            "GET",
+            "/search",
+            None,
+            b"",
+            None,
+            Duration::from_millis(200),
+        )
+        .expect_err("the answer never finished");
+        assert_eq!(
+            err,
+            ProxyError::TimedOut("sent 17 bytes and then nothing for 0.2s".into())
+        );
+        applet.join().unwrap();
+    }
+
+    /// The applet names a plot page; a name this build does not know,
+    /// or none, leaves it data.
+    #[test]
+    fn the_document_kind_is_read_from_its_header() {
+        let plot =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nx-datalib-document: plot\r\n\r\n<p>";
+        assert_eq!(parse_response(plot).unwrap().document, DocumentKind::Plot);
+        let odd =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nX-Datalib-Document: trusted\r\n\r\n<p>";
+        assert_eq!(parse_response(odd).unwrap().document, DocumentKind::Data);
+        let none = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<p>";
+        assert_eq!(parse_response(none).unwrap().document, DocumentKind::Data);
     }
 
     #[test]

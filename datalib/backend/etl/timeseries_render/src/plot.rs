@@ -1,6 +1,7 @@
 //! Build one self-contained Plotly page per physical quantity.
 
 use anyhow::{Context, Result};
+use datalib_etl_render::html::escape_attr;
 use serde_json::{json, Map, Value};
 
 use crate::units::{Axis, Quantity};
@@ -46,19 +47,31 @@ pub fn standalone_html(quantity: &Quantity, subtitle: &str, traces: &[Trace]) ->
     let spec = json!({
         "data": data,
         "layout": layout_json(quantity, subtitle),
-        "config": {
-            "responsive": true,
-            "displaylogo": false,
-            "scrollZoom": true,
-            "toImageButtonOptions": {"filename": quantity.key, "format": "png", "scale": 2},
-        },
+        "config": figure_config(quantity.key),
     });
-    let spec_json = escape_json_for_html(
-        &serde_json::to_string(&spec).context("serialize plotly figure spec")?,
-    );
+    figure_page(quantity.title, &spec)
+}
 
-    let title = html_escape(quantity.title);
-    let notice = html_escape(OFFLINE_NOTICE);
+/// The Plotly `config` every page here uses; `filename` names the PNG
+/// a download saves.
+pub fn figure_config(filename: &str) -> Value {
+    json!({
+        "responsive": true,
+        "displaylogo": false,
+        "scrollZoom": true,
+        "toImageButtonOptions": {"filename": filename, "format": "png", "scale": 2},
+    })
+}
+
+/// A self-contained page drawing the Plotly figure `spec` (its `data`,
+/// `layout` and `config`), under the page title `title`. The figure is
+/// inlined, so the page works opened straight off disk; only Plotly
+/// itself comes from the CDN, and the page says so when it can't.
+pub fn figure_page(title: &str, spec: &Value) -> Result<String> {
+    let spec_json =
+        escape_json_for_html(&serde_json::to_string(spec).context("serialize plotly figure spec")?);
+    let title = escape_attr(title);
+    let notice = escape_attr(OFFLINE_NOTICE);
     Ok(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -100,8 +113,8 @@ pub fn standalone_html(quantity: &Quantity, subtitle: &str, traces: &[Trace]) ->
 </body>
 </html>
 "#,
-        src = html_escape(PLOTLY_SRC),
-        integrity = html_escape(PLOTLY_INTEGRITY),
+        src = escape_attr(PLOTLY_SRC),
+        integrity = escape_attr(PLOTLY_INTEGRITY),
     ))
 }
 
@@ -166,13 +179,6 @@ fn layout_json(quantity: &Quantity, subtitle: &str) -> Value {
 /// Make a JSON document safe to embed in a `<script>` element.
 pub fn escape_json_for_html(json: &str) -> String {
     json.replace('<', "\\u003c")
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }
 
 #[cfg(test)]

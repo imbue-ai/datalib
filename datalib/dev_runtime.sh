@@ -15,8 +15,8 @@
 #   <stage>/latchkey/<v>/node_modules  -> the latchkey store
 #
 # A caller's own `DATALIB_RUNTIME_DIR` wins. Requires the launching
-# rule to carry `_DEV_RUNTIME_DATA` / `_DEV_RUNTIME_ENV` from
-# datalib/BUILD.bazel; a missing input is fatal rather than a silent
+# rule to carry `DEV_RUNTIME_DATA` / `DEV_RUNTIME_ENV` from
+# datalib/dev_runtime.bzl; a missing input is fatal rather than a silent
 # fall-through, for the same reason run_e2e.sh makes it fatal.
 #
 # Also names the checkout's commit for the binaries (`DATALIB_GIT_HASH`,
@@ -43,7 +43,7 @@ _rt_need() { # env var holding an rlocationpath, human name
   path="$(rlocation "${!1:-}")" || path=""
   if [[ -z "$path" || ! -e "$path" ]]; then
     echo "ERROR: $2 not in runfiles ($1='${!1:-}')" >&2
-    echo "Did it drop out of _DEV_RUNTIME_DATA / _DEV_RUNTIME_ENV in datalib/BUILD.bazel?" >&2
+    echo "Did it drop out of DEV_RUNTIME_DATA / DEV_RUNTIME_ENV (datalib/dev_runtime.bzl)?" >&2
     exit 1
   fi
   printf '%s' "$path"

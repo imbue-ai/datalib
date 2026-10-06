@@ -27,7 +27,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["process", "sync", "time", "fs", "io-util"] }
 # Same pinned spec as datalib-etl: default content hash for
 # artifact versions when a step doesn't report its own.
-blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
+blake3 = { version = "1", default-features = false, features = ["std", "rayon"] }
 tracing = "0.1"
 # The binary's own lines go into the run store through
 # `datalib_runs::StoreLayer`; the filter is `RUST_LOG`'s grammar.

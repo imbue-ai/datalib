@@ -6,36 +6,27 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_pdf_config::PdfRenderConfig;
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
-use std::path::PathBuf;
+use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use std::path::Path;
 
 pub fn plan_render(
     ctx: PlanContext,
     config: PdfRenderConfig,
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
-    let name = ctx.name;
-    Ok(vec![Box::new(PdfRender {
-        id: format!("pdf/{name}/render"),
-        raw_path: config.common.raw_path().to_path_buf(),
-    })])
+    Ok(plan_source_render(ctx, config.common.raw_path(), PdfRender))
 }
 
-struct PdfRender {
-    id: String,
-    raw_path: PathBuf,
-}
+struct PdfRender;
 
 #[async_trait]
-impl RenderProcessor for PdfRender {
-    fn id(&self) -> &str {
-        &self.id
+impl SourceRender for PdfRender {
+    const PROVIDER: &'static str = "pdf";
+
+    fn render_version(&self) -> u32 {
+        crate::render::RENDER_VERSION
     }
 
-    fn render_version(&self) -> Option<u32> {
-        Some(crate::render::RENDER_VERSION)
-    }
-
-    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+    async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         let out_dir = datalib_etl::layout::render_markdown_root(ctx.root, ctx.name);
         // Load first, render second: the document sink borrows `ctx`
         // and is not `Send`, so it must not be alive across an await.
@@ -45,7 +36,7 @@ impl RenderProcessor for PdfRender {
             targets,
             scan_meta_id,
             scan,
-        }) = render::load(&self.raw_path, ctx.raw_range())
+        }) = render::load(raw_path, ctx.raw_range())
             .await
             .context("pdf load render targets")?
         else {
@@ -77,7 +68,7 @@ impl RenderProcessor for PdfRender {
         let s = render::render_targets(&to_render, &out_dir, ctx.name, ctx.progress, &mut on_doc)
             .context("pdf render")?;
         for (doc_uuid, error) in &s.failures {
-            ctx.report_document_failed(doc_uuid, error, self.render_version())?;
+            ctx.report_document_failed(doc_uuid, error, Some(self.render_version()))?;
         }
 
         // Every document this run looked at is declared with nothing —

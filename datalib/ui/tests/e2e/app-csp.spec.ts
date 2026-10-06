@@ -8,7 +8,7 @@
 // likely to regress.
 
 import { test, expect, type Page } from "@playwright/test";
-import { SEARCH_ROWS, TABLE_ROWS, firstRowUuid, selectRowByUuid } from "./grid-helpers";
+import { GRID, SEARCH_ROWS, TABLE_ROWS, firstRowUuid, selectRowByUuid } from "./grid-helpers";
 
 declare global {
   interface Window {
@@ -38,7 +38,7 @@ test("no screen violates the page's CSP", async ({ page, context }) => {
 
   // The grid, then a document opened from it: card source evaluated,
   // rendered markdown sanitized and mounted in a shadow root.
-  await page.goto("/");
+  await page.goto(GRID);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
   await selectRowByUuid(page, await firstRowUuid(page));
   await expect(page.locator(".chat-preview")).toBeVisible();

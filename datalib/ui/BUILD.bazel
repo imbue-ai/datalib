@@ -1,5 +1,6 @@
 load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
 load("@aspect_rules_js//js:defs.bzl", "js_run_binary")
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//datalib/ui:prettier/package_json.bzl", prettier_bin = "bin")
 load("@npm//datalib/ui:vite/package_json.bzl", vite_bin = "bin")
@@ -7,6 +8,7 @@ load("@npm//datalib/ui:vitest/package_json.bzl", vitest_bin = "bin")
 load("@npm//datalib/ui:vue-tsc/package_json.bzl", vue_tsc_bin = "bin")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//datalib:dev_runtime.bzl", "DEV_RUNTIME_DATA", "DEV_RUNTIME_ENV")
 
 # Materializes the npm dep graph from pnpm-lock.yaml into a virtual
 # node_modules/ tree backing the js_run_binary action below.
@@ -241,12 +243,11 @@ sh_test(
     deps = _E2E_DEPS,
     # Needs network (Playwright fetches any missing browser binary —
     # chromium and webkit) and the host's pnpm / node / Playwright
-    # cache, hence `no-sandbox` + `requires-network`. Do NOT re-add the `external` tag: this is a
-    # routine UI integration test that must run on the default
-    # `bazel test //...` path (and CI's
-    # `--test_tag_filters=-manual,-external`). `requires-network`
-    # already gates it out of hermetic / offline environments;
-    # `external` would over-exclude.
+    # cache, hence `no-sandbox` + `requires-network`. Do NOT add the
+    # `external` tag: this is a routine UI integration test that must
+    # run on the default `bazel test //...` path, which is what CI runs.
+    # `requires-network` already gates it out of hermetic / offline
+    # runs; `external` would over-exclude.
     #
     # `cpu:4` claims the whole CI runner (ubuntu-latest has four vCPUs):
     # nine backend processes, two browser engines and Playwright's own
@@ -261,8 +262,8 @@ sh_test(
     ],
     # `long` = 900s. NOT decoration: an `sh_test` with no `size` or
     # `timeout` is `medium`, i.e. **300 seconds**, and this suite does
-    # not fit in that. It runs ~69 tests from 26 spec files across two
-    # browser engines behind nine backend processes, and the `warmup`
+    # not fit in that. It runs every spec file across two browser
+    # engines behind nine backend processes, and the `warmup`
     # project alone — qmd's cold model load, paid once for the whole
     # suite — grew to 1.2-1.5 min in qmd 2.8.3.
     #
@@ -302,6 +303,86 @@ sh_test(
         # can only run one engine.
         "E2E_BROWSERS",
     ],
+)
+
+# --- The sign-in suite ----------------------------------------------
+#
+# The wizard's latchkey flows against a real datalib-http and the real
+# pinned latchkey, with the third-party sites, the browser's network and
+# the keychain faked; tests/e2e_auth/README.md has the how. Not on the
+# default `bazel test //...` path (`manual`): it starts a backend and
+# often a Chromium per test. Run it with `bazel run //datalib/ui:e2e_auth`
+# or `bazel test //datalib/ui:e2e_auth_test`; CI runs it from
+# .github/workflows/latchkey-auth.yml.
+
+copy_to_bin(
+    name = "e2e_auth_inputs",
+    srcs = [
+        "package.json",
+        "playwright.auth.config.ts",
+        "tsconfig.json",
+    ] + glob(["tests/e2e_auth/**/*"], allow_empty = False),
+)
+
+_E2E_AUTH_DATA = [
+    "//datalib/backend/http:datalib_http_bin",
+    "//datalib/backend/datalib_step:datalib_step",
+    # The router and its impersonating curl, side by side as they ship;
+    # the suite's curl hands every request to the real router.
+    "//third-party/latchkey-curl-shims:curl_impersonate",
+    "//third-party/latchkey-curl-shims:latchkey_curl_router",
+    # The Garmin plugin, as a person's own copy; the env names it by
+    # its package.json, which has to be listed itself.
+    "//third-party/latchkey-garmin:package.json",
+    "//third-party/latchkey-garmin:plugin",
+    ":node_modules",
+    ":e2e_auth_inputs",
+] + DEV_RUNTIME_DATA
+
+_E2E_AUTH_ENV = dict(
+    DEV_RUNTIME_ENV,
+    DATALIB_TEST_AUTH_HTTP_BIN_RLOC = "$(rlocationpath //datalib/backend/http:datalib_http_bin)",
+    DATALIB_TEST_AUTH_STEP_BIN_RLOC = "$(rlocationpath //datalib/backend/datalib_step:datalib_step)",
+    DATALIB_TEST_AUTH_ROUTER_RLOC = "$(rlocationpath //third-party/latchkey-curl-shims:latchkey_curl_router)",
+    DATALIB_TEST_AUTH_GARMIN_PLUGIN_RLOC = "$(rlocationpath //third-party/latchkey-garmin:package.json)",
+)
+
+sh_binary(
+    name = "e2e_auth",
+    srcs = ["run_e2e_auth.sh"],
+    data = _E2E_AUTH_DATA,
+    env = _E2E_AUTH_ENV,
+    deps = _E2E_DEPS,
+)
+
+sh_test(
+    name = "e2e_auth_test",
+    srcs = ["run_e2e_auth.sh"],
+    data = _E2E_AUTH_DATA,
+    env = _E2E_AUTH_ENV,
+    deps = _E2E_DEPS,
+    # `requires-network` and HOME for the same reason as :e2e_test:
+    # Playwright's Chromium is not a Bazel input. PATH for `openssl` and
+    # `curl`, which the fakes run.
+    env_inherit = [
+        "HOME",
+        "PATH",
+    ],
+    tags = [
+        "cpu:4",
+        "manual",
+        "no-remote-exec",
+        "no-sandbox",
+        "requires-network",
+    ],
+    timeout = "long",
+)
+
+# `:e2e_auth_test` is `manual`, so nothing in `//...` would notice it
+# stop building.
+build_test(
+    name = "manual_targets_build",
+    targets = [":e2e_auth_test"],
 )
 
 # --- Hermetic TypeScript typecheck -----------------------------------
@@ -414,6 +495,16 @@ copy_to_bin(
 # Left alone, vitest forks a jsdom worker per host core regardless of
 # what bazel budgeted it, which on a four-vCPU CI runner meant this
 # ~7s suite took 85-96s whenever the e2e suite ran beside it.
+# What every shared renderer writes when its plain-text fields hold HTML
+# and markdown, for `tests/hostile_text.test.ts` to render through the
+# app's own markdown-it and sanitizer. It lands beside that test.
+genrule(
+    name = "hostile_samples",
+    srcs = ["//datalib/backend/etl/hostile_samples:render_hostile_samples"],
+    outs = ["tests/hostile_samples.json"],
+    cmd = "$(location //datalib/backend/etl/hostile_samples:render_hostile_samples) $@ >/dev/null",
+)
+
 vitest_bin.vitest_test(
     name = "unit_test",
     args = [
@@ -422,6 +513,7 @@ vitest_bin.vitest_test(
     ],
     chdir = package_name(),
     data = [
+        ":hostile_samples",
         ":node_modules",
         ":vitest_inputs",
     ],
@@ -454,10 +546,11 @@ copy_to_bin(
 copy_to_bin(
     name = "render_preview_sources",
     srcs = [
-        "src/App.vue",
+        "src/theme.css",
         "src/cards/ChatBody.ce.vue",
         "src/cards/DocCard.ce.vue",
         "src/cards/chatSections.js",
+        "src/cards/documentBody.css",
     ],
 )
 

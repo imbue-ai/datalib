@@ -13,6 +13,7 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use datalib_etl::download_problems;
+use datalib_etl::run_problems::RunProblems;
 
 pub use db::{db_path_for, RawDb};
 
@@ -56,6 +57,8 @@ pub struct FetchSummary {
     pub events_deleted: usize,
     /// `.ics` files whose contents had not moved since the last run.
     pub files_skipped: usize,
+    /// `.ics` files that are gone, their calendars with them.
+    pub files_removed: usize,
     pub errors: usize,
     pub requests: usize,
 }
@@ -63,12 +66,13 @@ pub struct FetchSummary {
 impl FetchSummary {
     pub fn line(&self) -> String {
         format!(
-            "calendars={} new={} updated={} deleted={} files_skipped={} errors={} requests={}",
+            "calendars={} new={} updated={} deleted={} files_skipped={} files_removed={} errors={} requests={}",
             self.calendars,
             self.events_new,
             self.events_updated,
             self.events_deleted,
             self.files_skipped,
+            self.files_removed,
             self.errors,
             self.requests,
         )
@@ -80,14 +84,14 @@ impl FetchSummary {
 /// matches nothing is reported and costs only itself — unless nothing
 /// matches at all, which fails the run rather than falling back to
 /// every calendar the filter was there to exclude.
-pub async fn select_calendars<'a>(
-    db: &RawDb,
+pub fn select_calendars<'a>(
+    problems: &RunProblems,
     configured: &[String],
     available: impl Iterator<Item = (&'a String, Option<&'a str>)>,
 ) -> Result<HashSet<String>> {
     let available: Vec<(&String, Option<&str>)> = available.collect();
     if configured.is_empty() {
-        download_problems::report(db.pool(), &[]).await;
+        problems.config([]);
         return Ok(available.iter().map(|(id, _)| (*id).clone()).collect());
     }
     let names = || {
@@ -114,8 +118,9 @@ pub async fn select_calendars<'a>(
                 )
             })
     });
-    download_problems::report(db.pool(), &resolution.problems).await;
-    if resolution.nothing_resolved() {
+    let nothing_resolved = resolution.nothing_resolved();
+    problems.config(resolution.problems);
+    if nothing_resolved {
         anyhow::bail!(
             "none of the configured calendars ({}) exists; the account has {}",
             configured.join(", "),

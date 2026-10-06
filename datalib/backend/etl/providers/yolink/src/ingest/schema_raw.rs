@@ -9,7 +9,7 @@ use sqlx::Sqlite;
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
-pub const DATA_TABLES: &[&str] = &["yolink_devices", "yolink_readings"];
+pub const DATA_TABLES: &[&str] = &["yolink_devices", "yolink_readings", "yolink_windows"];
 
 /// `yolink_devices` — one row per configured device, carrying its
 /// per-device config snapshot plus the high-water cursor used to
@@ -97,6 +97,31 @@ pub const YOLINK_READINGS_BY_DEVICE_TS_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS yolink_readings_by_device_ts
         ON yolink_readings(device_name, ts_ms)";
 
+/// `yolink_windows` — one row per history window whose fetch failed and
+/// has not since succeeded. The walk's resume point is the newest stored
+/// reading, so a window that failed behind it is asked for again only
+/// because it is here; a window that fetches is deleted.
+pub const YOLINK_WINDOWS_DDL: &str = "CREATE TABLE IF NOT EXISTS yolink_windows (
+    id TEXT PRIMARY KEY,
+    device_name TEXT NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL
+)";
+
+pub const YOLINK_WINDOWS_TABLE: &str = "yolink_windows";
+
+pub fn window_id_recipe(device_name: &str, start_ms: i64, end_ms: i64) -> String {
+    format!("{device_name}#{start_ms}#{end_ms}")
+}
+
+/// The device a [`window_id_recipe`] id belongs to. A device name may
+/// itself hold `#`; the two numbers after it cannot.
+pub fn device_of_window_id(id: &str) -> Option<&str> {
+    let mut parts = id.rsplitn(3, '#');
+    let (_end, _start) = (parts.next()?, parts.next()?);
+    parts.next()
+}
+
 /// Recipe for the synthesized [`YOLINK_READINGS_DDL`] primary key.
 pub fn reading_id_recipe(device_name: &str, ts_ms: i64, metric: &str) -> String {
     format!("{device_name}#{ts_ms}#{metric}")
@@ -111,6 +136,7 @@ pub fn full_ddl() -> Vec<String> {
         YOLINK_DEVICES_DDL.to_string(),
         YolinkReadingRow::ddl(),
         YOLINK_READINGS_BY_DEVICE_TS_INDEX_DDL.to_string(),
+        YOLINK_WINDOWS_DDL.to_string(),
     ];
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));

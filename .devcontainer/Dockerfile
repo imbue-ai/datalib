@@ -83,7 +83,7 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && test "$(node --version)" = "v${NODE_VERSION}" \
     || { echo "node is $(node --version), not v${NODE_VERSION}: NODE_IMAGE_DIGEST and NODE_VERSION moved apart" >&2; exit 1; } \
     && npm --version
-ARG LATCHKEY_VERSION=3.14.0
+ARG LATCHKEY_VERSION=3.16.2
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}" && npm cache clean --force
 
 # bun — qmd's own dev workflow (`bun install`, `bun src/cli/qmd.ts`).

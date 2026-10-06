@@ -21,8 +21,8 @@
 # `datalib-step`, which reads the function and the group's `type` from
 # the environment. A step's id is composed as `<group>/<function>` and
 # never written; it is what another step's `inputs` name. Two shared
-# fan-in steps under the `unified_index` group index every source's
-# rendered markdown.
+# fan-in steps under the `unified_index` group index every source: one
+# reads its rendered markdown, the other its own qmd search steps.
 #
 # TOML shape: each entry is a `[[groups]]`, `[[steps]]` or `[[applets]]`
 # table, and a step's `params` are `[steps.params.…]` sub-tables. A
@@ -32,9 +32,10 @@
 # `[[…]]` header entirely.
 #
 # Sources that support more than one input mode include a group for
-# each: `email` (JMAP vs. Gmail API vs. Takeout .mbox), `carddav`
-# contacts (CardDAV server vs. local .vcf files) and `calendar` (Google
-# vs. Fastmail vs. another CalDAV server vs. .ics files).
+# each: `email` (JMAP vs. Gmail API vs. Takeout .mbox), `contacts`
+# (Fastmail vs. another CardDAV server vs. local .vcf files) and
+# `calendar` (Google vs. Fastmail vs. another CalDAV server vs. .ics
+# files).
 #
 # A group may also carry a `name = "…"` — free text the UI shows in
 # place of its `id`. It is the renameable half of the identity: the
@@ -58,7 +59,7 @@
 data_root = "~/datalib"  # Base dir; everything is written under here. `~` is expanded.
 
 # Where each source's raw store lives: a source's raw data
-# (entities.doltlite_db + blobs.doltlite_db + the events/ tape) is the
+# (entities.doltlite_db + blobs.sqlite + the events/ tape) is the
 # ingest step's tree, `<data_root>/<group>/ingest/`, and nothing else —
 # the runner versions that tree and the render step reads it by that
 # name. To keep a store on a bigger disk, put a symlink there. This is
@@ -68,20 +69,22 @@ data_root = "~/datalib"  # Base dir; everything is written under here. `~` is ex
 
 # --- Shared index steps -------------------------------------------------
 
-# Every source's rendered markdown feeds these two fan-ins: the SQL
-# index behind the grid UI, and the qmd semantic-search index.
+# The two fan-ins: the SQL index behind the grid UI, fed by every
+# source's rendered markdown, and the qmd aggregator, which runs after
+# every source's `keyword_index` and `embed` and keeps the search index
+# to the sources it names.
 [[groups]]
 id = "unified_index"
 
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "google-calendar/render_markdown", "fastmail-calendar/render_markdown", "icloud-calendar/render_markdown", "ics-calendar/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "fastmail-contacts/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "google-calendar/render_markdown", "fastmail-calendar/render_markdown", "icloud-calendar/render_markdown", "ics-calendar/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "apple-messages/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "google-calendar/render_markdown", "fastmail-calendar/render_markdown", "icloud-calendar/render_markdown", "ics-calendar/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
+function = "qmd_aggregator"
+inputs = ["claude-api/keyword_index", "claude-api/embed", "claude-export/keyword_index", "claude-export/embed", "claude-code/keyword_index", "claude-code/embed", "codex/keyword_index", "codex/embed", "chatgpt/keyword_index", "chatgpt/embed", "slack/keyword_index", "slack/embed", "github/keyword_index", "github/embed", "gitlab/keyword_index", "gitlab/embed", "notion/keyword_index", "notion/embed", "fastmail/keyword_index", "fastmail/embed", "gmail/keyword_index", "gmail/embed", "gmail-takeout/keyword_index", "gmail-takeout/embed", "fastmail-contacts/keyword_index", "fastmail-contacts/embed", "icloud-contacts/keyword_index", "icloud-contacts/embed", "vcard-contacts/keyword_index", "vcard-contacts/embed", "google-calendar/keyword_index", "google-calendar/embed", "fastmail-calendar/keyword_index", "fastmail-calendar/embed", "icloud-calendar/keyword_index", "icloud-calendar/embed", "ics-calendar/keyword_index", "ics-calendar/embed", "beeper/keyword_index", "beeper/embed", "perseus/keyword_index", "perseus/embed", "yolink/keyword_index", "yolink/embed", "garmin/keyword_index", "garmin/embed", "ship-air/keyword_index", "ship-air/embed", "signal/keyword_index", "signal/embed", "whatsapp/keyword_index", "whatsapp/embed", "facebook/keyword_index", "facebook/embed", "linkedin/keyword_index", "linkedin/embed", "google-takeout/keyword_index", "google-takeout/embed", "sms-backup-restore/keyword_index", "sms-backup-restore/embed", "pdfs/keyword_index", "pdfs/embed", "apple-messages/keyword_index", "apple-messages/embed"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -117,6 +120,16 @@ group = "claude-api"
 function = "render_markdown"
 inputs = ["claude-api/ingest"]
 
+[[steps]]
+group = "claude-api"
+function = "keyword_index"
+inputs = ["claude-api/render_markdown"]
+
+[[steps]]
+group = "claude-api"
+function = "embed"
+inputs = ["claude-api/keyword_index"]
+
 # An unpacked Claude data export already on disk: the same `claude`
 # type, with `export` as the method instead of `api`. No network and no
 # credentials — the ingest step just reads the export's JSON and writes
@@ -142,6 +155,16 @@ path = "~/backups/claude-export"
 group = "claude-export"
 function = "render_markdown"
 inputs = ["claude-export/ingest"]
+
+[[steps]]
+group = "claude-export"
+function = "keyword_index"
+inputs = ["claude-export/render_markdown"]
+
+[[steps]]
+group = "claude-export"
+function = "embed"
+inputs = ["claude-export/keyword_index"]
 
 # --- Claude Code --------------------------------------------------------
 
@@ -172,6 +195,16 @@ inputs = ["claude-code/ingest"]
 [steps.params]
 max_tool_result_bytes = 16384
 
+[[steps]]
+group = "claude-code"
+function = "keyword_index"
+inputs = ["claude-code/render_markdown"]
+
+[[steps]]
+group = "claude-code"
+function = "embed"
+inputs = ["claude-code/keyword_index"]
+
 # --- Codex --------------------------------------------------------------
 
 # Codex CLI threads, read off the store Codex itself keeps on this
@@ -200,6 +233,16 @@ inputs = ["codex/ingest"]
 [steps.params]
 max_tool_result_bytes = 16384
 
+[[steps]]
+group = "codex"
+function = "keyword_index"
+inputs = ["codex/render_markdown"]
+
+[[steps]]
+group = "codex"
+function = "embed"
+inputs = ["codex/keyword_index"]
+
 # --- ChatGPT ------------------------------------------------------------
 
 # ChatGPT conversation mirror. Credentials via latchkey.
@@ -222,6 +265,16 @@ sleep_between = 0.5    # seconds between requests (be polite)
 group = "chatgpt"
 function = "render_markdown"
 inputs = ["chatgpt/ingest"]
+
+[[steps]]
+group = "chatgpt"
+function = "keyword_index"
+inputs = ["chatgpt/render_markdown"]
+
+[[steps]]
+group = "chatgpt"
+function = "embed"
+inputs = ["chatgpt/keyword_index"]
 
 # --- Slack --------------------------------------------------------------
 
@@ -279,7 +332,7 @@ dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12D
                             # already have history, to pick up edits and
                             # reactions. NOT a range bound — it only adds
                             # work on top of the walk from `since`. Unset
-                            # here means no refresh pass.
+                            # is 30; 0 turns the pass off.
                             #
                             # It is also the only way we notice a DELETED
                             # message: Slack has no tombstones, so a
@@ -292,6 +345,16 @@ dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12D
 group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
+
+[[steps]]
+group = "slack"
+function = "keyword_index"
+inputs = ["slack/render_markdown"]
+
+[[steps]]
+group = "slack"
+function = "embed"
+inputs = ["slack/keyword_index"]
 
 # --- GitHub -------------------------------------------------------------
 
@@ -318,6 +381,16 @@ group = "github"
 function = "render_markdown"
 inputs = ["github/ingest"]
 
+[[steps]]
+group = "github"
+function = "keyword_index"
+inputs = ["github/render_markdown"]
+
+[[steps]]
+group = "github"
+function = "embed"
+inputs = ["github/keyword_index"]
+
 # --- GitLab -------------------------------------------------------------
 
 # GitLab MR mirror. Credentials via latchkey. `merge_requests` entries
@@ -341,6 +414,16 @@ merge_requests = [
 group = "gitlab"
 function = "render_markdown"
 inputs = ["gitlab/ingest"]
+
+[[steps]]
+group = "gitlab"
+function = "keyword_index"
+inputs = ["gitlab/render_markdown"]
+
+[[steps]]
+group = "gitlab"
+function = "embed"
+inputs = ["gitlab/keyword_index"]
 
 # --- Notion -------------------------------------------------------------
 
@@ -387,6 +470,16 @@ group = "notion"
 function = "render_markdown"
 inputs = ["notion/ingest"]
 
+[[steps]]
+group = "notion"
+function = "keyword_index"
+inputs = ["notion/render_markdown"]
+
+[[steps]]
+group = "notion"
+function = "embed"
+inputs = ["notion/keyword_index"]
+
 # --- Email: two input modes ---------------------------------------------
 
 # Mode A — JMAP server (Fastmail or any RFC 8620/8621 server). The
@@ -429,6 +522,16 @@ outlink_format = "fastmail"
 # whole account but only render two branches:
 #   only_render_labels = ["Inbox", "Work/Projects"]
 only_render_labels = []
+
+[[steps]]
+group = "fastmail"
+function = "keyword_index"
+inputs = ["fastmail/render_markdown"]
+
+[[steps]]
+group = "fastmail"
+function = "embed"
+inputs = ["fastmail/keyword_index"]
 
 # Mode B — Gmail REST API, for a Gmail account. The mode that needs the
 # least setup of any source in this file: latchkey has a built-in
@@ -494,6 +597,16 @@ inputs = ["gmail/ingest"]
 outlink_format = "gmail"
 only_render_labels = []
 
+[[steps]]
+group = "gmail"
+function = "keyword_index"
+inputs = ["gmail/render_markdown"]
+
+[[steps]]
+group = "gmail"
+function = "embed"
+inputs = ["gmail/keyword_index"]
+
 # Mode C — Google Takeout .mbox on disk. The `mbox` table selects it:
 # `path` is the file, and the rest labels the synthesized account row.
 [[groups]]
@@ -510,13 +623,9 @@ function = "ingest"
 # paths for nested labels). Exact match, union across labels;
 # empty = everything.
 only_extract_labels = []          # ingest only messages carrying these labels
-
-[steps.params.common]
-# The .mbox is a complete snapshot, so a message that is no longer in it
-# was deleted. Wipe the entity tables before each ingest and rewrite them
-# from the file, and the deletion falls out. The old rows stay in doltlite
-# history, so `dolt_diff` can still show you what went.
-always_clear_before_ingest = true
+# The .mbox is a complete snapshot: a message a newer export no longer
+# carries, or one only a deleted .mbox held, leaves the mirror on the next
+# sync. The old rows stay in doltlite history.
 
 [steps.params.mbox]
 path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
@@ -533,11 +642,47 @@ inputs = ["gmail-takeout/ingest"]
 outlink_format = "gmail"   # render each message's `↗` outlink to Gmail
 only_render_labels = []    # render only threads touching these labels; empty = all
 
-# --- Contacts: two input modes ------------------------------------------
+[[steps]]
+group = "gmail-takeout"
+function = "keyword_index"
+inputs = ["gmail-takeout/render_markdown"]
 
-# Mode A — CardDAV server. The `carddav` table selects it; `server_url`
-# is required. Credentials via latchkey. Omit `addressbooks` to sync
-# every addressbook under the principal.
+[[steps]]
+group = "gmail-takeout"
+function = "embed"
+inputs = ["gmail-takeout/keyword_index"]
+
+# --- Contacts: three input modes ----------------------------------------
+
+# Mode A — Fastmail. The `fastmail` table selects it: CardDAV at
+# Fastmail's own address, with the app password latchkey holds as
+# `fastmail-dav`. Omit `addressbooks` to sync every address book.
+[[groups]]
+id = "fastmail-contacts"
+type = "contacts"
+
+[[steps]]
+group = "fastmail-contacts"
+function = "ingest"
+[steps.params.fastmail]
+
+[[steps]]
+group = "fastmail-contacts"
+function = "render_markdown"
+inputs = ["fastmail-contacts/ingest"]
+
+[[steps]]
+group = "fastmail-contacts"
+function = "keyword_index"
+inputs = ["fastmail-contacts/render_markdown"]
+
+[[steps]]
+group = "fastmail-contacts"
+function = "embed"
+inputs = ["fastmail-contacts/keyword_index"]
+
+# Mode B — any other CardDAV server. The `carddav` table selects it;
+# `server_url` is required. Credentials via latchkey.
 [[groups]]
 id = "icloud-contacts"
 type = "contacts"
@@ -554,7 +699,17 @@ group = "icloud-contacts"
 function = "render_markdown"
 inputs = ["icloud-contacts/ingest"]
 
-# Mode B — local vCard files. The `vcf` table selects it: `.vcf` files
+[[steps]]
+group = "icloud-contacts"
+function = "keyword_index"
+inputs = ["icloud-contacts/render_markdown"]
+
+[[steps]]
+group = "icloud-contacts"
+function = "embed"
+inputs = ["icloud-contacts/keyword_index"]
+
+# Mode C — local vCard files. The `vcf` table selects it: `.vcf` files
 # are read from the directory at its `path`.
 [[groups]]
 id = "vcard-contacts"
@@ -565,16 +720,23 @@ group = "vcard-contacts"
 function = "ingest"
 [steps.params.vcf]
 path = "~/backups/contacts_vcf"
-[steps.params.common]
-# The directory is the whole address book, so a `.vcf` that is gone means
-# the contact is gone. (CardDAV mode above doesn't need this: the server
-# reports deletions itself.)
-always_clear_before_ingest = true
+# Each `.vcf` is an address book: a card a file no longer carries, or every
+# card of a file that is gone, leaves the mirror on the next sync.
 
 [[steps]]
 group = "vcard-contacts"
 function = "render_markdown"
 inputs = ["vcard-contacts/ingest"]
+
+[[steps]]
+group = "vcard-contacts"
+function = "keyword_index"
+inputs = ["vcard-contacts/render_markdown"]
+
+[[steps]]
+group = "vcard-contacts"
+function = "embed"
+inputs = ["vcard-contacts/keyword_index"]
 
 # --- Calendar: four input modes -----------------------------------------
 
@@ -600,6 +762,16 @@ group = "google-calendar"
 function = "render_markdown"
 inputs = ["google-calendar/ingest"]
 
+[[steps]]
+group = "google-calendar"
+function = "keyword_index"
+inputs = ["google-calendar/render_markdown"]
+
+[[steps]]
+group = "google-calendar"
+function = "embed"
+inputs = ["google-calendar/keyword_index"]
+
 # Mode B — Fastmail, over CalDAV. Credentials via latchkey's built-in
 # `fastmail-dav` service, which holds an app password.
 [[groups]]
@@ -616,6 +788,16 @@ calendars = ["Work", "Home"]
 group = "fastmail-calendar"
 function = "render_markdown"
 inputs = ["fastmail-calendar/ingest"]
+
+[[steps]]
+group = "fastmail-calendar"
+function = "keyword_index"
+inputs = ["fastmail-calendar/render_markdown"]
+
+[[steps]]
+group = "fastmail-calendar"
+function = "embed"
+inputs = ["fastmail-calendar/keyword_index"]
 
 # Mode C — any other CalDAV server. `server_url` is where discovery
 # starts; the host's `/.well-known/caldav` is tried when it does not
@@ -635,6 +817,16 @@ group = "icloud-calendar"
 function = "render_markdown"
 inputs = ["icloud-calendar/ingest"]
 
+[[steps]]
+group = "icloud-calendar"
+function = "keyword_index"
+inputs = ["icloud-calendar/render_markdown"]
+
+[[steps]]
+group = "icloud-calendar"
+function = "embed"
+inputs = ["icloud-calendar/keyword_index"]
+
 # Mode D — a folder of `.ics` files: Google Takeout's `Calendar/`, an
 # Apple Calendar export. Each file is one calendar.
 [[groups]]
@@ -651,6 +843,16 @@ path = "~/Downloads/Takeout/Calendar"
 group = "ics-calendar"
 function = "render_markdown"
 inputs = ["ics-calendar/ingest"]
+
+[[steps]]
+group = "ics-calendar"
+function = "keyword_index"
+inputs = ["ics-calendar/render_markdown"]
+
+[[steps]]
+group = "ics-calendar"
+function = "embed"
+inputs = ["ics-calendar/keyword_index"]
 
 # --- Beeper -------------------------------------------------------------
 
@@ -678,6 +880,16 @@ inputs = ["beeper/ingest"]
 [steps.params]
 period = "month"   # month (default) | day | year | all — span of each rendered doc
 
+[[steps]]
+group = "beeper"
+function = "keyword_index"
+inputs = ["beeper/render_markdown"]
+
+[[steps]]
+group = "beeper"
+function = "embed"
+inputs = ["beeper/keyword_index"]
+
 # --- Perseus Digital Library --------------------------------------------
 
 # TEI editions from PerseusDL/canonical-greekLit. The `github` table
@@ -700,6 +912,16 @@ group = "perseus"
 function = "render_markdown"
 inputs = ["perseus/ingest"]
 [steps.params]
+
+[[steps]]
+group = "perseus"
+function = "keyword_index"
+inputs = ["perseus/render_markdown"]
+
+[[steps]]
+group = "perseus"
+function = "embed"
+inputs = ["perseus/keyword_index"]
 # alignment_pairs = [   # edition pairs to sentence-align, e.g.
 #   ["perseus-grc2", "perseus-eng2"],
 # ]
@@ -738,12 +960,22 @@ device_udid = "fedcba9876543210fedcba9876543210"
 # `plots/`, iframed from the page; they load Plotly from cdn.plot.ly, so
 # viewing them needs network access (the data itself is inlined).
 #
-# Because there is one page, incrementality is just the raw store's HEAD:
-# if the download step appended nothing, the render is a no-op. No knobs.
+# The page names the raw tables it reads as a whole; if none of them
+# changed since the last render, the render is a no-op. No knobs.
 [[steps]]
 group = "yolink"
 function = "render_markdown"
 inputs = ["yolink/ingest"]
+
+[[steps]]
+group = "yolink"
+function = "keyword_index"
+inputs = ["yolink/render_markdown"]
+
+[[steps]]
+group = "yolink"
+function = "embed"
+inputs = ["yolink/keyword_index"]
 
 # --- Garmin Connect -----------------------------------------------------
 
@@ -754,10 +986,10 @@ inputs = ["yolink/ingest"]
 # scores), weigh-ins, activities with their original FIT files, devices,
 # personal records, gear, badges, workouts and goals.
 #
-# Not a latchkey service. Sign in once with `datalib-step login garmin`
-# (email, password, emailed MFA code); it writes an OAuth1 token that
-# lasts about a year under `token_dir`, and the ingest step mints the
-# hourly bearer from it on its own. A token from garth works too.
+# Through latchkey's Garmin plugin, which the Add a source dialog installs
+# on the first sign-in. From a terminal, with the plugin in place:
+# `latchkey auth browser garmin`, or `latchkey auth set-nocurl garmin
+# ~/.garth` to import a token garth wrote. The sign-in lasts about a year.
 [[groups]]
 id = "garmin"
 type = "garmin"
@@ -769,7 +1001,6 @@ function = "ingest"
 [steps.params.api]
 since = "2024-01-01"       # earliest day to mirror; default a year back. Quote it:
                            # a bare date is a TOML date, not the string validated here
-# token_dir = "~/.garth"   # where the login put oauth1_token.json (default)
 # refresh_days = 7         # trailing days re-fetched every run (late syncs, recomputed sleep)
 # metrics = ["daily_summary", "sleep", "hrv"]  # a subset of the per-day metrics
 # activity_files = true    # each activity's original FIT file, into the blob store
@@ -782,6 +1013,16 @@ since = "2024-01-01"       # earliest day to mirror; default a year back. Quote 
 group = "garmin"
 function = "render_markdown"
 inputs = ["garmin/ingest"]
+
+[[steps]]
+group = "garmin"
+function = "keyword_index"
+inputs = ["garmin/render_markdown"]
+
+[[steps]]
+group = "garmin"
+function = "embed"
+inputs = ["garmin/keyword_index"]
 # --- AirVisual (IQAir) monitors -----------------------------------------
 
 # AirVisual Pros' own history files, read off each unit's Samba share
@@ -820,6 +1061,16 @@ group = "ship-air"
 function = "render_markdown"
 inputs = ["ship-air/ingest"]
 
+[[steps]]
+group = "ship-air"
+function = "keyword_index"
+inputs = ["ship-air/render_markdown"]
+
+[[steps]]
+group = "ship-air"
+function = "embed"
+inputs = ["ship-air/keyword_index"]
+
 # --- Signal (Android backup) --------------------------------------------
 
 # Decrypts the newest `signal-backup-*` snapshot under `backup.path`
@@ -846,6 +1097,16 @@ function = "render_markdown"
 inputs = ["signal/ingest"]
 [steps.params]
 period = "month"   # month (default) | day | year | all — span of each rendered doc
+
+[[steps]]
+group = "signal"
+function = "keyword_index"
+inputs = ["signal/render_markdown"]
+
+[[steps]]
+group = "signal"
+function = "embed"
+inputs = ["signal/keyword_index"]
 
 # --- WhatsApp (Android crypt15 backup) ----------------------------------
 
@@ -875,6 +1136,16 @@ group = "whatsapp"
 function = "render_markdown"
 inputs = ["whatsapp/ingest"]
 
+[[steps]]
+group = "whatsapp"
+function = "keyword_index"
+inputs = ["whatsapp/render_markdown"]
+
+[[steps]]
+group = "whatsapp"
+function = "embed"
+inputs = ["whatsapp/keyword_index"]
+
 # --- Facebook (data export) ---------------------------------------------
 
 # File-backed: point `export.path` at an unzipped "Download your
@@ -899,6 +1170,16 @@ path = "~/backups/Facebook"
 group = "facebook"
 function = "render_markdown"
 inputs = ["facebook/ingest"]
+
+[[steps]]
+group = "facebook"
+function = "keyword_index"
+inputs = ["facebook/render_markdown"]
+
+[[steps]]
+group = "facebook"
+function = "embed"
+inputs = ["facebook/keyword_index"]
 
 # --- LinkedIn (data export) ---------------------------------------------
 
@@ -935,6 +1216,16 @@ group = "linkedin"
 function = "render_markdown"
 inputs = ["linkedin/ingest"]
 
+[[steps]]
+group = "linkedin"
+function = "keyword_index"
+inputs = ["linkedin/render_markdown"]
+
+[[steps]]
+group = "linkedin"
+function = "embed"
+inputs = ["linkedin/keyword_index"]
+
 # --- Google Takeout (data export) ---------------------------------------
 
 # File-backed: point `export.path` at the unzipped Google Takeout root
@@ -957,13 +1248,11 @@ type = "google_takeout"
 group = "google-takeout"
 function = "ingest"
 
-[steps.params.common]
-# Each Takeout is a complete snapshot of the feeds it covers — so point
-# this at a full export, not one you requested a single product from, or
-# the wipe drops what the narrower export simply doesn't mention.
-always_clear_before_ingest = true
-
 [steps.params.export]
+# Each Takeout is a complete snapshot of the products you ticked: a record
+# a newer export no longer holds leaves the mirror on the next sync, and
+# the old rows stay in doltlite history. A product missing from the export
+# altogether deletes nothing — it reads as "not requested this time".
 path = "~/backups/Takeout"
 google_chat = true                # DMs + bots + attachments → Markdown
 google_voice = true               # texts, voicemails, calls → Markdown
@@ -979,6 +1268,16 @@ gemini_apps = false               # raw store only
 group = "google-takeout"
 function = "render_markdown"
 inputs = ["google-takeout/ingest"]
+
+[[steps]]
+group = "google-takeout"
+function = "keyword_index"
+inputs = ["google-takeout/render_markdown"]
+
+[[steps]]
+group = "google-takeout"
+function = "embed"
+inputs = ["google-takeout/keyword_index"]
 
 # --- SMS Backup & Restore (Android export) ------------------------------
 
@@ -996,15 +1295,23 @@ group = "sms-backup-restore"
 function = "ingest"
 [steps.params.backup]
 path = "~/backups/SMSBackupRestore"
-[steps.params.common]
-# The export directory is the whole archive, so a message no longer in it
-# was deleted on the phone.
-always_clear_before_ingest = true
+# The directory is the whole archive: a message no backup file still holds
+# leaves the mirror on the next sync.
 
 [[steps]]
 group = "sms-backup-restore"
 function = "render_markdown"
 inputs = ["sms-backup-restore/ingest"]
+
+[[steps]]
+group = "sms-backup-restore"
+function = "keyword_index"
+inputs = ["sms-backup-restore/render_markdown"]
+
+[[steps]]
+group = "sms-backup-restore"
+function = "embed"
+inputs = ["sms-backup-restore/keyword_index"]
 
 # --- fsindex (directory-tree scanner) -----------------------------------
 
@@ -1076,6 +1383,16 @@ group = "pdfs"
 function = "render_markdown"
 inputs = ["pdfs/ingest"]
 
+[[steps]]
+group = "pdfs"
+function = "keyword_index"
+inputs = ["pdfs/render_markdown"]
+
+[[steps]]
+group = "pdfs"
+function = "embed"
+inputs = ["pdfs/keyword_index"]
+
 # --- media (local music / photos / video / playlists) --------------------
 
 # File-backed: point `fswalk.path` at a directory tree. Every audio,
@@ -1139,7 +1456,7 @@ inputs = ["media/ingest"]
 # --- lightroom (Adobe Lightroom Classic catalog backup) -----------------
 
 # File-backed: point `catalog.path` at a `.lrcat`, which is an ordinary
-# SQLite database. Every table is mirrored into the source's doltlite raw
+# SQLite database, or at one of Lightroom's backup `.zip` files. Every table is mirrored into the source's doltlite raw
 # store, and doltlite's content-addressed storage does the deduplication —
 # so re-running after a day of editing stores only the rows that changed,
 # while every prior state stays queryable via `dolt_log`,
@@ -1175,10 +1492,11 @@ function = "ingest"
 # stable_key_columns = ["id_global"]
 #
 # A table with no `id_global` keeps its own declared key (`id_local` for
-# most of them), and a table the source left keyless stays keyless — those
-# are the cloud-sync bookkeeping tables, which have no candidate column at
-# all. doltlite still versions a keyless table, by row multiset, so you see
-# every change; you just see it as added/removed rather than modified.
+# most of them). A table the source gave no `PRIMARY KEY` (mostly the
+# cloud-sync bookkeeping) is keyed on its only UNIQUE index when no row
+# has a NULL in it; otherwise it stays keyless and doltlite
+# diffs it by position, which shows as added/removed/modified runs
+# rather than as edits.
 #
 # Pin a key yourself when you know one the source didn't declare. An empty
 # list forces a table keyless. Be sure before you use this: the key is
@@ -1201,6 +1519,16 @@ function = "ingest"
 # gc = false
 [steps.params.catalog]
 path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
+#
+# Replay a folder of Lightroom's backups as the catalog's history, beside
+# `catalog` or instead of it: each backup (a folder named like
+# `2026-09-27 1650` holding a .zip) becomes one commit, oldest first, dated
+# when it was taken; each sync adds the backups taken since, then mirrors
+# the catalog on top. A backup that turns up late, older than what is
+# already committed, is replayed too, and the newest state goes back on
+# top after it. See INGEST.md §"A folder of backups".
+# [steps.params.backups]
+# path = "~/Pictures/Lightroom/Backups"
 
 # --- apple_photos (Apple Photos library backup) --------------------------
 
@@ -1266,27 +1594,27 @@ path = "~/Pictures/Photos Library.photoslibrary"
 
 # --- apple_messages (the Messages app's own database) --------------------
 
-# File-backed: point `database.path` at Messages' `chat.db`, the SQLite
-# file the app keeps for itself (or a copy of it — an iPhone backup's
-# `3d0d7e5fb2ce288813306e4d4636395e047a3d28` is the same database). The
-# engine is the one apple_photos uses, so the same properties hold, and
-# unlike Photos this one renders: every chat becomes a page a month, with
-# tapbacks on their messages and attachments listed by name. Attachment
-# bytes are not copied — they sit under `~/Library/Messages/Attachments`,
-# which picking `chat.db` grants no access to.
+# File-backed: point `messages.path` at the Messages folder, where the app
+# keeps its SQLite database `chat.db` — or at a `chat.db` file directly (a
+# copy of it; an iPhone backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28`
+# is the same database). The engine is the one apple_photos uses, so the
+# same properties hold, and unlike Photos this one renders: every chat
+# becomes a page a month, with tapbacks on their messages and attachments
+# listed by name. Attachment bytes are not copied.
 # See datalib/backend/etl/providers/apple_messages/INGEST.md.
 #
-# macOS protects `~/Library/Messages`. In the app, choose the file with
+# macOS protects `~/Library/Messages`. In the app, choose the folder with
 # the picker: that is what grants Datalib access (Cmd-Shift-G in the
-# dialog reaches the folder). From a terminal, the terminal needs Full
+# dialog reaches it). Choosing `chat.db` alone is not enough — the
+# snapshot also reads the `chat.db-wal` beside it. From a terminal, the terminal needs Full
 # Disk Access (System Settings → Privacy & Security); an ingest that
 # reports "Operation not permitted" is missing that, not the file.
 [[groups]]
-id = "messages"
+id = "apple-messages"
 type = "apple_messages"
 
 [[steps]]
-group = "messages"
+group = "apple-messages"
 function = "ingest"
 [steps.params]
 # Leave out the app's counters and settings, the Spotlight and CloudKit
@@ -1307,13 +1635,23 @@ function = "ingest"
 #
 # Collect unreachable chunks each run; see lightroom above.
 # gc = false
-[steps.params.database]
-path = "~/Library/Messages/chat.db"
+[steps.params.messages]
+path = "~/Library/Messages"
 
 [[steps]]
-group = "messages"
+group = "apple-messages"
 function = "render_markdown"
-inputs = ["messages/ingest"]
+inputs = ["apple-messages/ingest"]
+
+[[steps]]
+group = "apple-messages"
+function = "keyword_index"
+inputs = ["apple-messages/render_markdown"]
+
+[[steps]]
+group = "apple-messages"
+function = "embed"
+inputs = ["apple-messages/keyword_index"]
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

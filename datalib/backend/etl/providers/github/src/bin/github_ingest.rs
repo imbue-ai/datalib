@@ -1,6 +1,6 @@
 //! `github-ingest` — mirror PRs the user authored / commented on /
-//! was @mentioned in, plus all their comments and reviews. Output is
-//! event-store JSONL under `<out>/<entity>/{created,updated}/events.jsonl`.
+//! was @mentioned in, plus all their comments and reviews, into the
+//! doltlite store at `<out>/entities.doltlite_db`.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -31,7 +31,7 @@ struct Args {
     #[arg(long, default_value_t = 30)]
     refresh_window_days: u32,
 
-    /// Safety cap on PR count.
+    /// Most PRs to fetch this run; the rest are left to later runs.
     #[arg(long)]
     max_prs: Option<usize>,
 
@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
         targets,
         full_sync: args.full,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), datalib_time::IsoOffsetTimestamp::now_local())
     };
 
     let span = info_span!("github_ingest", out = %args.out.display());

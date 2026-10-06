@@ -48,12 +48,17 @@ pub enum ColumnType {
     /// A [`Timeseries`]: its latest value over a sparkline of recent
     /// samples, calibrated across the column.
     Timeseries,
+    /// A [`Quantity`]: one figure, drawn by its unit (`count` as grouped
+    /// digits, `seconds` as "25 min"), a short note in its place when
+    /// there is no figure to give, and the reasoning on hover.
+    Quantity,
     /// An [`Identity`]: something resolved to a label and an icon token
     /// by whoever serves the row, shown as icon + label with the id on
     /// hover.
     Identity,
-    /// A [`Status`]: a glyph for the word, the reason on hover, and a
-    /// bar while it moves.
+    /// A [`Status`]: a glyph for the word, when it got there (relative,
+    /// like a `Timestamp`), the reason on hover, and a bar while it
+    /// moves. Sorts on when.
     Status,
     /// A row of [`Chip`]s.
     Chips,
@@ -91,6 +96,51 @@ pub struct ColumnSpec {
     /// decides what an edit does.
     #[serde(default)]
     pub editable: bool,
+    /// How the producer's search bar filters on this column, where it
+    /// can: a cell's value becomes a term the viewer writes into it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<ColumnSearch>,
+    /// On an [`Identity`] column: the row field holding [`Chip`]s the
+    /// cell draws after the label, as bare counts. A double-click on
+    /// them reaches the viewer as a double-click on that field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badges: Option<String>,
+}
+
+/// The key a term on this column starts with (`author:`), and the row
+/// field whose value the term names: the uuid behind a name, the id
+/// behind a label.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColumnSearch {
+    pub key: String,
+    pub field: String,
+}
+
+/// What a paged grid reads of its rows beyond their columns: the field
+/// that names a row, the document a selected row opens, and what free
+/// text in its search bar matches.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RowsSpec {
+    pub row_key: &'static str,
+    pub document: DocumentLink,
+    pub free_text: FreeTextMatch,
+}
+
+/// The document a row opens: the first of `fields` the row has a value
+/// in, at the section `anchor` names.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DocumentLink {
+    pub fields: &'static [&'static str],
+    pub anchor: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FreeTextMatch {
+    /// qmd ranks the rows: they come in its order, best first.
+    Qmd,
+    /// A substring of some of the columns; the rows keep their order.
+    Like,
 }
 
 fn yes() -> bool {
@@ -106,6 +156,8 @@ impl ColumnSpec {
             description: None,
             default_visible: true,
             editable: false,
+            search: None,
+            badges: None,
         }
     }
     pub fn describe(mut self, description: &str) -> Self {
@@ -118,6 +170,10 @@ impl ColumnSpec {
     }
     pub fn editable(mut self) -> Self {
         self.editable = true;
+        self
+    }
+    pub fn badges(mut self, field: &str) -> Self {
+        self.badges = Some(field.into());
         self
     }
 }
@@ -154,18 +210,28 @@ pub struct Timeseries {
     pub unit: String,
     /// Oldest first. Compacted: a step function, not an even grid.
     pub samples: Vec<Sample>,
+    /// How far back the plot reaches, in seconds. The producer's to
+    /// say, since it knows how far back it kept: bytes on disk over
+    /// minutes and items over days sit side by side in one table.
+    pub window_secs: u64,
     /// The breakdown behind the number, for its hover.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
 
-/// One segment of a status bar: a part of the whole and the status it
-/// is in.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Segment {
-    pub id: String,
-    pub key: String,
-    pub label: String,
+/// One figure with the reasoning behind it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Quantity {
+    /// `None` when there is no figure to give; then `note` says why in a
+    /// word or two, or the cell is blank.
+    pub value: Option<i64>,
+    /// `count` or `seconds`; the viewer formats by it.
+    pub unit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// How the figure was reached, for its hover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// One row's status, reduced to a vocabulary a Status column can draw.
@@ -184,14 +250,6 @@ pub struct Status {
     pub last_success_at: Option<String>,
     /// Why it is that word — the failure, what it is waiting on.
     pub detail: Option<String>,
-    /// How far along, in `[0, 1]`, when the thing said how much is ahead
-    /// of it. Drawn only while `key` is `running`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fraction: Option<f64>,
-    /// For a status that aggregates several things in flight: one
-    /// segment each, drawn as a bar instead of the glyph.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub segments: Option<Vec<Segment>>,
 }
 
 #[derive(
@@ -209,14 +267,9 @@ pub struct Status {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ChipKind {
-    Info,
-    Idle,
     Metric,
     Warning,
     Error,
-    /// Checked and found clean: a green zero, as opposed to `Idle`'s
-    /// nothing-to-do grey-green.
-    Ok,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -234,12 +287,20 @@ pub struct Action {
     pub id: String,
     pub label: String,
     pub enabled: bool,
+    /// The enabled button's hover: what pressing it does, in a sentence.
+    /// `label` alone when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
     /// The disabled button's hover.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
     /// Drawn as something to think twice about.
     #[serde(default)]
     pub danger: bool,
+    /// Drawn as an on/off switch in this position rather than a button;
+    /// pressing it asks for the other one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<bool>,
 }
 
 #[cfg(test)]

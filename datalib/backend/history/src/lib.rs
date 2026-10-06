@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use datalib_pin::{head, is_missing_table, open_reader, Pin};
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
@@ -48,11 +48,35 @@ pub struct Commit {
 #[derive(Debug, Clone, Serialize)]
 pub struct TableState {
     pub table: String,
+    /// [`holds_records`]: the source's data rather than datalib's own
+    /// bookkeeping. What the totals a person reads are summed over.
+    pub records: bool,
     /// Rows after this commit.
     pub rows: i64,
     pub added: i64,
     pub deleted: i64,
     pub modified: i64,
+}
+
+/// The tables every raw store has that are datalib's, not the source's:
+/// `datalib_etl::doltlite_raw::SHARED_TABLES` and the file-scan cursor
+/// `ingested_files`. Listed here because this crate cannot link the
+/// ingest framework; a test there keeps the two in step.
+const DATALIB_TABLES: &[&str] = &[
+    "_datalib_meta",
+    "sync_runs",
+    "sync_scope_state",
+    "sync_scope_config",
+    "problems",
+    "ingested_files",
+];
+
+/// Whether a table holds the source's records: every table but
+/// [`DATALIB_TABLES`] and the `<table>_bookkeeping` sidecars, which hold
+/// one row of fetch stamps per record and so would count each change
+/// twice.
+pub fn holds_records(table: &str) -> bool {
+    !table.ends_with("_bookkeeping") && !DATALIB_TABLES.contains(&table)
 }
 
 pub async fn read(db_path: &Path, limit: usize) -> Result<StoreHistory> {
@@ -122,6 +146,7 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
                 let (added, deleted, modified) = changes.get(table).copied().unwrap_or((0, 0, 0));
                 TableState {
                     table: table.clone(),
+                    records: holds_records(table),
                     rows: *rows,
                     added,
                     deleted,
@@ -153,8 +178,7 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
 }
 
 /// Row count of every user table at the pinned commit. A table in
-/// `sqlite_master` with no `dolt_at_` module has never been committed,
-/// so at any commit it holds nothing.
+/// `sqlite_master` that the commit does not have holds nothing there.
 async fn table_sizes(pool: &SqlitePool, pin: &Pin) -> Result<BTreeMap<String, i64>> {
     let names: Vec<String> = sqlx::query_scalar(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite%' ORDER BY name",
@@ -164,12 +188,9 @@ async fn table_sizes(pool: &SqlitePool, pin: &Pin) -> Result<BTreeMap<String, i6
     .context("sqlite_master")?;
     let mut sizes = BTreeMap::new();
     for name in names {
-        if !is_table_name(&name) {
-            bail!("table name {name:?} cannot be read through dolt_at_");
-        }
-        // `name` passed `is_table_name` and `Pin::at` checked the hash, so
-        // both splice safely; there is nothing to bind in a table-valued
-        // function's name.
+        // `Pin::table` quotes the name and splices a hash `Pin::at`
+        // checked; there is nothing to bind in a table-valued function's
+        // name.
         let sql = format!("SELECT COUNT(*) FROM {}", pin.table(&name));
         let rows: i64 = match sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
             .fetch_one(pool)
@@ -182,18 +203,6 @@ async fn table_sizes(pool: &SqlitePool, pin: &Pin) -> Result<BTreeMap<String, i6
         sizes.insert(name, rows);
     }
     Ok(sizes)
-}
-
-/// What `dolt_at_<name>` accepts: the identifier character set our DDL
-/// uses. Anything else is refused rather than quoted, since a module
-/// name cannot be quoted.
-fn is_table_name(s: &str) -> bool {
-    !s.is_empty()
-        && s.bytes()
-            .next()
-            .is_some_and(|b| b.is_ascii_lowercase() || b == b'_')
-        && s.bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// `(added, deleted, modified)` per table with a data change between the
@@ -406,9 +415,8 @@ mod tests {
         assert!(h.commits[3].tables.is_empty());
     }
 
-    /// Doltlite's working set lives in the file, so a plain `SELECT`
-    /// from the history reader sees rows a sync has written and not yet
-    /// committed. HEAD's counts must be HEAD's: what a sync is
+    /// A plain `SELECT` on the writer's branch sees rows a sync has
+    /// written and not yet committed. HEAD's counts must be HEAD's: what a sync is
     /// mid-writing is not history yet, and a count that included it
     /// would put the same rows into every older commit's total too.
     #[tokio::test]
@@ -480,6 +488,98 @@ mod tests {
         assert_eq!(h.commits.len(), 2);
         assert_eq!(h.commits[0].message, "two");
         assert_eq!(table(&h.commits[0], "t").rows, 1);
+    }
+
+    async fn exec(pool: &SqlitePool, sql: &'static str) {
+        sqlx::query(sql).execute(pool).await.unwrap();
+    }
+
+    /// Every table is listed, and each says whether it holds records:
+    /// the History card sums only those.
+    #[tokio::test]
+    async fn each_table_says_whether_it_holds_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.doltlite_db");
+        let pool = writer(&path).await;
+        if !is_doltlite(&pool).await {
+            return;
+        }
+        exec(&pool, "CREATE TABLE contacts (id INTEGER PRIMARY KEY)").await;
+        exec(
+            &pool,
+            "CREATE TABLE contacts_bookkeeping (id INTEGER PRIMARY KEY)",
+        )
+        .await;
+        exec(&pool, "CREATE TABLE ingested_files (path TEXT PRIMARY KEY)").await;
+        exec(&pool, "INSERT INTO contacts VALUES (1)").await;
+        exec(&pool, "INSERT INTO contacts_bookkeeping VALUES (1)").await;
+        exec(&pool, "INSERT INTO ingested_files VALUES ('x.vcf')").await;
+        commit(&pool, "load").await;
+        pool.close().await;
+
+        let h = read(&path, 100).await.unwrap();
+        let top = &h.commits[0];
+        assert!(table(top, "contacts").records);
+        assert!(!table(top, "contacts_bookkeeping").records);
+        assert!(!table(top, "ingested_files").records);
+    }
+
+    /// A mirrored SQLite file keeps upstream's table names — Lightroom's
+    /// are `Adobe_AdditionalMetadata` and the like. The history read them
+    /// through `dolt_at_` and once refused any name that was not
+    /// lowercase, which failed the whole request.
+    #[tokio::test]
+    async fn upstream_table_names_are_read_as_they_are() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.doltlite_db");
+        let pool = writer(&path).await;
+        if !is_doltlite(&pool).await {
+            return;
+        }
+        exec(
+            &pool,
+            "CREATE TABLE Adobe_AdditionalMetadata (id INTEGER PRIMARY KEY)",
+        )
+        .await;
+        exec(
+            &pool,
+            "CREATE TABLE \"odd \"\"name\"\"\" (id INTEGER PRIMARY KEY)",
+        )
+        .await;
+        commit(&pool, "schema").await;
+        exec(
+            &pool,
+            "INSERT INTO Adobe_AdditionalMetadata VALUES (1), (2)",
+        )
+        .await;
+        exec(&pool, "INSERT INTO \"odd \"\"name\"\"\" VALUES (1)").await;
+        commit(&pool, "load").await;
+        pool.close().await;
+
+        let h = read(&path, 100).await.unwrap();
+        let top = &h.commits[0];
+        let adobe = table(top, "Adobe_AdditionalMetadata");
+        assert_eq!((adobe.rows, adobe.added), (2, 2));
+        let odd = table(top, "odd \"name\"");
+        assert_eq!((odd.rows, odd.added), (1, 1));
+    }
+
+    #[test]
+    fn records_are_every_table_but_datalibs_own_and_the_sidecars() {
+        for t in ["contacts", "messages", "bookkeeping_notes"] {
+            assert!(holds_records(t), "{t}");
+        }
+        for t in [
+            "contacts_bookkeeping",
+            "_datalib_meta",
+            "sync_runs",
+            "sync_scope_state",
+            "sync_scope_config",
+            "problems",
+            "ingested_files",
+        ] {
+            assert!(!holds_records(t), "{t}");
+        }
     }
 
     #[test]

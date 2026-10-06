@@ -157,6 +157,22 @@ async fn component_args_round_trip() {
     );
 }
 
+/// A component's icon is part of its metadata like its title: kept by a
+/// source-only re-PUT, cleared by an empty string.
+#[tokio::test]
+async fn icon_keeps_or_clears() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_for(tmp.path()).await;
+    let put = |body: serde_json::Value| json_req(&app, "PUT", "/api/lib/w", body);
+
+    put(serde_json::json!({ "source": "export default 1;", "title": "T", "icon": "map" })).await;
+    put(serde_json::json!({ "source": "export default 2;" })).await;
+    assert_eq!(user_entries(&app).await["w"]["icon"], "map");
+
+    put(serde_json::json!({ "source": "export default 3;", "icon": "" })).await;
+    assert!(user_entries(&app).await["w"].get("icon").is_none());
+}
+
 /// Absent title/description keep what is stored, so a plain source
 /// re-PUT doesn't wipe them; an empty string clears.
 #[tokio::test]

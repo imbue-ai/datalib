@@ -64,8 +64,8 @@ async fn claude_synth_playback_extract_roundtrip() {
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
-    // Open here and close before the store is read back: a second
-    // live connection to one file makes a `dolt_commit` fail.
+    // Open here and close before the store is read back: the file
+    // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let summary = fetch(FetchOptions {
         // Point export_dir at our input snapshot so users.json gets
@@ -103,8 +103,8 @@ async fn claude_synth_playback_extract_roundtrip() {
     // `since` scoping against a fresh db: c2 (updated 2025-01-01)
     // predates the cutoff, so only c1 is fetched.
     let since_db = d.path().join("out_since.doltlite_db");
-    // Open here and close before the store is read back: a second
-    // live connection to one file makes a `dolt_commit` fail.
+    // Open here and close before the store is read back: the file
+    // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&since_db)).await.unwrap();
     let summary = fetch(FetchOptions {
         export_dir: Some(api.clone()),
@@ -124,8 +124,8 @@ async fn claude_synth_playback_extract_roundtrip() {
 
     // Moving `since` further back backfills the newly-in-scope c2 as
     // missing while the already-fetched c1 classifies up to date.
-    // Open here and close before the store is read back: a second
-    // live connection to one file makes a `dolt_commit` fail.
+    // Open here and close before the store is read back: the file
+    // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&since_db)).await.unwrap();
     let summary = fetch(FetchOptions {
         export_dir: Some(api.clone()),

@@ -5,7 +5,7 @@
 // from the banner. Writes the allow store, so it runs on its own root.
 
 import { test, expect, type Page } from "@playwright/test";
-import { SEARCH_ROWS, selectRowByUuid } from "./grid-helpers";
+import { docBody, EVERY_ROW, SEARCH_ROWS, selectRowByUuid } from "./grid-helpers";
 
 declare const Buffer: { from(data: string, encoding: "base64"): Uint8Array };
 // A 1×1 transparent PNG, standing in for the server's answer: the
@@ -40,10 +40,10 @@ async function openMarketingEmail(page: Page): Promise<string> {
     (r) => r.kind === "Email" && r.conversation_name === "Your shore leave awaits!",
   );
   expect(email, "the fixture's Risa marketing email").toBeDefined();
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
   await selectRowByUuid(page, email!.uuid);
-  await expect(page.locator(".chat-preview .chat-body")).toBeVisible();
+  await expect(docBody(page)).toBeVisible();
   return email!.markdown_uuid;
 }
 
@@ -70,8 +70,8 @@ test("a click records an allow, which loads, persists and can be forgotten", asy
   const md = await openMarketingEmail(page);
 
   const banner = page.locator(".chat-preview .remote-banner");
-  const chips = page.locator(".chat-preview button.remote-media");
-  const loaded = page.locator('.chat-preview img[src^="/api/remote_media?url="]');
+  const chips = docBody(page).locator("button.remote-media");
+  const loaded = docBody(page).locator('img[src^="/api/remote_media?url="]');
   const rules = banner.locator(".remote-rule");
   await expect(chips).toHaveCount(2);
   expect(await allowRows(page)).toEqual([]);
@@ -96,7 +96,7 @@ test("a click records an allow, which loads, persists and can be forgotten", asy
   expect(proxied).toEqual([PIXEL, HERO]);
 
   // The bytes came back through this origin and drew something.
-  const hero = page.locator(`.chat-preview img[alt="Temtibi Lagoon at sunset"]`);
+  const hero = docBody(page).locator(`img[alt="Temtibi Lagoon at sunset"]`);
   await expect.poll(() => hero.evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBe(1);
 
   // A fresh page reads the rows and renders the images loaded from

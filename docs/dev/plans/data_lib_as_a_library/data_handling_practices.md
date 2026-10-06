@@ -112,8 +112,10 @@ architecture doc:
   requirement for **new multi-batch-input code** — see the `docs`
   provider in [`toolchain_for_agents.md`](toolchain_for_agents.md).
 - **R7 is half-blocked** and should not gate R1–R5. Bounding anything
-  in a `.doltlite_db` reclaims no disk today; stating the bounds is not
-  blocked and comes first.
+  in a `.doltlite_db` reclaims no disk until the history is squashed and
+  gc'd, which nothing does yet
+  ([`doltlite.md`](../../doltlite.md#disk-space-and-dolt_gc)); stating
+  the bounds is not blocked and comes first.
 
 **What we already get right** stays unchanged and is not in question:
 upstream-id primary keys; complete single-writer upserts; per-attempt

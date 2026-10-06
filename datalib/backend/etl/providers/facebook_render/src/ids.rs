@@ -5,7 +5,7 @@
 //! composes (the comments and reactions timelines, the friends list)
 //! are keyed on their names.
 
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Facebook;
@@ -23,37 +23,23 @@ pub const KIND_REACTION: &str = "reaction";
 pub const KIND_FRIEND: &str = "friend";
 pub const KIND_FRIENDS_GROUP: &str = "friends_group";
 
-fn identity(
-    source_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    date_ms: Option<i64>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(date_ms),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn post(source_id: &str, row_id: &str) -> Identity {
-    identity(source_id, KIND_POST, row_id.to_string(), None)
+    IDS.mint(source_id, KIND_POST, row_id.to_string(), None)
 }
 
 /// The one item a post's document holds.
 pub fn post_text(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(source_id, KIND_POST_TEXT, row_id.to_string(), date_ms)
+    IDS.mint(source_id, KIND_POST_TEXT, row_id.to_string(), date_ms)
 }
 
 pub fn album(source_id: &str, row_id: &str) -> Identity {
-    identity(source_id, KIND_ALBUM, row_id.to_string(), None)
+    IDS.mint(source_id, KIND_ALBUM, row_id.to_string(), None)
 }
 
 pub fn album_description(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_ALBUM_DESCRIPTION,
         row_id.to_string(),
@@ -62,7 +48,7 @@ pub fn album_description(source_id: &str, row_id: &str, date_ms: Option<i64>) ->
 }
 
 pub fn photo(source_id: &str, album_row_id: &str, uri: &str, date_ms: Option<i64>) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_PHOTO,
         composite_key(&[album_row_id, uri]),
@@ -72,11 +58,11 @@ pub fn photo(source_id: &str, album_row_id: &str, uri: &str, date_ms: Option<i64
 
 /// A timeline datalib composes — `comments`, `reactions`.
 pub fn feed(source_id: &str, name: &str) -> Identity {
-    identity(source_id, KIND_FEED, name.to_string(), None)
+    IDS.mint(source_id, KIND_FEED, name.to_string(), None)
 }
 
 pub fn feed_month(source_id: &str, name: &str, period_key: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_FEED_MONTH,
         composite_key(&[name, period_key]),
@@ -85,24 +71,24 @@ pub fn feed_month(source_id: &str, name: &str, period_key: &str) -> Identity {
 }
 
 pub fn comment(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(source_id, KIND_COMMENT, row_id.to_string(), date_ms)
+    IDS.mint(source_id, KIND_COMMENT, row_id.to_string(), date_ms)
 }
 
 /// One reaction may arrive as two export rows; the item is keyed on
 /// every row it folds together.
 pub fn reaction(source_id: &str, row_ids: &[&str], date_ms: Option<i64>) -> Identity {
-    identity(source_id, KIND_REACTION, composite_key(row_ids), date_ms)
+    IDS.mint(source_id, KIND_REACTION, composite_key(row_ids), date_ms)
 }
 
 /// No stamp: "friends since" is the row's stamp, but it is the day of
 /// the friendship at second precision as the export gives it — kept
 /// out so a friend row does not move when the export re-states it.
 pub fn friend(source_id: &str, row_id: &str) -> Identity {
-    identity(source_id, KIND_FRIEND, row_id.to_string(), None)
+    IDS.mint(source_id, KIND_FRIEND, row_id.to_string(), None)
 }
 
 pub fn friends_group(source_id: &str) -> Identity {
-    identity(source_id, KIND_FRIENDS_GROUP, "friends".to_string(), None)
+    IDS.mint(source_id, KIND_FRIENDS_GROUP, "friends".to_string(), None)
 }
 
 #[cfg(test)]

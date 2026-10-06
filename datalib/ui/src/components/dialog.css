@@ -1,0 +1,88 @@
+/* The frame every modal dialog here shares (ConfirmDialog,
+   SourceWizard): the dimmed backdrop, the panel, its header with the
+   title and ×, its scrolling body and its footer of buttons. A dialog
+   includes this as a scoped style, adds its own class beside these,
+   and sets its own width. The footer's buttons are `.btn`, with
+   `.primary` for the one that does the thing. */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh 16px;
+  z-index: 50;
+}
+.dialog {
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  border: 1px solid var(--datalib-border);
+  border-radius: calc(var(--datalib-radius) + 4px);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+  font-family: var(--datalib-font);
+  font-size: var(--datalib-font-size);
+}
+.dialog-head,
+.dialog-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+}
+.dialog-head {
+  border-bottom: 1px solid var(--datalib-border-soft);
+}
+.dialog-foot {
+  border-top: 1px solid var(--datalib-border-soft);
+  justify-content: flex-end;
+}
+.dialog-head h2 {
+  margin: 0;
+  font-size: calc(var(--datalib-title-size) + 2px);
+  flex: 1;
+}
+.dialog-x {
+  background: none;
+  border: none;
+  color: var(--datalib-muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dialog-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+}
+.btn {
+  height: calc(var(--datalib-control-h) + 4px);
+  padding: 0 14px;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  background: var(--datalib-hover);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: var(--datalib-accent);
+  border-color: var(--datalib-accent);
+  color: var(--datalib-on-accent);
+}
+.btn.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--datalib-accent) 85%, black);
+}
+.btn.ghost {
+  background: none;
+}

@@ -7,9 +7,10 @@ run producers to completion before starting consumers.
 
 `./run.sh` tests that against the real engine (the Bazel-built doltlite
 CLI, one connection per simulated "step", matching the
-`max_connections = 1` discipline the ETL pool enforces).
+`max_connections = 1` discipline the ETL pool enforces). It prints the
+engine version it ran against.
 
-## Results — doltlite 0.50.3
+## Results — doltlite 0.50.13 (same as on 0.50.3)
 
 | # | scenario | result |
 |---|---|---|
@@ -18,58 +19,26 @@ CLI, one connection per simulated "step", matching the
 | C | reader pins with `dolt_at_t('<hash>')` | **stable** — one value, ten samples, across the writer's whole run |
 | D | reader re-pins, consumes `dolt_diff_t(old,new)` | **20** rows to process vs **41** to re-read |
 | E | writer health, and reader side effects | **0** busy/locked/errors; **no** branches left behind |
-| F | pin durability | readable from a fresh process; survives `dolt_gc()` |
+| F | pin durability | readable from a fresh process; survives `dolt_gc()` (25 chunks reclaimed) |
 
 The *value* C settles on varies between runs — the reader pins to
 whatever the writer had committed at the moment it started. That it
 never moves afterwards is the assertion.
 
-**The premise holds, and the primitives are clean.** C is the design in
-one row. A and B are what you get if you relax the scheduler's edges
-*without* changing the readers: not a stale view but a **torn** one,
-mixing committed and uncommitted rows.
+**The premise holds.** C is the design in one row. A and B are what you
+get if you relax the scheduler's edges *without* changing the readers:
+not a stale view but a **torn** one, mixing committed and uncommitted
+rows. What `dolt_at_<table>` and `dolt_diff_<table>` do, and the other
+ways to read one commit, are in
+[`docs/dev/doltlite.md`](../../docs/dev/doltlite.md) § "Three ways to
+read one commit" and § "Diffs".
 
-## The two primitives
+## What the runner built on it
 
-**`dolt_at_<table>('<commit-ish>')`** — doltlite's `AS OF`. A
-table-valued function accepting `HEAD`, `HEAD~N`, or a raw commit hash,
-with the table's own schema. Critically it is a **pure read**: no
-branch, no `dolt_checkout`, no write to the file, nothing left behind.
-And it reads *committed* state only — scenario A is the proof, where it
-returns 2 while a plain `SELECT` returns 4 against the same file.
-
-**`dolt_diff_<table>('<from>','<to>')`** — the arbitrary two-commit row
-diff, as a table-valued function. Columns are
-`to_*`, `from_*`, `diff_type`.
-
-> Do not confuse these with the **unparameterized** vtabs of the same
-> name. Bare `dolt_diff_<t>` is the per-commit change log, and filtering
-> it on `from_commit`/`to_commit` only ever matches **adjacent
-> parent→child pairs** — an arbitrary range silently returns 0 rows,
-> which reads as "no changes" rather than as an error. The
-> parameterized call is the one you want. (Bare `dolt_diff`, with no
-> `_<table>` suffix, is a third thing again: a list of commits.)
-
-MySQL-style `SELECT … FROM t AS OF '…'` is a **parse error** — SQLite's
-grammar has no such clause. The capability is there; only the spelling
-differs.
-
-**A pin is just a hash.** Scenario F: a brand-new process with no
-inherited connection reads an old pin fine, and it still reads correctly
-after `dolt_gc()` reclaims 25 chunks — as does a diff spanning the gc
-boundary. Nothing has to be held open to keep a pin alive, so a slow
-consumer cannot have its view collected out from under it.
-
-## What this leaves for the design
-
-Pinning costs a reader nothing and disturbs the writer not at all, so
-the reader side is essentially free. What remains is not a storage
-question but a scheduling one: how a consumer *learns* there is a new
-commit worth re-pinning to, and how it keeps durable offset state
-between chunks.
-
-## Environment
-
-macOS, doltlite as pinned in `MODULE.bazel` — 0.50.3 at time of
-writing, via `//third-party/doltlite:doltlite`. `run.sh` prints the
-engine version it actually ran against and builds the CLI if missing.
+A consumer reads its producer at a pinned commit and holds no lock on
+it, and may start on a producer still running when that producer
+declares `streams_output`, reading each seal as it lands
+([`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
+§ "What keeps steps apart: locks"; the reader side is
+`doltlite_raw::open_reader`, which opens the commit read-only and
+detached — [`docs/dev/doltlite.md`](../../docs/dev/doltlite.md#three-ways-to-read-one-commit)).

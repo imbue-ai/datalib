@@ -8,6 +8,8 @@
 //! Each scope namespaces rows per `(provider, feed)`, so two feeds can claim
 //! the same file without colliding.
 
+use std::collections::HashSet;
+
 use anyhow::{Context, Result};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
@@ -90,6 +92,21 @@ pub async fn record_file(
     scope: &str,
     file: &ScannedFile,
 ) -> Result<()> {
+    record_file_with_problem(tx, scope, file, None).await
+}
+
+/// [`record_file`], and what this read of the file could not use: a
+/// record that would not parse, one with no key. The file is stamped, so
+/// nothing reads it again until it changes; its problem is a row keyed
+/// `file:<scope>:<rel>` that only the next stamp of it rewrites and only
+/// [`forget_file`] drops. `None` is a clean read and clears the row.
+pub async fn record_file_with_problem(
+    tx: &mut Transaction<'_, Sqlite>,
+    scope: &str,
+    file: &ScannedFile,
+    problem: Option<(datalib_problems::Outcome, datalib_problems::Problem)>,
+) -> Result<()> {
+    replace_file_problem(tx, scope, &file.rel, problem).await?;
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     sqlx::query(
         "INSERT INTO ingested_files \
@@ -113,6 +130,95 @@ pub async fn record_file(
     Ok(())
 }
 
+/// Drop one path's stamp, inside the transaction that deleted the rows it
+/// produced — so a crash between the two leaves the path still stamped,
+/// and the next run sees it removed again and retries.
+pub async fn forget_file(tx: &mut Transaction<'_, Sqlite>, scope: &str, rel: &str) -> Result<()> {
+    replace_file_problem(tx, scope, rel, None).await?;
+    sqlx::query("DELETE FROM ingested_files WHERE scope = ? AND rel_path = ?")
+        .bind(scope)
+        .bind(rel)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("forget ingested_files {scope}={rel}"))?;
+    Ok(())
+}
+
+fn file_problem_key(scope: &str, rel: &str) -> String {
+    format!("{FILE_PROBLEM_PREFIX}{scope}:{rel}")
+}
+
+/// The sweep key's prefix of every row [`record_file_with_problem`] writes.
+pub const FILE_PROBLEM_PREFIX: &str = "file:";
+
+/// Set or clear one file's problem row, keeping when it was first seen.
+async fn replace_file_problem(
+    tx: &mut Transaction<'_, Sqlite>,
+    scope: &str,
+    rel: &str,
+    problem: Option<(datalib_problems::Outcome, datalib_problems::Problem)>,
+) -> Result<()> {
+    use crate::bulk::BulkUpsertable as _;
+    use datalib_problems::{ProblemRow, Scope, ScopeKind, Stage};
+    let key = file_problem_key(scope, rel);
+    let first_seen: Option<String> = sqlx::query_scalar(
+        "SELECT first_seen_at_utc FROM problems WHERE scope_kind = ? AND scope_key = ?",
+    )
+    .bind(ScopeKind::Entity.as_str())
+    .bind(&key)
+    .fetch_optional(&mut **tx)
+    .await
+    .with_context(|| format!("read the problem of {key}"))?;
+    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
+        .bind(ScopeKind::Entity.as_str())
+        .bind(&key)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("clear the problem of {key}"))?;
+    let Some((outcome, problem)) = problem else {
+        return Ok(());
+    };
+    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    let row = ProblemRow {
+        first_seen_at_utc: first_seen.unwrap_or_else(|| now.clone()),
+        last_seen_at_utc: now,
+        tz_offset: Some(tz_offset),
+        ..ProblemRow::new(
+            "",
+            Stage::Fetch,
+            Scope::Entity(&key),
+            None,
+            outcome,
+            problem,
+            None,
+        )
+    };
+    let sql = crate::bulk::insert_sql::<ProblemRow>();
+    // Audited: `sql` is built from `ProblemRow`'s associated consts, never
+    // from row data; all values bound.
+    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("record the problem of {key}"))?;
+    datalib_problems::note_recorded([&row]);
+    Ok(())
+}
+
+/// [`forget_file`] for several paths, in a transaction of its own: for a
+/// caller whose deletion already committed, where a crash in between only
+/// means the next run finds the same paths gone and deletes nothing more.
+pub async fn forget_files(pool: &SqlitePool, scope: &str, rels: &[&str]) -> Result<()> {
+    if rels.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await.context("begin forget_files tx")?;
+    for rel in rels {
+        forget_file(&mut tx, scope, rel).await?;
+    }
+    tx.commit().await.context("commit forget_files tx")?;
+    Ok(())
+}
+
 /// [`record_file`] for callers that don't already own a transaction.
 pub async fn record_file_pool(pool: &SqlitePool, scope: &str, file: &ScannedFile) -> Result<()> {
     let mut tx = pool.begin().await.context("begin record_file tx")?;
@@ -121,37 +227,48 @@ pub async fn record_file_pool(pool: &SqlitePool, scope: &str, file: &ScannedFile
     Ok(())
 }
 
-/// Ingest one already-scanned file, if its contents have changed since `scope`
-/// last finished with it — the dozen lines every single-file feed repeated
-/// around its parser, once.
+/// What [`ingest_snapshot`] did to its table.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotCounts {
+    pub written: usize,
+    pub removed: usize,
+}
+
+/// Mirror one already-scanned file that holds the whole of `T`'s table, if
+/// its contents have changed since `scope` last finished with it: upsert
+/// what it lists, and delete the rows it no longer lists, in one
+/// transaction.
 ///
 /// Takes a [`ScannedFile`] rather than a path because the provider has already
 /// scanned the export root, so the file's existence and its hash are known.
 ///
-/// Returns rows written; `0` when the file is absent from the scan or
-/// unchanged. A parse that yields no rows still stamps — the file was read and
-/// understood to contain nothing, and re-reading it every run would be the
-/// "retry forever" shape.
-pub async fn ingest_changed<T, F>(
+/// `parse` returns every record the file holds, and an empty list
+/// empties the table. A file it cannot read as a whole list — not the
+/// layout it knows, or entries none of which it could read — is an
+/// error: nothing is written or deleted, and the file is not stamped, so
+/// a build that reads the new layout picks it up.
+///
+/// A file absent from the scan, or unchanged, does nothing. Absent is not
+/// empty: an export requested without this product has no such file.
+pub async fn ingest_snapshot<T, F>(
     pool: &SqlitePool,
     scope: &str,
     file: Option<&ScannedFile>,
     parse: F,
-) -> Result<usize>
+) -> Result<SnapshotCounts>
 where
     T: crate::bulk::BulkUpsertable,
     F: FnOnce(&[u8]) -> Result<Vec<T>>,
 {
     let Some(f) = file else {
-        return Ok(0);
+        return Ok(SnapshotCounts::default());
     };
     if crate::fsscan::is_unchanged(&load_cursor(pool, scope).await?, f) {
-        return Ok(0);
+        return Ok(SnapshotCounts::default());
     }
 
     let bytes = std::fs::read(&f.path).with_context(|| format!("read {}", f.path.display()))?;
     let rows = parse(&bytes)?;
-    let n = rows.len();
 
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = pool
@@ -159,17 +276,25 @@ where
         .await
         .with_context(|| format!("begin {scope} tx"))?;
     crate::bulk::bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
+    let keep: HashSet<String> = rows.iter().map(|r| r.id().to_string()).collect();
+    let gone = crate::prune::prune_scope_in_tx(&mut tx, T::TABLE, &[], &keep).await?;
+    crate::prune::record(T::TABLE, keep.len() + gone.len(), gone.len());
+    let counts = SnapshotCounts {
+        written: rows.len(),
+        removed: gone.len(),
+    };
     record_file(&mut tx, scope, f).await?;
     tx.commit()
         .await
         .with_context(|| format!("commit {scope} tx"))?;
-    Ok(n)
+    Ok(counts)
 }
 
 /// `DELETE FROM ingested_files WHERE scope = ?`. Use from a provider's
 /// `reset` path when wiping per-feed state.
 pub async fn clear_scope(pool: &SqlitePool, scope: &str) -> Result<()> {
     ensure_schema(pool).await?;
+    forget_problems_under(pool, &format!("{FILE_PROBLEM_PREFIX}{scope}:")).await?;
     sqlx::query("DELETE FROM ingested_files WHERE scope = ?")
         .bind(scope)
         .execute(pool)
@@ -180,11 +305,24 @@ pub async fn clear_scope(pool: &SqlitePool, scope: &str) -> Result<()> {
 
 pub async fn clear_scope_prefix(pool: &SqlitePool, prefix: &str) -> Result<()> {
     ensure_schema(pool).await?;
+    forget_problems_under(pool, &format!("{FILE_PROBLEM_PREFIX}{prefix}")).await?;
     sqlx::query("DELETE FROM ingested_files WHERE scope LIKE ?")
         .bind(format!("{prefix}%"))
         .execute(pool)
         .await
         .with_context(|| format!("clear ingested_files scope LIKE {prefix}%"))?;
+    Ok(())
+}
+
+async fn forget_problems_under(pool: &SqlitePool, key_prefix: &str) -> Result<()> {
+    // `INSTR(x, ?) = 1` rather than `LIKE`: `_` in a path is a wildcard to
+    // LIKE.
+    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1")
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(key_prefix)
+        .execute(pool)
+        .await
+        .with_context(|| format!("clear the file problems under {key_prefix}"))?;
     Ok(())
 }
 
@@ -226,6 +364,10 @@ mod tests {
             .await
             .unwrap();
         ensure_schema(&pool).await.unwrap();
+        sqlx::query(crate::doltlite_raw::PROBLEMS_DDL)
+            .execute(&pool)
+            .await
+            .unwrap();
         let cache = FingerprintCache::open(&dir.path().join("fp.sqlite"))
             .await
             .unwrap();
@@ -272,6 +414,67 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    async fn file_problems(pool: &SqlitePool) -> Vec<(String, String)> {
+        sqlx::query_as("SELECT scope_key, first_seen_at_utc FROM problems ORDER BY scope_key")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn stamp(e: &Env, scope: &str, f: &ScannedFile, unusable: Option<&str>) {
+        use datalib_problems::{Outcome, Problem, Reason};
+        let problem = unusable.map(|d| {
+            (
+                Outcome::Dropped,
+                Problem::record(Reason::Undeserializable, d),
+            )
+        });
+        let mut tx = e.pool.begin().await.unwrap();
+        record_file_with_problem(&mut tx, scope, f, problem)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    /// What a read of a file could not use stands while the file is
+    /// stamped — the file is not read again, so nothing could have fixed
+    /// it — keeps when it was first seen across a re-read that still
+    /// fails, and goes with a clean re-read, with the file, or with a
+    /// reset of its scope.
+    #[tokio::test]
+    async fn a_files_problem_lives_exactly_as_long_as_its_stamp_says() {
+        let e = env().await;
+        e.write("a.mbox", b"one bad message");
+        e.write("b.mbox", b"another");
+        let scan = e.scan().await;
+        let (a, b) = (scan.file("a.mbox").unwrap(), scan.file("b.mbox").unwrap());
+
+        stamp(&e, "p/feed", a, Some("message 3 would not parse")).await;
+        stamp(&e, "p/feed", b, Some("message 1 would not parse")).await;
+        let first = file_problems(&e.pool).await;
+        assert_eq!(
+            first.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+            ["file:p/feed:a.mbox", "file:p/feed:b.mbox"]
+        );
+
+        stamp(&e, "p/feed", a, Some("message 3 would not parse")).await;
+        assert_eq!(
+            file_problems(&e.pool).await,
+            first,
+            "still failing, first seen kept"
+        );
+
+        stamp(&e, "p/feed", a, None).await;
+        let mut tx = e.pool.begin().await.unwrap();
+        forget_file(&mut tx, "p/feed", "b.mbox").await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(file_problems(&e.pool).await.is_empty());
+
+        stamp(&e, "p/feed", a, Some("message 3 would not parse")).await;
+        clear_scope(&e.pool, "p/feed").await.unwrap();
+        assert!(file_problems(&e.pool).await.is_empty());
     }
 
     #[tokio::test]

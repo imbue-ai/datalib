@@ -2,6 +2,7 @@
 
 use clap::Parser;
 use datalib_http::{router, ApiToken};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8731";
@@ -17,9 +18,9 @@ struct Args {
     /// absent; an empty root produces an empty search index.
     data_root: PathBuf,
 
-    /// Skip opening the default browser at the listening URL. Default
-    /// is to open; pass this for headless / scripted runs (e2e tests,
-    /// dev iteration where the tab is already open, CI).
+    /// Skip opening the default browser at the listening URL. It opens
+    /// only when stdout is a terminal, so an agent's or a script's run
+    /// never steals the focus; pass this to skip it at a terminal too.
     #[arg(long)]
     no_open: bool,
 
@@ -36,6 +37,12 @@ struct Args {
     /// one run: for building fixtures, never for a person's root.
     #[arg(long, value_parser = rfc3339)]
     now: Option<String>,
+
+    /// Write the starter `config.toml` first, when the root has none, so
+    /// the app opens on the Dashboard rather than the first-run screen.
+    /// The desktop app passes it for a library it has just created.
+    #[arg(long)]
+    init: bool,
 }
 
 fn rfc3339(s: &str) -> Result<String, String> {
@@ -67,6 +74,9 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(0);
     })
     .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // Before the url file: a spawner may signal the moment it sees it,
+    // and a SIGINT that lands before its handler kills the process.
+    let signals = ShutdownSignals::register()?;
     let bind = std::env::var("DATALIB_BIND").unwrap_or_else(|_| DEFAULT_BIND.into());
     let created = !root.exists();
 
@@ -81,6 +91,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Dropped at the very end of `main`: that drop is the final flush.
     let _log = datalib_http::logging::init(&root);
+
+    if args.init && datalib_http::write_starter_config(&root)? {
+        tracing::info!("wrote the starter config");
+    }
 
     // `build_state` creates the root when absent; the log line here just
     // makes the first-run case visible.
@@ -97,10 +111,10 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     let base_url = format!("http://{}", listener.local_addr()?);
-    // The app opens on the sources card (`/data_sources`, see
-    // `ui/src/router`): what a person does first is add a source or
-    // sync one, not search.
-    let url = format!("{base_url}/data_sources?token={}", api_token.value());
+    // The app opens on the Dashboard (`/`, `dashboardView()`): what
+    // needs the person, their library and their sources. A root with no
+    // config gets the first-run screen there instead.
+    let url = format!("{base_url}/?token={}", api_token.value());
     // Record where we ended up, so a later would-be owner's refusal can
     // point at this server instead of just saying "taken".
     root_lock.announce(&base_url);
@@ -127,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
         datalib_http::auth::restrict_to_owner(url_file)?;
     }
 
-    if !args.no_open {
+    if !args.no_open && std::io::stdout().is_terminal() {
         // Best-effort browser open. We don't propagate the error
         // because most users will already have the tab from a prior
         // run (and `webbrowser::open` returns Ok in that case anyway).
@@ -154,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
     let applets = state.applets.clone();
     let sync = state.sync.clone();
     axum::serve(listener, router(state))
-        .with_graceful_shutdown(terminated(parent_gone))
+        .with_graceful_shutdown(terminated(signals, parent_gone))
         .await?;
     tracing::info!("datalib-http: shutting down, stopping applets and syncs");
     applets.shutdown();
@@ -180,33 +194,51 @@ const SYNC_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 /// own kill is the fallback there.
 const PARENT_GONE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// The signals that end the server, registered when this is built rather
+/// than when the shutdown future is first polled (axum spawns it, so that
+/// is some time after serving starts). One interrupt stream serves both
+/// Ctrl-Cs, so a second one is seen however soon it follows the first.
+struct ShutdownSignals {
+    interrupt: Interrupt,
+    #[cfg(unix)]
+    terminate: tokio::signal::unix::Signal,
+}
+
+#[cfg(unix)]
+type Interrupt = tokio::signal::unix::Signal;
+#[cfg(windows)]
+type Interrupt = tokio::signal::windows::CtrlC;
+
+impl ShutdownSignals {
+    fn register() -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            Ok(Self {
+                interrupt: signal(SignalKind::interrupt())?,
+                terminate: signal(SignalKind::terminate())?,
+            })
+        }
+        #[cfg(windows)]
+        {
+            Ok(Self {
+                interrupt: tokio::signal::windows::ctrl_c()?,
+            })
+        }
+    }
+}
+
 /// Resolves on the first Ctrl-C, SIGTERM or the parent pipe closing —
 /// and from then on arms the two ways out of a shutdown that will not
 /// finish: a second Ctrl-C ends the process at once, and
 /// [`SHUTDOWN_DEADLINE`] ends it regardless. Without those, the first
 /// Ctrl-C closes the listener and nothing more, and tokio's installed
 /// handler swallows every Ctrl-C after it.
-async fn terminated(parent_gone: tokio::sync::oneshot::Receiver<()>) {
-    let interrupt = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
+async fn terminated(mut signals: ShutdownSignals, parent_gone: tokio::sync::oneshot::Receiver<()>) {
     #[cfg(unix)]
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut sig) => {
-                sig.recv().await;
-            }
-            // No handler is worse than a handler that never fires, but
-            // both are survivable: the applet's own parent watch is the
-            // backstop either way.
-            Err(e) => {
-                tracing::warn!("datalib-http: cannot listen for SIGTERM: {e}");
-                std::future::pending::<()>().await;
-            }
-        }
-    };
+    let terminate = signals.terminate.recv();
     #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    let terminate = std::future::pending::<Option<()>>();
     // `Err` is the sender dropped without firing: the watch was never
     // armed (no `DATALIB_PARENT_PIPE`), so there is no parent to outlive.
     let parent_gone = async {
@@ -216,7 +248,7 @@ async fn terminated(parent_gone: tokio::sync::oneshot::Receiver<()>) {
     };
 
     tokio::select! {
-        _ = interrupt => {
+        _ = signals.interrupt.recv() => {
             tracing::info!("datalib-http: interrupted, shutting down (Ctrl-C again to exit now)");
         }
         _ = terminate => {
@@ -227,8 +259,9 @@ async fn terminated(parent_gone: tokio::sync::oneshot::Receiver<()>) {
         }
     }
 
-    tokio::spawn(async {
-        let _ = tokio::signal::ctrl_c().await;
+    let mut interrupt = signals.interrupt;
+    tokio::spawn(async move {
+        interrupt.recv().await;
         datalib_parent_watch::report("datalib-http: interrupted again, exiting now");
         std::process::exit(130);
     });

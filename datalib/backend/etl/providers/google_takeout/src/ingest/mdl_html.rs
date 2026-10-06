@@ -80,7 +80,10 @@ pub fn last_timestamp_chunk(cell: &str) -> Option<String> {
         }
     }
     let ampm = ampm_idx?;
-    let start = ampm.saturating_sub(30);
+    let mut start = ampm.saturating_sub(30);
+    while !text.is_char_boundary(start) {
+        start -= 1;
+    }
     let after = &text[ampm + 4..];
     let tz_end = after
         .find(|c: char| c.is_whitespace())
@@ -181,6 +184,23 @@ mod tests {
         let ts = last_timestamp_chunk(cells[1]).expect("should find ts");
         assert!(ts.contains("Jun 5, 2026"));
         assert!(ts.contains("9:00:00 AM PDT"));
+    }
+
+    /// A multi-byte character 30 bytes before " AM " once panicked the
+    /// whole Takeout ingest: the look-back sliced through the middle of it.
+    #[test]
+    fn last_timestamp_chunk_survives_a_multibyte_char_in_the_look_back() {
+        let cell = "<div>Watched Worf's Brüder 1234 Jun 5, 2026, 9:00:00 AM PDT</div>";
+        let text = strip_tags(cell);
+        let look_back = text.find(" AM ").unwrap() - 30;
+        assert!(
+            !text.is_char_boundary(look_back),
+            "the fixture must put the look-back inside the 'ü'"
+        );
+        assert_eq!(
+            last_timestamp_chunk(cell).as_deref(),
+            Some("Jun 5, 2026, 9:00:00 AM PDT")
+        );
     }
 
     #[test]

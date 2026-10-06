@@ -61,6 +61,15 @@ impl Harness {
         }
     }
 
+    /// A writable copy of the fixture corpus, for the tests that edit
+    /// it between scans.
+    fn on_a_copy() -> Self {
+        let h = Self::new();
+        let root = h._tmp.path().join("corpus");
+        copy_tree(&fixture_dir(), &root);
+        Self { root, ..h }
+    }
+
     async fn scan(&self) -> Result<ingest::FetchSummary> {
         self.scan_at(NOW).await
     }
@@ -82,9 +91,11 @@ impl Harness {
         })
         .await;
         // Commit what the scan wrote, the way the processor's
-        // `RawStoreSession::finish` does in production: render pins HEAD, so
+        // `RawStoreSession::run` does in production: render pins HEAD, so
         // an uncommitted row is invisible to it.
-        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: pdf scan").await?;
+        if summary.is_ok() {
+            datalib_etl::doltlite_raw::commit_run(db.pool(), "test: pdf scan").await?;
+        }
         // Closed, not dropped: `db` and `render` both reopen this store,
         // and one doltlite file takes one connection at a time.
         db.close().await;
@@ -254,7 +265,7 @@ async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
         .collect();
     assert_eq!(page_rows.len(), 1, "only page 1 has text");
     assert_eq!(page_rows[0].message_index, Some(1));
-    assert!(page_rows[0].text.contains("Ablative plating"));
+    assert!(page_rows[0].preview.contains("Ablative plating"));
 
     // Page 2 is in the markdown as a note, not as a hole. The note gets
     // no section anchor, because there is nothing to navigate to.
@@ -610,5 +621,113 @@ async fn scanned_documents_are_recorded_but_not_rendered() -> Result<()> {
             "the scanned fixture must not render until OCR lands"
         );
     }
+    Ok(())
+}
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        // Bazel's runfiles are symlinks; follow them.
+        if std::fs::metadata(entry.path()).unwrap().is_dir() {
+            copy_tree(&entry.path(), &dest);
+        } else {
+            std::fs::copy(entry.path(), &dest).unwrap();
+        }
+    }
+}
+
+async fn problems(h: &Harness) -> Result<Vec<(String, String)>> {
+    let db = h.db().await;
+    let rows = sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+        .fetch_all(db.pool())
+        .await?;
+    db.close().await;
+    Ok(rows)
+}
+
+async fn paths(h: &Harness) -> Result<Vec<String>> {
+    let db = h.db().await;
+    let rows = sqlx::query_scalar("SELECT id FROM pdf_paths ORDER BY id")
+        .fetch_all(db.pool())
+        .await?;
+    db.close().await;
+    Ok(rows)
+}
+
+/// A document that will not identify is a row naming its path, retried
+/// every scan, and the scan that identifies it clears the row.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_that_will_not_identify_is_a_row_until_it_does() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let rows = problems(&h).await?;
+    assert_eq!(
+        rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        ["record:pdf_paths:holodeck/corrupt.pdf"]
+    );
+    assert!(rows[0].1.starts_with("classify: "), "{}", rows[0].1);
+    assert!(
+        !rows[0].1.contains(&*h.root.to_string_lossy()),
+        "the fixture pins the sample, so it names no machine's path: {}",
+        rows[0].1
+    );
+
+    std::fs::copy(
+        h.root.join("captains_log.pdf"),
+        h.root.join("holodeck/corrupt.pdf"),
+    )?;
+    let s = h.scan().await?;
+    assert_eq!(s.errors, 0, "{s:?}");
+    assert_eq!(problems(&h).await?, Vec::<(String, String)>::new());
+    Ok(())
+}
+
+/// A document the scan cannot see at all is not tried again, so its row
+/// stands rather than clearing.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unseen_document_keeps_its_row() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let corrupt = h.root.join("holodeck/corrupt.pdf");
+    std::fs::remove_file(&corrupt)?;
+    std::os::unix::fs::symlink(h.root.join("nowhere.pdf"), &corrupt)?;
+    h.scan().await?;
+    let keys: Vec<String> = problems(&h).await?.into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        ["listing:files", "record:pdf_paths:holodeck/corrupt.pdf"]
+    );
+    Ok(())
+}
+
+/// A walk that could not read part of the tree drops no path: a file it
+/// did not see may be one it could not see. The next clean walk drops
+/// what is really gone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_walk_with_errors_drops_no_path() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let before = paths(&h).await?;
+    std::fs::remove_file(h.root.join("engineering/hull_survey.pdf"))?;
+    let dead = h.root.join("engineering/dead.pdf");
+    std::os::unix::fs::symlink(h.root.join("nowhere.pdf"), &dead)?;
+
+    h.scan().await?;
+    assert_eq!(paths(&h).await?, before);
+    let keys: Vec<String> = problems(&h).await?.into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        ["listing:files", "record:pdf_paths:holodeck/corrupt.pdf"]
+    );
+
+    std::fs::remove_file(&dead)?;
+    h.scan().await?;
+    let after = paths(&h).await?;
+    assert!(!after.contains(&"engineering/hull_survey.pdf".to_string()));
+    assert_eq!(after.len(), before.len() - 1);
+    let keys: Vec<String> = problems(&h).await?.into_iter().map(|r| r.0).collect();
+    assert_eq!(keys, ["record:pdf_paths:holodeck/corrupt.pdf"]);
     Ok(())
 }

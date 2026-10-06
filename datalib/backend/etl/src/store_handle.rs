@@ -21,6 +21,10 @@ pub trait RawStoreHandle {
     /// Every pool this handle opened, in declaration order.
     fn pools(&self) -> Vec<&SqlitePool>;
 
+    /// The pools that commit: every one but a blob CAS's, which is plain
+    /// SQLite and commits each write as it makes it.
+    fn versioned_pools(&self) -> Vec<&SqlitePool>;
+
     /// Close all of them and wait for the connections to actually go away.
     async fn close_all(&self)
     where
@@ -31,16 +35,14 @@ pub trait RawStoreHandle {
         }
     }
 
-    /// One `dolt_commit` per store, last-declared first: a provider
-    /// declares its entity pool before its blob CAS, and blobs commit
-    /// before the rows that name them (`raw_store::SealState::seal`).
-    /// For a test that drives `fetch` itself and so stands in for the
-    /// step's `finish`; the step goes through `RawStoreSession`.
+    /// One `dolt_commit` per versioned store. For a test that drives
+    /// `fetch` itself and so stands in for the step's `finish`; the step
+    /// goes through `RawStoreSession`.
     async fn commit_all(&self, msg: &str) -> anyhow::Result<()>
     where
         Self: Sync,
     {
-        for pool in self.pools().into_iter().rev() {
+        for pool in self.versioned_pools() {
             crate::doltlite_raw::commit_run(pool, msg).await?;
         }
         Ok(())
@@ -80,7 +82,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let h = Handle {
             pool: pool(&dir.path().join("entities.doltlite_db")).await,
-            cas: BlobCas::open(&dir.path().join("blobs.doltlite_db"))
+            cas: BlobCas::open(&dir.path().join("blobs.sqlite"))
                 .await
                 .unwrap(),
             not_a_store: "ignored".into(),
@@ -89,6 +91,11 @@ mod tests {
             h.pools().len(),
             2,
             "the entity pool and the CAS, and not the String"
+        );
+        assert_eq!(
+            h.versioned_pools().len(),
+            1,
+            "the CAS is plain SQLite and has nothing to commit"
         );
         h.close_all().await;
         assert!(h.pools().iter().all(|p| p.is_closed()), "all closed");

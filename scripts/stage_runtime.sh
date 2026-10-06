@@ -168,14 +168,14 @@ stage_tree() { # kind, version, source node_modules dir
 }
 
 # Drop a package we deliberately do not ship, and any symlink left
-# pointing into it:
+# pointing into it. Today that is typescript: qmd's only peer
+# dependency, ~23 MB, and its CLI never imports it at runtime
+# (dev-time tsx/typechecking).
 #
-#   * typescript is qmd's only peer dependency, ~23 MB, and its CLI
-#     never imports it at runtime (dev-time tsx/typechecking).
-#   * playwright (with playwright-core, ~17 MB of a 28 MB tree) backs
-#     latchkey's browser-login flows, which datalib never invokes;
-#     latchkey degrades gracefully when the import fails, the same way
-#     its own bun-compiled release binaries do.
+# Not playwright, though it is most of latchkey's tree: it is what
+# `latchkey auth browser` and `ensure-browser` import, and the wizard's
+# "Latchkey auth" button runs both. Without it latchkey reports itself
+# as "the standalone latchkey binary" and every browser login fails.
 #
 # The dangling-symlink sweep is the part worth keeping: pnpm's layout
 # reaches a package through several links, and a link pointing at
@@ -197,7 +197,6 @@ stage_tree qmd "$qmd_version" "$bin/third-party/qmd/runtime/node_modules"
 prune_pkg "$runtime_dir/qmd/$qmd_version/node_modules" 'typescript@*'
 
 stage_tree latchkey "$latchkey_version" "$bin/third-party/latchkey/runtime/node_modules"
-prune_pkg "$runtime_dir/latchkey/$latchkey_version/node_modules" 'playwright*'
 
 # ---------------------------------------------------------------------------
 # The node-llama-cpp platform filter.
@@ -300,6 +299,18 @@ smoke_ok=1
 "$runtime_dir/node/bin/node" "$smoke" || smoke_ok=""
 rm -f "$smoke"
 [[ -n "$smoke_ok" ]] || fail "the staged node-llama-cpp binding does not load"
+
+# latchkey imports playwright lazily, so a tree without it passes the
+# entry check above and still fails every browser login. Resolved from
+# inside the real package directory, as latchkey's own import is.
+latchkey_pkg="$(cd -P "$runtime_dir/latchkey/$latchkey_version/node_modules/latchkey" && pwd -P)"
+smoke="$latchkey_pkg/.stage_runtime_smoke.mjs"
+echo 'await import("playwright");' > "$smoke"
+log "smoke: latchkey resolves playwright"
+smoke_ok=1
+"$runtime_dir/node/bin/node" "$smoke" || smoke_ok=""
+rm -f "$smoke"
+[[ -n "$smoke_ok" ]] || fail "the staged latchkey tree cannot import playwright; browser logins would fail"
 
 # Drop trees whose version is no longer pinned (left behind by a bump),
 # so incremental build machines don't ship dead weight.

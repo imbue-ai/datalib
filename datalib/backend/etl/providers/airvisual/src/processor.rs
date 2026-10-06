@@ -43,19 +43,21 @@ impl DataProcessor for AirvisualIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            devices: self.devices.clone(),
-            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        let pool = db.pool().clone();
+        ctx.run_store(pool, None, |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                devices: self.devices.clone(),
+                cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "devices={} files={} files_skipped={} lines={} samples={} sentinels={} clock_unset={} bad_lines={} errors={}",
+                s.devices, s.files, s.files_skipped, s.lines, s.samples, s.sentinels, s.clock_unset, s.bad_lines, s.errors,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "devices={} files={} files_skipped={} lines={} samples={} sentinels={} clock_unset={} bad_lines={} errors={}",
-            s.devices, s.files, s.files_skipped, s.lines, s.samples, s.sentinels, s.clock_unset, s.bad_lines, s.errors,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

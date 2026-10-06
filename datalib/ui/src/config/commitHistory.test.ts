@@ -20,10 +20,16 @@ const commit = (
 
 const table = (table: string, rows: number, added = 0, deleted = 0, modified = 0) => ({
   table,
+  records: true,
   rows,
   added,
   deleted,
   modified,
+});
+/// A table the server says is datalib's own, not the source's records.
+const bookkeeping = (name: string, rows: number, added = 0, deleted = 0, modified = 0) => ({
+  ...table(name, rows, added, deleted, modified),
+  records: false,
 });
 
 describe("historyRows", () => {
@@ -41,9 +47,10 @@ describe("historyRows", () => {
               "download slack: msgs=1 run=job-7",
               [
                 table("messages", 1411, 1411),
-                table("messages_bookkeeping", 1411, 1411),
+                bookkeeping("messages_bookkeeping", 1411, 1411),
                 table("users", 413, 0, 2, 5),
-                table("users_bookkeeping", 413, 0, 2, 5),
+                bookkeeping("users_bookkeeping", 413, 0, 2, 5),
+                bookkeeping("ingested_files", 9, 3, 0, 6),
               ],
               "job-7",
             ),
@@ -57,6 +64,7 @@ describe("historyRows", () => {
       ["commit", "download slack: msgs=1"],
       ["table", "messages"],
       ["table", "users"],
+      ["table", "ingested_files"],
     ]);
     const [store, c, messages] = rows;
     expect(store.path).toEqual(["slack/ingest/entities.doltlite_db"]);
@@ -67,6 +75,8 @@ describe("historyRows", () => {
     ]);
     expect(c.stepId).toBe("slack/ingest");
     expect(c.run).toBe("job-7");
+    // Summed over the record tables: the sidecars and `ingested_files`
+    // moved too, and count for nothing.
     expect(c.rows).toBe(1824);
     expect([c.added, c.deleted, c.modified]).toEqual([1411, 2, 5]);
     expect(messages.path[2]).toBe("slack/ingest/entities.doltlite_db@aaa#messages");
@@ -74,15 +84,15 @@ describe("historyRows", () => {
   });
 
   it("keeps each store's walk order and never interleaves stores", () => {
-    const blobs: TreeHistory = {
+    const slack: TreeHistory = {
       tree: "slack",
       stores: [
         {
-          path: "slack/ingest/blobs.doltlite_db",
+          path: "slack/render_markdown/indexed_markdown.doltlite_db",
           truncated: false,
           commits: [
-            commit("b2", "2026-09-08T20:54:34+00:00", "checkpoint blobs"),
-            commit("b1", "2026-09-08T20:54:34+00:00", "Initialize data repository"),
+            commit("r2", "2026-09-08T20:54:34+00:00", "checkpoint slack"),
+            commit("r1", "2026-09-08T20:54:34+00:00", "Initialize data repository"),
           ],
         },
         {
@@ -95,16 +105,16 @@ describe("historyRows", () => {
         },
       ],
     };
-    const rows = historyRows([blobs]);
+    const rows = historyRows([slack]);
     expect(rows.map((r) => r.hash ?? r.label)).toEqual([
-      "blobs.doltlite_db",
-      "b2",
-      "b1",
+      "indexed_markdown.doltlite_db",
+      "r2",
+      "r1",
       "entities.doltlite_db",
       "e2",
       "e1",
     ]);
-    expect(truncatedStores([blobs])).toEqual(["slack/ingest/entities.doltlite_db"]);
+    expect(truncatedStores([slack])).toEqual(["slack/ingest/entities.doltlite_db"]);
   });
 
   it("names a sidecar by its suffix alone", () => {

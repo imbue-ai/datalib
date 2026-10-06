@@ -1,15 +1,14 @@
 //! Reading a doltlite store at one commit.
 //!
-//! A plain `SELECT` reads doltlite's working set, which lives in the file
-//! and is shared across processes, so it returns rows the writer has
-//! `COMMIT`ed at the SQL level but not yet committed to doltlite
-//! (`doltlite_two_process_test` measures exactly that window). Anything
-//! reading a store some other process writes reads committed state
-//! instead: `dolt_at_<table>('<hash>')`, for a hash it resolved once.
+//! A plain `SELECT` on a branch reads that branch's working set, rows the
+//! writer has not committed to doltlite included. Anything reading a store
+//! some other process writes reads one commit instead: it resolves a hash
+//! once and opens `<store>@<hash>` read-only ([`open_at`]), a detached
+//! connection on which every plain table name reads that commit
+//! (docs/dev/doltlite.md#three-ways-to-read-one-commit).
 //!
 //! This crate is the part of that discipline with no dependencies: the
-//! hash as a type, HEAD, and the read-only open. `datalib_etl::pin` builds
-//! the per-connection `pinned_<table>` views on top of it.
+//! hash as a type, HEAD, and the two read-only opens.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -54,10 +53,12 @@ impl Pin {
     }
 
     /// The table expression that reads `table` at this commit. Safe to
-    /// splice into SQL for a `table` that is a literal in the caller: the
-    /// hash was checked by [`Pin::at`].
+    /// splice into SQL for any table name: the module name is a quoted
+    /// identifier, which doltlite resolves case and all, and the hash was
+    /// checked by [`Pin::at`].
     pub fn table(&self, table: &str) -> String {
-        format!("dolt_at_{table}('{}')", self.0)
+        let module = format!("dolt_at_{table}").replace('"', "\"\"");
+        format!("\"{module}\"('{}')", self.0)
     }
 }
 
@@ -65,10 +66,10 @@ impl Pin {
 /// commits yet, or a build without the dolt extensions, which read the
 /// same: nothing to pin.
 pub async fn head(pool: &SqlitePool) -> Result<Option<Pin>> {
-    // A scalar function answers from the session's last view of the
-    // store; it is a table read that reloads the root from the file. So
-    // one first, or a connection held across a writer's commit keeps
-    // reporting the HEAD it opened at (`a_pinned_read_names_one_commit`).
+    // A table read first: a bare `dolt_hashof` answers from the session's
+    // last view, so a connection held across a writer's commit would keep
+    // reporting the HEAD it opened at (`a_pinned_read_names_one_commit`;
+    // docs/dev/doltlite.md#what-a-read-only-connection-may-do).
     let _: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master")
         .fetch_one(pool)
         .await?;
@@ -81,50 +82,49 @@ pub async fn head(pool: &SqlitePool) -> Result<Option<Pin>> {
     commit.map(Pin::at).transpose()
 }
 
-/// Whether this connection has a table it cannot read pinned.
-///
-/// Doltlite registers a `dolt_at_<table>` module per table it finds in
-/// any commit — when the connection opens, and again after that
-/// connection's own `dolt_commit`. A table another process committed
-/// after this connection opened has no module here, and never will:
-/// reading it pinned fails with "no such table: dolt_at_<table>" for as
-/// long as the connection lives. A long-lived reader that finds this
-/// true reopens; a table that is merely uncommitted so far reads the
-/// same way and the reopen is harmless.
-pub async fn has_unpinnable_tables(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
-    let n: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master \
-          WHERE type = 'table' AND name NOT LIKE 'sqlite_%' \
-            AND 'dolt_at_' || name NOT IN (SELECT name FROM pragma_module_list)",
-    )
-    .fetch_one(pool)
-    .await?;
-    Ok(n > 0)
+/// Something a statement named that the store, at the commit read, does
+/// not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Missing {
+    /// A table, by its bare name: a `dolt_at_` module counts as the table
+    /// it reads.
+    Table(String),
+    Column(String),
 }
 
-/// True iff `e` is SQLite's "no such table" for `table` read bare or
-/// through its `dolt_at_` module — the fresh-store state, before whatever
-/// owns the table has committed it. Deliberately an exact match on the
-/// one table the query reads, so corruption, bad SQL and missing columns
-/// still surface as errors.
-pub fn is_missing_table(e: &sqlx::Error, table: &str) -> bool {
-    match e {
-        sqlx::Error::Database(db) => {
-            let m = db.message();
-            m == format!("no such table: {table}") || m == format!("no such table: dolt_at_{table}")
-        }
-        _ => false,
+/// The one reading of "this store lacks what the query named": SQLite's
+/// "no such table" and "no such column", doltlite's "table not found:
+/// <table> at <hash>" for a table the schema has and that commit does
+/// not, and sqlx's own column-not-found when a row is decoded by a column
+/// the `SELECT *` did not return. `None` for anything else, so corruption
+/// and bad SQL still surface as errors.
+pub fn missing_schema(e: &sqlx::Error) -> Option<Missing> {
+    let m = match e {
+        sqlx::Error::ColumnNotFound(column) => return Some(Missing::Column(column.clone())),
+        sqlx::Error::Database(db) => db.message(),
+        _ => return None,
+    };
+    if let Some(table) = m.strip_prefix("no such table: ") {
+        let table = table.strip_prefix("dolt_at_").unwrap_or(table);
+        return Some(Missing::Table(table.to_string()));
     }
+    if let Some((table, _commit)) = m
+        .strip_prefix("table not found: ")
+        .and_then(|rest| rest.split_once(" at "))
+    {
+        return Some(Missing::Table(table.to_string()));
+    }
+    m.strip_prefix("no such column: ")
+        .map(|column| Missing::Column(column.to_string()))
 }
 
-/// A reader's handle on a store some other process writes.
-///
-/// Read-only, so "a reader must not write" is the engine's rule rather
-/// than an intention; never creates the file, because a root that has
-/// not synced has none and the reader must not be what makes it. One
-/// connection, never recycled: doltlite's session state is per
-/// connection, and a replacement starts on `main` with a clean tree. The
-/// acquire timeout is [`acquire_timeout`].
+/// True iff `e` says `table` is not there to read: the fresh-store state,
+/// before whatever owns the table has committed it. Deliberately a match
+/// on the one table the query reads.
+pub fn is_missing_table(e: &sqlx::Error, table: &str) -> bool {
+    matches!(missing_schema(e), Some(Missing::Table(t)) if t == table)
+}
+
 /// How long a pool waits for its one connection before giving up. Far past
 /// sqlx's 30s default because a cold open of a multi-GB store legitimately
 /// takes seconds inside `sqlite3_open_v2`; five minutes is "something else
@@ -144,10 +144,53 @@ pub fn acquire_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// A read-only handle on the file's default branch, `main`: what has been
+/// published, and nothing a writer still has in flight on its own branch.
+/// It follows `main` as it moves; to read one commit, [`open_at`].
+///
+/// Read-only, so "a reader must not write" is the engine's rule rather
+/// than an intention; never creates the file, because a root that has
+/// not synced has none and the reader must not be what makes it. One
+/// connection, never recycled: doltlite's session state is per
+/// connection. The acquire timeout is [`acquire_timeout`].
 pub async fn open_reader(db_path: &Path) -> Result<SqlitePool, sqlx::Error> {
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
         .read_only(true)
         .create_if_missing(false);
+    reader_pool(opts).await
+}
+
+/// A read-only handle on `db_path` at `pin`: doltlite opens `<file>@<hash>`
+/// detached, so every plain table name on it reads that commit, the file's
+/// working set is out of reach, indexes work, and no peer moving a branch
+/// moves it (docs/dev/doltlite.md#opening-a-revision-by-path).
+///
+/// Its `sqlite_master` is the commit's schema: a table that commit does
+/// not have is `no such table`, the same as one never created.
+pub async fn open_at(db_path: &Path, pin: &Pin) -> Result<SqlitePool, sqlx::Error> {
+    // `filename`, not a `sqlite://` URL: the `@` would parse as userinfo.
+    let opts = SqliteConnectOptions::new()
+        .filename(format!("{}@{}", db_path.display(), pin.commit()))
+        .read_only(true)
+        .create_if_missing(false);
+    reader_pool(opts).await
+}
+
+/// Whether the commit a pool reads holds any table of its own. On an
+/// [`open_at`] pool that is the question "is this store readable at this
+/// commit": a doltlite file is born with a commit that holds nothing, and
+/// a reader that took it for an empty store would report a source that
+/// lost every row.
+pub async fn holds_a_table(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(n > 0)
+}
+
+async fn reader_pool(opts: SqliteConnectOptions) -> Result<SqlitePool, sqlx::Error> {
     SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -181,7 +224,11 @@ mod tests {
         }
         assert_eq!(
             Pin::at(HASH).unwrap().table("grid_rows"),
-            format!("dolt_at_grid_rows('{HASH}')")
+            format!("\"dolt_at_grid_rows\"('{HASH}')")
+        );
+        assert_eq!(
+            Pin::at(HASH).unwrap().table("Adobe \"x\""),
+            format!("\"dolt_at_Adobe \"\"x\"\"\"('{HASH}')")
         );
     }
 
@@ -292,13 +339,11 @@ mod tests {
         assert_eq!(count_at(&r, &first).await.unwrap(), 1);
     }
 
-    /// A table committed after the reader opened cannot be read pinned on
-    /// that connection — the module is registered at open — and the
-    /// reader can tell, and a reopen is the cure. Until the table is
-    /// committed at all it reads as missing, the same as one never
-    /// created.
+    /// A table committed after the reader opened reads pinned on that same
+    /// connection, with no reopen. At a commit from before it existed it
+    /// reads as missing, the same as one never created.
     #[tokio::test]
-    async fn a_table_committed_after_the_reader_opened_needs_a_reopen() {
+    async fn a_table_committed_after_the_reader_opened_reads_without_a_reopen() {
         let td = tempfile::tempdir().unwrap();
         let db = td.path().join("t.doltlite_db");
         let w = writer(&db).await;
@@ -310,7 +355,6 @@ mod tests {
             .await
             .unwrap()
             .expect("a store is born with a commit");
-        assert!(!has_unpinnable_tables(&r).await.unwrap());
         let e = count_at(&r, &born).await.unwrap_err();
         assert!(is_missing_table(&e, "t"), "{e}");
         assert!(!is_missing_table(&e, "u"), "{e}");
@@ -319,22 +363,47 @@ mod tests {
             .execute(&w)
             .await
             .unwrap();
-        assert!(
-            has_unpinnable_tables(&r).await.unwrap(),
-            "created but not committed: no module, and there should not be one"
-        );
         insert(&w, 1).await;
         commit(&w).await.unwrap();
         let first = head(&r).await.unwrap().unwrap();
         assert_ne!(first, born);
-        let e = count_at(&r, &first).await.unwrap_err();
-        assert!(is_missing_table(&e, "t"), "{e}");
-        assert!(has_unpinnable_tables(&r).await.unwrap());
-
-        r.close().await;
-        let r = open_reader(&db).await.unwrap();
-        assert!(!has_unpinnable_tables(&r).await.unwrap());
         assert_eq!(count_at(&r, &first).await.unwrap(), 1);
+        let e = count_at(&r, &born).await.unwrap_err();
+        assert!(is_missing_table(&e, "t"), "{e}");
+        assert!(!is_missing_table(&e, "u"), "{e}");
+    }
+
+    /// Every way a read can name what the store lacks is one answer, and
+    /// a statement that is simply wrong is none.
+    #[tokio::test]
+    async fn a_missing_table_or_column_is_one_answer_and_bad_sql_is_not() {
+        use sqlx::Row;
+        let td = tempfile::tempdir().unwrap();
+        let w = writer(&td.path().join("t.doltlite_db")).await;
+        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            .execute(&w)
+            .await
+            .unwrap();
+        insert(&w, 1).await;
+        let err = |sql: &'static str| {
+            let w = w.clone();
+            async move { sqlx::query(sql).fetch_all(&w).await.unwrap_err() }
+        };
+        assert_eq!(
+            missing_schema(&err("SELECT * FROM u").await),
+            Some(Missing::Table("u".into()))
+        );
+        assert_eq!(
+            missing_schema(&err("SELECT nope FROM t").await),
+            Some(Missing::Column("nope".into()))
+        );
+        assert_eq!(missing_schema(&err("SELEKT 1").await), None);
+        let row = sqlx::query("SELECT * FROM t").fetch_one(&w).await.unwrap();
+        let decoded = row.try_get::<i64, _>("nope").unwrap_err();
+        assert_eq!(
+            missing_schema(&decoded),
+            Some(Missing::Column("nope".into()))
+        );
     }
 
     /// A reader must never be the thing that creates the writer's file.

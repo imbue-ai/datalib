@@ -14,10 +14,11 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 /// Delete the rows of `table` inside `scope` whose id is not in `keep`,
-/// and their bookkeeping sidecars. Returns the ids that went.
+/// their bookkeeping sidecars and their fetch problems. Returns the ids
+/// that went.
 ///
 /// `scope` is the bound the caller re-enumerated, as `(column, value)`
 /// equality pairs — `[("repo_full_name", repo), ("pr_number", num)]` for one
@@ -28,6 +29,20 @@ use sqlx::SqlitePool;
 /// identifiers. Values are bound.
 pub async fn prune_scope(
     pool: &SqlitePool,
+    table: &str,
+    scope: &[(&str, &str)],
+    keep: &HashSet<String>,
+) -> Result<Vec<String>> {
+    let mut tx = pool.begin().await.context("begin prune tx")?;
+    let gone = prune_scope_in_tx(&mut tx, table, scope, keep).await?;
+    tx.commit().await.context("commit prune tx")?;
+    Ok(gone)
+}
+
+/// [`prune_scope`] inside the caller's transaction, so the rows that
+/// replace a collection and the prune of what it lost land together.
+pub async fn prune_scope_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
     table: &str,
     scope: &[(&str, &str)],
     keep: &HashSet<String>,
@@ -47,7 +62,7 @@ pub async fn prune_scope(
         q = q.bind((*val).to_string());
     }
     let present: Vec<String> = q
-        .fetch_all(pool)
+        .fetch_all(&mut **tx)
         .await
         .with_context(|| format!("list {table} ids in scope for prune"))?;
 
@@ -55,11 +70,7 @@ pub async fn prune_scope(
         .into_iter()
         .filter(|id| !keep.contains(id))
         .collect();
-    if gone.is_empty() {
-        return Ok(gone);
-    }
 
-    let mut tx = pool.begin().await.context("begin prune tx")?;
     for chunk in gone.chunks(crate::bulk::SQL_CHUNK) {
         let mut placeholders = String::new();
         crate::bulk::push_placeholder_list(&mut placeholders, chunk.len());
@@ -73,13 +84,97 @@ pub async fn prune_scope(
             for id in chunk {
                 q = q.bind(id.clone());
             }
-            q.execute(&mut *tx)
+            q.execute(&mut **tx)
                 .await
                 .with_context(|| format!("prune {table}"))?;
         }
+        forget_problems_in_tx(tx, table, &placeholders, chunk).await?;
     }
-    tx.commit().await.context("commit prune tx")?;
     Ok(gone)
+}
+
+/// A record upstream no longer has cannot fail to fetch, so its problem
+/// goes with it rather than standing for good.
+async fn forget_problems_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    table: &str,
+    placeholders: &str,
+    ids: &[String],
+) -> Result<()> {
+    let sql =
+        format!("DELETE FROM problems WHERE scope_kind = ? AND scope_key IN ({placeholders})");
+    // Audited: the IN-list is a `?,?,?` run sized from `ids`; every key is
+    // bound.
+    let mut q =
+        sqlx::query(sqlx::AssertSqlSafe(sql)).bind(datalib_problems::ScopeKind::Entity.as_str());
+    for id in ids {
+        q = q.bind(format!("{table}:{id}"));
+    }
+    q.execute(&mut **tx)
+        .await
+        .with_context(|| format!("forget the problems of pruned {table} rows"))?;
+    Ok(())
+}
+
+/// Delete the rows of `table` whose `owner_column` is one of `owners`, their
+/// bookkeeping sidecars and their fetch problems: the CAS edges of records
+/// a prune removed.
+/// Returns how many rows went.
+///
+/// `table` and `owner_column` are interpolated; callers pass trusted
+/// identifiers. The owners are bound.
+pub async fn delete_owned(
+    pool: &SqlitePool,
+    table: &str,
+    owner_column: &str,
+    owners: &[String],
+) -> Result<u64> {
+    let mut tx = pool.begin().await.context("begin delete_owned tx")?;
+    let removed = delete_owned_in_tx(&mut tx, table, owner_column, owners).await?;
+    tx.commit().await.context("commit delete_owned tx")?;
+    Ok(removed)
+}
+
+/// [`delete_owned`] inside the caller's transaction.
+pub async fn delete_owned_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    table: &str,
+    owner_column: &str,
+    owners: &[String],
+) -> Result<u64> {
+    let mut removed = 0;
+    for chunk in owners.chunks(crate::bulk::SQL_CHUNK) {
+        let mut placeholders = String::new();
+        crate::bulk::push_placeholder_list(&mut placeholders, chunk.len());
+        let sidecar = format!(
+            "DELETE FROM {table}_bookkeeping WHERE id IN \
+             (SELECT id FROM {table} WHERE {owner_column} IN ({placeholders}))"
+        );
+        let problems = format!(
+            "DELETE FROM problems WHERE scope_kind = '{entity}' AND scope_key IN \
+             (SELECT '{table}:' || id FROM {table} WHERE {owner_column} IN ({placeholders}))",
+            entity = datalib_problems::ScopeKind::Entity.as_str(),
+        );
+        let rows = format!("DELETE FROM {table} WHERE {owner_column} IN ({placeholders})");
+        for (i, sql) in [sidecar, problems, rows].into_iter().enumerate() {
+            // Audited: `table` and `owner_column` are `&'static str` at every
+            // callsite, the scope kind a closed vocabulary's spelling; the
+            // IN-list is a `?,?,?` run sized from the chunk and every owner
+            // is bound.
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+            for id in chunk {
+                q = q.bind(id.clone());
+            }
+            let done = q
+                .execute(&mut **tx)
+                .await
+                .with_context(|| format!("delete owned {table}"))?;
+            if i == 2 {
+                removed += done.rows_affected();
+            }
+        }
+    }
+    Ok(removed)
 }
 
 /// Note that a prune took place, loudly when it was a big one.
@@ -136,16 +231,10 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// `prune_scope` must delete inside its scope and nowhere else. The
-    /// scope is the whole safety story now that nothing vetoes a large
-    /// prune: a scope that leaks deletes rows the caller never enumerated.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn prune_scope_deletes_only_inside_its_scope() {
-        let d = tempfile::tempdir().unwrap();
-        let db = d.path().join("t.doltlite_db");
-        // With its bookkeeping sidecar, because that is the shape every
-        // caller has and `prune_scope` clears both. A table without one is
-        // not an entity table and has no business being pruned here.
+    // With its bookkeeping sidecar, because that is the shape every
+    // caller has and `prune_scope` clears both. A table without one is
+    // not an entity table and has no business being pruned here.
+    async fn open_notes(db: &std::path::Path) -> SqlitePool {
         let ddl = [
             "CREATE TABLE IF NOT EXISTS notes (
              id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT )"
@@ -153,10 +242,56 @@ mod tests {
             crate::doltlite_raw::bookkeeping_ddl_for("notes"),
         ];
         let slices: Vec<&str> = ddl.iter().map(String::as_str).collect();
-        let pool =
-            crate::doltlite_raw::open_derived(&db, &slices, crate::doltlite_raw::StoreKind::Raw)
+        crate::doltlite_raw::open(db, &slices).await.unwrap()
+    }
+
+    async fn record_failed(pool: &SqlitePool, id: &str) {
+        let mut tx = pool.begin().await.unwrap();
+        crate::doltlite_raw::record_object_error(&mut tx, "notes", id, "HTTP 500")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    async fn problem_keys(pool: &SqlitePool) -> Vec<String> {
+        sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    /// A record upstream no longer has takes its fetch problem with it,
+    /// whichever way it is pruned; a kept record keeps its own.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_pruned_record_takes_its_problem_with_it() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = open_notes(&d.path().join("t.doltlite_db")).await;
+        for (id, owner) in [("a", "x"), ("b", "x"), ("e1", "gone")] {
+            sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
+                .bind(id)
+                .bind(owner)
+                .execute(&pool)
                 .await
                 .unwrap();
+            record_failed(&pool, id).await;
+        }
+        let keep: HashSet<String> = ["a".to_string()].into_iter().collect();
+        prune_scope(&pool, "notes", &[("owner", "x")], &keep)
+            .await
+            .unwrap();
+        delete_owned(&pool, "notes", "owner", &["gone".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(problem_keys(&pool).await, ["notes:a"]);
+    }
+
+    /// `prune_scope` must delete inside its scope and nowhere else. The
+    /// scope is the whole safety story now that nothing vetoes a large
+    /// prune: a scope that leaks deletes rows the caller never enumerated.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn prune_scope_deletes_only_inside_its_scope() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = open_notes(&d.path().join("t.doltlite_db")).await;
         for (id, owner) in [("a", "x"), ("b", "x"), ("c", "y")] {
             sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
                 .bind(id)
@@ -191,21 +326,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn an_empty_scope_covers_the_table() {
         let d = tempfile::tempdir().unwrap();
-        let db = d.path().join("t.doltlite_db");
-        // With its bookkeeping sidecar, because that is the shape every
-        // caller has and `prune_scope` clears both. A table without one is
-        // not an entity table and has no business being pruned here.
-        let ddl = [
-            "CREATE TABLE IF NOT EXISTS notes (
-             id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT )"
-                .to_string(),
-            crate::doltlite_raw::bookkeeping_ddl_for("notes"),
-        ];
-        let slices: Vec<&str> = ddl.iter().map(String::as_str).collect();
-        let pool =
-            crate::doltlite_raw::open_derived(&db, &slices, crate::doltlite_raw::StoreKind::Raw)
-                .await
-                .unwrap();
+        let pool = open_notes(&d.path().join("t.doltlite_db")).await;
         for id in ["a", "b"] {
             sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, 'x', '{}')")
                 .bind(id)
@@ -216,5 +337,29 @@ mod tests {
         let keep: HashSet<String> = ["a".to_string()].into_iter().collect();
         let gone = prune_scope(&pool, "notes", &[], &keep).await.unwrap();
         assert_eq!(gone, vec!["b".to_string()]);
+    }
+
+    /// A pruned record's edges go with it, and nobody else's.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_owned_removes_only_the_named_owners_rows() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = open_notes(&d.path().join("t.doltlite_db")).await;
+        for (id, owner) in [("e1", "gone"), ("e2", "gone"), ("e3", "kept")] {
+            sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
+                .bind(id)
+                .bind(owner)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let n = delete_owned(&pool, "notes", "owner", &["gone".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(n, 2);
+        let left: Vec<String> = sqlx::query_scalar("SELECT id FROM notes")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, vec!["e3".to_string()]);
     }
 }

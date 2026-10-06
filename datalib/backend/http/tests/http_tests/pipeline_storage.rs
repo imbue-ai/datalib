@@ -2,14 +2,10 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use datalib_core::app_store::AppStore;
-use datalib_http::applets::AppletRegistry;
-use datalib_http::{router, ApiToken, AppState};
-use std::path::Path;
-use std::sync::Arc;
+use datalib_http::router;
 use tower::ServiceExt;
 
-const TEST_TOKEN: &str = "pipeline-storage-test-token";
+use crate::support::{state, TEST_TOKEN};
 
 const CONFIG: &str = r#"
 [[groups]]
@@ -42,25 +38,6 @@ group = "pdfs"
 function = "render_markdown"
 inputs = ["pdfs/ingest"]
 "#;
-
-async fn state(root: &Path) -> AppState {
-    let root = Arc::new(root.to_path_buf());
-    let app = AppStore::open(root.as_path())
-        .await
-        .expect("open app stores");
-    AppState {
-        root: root.clone(),
-        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
-        app: Arc::new(app),
-        root_tx: tokio::sync::broadcast::channel(16).0,
-        // Deliberately no sampler task: these tests drive the walk
-        // through the endpoint, which is the path under test.
-        usage: Default::default(),
-        newer_root: Vec::new(),
-        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
-    }
-}
 
 async fn storage(app: &axum::Router, query: &str) -> serde_json::Value {
     let resp = app
@@ -132,11 +109,7 @@ async fn a_refresh_sees_bytes_written_since_the_last_walk() {
         vec![7u8; 4096],
     )
     .unwrap();
-    std::fs::write(
-        td.path().join("pdfs/ingest/blobs.doltlite_db"),
-        vec![7u8; 1024],
-    )
-    .unwrap();
+    std::fs::write(td.path().join("pdfs/ingest/blobs.sqlite"), vec![7u8; 1024]).unwrap();
 
     let after = storage(&app, "?refresh=1").await;
     let raw = tree(&after, "pdfs/ingest");
@@ -210,11 +183,7 @@ async fn a_group_directory_is_a_measured_tree_of_its_own() {
 
     std::fs::create_dir_all(td.path().join("pdfs/ingest")).unwrap();
     std::fs::create_dir_all(td.path().join("pdfs/render_markdown")).unwrap();
-    std::fs::write(
-        td.path().join("pdfs/ingest/blobs.doltlite_db"),
-        vec![7u8; 1024],
-    )
-    .unwrap();
+    std::fs::write(td.path().join("pdfs/ingest/blobs.sqlite"), vec![7u8; 1024]).unwrap();
     std::fs::write(td.path().join("pdfs/render_markdown/a.md"), vec![7u8; 100]).unwrap();
 
     let after = storage(&app, "?refresh=1").await;

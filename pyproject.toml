@@ -17,6 +17,9 @@ package = false
 dev = [
     "ruff>=0.14.0",
     "pyright>=1.1.400",
+    # Test-only: `//tests/fixtures:metrics_export_e2e_test` reads
+    # `GET /metrics` with Prometheus's own parser.
+    "prometheus-client>=0.21.0",
 ]
 
 [tool.ruff]

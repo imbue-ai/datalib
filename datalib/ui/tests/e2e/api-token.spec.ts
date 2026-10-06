@@ -7,6 +7,7 @@
 // on (search, assets, the SSE stream) rides that cookie.
 
 import { test, expect } from "@playwright/test";
+import { cardOf, GRID } from "./grid-helpers";
 
 // The same value playwright.config.ts minted and handed to the backend
 // via DATALIB_TOKEN. Read from env because the config caches it there
@@ -19,7 +20,7 @@ const TOKEN = process.env.DATALIB_TOKEN;
 test.use({ extraHTTPHeaders: {} });
 
 test("no token means no app, on the page and on the API", async ({ page, request }) => {
-  const resp = await page.goto("/");
+  const resp = await page.goto(GRID);
   expect(resp?.status()).toBe(401);
   await expect(page.getByText("This browser isn't authenticated")).toBeVisible();
 
@@ -42,13 +43,14 @@ test("?token= mints a session cookie, then the app runs on it", async ({ page, c
   expect(cookie?.sameSite).toBe("Lax");
 
   // The app itself came up, which means the cookie carried the bundle,
-  // the /applet/unified_index/search behind the grid, and everything else the page asked
-  // for — no per-request token plumbing anywhere in the UI.
-  const firstRow = page.locator(".grid-box .slick-row").first();
+  // the /applet/unified_index/search behind the Dashboard's latest activity, and
+  // everything else the page asked for — no per-request token plumbing
+  // anywhere in the UI.
+  const firstRow = cardOf(page, "latestActivityView()").locator(".recent").first();
   await expect(firstRow).toBeVisible({ timeout: 20_000 });
 
   // And a fresh navigation with no token at all now works, because the
   // cookie is in the jar.
-  const again = await page.goto("/");
+  const again = await page.goto(GRID);
   expect(again?.status()).toBe(200);
 });

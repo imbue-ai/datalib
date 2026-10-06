@@ -3,9 +3,8 @@
 //! numbers: a per-day metric is `<metric>#<date>`, and the account
 //! singletons are named for the endpoint they came from.
 
-use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
-use datalib_etl_macros::{CasEdgeRow, RawTable, WirePayloadRow};
+use datalib_etl_macros::{RawTable, WirePayloadRow};
 
 pub const DATA_TABLES: &[&str] = &[
     "garmin_account",
@@ -45,7 +44,9 @@ pub struct DeviceRow {
 /// metric's endpoint returned for that day, verbatim. A day the
 /// endpoint had nothing for (204, 404, or an empty body) is stored as
 /// JSON `null`, so "asked and empty" is distinguishable from "never
-/// asked" and a re-walk rewrites nothing.
+/// asked" and a re-walk rewrites nothing. `fetched_on` is the run's date
+/// when the row was fetched: a day fetched before it had settled is
+/// fetched again (`ingest::settles_on`).
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "garmin_daily",
@@ -55,6 +56,7 @@ pub struct DailyRow {
     pub id_and_payload: WirePayload,
     pub metric: String,
     pub calendar_date: String,
+    pub fetched_on: Option<String>,
 }
 
 impl DailyRow {
@@ -79,7 +81,8 @@ pub const WEIGH_INS_BY_DATE_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS garmin_weigh_ins_by_date ON garmin_weigh_ins(calendar_date)";
 
 /// `garmin_activities` — one row per activity as the listing describes
-/// it, keyed on `activityId`.
+/// it, keyed on `activityId`. `listing_hash` is the blake3 of the payload:
+/// the version of the activity its detail and file are fetched for.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "garmin_activities")]
 pub struct ActivityRow {
@@ -87,6 +90,7 @@ pub struct ActivityRow {
     pub start_time_gmt: Option<String>,
     pub activity_type: Option<String>,
     pub name: Option<String>,
+    pub listing_hash: Option<String>,
 }
 
 pub const ACTIVITIES_BY_START_INDEX_DDL: &str =
@@ -94,33 +98,53 @@ pub const ACTIVITIES_BY_START_INDEX_DDL: &str =
 
 /// `garmin_activity_details` — `/activity-service/activity/<id>`, the
 /// fuller record (device, sensors, gear, summary), keyed like the list.
+/// `listing_hash` is the `garmin_activities.listing_hash` the detail was
+/// fetched for; a detail whose activity now lists differently is owed.
+/// An activity Garmin has no detail for holds JSON `null`.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "garmin_activity_details")]
 pub struct ActivityDetailRow {
     pub id_and_payload: WirePayload,
+    pub listing_hash: Option<String>,
 }
 
-/// `garmin_activity_files` — an activity's original FIT file in the CAS.
-/// `file_kind` is `fit`; the row exists with a NULL `blake3` when the
-/// fetch failed, so the next run retries it.
-#[derive(Debug, Clone, CasEdgeRow)]
-#[cas_edge_row(table = "garmin_activity_files")]
+/// `garmin_activity_files` — an activity's original FIT file in the CAS;
+/// `file_kind` is `fit`. `listing_hash` is the listing version the
+/// download was answered for, whatever the answer: the file (`blake3`
+/// set), no file at all, or one that could not be read (both `blake3`
+/// NULL). It is NULL when the request itself failed, which leaves the
+/// file owed.
+#[derive(Debug, Clone, RawTable)]
+#[raw_table(
+    table = "garmin_activity_files",
+    index = "garmin_activity_files_by_activity_id:activity_id",
+    index = "garmin_activity_files_by_file_kind:file_kind,blake3"
+)]
 pub struct ActivityFileRow {
     pub id: String,
     pub activity_id: String,
     pub file_kind: String,
     pub blake3: Option<String>,
+    pub listing_hash: Option<String>,
 }
 
-/// `garmin_wellness_files` — one day's wellness FIT bundle (a zip) in
-/// the CAS, keyed on the calendar day.
-#[derive(Debug, Clone, CasEdgeRow)]
-#[cas_edge_row(table = "garmin_wellness_files")]
+/// `garmin_wellness_files` — one row per calendar day the wellness
+/// bundle was asked for: the zip in the CAS (`blake3` set), or no bundle
+/// that day (`blake3` NULL). `fetched_on` is the run's date when Garmin
+/// answered, read as `garmin_daily.fetched_on` is; NULL when the request
+/// failed.
+#[derive(Debug, Clone, RawTable)]
+#[raw_table(
+    table = "garmin_wellness_files",
+    index = "garmin_wellness_files_by_calendar_date:calendar_date",
+    index = "garmin_wellness_files_by_file_kind:file_kind,blake3"
+)]
 pub struct WellnessFileRow {
     pub id: String,
     pub calendar_date: String,
     pub file_kind: String,
     pub blake3: Option<String>,
+    pub fetched_on: Option<String>,
 }
 
 pub const FILE_KIND_FIT: &str = "fit";
@@ -153,6 +177,7 @@ pub fn full_ddl() -> Vec<String> {
         ActivityRow::ddl(),
         ACTIVITIES_BY_START_INDEX_DDL.to_string(),
         ActivityDetailRow::ddl(),
+        datalib_etl::coverage::DDL.to_string(),
     ];
     out.extend(DailyRow::all_ddl());
     out.extend(ItemRow::all_ddl());

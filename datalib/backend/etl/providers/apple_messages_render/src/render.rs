@@ -6,9 +6,8 @@
 //! putting a message in its chat. Identity comes from the guids beside
 //! the rowids: a chat is its `chat.guid`, a message its `message.guid`,
 //! both Apple-issued and the same in every copy of one account's
-//! database. Attachments are named, not copied: the files sit under
-//! `~/Library/Messages/Attachments/`, which a picked `chat.db` grants no
-//! access to, so each renders as a placeholder carrying its path.
+//! database. Attachments are named, not copied (INGEST.md says why), so
+//! each renders as a placeholder carrying its path.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -17,13 +16,16 @@ use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION};
+use datalib_etl_chat_common::changed_chats;
+use datalib_etl_chat_common::render::{RenderProfile, ENTITY_KIND_CONVERSATION};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
+use datalib_handle::Handle;
 use datalib_id::{composite_key, entity_id_str, IdNamespace};
 use datalib_schema::providers::Provider;
 use datalib_time::RecordStampPrecision;
@@ -34,7 +36,9 @@ use crate::typedstream::attributed_body_text;
 
 /// v2: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
-pub const RENDER_VERSION: u32 = 2;
+/// v4: the author span carries the author's handle as `data-handle`.
+/// v5: a `+1` number without ten digits after the 1 has no handle.
+pub const RENDER_VERSION: u32 = 5;
 
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
@@ -90,18 +94,11 @@ fn profile() -> RenderProfile {
         reaction_kind: "Messages Tapback".to_string(),
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 
-/// What one render pass did: the cursor to stamp and every chat it
-/// declared.
-#[derive(Debug, Default)]
-pub struct RenderOutcome {
-    pub rendered: usize,
-    pub skipped: usize,
-    pub new_head: Option<String>,
-    pub buckets: Buckets,
-}
+pub use datalib_etl_chat_common::RenderOutcome;
 
 pub fn render(
     raw_dir: &Path,
@@ -131,51 +128,25 @@ pub fn render(
         })
     })?;
 
-    // The driver names stale buckets by chat uuid; the chats are by guid.
-    let by_uuid: HashMap<String, &str> = all_chats
-        .iter()
-        .map(|c| (c.chat_uuid.clone(), c.id.as_str()))
-        .collect();
-    let narrowed = range.narrow_by(forward.as_ref(), |key| {
-        by_uuid.get(key).map(|g| g.to_string())
+    let mut changed = changed_chats(all_chats, range, forward.as_ref(), |guid| {
+        chat_uuid(source_id, guid)
     });
-    // Named chats first, with no documents: one this run looked at that
-    // has no message left builds no chat, and chat-common never sees it.
-    // The rendered ones follow and replace that.
-    let mut buckets: Buckets = narrowed
-        .render
-        .iter()
-        .flatten()
-        .map(|guid| chat_uuid(source_id, guid))
-        .chain(narrowed.gone.iter().cloned())
-        .map(|key| Bucket {
-            key,
-            inputs: Vec::new(),
-        })
-        .collect();
-    let total = all_chats.len();
-    let chats: Vec<NormalizedChat> = match &narrowed.render {
-        None => all_chats,
-        Some(live) => all_chats
-            .into_iter()
-            .filter(|c| live.contains(&c.id))
-            .collect(),
-    };
     let summary = datalib_etl_chat_common::render_all(
         &profile(),
-        &chats,
+        &changed.chats,
         out_root,
         source_id,
         &HashMap::new(),
         progress,
         on_doc_complete,
     )?;
-    buckets.extend(summary.buckets);
+    changed.buckets.extend(summary.buckets);
     Ok(RenderOutcome {
         rendered: summary.docs_rendered,
-        skipped: total - chats.len(),
+        skipped: changed.skipped,
         new_head,
-        buckets,
+        scan_elapsed: None,
+        buckets: changed.buckets,
     })
 }
 
@@ -190,7 +161,7 @@ async fn load(
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<Loaded> {
-    let handles: HashMap<i64, String> = sqlx::query("SELECT ROWID, id FROM pinned_handle")
+    let handles: HashMap<i64, String> = sqlx::query("SELECT ROWID, id FROM handle")
         .fetch_all(pool)
         .await
         .context("select handle")?
@@ -200,12 +171,11 @@ async fn load(
 
     let mut chats: Vec<ChatBuild> = Vec::new();
     let mut chat_idx: HashMap<i64, usize> = HashMap::new();
-    let chat_rows = sqlx::query(
-        "SELECT ROWID, guid, chat_identifier, display_name FROM pinned_chat ORDER BY ROWID",
-    )
-    .fetch_all(pool)
-    .await
-    .context("select chat")?;
+    let chat_rows =
+        sqlx::query("SELECT ROWID, guid, chat_identifier, display_name FROM chat ORDER BY ROWID")
+            .fetch_all(pool)
+            .await
+            .context("select chat")?;
     for r in &chat_rows {
         let rowid: i64 = r.get("ROWID");
         let inputs = Inputs::default();
@@ -222,7 +192,7 @@ async fn load(
         });
     }
 
-    let members = sqlx::query("SELECT chat_id, handle_id FROM pinned_chat_handle_join")
+    let members = sqlx::query("SELECT chat_id, handle_id FROM chat_handle_join")
         .fetch_all(pool)
         .await
         .context("select chat_handle_join")?;
@@ -240,7 +210,7 @@ async fn load(
     }
 
     let mut chat_of_message: HashMap<i64, usize> = HashMap::new();
-    let joins = sqlx::query("SELECT chat_id, message_id FROM pinned_chat_message_join")
+    let joins = sqlx::query("SELECT chat_id, message_id FROM chat_message_join")
         .fetch_all(pool)
         .await
         .context("select chat_message_join")?;
@@ -258,8 +228,8 @@ async fn load(
     let files = sqlx::query(
         "SELECT j.message_id, a.ROWID AS attachment_id, a.filename, a.mime_type, \
                 a.transfer_name, a.total_bytes \
-           FROM pinned_message_attachment_join j \
-           JOIN pinned_attachment a ON a.ROWID = j.attachment_id",
+           FROM message_attachment_join j \
+           JOIN attachment a ON a.ROWID = j.attachment_id",
     )
     .fetch_all(pool)
     .await
@@ -298,7 +268,7 @@ async fn load(
         "SELECT ROWID, guid, text, attributedBody, date, is_from_me, is_read, handle_id, item_type, \
                 group_action_type, group_title, associated_message_guid, \
                 associated_message_type, associated_message_emoji \
-           FROM pinned_message ORDER BY date, ROWID",
+           FROM message ORDER BY date, ROWID",
     )
     .fetch_all(pool)
     .await
@@ -316,15 +286,16 @@ async fn load(
             chat.inputs.read("handle", &handle_id.to_string());
         }
         let from_me: i64 = r.get("is_from_me");
-        let (author_id, author_display) = if from_me == 1 {
-            ("me".to_string(), "Me".to_string())
+        let (author_handle, author_display) = if from_me == 1 {
+            (None, "Me".to_string())
         } else {
             let id = handles
                 .get(&handle_id)
                 .or(chat.identifier.as_ref())
                 .cloned()
                 .unwrap_or_else(|| "?".to_string());
-            (id.clone(), id)
+            // A Messages handle is a phone number or an Apple ID email.
+            (Handle::tel(&id).or_else(|| Handle::email(&id)), id)
         };
         let guid: String = r.get("guid");
         let date_ms = apple_date_ms(r.get("date"));
@@ -360,19 +331,21 @@ async fn load(
         };
         chat.items.push(NormalizedChatItem {
             message_uuid: message_uuid(source_id, &guid, date_ms),
-            author_id,
+            author_handle,
             author_display,
             date_ms,
             text: body_text(r.get("text"), r.get("attributedBody"), &guid),
             kind,
             attachments,
             reactions: Vec::new(),
+            labels: Vec::new(),
             system_note,
             source_url: None,
             kind_label: None,
             source_ref: Some(UpstreamRef::new(KIND_MESSAGE, guid)),
             is_aside: false,
             unread,
+            recipients: Vec::new(),
             problems: Vec::new(),
         });
     }
@@ -484,6 +457,7 @@ impl ChatBuild {
             .or(self.identifier)
             .unwrap_or_else(|| self.guid.clone());
         NormalizedChat {
+            contacts: Vec::new(),
             inputs: self.inputs.declared(),
             path_prefix: None,
             chat_uuid: chat_uuid(source_id, &self.guid),

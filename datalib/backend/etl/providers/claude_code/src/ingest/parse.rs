@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use datalib_etl_agent_sessions::SkippedLines;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -20,6 +21,8 @@ pub struct ParsedTranscript {
     pub meta: TranscriptMeta,
     pub records: Vec<ParsedRecord>,
     pub stats: ParseStats,
+    /// The lines that could not be used, for the file's problem row.
+    pub skipped: Option<String>,
 }
 
 impl ParsedTranscript {
@@ -102,21 +105,27 @@ pub fn parse_transcript(
     let mut custom_title = None;
     let mut ai_title = None;
     let mut agent_name = None;
+    let mut skipped = SkippedLines::default();
+    let mut last_line_no = 0;
 
-    for line in text.lines() {
+    for (i, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
+        let line_no = i + 1;
+        last_line_no = line_no;
         stats.lines += 1;
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => {
                 stats.malformed += 1;
+                skipped.skip(line_no, "not JSON");
                 continue;
             }
         };
         let Some(record_type) = v.get("type").and_then(Value::as_str) else {
             stats.malformed += 1;
+            skipped.skip(line_no, "no type");
             continue;
         };
         *meta
@@ -133,6 +142,7 @@ pub fn parse_transcript(
         if CONTENT_TYPES.contains(&record_type) {
             let Some(uuid) = str_field(&v, "uuid") else {
                 stats.unkeyed += 1;
+                skipped.skip(line_no, "a content record with no uuid");
                 continue;
             };
             note_record_facts(&mut meta, &v);
@@ -177,6 +187,7 @@ pub fn parse_transcript(
         meta,
         records,
         stats,
+        skipped: skipped.summary(last_line_no),
     })
 }
 
@@ -335,6 +346,29 @@ mod tests {
         );
         assert!(t.meta.models.contains("claude-opus-5"));
         assert_eq!(t.meta.record_counts["last-prompt"], 1);
+        assert_eq!(
+            t.skipped, None,
+            "a bad last line is a session still being written"
+        );
+    }
+
+    /// Lines stepped over anywhere but at the end are the file's problem,
+    /// a record with no uuid among them.
+    #[test]
+    fn an_interior_bad_line_is_a_problem() {
+        let text = [
+            line(user("u1", "2364-04-11T10:00:00.000Z", json!("Engage"))),
+            line(json!({"type": "user", "sessionId": "s1", "message": {"content": "x"}})),
+            "not json at all".to_string(),
+            line(user("u2", "2364-04-11T10:00:01.000Z", json!("Make it so"))),
+        ]
+        .join("\n");
+        let t = parse_transcript(&text, "p/s1.jsonl", None).unwrap();
+        assert_eq!(t.records.len(), 2);
+        assert_eq!(
+            t.skipped.as_deref(),
+            Some("2 lines could not be used; first: line 2, a content record with no uuid")
+        );
     }
 
     /// A session nobody named is titled by its first prompt, never by a

@@ -42,15 +42,16 @@ merge conflict waiting to happen.
 - [`datalib/backend/etl/macros/README.md`](datalib/backend/etl/macros/README.md) — the four table derives.
 - [`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md), [`…_practices.md`](docs/dev/data_architecture_ingestion_practices.md) — download: principles, then how to build a provider. A provider's own quirks are in the `INGEST.md` beside its code, where it has one.
 - [`docs/dev/data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md) — render: projection to `GridRow` + markdown, incrementality.
+- [`docs/dev/latchkey.md`](docs/dev/latchkey.md) — how a web source signs in: the three kinds of latchkey service, who names an account, the keychain, the gateway. Read before touching a sign-in.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column.
 - [`docs/dev/edges.md`](docs/dev/edges.md), [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — cross-document edges; the one rule for minting a uuid (read before any `*_uuid` recipe).
-- [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
+- [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — what the engine does (branches, locks, reads, diffs, plans, write cost, gc), inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
 - [`docs/dev/app_stores.md`](docs/dev/app_stores.md) — the stores `datalib-http` owns and where every store lives under a data root.
 
 **UI**
 
-- [`docs/dev/cards.md`](docs/dev/cards.md), [`docs/dev/dactal.md`](docs/dev/dactal.md) — the card system, the miller layout and the browser's history; the dactal view bridge.
+- [`docs/dev/cards.md`](docs/dev/cards.md), [`docs/dev/dactal.md`](docs/dev/dactal.md) — the card system and the containers layout that hosts every card; the dactal view bridge.
 - [`datalib/backend/etl/chat-common/README.md`](datalib/backend/etl/chat-common/README.md) — the one chat layout and the sanitizer allowlist. Read before changing how a message looks.
 - [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md) — a path field in the source wizard offers a native picker.
 - [`docs/dev/applets.md`](docs/dev/applets.md) — how to write an applet, and the secret every applet requires.
@@ -58,8 +59,8 @@ merge conflict waiting to happen.
 **Dev workflow**
 
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
-- [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell.
-- [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md).
+- [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell; how to audit the docs and the code for drift and copies.
+- [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md). Writing or fixing a Playwright spec: read its §"Writing a spec that does not flake" first.
 - [`docs/dev/ci.md`](docs/dev/ci.md) — CI, its caches and BuildBuddy, and reading a run.
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — how a release is assembled, and testing its steps from a mac.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md), [`runtime_fetch.md`](docs/dev/runtime_fetch.md), [`docker.md`](docs/dev/docker.md) — what ships beside the binaries: the Chrome-impersonating curl, the Node runtime, the container image.
@@ -86,13 +87,20 @@ saved queries, and an alias costs one line. And say what breaks: a
 change that invalidates a store or a config belongs in the commit
 message.
 
-## Prose can be stale — verify claims against the tree
+## A change keeps the docs true
 
-The docs and this repo's commit messages are detailed and
-well-argued, and that is what makes a wrong one dangerous: a
-well-reasoned paragraph reads as evidence. **Before reporting any "we
-now do X" or "X still needs doing" claim as current fact, verify it
-against the tree or the diff:**
+The reference docs — the ones the doc map lists, and the `README.md`,
+`INGEST.md` and `TRANSLATE.md` files beside the code — say what the
+tree does now. **A change that makes one of them wrong fixes it in the
+same change.** A doc carries no "current as of" date and no "the code
+wins" hedge: it is either right or it gets fixed. How to audit them
+against the tree, and the tree for copies:
+[`style.md`](docs/dev/style.md) §"Auditing the tree for drift and
+repetition".
+
+Plans, audits and commit messages are records of the day they were
+written, not of the tree. Before repeating a "we now do X" or "X still
+needs doing" from one of them as current fact, check it:
 
 ```sh
 git show --stat <sha>                    # did that commit touch what its message says?
@@ -104,9 +112,6 @@ grep -rn <thing-said-to-exist> <subtree> # is the thing there at all?
 one is self-concealing. Treat "now covered by a test" as unverified until
 you have read the assertion — and for a test whose job is to catch a
 silent no-op, until you have watched it fail against the broken behavior.
-
-When prose and the tree disagree, the tree wins. Fix the prose in the
-same change.
 
 ## Write plainspoken
 
@@ -166,49 +171,62 @@ datalib/
                    `datalib_schema` sits here or above.
     etl/timeseries_render/ what the time-series render crates share.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
-                   (config schema) per provider. Ten of the file-backed
-                   ones scan a local tree through etl/src/fsscan.rs
-                   (fsindex has its own walker over etl/src/fswalk.rs);
-                   four mirror a SQLite file through etl/sqlite_mirror/;
-                   two are sensor time series. fsindex, media, lightroom and apple_photos
-                   have no <p>_render.
+                   (config schema) per provider. Twelve of the
+                   file-backed ones scan a local tree through
+                   etl/src/fsscan.rs (claude_code and codex by way of
+                   etl/agent_sessions/; fsindex has its own walker over
+                   etl/src/fswalk.rs); four mirror a SQLite file through
+                   etl/sqlite_mirror/; three render time series
+                   (airvisual, yolink, garmin). fsindex, media, lightroom
+                   and apple_photos have no <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
-    probe/         the "Test connection" report shape, alone.
+    probe/         what "Check connection" and a picker's "Load" ask
+                   and answer, alone.
     migrate_config/ `datalib-migrate-config`: rewrites the one retired
                    config shape into the current one.
     runtime/       the data-root layout, which build this is
                    (`build_id`), the bundled-Node resolver (the `npx`
                    fallback is opt-in and loud) and the qmd model
-                   pins. Has NO dependencies, deliberately: the qmd
-                   indexer links it, and is an input to the fixture's
-                   embedding action, so anything it links re-runs that
-                   embed on CI.
+                   pins. No dependencies, so anything can link it.
+    qmd_indexer/   `Index`: the qmd index's operations — register the
+                   collections, keyword-index or embed one source — over
+                   qmd's SDK. Tested against the real qmd.
     qmd_models/    puts qmd's pinned GGUFs in place, sha256-verified,
                    so qmd never fetches one itself. Linked by the step
-                   and the applet, never by the indexer (see above).
+                   and the applet.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
     core/          the app stores plus re-exports of `runtime`.
     query/         the search-bar grammar every grid shares; no deps.
+    handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
+                   `slack:`), normalized; what renders write as
+                   `data-handle`. No first-party deps.
+    contact_schema/ `DatalibContact`: a person as one source describes
+                   them. Only the shape; contact-common renders it.
+    contacts/      the contacts app's store under `datalib_curated/`;
+                   the `datalib_contacts` applet is its one writer.
     unified_index/ the grid index, the qmd index, the query language over
                    them. Linked by datalib-step and datalib-applet —
                    never by datalib-http or datalib-dag.
     applets/       `datalib-applet`: the applet host.
-    history/       a doltlite store's commit log, third-party deps only,
-                   so datalib-http can serve it without linking `etl`.
+    history/       a doltlite store's commit log; its one first-party dep
+                   is `pin`, so datalib-http can serve it without
+                   linking `etl`.
     http/          `datalib-http`: API server + sync loop + UI host +
                    applet gateway. Every route is behind a per-process
                    API token (src/auth.rs): read
                    `<root>/system/api-token`, send
                    `Authorization: Bearer <token>`.
     schema/        `grid_rows`/`edges`/`markdowns` row structs;
-    app_schema/    feedback/usage/runs; both derive DDL via
-                   `#[derive(PortableTable)]`.
+    app_schema/    feedback, disk usage, remote media, runs; both derive
+                   DDL via `#[derive(PortableTable)]`.
   ui/          Vue frontend; every grid is SlickGrid, kept behind a few
                files so it can be swapped (docs/dev/cards.md § The grid).
   tauri/       the desktop shell (out of Bazel).
-tests/fixtures/  TNG-themed source data + the cached `ingested/` artifact.
+tests/fixtures/  the TNG fixture pipeline: it syncs the providers' TNG
+               source data (each kept in its provider's tests/fixtures/)
+               into the cached `ingested/` artifact.
 docs/          dev/ architecture notes; user/ guides; dev/plans/; assets/ images
                only the docs use (the README grid shares the UI's marks).
 third-party/   vendored upstream code.
@@ -216,10 +234,10 @@ third-party/   vendored upstream code.
 
 A provider's config schema is its own crate (`<p>_config`, serde
 structs and nothing else) so anything that needs to *understand* a
-config can link it without the machinery. Those crates are Bazel-only
-by design — no `Cargo.toml` — because a first-party crate with only
-third-party deps needs just a `BUILD.bazel`. The `<p>_render` split is
-the same move (see §"Ingest and render are separate crates").
+config can link it without the machinery. Those crates have no
+`Cargo.toml` (§"Git: prefer merges over rebases" says why). The
+`<p>_render` split is the same move (see §"Ingest and render are
+separate crates").
 
 ## The sync pipeline
 
@@ -231,11 +249,18 @@ tree it writes; `inputs` name steps by that id and are the edges; an
 `[[applets]]` entry is a server the gateway spawns. A built-in step has
 no `command` and runs `datalib-step`.
 
-Each source has an `ingest` step and a `render_markdown` step, and two
-fan-in steps under `unified_index` index every render tree their
-`inputs` name: `grid_index` (the SQL index the grid reads) and
-`qmd_index` (semantic search, one collection per group). Both are read
-by the `unified_index` applet; `datalib-http` never opens them. A render
+Each source has an `ingest` step and (most) a `render_markdown` step, and
+`grid_index` under `unified_index` reads every render tree its `inputs`
+name into the SQL index the grid reads. A searched source fills its own
+collection of the qmd index (free-text search) with two more steps of
+its own, `keyword_index` and then `embed`, so the slow embedding can be
+turned off or run by hand per source. `qmd_aggregator` reads every
+source's pair: it retires the collection of any source it does not name
+and reports on the whole, and removing it turns search off.
+`embedding_map` reads the aggregator and lays the embeddings out on a
+plane for the map card (`datalib/backend/embedding_map/README.md`).
+All of it is queried by the `unified_index` applet; `datalib-http`
+reads only the stores' commit logs (`history/`), never their rows. A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
@@ -245,12 +270,10 @@ config entry the loader cannot use costs that entry and nothing else;
 cannot serve anything from comes back as `app_ready: false` and the UI
 shows `ConfigErrorView`, live in both directions. The http server runs
 the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
-`runner-lock` for its life; a sync, a stop, a pause is a row it writes
-there (`POST /api/requests`, `/api/steps/<id>/pause`); the Manage tab
-edits the config; a
-root with no config gets the launcher and the first-run screen. See
-`docs/dev/step_protocol.md` for writing a step and `docs/dev/applets.md`
-for applets.
+`runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
+there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
+edits the config; a root with no config gets the launcher and the
+first-run screen.
 
 ## Ingest and render are separate crates
 
@@ -258,15 +281,18 @@ A provider is three crates: `datalib_etl_<p>_config`, `datalib_etl_<p>`
 (fetches), and `datalib_etl_<p>_render` (markdown + `grid_rows`). The
 framework splits the same way — `datalib_etl` below, `datalib_etl_render`
 above. **The render schema stops at that line:** `datalib_schema` is
-reachable from render crates and from nothing on the ingest side, which
-Rust's acyclic crate graph enforces by itself.
+reachable from render crates and from nothing on the ingest side.
+Nothing in the build refuses an ingest crate that takes it; the
+measurement below is what notices.
 
 - **Anything an ingest needs lives on the ingest side.** The uuid recipes
   are minted during download and read again during render, so they
   belong in `ingest/schema_raw.rs` and the render crate names them
   through the download crate.
 - **A source that renders nothing has no `_render` crate.** `ingest_only!`
-  in `datalib_step/src/dispatch.rs` says so once.
+  in `datalib_step/src/dispatch.rs` says so once, and
+  `SourceType::item_table` names the raw table whose rows are its
+  Items count, since it has no documents to count them.
 
 The measurement that checks it:
 
@@ -274,17 +300,16 @@ The measurement that checks it:
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
-77 at the last count. If that number climbs, something took a dependency
+73 at the last count. If that number climbs, something took a dependency
 it should not have.
 
 ## The grid_rows union table
 
-The grid is backed by one denormalized table, `grid_rows`, populated by
-the `grid_index` step from every source's render store, and read by the
-`unified_index` applet with one SELECT — no per-provider branches in the
-query path. The schema is the `GridRow` struct in
-`datalib/backend/schema/src/grid_rows.rs`; `docs/dev/grid_rows.md` has
-the architecture and the checklist for adding a column.
+The grid is one denormalized table, `grid_rows` (the `GridRow` struct in
+`datalib/backend/schema/src/grid_rows.rs`), which `grid_index` fills
+from every source's render store and the `unified_index` applet reads
+with one SELECT — no per-provider branches in the query path.
+`docs/dev/grid_rows.md` has the checklist for adding a column.
 
 ## QMDs are write-only
 
@@ -309,35 +334,45 @@ datalib-doltlite -readonly <store>.doltlite_db .dump | sqlite3 out.sqlite
 
 In a checkout use `bazelisk build //third-party/doltlite:doltlite`, a
 sqlite3-shell drop-in version-locked to the tree; from a test take it as
-a `data` dep. `docs/dev/doltlite.md` has the recipes, `docs/dev/app_stores.md`
-the map of which store lives where and who owns it.
+a `data` dep. [`docs/dev/doltlite.md`](docs/dev/doltlite.md) is the one
+place for what the engine does, with the recipes;
+`docs/dev/app_stores.md` maps which store lives where and who owns it.
+Every fact there is a test in `//datalib/backend/doltlite_facts:doltlite_facts_test`
+or `//datalib/backend/etl:doltlite_two_process_test`, so a doltlite bump
+that moves one fails by name.
 
-The rules, none optional; the reasons and measurements are in
+The rules, none optional. How our code enforces them is in
 `datalib/backend/etl/README.md` §"Connection pools":
 
-- **One writer per file.** Doltlite's working set lives in the *file*,
-  per branch, shared across processes; two writers land on one branch
-  and each `-Am` commit captures the other's in-flight rows. Giving the
-  second one a branch of its own does not rescue it — the two then
-  contend for the file instead (measured; `etl/README.md`). The
-  `grid_index` step owns the index; `datalib-http`
-  owns feedback, jobs and usage; the applet only reads. A download takes
-  its store as an input (`FetchOptions.db: RawDb`) and never opens one.
+- **One writer per file.** Doltlite keeps uncommitted rows per branch
+  *in the file*, so two writers on one branch commit each other's
+  half-written rows, and doltlite itself only makes a second writer
+  wait its turn, never refuses it
+  ([locks and writers](docs/dev/doltlite.md#locks-and-writers)). Our
+  per-file lock refuses it. The `grid_index` step owns the index;
+  `datalib-http` owns feedback, usage and remote media; the applet only
+  reads. A download takes its store as an input
+  (`FetchOptions.db: RawDb`) and never opens one.
 - **A writer works on `datalib_writer`, never on `main`**, and
   fast-forwards `main` when it seals, so a reader never sees a
   half-written batch or a half-built schema. `commit_run` is the seal —
-  a bare `dolt_commit` publishes nothing and reaches no reader; use
-  `commit_all` for a handle that carries a blob CAS.
+  a bare `dolt_commit` publishes nothing and reaches no reader. `main`
+  moves only by that force-move, which is right only while one process
+  moves it.
 - **Every pool is `max_connections(1)`** with recycling off, and there is
   one open per file per pass. `close().await` before the next open, on
   the error path too — dropping the handle only schedules the close.
-- **A reader opens read-only and pins a commit** (`open_reader`, then
-  `pin`, then `pinned_<t>` views). Render reads its raw store that way and
-  `grid_index` reads every render store that way.
-- **A reader never runs `dolt_status`.** From a read-only connection it
-  fails the writer's commit and loses the rows behind it (#400). Any
-  other statement a reader adds is presumed guilty until
-  `doltlite_two_process_test` has run with it.
+- **A reader opens read-only and reads one commit**, one of
+  [three ways](docs/dev/doltlite.md#three-ways-to-read-one-commit):
+  `dolt_at_<t>('<hash>')`, a held read transaction, or a detached
+  read-only open of `<file>@<hash>`. Render and `grid_index` use the
+  last (`doltlite_raw::open_reader`), so their queries name the tables
+  themselves; the search applet holds a transaction
+  (`DoltRepo::pinned`). A process that *moves a ref*, even on its own
+  branch, is a writer.
+- **A statement a reader adds is presumed guilty until
+  `doltlite_two_process_test` has run with it.** Looking like a read is
+  not enough; `etl/README.md` has the allowlist.
 - **Never run a store call on a runtime you are about to drop**;
   `indexed_markdown::blocking` keeps one process-wide runtime for that.
 
@@ -360,14 +395,19 @@ dependency:
   format (`whatsapp-backup/src/key.rs`, `signal-backup/proto/`), never
   a source of code.
 - **Say where it came from.** Ported MIT/BSD code names the project and
-  its copyright line in the file header (`garmin/src/login.rs`).
+  its copyright line in the file header. Vendored code keeps its
+  `LICENSE` and a README naming the upstream commit
+  (`third-party/latchkey-garmin/`).
 
 ## Git: prefer merges over rebases
 
 `git pull` (default merge), not `git pull --rebase`. Rebasing rewrites
 local hashes and loses what actually happened; force-push is off the
-table on shared branches. This is about how a branch takes in `main`,
-not how a PR lands — a PR lands **squashed** (next section).
+table on shared branches. A PR lands as a merge commit too (next
+section), so never squash a branch yourself: `git reset --soft` onto a
+`main` that has moved since the branch was cut commits a tree that
+silently reverts everything landed in between (#745 undid #743 that
+way).
 
 **`MODULE.bazel.lock` is never resolved by hand.** It is generated, and
 two branches that both moved it conflict textually even though the
@@ -385,24 +425,40 @@ one; a crate with only a `BUILD.bazel` does not (the `<p>_config`
 crates and `datalib_problems` are the pattern). A `Cargo.toml` is
 needed only when something outside bazel has to see the crate.
 
-## Push early, open the PR early, and watch CI
+## Push early, open the PR early, watch CI, and turn on autofix
 
 Push the branch and open a PR as soon as there is something to test —
-CI's runners are free. After pushing, check `gh pr view <n> --json
-mergeable,mergeStateStatus` and follow the run to its end. If it fails,
-read the failure; if the failed target looks like a flake (the
-doltlite-timing ones, or anything `scripts/flaky_tests.py` lists),
-re-run the failed jobs once before digging in. Before pushing a
-follow-up, confirm the PR is still open — a merged PR does not reopen.
+CI's runners are free — as long as nothing in it is private data
+(§"Real data stays out of the repo"). Then turn on autofix for the PR,
+so a red run, a merge conflict or a review comment comes back to the
+agent that wrote it instead of waiting for a person. After pushing,
+check `gh pr view <n> --json mergeable,mergeStateStatus` and follow the
+run to its end. If it fails, read the failure; if the failed target
+looks like a flake (the doltlite-timing ones, or anything
+`scripts/flaky_tests.py` lists), re-run the failed jobs once before
+digging in. Before pushing a follow-up, confirm the PR is still open —
+a merged PR does not reopen.
 
-**A PR lands as one squashed commit**: `gh pr merge <n> --squash`, or
-"Squash and merge" on GitHub. `main`'s first-parent history is then
-one commit per PR, titled after the PR with its number, and `git
-bisect` and `git log main` read at the PR level. A merge commit
-(`--merge`) keeps every "fix typo" and "address review" commit on
-`main` for good; a rebase merge re-hashes the branch. The commit
-message is the PR title plus the branch's messages, so write the PR
-title as the commit subject you want to keep.
+**A PR lands as a merge commit**: `gh pr merge <n> --merge`, or
+"Create a merge commit" on GitHub — not squash, not rebase. The
+branch's commits then stay ancestors of `main`, so git can say whether
+a branch landed (`git merge-base --is-ancestor <branch> origin/main`),
+a branch cut from another unmerged branch merges cleanly once that one
+lands, and a follow-up after a merge is a new PR from the same branch
+carrying only the new commits.
+
+**Read `main` along its first parents**, which is one merge commit per
+PR, titled after the PR:
+
+```sh
+git log --first-parent origin/main
+git bisect start --first-parent      # steps PR by PR, never mid-branch
+git blame --first-parent <path>      # which PR, not which fixup
+```
+
+Plain `git log` and GitHub's commit list also show every commit on
+every branch; that is the price. The merge commit's subject is the PR
+title, so write the title as the line you want in that log.
 
 ## Python deps: pyproject.toml → requirements.txt → Bazel
 
@@ -459,7 +515,9 @@ sleep that is long enough on a warm mac is short on a loaded CI runner
 (the one on `2cbcc398` was), and a sleep that is long enough on CI
 makes every local run slower than it needs to be. Poll the row, the
 file, the endpoint — with a deadline, so a hang is a failure that
-names what never arrived rather than a timeout with no message.
+names what never arrived rather than a timeout with no message. In the
+Playwright suite, where most of our flakes have been, the rules are in
+[`testing.md`](docs/dev/testing.md) §"Writing a spec that does not flake".
 
 Three neighbours of the same mistake:
 
@@ -484,6 +542,15 @@ Three neighbours of the same mistake:
   say why. `scripts/flaky_tests.py` names the ones that have already
   flaked; a target it lists twice needs one of those two fixes, not a
   re-run.
+
+## Real data stays out of the repo
+
+**Nothing from a person's mirror goes into the tree or onto GitHub**: not
+a fixture, snapshot, test string or comment, and not a commit message, PR
+description or issue. The repo is public, and a force-pushed commit stays
+reachable by its hash. Learn a shape from a real root, then write the test
+in made-up TNG data; counts, sizes and timings are fine to quote, what the
+records say is not.
 
 ## Common commands
 
@@ -514,6 +581,16 @@ survivor is the `anthropic` search keyword in `ui/src/config/catalog.ts`.
 Everything that identifies, filters or joins uses the id, and the field
 is `source_id` everywhere. `source_name` survives in one place because a
 **person** types it: the `source_name:` search filter.
+
+## A local file or folder: ask `fsscan` what changed
+
+**Don't walk a folder or re-read an input yourself to learn whether it
+changed; ask `datalib_etl::fsscan`.** It hashes each file once per host
+(a shared fingerprint cache), so an unchanged input costs a `stat` —
+milliseconds, where re-reading costs seconds — and `file_checkpoint`
+keeps this source's `path → blake3` cursor to diff against. The recipe
+is `datalib/backend/etl/README.md` §"Answering "did it change?" for a
+file-backed source"; `lightroom`'s `ingest/sync.rs` is a small example.
 
 ## A cursor is only valid under the config that set it
 
@@ -569,7 +646,11 @@ upstream (block types, MIME types), free-form display text
 | a log line's severity and pipe | `LogLevel`, `Stream` | `app_schema/src/runs/log.rs` |
 | what the loop made of a step (`steps.state`) | `StateKind` | `dag/src/supervisor/tick.rs` |
 | how a sync request ended | `RequestOutcome` | `dag/src/supervisor/store.rs` |
-| a browser-login attempt | `ConnectState` | `http/src/connect.rs` |
+| a browser-login attempt, and what it is doing | `ConnectState`, `ConnectPhase` | `http/src/connect.rs` |
+| who names a latchkey account a browser login adds | `AccountNaming` | `http/src/connect.rs` |
+| what kind of trouble a sign-in or probe ran into | `IssueKind` | `probe/src/issue.rs` (`datalib_probe`) |
+| a probe the wizard polls | `ProbeState` | `http/src/probe.rs` |
+| the list a picker loads | `ProbeList` | `probe/src/lib.rs` (`datalib_probe`) |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `problems/src/lib.rs` (`datalib_problems`) |
 | a configured entry upstream does not have; a listing or phase a run could not do | `ProblemReason`, `RunProblemKind` | `etl/src/download_problems.rs` |
@@ -577,6 +658,9 @@ upstream (block types, MIME types), free-form display text
 | a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
 | which of datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
+| what namespace a handle is in | `HandleKind` | `handle/src/lib.rs` (`datalib_handle`) |
+| a contact is a person or a group; how one is reached | `ContactKind`, `Medium` | `contact_schema/src/lib.rs` (`datalib_contact_schema`) |
+| how a handle was linked | `LinkedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
 
 The TypeScript side mirrors these as string-literal unions in
 `datalib/ui/src/api.ts`, hand-kept — change both halves together.
@@ -596,10 +680,12 @@ log when it fires.
 
 **An error or a warning about a record goes through `problems`, never
 only to the log.** A record a download could not fetch goes through
-`record_object_attempt` / `record_object_error`; a configured entry
-upstream does not have goes through `download_problems::report`, and
-a listing or phase the run could not do as a whole through
-`download_problems::report_run`; a record render could not fully
+`record_object_attempt` / `record_object_error`. Everything else a
+download could not do goes into the one `RunProblems` its `fetch` is
+handed (`run_problems::collecting`): a record that failed before we had
+a row for it, a configured entry upstream does not have, a listing or
+phase the run could not do as a whole. Each report says what the run
+covered, and only that is cleared. A record render could not fully
 project goes on its document's `RenderedMarkdown::problems`, or
 through `RenderCtx::report_*` when there is no document yet. The rows
 travel with the data to the index, and that is where a person sees
@@ -636,9 +722,9 @@ find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop —
 
 ## Auth (web API)
 
-Downloaders reach Cloudflare-fronted hosts through `latchkey curl`, which
-injects the session credential, routed via `latchkey-curl-router` to
-the bundled `curl-impersonate` (`docs/dev/curl_impersonate.md`). If the
-credential is missing or expired, `latchkey auth set <service>` fixes
-it; if Cloudflare still 403s, the IP/UA may be flagged — wait it out or
-swap networks.
+Every web source signs in through latchkey, and a downloader only ever
+runs `latchkey curl`: [`docs/dev/latchkey.md`](docs/dev/latchkey.md).
+Cloudflare-fronted hosts go through the bundled `curl-impersonate`
+([`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md)); if
+Cloudflare still 403s, the IP or user agent may be flagged — wait it
+out or swap networks.

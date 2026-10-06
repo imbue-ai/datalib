@@ -145,8 +145,8 @@ onBeforeUnmount(() => {
   inset: 0;
   display: flex;
   flex-direction: column;
-  padding: 10px 12px;
-  gap: 8px;
+  padding: var(--datalib-pad);
+  gap: var(--datalib-gap);
   box-sizing: border-box;
 }
 .cfg-file {
@@ -155,7 +155,7 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px;
   margin: 0;
-  font-size: 12px;
+  font-size: var(--datalib-font-size);
   color: var(--datalib-muted);
 }
 .cfg-file code {
@@ -167,10 +167,10 @@ onBeforeUnmount(() => {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--datalib-border);
-  border-radius: 5px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-input-bg);
   color: var(--datalib-fg);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--datalib-mono);
   font-size: 12.5px;
   line-height: 1.55;
   resize: none;
@@ -184,23 +184,25 @@ onBeforeUnmount(() => {
 }
 .cfg-dirty,
 .cfg-banner {
-  font-size: 12px;
+  font-size: var(--datalib-font-size);
   color: var(--datalib-muted);
 }
 .cfg-banner.good {
-  color: var(--datalib-log-ok);
+  color: var(--datalib-ok);
 }
 .cfg-banner.bad {
-  color: var(--datalib-log-error);
+  color: var(--datalib-error-fg);
 }
 .cfg-btn {
-  padding: 2px 9px;
+  height: var(--datalib-control-h);
+  padding: 0 10px;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
-  background: var(--datalib-card-bg);
-  color: inherit;
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--datalib-font-size);
+  font-weight: 600;
   cursor: pointer;
 }
 .cfg-btn:hover:not(:disabled) {

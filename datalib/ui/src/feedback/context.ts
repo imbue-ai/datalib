@@ -128,14 +128,17 @@ export interface SelectionCapture {
   end_message_uuid: string;
   selected_text: string;
 }
-export function capturePreviewSelection(): SelectionCapture | null {
-  const sel = typeof window !== "undefined" ? window.getSelection() : null;
+/** `win` is whose selection: the app's, or a document frame's. */
+export function capturePreviewSelection(
+  win: Window | undefined = typeof window !== "undefined" ? window : undefined,
+): SelectionCapture | null {
+  const sel = win?.getSelection() ?? null;
   if (!sel || sel.isCollapsed) return null;
   const raw = sel.toString();
   const trimmed = raw.replace(/^[\s]+|[\s]+$/g, "");
   if (!trimmed) return null;
-  const anchor = sel.anchorNode instanceof Element ? sel.anchorNode : sel.anchorNode?.parentElement;
-  const focus = sel.focusNode instanceof Element ? sel.focusNode : sel.focusNode?.parentElement;
+  const anchor = elementOf(sel.anchorNode);
+  const focus = elementOf(sel.focusNode);
   const start = anchor ? messageAncestor(anchor) : null;
   const end = focus ? messageAncestor(focus) : null;
   if (!start || !end) return null;
@@ -147,6 +150,13 @@ export function capturePreviewSelection(): SelectionCapture | null {
     end_message_uuid: end,
     selected_text: trimmed,
   };
+}
+
+/** A node as an Element, by node type: a node in a document frame
+ *  belongs to the frame's window, where `instanceof Element` is false. */
+function elementOf(node: Node | null | undefined): Element | null {
+  if (!node) return null;
+  return node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
 }
 
 /** Look for the closest per-message wrapper the renderer emits around

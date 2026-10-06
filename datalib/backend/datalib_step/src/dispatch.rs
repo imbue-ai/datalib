@@ -791,6 +791,35 @@ mod tests {
         }
     }
 
+    /// A source that renders nothing has no documents to count its
+    /// items, so its type has to name the raw table that does — or its
+    /// Items cell is blank forever. And a source that renders counts
+    /// its own, so naming a table there would overwrite that count.
+    #[test]
+    fn a_type_names_an_item_table_exactly_when_it_renders_nothing() {
+        let td = tempfile::tempdir().unwrap();
+        for &ty in <SourceType as strum::VariantArray>::VARIANTS {
+            let Ok(planned) = plan(
+                ty.as_str(),
+                Phase::Render,
+                "s",
+                raw_dir(td.path(), "s", Phase::Render),
+                serde_json::json!({}),
+            ) else {
+                assert!(ty.item_table().is_none(), "{ty}: no render plan to check");
+                continue;
+            };
+            let Wave::Render(processors) = planned.processors else {
+                panic!("{ty}: a render phase planned another wave");
+            };
+            assert_eq!(
+                processors.is_empty(),
+                ty.item_table().is_some(),
+                "{ty}: renders nothing exactly when it names an item table"
+            );
+        }
+    }
+
     #[test]
     fn unknown_type_lists_known_ones() {
         let td = tempfile::tempdir().unwrap();

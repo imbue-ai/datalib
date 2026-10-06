@@ -6,8 +6,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl::title::Title;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::escape_md_inline;
+use datalib_etl_render::title::Title;
+use datalib_etl_timeseries_render::page::write_page;
+use datalib_etl_timeseries_render::text::{iso, short_ts};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -72,8 +76,8 @@ pub fn render_all(
         let subtitle = format!(
             "{} weigh-ins · {} — {}",
             parsed.weigh_ins.len(),
-            short(parsed.weigh_ins[0].timestamp_gmt_ms),
-            short(parsed.weigh_ins[parsed.weigh_ins.len() - 1].timestamp_gmt_ms),
+            short_ts(parsed.weigh_ins[0].timestamp_gmt_ms),
+            short_ts(parsed.weigh_ins[parsed.weigh_ins.len() - 1].timestamp_gmt_ms),
         );
         let html = weight_html("Weight", &subtitle, &parsed.weigh_ins)?;
         let path = plots_dir.join("weight.html");
@@ -85,31 +89,15 @@ pub fn render_all(
 
     let m_uuid = document_uuid(source_id);
     let body = render_markdown(parsed, source_id, &m_uuid, plot_file);
-    let md_path = page_dir.join("index.md");
-    fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
-    let md_rel = md_path
-        .strip_prefix(root)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
-
-    let mut problems: Vec<ProblemRow> = Vec::new();
-    let rows = build_grid_rows(parsed, source_id, &m_uuid, &md_rel, &mut problems);
-    on_doc_complete(RenderedMarkdown {
-        markdown_uuid: m_uuid.clone(),
-        source_id: source_id.to_string(),
-        // Not the raw HEAD: it moves on every ingest, and a row whose
-        // content did not change may carry nothing per-run.
-        upstream_cursor: None,
-        bucket_key: Some(m_uuid.clone()),
-        md_path,
-        render_version: RENDER_VERSION,
-        rows,
-        sections: Vec::new(),
-        edges: Vec::new(),
-        problems,
-    })
-    .with_context(|| format!("on_doc_complete {m_uuid}"))?;
+    write_page(
+        root,
+        source_id,
+        &m_uuid,
+        body,
+        RENDER_VERSION,
+        |md_rel, problems| build_grid_rows(parsed, source_id, &m_uuid, md_rel, problems),
+        on_doc_complete,
+    )?;
     progress.inc(1);
     if parsed.head.is_none() {
         tracing::warn!(
@@ -137,9 +125,9 @@ fn render_markdown(
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
     let _ = writeln!(out, "source_id: {source_id}");
     out.push_str("provider: garmin\n");
-    let _ = writeln!(out, "title: {}", yaml_safe(&title));
+    let _ = writeln!(out, "title: {}", yaml_scalar(&title));
     if let Some(ts) = &created_at {
-        let _ = writeln!(out, "created_at: {}", yaml_safe(ts));
+        let _ = writeln!(out, "created_at: {}", yaml_scalar(ts));
     }
     out.push_str("---\n\n");
     out.push_str(
@@ -169,9 +157,9 @@ fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, plot_file: Opt
         out,
         "**{:.1} kg** on {} · {} weigh-ins since {}{}.\n",
         latest.weight_kg,
-        short(latest.timestamp_gmt_ms),
+        short_ts(latest.timestamp_gmt_ms),
         parsed.weigh_ins.len(),
-        short(first.timestamp_gmt_ms),
+        short_ts(first.timestamp_gmt_ms),
         match latest.body_fat_pct {
             Some(f) => format!(" · {f:.1} % body fat"),
             None => String::new(),
@@ -201,13 +189,13 @@ fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, plot_file: Opt
         let _ = writeln!(
             out,
             "| {} | {:.1} | {} | {} | {} |",
-            short(w.timestamp_gmt_ms),
+            short_ts(w.timestamp_gmt_ms),
             w.weight_kg,
             w.bmi.map(|b| format!("{b:.1}")).unwrap_or_default(),
             w.body_fat_pct
                 .map(|f| format!("{f:.1} %"))
                 .unwrap_or_default(),
-            w.source_type.as_deref().unwrap_or(""),
+            escape_md_inline(w.source_type.as_deref().unwrap_or("")),
         );
     }
     out.push('\n');
@@ -225,14 +213,14 @@ fn render_device_section(out: &mut String, parsed: &ParsedGarmin, source_id: &st
             out,
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--garmin\">\n"
         );
-        let _ = writeln!(out, "### {}\n", d.name);
+        let _ = writeln!(out, "### {}\n", escape_md_inline(&d.name));
         let _ = writeln!(
             out,
             "*device {}{}*\n",
-            d.id,
+            escape_md_inline(&d.id),
             d.last_sync
                 .as_deref()
-                .map(|s| format!(" · last synced {s}"))
+                .map(|s| format!(" · last synced {}", escape_md_inline(s)))
                 .unwrap_or_default()
         );
         out.push_str("</div>\n\n");
@@ -281,7 +269,7 @@ fn build_grid_rows(
             text,
             "\nlatest {:.1} kg on {}",
             w.weight_kg,
-            short(w.timestamp_gmt_ms)
+            short_ts(w.timestamp_gmt_ms)
         );
     }
     let mut rows: Vec<GridRow> = GridRow::builder()
@@ -290,6 +278,7 @@ fn build_grid_rows(
         .kind("Garmin Weight")
         .source_label("Garmin")
         .is_document(true)
+        .item_count(Some(parsed.measurements()))
         .created_at(
             parsed
                 .weigh_ins
@@ -305,7 +294,7 @@ fn build_grid_rows(
         .conversation_name(Some(title.clone()))
         .conversation_uuid(m_uuid.to_string())
         .entire_chat(format!("/chat/{m_uuid}"))
-        .text(text)
+        .body(text)
         .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(m_uuid.to_string()))
         .upstream_id(Some(source_id.to_string()))
@@ -326,7 +315,7 @@ fn build_grid_rows(
                 .conversation_uuid(m_uuid.to_string())
                 .message_index(Some(idx as i64))
                 .entire_chat(format!("/chat/{m_uuid}"))
-                .text(format!("{} (device {})", d.name, d.id))
+                .body(format!("{} (device {})", d.name, d.id))
                 .qmd_path(Some(md_rel.to_string()))
                 .upstream_id(Some(d.id.clone()))
                 .upstream_entity_kind(Some(KIND_DEVICE.to_string()))
@@ -348,16 +337,6 @@ fn page_title(parsed: &ParsedGarmin, source_id: &str) -> String {
     }
 }
 
-fn iso(ms: i64) -> Option<String> {
-    datalib_time::IsoOffsetTimestamp::from_unix_millis(ms).map(|t| t.to_rfc3339())
-}
-
-fn short(ms: i64) -> String {
-    datalib_time::IsoOffsetTimestamp::from_unix_millis(ms)
-        .map(|t| t.inner().format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_else(|| ms.to_string())
-}
-
 /// Garmin writes device stamps as `2026-09-14T05:12:44.0` with no
 /// offset, and the field name says GMT — the one place assuming UTC is
 /// backed by the source itself.
@@ -367,17 +346,48 @@ fn garmin_stamp_to_iso(s: &str) -> Option<String> {
         .map(|t| t.to_rfc3339())
 }
 
-fn yaml_safe(s: &str) -> String {
-    if s.chars().any(|c| ":#[]{}&*?,|>'\"%@`\n".contains(c)) {
-        format!("\"{}\"", s.replace('"', "\\\""))
-    } else {
-        s.to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A device's name and a weigh-in's source come from Garmin's API;
+    /// on the page they are text.
+    #[test]
+    fn a_device_and_a_weigh_in_in_markup_render_escaped() {
+        let parsed = ParsedGarmin {
+            head: None,
+            display_name: None,
+            full_name: None,
+            weigh_ins: vec![super::super::parse::WeighIn {
+                id: "w1".into(),
+                calendar_date: "2364-04-11".into(),
+                timestamp_gmt_ms: 12442118400000,
+                weight_kg: 80.0,
+                bmi: None,
+                body_fat_pct: None,
+                source_type: Some("<b>scale</b> | x".into()),
+            }],
+            devices: vec![super::super::parse::Device {
+                id: "<i>1</i>".into(),
+                name: "<script>x</script> & co".into(),
+                last_sync: None,
+            }],
+            metrics: Vec::new(),
+            activities: 0,
+            activity_files: 0,
+            items: 0,
+        };
+        let mut out = String::new();
+        render_device_section(&mut out, &parsed, "garmin");
+        render_weight_section(&mut out, &parsed, None);
+        assert!(!out.contains("<script>") && !out.contains("<b>"), "{out}");
+        assert!(
+            out.contains("### &lt;script&gt;x&lt;/script&gt; &amp; co\n"),
+            "{out}"
+        );
+        assert!(out.contains("*device &lt;i&gt;1&lt;/i&gt;*"), "{out}");
+        assert!(out.contains("| &lt;b&gt;scale&lt;/b&gt; \\| x |"), "{out}");
+    }
 
     #[test]
     fn page_ids_are_source_scoped_and_device_ids_are_garmins() {

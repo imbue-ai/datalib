@@ -47,10 +47,11 @@ Four details are worth carrying into anything you write yourself:
   against this page's newer instructions.
 
 Everything below is that same command unpacked, plus how to point
-datalib at data of your own. Every shell block from here on is run
-against every published image by `datalib/docker/doc_test.sh`, so those
-are known to work as written; the one above is not, because its `open`
-is macOS-only.
+datalib at data of your own. Every shell block in sections 1 and 2 is
+run against every published release image by
+`datalib/docker/doc_test.sh`, so those are known to work as written;
+the one above is not, because its `open` is macOS-only, and neither is
+section 3.
 
 Set a few variables once, in the shell you'll use for the rest of this
 page:
@@ -101,7 +102,7 @@ the image:
 docker exec datalib-demo datalib-dag /opt/datalib/demo/config.toml
 ```
 
-The same thing happens if you press **Sync all** on the Data sources card.
+The same thing happens if you press **Sync everything** on the Data sources card.
 Every store in the library is a database you can query, from inside
 the container or from any other one with the folder mounted:
 
@@ -144,8 +145,6 @@ type = "email"
 [[steps]]
 group = "gmail"
 function = "ingest"
-[steps.params.common]
-always_clear_before_ingest = true
 [steps.params.mbox]
 path = "/import/$(basename "$MBOX")"
 account_id = "you@gmail.com"
@@ -170,8 +169,18 @@ inputs = ["gmail/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
+function = "qmd_aggregator"
+inputs = ["gmail/keyword_index", "gmail/embed"]
+
+[[steps]]
+group = "gmail"
+function = "keyword_index"
 inputs = ["gmail/render_markdown"]
+
+[[steps]]
+group = "gmail"
+function = "embed"
+inputs = ["gmail/keyword_index"]
 
 [[applets]]
 group = "unified_index"
@@ -191,11 +200,11 @@ docker run --rm \
   "$IMG" datalib-dag /data/config.toml
 ```
 
-The last step embeds every message for semantic search, which on a
+The `embed` step embeds every message for semantic search, which on a
 laptop CPU takes roughly five to ten minutes per thousand messages. It
 is resumable: Ctrl-C, run the same command again, and it picks up where
-it stopped. Then serve it, mounting the export again so **Sync all**
-in the app can re-read it:
+it stopped. Then serve it, mounting the export again so **Sync
+everything** in the app can re-read it:
 
 <!-- doc-test: run own-serve -->
 ```sh
@@ -285,8 +294,8 @@ docker run --rm \
 ```
 
 Add the same `-v "$LATCHKEY_DIR:/root/.latchkey:ro"` to the
-`datalib-http` command in step 2 and **Sync all** in the app works
-too.
+`datalib-http` command in step 2 and **Sync everything** in the app
+works too.
 
 ## What the container can see
 
@@ -301,5 +310,5 @@ run the container with `--privileged`; the point of the container is
 that the blast radius of a bad day is the folders in this table.
 
 The image bundles the three qmd models, so semantic search never
-downloads anything. Building the image yourself, and what is in it, is
+downloads anything (the `-slim` tag leaves them out). Building the image yourself, and what is in it, is
 in [`docs/dev/docker.md`](../dev/docker.md).

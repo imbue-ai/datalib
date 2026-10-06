@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The "+ Data Source" / "Edit" dialog: pick a type, fill one form,
+// The "Add source" / "Edit" dialog: pick a type, fill one form,
 // review the TOML that will be written. One form writes one source —
 // the `[[groups]]` entry, its `ingest` step and its `render_markdown`
 // step — and editing a source reopens the same form over all three.
@@ -15,13 +15,15 @@
 // the `[[groups]]` entry; the steps written under it carry neither.
 
 // A descriptor with a `credentialService` also gets a **Connection**
-// block: which latchkey account to use, "Latchkey auth", which runs
-// latchkey's browser login, and "Test connection", which calls the
-// provider's own probe (`datalib-step probe <type>`). What comes back is not just a
-// green tick — it names the account actually reached, and it fills
-// every `probe:` field's checklist, the render step's included. A
-// label picker built from the live account is the difference between a
-// filter that works and a filter that is a spelling test.
+// block: which latchkey account to use, the "Web login" tab, which runs
+// latchkey's browser login, the "Paste a key" tab, which stores a token
+// or app password with `latchkey auth set`, and "Check connection", which
+// asks the provider's own probe (`datalib-step probe <type>`) which account
+// the credentials reach — a green tick that names the account. Each
+// `probe:` field has a "Load" of its own that fills its checklist from the
+// live account, with progress while it pages. A label picker built from the
+// live account is the difference between a filter that works and a filter
+// that is a spelling test.
 import { computed, onUnmounted, ref, watch } from "vue";
 import {
   CATALOG,
@@ -43,12 +45,34 @@ import {
   suggestId,
   type ConfiguredGroup,
   type FieldValues,
+  type QmdIndexing,
   type SourceSteps,
 } from "@/config/sourceSteps";
-import { type ProbeItem, type ProbeItemKind, type ProbeReport, type StoredAccount } from "@/api";
+import { FailureError } from "@/apiError";
+import {
+  type AccountNaming,
+  type Failure,
+  type ConnectPhase,
+  type ProbeItem,
+  type ProbeItemKind,
+  type ProbeProgress,
+  type ProbeReport,
+  type StoredAccount,
+} from "@/api";
+import { type SignInWhere } from "@/config/issues";
+import { countOf, loadingText } from "@/config/probeProgress";
 import { useApi } from "@/cards/cardApi";
+import AccountCombo, { type AccountOption } from "@/components/AccountCombo.vue";
 import { iconUrl } from "@/config/icons";
+import {
+  SECRET,
+  credentialShape,
+  pastedCredential,
+  pasteTarget,
+  suggestedAccount,
+} from "@/config/credentialShape";
 import { ingestReach } from "@/config/ingestMethods";
+import { loginAccount, nameLeftToService } from "@/config/accountNaming";
 import { isDesktopApp, pickPath } from "@/desktop";
 import {
   BYTE_UNITS,
@@ -58,10 +82,18 @@ import {
   splitBytes,
   type ByteUnit,
 } from "@/config/byteSize";
+import IssueNote from "@/components/IssueNote.vue";
 import ProbeItemPicker from "@/components/ProbeItemPicker.vue";
-import { STATUS_GLYPHS } from "@/config/glyphs";
+import { PATH_GLYPHS, STATUS_GLYPHS } from "@/config/glyphs";
+import { copyToClipboard } from "@/clipboard";
 
-const { latchkeyService, probeSource, startLatchkeyConnect, latchkeyConnectStatus } = useApi();
+const {
+  latchkeyService,
+  runProbe,
+  setLatchkeyCredential,
+  startLatchkeyConnect,
+  latchkeyConnectStatus,
+} = useApi();
 
 const props = defineProps<{
   /// Group ids already in the config, plus the id of every step outside
@@ -74,10 +106,9 @@ const props = defineProps<{
     group: ConfiguredGroup;
     entry: CatalogEntry;
     steps: SourceSteps;
-    /// Whether `unified_index/qmd_index` names this source's render
-    /// step today — the config's way of saying "semantic search covers
-    /// this source".
-    qmdIndexed: boolean;
+    /// Which of its own qmd steps this source has today — the config's
+    /// way of saying how free-text search reaches it.
+    qmdIndexing: QmdIndexing;
   } | null;
 }>();
 
@@ -103,10 +134,10 @@ const emit = defineEmits<{
       /// The render step's composed id, for the caller to wire into the
       /// fan-ins. Null for a provider that renders nothing.
       renderId: string | null;
-      /// Whether the render step belongs in `unified_index/qmd_index`'s
-      /// inputs. False leaves the markdown out of semantic search; the
-      /// grid index is not a choice.
-      qmdIndex: boolean;
+      /// Which of its `keyword_index` and `embed` steps the source gets.
+      /// `none` leaves the markdown out of free-text search; the grid
+      /// index is not a choice.
+      qmdIndexing: QmdIndexing;
     },
   ): void;
 }>();
@@ -150,16 +181,19 @@ const renderWanted = ref(props.editing ? !!props.editing.steps.render : true);
 /// source asked for it.
 const renders = computed(() => providerRenders.value && renderWanted.value);
 
-/// Whether this source's markdown goes into the qmd index. On by
-/// default, for the same reason rendering is: a source nobody can
-/// search semantically is a surprise, not a saving. Editing seeds it
-/// from the fan-in's inputs. Embedding is the slow part of a sync, so
-/// off is a real choice for a source whose value is its rows.
-const qmdWanted = ref(props.editing ? props.editing.qmdIndexed : true);
+/// Whether this source's markdown gets a keyword index, and embeddings
+/// on top of it. Both on by default, for the same reason rendering is: a
+/// source nobody can search is a surprise, not a saving. Editing seeds
+/// them from the qmd steps the source has.
+const keywordWanted = ref(props.editing ? props.editing.qmdIndexing !== "none" : true);
+const embedWanted = ref(props.editing ? props.editing.qmdIndexing === "keyword_and_embed" : true);
 
-/// Does this source reach the qmd index — there is markdown to index,
-/// and this source asked for it.
-const qmdIndexes = computed(() => renders.value && qmdWanted.value);
+/// How far into qmd this source goes: only as far as there is markdown to
+/// index, and embeddings only on top of a keyword index.
+const qmdIndexing = computed<QmdIndexing>(() => {
+  if (!renders.value || !keywordWanted.value) return "none";
+  return embedWanted.value ? "keyword_and_embed" : "keyword";
+});
 
 /// The fields the form shows for one phase: the descriptor's, less any
 /// whose gate is shut.
@@ -175,9 +209,8 @@ const renderFields = computed(() => (renders.value ? activeFields("render") : []
 /// The ingest fields the main form renders: the descriptor's, less the
 /// latchkey account. That one lands on the same params target and is
 /// written by the same code as any other field, but it is *shown* in
-/// the Connection block beside the button that populates it — or, where
-/// `showAccountPicker` is off, not shown at all. Either way it must not
-/// reappear here; rendering it twice is the bug this exists to prevent.
+/// the Connection block beside the buttons that sign in to it; rendering
+/// it twice is the bug this exists to prevent.
 const formFields = computed(() =>
   downloadFields.value.filter((f) => !(f.kind === "text" && f.latchkey)),
 );
@@ -343,12 +376,17 @@ const idError = computed(() => {
 /// `PathBuf` rather than an `Option<PathBuf>` — so a config missing one
 /// fails at deserialize time rather than at sync time. Caught here so
 /// the message lands under the field instead of in a job log.
-const missingRequired = computed(() =>
-  [...downloadFields.value, ...renderFields.value]
+const missingRequired = computed(() => {
+  const fields = [...downloadFields.value, ...renderFields.value];
+  const blank = (f: Field) => String(values.value[f.target] ?? "").trim() === "";
+  const missing = fields
     .filter((f) => "required" in f && f.required)
-    .filter((f) => String(values.value[f.target] ?? "").trim() === "")
-    .map((f) => f.label),
-);
+    .filter(blank)
+    .map((f) => f.label);
+  const oneOf = fields.filter((f) => chosen.value?.requiresOneOf?.includes(f.target));
+  if (oneOf.length && oneOf.every(blank)) missing.push(oneOf.map((f) => f.label).join(" or "));
+  return missing;
+});
 
 const canSubmit = computed(() => !idError.value && missingRequired.value.length === 0);
 
@@ -415,6 +453,7 @@ async function browse(f: Field) {
     title: f.pickTitle ?? f.label,
     // Re-editing a source reopens near its current value.
     startAt: String(values.value[f.target] ?? ""),
+    startIn: f.startIn,
     extensions: f.extensions,
   });
   if (result.outcome === "picked") {
@@ -424,6 +463,43 @@ async function browse(f: Field) {
     pickFailed.value[f.target] = result.reason;
   }
   // Canceled: leave the field exactly as it was, and say nothing.
+}
+
+/// A path field's help split around its `startIn`, so the path can
+/// carry a copy button: Cmd-Shift-G in the picker, or a terminal, is
+/// where it gets pasted.
+function helpAroundStart(f: Field): { before: string; path: string; after: string } | null {
+  if (f.kind !== "path" || !f.startIn || !f.help) return null;
+  const at = f.help.indexOf(f.startIn);
+  if (at < 0) return null;
+  return {
+    before: f.help.slice(0, at),
+    path: f.startIn,
+    after: f.help.slice(at + f.startIn.length),
+  };
+}
+
+const copiedStart = ref<string | null>(null);
+
+async function copyStart(f: Field) {
+  if (f.kind !== "path" || !f.startIn) return;
+  if (await copyToClipboard(f.startIn)) {
+    copiedStart.value = f.target;
+    setTimeout(() => {
+      if (copiedStart.value === f.target) copiedStart.value = null;
+    }, 1500);
+  }
+}
+
+/// Every field is a <label>, so a click anywhere in one activates its
+/// control — including the click that ends a drag across the help text,
+/// which moves focus to the input and drops the selection. Help text is
+/// there to be read and copied from.
+function keepHelpSelectable(e: MouseEvent) {
+  const t = e.target instanceof Element ? e.target : null;
+  if (t?.closest("label .wiz-help") && !t.closest("a, button, input, select, textarea")) {
+    e.preventDefault();
+  }
 }
 
 // Connection: which latchkey account, and what it can reach
@@ -447,33 +523,13 @@ const service = computed(() => {
     : null;
 });
 
-/// Whether naming a latchkey account is offered for this source.
-///
-/// Off wherever we register the service ourselves with a generic
-/// cookie capture, because latchkey cannot honour what the control
-/// would promise: `auth browser` accepts `--account`, reports success,
-/// and files the credential under the unnamed default anyway
-/// (imbue-ai/latchkey#148), having first refused a name that does not
-/// exist yet. A picker there can only name an account the login
-/// ignores, and the config would then point at a credential that lives
-/// somewhere else.
-///
-/// On everywhere else, and deliberately: a built-in OAuth service
-/// learns an identity from the account signed into and files under it,
-/// so Fastmail and Gmail really do hold one credential per address.
-///
-/// Hidden rather than deleted — the field, the account list and the
-/// plumbing that sends one all remain, and are still tested — so this
-/// is one condition to drop when #148 is fixed.
-const showAccountPicker = computed(() => !chosen.value?.credentialRegister);
-
-/// The one field, if any, that holds a latchkey account. There is at
-/// most one per descriptor: a step mirrors one identity.
-const accountField = computed(() =>
-  showAccountPicker.value
-    ? (downloadFields.value.find((f) => f.kind === "text" && f.latchkey) as
-        (Field & { kind: "text" }) | undefined)
-    : undefined,
+/// The one field that holds a latchkey account. Every latchkey source
+/// has exactly one (`fieldsFor` adds it where the descriptor does not):
+/// a step mirrors one identity.
+const accountField = computed(
+  () =>
+    downloadFields.value.find((f) => f.kind === "text" && f.latchkey) as
+      (Field & { kind: "text" }) | undefined,
 );
 
 const accounts = ref<StoredAccount[] | null>(null);
@@ -490,26 +546,54 @@ const latchkeyCli = ref("latchkey");
 /// them are on the gateway's side, and latchkey refuses every command
 /// the login button would run — so the button is not offered at all.
 const gateway = ref<string | null>(null);
-/// Why the account list is empty, when latchkey could not be asked.
-/// Shown as a note, not an error — the field is still typable.
-const accountsError = ref<string | null>(null);
+/// Why latchkey could not be asked, when it could not — shown at the
+/// top of the Connection section for every source, since without the
+/// answer it offers no way to sign in at all.
+const accountsFailure = ref<Failure | null>(null);
+/// Where signing in will install the latchkey plugin this service comes
+/// from, while latchkey lacks it.
+const installsPlugin = ref<string | null>(null);
+/// Who names the account a browser login adds: the service, from who
+/// signed in, or the person, in the box.
+const accountNaming = ref<AccountNaming>("chosen");
+const storedNames = computed(() => (accounts.value ?? []).map((a) => a.account));
+/// The box names an account latchkey holds for a service that names its
+/// own, so signing in refreshes it rather than adding one.
+const signsInAgainAs = computed(() =>
+  accountNaming.value === "service" && accountValue.value
+    ? loginAccount("service", storedNames.value, accountValue.value)
+    : "",
+);
+const accountHelp = computed(() =>
+  accountNaming.value === "service"
+    ? `${chosen.value?.label ?? "The service"} names each account itself when you sign in. ` +
+      "Pick one latchkey holds, or sign in to add another."
+    : accountField.value?.help,
+);
 
 async function loadAccounts() {
   const name = service.value;
   if (!name) return;
   accounts.value = null;
-  accountsError.value = null;
+  accountsFailure.value = null;
   try {
     const info = await latchkeyService(name);
     accounts.value = info.accounts;
     authOptions.value = info.auth_options;
+    setExample.value = info.set_example ?? null;
     serviceRegistered.value = info.registered;
     latchkeyCli.value = info.cli;
     gateway.value = info.gateway;
-    accountsError.value = info.error;
+    installsPlugin.value = info.installs_plugin;
+    accountNaming.value = info.account_naming;
+    accountsFailure.value = info.error
+      ? { issue: info.issue ?? "unknown", detail: info.error }
+      : null;
+    if (!signInTab.value || !signInWays.value.includes(signInTab.value))
+      chooseSignIn(signInWays.value[0] ?? null);
   } catch (e) {
     accounts.value = [];
-    accountsError.value = String(e);
+    accountsFailure.value = toFailure(e);
   }
 }
 
@@ -538,6 +622,122 @@ const setOnlyService = computed(
   () => !gateway.value && serviceRegistered.value && !authOptions.value.includes("browser"),
 );
 
+/// latchkey's example for this service knows the credential's shape —
+/// `fastmail-dav` takes `-u user:password`, not a header. A service
+/// registered by hand may have none, and gets the generic header form.
+const setExample = ref<string | null>(null);
+const setCommand = computed(() => {
+  const example = setExample.value ?? `latchkey auth set ${service.value} -H "…"`;
+  return example.replace(/^latchkey /, `${latchkeyCli.value} `);
+});
+
+// Pasting a credential
+
+/// Offered wherever latchkey takes a credential by hand — every service
+/// the wizard names — except under a gateway, which refuses `auth set`.
+const canPaste = computed(() => !gateway.value && authOptions.value.includes("set"));
+const pasteShape = computed(() =>
+  credentialShape(setExample.value, chosen.value?.credentialPaste?.headers),
+);
+const pasteUsername = ref("");
+const pasteSecret = ref("");
+/// Set once the account field is typed in or picked from, or already
+/// named an account when the paste form opened. Until then the field
+/// follows the pasted username, since that is what it is stored under.
+const accountChosen = ref(false);
+const paste = ref<{
+  state: "idle" | "saving" | "ok" | "failed";
+  message: string;
+  failure?: Failure;
+}>({
+  state: "idle",
+  message: "",
+});
+/// The ways in this service offers, in the order the tabs show them: a
+/// browser login gets whatever the sign-in grants, usually everything; a
+/// pasted key can be one made with less, where the service offers that.
+type SignInWay = "web" | "paste";
+const signInWays = computed<SignInWay[]>(() => [
+  ...(canConnect.value ? (["web"] as const) : []),
+  ...(canPaste.value ? (["paste"] as const) : []),
+]);
+const signInTab = ref<SignInWay | null>(null);
+
+function chooseSignIn(way: SignInWay | null) {
+  signInTab.value = way;
+  if (way === "paste") preparePaste();
+}
+
+function preparePaste() {
+  accountChosen.value = !!accountValue.value;
+  const address = accountValue.value.split(/\s/)[0] ?? "";
+  if (!pasteUsername.value && address.includes("@")) pasteUsername.value = address;
+}
+watch(pasteUsername, (username) => {
+  const field = accountField.value;
+  if (field && !accountChosen.value)
+    values.value[field.target] = suggestedAccount(
+      username,
+      chosen.value?.credentialPaste?.accountSuffix,
+    );
+});
+
+/// A folder is imported, not pasted.
+const pasteTabLabel = computed(() =>
+  pasteShape.value.kind === "directory" ? "Import tokens" : "Paste a key",
+);
+
+/// latchkey's own word for the secret: "Token", "App password".
+const pasteSecretLabel = computed(() => {
+  const label = pasteShape.value.secretLabel;
+  return label.charAt(0).toUpperCase() + label.slice(1);
+});
+
+const pasted = computed(() =>
+  pastedCredential(pasteShape.value, pasteUsername.value, pasteSecret.value),
+);
+
+/// The header the secret is sent in, shown with the secret elided so a
+/// person can see it is the kind of thing they have.
+const pasteHeaderHint = computed(() =>
+  pasteShape.value.kind === "headers" && pasteShape.value.headers[0] !== SECRET
+    ? pasteShape.value.headers.map((h) => h.replace(SECRET, "…")).join("  ")
+    : "",
+);
+
+/// Where the source names an account, the paste is stored under that
+/// name and must have one: an unnamed paste lands on whichever
+/// credential latchkey holds alone.
+const pasteNeedsName = computed(() => !!accountField.value);
+const pasteLandsOn = computed(() =>
+  pasteTarget(
+    (accounts.value ?? []).map((a) => a.account),
+    accountValue.value,
+  ),
+);
+
+async function savePasted() {
+  const name = service.value;
+  const credential = pasted.value;
+  if (!name || !credential || paste.value.state === "saving") return;
+  const account = pasteNeedsName.value ? accountValue.value : "";
+  if (pasteNeedsName.value && !account) return;
+  paste.value = { state: "saving", message: "" };
+  try {
+    await setLatchkeyCredential(name, account, credential);
+  } catch (e) {
+    paste.value = { state: "failed", message: "", failure: toFailure(e) };
+    return;
+  }
+  pasteSecret.value = "";
+  paste.value = { state: "ok", message: "Stored in latchkey." };
+  await loadAccounts();
+  // The credential is only a guess until something uses it; the check
+  // is the cheapest thing that does.
+  resetProbes();
+  if (canProbe.value) await checkConnection();
+}
+
 /// Set by the button on a service latchkey holds without a browser
 /// login: converting one means taking it apart and putting it back,
 /// which destroys the credentials stored under it. The commands are
@@ -563,7 +763,12 @@ const conversionCommands = computed(() => {
   ].join("\n");
 });
 
-const connect = ref<{ state: "idle" | "running" | "ok" | "failed"; message: string }>({
+const connect = ref<{
+  state: "idle" | "running" | "ok" | "failed";
+  message: string;
+  phase?: ConnectPhase;
+  failure?: Failure;
+}>({
   state: "idle",
   message: "",
 });
@@ -574,6 +779,14 @@ let closed = false;
 onUnmounted(() => {
   closed = true;
 });
+
+/// What a running login says it is waiting on.
+const CONNECT_PHASE_TEXT: Record<ConnectPhase, string> = {
+  preparing: "Getting the sign-in ready…",
+  downloading_browser:
+    "Getting a browser for the sign-in — a one-time download that can take a few minutes…",
+  signing_in: "A browser window should open. Finish the login there.",
+};
 
 async function connectViaLatchkey() {
   const name = service.value;
@@ -596,7 +809,7 @@ async function connectViaLatchkey() {
     const ephemeral = chosen.value?.credentialRegister?.login_flow === "cookie-capture";
     const started = await startLatchkeyConnect(
       name,
-      accountValue.value,
+      loginAccount(accountNaming.value, storedNames.value, accountValue.value),
       wouldRegister.value,
       ephemeral,
     );
@@ -604,20 +817,27 @@ async function connectViaLatchkey() {
       await new Promise((r) => setTimeout(r, 1500));
       if (closed) return;
       const status = await latchkeyConnectStatus(started.id);
-      if (status.status === "running") continue;
+      if (status.status === "running") {
+        connect.value = {
+          state: "running",
+          message: CONNECT_PHASE_TEXT[status.phase],
+          phase: status.phase,
+        };
+        continue;
+      }
       if (status.status === "ok") {
         // The point of connecting was to add an account; showing the
         // stale list would hide the one just added.
         await loadAccounts();
-        // Follow the login rather than the box. `--account` is ignored
-        // when latchkey stores (imbue-ai/latchkey#148): an OAuth login
-        // files under the address actually signed in with, so signing
-        // in as a second Fastmail address is how a second account comes
-        // to exist — and the form has to name that one, or the config
-        // points at a credential that isn't there.
+        // Follow the login rather than the box: a service that names
+        // its own accounts files the credential under whoever signed
+        // in, and the config has to name that one.
         const landed = status.account;
         const field = accountField.value;
         if (landed && field) values.value[field.target] = landed;
+        // What was checked and loaded before the login was done with a
+        // credential that has just been replaced.
+        resetProbes();
         connect.value = {
           state: "ok",
           message: landed
@@ -627,14 +847,42 @@ async function connectViaLatchkey() {
       } else {
         connect.value = {
           state: "failed",
-          message: status.output || "The login did not complete.",
+          message: "",
+          failure: {
+            issue: status.issue ?? "unknown",
+            detail: status.output || "The login did not complete.",
+          },
         };
       }
       return;
     }
   } catch (e) {
-    connect.value = { state: "failed", message: String(e) };
+    connect.value = { state: "failed", message: "", failure: toFailure(e) };
   }
+}
+
+/// The names latchkey holds for this service, with what it says of each.
+/// Its status is a hint, not a verdict: `fastmail-dav` checks every
+/// credential against CardDAV, so a calendar-only password reads invalid.
+const accountOptions = computed<AccountOption[] | null>(() =>
+  accounts.value === null
+    ? null
+    : accounts.value.map((a) => ({
+        value: a.account,
+        note:
+          a.credential_status === "valid"
+            ? "✓"
+            : a.credential_status === "invalid"
+              ? "latchkey reports it invalid"
+              : undefined,
+      })),
+);
+
+function chooseAccount(name: string) {
+  const field = accountField.value;
+  if (!field) return;
+  values.value[field.target] = name;
+  accountChosen.value = true;
 }
 
 /// The account currently in the form. Empty means "latchkey's unnamed
@@ -644,54 +892,119 @@ const accountValue = computed(() =>
   accountField.value ? String(values.value[accountField.value.target] ?? "").trim() : "",
 );
 
-// The probe
+// The probe: "Check connection" asks which account the credentials
+// reach; each picker's "Load" asks for its own list, which can take a
+// while on a big account, so it says how far it has got.
 
-const probe = ref<{
-  state: "idle" | "running" | "ok" | "failed";
-  message: string;
+type Outcome = { state: "idle" | "running" | "ok" | "failed"; failure: Failure | null };
+
+const check = ref<Outcome & { report: ProbeReport | null }>({
+  state: "idle",
+  failure: null,
+  report: null,
+});
+
+type ListLoad = Outcome & {
   report: ProbeReport | null;
-}>({ state: "idle", message: "", report: null });
+  progress: ProbeProgress | null;
+  startedAt: number;
+};
 
-/// Can "Test connection" be offered here at all?
+const IDLE_LIST: ListLoad = {
+  state: "idle",
+  failure: null,
+  report: null,
+  progress: null,
+  startedAt: 0,
+};
+
+/// One load per list, shared by every field that picks from it.
+const lists = ref<Partial<Record<ProbeNoun, ListLoad>>>({});
+
+function listLoad(noun: ProbeNoun): ListLoad {
+  return lists.value[noun] ?? IDLE_LIST;
+}
+
+/// Forget what was checked and loaded: the credentials it was done
+/// with have just changed.
+function resetProbes() {
+  check.value = { state: "idle", failure: null, report: null };
+  lists.value = {};
+}
+
+/// Can "Check connection" and the pickers' "Load" be offered here?
 const canProbe = computed(() => !!chosen.value?.canProbe && !!probeParams.value);
 
-async function testConnection() {
+async function checkConnection() {
   const entry = chosen.value;
   const params = probeParams.value;
-  if (!entry || !params || probe.value.state === "running") return;
-  probe.value = { state: "running", message: "", report: null };
+  if (!entry || !params || check.value.state === "running") return;
+  check.value = { state: "running", failure: null, report: null };
   try {
-    const report = await probeSource(entry.type, params);
-    probe.value = {
-      state: "ok",
-      message: "",
-      report,
-    };
+    const report = await runProbe(entry.type, params, null);
+    check.value = { state: "ok", failure: null, report };
   } catch (e) {
-    probe.value = { state: "failed", message: probeFailure(e), report: null };
+    check.value = { state: "failed", failure: toFailure(e), report: null };
   }
 }
 
-/// A probe failure as something to read. What arrives is the step's own
-/// stderr — one `error: ` line per link in its cause chain, and for a
-/// credential problem a numbered setup recipe after them — wrapped in a
-/// JS `Error`. Strip the two layers of prefix that add nothing; the
-/// lines themselves are the message, and the template keeps them.
-function probeFailure(e: unknown): string {
-  const raw = e instanceof Error ? e.message : String(e);
-  return raw
-    .split("\n")
-    .map((line) => line.replace(/^\s*error:\s*/, ""))
-    .join("\n")
-    .trim();
+async function loadList(noun: ProbeNoun) {
+  const entry = chosen.value;
+  const params = probeParams.value;
+  if (!entry || !params || listLoad(noun).state === "running") return;
+  lists.value[noun] = { ...IDLE_LIST, state: "running", startedAt: Date.now() };
+  tickWhileLoading();
+  try {
+    const report = await runProbe(entry.type, params, noun, (progress) => {
+      const load = lists.value[noun];
+      if (load) load.progress = progress;
+    });
+    lists.value[noun] = { ...listLoad(noun), state: "ok", report };
+  } catch (e) {
+    lists.value[noun] = { ...listLoad(noun), state: "failed", failure: toFailure(e) };
+  }
 }
 
-/// The failure in one line, which is the part that says what went
-/// wrong. Everything after it is how to fix it.
-const probeHeadline = computed(() => probe.value.message.split("\n")[0] ?? "");
-/// The rest, kept as written: it is a numbered recipe with commands in
-/// it, and reflowing it into a paragraph is what made it unreadable.
-const probeDetail = computed(() => probe.value.message.split("\n").slice(1).join("\n").trim());
+/// The clock the loading lines read their seconds from, ticking only
+/// while something loads.
+const now = ref(Date.now());
+let ticker: ReturnType<typeof setInterval> | null = null;
+
+function tickWhileLoading() {
+  if (ticker) return;
+  ticker = setInterval(() => {
+    now.value = Date.now();
+    if (!Object.values(lists.value).some((l) => l?.state === "running")) {
+      clearInterval(ticker as ReturnType<typeof setInterval>);
+      ticker = null;
+    }
+  }, 1000);
+}
+
+onUnmounted(() => {
+  if (ticker) clearInterval(ticker);
+});
+
+// A check or a list is about the account it was made with.
+watch(accountValue, resetProbes);
+
+function loadingLine(noun: ProbeNoun): string {
+  const load = listLoad(noun);
+  return loadingText(probeNoun(noun), load.progress, (now.value - load.startedAt) / 1000);
+}
+
+/// Any failure as the wizard shows one: a classified one as it came,
+/// anything else (a dropped connection to this server) as its text.
+function toFailure(e: unknown): Failure {
+  if (e instanceof FailureError) return e.failure;
+  return { issue: "unknown", detail: e instanceof Error ? e.message : String(e) };
+}
+
+/// Where this dialog can get a credential into latchkey from, which is
+/// what a failure's advice points at.
+const signInWhere = computed<SignInWhere>(() =>
+  gateway.value ? "gateway" : canConnect.value || canPaste.value ? "here" : "terminal",
+);
 
 /// Which of a report's item kinds each `probe:` noun takes. A render
 /// filter matches only what emails are filed in, never a Gmail flag,
@@ -702,12 +1015,14 @@ const PROBE_KINDS: Record<ProbeNoun, ProbeItemKind[]> = {
   conversations: ["conversation"],
   channels: ["channel"],
   calendars: ["calendar"],
+  addressbooks: ["address_book"],
 };
 
-/// What a `probe:` field should offer, given what came back.
+/// What a `probe:` field should offer, given what its list loaded.
 function probeOptions(field: Field): ProbeItem[] {
-  const report = probe.value.report;
-  if (!report || field.kind !== "string_list" || !field.probe) return [];
+  if (field.kind !== "string_list" || !field.probe) return [];
+  const report = listLoad(field.probe).report;
+  if (!report) return [];
   const kinds = PROBE_KINDS[field.probe];
   return report.items.filter((i) => kinds.includes(i.kind));
 }
@@ -753,38 +1068,38 @@ function unknownValues(field: Field): string[] {
 /// account has conversations and a Slack workspace channels.
 function probeNoun(probe: ProbeNoun): string {
   if (probe === "labels" || probe === "mailboxes") return chosen.value?.mailboxNoun ?? "folders";
+  if (probe === "addressbooks") return "address books";
   return probe;
 }
 
-/// The noun each item kind is counted under in the "Reached …" line.
-const KIND_NOUNS: Record<ProbeItemKind, ProbeNoun> = {
-  mailbox: "labels",
-  keyword: "labels",
-  conversation: "conversations",
-  channel: "channels",
-  calendar: "calendars",
-};
+/// Who a report reached, in the words the wizard shows it by.
+function reachedName(report: ProbeReport): string {
+  return report.account.address || report.account.display_name || report.account.id;
+}
 
-/// What the probe came back with, counted by kind: "3 channels, 2
-/// conversations". A report with nothing in it says so in words, since
-/// there is no one noun to count zero of.
-const probeSummary = computed(() => {
-  const counts = new Map<ProbeNoun, number>();
-  for (const item of probe.value.report?.items ?? []) {
-    // A backend newer than this build may name a kind it lacks; the
-    // item still counts, as the plainest noun.
-    const noun = KIND_NOUNS[item.kind] ?? "labels";
-    counts.set(noun, (counts.get(noun) ?? 0) + 1);
-  }
-  if (counts.size === 0) return "nothing to pick from";
-  return [...counts].map(([noun, n]) => `${n} ${probeNoun(noun)}`).join(", ");
-});
+/// "12 channels from picard in Enterprise" — what a load came back
+/// with, counted in the field's own noun.
+function loadedLine(field: Field): string {
+  if (field.kind !== "string_list" || !field.probe) return "";
+  const report = listLoad(field.probe).report;
+  if (!report) return "";
+  const n = probeOptions(field).length;
+  return n === 0
+    ? `No ${probeNoun(field.probe)} on ${reachedName(report)}.`
+    : `${countOf(n, probeNoun(field.probe))} from ${reachedName(report)}.`;
+}
 
 // Load the account list as soon as there is a service to load it for:
 // on open in edit mode, and on picking a tile in create mode.
 watch(
   service,
   (name) => {
+    // A half-typed secret belongs to the service it was typed for, and
+    // a check or a list to the source it was made for.
+    resetProbes();
+    signInTab.value = null;
+    pasteSecret.value = "";
+    paste.value = { state: "idle", message: "" };
     if (name) void loadAccounts();
   },
   { immediate: true },
@@ -800,7 +1115,7 @@ function submit() {
     groupBody: source.value.groupBody,
     stepsBody: source.value.stepsBody,
     renderId: source.value.renderId,
-    qmdIndex: qmdIndexes.value,
+    qmdIndexing: qmdIndexing.value,
   });
 }
 </script>
@@ -809,20 +1124,21 @@ function submit() {
   <!-- The backdrop deliberately does not close this dialog: a stray
        click beside a half-filled form would discard every field in it
        with nothing to undo it. The × and Cancel are the ways out. -->
-  <div class="wiz-backdrop">
+  <div class="wiz-backdrop dialog-backdrop">
     <div
-      class="wiz"
+      class="wiz dialog"
       role="dialog"
       aria-modal="true"
       :aria-label="isEdit ? 'Edit source' : 'Add data source'"
+      @click="keepHelpSelectable"
     >
-      <header class="wiz-head">
+      <header class="wiz-head dialog-head">
         <h2>{{ isEdit ? `Edit ${name || id}` : "Add a data source" }}</h2>
-        <button class="wiz-x" aria-label="Close" @click="emit('close')">×</button>
+        <button class="wiz-x dialog-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
 
       <!-- Stage 1: pick a type -->
-      <div v-if="stage === 'pick'" class="wiz-body">
+      <div v-if="stage === 'pick'" class="wiz-body dialog-body">
         <input
           v-model="query"
           class="wiz-filter"
@@ -859,7 +1175,7 @@ function submit() {
       </div>
 
       <!-- Stage 2: configure -->
-      <div v-else-if="chosen" class="wiz-body">
+      <div v-else-if="chosen" class="wiz-body dialog-body">
         <div class="wiz-chosen">
           <img v-if="iconUrl(chosen.icon)" :src="iconUrl(chosen.icon)!" alt="" class="wiz-icon" />
           <div>
@@ -876,161 +1192,272 @@ function submit() {
             Credentials are held by latchkey, under its
             <code>{{ service }}</code> service — datalib never stores them itself.
           </p>
+          <!-- Every way to sign in below comes from latchkey's answer, so
+               while it is asked the section says so, and when it cannot
+               be asked the section says why — for every source, not only
+               the ones with an account picker. -->
+          <p v-if="accounts === null" class="wiz-help wiz-conn-asking" role="status">
+            Asking latchkey how you can sign in…
+          </p>
+          <IssueNote
+            v-if="accountsFailure"
+            class="wiz-conn-note wiz-accounts-failed"
+            :failure="accountsFailure"
+            :service="chosen.label"
+            :where="signInWhere"
+          />
 
-          <label v-if="accountField" class="wiz-field">
+          <div v-if="accountField" class="wiz-field">
             <span class="wiz-label">{{ accountField.label }}</span>
-            <span class="wiz-accountrow">
-              <!-- A dropdown *and* a box. latchkey may hold an account
-                   this server cannot enumerate, and a list that came
-                   back empty must not be the only way in. -->
-              <select
-                class="wiz-input wiz-select wiz-accountpick"
-                :value="
-                  accounts?.some((a) => a.account === accountValue) ? accountValue : '__other'
-                "
-                @change="
-                  values[accountField.target] =
-                    ($event.target as HTMLSelectElement).value === '__other'
-                      ? ''
-                      : ($event.target as HTMLSelectElement).value
-                "
-              >
-                <option value="__other">
-                  {{ accounts === null ? "Loading accounts…" : "Type an account…" }}
-                </option>
-                <option
-                  v-for="a in accounts ?? []"
-                  :key="a.account || '(default)'"
-                  :value="a.account"
-                >
-                  {{ a.account || "(latchkey’s default account)" }}
-                  {{
-                    a.credential_status === "valid"
-                      ? "✓"
-                      : a.credential_status === "invalid"
-                        ? "— expired"
-                        : ""
-                  }}
-                </option>
-              </select>
-              <input
-                class="wiz-input"
-                :value="values[accountField.target] as string"
-                spellcheck="false"
-                @input="values[accountField.target] = ($event.target as HTMLInputElement).value"
-              />
-            </span>
-            <small v-if="accountField.help" class="wiz-help">{{ accountField.help }}</small>
-            <small v-if="accounts && accounts.length === 0 && !accountsError" class="wiz-help">
+            <AccountCombo
+              :model-value="accountValue"
+              :options="accountOptions"
+              :label="accountField.label"
+              :placeholder="
+                accountNaming === 'service' ? 'named when you sign in' : 'you@example.com'
+              "
+              @update:model-value="chooseAccount"
+            />
+            <small v-if="accountHelp" class="wiz-help wiz-account-help">{{ accountHelp }}</small>
+            <small v-if="accounts && accounts.length === 0 && !accountsFailure" class="wiz-help">
               latchkey has no <code>{{ service }}</code> credential stored yet.
               {{ canConnect ? "Connect below." : "" }}
             </small>
-            <small v-if="accountsError" class="wiz-help">
-              Couldn’t ask latchkey which accounts it holds ({{ accountsError }}). Type the account
-              name — the sync uses latchkey directly and is unaffected by this.
-            </small>
-          </label>
-
-          <div class="wiz-conn-actions">
-            <button
-              v-if="canConnect"
-              type="button"
-              class="btn ghost"
-              :disabled="connect.state === 'running'"
-              @click="connectViaLatchkey"
-            >
-              {{ connect.state === "running" ? "Waiting for the browser…" : "Latchkey auth" }}
-            </button>
-            <button
-              v-if="canProbe"
-              type="button"
-              class="btn ghost"
-              :disabled="probe.state === 'running'"
-              @click="testConnection"
-            >
-              {{ probe.state === "running" ? "Testing…" : "Test connection" }}
-            </button>
           </div>
 
-          <p v-if="canConnect && chosen.credentialConnectWarning" class="wiz-help wiz-conn-note">
-            {{ chosen.credentialConnectWarning }}
-          </p>
           <!-- Under a gateway the login happens on the gateway's side,
-               and every command the button would run is refused. -->
+               and every command a sign-in would run is refused. -->
           <p v-if="gateway" class="wiz-help wiz-conn-note">
             Credentials are held by a latchkey gateway (<code>{{ gateway }}</code
-            >). Sign in where that gateway is managed, then press <b>Test connection</b>.
+            >). Sign in where that gateway is managed, then press <b>Check connection</b>.
           </p>
-          <!-- What the button says on a service that has no browser
-               login. Shown rather than done: latchkey refuses to
-               re-register a name it holds, so the only way to add one
-               destroys the credentials already stored under it. -->
-          <div v-if="showConversion" class="wiz-conn-note wiz-convert">
-            <p class="wiz-help wiz-convert-head">
-              latchkey holds <code>{{ service }}</code> without a browser login, and won’t add one
-              to a name it already has. Adding one means taking the service apart and registering it
-              again — which
-              <b
-                >deletes every credential stored under <code>{{ service }}</code></b
-              >, so it is yours to run, not this dialog’s:
-            </p>
-            <pre class="wiz-probe-detail">{{ conversionCommands }}</pre>
-            <p class="wiz-help">
-              Then come back and press <b>Latchkey auth</b>. Or skip all of it and paste a
-              credential, below — that needs no conversion and is what this service does today.
-            </p>
+          <p
+            v-if="installsPlugin && signInWays.length"
+            class="wiz-help wiz-conn-note wiz-plugin-note"
+          >
+            latchkey reaches {{ chosen.label }} through a plugin. Signing in installs it into
+            <code>{{ installsPlugin }}</code
+            >.
+          </p>
+          <!-- How a credential gets into latchkey under the name above. A
+               tab per way the service offers; a lone way is shown bare. -->
+          <div v-if="signInWays.length" class="wiz-signin">
+            <div v-if="signInWays.length > 1" class="wiz-tabs" role="tablist">
+              <button
+                v-for="way in signInWays"
+                :id="`wiz-tab-${way}`"
+                :key="way"
+                type="button"
+                role="tab"
+                class="wiz-tab"
+                :aria-selected="signInTab === way"
+                aria-controls="wiz-signin-panel"
+                @click="chooseSignIn(way)"
+              >
+                {{ way === "web" ? "Web login" : pasteTabLabel }}
+              </button>
+            </div>
+            <div
+              v-if="signInTab === 'web'"
+              id="wiz-signin-panel"
+              class="wiz-tabpanel"
+              :role="signInWays.length > 1 ? 'tabpanel' : undefined"
+              :aria-labelledby="signInWays.length > 1 ? 'wiz-tab-web' : undefined"
+            >
+              <p class="wiz-help">
+                Opens a browser window to sign in. latchkey keeps what the sign-in grants, which is
+                usually full access: it can read and change everything the account can.
+                <template v-if="signInWays.includes('paste') && pasteShape.kind !== 'directory'"
+                  >For less, use <b>Paste a key</b>.</template
+                >
+              </p>
+              <p
+                v-if="nameLeftToService(accountNaming, storedNames, accountValue)"
+                class="wiz-help wiz-name-left"
+              >
+                {{ chosen.label }} names the new account itself, so
+                <code>{{ accountValue }}</code> is replaced by the name it reports.
+              </p>
+              <p v-if="chosen.credentialConnectWarning" class="wiz-help">
+                {{ chosen.credentialConnectWarning }}
+              </p>
+              <div class="wiz-conn-actions">
+                <button
+                  type="button"
+                  class="btn"
+                  :disabled="connect.state === 'running'"
+                  @click="connectViaLatchkey"
+                >
+                  {{
+                    connect.state !== "running"
+                      ? signsInAgainAs
+                        ? `Sign in again as ${signsInAgainAs}`
+                        : "Sign in with browser"
+                      : connect.phase === "downloading_browser"
+                        ? "Getting a browser…"
+                        : "Waiting for the browser…"
+                  }}
+                </button>
+              </div>
+              <IssueNote
+                v-if="connect.state === 'failed' && connect.failure"
+                class="wiz-connect-failed"
+                :failure="connect.failure"
+                :service="chosen.label"
+                :where="signInWhere"
+              />
+              <p v-else-if="connect.state !== 'idle'" class="wiz-help wiz-connect-status">
+                {{ connect.message }}
+              </p>
+              <!-- What the button says on a service that has no browser
+                   login. Shown rather than done: latchkey refuses to
+                   re-register a name it holds, so the only way to add one
+                   destroys the credentials already stored under it. -->
+              <div v-if="showConversion" class="wiz-conn-note wiz-convert">
+                <p class="wiz-help wiz-convert-head">
+                  latchkey holds <code>{{ service }}</code> without a browser login, and won’t add
+                  one to a name it already has. Adding one means taking the service apart and
+                  registering it again — which
+                  <b
+                    >deletes every credential stored under <code>{{ service }}</code></b
+                  >, so it is yours to run, not this dialog’s:
+                </p>
+                <pre class="wiz-probe-detail">{{ conversionCommands }}</pre>
+                <p class="wiz-help">
+                  Then come back and press <b>Sign in with browser</b>. Or skip all of it and use
+                  the <b>Paste a key</b> tab — that needs no conversion and is what this service
+                  does today.
+                </p>
+              </div>
+            </div>
+            <!-- latchkey's `auth set`, run by the server. The secret is
+                 sent once and never kept in the form after it is stored. -->
+            <div
+              v-else-if="signInTab === 'paste'"
+              id="wiz-signin-panel"
+              class="wiz-tabpanel wiz-paste"
+              :role="signInWays.length > 1 ? 'tabpanel' : undefined"
+              :aria-labelledby="signInWays.length > 1 ? 'wiz-tab-paste' : undefined"
+            >
+              <p v-if="!signInWays.includes('web')" class="wiz-help">
+                <code>{{ service }}</code> has no web login, so its credential is pasted here.
+              </p>
+              <p v-if="chosen.credentialPaste?.help" class="wiz-help">
+                {{ chosen.credentialPaste.help }}
+              </p>
+              <label v-if="pasteShape.kind === 'basic'" class="wiz-field">
+                <span class="wiz-label">Username</span>
+                <input
+                  v-model="pasteUsername"
+                  class="wiz-input"
+                  :placeholder="pasteShape.userHint"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </label>
+              <label class="wiz-field">
+                <span class="wiz-label">{{ pasteSecretLabel }}</span>
+                <input
+                  v-model="pasteSecret"
+                  class="wiz-input"
+                  :type="pasteShape.kind === 'directory' ? 'text' : 'password'"
+                  :placeholder="
+                    pasteShape.kind === 'directory' ? pasteShape.placeholder : undefined
+                  "
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <small v-if="pasteHeaderHint" class="wiz-help">
+                  Sent as <code>{{ pasteHeaderHint }}</code>
+                </small>
+              </label>
+              <p v-if="pasteNeedsName" class="wiz-help">
+                <template v-if="pasteLandsOn.kind === 'unnamed'">
+                  Name the {{ accountField?.label ?? "account" }} above: latchkey stores this
+                  credential under that name.
+                </template>
+                <template v-else-if="pasteLandsOn.kind === 'replaces'">
+                  Stored as <code>{{ pasteLandsOn.account }}</code
+                  >, replacing the <code>{{ service }}</code> credential latchkey already holds
+                  under that name — every source that uses it gets this one. Choose another name
+                  above to keep it.
+                </template>
+                <template v-else>
+                  Stored as <code>{{ accountValue }}</code
+                  >.
+                  <template v-if="pasteLandsOn.besideUnnamed">
+                    latchkey also holds an unnamed <code>{{ service }}</code> credential; with both
+                    stored, it won’t pick one for a source that names no account, so name an account
+                    in those sources too.
+                  </template>
+                </template>
+              </p>
+              <div class="wiz-conn-actions">
+                <button
+                  type="button"
+                  class="btn"
+                  :disabled="
+                    !pasted ||
+                    (pasteNeedsName && pasteLandsOn.kind === 'unnamed') ||
+                    paste.state === 'saving'
+                  "
+                  @click="savePasted"
+                >
+                  {{ paste.state === "saving" ? "Storing…" : "Store in latchkey" }}
+                </button>
+              </div>
+              <IssueNote
+                v-if="paste.state === 'failed' && paste.failure"
+                :failure="paste.failure"
+                :service="chosen.label"
+                :where="signInWhere"
+              />
+              <p v-else-if="paste.message" class="wiz-help">
+                {{ paste.message }}
+              </p>
+              <p class="wiz-help">
+                From a terminal instead: <code>{{ setCommand }}</code>
+              </p>
+            </div>
           </div>
 
-          <!-- Only where the button cannot help: a service its owner
-               registered without a browser login. -->
-          <p v-if="setOnlyService" class="wiz-help wiz-conn-note">
-            <code>{{ service }}</code> has no browser login, so its credential is pasted:
-            <code>latchkey auth set {{ service }} -H "…"</code>
-          </p>
-          <p v-if="connect.state !== 'idle'" class="wiz-help wiz-conn-note">
-            {{ connect.message }}
-          </p>
+          <div v-if="canProbe" class="wiz-conn-actions wiz-check">
+            <button
+              type="button"
+              class="btn ghost"
+              :disabled="check.state === 'running'"
+              @click="checkConnection"
+            >
+              {{ check.state === "running" ? "Checking…" : "Check connection" }}
+            </button>
+          </div>
           <!-- The verdict is a mark before the words — the Manage
                screen's own tick and "!", in its colours — so the eye
                gets the answer before reading what it was. -->
-          <div
-            v-if="probe.state === 'failed'"
-            class="wiz-conn-note wiz-probe-note wiz-probe-failed"
-          >
-            <p class="wiz-error wiz-probe-headline">
-              <svg class="wiz-probe-mark" viewBox="0 0 24 24" role="img" aria-label="Failed">
-                <path :d="STATUS_GLYPHS.failed" fill="currentColor" />
-              </svg>
-              {{ probeHeadline }}
-            </p>
-            <details v-if="probeDetail">
-              <summary class="wiz-help">How to fix it</summary>
-              <pre class="wiz-probe-detail">{{ probeDetail }}</pre>
-            </details>
-          </div>
+          <IssueNote
+            v-if="check.state === 'failed' && check.failure"
+            class="wiz-conn-note wiz-probe-failed"
+            :failure="check.failure"
+            :service="chosen.label"
+            :where="signInWhere"
+          />
           <p
-            v-else-if="probe.state === 'ok' && probe.report"
+            v-else-if="check.state === 'ok' && check.report"
             class="wiz-help wiz-conn-note wiz-probe-note wiz-probe-ok"
           >
             <svg class="wiz-probe-mark" viewBox="0 0 24 24" role="img" aria-label="Connected">
               <path :d="STATUS_GLYPHS.succeeded" fill="currentColor" />
             </svg>
-            Reached
-            <b>{{
-              probe.report.account.address ||
-              probe.report.account.display_name ||
-              probe.report.account.id
-            }}</b
+            Connected to
+            <b>{{ reachedName(check.report) }}</b
             ><!-- A message estimate is only shown when the provider gave
                   one for free: Gmail's profile carries it, JMAP's
-                  session does not. --><template v-if="probe.report.account.message_estimate">
-              — about {{ probe.report.account.message_estimate.toLocaleString() }} messages,
-              {{ probeSummary }}.</template
-            ><template v-else> — {{ probeSummary }}.</template>
-            The pickers below are filled in from it.
-            <!-- What the provider wanted said alongside a success:
-                 "the 500 most recent are listed", "counts are blank". -->
-            <span v-for="note in probe.report.notes" :key="note" class="wiz-probe-aside">{{
+                  session does not. --><template v-if="check.report.account.message_estimate">
+              — about
+              {{ check.report.account.message_estimate.toLocaleString() }} messages</template
+            >.
+            <!-- What the provider wanted said alongside a success. -->
+            <span v-for="note in check.report.notes" :key="note" class="wiz-probe-aside">{{
               note
             }}</span>
           </p>
@@ -1122,20 +1549,37 @@ function submit() {
               </small>
             </label>
             <label class="wiz-field wiz-inline">
-              <span class="wiz-label">Index the markdown for semantic search</span>
+              <span class="wiz-label">Keyword-index the markdown</span>
               <input
-                v-model="qmdWanted"
+                v-model="keywordWanted"
                 type="checkbox"
                 class="wiz-bool"
                 :disabled="!renderWanted"
               />
               <small class="wiz-help">
-                Names this source in <code>unified_index/qmd_index</code>, the index every free-text
-                search goes to: it embeds this source's markdown so a search matches on meaning as
-                well as on words. Embedding is the slow part of a sync. Turn it off and the source
-                keeps its rows, its columns and its filters in the grid, but typing words into the
-                search bar will not find it.<template v-if="!renderWanted">
+                A step of its own, <code>{{ `${groupId || "…"}/keyword_index` }}</code
+                >, puts this source's markdown into the index every free-text search goes to, so
+                typing words into the search bar finds it. Turn it off and the source keeps its
+                rows, its columns and its filters in the grid, but the search bar will not find
+                it.<template v-if="!renderWanted">
                   Nothing to index while rendering is off.</template
+                >
+              </small>
+            </label>
+            <label class="wiz-field wiz-inline">
+              <span class="wiz-label">Embed it for search by meaning</span>
+              <input
+                v-model="embedWanted"
+                type="checkbox"
+                class="wiz-bool"
+                :disabled="!renderWanted || !keywordWanted"
+              />
+              <small class="wiz-help">
+                Another step, <code>{{ `${groupId || "…"}/embed` }}</code
+                >, computes vectors so a search matches on meaning as well as on words, and places
+                the source on the map. Embedding is the slow part of a sync. Turn it off and keyword
+                search still finds the source.<template v-if="renderWanted && !keywordWanted">
+                  It reads the keyword index, so it needs that on.</template
                 >
               </small>
             </label>
@@ -1221,10 +1665,58 @@ function submit() {
                 spellcheck="false"
                 @input="setListText(f, ($event.target as HTMLInputElement).value)"
               />
+              <!-- Loading a list is its own button, not part of the
+                   check: a big account's list takes a while, so it is
+                   asked for only where it is wanted, and says how far
+                   it has got. -->
+              <div v-if="f.probe && canProbe" class="wiz-load">
+                <template v-if="listLoad(f.probe).state === 'running'">
+                  <progress
+                    class="wiz-load-bar"
+                    :value="
+                      listLoad(f.probe).progress?.total != null
+                        ? listLoad(f.probe).progress?.done
+                        : undefined
+                    "
+                    :max="listLoad(f.probe).progress?.total ?? undefined"
+                  />
+                  <small class="wiz-help wiz-load-status" role="status">{{
+                    loadingLine(f.probe)
+                  }}</small>
+                </template>
+                <button
+                  v-else
+                  type="button"
+                  class="btn ghost wiz-load-btn"
+                  @click="loadList(f.probe)"
+                >
+                  {{
+                    listLoad(f.probe).state === "ok"
+                      ? `Reload ${probeNoun(f.probe)}`
+                      : `Load ${probeNoun(f.probe)} from ${chosen.label}`
+                  }}
+                </button>
+                <small v-if="listLoad(f.probe).state === 'ok'" class="wiz-help wiz-load-done">
+                  {{ loadedLine(f) }}
+                  <span
+                    v-for="note in listLoad(f.probe).report?.notes ?? []"
+                    :key="note"
+                    class="wiz-probe-aside"
+                    >{{ note }}</span
+                  >
+                </small>
+                <IssueNote
+                  v-else-if="listLoad(f.probe).state === 'failed' && listLoad(f.probe).failure"
+                  class="wiz-load-failed"
+                  :failure="listLoad(f.probe).failure!"
+                  :service="chosen.label"
+                  :where="signInWhere"
+                />
+              </div>
               <!-- The picker is an *addition* to the box above, never
-                   a replacement: a probe needs credentials that may not
+                   a replacement: a list needs credentials that may not
                    exist yet, and this form has to stay usable before one
-                   has ever succeeded. Both edit the same array. -->
+                   has ever loaded. Both edit the same array. -->
               <ProbeItemPicker
                 v-if="f.probe && probeOptions(f).length"
                 :items="probeOptions(f)"
@@ -1235,10 +1727,6 @@ function submit() {
                 Not on this account: {{ unknownValues(f).join(", ") }}. Nothing can be mirrored for
                 a name the account doesn’t have — check the spelling, or tick it in the list.
               </small>
-              <small v-else-if="f.probe && !probe.report" class="wiz-help">
-                Run “Test connection” to pick from this account’s real
-                {{ probeNoun(f.probe) }} instead of typing them.
-              </small>
             </span>
             <input
               v-else
@@ -1248,7 +1736,26 @@ function submit() {
               @input="values[f.target] = ($event.target as HTMLInputElement).value"
             />
 
-            <small v-if="f.help" class="wiz-help">{{ f.help }}</small>
+            <small v-if="helpAroundStart(f)" class="wiz-help"
+              >{{ helpAroundStart(f)!.before
+              }}<span class="wiz-startin"
+                ><code>{{ helpAroundStart(f)!.path }}</code
+                ><button
+                  type="button"
+                  class="wiz-copy"
+                  :title="copiedStart === f.target ? 'Copied' : 'Copy this path'"
+                  :aria-label="`Copy ${helpAroundStart(f)!.path}`"
+                  @click="copyStart(f)"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      :d="copiedStart === f.target ? STATUS_GLYPHS.succeeded : PATH_GLYPHS.copy"
+                      fill="currentColor"
+                    />
+                  </svg></button></span
+              >{{ helpAroundStart(f)!.after }}</small
+            >
+            <small v-else-if="f.help" class="wiz-help">{{ f.help }}</small>
             <small v-if="pickFailed[f.target]" class="wiz-error">
               Couldn’t open the file picker ({{ pickFailed[f.target] }}). Type or paste the path
               instead.
@@ -1272,7 +1779,7 @@ function submit() {
         </details>
       </div>
 
-      <footer class="wiz-foot">
+      <footer class="wiz-foot dialog-foot">
         <span v-if="stage === 'configure' && missingRequired.length" class="wiz-foot-note">
           Still needed: {{ missingRequired.join(", ") }}
         </span>
@@ -1290,58 +1797,10 @@ function submit() {
   </div>
 </template>
 
+<style scoped src="./dialog.css"></style>
 <style scoped>
-.wiz-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 6vh 16px;
-  z-index: 50;
-}
 .wiz {
-  background: var(--datalib-bg);
-  color: var(--datalib-fg);
-  border: 1px solid var(--datalib-border);
-  border-radius: 8px;
   width: min(760px, 100%);
-  max-height: 88vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
-}
-.wiz-head,
-.wiz-foot {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
-}
-.wiz-head {
-  border-bottom: 1px solid var(--datalib-border);
-}
-.wiz-foot {
-  border-top: 1px solid var(--datalib-border);
-  justify-content: flex-end;
-}
-.wiz-head h2 {
-  margin: 0;
-  font-size: 17px;
-  flex: 1;
-}
-.wiz-x {
-  background: none;
-  border: none;
-  color: var(--datalib-muted);
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-}
-.wiz-body {
-  padding: 16px 18px;
-  overflow-y: auto;
 }
 
 .wiz-filter,
@@ -1350,7 +1809,7 @@ function submit() {
   box-sizing: border-box;
   padding: 8px 10px;
   border: 1px solid var(--datalib-border);
-  border-radius: 5px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-input-bg);
   color: var(--datalib-fg);
   font: inherit;
@@ -1376,7 +1835,7 @@ function submit() {
    two overlapping ones. */
 .wiz-bytes {
   display: inline-flex;
-  border-radius: 5px;
+  border-radius: var(--datalib-radius);
 }
 .wiz-bytes:focus-within {
   outline: 2px solid var(--datalib-accent);
@@ -1386,11 +1845,11 @@ function submit() {
   outline: none;
 }
 .wiz-bytes .wiz-num {
-  border-radius: 5px 0 0 5px;
+  border-radius: var(--datalib-radius) 0 0 var(--datalib-radius);
 }
 .wiz-unit {
   width: auto;
-  border-radius: 0 5px 5px 0;
+  border-radius: 0 var(--datalib-radius) var(--datalib-radius) 0;
   border-left: none;
 }
 /* Shares `.wiz-input`'s box; keeps the platform disclosure arrow so it
@@ -1400,7 +1859,7 @@ function submit() {
 }
 
 .wiz-group h3 {
-  font-size: 11px;
+  font-size: var(--datalib-font-size-small);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--datalib-muted);
@@ -1418,8 +1877,8 @@ function submit() {
   text-align: left;
   padding: 10px;
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  background: var(--datalib-card-bg);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
   color: inherit;
   cursor: pointer;
   font: inherit;
@@ -1442,11 +1901,11 @@ function submit() {
   flex: 1;
 }
 .wiz-tile-text b {
-  font-size: 14px;
+  font-size: var(--datalib-title-size);
 }
 .wiz-tile-text small {
   color: var(--datalib-muted);
-  font-size: 11.5px;
+  font-size: var(--datalib-font-size-small);
 }
 .wiz-soon {
   font-size: 10px;
@@ -1473,8 +1932,8 @@ function submit() {
   gap: 10px;
   padding: 10px;
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
-  background: var(--datalib-card-bg);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-surface-2);
   margin-bottom: 14px;
 }
 .wiz-chosen div {
@@ -1484,11 +1943,11 @@ function submit() {
 }
 .wiz-chosen small {
   color: var(--datalib-muted);
-  font-size: 11.5px;
+  font-size: var(--datalib-font-size-small);
 }
 
 .wiz-cred {
-  font-size: 12.5px;
+  font-size: var(--datalib-font-size);
   color: var(--datalib-muted);
   border-left: 3px solid var(--datalib-border);
   padding-left: 10px;
@@ -1518,7 +1977,7 @@ function submit() {
   order: -1;
 }
 .wiz-label {
-  font-size: 12.5px;
+  font-size: var(--datalib-font-size);
   font-weight: 600;
 }
 .wiz-nofields {
@@ -1531,18 +1990,15 @@ function submit() {
 }
 .wiz-help {
   color: var(--datalib-muted);
-  font-size: 11.5px;
+  font-size: var(--datalib-font-size-small);
   line-height: 1.45;
 }
 .wiz-error {
-  color: #b8481a;
-  font-size: 11.5px;
+  color: var(--datalib-error-fg);
+  font-size: var(--datalib-font-size-small);
 }
 .wiz-permanent {
-  color: #b8481a;
-}
-.wiz-probe-headline {
-  margin: 0 0 4px;
+  color: var(--datalib-error-fg);
 }
 .wiz-probe-mark {
   width: 14px;
@@ -1552,9 +2008,6 @@ function submit() {
 }
 .wiz-probe-ok .wiz-probe-mark {
   color: var(--datalib-log-ok);
-}
-.wiz-probe-failed .wiz-probe-mark {
-  color: var(--datalib-log-error);
 }
 .wiz-probe-aside {
   display: block;
@@ -1570,18 +2023,73 @@ function submit() {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--datalib-code-bg);
-  border-radius: 5px;
-  font-size: 11px;
+  border-radius: var(--datalib-radius);
+  font-size: var(--datalib-font-size-small);
   line-height: 1.5;
 }
 .wiz-probe-note details > summary {
   cursor: pointer;
+}
+/* A picker's own "Load" row: the button, or while it runs a bar and a
+   line that counts. The bar has no value until the service says a
+   total, which leaves it in the browser's moving, indeterminate state. */
+.wiz-load {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 6px 0;
+}
+.wiz-load-bar {
+  width: 160px;
+  height: 6px;
+  accent-color: var(--datalib-accent);
+}
+.wiz-load-failed {
+  flex-basis: 100%;
 }
 .wiz-convert {
   border-left: 3px solid var(--datalib-border);
   padding-left: 10px;
 }
 .wiz-convert-head {
+  margin: 0;
+}
+.wiz-signin {
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  margin-bottom: 10px;
+}
+.wiz-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--datalib-border);
+}
+.wiz-tab {
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  color: var(--datalib-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.wiz-tab[aria-selected="true"] {
+  color: var(--datalib-fg);
+  border-bottom-color: var(--datalib-accent);
+}
+.wiz-tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+.wiz-tabpanel > p,
+.wiz-tabpanel > .wiz-conn-actions {
+  margin: 0;
+}
+.wiz-paste p,
+.wiz-paste .wiz-field {
   margin: 0;
 }
 .wiz-req {
@@ -1594,8 +2102,8 @@ function submit() {
   margin-left: 6px;
 }
 .wiz-path {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12.5px;
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size);
 }
 /* The input takes the slack so the button keeps its label on one line. */
 .wiz-pathrow {
@@ -1610,9 +2118,33 @@ function submit() {
 .wiz-browse {
   white-space: nowrap;
 }
+.wiz-startin {
+  white-space: nowrap;
+}
+.wiz-startin code {
+  font-size: 11px;
+  user-select: all;
+}
+.wiz-copy {
+  display: inline-flex;
+  vertical-align: -3px;
+  margin-left: 2px;
+  padding: 1px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.wiz-copy:hover {
+  color: var(--datalib-fg);
+}
+.wiz-copy svg {
+  width: 13px;
+  height: 13px;
+}
 .wiz-foot-note {
   margin-right: auto;
-  font-size: 12px;
+  font-size: var(--datalib-font-size-small);
   color: var(--datalib-muted);
 }
 
@@ -1627,7 +2159,7 @@ function submit() {
 .wiz-section-head,
 .wiz-conn-head {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: var(--datalib-font-size-small);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--datalib-muted);
@@ -1643,7 +2175,7 @@ function submit() {
    that talks to something outside. */
 .wiz-conn {
   border: 1px solid var(--datalib-border);
-  border-radius: 6px;
+  border-radius: var(--datalib-radius);
   padding: 12px 14px 4px;
   margin-bottom: 16px;
 }
@@ -1659,17 +2191,6 @@ function submit() {
 .wiz-conn-note {
   margin: 0 0 10px;
 }
-/* Dropdown over box, not side by side: an account is an email address
-   and both halves need the width. */
-.wiz-accountrow {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.wiz-accountpick {
-  max-width: 100%;
-}
-
 .wiz-listfield {
   display: flex;
   flex-direction: column;
@@ -1680,40 +2201,15 @@ function submit() {
 }
 .wiz-review summary {
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: var(--datalib-font-size);
   color: var(--datalib-muted);
 }
 .wiz-review pre {
   margin: 8px 0 0;
   padding: 10px;
   background: var(--datalib-code-bg);
-  border-radius: 5px;
+  border-radius: var(--datalib-radius);
   overflow-x: auto;
-  font-size: 12px;
-}
-
-.btn {
-  padding: 7px 14px;
-  border: 1px solid var(--datalib-border);
-  border-radius: 5px;
-  background: var(--datalib-card-bg);
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-.btn:hover:not(:disabled) {
-  background: var(--datalib-hover);
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.btn.primary {
-  background: var(--datalib-accent);
-  border-color: var(--datalib-accent);
-  color: #fff;
-}
-.btn.ghost {
-  background: none;
+  font-size: var(--datalib-font-size-small);
 }
 </style>

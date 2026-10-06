@@ -28,7 +28,7 @@ use super::parse::ParsedBeeper;
 ///     The raw store keys rooms, users and events by their Matrix ids,
 ///     so an existing root resets and downloads again; every uuid
 ///     moved, `chat_uuid` among them.
-pub const RENDER_VERSION: u32 = 3;
+pub const RENDER_VERSION: u32 = 4;
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {

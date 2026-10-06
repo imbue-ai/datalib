@@ -6,6 +6,9 @@
 //! literal. The design — ids, severity, the copy rule, what reads the
 //! table — is `docs/dev/plans/problem_visibility.md`.
 
+mod recorded;
+pub use recorded::{log_recorded, note_recorded};
+
 use anyhow::{Context, Result};
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
@@ -110,8 +113,9 @@ closed_vocabulary! {
         /// missing, or — when an earlier fetch left a payload — stale.
         FetchFailed,
         /// The download declined to fetch this record, because a limit
-        /// in the config said not to. → nothing went wrong; the record
-        /// is absent on purpose, and raising the limit picks it up.
+        /// in the config said not to. → a warning: nothing failed, but
+        /// the record is not in the mirror. A provider that retries its
+        /// skips fetches it once the limit allows.
         OverSizeLimit,
         /// A configured entry — a label, a channel, a conversation id —
         /// that upstream does not have. → that entry is not mirrored;
@@ -120,6 +124,10 @@ closed_vocabulary! {
         /// A configured entry that exists but this credential cannot
         /// read. → the same.
         Forbidden,
+        /// A configured entry upstream has sent nothing new for a while:
+        /// a sensor unplugged, out of range or out of battery. → what
+        /// came before is kept; nothing new is arriving.
+        Silent,
         /// Nothing was lost; this is a finding worth publishing.
         Noted,
     }
@@ -282,45 +290,64 @@ impl Problem {
 
 /// One problem, on one record, in one store.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, PortableTable)]
-#[portable_table(table = "problems", primary_key = "problem_uuid")]
+#[portable_table(
+    table = "problems",
+    primary_key = "problem_uuid",
+    // The search bar's keys are on the columns they filter.
+    search(
+        order = "last_seen_at_utc desc, problem_uuid asc",
+        range = "last_seen_at_utc"
+    )
+)]
 pub struct ProblemRow {
     /// Minted by `datalib_id::problem_id` from the columns that name
     /// the problem — never from the sample or the stamps — so a re-run
     /// of the same code over the same record mints the same id.
-    #[col(sql = "VARCHAR(36)")]
+    #[col(sql = "VARCHAR(36)", search = "problem", alias = "problem_uuid")]
     pub problem_uuid: String,
     /// The id of the source that produced this, matching
     /// `markdowns.source_id`.
-    #[col(sql = "VARCHAR(64)")]
+    #[col(sql = "VARCHAR(64)", search, alias = "source")]
     pub source_id: String,
-    #[col(sql = "VARCHAR(16)", enum)]
+    #[col(sql = "VARCHAR(16)", enum, search)]
     pub stage: Stage,
-    #[col(sql = "VARCHAR(16)", enum)]
+    #[col(sql = "VARCHAR(16)", enum, search)]
     pub severity: Severity,
-    #[col(sql = "VARCHAR(16)", enum)]
+    #[col(sql = "VARCHAR(16)", enum, search)]
     pub outcome: Outcome,
-    #[col(sql = "VARCHAR(32)", enum)]
+    #[col(sql = "VARCHAR(32)", enum, search)]
     pub reason: Reason,
-    #[col(sql = "VARCHAR(16)", enum)]
+    #[col(sql = "VARCHAR(16)", enum, search = "scope", alias = "scope_kind")]
     pub scope_kind: ScopeKind,
     /// The sweep key: the `markdown_uuid` of the document the record
     /// belongs to, or — when the failure happened before we knew that —
     /// the raw-store entity id.
-    #[col(sql = "VARCHAR(96)")]
+    #[col(
+        sql = "VARCHAR(96)",
+        search = "doc",
+        alias = "markdown_uuid",
+        alias = "scope_key"
+    )]
     pub scope_key: String,
     /// The `grid_rows.uuid` the record has, or would have had; `None`
     /// for a problem about the whole document or entity. With a
     /// markdown scope this is the section the document view can scroll
-    /// to.
-    #[col(sql = "VARCHAR(96)")]
+    /// to. On a fetch-stage row it is the row the raw entity is or
+    /// belongs to, set only where the render store holds that row.
+    #[col(
+        sql = "VARCHAR(96)",
+        search = "item",
+        alias = "item_uuid",
+        alias = "uuid"
+    )]
     pub item_uuid: Option<String>,
-    #[col(sql = "VARCHAR(128)")]
+    #[col(sql = "VARCHAR(128)", search, like)]
     pub field: Option<String>,
     #[col(sql = "VARCHAR(255)")]
     pub path: Option<String>,
-    #[col(sql = "VARCHAR(128)")]
+    #[col(sql = "VARCHAR(128)", search, like)]
     pub rule: Option<String>,
-    #[col(sql = "TEXT")]
+    #[col(sql = "TEXT", like)]
     pub sample: String,
     /// When this problem was first recorded, in UTC. Stamped by the
     /// store that first holds it, not the writer, and carried through

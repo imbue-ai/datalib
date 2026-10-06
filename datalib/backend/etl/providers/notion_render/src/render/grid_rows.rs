@@ -134,13 +134,14 @@ fn page_row(
         .kind("Notion Page")
         .source_label("Notion")
         .is_document(true)
+        .item_count(Some(1))
         .created_at(created_at)
         .modified_at(modified_at)
         .author(resolved_author(author_id, users))
         .conversation_name(Some(title.to_string()))
         .conversation_uuid(id.uuid.clone())
         .entire_chat(format!("/chat/{}", id.uuid))
-        .text(title.to_string())
+        .body(title.to_string())
         .qmd_path(Some(page_qmd_path_rel(stanza, &pid)))
         .source_url(Some(notion_url(&pid)))
         .upstream_id(Some(id.natural_key))
@@ -189,6 +190,7 @@ fn thread_rows(
             .kind("Notion Comment Thread")
             .source_label("Notion")
             .is_document(true)
+            .item_count(Some(members_sorted.len() as i64))
             .created_at(
                 first
                     .get("created_time")
@@ -212,7 +214,7 @@ fn thread_rows(
             .conversation_name(Some(page_title.to_string()))
             .conversation_uuid(thread.uuid.clone())
             .entire_chat(format!("/chat/{}", thread.uuid))
-            .text(aggregated_text)
+            .body(aggregated_text)
             .qmd_path(Some(thread_qmd.clone()))
             .source_url(Some(thread_url.clone()))
             .upstream_id(Some(thread.natural_key.clone()))
@@ -235,6 +237,7 @@ fn thread_rows(
                 .provider(Provider::Notion)
                 .kind("Notion Comment")
                 .source_label("Notion")
+                .item_count(Some(1))
                 .created_at(created_time.map(str::to_string))
                 .modified_at(
                     c.get("last_edited_time")
@@ -247,7 +250,7 @@ fn thread_rows(
                 .conversation_uuid(thread.uuid.clone())
                 .message_index(Some(idx as i64))
                 .entire_chat(format!("/chat/{}", thread.uuid))
-                .text(comment_text_plain(c))
+                .body(comment_text_plain(c))
                 .qmd_path(Some(thread_qmd.clone()))
                 .source_url(Some(thread_url.clone()))
                 .upstream_id(Some(id.natural_key))
@@ -561,9 +564,9 @@ mod tests {
         let thread = &docs.threads[0];
         assert_eq!(thread.anchor_block_uuid.as_deref(), Some("b-1"));
         assert!(
-            thread.rows[0].text.contains("Warp core alignment"),
+            thread.rows[0].preview.contains("Warp core alignment"),
             "thread text should lead with the anchor: {:?}",
-            thread.rows[0].text
+            thread.rows[0].preview
         );
     }
 

@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { chatHrefFromClick, chatUuidFromHref } from "../src/cards/chatLink";
+import { chatUuidFromHref, linkFromClick } from "../src/cards/chatLink";
 
 // Forge a MouseEvent-shaped object whose `target` is an `<a>` carrying
 // the given href (or an arbitrary descendant of it). jsdom's
 // `MouseEvent` doesn't let you assign `target` after construction, so
-// we cast a plain object literal instead — `chatHrefFromClick` only
+// we cast a plain object literal instead — `linkFromClick` only
 // reads `target`, modifier-key fields, and `button`.
 type FakeMouseEvent = {
   target: Element | null;
@@ -39,54 +39,41 @@ function clickOn(
   } as unknown as MouseEvent;
 }
 
-describe("chatHrefFromClick", () => {
-  it("returns the uuid for a /chat/<uuid> link", () => {
-    expect(chatHrefFromClick(clickOn("/chat/abc-123"))).toBe("abc-123");
-  });
-
-  it("returns the uuid for a hash-prefixed /chat/<uuid> link", () => {
-    expect(chatHrefFromClick(clickOn("#/chat/xyz-789"))).toBe("xyz-789");
-  });
-
-  it("returns the uuid for a /#/chat/<uuid> link (perseus form)", () => {
-    expect(chatHrefFromClick(clickOn("/#/chat/per-456"))).toBe("per-456");
-  });
-
-  it("strips trailing query / hash from the uuid segment", () => {
-    expect(chatHrefFromClick(clickOn("/chat/u1?msg=42"))).toBe("u1");
-    expect(chatHrefFromClick(clickOn("/chat/u1#m5"))).toBe("u1");
-    expect(chatHrefFromClick(clickOn("/chat/u1/extra"))).toBe("u1");
+describe("linkFromClick", () => {
+  it("names the link as written, resolved, and how it was clicked", () => {
+    const link = linkFromClick(clickOn("/chat/abc-123"));
+    expect(link).toEqual({
+      href: "/chat/abc-123",
+      resolved: new URL("/chat/abc-123", document.baseURI).href,
+      browserClick: false,
+    });
+    expect(chatUuidFromHref(link!.href)).toBe("abc-123");
   });
 
   it("walks up to find an ancestor <a>", () => {
-    expect(chatHrefFromClick(clickOn("/chat/u2", {}, true))).toBe("u2");
+    expect(linkFromClick(clickOn("/chat/u2", {}, true))?.href).toBe("/chat/u2");
   });
 
-  it("returns null when the click isn't inside an <a>", () => {
+  it("is null when the click isn't on a link with an href", () => {
     const div = document.createElement("div");
-    const ev = { target: div, button: 0 } as unknown as MouseEvent;
-    expect(chatHrefFromClick(ev)).toBeNull();
+    expect(linkFromClick({ target: div, button: 0 } as unknown as MouseEvent)).toBeNull();
+    expect(linkFromClick(clickOn(null))).toBeNull();
+    expect(linkFromClick({ target: null } as unknown as MouseEvent)).toBeNull();
   });
 
-  it("returns null for non-/chat hrefs", () => {
-    expect(chatHrefFromClick(clickOn("/other/u3"))).toBeNull();
-    expect(chatHrefFromClick(clickOn("https://example.com/chat/u3"))).toBeNull();
-    expect(chatHrefFromClick(clickOn(""))).toBeNull();
+  it("leaves a same-page anchor to the body, but not a hash /chat/ link", () => {
+    expect(linkFromClick(clickOn("#section-2"))).toBeNull();
+    expect(linkFromClick(clickOn("#/chat/xyz-789"))?.href).toBe("#/chat/xyz-789");
   });
 
-  it("returns null for a missing href attribute", () => {
-    expect(chatHrefFromClick(clickOn(null))).toBeNull();
+  it("keeps an off-site link, for the card to send to the browser", () => {
+    expect(linkFromClick(clickOn("https://example.com/x"))?.resolved).toBe("https://example.com/x");
   });
 
-  it("returns null when a modifier or non-primary button is held", () => {
-    expect(chatHrefFromClick(clickOn("/chat/u4", { metaKey: true }))).toBeNull();
-    expect(chatHrefFromClick(clickOn("/chat/u4", { ctrlKey: true }))).toBeNull();
-    expect(chatHrefFromClick(clickOn("/chat/u4", { shiftKey: true }))).toBeNull();
-    expect(chatHrefFromClick(clickOn("/chat/u4", { button: 1 }))).toBeNull();
-  });
-
-  it("returns null for a non-Element event target", () => {
-    expect(chatHrefFromClick({ target: null } as unknown as MouseEvent)).toBeNull();
+  it("says when a modifier or non-primary button asked for a new tab", () => {
+    for (const opts of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { button: 1 }]) {
+      expect(linkFromClick(clickOn("/chat/u4", opts))?.browserClick).toBe(true);
+    }
   });
 });
 

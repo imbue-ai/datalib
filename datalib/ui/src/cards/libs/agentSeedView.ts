@@ -10,14 +10,14 @@ export function agentSeedView(name: string): CardRender {
     ctx.setTitle("New component");
     const style = document.createElement("style");
     style.textContent = `
-      .as { font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--datalib-fg, inherit); padding: 16px; max-width: 34rem; }
-      .as-title { font-weight: 600; font-size: 14px; }
-      .as-name { opacity: .6; font: 11px/1.4 ui-monospace, Menlo, monospace; margin: 2px 0 10px; }
+      .as { font: var(--datalib-font-size)/1.5 var(--datalib-font); color: var(--datalib-fg, inherit); padding: 16px; max-width: 34rem; }
+      .as-title { font-weight: 600; font-size: var(--datalib-title-size); }
+      .as-name { color: var(--datalib-muted); font: var(--datalib-font-size-small)/1.4 var(--datalib-mono); margin: 2px 0 10px; }
       .as-steps { margin: 0; padding-left: 1.4em; display: flex; flex-direction: column; gap: 8px; }
       .as-copy {
-        margin-left: .3em; padding: 2px 10px; cursor: pointer; font-size: 12px;
-        border: 1px solid var(--datalib-accent, #4060c0); border-radius: 4px;
-        background: var(--datalib-accent, #4060c0); color: var(--datalib-bg, #fff);
+        margin-left: .3em; padding: 2px 10px; cursor: pointer; font-size: var(--datalib-font-size-small);
+        border: 1px solid var(--datalib-accent); border-radius: var(--datalib-radius);
+        background: var(--datalib-accent); color: var(--datalib-on-accent);
       }
     `;
     root.appendChild(style);

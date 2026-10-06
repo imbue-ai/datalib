@@ -48,4 +48,4 @@ pub mod render;
 /// v15: ids are minted through `datalib_id` under `Content`, edges
 /// through `datalib_id::edge_id`, and every row carries its
 /// backpointer. Every uuid moved.
-pub const RENDER_VERSION: u32 = 15;
+pub const RENDER_VERSION: u32 = 18;

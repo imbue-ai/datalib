@@ -1,37 +1,18 @@
 //! A page of the app reports what happened on it through
 //! `POST /api/ui/events`, and it comes back as a `ui` process with its
-//! lines: `GET /api/processes?process=ui`, `GET /api/log?process=<id>`.
+//! lines: `GET /api/processes?process=ui`, `GET /api/log?q=process_id:<id>`.
 //! One test, because the subscriber it installs is the process's only
 //! one.
 
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
-use datalib_core::app_store::AppStore;
-use datalib_http::applets::AppletRegistry;
-use datalib_http::{router, ApiToken, AppState};
+use datalib_http::router;
 use std::path::Path;
-use std::sync::Arc;
 use tower::ServiceExt;
 
-const TEST_TOKEN: &str = "ui-events-test-token";
-const PAGE: &str = "0192b9c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d";
+use crate::support::{state, TEST_TOKEN};
 
-async fn state(root: &Path) -> AppState {
-    let root = Arc::new(root.to_path_buf());
-    let app = AppStore::open(root.as_path())
-        .await
-        .expect("open app stores");
-    AppState {
-        root: root.clone(),
-        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
-        app: Arc::new(app),
-        root_tx: tokio::sync::broadcast::channel(16).0,
-        usage: Default::default(),
-        newer_root: Vec::new(),
-        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
-    }
-}
+const PAGE: &str = "0192b9c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d";
 
 async fn send(
     root: &Path,
@@ -144,7 +125,7 @@ async fn a_page_is_a_process_and_what_it_reports_are_its_lines() {
     assert!(page["run_id"].is_null());
     assert!(page["finished_at_utc"].is_string(), "closed: {page}");
 
-    let lines = get_json(root, &format!("/api/log?process={PAGE}")).await;
+    let lines = get_json(root, &format!("/api/log?q=process_id:{PAGE}")).await;
     let lines = lines.as_array().unwrap();
     let targets: Vec<&str> = lines
         .iter()

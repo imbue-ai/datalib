@@ -1,56 +1,26 @@
 //! Doltlite-backed raw store for the ChatGPT provider.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::blob_cas::BlobCas;
 use datalib_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::full_ddl;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
-}
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        let cas = BlobCas::open(&datalib_etl::blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
-
     // ── `me` ────────────────────────────────────────────────────────
 
     pub async fn load_me(&self) -> Result<Option<Value>> {
         let row = sqlx::query("SELECT json(payload) AS payload FROM me ORDER BY id LIMIT 1")
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("select me")?;
         let Some(row) = row else { return Ok(None) };
@@ -83,7 +53,7 @@ impl RawDb {
             q = q.bind(*id);
         }
         let rows = q
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("existing_update_times")?;
         let mut out = HashMap::with_capacity(rows.len());
@@ -96,55 +66,75 @@ impl RawDb {
         Ok(out)
     }
 
-    /// Delete every conversation not in `keep`, and its attachment edges.
+    /// Delete every conversation not in `keep`, its attachment edges, and
+    /// the fetch problems of both.
     ///
     /// Only for a caller holding a **complete** listing — see the gate at
     /// the callsite. That gate is the whole safety story: nothing here
     /// second-guesses how much it deletes, because the rows stay in
     /// doltlite history either way.
     pub async fn prune_conversations(&self, keep: &HashSet<String>) -> Result<usize> {
-        let held: Vec<String> = sqlx::query_scalar("SELECT id FROM conversations")
-            .fetch_all(&self.pool)
+        let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations")
+            .fetch_one(self.pool())
             .await
-            .context("list conversation ids for prune")?;
-        let gone: Vec<String> = held
-            .iter()
-            .filter(|id| !keep.contains(*id))
-            .cloned()
-            .collect();
-        if gone.is_empty() {
-            return Ok(0);
-        }
-        let mut tx = self.pool.begin().await.context("begin prune tx")?;
-        for chunk in gone.chunks(datalib_etl::bulk::SQL_CHUNK) {
-            let mut placeholders = String::new();
-            datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
-            for sql in [
-                format!(
-                    "DELETE FROM chatgpt_attachments WHERE conversation_id IN ({placeholders})"
-                ),
-                format!("DELETE FROM conversations WHERE id IN ({placeholders})"),
-                format!("DELETE FROM conversations_bookkeeping WHERE id IN ({placeholders})"),
-            ] {
-                // Audited: static table names; the IN-list is a `?,?,?` run
-                // sized from the chunk and every id is bound.
-                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-                for id in chunk {
-                    q = q.bind(id.clone());
-                }
-                q.execute(&mut *tx)
-                    .await
-                    .context("prune chatgpt conversations")?;
-            }
-        }
+            .context("count conversations for prune")?;
+        let mut tx = self.pool().begin().await.context("begin prune tx")?;
+        let gone =
+            datalib_etl::prune::prune_scope_in_tx(&mut tx, "conversations", &[], keep).await?;
+        datalib_etl::prune::delete_owned_in_tx(
+            &mut tx,
+            "chatgpt_attachments",
+            "conversation_id",
+            &gone,
+        )
+        .await?;
         tx.commit().await.context("commit prune tx")?;
-        datalib_etl::prune::record("chatgpt conversations", held.len(), gone.len());
+        datalib_etl::prune::record("chatgpt conversations", held as usize, gone.len());
         Ok(gone.len())
+    }
+
+    pub async fn has_any_conversation(&self) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM conversations LIMIT 1")
+            .fetch_optional(self.pool())
+            .await
+            .context("has_any_conversation")?;
+        Ok(row.is_some())
+    }
+
+    /// The conversation as stored, `None` for one never fetched.
+    pub async fn load_conversation_payload(&self, id: &str) -> Result<Option<Value>> {
+        let payload: Option<Option<String>> =
+            sqlx::query_scalar("SELECT json(payload) FROM conversations WHERE id = ?")
+                .bind(id)
+                .fetch_optional(self.pool())
+                .await
+                .context("select one conversation")?;
+        payload
+            .flatten()
+            .map(|s| serde_json::from_str(&s).context("parse a stored conversation"))
+            .transpose()
+    }
+
+    /// Every conversation with an attachment whose last attempt failed.
+    /// One chatgpt.com no longer has is a skip, not a failure, and waits
+    /// for its conversation to change.
+    pub async fn conversations_with_unfetched_attachments(&self) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT DISTINCT a.conversation_id FROM chatgpt_attachments a \
+             JOIN problems p ON p.scope_kind = ? \
+                AND p.scope_key = 'chatgpt_attachments:' || a.id \
+             WHERE p.reason = ? ORDER BY a.conversation_id",
+        )
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(datalib_problems::Reason::FetchFailed.as_str())
+        .fetch_all(self.pool())
+        .await
+        .context("select conversations with unfetched attachments")
     }
 
     pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("begin record_conversation_error tx")?;
@@ -156,7 +146,7 @@ impl RawDb {
     }
 
     pub async fn failed_conversation_ids(&self) -> Result<Vec<String>> {
-        dr::failed_ids(&self.pool, "conversations").await
+        dr::failed_ids(self.pool(), "conversations").await
     }
 
     /// Snapshot `(file_id → blake3)` for every attachment whose bytes
@@ -164,7 +154,8 @@ impl RawDb {
     /// fetch run; updated in-place as new downloads land. Replaces
     /// the per-file SQL `attachment_has_bytes` lookup.
     pub async fn load_attachment_blake3s(&self) -> Result<HashMap<String, String>> {
-        datalib_etl::blob_cas::load_blake3_index(&self.pool, "chatgpt_attachments", "file_id").await
+        datalib_etl::blob_cas::load_blake3_index(self.pool(), "chatgpt_attachments", "file_id")
+            .await
     }
 
     // ── loads ───────────────────────────────────────────────────────
@@ -177,7 +168,7 @@ impl RawDb {
              WHERE c.payload IS NOT NULL
              ORDER BY c.id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select conversations")?;
         let mut out = Vec::with_capacity(rows.len());
@@ -225,7 +216,7 @@ pub struct LoadedRaw {
 /// `datalib_etl_chatgpt_render::render::parse::parse(..., last_render_hash)` instead;
 /// this one ignores the cursor and loads everything. Attachment bytes
 /// are NOT loaded here — tests that need them load a [`BlobBundle`]
-/// via `BlobBundle::load(...)` directly.
+/// via `BlobBundle::load_many(...)` directly.
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {

@@ -20,14 +20,15 @@ use sqlx::Row;
 
 use super::sentinels::clean_text;
 use datalib_etl_chatgpt::ingest::db::{db_path_for, LoadedConversation, LoadedRaw};
+use datalib_etl_chatgpt::ingest::image_asset_file_id;
 use datalib_etl_chatgpt::ingest::schema_raw::ConversationAttachmentRow;
 
 /// SQL projection that maps a ChatGPT `file_id` to its CAS blake3.
-/// Used by [`BlobBundle::load`] from `parse_doltlite_async`.
+/// Used by [`BlobBundle::load_many`] from `parse_doltlite_async`.
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_id AS ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
-      FROM pinned_chatgpt_attachments chatgpt_attachments
+      FROM chatgpt_attachments
      WHERE file_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 #[derive(Debug, Clone)]
@@ -283,18 +284,7 @@ fn collect_attachments(m: &Map<String, Value>) -> Vec<OAAttachmentRef> {
         .and_then(|c| c.get("parts"))
         .and_then(Value::as_array)
     {
-        for p in parts {
-            let Some(obj) = p.as_object() else { continue };
-            if obj.get("content_type").and_then(Value::as_str) != Some("image_asset_pointer") {
-                continue;
-            }
-            let Some(ptr) = obj.get("asset_pointer").and_then(Value::as_str) else {
-                continue;
-            };
-            let id = ptr
-                .strip_prefix("sediment://")
-                .or_else(|| ptr.strip_prefix("file-service://"))
-                .unwrap_or(ptr);
+        for id in parts.iter().filter_map(image_asset_file_id) {
             if out.iter().any(|a| a.file_id == id) {
                 continue;
             }
@@ -502,10 +492,9 @@ async fn parse_doltlite_async(
     source_id: &str,
     range: RawRange<'_>,
 ) -> Result<ParsedChatGPTApi> {
-    // Pinned at open — at the driver's commit, else HEAD — with the views
-    // installed before anything reads. No commit means nothing has been
-    // committed here to render: emptiness, not a reason to read the
-    // working set.
+    // Opened at the driver's commit, else HEAD. No commit means nothing
+    // has been committed here to render: emptiness, not a reason to read
+    // the working set.
     let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
         .with_context(|| format!("open chatgpt doltlite for render {}", db_path.display()))?
@@ -526,9 +515,8 @@ async fn parse_doltlite_async(
         None
     };
 
-    // Pin before anything reads this store. The diff below and the rows
-    // behind it have to name one commit, and the `pinned_<table>` views must
-    // already exist when the diff runs — its bucket query joins live tables.
+    // Open at one commit before anything reads this store: the diff below
+    // and the rows behind it have to name that commit.
     // No commit at all means nothing has been committed here to render, which
     // is emptiness, not a reason to read the working set.
 
@@ -564,37 +552,45 @@ async fn parse_doltlite_async(
 
     // Per-doc BlobBundle: walk each conversation's payload to collect
     // the attachment file_ids it references, then bulk-load that set
-    // from the per-provider edge table + CAS. Two SQL queries per
-    // conversation (regardless of attachment count) replace 4N
-    // queries the retired per-blob streaming reader did at render time.
-    for conv in &mut parsed.conversations {
+    // from the per-provider edge table + CAS, every conversation's
+    // together.
+    let refs_by_conv: Vec<Vec<String>> = parsed
+        .conversations
+        .iter()
+        .map(|conv| collect_attachment_ref_ids(&conv.upstream_payload))
+        .collect();
+    for (conv, refs) in parsed.conversations.iter_mut().zip(&refs_by_conv) {
         // Every page's account column comes off the one `me` row.
         if let Some(me_id) = &me_row_id {
             conv.inputs.read("me", me_id);
         }
-        let refs = collect_attachment_ref_ids(&conv.upstream_payload);
-        for file_id in &refs {
+        for file_id in refs {
             conv.inputs.read(
                 "chatgpt_attachments",
                 &ConversationAttachmentRow::pk_recipe(&conv.conv.conversation_id, file_id),
             );
         }
-        let Some(cas_pool) = cas_pool.as_ref() else {
-            continue;
-        };
-        if refs.is_empty() {
-            continue;
+    }
+    if let Some(cas_pool) = cas_pool.as_ref() {
+        let mut blobs = BlobBundle::load_many(
+            &pool,
+            cas_pool,
+            ATTACHMENTS_PROJECTION_SQL,
+            refs_by_conv.into_iter().enumerate(),
+        )
+        .await?;
+        for (i, conv) in parsed.conversations.iter_mut().enumerate() {
+            if let Some(b) = blobs.remove(&i) {
+                conv.blobs = b;
+            }
         }
-        let ref_strs: Vec<&str> = refs.iter().map(String::as_str).collect();
-        conv.blobs =
-            BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &ref_strs).await?;
     }
 
     Ok(parsed)
 }
 
 /// Walk one conversation's mapping to enumerate every attachment
-/// `file_id` it references — the input set to [`BlobBundle::load`].
+/// `file_id` it references — the input set to [`BlobBundle::load_many`].
 /// Same walk shape that `fetch_attachments_for` does at download time
 /// (and that the legacy `collect_attachments` does inside `shred`),
 /// just without name/mime: we only care about the ref ids here.
@@ -630,21 +626,9 @@ fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
             .and_then(|c| c.get("parts"))
             .and_then(Value::as_array)
         {
-            for p in parts {
-                let Some(obj) = p.as_object() else { continue };
-                if obj.get("content_type").and_then(Value::as_str) != Some("image_asset_pointer") {
-                    continue;
-                }
-                let Some(ptr) = obj.get("asset_pointer").and_then(Value::as_str) else {
-                    continue;
-                };
-                let id = ptr
-                    .strip_prefix("sediment://")
-                    .or_else(|| ptr.strip_prefix("file-service://"))
-                    .unwrap_or(ptr)
-                    .to_string();
-                if seen.insert(id.clone()) {
-                    out.push(id);
+            for id in parts.iter().filter_map(image_asset_file_id) {
+                if seen.insert(id.to_string()) {
+                    out.push(id.to_string());
                 }
             }
         }
@@ -654,11 +638,10 @@ fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
 
 /// The `me` row's primary key and payload, or neither.
 async fn load_me_payload(pool: &SqlitePool) -> Result<(Option<String>, Option<Value>)> {
-    let row =
-        sqlx::query("SELECT id, json(payload) AS payload FROM pinned_me me ORDER BY id LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .context("select me")?;
+    let row = sqlx::query("SELECT id, json(payload) AS payload FROM me ORDER BY id LIMIT 1")
+        .fetch_optional(pool)
+        .await
+        .context("select me")?;
     let Some(row) = row else {
         return Ok((None, None));
     };
@@ -673,8 +656,8 @@ async fn load_conversations(
 ) -> Result<Vec<LoadedConversation>> {
     let rows = sqlx::query(
         "SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc
-           FROM pinned_conversations c
-           LEFT JOIN pinned_conversations_bookkeeping b ON b.id = c.id
+           FROM conversations c
+           LEFT JOIN conversations_bookkeeping b ON b.id = c.id
           WHERE c.payload IS NOT NULL
           ORDER BY c.id",
     )

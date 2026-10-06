@@ -3,16 +3,24 @@
 // glyph, a sparkline for a time series. Plain DOM, owned by no grid;
 // `typedColumns.ts` maps a `ColumnSpec` onto them. Nothing here knows
 // what the rows are.
-import type { Chip, ColumnSpec, ColumnType, Identity, StatusView, Timeseries } from "@/api";
+import type {
+  Chip,
+  ColumnSpec,
+  ColumnType,
+  Identity,
+  Quantity,
+  StatusView,
+  Timeseries,
+} from "@/api";
 import { iconUrl } from "@/config/icons";
 import { STATUS_GLYPHS, STEP_GLYPHS, glyphSvg } from "@/config/glyphs";
-import { sparkline, type Sample } from "@/config/sparkline";
-import { formatRelative, formatStamp } from "@/config/timeFormat";
+import { ownRange, sparkline, windowDelta, type Sample } from "@/config/sparkline";
+import { formatDuration, formatRelative, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
 
 /// The fields of one type among the specs. A `timestamp` cell reads "5
-/// minutes ago" and a `timeseries` sparkline slides, so both go stale
-/// on their own and the host repaints them on a clock.
+/// minutes ago", so it goes stale on its own and the host repaints it
+/// on a clock.
 export function fieldsOfType(specs: ColumnSpec[], type: ColumnType): string[] {
   return specs.filter((c) => c.type === type).map((c) => c.field);
 }
@@ -53,24 +61,28 @@ export function none(): HTMLElement {
   return span;
 }
 
-function windowPhrase(secs: number): string {
-  return secs % 60 === 0
-    ? `the last ${secs / 60} minute${secs === 60 ? "" : "s"}`
-    : `the last ${secs} seconds`;
+export function windowPhrase(secs: number): string {
+  for (const [unit, size] of [
+    ["day", 86_400],
+    ["hour", 3_600],
+    ["minute", 60],
+  ] as const) {
+    if (secs >= size && secs % size === 0) {
+      const n = secs / size;
+      return n === 1 ? `the last ${unit}` : `the last ${n} ${unit}s`;
+    }
+  }
+  return `the last ${secs} seconds`;
 }
 
 const SPARK = { width: 120, height: 18 };
 
-/// How long the clock takes to move a sparkline by one pixel.
-export function sparkStepMs(windowSecs: number): number {
-  return (windowSecs * 1000) / SPARK.width;
-}
-
-function sparkSvg(samples: Sample[], max: number, windowMs: number): SVGSVGElement | null {
+function sparkSvg(value: number, samples: Sample[], windowMs: number): SVGSVGElement | null {
+  const nowMs = Date.now();
   const spark = sparkline(samples, {
-    nowMs: Date.now(),
+    nowMs,
     windowMs,
-    max,
+    ...ownRange(value, samples, nowMs, windowMs),
     width: SPARK.width,
     height: SPARK.height,
     inset: 0.5,
@@ -92,42 +104,90 @@ function sparkSvg(samples: Sample[], max: number, windowMs: number): SVGSVGEleme
   return svg;
 }
 
+/// A series drawn as a sparkline with its present value and its change
+/// over the window laid over it. The Manage table's cells and the
+/// status bar's data-root total are both this, so they read alike.
+/// `change` says the movement in words, for the hover.
+export function sparkTrack(
+  value: number,
+  unit: string,
+  samples: Sample[],
+  windowSecs: number,
+): { el: HTMLElement; change: string } {
+  const windowMs = windowSecs * 1000;
+  const track = document.createElement("span");
+  track.className = "tg-plot";
+  // No samples yet means the producer hasn't measured twice. The value
+  // still shows; there is just nothing behind it to draw.
+  const svg = sparkSvg(value, samples, windowMs);
+  if (svg) track.appendChild(svg);
+  const label = document.createElement("span");
+  label.className = "tg-plot-label";
+  const now = document.createElement("span");
+  now.className = "tg-plot-value";
+  now.textContent = formatUnit(value, unit);
+  label.appendChild(now);
+  const moved = windowDelta(value, samples, Date.now(), windowMs);
+  if (moved) {
+    const delta = document.createElement("span");
+    delta.className = "tg-plot-delta";
+    delta.textContent = `${moved > 0 ? "+" : "−"}${formatUnit(Math.abs(moved), unit)}`;
+    label.appendChild(delta);
+  }
+  track.appendChild(label);
+  const change = moved
+    ? // Said as a change rather than as two endpoints: both endpoints
+      // round to the same figure whenever the movement is small
+      // against the total.
+      `${moved > 0 ? "Grew" : "Shrank"} by ${formatUnit(Math.abs(moved), unit)} over ` +
+      `${windowPhrase(windowSecs)}. The line is scaled to its own range rather than to ` +
+      `zero, so its height is the shape of the change, not the size.`
+    : `No change over ${windowPhrase(windowSecs)}.`;
+  return { el: track, change };
+}
+
 // ── Cell renderers, one per type ─────────────────────────────────
 
 export function renderIdentity(
   v: Identity | null | undefined,
-  isTreeColumn: boolean,
   isParent: boolean,
+  badges: { field: string; chips: Chip[] } | null = null,
 ): HTMLElement {
   const wrap = document.createElement("span");
   wrap.className = "tg-identity";
   if (!v) return wrap;
+  // The icon leads, whether a brand mark or a role glyph; a glyph is
+  // muted so the name stays what the eye lands on.
   const icon = iconFor(v.icon, v.detail ?? v.label);
-  // A brand mark leads; a role glyph follows the name, muted, because
-  // the name is what the eye should land on and the glyph answers the
-  // follow-up question.
-  const brand = icon?.tagName === "IMG";
-  if (icon && brand) wrap.appendChild(icon);
-  const text = document.createElement("span");
-  text.textContent = v.label;
-  if (isParent) text.className = "tg-parent";
-  text.title = v.detail ? `${v.id} — ${v.detail}` : v.id;
-  wrap.appendChild(text);
-  if (icon && !brand) {
+  if (icon?.tagName === "IMG") wrap.appendChild(icon);
+  else if (icon) {
     const mark = document.createElement("span");
     mark.className = "tg-mark";
     mark.title = v.detail ?? "";
     mark.appendChild(icon);
     wrap.appendChild(mark);
   }
-  // The row's own id, where the column is the row's identity and the
-  // label hides it.
-  if (isTreeColumn && v.id !== v.label) {
-    const id = document.createElement("span");
-    id.className = "tg-id";
-    id.textContent = v.id;
-    id.title = `Id — stored in ${v.id}/ under the data root`;
-    wrap.appendChild(id);
+  const text = document.createElement("span");
+  text.textContent = v.label;
+  text.className = isParent ? "tg-label tg-parent" : "tg-label";
+  text.title = v.detail ? `${v.id} — ${v.detail}` : v.id;
+  wrap.appendChild(text);
+  if (badges?.chips.length) wrap.appendChild(renderBadges(badges.field, badges.chips));
+  return wrap;
+}
+
+/// Counts drawn as bubbles after a label. `data-field` is what the grid
+/// reads to route a double-click on them to `field`.
+function renderBadges(field: string, chips: Chip[]): HTMLElement {
+  const wrap = document.createElement("span");
+  wrap.className = "tg-badges";
+  wrap.dataset.field = field;
+  for (const chip of chips) {
+    const el = document.createElement("span");
+    el.className = `tg-badge tg-chip-${chip.kind}`;
+    el.textContent = chip.text;
+    el.title = chip.title;
+    wrap.appendChild(el);
   }
   return wrap;
 }
@@ -137,8 +197,8 @@ export function renderStatus(s: StatusView | null | undefined): HTMLElement {
   if (!s) return wrap;
   const { key, label } = s;
   wrap.className = `tg-status tg-status-${key.replace(/[\s_]+/g, "-")}`;
-  // The word, and then why it is that word. The column is glyphs, so
-  // this is the only place either appears.
+  // The word, and then why it is that word. The glyph stands for the
+  // word, so this is the only place either appears.
   wrap.title = s.detail ? `${label} — ${s.detail}` : label;
   const spinnerOrGlyph = () => {
     if (key === "running") {
@@ -162,27 +222,12 @@ export function renderStatus(s: StatusView | null | undefined): HTMLElement {
     return word;
   };
   wrap.appendChild(spinnerOrGlyph());
-  if (s.segments) {
-    // One segment per part, each in its own status colour, the running
-    // one pulsing. No arithmetic across parts; the bar *is* the parts.
-    const bar = document.createElement("span");
-    bar.className = "tg-segs";
-    for (const seg of s.segments) {
-      const cell = document.createElement("span");
-      cell.className = `tg-seg tg-seg-${seg.key.replace(/[\s_]+/g, "-")}`;
-      cell.title = `${seg.id}: ${seg.label}`;
-      bar.appendChild(cell);
-    }
-    wrap.appendChild(bar);
-  } else if (key === "running" && s.fraction != null) {
-    // A bar only when the thing said how much is ahead of it: a bar at
-    // an invented fraction claims more than we know.
-    const bar = document.createElement("span");
-    bar.className = "tg-progress";
-    const fill = document.createElement("span");
-    fill.style.width = `${s.fraction * 100}%`;
-    bar.appendChild(fill);
-    wrap.appendChild(bar);
+  if (s.at) {
+    const when = document.createElement("span");
+    when.className = "tg-status-at";
+    when.textContent = formatRelative(s.at, Date.now());
+    when.title = formatStamp(s.at);
+    wrap.appendChild(when);
   }
   return wrap;
 }
@@ -213,11 +258,7 @@ export function renderTimestamp(iso: string | null | undefined): HTMLElement {
   return span;
 }
 
-export function renderTimeseries(
-  v: Timeseries | null | undefined,
-  ceiling: number,
-  windowSecs: number,
-): HTMLElement {
+export function renderTimeseries(v: Timeseries | null | undefined): HTMLElement {
   const wrap = document.createElement("span");
   wrap.className = "tg-series";
   if (!v || v.value === null) {
@@ -227,21 +268,30 @@ export function renderTimeseries(
     if (v?.detail) wrap.title = v.detail;
     return wrap;
   }
-  wrap.title =
-    `${v.detail ?? formatUnit(v.value, v.unit)} · the line is ${windowPhrase(windowSecs)}, ` +
-    `drawn against the largest row`;
-  const track = document.createElement("span");
-  track.className = "tg-plot";
-  // No samples yet means the producer hasn't measured twice. The value
-  // still shows; there is just nothing behind it to draw.
-  const svg = sparkSvg(v.samples, ceiling, windowSecs * 1000);
-  if (svg) track.appendChild(svg);
-  const label = document.createElement("span");
-  label.className = "tg-plot-label";
-  label.textContent = formatUnit(v.value, v.unit);
-  track.appendChild(label);
-  wrap.appendChild(track);
+  const track = sparkTrack(v.value, v.unit, v.samples, v.window_secs);
+  wrap.title = `${v.detail ?? formatUnit(v.value, v.unit)}\n${track.change}`;
+  wrap.appendChild(track.el);
   return wrap;
+}
+
+/// A quantity's figure as the cell shows it.
+export function quantityText(q: Quantity | null | undefined): string {
+  if (!q || q.value == null) return q?.note ?? "";
+  return q.unit === "seconds" ? formatDuration(q.value) : q.value.toLocaleString();
+}
+
+export function renderQuantity(q: Quantity | null | undefined): HTMLElement {
+  const span = document.createElement("span");
+  span.className = "tg-quantity";
+  if (!q || (q.value == null && !q.note)) {
+    span.appendChild(none());
+    if (q?.detail) span.title = q.detail;
+    return span;
+  }
+  span.textContent = quantityText(q);
+  if (q.value == null) span.classList.add(`tg-quantity-note`, `tg-quantity-${q.note}`);
+  if (q.detail) span.title = q.detail;
+  return span;
 }
 
 export const WIDTH: Record<ColumnType, number> = {
@@ -251,10 +301,11 @@ export const WIDTH: Record<ColumnType, number> = {
   bytes: 110,
   timestamp: 150,
   datetime: 165,
-  timeseries: 140,
+  timeseries: 170,
+  quantity: 80,
   identity: 120,
-  status: 96,
+  status: 150,
   chips: 260,
-  actions: 92,
+  actions: 116,
   markdown_uuid: 200,
 };

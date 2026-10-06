@@ -173,16 +173,18 @@ function onKeydown(ev: KeyboardEvent) {
   justify-content: center;
 }
 .fb-modal {
-  background: var(--datalib-input-bg, #fff);
-  color: var(--datalib-fg, #000);
-  border: 1px solid var(--datalib-border, #ccc);
-  border-radius: 6px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  border: 1px solid var(--datalib-border);
+  border-radius: calc(var(--datalib-radius) + 4px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
   width: min(520px, 90vw);
   padding: 16px 18px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  font-family: var(--datalib-font);
+  font-size: var(--datalib-font-size);
 }
 .fb-header {
   display: flex;
@@ -190,13 +192,13 @@ function onKeydown(ev: KeyboardEvent) {
   gap: 2px;
 }
 .fb-title {
-  font-size: 1.05rem;
+  font-size: calc(var(--datalib-title-size) + 2px);
   font-weight: 600;
 }
 .fb-surface {
-  font-size: 0.8rem;
-  color: var(--datalib-fg-muted, #888);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--datalib-font-size-small);
+  color: var(--datalib-muted);
+  font-family: var(--datalib-mono);
 }
 .fb-sentiments {
   display: flex;
@@ -205,41 +207,49 @@ function onKeydown(ev: KeyboardEvent) {
 .fb-thumb {
   flex: 1 1 0;
   padding: 6px 10px;
-  border: 1px solid var(--datalib-border, #ccc);
-  border-radius: 4px;
-  background: transparent;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
   color: inherit;
   cursor: pointer;
-  font-size: 0.9rem;
+  font: inherit;
+}
+.fb-thumb:hover {
+  background: var(--datalib-hover);
 }
 .fb-thumb.active {
-  background: var(--datalib-accent, #e0e8ff);
-  border-color: var(--datalib-accent-border, #88a);
+  background: color-mix(in srgb, var(--datalib-accent) 14%, var(--datalib-bg));
+  border-color: var(--datalib-accent);
 }
 .fb-comment {
   width: 100%;
   box-sizing: border-box;
   padding: 8px 10px;
   font: inherit;
-  background: var(--datalib-bg, #fff);
+  background: var(--datalib-input-bg);
   color: inherit;
-  border: 1px solid var(--datalib-border, #ccc);
-  border-radius: 4px;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
   resize: vertical;
   min-height: 80px;
 }
+.fb-comment:focus {
+  outline: none;
+  border-color: var(--datalib-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--datalib-accent) 18%, transparent);
+}
 .fb-error {
-  color: #e35d6a;
-  font-size: 0.85rem;
+  color: var(--datalib-error-fg);
+  font-size: var(--datalib-font-size-small);
 }
 .fb-success {
-  color: #3a8a3a;
-  font-size: 0.85rem;
+  color: var(--datalib-ok);
+  font-size: var(--datalib-font-size-small);
 }
 .fb-success code {
-  background: var(--datalib-code-bg, #f5f5f5);
+  background: var(--datalib-code-bg);
   padding: 0 0.25rem;
-  border-radius: 2px;
+  border-radius: 3px;
 }
 .fb-footer {
   display: flex;
@@ -248,20 +258,27 @@ function onKeydown(ev: KeyboardEvent) {
 }
 .fb-btn {
   padding: 6px 14px;
-  border: 1px solid var(--datalib-border, #ccc);
-  border-radius: 4px;
-  background: transparent;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
   color: inherit;
   cursor: pointer;
-  font-size: 0.9rem;
+  font: inherit;
+  font-weight: 600;
+}
+.fb-btn:hover:not(:disabled) {
+  background: var(--datalib-hover);
 }
 .fb-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 .fb-submit {
-  background: var(--datalib-accent, #4060c0);
-  color: var(--datalib-accent-fg, #fff);
-  border-color: var(--datalib-accent-border, #4060c0);
+  background: var(--datalib-accent);
+  color: var(--datalib-on-accent);
+  border-color: var(--datalib-accent);
+}
+.fb-submit:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--datalib-accent) 85%, black);
 }
 </style>

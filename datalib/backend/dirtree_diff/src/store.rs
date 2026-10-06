@@ -75,7 +75,7 @@ pub async fn resolve_ref(pool: &SqlitePool, reference: &str) -> Result<Commit> {
     Commit::parse(&raw)
 }
 
-pub async fn unify(scratch: &Path, left: &Path, right: &Path) -> Result<()> {
+pub async fn unify(scratch: &Path, left: &Path, right: &Path) -> Result<SqlitePool> {
     let pool = open_scratch(scratch).await?;
     let left = std::fs::canonicalize(left).with_context(|| format!("{}", left.display()))?;
     let right = std::fs::canonicalize(right).with_context(|| format!("{}", right.display()))?;
@@ -92,9 +92,7 @@ pub async fn unify(scratch: &Path, left: &Path, right: &Path) -> Result<()> {
             .await
             .with_context(|| format!("fetch {name}"))?;
     }
-    // Drop it on the floor; see the note above.
-    pool.close().await;
-    Ok(())
+    Ok(pool)
 }
 
 /// Which of fsindex's two entry tables a read goes to. `dirs` is a few
@@ -178,9 +176,8 @@ fn entry_from_row(row: &sqlx::sqlite::SqliteRow, prefix: &str) -> Entry {
 /// a directory that moved or was copied whole keeps its tree-hash, and
 /// the tree-hash covers every row beneath it.
 ///
-/// Doltlite pushes no predicate into `dolt_diff_<t>` (measured: a
-/// key-range filter costs the same walk as none), so this saves the
-/// rows crossing into Rust, not the engine's work.
+/// A diff pushes no predicate down (docs/dev/doltlite.md#diffs), so this
+/// saves the rows crossing into Rust, not the engine's work.
 #[derive(Debug, Clone, Default)]
 pub struct Skip {
     pub left: Vec<String>,

@@ -1,7 +1,6 @@
 //! End-to-end tests for the SQLite→doltlite mirror engine, against a
 //! Lightroom-shaped fixture.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -54,15 +53,8 @@ impl Fixture {
 
     fn options(&self) -> MirrorOptions {
         MirrorOptions {
-            source_path: self.catalog.clone(),
-            snapshot: true,
-            include_tables: vec!["*".to_string()],
-            exclude_tables: Vec::new(),
-            exclude_columns: Vec::new(),
             stable_key_columns: vec!["id_global".to_string()],
-            primary_keys: BTreeMap::new(),
-            gc: false,
-            sidecar_tables: Vec::new(),
+            ..MirrorOptions::new(&self.catalog)
         }
     }
 
@@ -215,10 +207,8 @@ async fn indexes_and_triggers_are_not_mirrored() -> Result<()> {
     f.ingest().await?;
 
     // `sqlite_autoindex_*` rows are excluded because they are the storage
-    // engine's, not the source catalog's: doltlite 0.50 reports an
-    // implicit index for every non-INTEGER primary key, the way stock
-    // SQLite always has. It did not before 0.11.54's SQLite-compatibility
-    // work, so this assertion used to be able to say "zero of anything".
+    // engine's, not the source catalog's: doltlite reports an implicit
+    // index for every non-INTEGER primary key, as stock SQLite does.
     const NAMED_INDEXES_AND_TRIGGERS: &str = "SELECT COUNT(*) FROM sqlite_master \
            WHERE type IN ('index', 'trigger') \
              AND name NOT GLOB 'sqlite_autoindex_*'";
@@ -439,8 +429,7 @@ async fn insert_update_and_delete_are_reflected_in_the_mirror() -> Result<()> {
 #[tokio::test]
 async fn edits_to_a_keyless_table_are_reflected() -> Result<()> {
     // `AgOzSpaceIds` has no primary key and no unique index. doltlite
-    // still versions it, by row multiset rather than by key — the honest
-    // representation of a source table that has no identity either.
+    // still versions it, by hidden rowid — so by position, not content.
     let f = Fixture::new();
     f.ingest().await?;
     f.edit_catalog(&[
@@ -570,6 +559,96 @@ async fn stable_key_is_used_where_available_and_declared_key_elsewhere() -> Resu
     // Has neither → keyless.
     assert!(mirror_pk(&pool, "AgOzSpaceIds").await.is_empty());
     pool.close().await;
+    Ok(())
+}
+
+async fn mirror_key(pool: &SqlitePool, table: &str) -> Vec<String> {
+    sqlx::query_scalar("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+        .bind(table)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_else(|e| panic!("pragma_table_info({table}): {e}"))
+}
+
+/// Guards why a sole UNIQUE index becomes the key: keyed on it, a table
+/// with no `PRIMARY KEY` diffs by key, so deleting its first row is one
+/// removed row rather than every later row read as modified.
+#[tokio::test]
+async fn a_table_with_no_declared_key_keys_on_its_only_unique_index() -> Result<()> {
+    let f = Fixture::new();
+    f.edit_catalog(&[
+        "CREATE TABLE Synced (image INTEGER, payloadKey TEXT, payload TEXT)",
+        "CREATE UNIQUE INDEX index_Synced_primaryKey ON Synced(image, payloadKey)",
+        // Partial: it constrains some rows only, so it is not a second
+        // UNIQUE index competing with the first.
+        "CREATE UNIQUE INDEX partial_only ON Synced(image) WHERE payloadKey = 'a'",
+        "INSERT INTO Synced VALUES (1,'a','x'),(2,'a','y'),(3,'b','z')",
+    ])
+    .await?;
+    f.ingest().await?;
+    f.edit_catalog(&["DELETE FROM Synced WHERE image = 1"])
+        .await?;
+    let (_, commit) = f.ingest().await?;
+
+    let pool = f.mirror_pool().await?;
+    assert_eq!(mirror_key(&pool, "Synced").await, ["image", "payloadKey"]);
+    let commit = commit.expect("the delete is a change");
+    assert_eq!(diff_types(&pool, "Synced", &commit).await, ["removed"]);
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_unique_index_with_nulls_or_a_rival_leaves_the_table_keyless() -> Result<()> {
+    let f = Fixture::new();
+    f.edit_catalog(&[
+        "CREATE TABLE Holey (a INTEGER, b TEXT)",
+        "CREATE UNIQUE INDEX holey_key ON Holey(a, b)",
+        "INSERT INTO Holey VALUES (1,'x'),(2,NULL)",
+        "CREATE TABLE Rivals (a INTEGER, b TEXT)",
+        "CREATE UNIQUE INDEX by_a ON Rivals(a)",
+        "CREATE UNIQUE INDEX by_b ON Rivals(b)",
+        "INSERT INTO Rivals VALUES (1,'x')",
+    ])
+    .await?;
+    f.ingest().await?;
+
+    let pool = f.mirror_pool().await?;
+    assert!(
+        mirror_key(&pool, "Holey").await.is_empty(),
+        "a key holds no NULLs"
+    );
+    assert!(
+        mirror_key(&pool, "Rivals").await.is_empty(),
+        "neither index is more the key than the other"
+    );
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_run_reports_the_source_and_snapshot_sizes() -> Result<()> {
+    let f = Fixture::new();
+    // Free pages are in the source file but not in a `VACUUM INTO` copy,
+    // so the two sizes differ.
+    f.edit_catalog(&[
+        "CREATE TABLE Bloat (x TEXT)",
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000) \
+         INSERT INTO Bloat SELECT hex(randomblob(500)) FROM n",
+        "DROP TABLE Bloat",
+    ])
+    .await?;
+    let original = std::fs::metadata(&f.catalog)?.len();
+    let (stats, _) = f.ingest().await?;
+    assert_eq!(stats.source_bytes, original);
+    assert!(
+        stats.snapshot_bytes < original,
+        "{} vs {original}",
+        stats.snapshot_bytes
+    );
+    assert!(stats
+        .summary()
+        .contains(&format!("snapshot_bytes={}", stats.snapshot_bytes)));
     Ok(())
 }
 

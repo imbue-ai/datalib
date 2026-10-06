@@ -16,7 +16,7 @@ use datalib_etl_email::ingest::db::{db_path_for, EmailJoins, LoadedEmail};
 use datalib_etl_email::ingest::schema_raw::EmlBlobRow;
 
 /// SQL projection from the `email_blobs` edge's `blake3` to `.eml`
-/// bytes. Consumed by [`BlobBundle::load`]. After the eml-as-canonical
+/// bytes. Consumed by [`BlobBundle::load_many`]. After the eml-as-canonical
 /// port we only load `.eml`s — attachment parts are mail-parsed out of
 /// the loaded `.eml` bytes and added to the same per-bucket
 /// `BlobBundle` under synthesized content-hash ref ids. `DISTINCT`
@@ -25,7 +25,7 @@ const EML_PROJECTION_SQL: &str = "
     SELECT DISTINCT blob_id AS ref_id, blake3,
            'message/rfc822' AS content_type,
            NULL AS upstream_name
-      FROM pinned_email_blobs email_blobs
+      FROM email_blobs
      WHERE blob_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 /// Result of the dolt_diff scan. Travels alongside the parsed bag so
@@ -116,10 +116,9 @@ async fn parse_async(
     range: RawRange<'_>,
     label_filter: bool,
 ) -> Result<ParsedEmail> {
-    // Pinned at open — at the driver's commit, else HEAD — with the views
-    // installed before anything reads. No commit means nothing has been
-    // committed here to render: emptiness, not a reason to read the
-    // working set.
+    // Opened at the driver's commit, else HEAD. No commit means nothing
+    // has been committed here to render: emptiness, not a reason to read
+    // the working set.
     let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
         .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?
@@ -141,21 +140,9 @@ async fn parse_async(
     };
 
     let mut unparsed: Vec<Unparsed> = Vec::new();
-    let accounts = load_accounts(&pool, datalib_etl::pin::Reads::At(&pin), &mut unparsed).await?;
-    let mailboxes = load_payloads(
-        &pool,
-        datalib_etl::pin::Reads::At(&pin),
-        "mailboxes",
-        &mut unparsed,
-    )
-    .await?;
-    let threads = load_payloads(
-        &pool,
-        datalib_etl::pin::Reads::At(&pin),
-        "threads",
-        &mut unparsed,
-    )
-    .await?;
+    let accounts = load_accounts(&pool, &mut unparsed).await?;
+    let mailboxes = load_payloads(&pool, "mailboxes", &mut unparsed).await?;
+    let threads = load_payloads(&pool, "threads", &mut unparsed).await?;
     // Every thread with at least one email — the load set on a cold
     // start, the denominator of the skipped count otherwise, and the
     // map from the driver's bucket keys back to thread keys.
@@ -188,19 +175,16 @@ async fn parse_async(
     // `bucket.joins.attachments[email_id]` so render's existing
     // `bucket.blobs.get(&att.blob_id)` lookup resolves uniformly.
     if let Some(cas_pool) = cas_pool.as_ref() {
-        for bucket in &mut docs {
-            let mut seen: HashSet<String> = HashSet::new();
-            let mut refs: Vec<&str> = Vec::new();
-            for em in &bucket.emails {
-                if seen.insert(em.blob_id.clone()) {
-                    refs.push(em.blob_id.as_str());
-                }
+        let refs = docs
+            .iter()
+            .enumerate()
+            .map(|(i, bucket)| (i, bucket.emails.iter().map(|em| em.blob_id.as_str())));
+        let mut blobs = BlobBundle::load_many(&pool, cas_pool, EML_PROJECTION_SQL, refs).await?;
+        for (i, bucket) in docs.iter_mut().enumerate() {
+            if let Some(b) = blobs.remove(&i) {
+                bucket.blobs = b;
+                extract_attachments_from_emls(bucket);
             }
-            if refs.is_empty() {
-                continue;
-            }
-            bucket.blobs = BlobBundle::load(&pool, cas_pool, EML_PROJECTION_SQL, &refs).await?;
-            extract_attachments_from_emls(bucket);
         }
     }
 
@@ -335,18 +319,18 @@ async fn scan_diff(
                     UNION
                     SELECT emails.account_id, emails.thread_id
                       FROM dolt_diff_email_mailboxes d
-                      JOIN pinned_emails emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
+                      JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
                      WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                     UNION
                     SELECT emails.account_id, emails.thread_id
                       FROM dolt_diff_email_keywords d
-                      JOIN pinned_emails emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
+                      JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
                      WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                     UNION
                     SELECT t.account_id,
                            coalesce(dt.to_id, dt.from_id) AS thread_id
                       FROM dolt_diff_threads dt
-                      JOIN pinned_threads t ON t.id = coalesce(dt.to_id, dt.from_id)
+                      JOIN threads t ON t.id = coalesce(dt.to_id, dt.from_id)
                      WHERE dt.from_ref = ?1 AND dt.to_ref = ?2 AND dt.diff_type != 'unchanged'
                 )
                 WHERE account_id IS NOT NULL AND thread_id IS NOT NULL
@@ -378,7 +362,7 @@ async fn scan_diff(
 }
 
 async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, String)>> {
-    let rows = sqlx::query("SELECT DISTINCT account_id, thread_id FROM pinned_emails")
+    let rows = sqlx::query("SELECT DISTINCT account_id, thread_id FROM emails")
         .fetch_all(pool)
         .await
         .context("load all (account_id, thread_id) pairs")?;
@@ -395,10 +379,9 @@ async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, Stri
 
 async fn load_accounts(
     pool: &SqlitePool,
-    reads: datalib_etl::pin::Reads<'_>,
     unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<(String, Value)>> {
-    let table = reads.table("accounts");
+    let table = "accounts";
     let sql = format!("SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
     // Audited: `table` is a literal.
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
@@ -419,11 +402,10 @@ async fn load_accounts(
 
 async fn load_payloads(
     pool: &SqlitePool,
-    reads: datalib_etl::pin::Reads<'_>,
     table: &'static str,
     unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<Value>> {
-    let pinned = reads.table(table);
+    let pinned = table;
     let sql =
         format!("SELECT id, json(payload) AS payload FROM {pinned} WHERE payload IS NOT NULL");
     // Audited: `table` is a literal at both callsites.
@@ -474,7 +456,7 @@ async fn load_buckets(
     let sql = format!(
         "SELECT id, account_id, thread_id, blob_id, message_id, in_reply_to, \"references\",
                 received_at, sent_at, size, subject, from_json, to_json, cc_json, has_attachment
-           FROM pinned_emails emails
+           FROM emails
           WHERE thread_id IN ({placeholders})
           ORDER BY thread_id, received_at, id"
     );
@@ -543,7 +525,7 @@ async fn load_buckets(
 
     // mailboxes
     let sql = format!(
-        "SELECT id, email_id, mailbox_id FROM pinned_email_mailboxes email_mailboxes WHERE email_id IN ({placeholders})"
+        "SELECT id, email_id, mailbox_id FROM email_mailboxes WHERE email_id IN ({placeholders})"
     );
     let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for e in &email_ids_in_buckets {
@@ -568,7 +550,7 @@ async fn load_buckets(
 
     // keywords
     let sql = format!(
-        "SELECT id, email_id, keyword FROM pinned_email_keywords email_keywords WHERE email_id IN ({placeholders})"
+        "SELECT id, email_id, keyword FROM email_keywords WHERE email_id IN ({placeholders})"
     );
     let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for e in &email_ids_in_buckets {

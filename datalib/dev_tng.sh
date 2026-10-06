@@ -34,6 +34,6 @@ echo "TNG data root: $ROOT" >&2
 # Use serve_dev.sh (backend-only) rather than dev.sh (backend + vite).
 # The packaged `datalib_http_bin` embeds the Vite-built SPA via
 # rust-embed, so a single binary serves both UI and `/api/*` — no
-# separate Vite dev server needed. The binary auto-opens the browser;
-# serve_dev.sh also opens its own URL after the health probe.
+# separate Vite dev server needed. serve_dev.sh opens the browser after
+# the health probe when run from a terminal.
 exec "$SERVE_SH" "$ROOT"

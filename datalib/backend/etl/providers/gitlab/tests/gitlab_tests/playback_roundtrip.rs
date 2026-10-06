@@ -61,18 +61,19 @@ async fn gitlab_synth_playback_extract_roundtrip() {
     write_event(&api, ENTITY_DISCUSSION, k, disc_raw.clone());
 
     let report = GitlabSynth::new(&api).synthesize(&playback).unwrap();
-    assert_eq!(report.fixtures_written, 6);
+    // 1 user + 3 scopes + 3 resumed ones + 1 MR detail + 1 discussions
+    assert_eq!(report.fixtures_written, 9);
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
     // The test owns the store: one connection for the download and the
-    // assertions both, because two is what breaks a doltlite file.
+    // assertions both, because the file takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let summary = fetch(FetchOptions {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), crate::tng_now())
     })
     .await;
     // Seal on the same handle, the way the download step's
@@ -94,12 +95,12 @@ async fn gitlab_synth_playback_extract_roundtrip() {
     // read an unsealed store and assert on zero rows.
     let parsed = parse_api_dir(&out_db, "gitlab", RawRange::cold()).expect("parse_api_dir");
     assert_eq!(
-        parsed.merge_requests.len(),
+        parsed.change_requests.len(),
         1,
         "render found no MR — a zero here means the download's rows were \
          never committed, not that the source is empty"
     );
-    assert_eq!(parsed.merge_requests[0].mr_iid as u64, iid);
+    assert_eq!(parsed.change_requests[0].number as u64, iid);
 
     let raw = block_on_load_all(&db_path_for(&out_db)).expect("load db");
     let me = raw.self_identity.expect("self identity present");

@@ -1,6 +1,7 @@
 //! `datalib-applet` — the applet host, one subcommand per applet.
 #![allow(clippy::disallowed_macros)]
 
+mod datalib_contacts;
 mod gate;
 mod slack;
 mod unified_index;
@@ -42,6 +43,10 @@ enum Which {
     /// document list, one document, and the files beside it.
     #[command(name = "unified_index")]
     UnifiedIndex,
+    /// The contacts app: create contacts and link handles to them, and
+    /// resolve a document's handles for its chips.
+    #[command(name = "datalib_contacts")]
+    DatalibContacts,
 }
 
 pub fn announce_port(port: u16) {
@@ -62,11 +67,25 @@ fn main() {
         eprintln!("datalib-applet: {e}");
         std::process::exit(2);
     }
+    // JSON on stderr, which the gateway unwraps the way the runner
+    // unwraps a step's, so each line is stored at its own level. No
+    // OTLP: its exporter needs a runtime this process builds later.
+    let obs = datalib_obs::ObsArgs {
+        log_level: std::env::var("RUST_LOG").ok(),
+        ..Default::default()
+    };
+    let _obs = match datalib_obs::init(&obs, "datalib-applet") {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            eprintln!("datalib-applet: logging is not set up: {e:#}");
+            None
+        }
+    };
     // The unified_index applet runs qmd; from a release tarball that
     // ships no `runtime/`, the first search fetches the manifest's.
     datalib_fetch::enable_runtime_fetch();
     if let Err(e) = run() {
-        eprintln!("datalib-applet: {e:#}");
+        tracing::error!(error = %format!("{e:#}"), "the applet stopped");
         std::process::exit(1);
     }
 }
@@ -98,7 +117,12 @@ fn run() -> Result<()> {
         // this applet only serves the endpoints behind them.
         Which::UnifiedIndex => {
             let port = cli.port.context("-p <port> is required")?;
-            unified_index::serve(port, &params)
+            unified_index::serve(port)
+        }
+        // Builtins draw its chips and popovers; nothing to write first.
+        Which::DatalibContacts => {
+            let port = cli.port.context("-p <port> is required")?;
+            datalib_contacts::serve(port)
         }
     }
 }

@@ -31,7 +31,9 @@ import {
   messageAncestor,
   type FeedbackContext,
 } from "@/feedback/context";
-import { chatHrefFromClick, isBrowserClick } from "./chatLink";
+import { chatUuidFromHref, isBrowserClick, type ClickedLink } from "./chatLink";
+import { asElement } from "./docFrame";
+import { openExternal } from "@/externalLinks";
 import { problemLabel } from "./problems";
 import { TOPIC_EDGE_HOVER, type CardCtx, type EdgeHoverPayload } from "./types";
 
@@ -56,11 +58,20 @@ function openDoc(md: string, anchor: string | null) {
   props.ctx.host.openCards(docSource(md, anchor));
 }
 
-function onBodyClick(ev: MouseEvent) {
-  const uuid = chatHrefFromClick(ev);
-  if (!uuid) return;
-  ev.preventDefault();
-  openDoc(uuid, null);
+/// A link clicked in the document frame, which never navigates itself:
+/// another document opens beside this card, a page of this app in a
+/// tab, anything else in the browser the person uses.
+function onFrameLink(link: ClickedLink) {
+  const uuid = chatUuidFromHref(link.href);
+  if (uuid && !link.browserClick) {
+    openDoc(uuid, null);
+    return;
+  }
+  const url = uuid
+    ? new URL(props.ctx.host.hrefFor(docSource(uuid, null)), location.href).href
+    : link.resolved;
+  if (new URL(url).origin === location.origin) window.open(url, "_blank", "noopener");
+  else void openExternal(url);
 }
 
 // Falsy anchor → "whole-doc destination", don't seed a highlight target.
@@ -325,23 +336,27 @@ const ctxMenuVisible = ref(false);
 const ctxMenuPos = ref({ x: 0, y: 0 });
 const ctxTarget = ref<PendingTarget | null>(null);
 
-function onPaneContextMenu(ev: MouseEvent) {
+/// Where a right-click happened: this window, or the document frame —
+/// whose selection it is, and how far its viewport sits from this one.
+type ClickView = { win: Window; dx: number; dy: number };
+
+function onPaneContextMenu(ev: MouseEvent, view: ClickView = { win: window, dx: 0, dy: 0 }) {
   if (!chat.value) return;
   const conv = chat.value.markdown_uuid;
-  const target = ev.target instanceof Element ? ev.target : null;
+  const target = asElement(ev.target);
 
   // Cascade: active selection > message under cursor > whole-page fallback.
   // Whichever path we take, we then open our custom context menu instead
   // of jumping straight into the feedback modal.
   let pending: PendingTarget;
-  const sel = capturePreviewSelection();
+  const sel = capturePreviewSelection(view.win);
   if (sel) {
     pending = {
       kind: "selection",
       anchor: target,
       conv,
       sel,
-      selectionText: window.getSelection()?.toString() ?? "",
+      selectionText: view.win.getSelection()?.toString() ?? "",
     };
   } else {
     const msgUuid = messageAncestor(target);
@@ -365,7 +380,7 @@ function onPaneContextMenu(ev: MouseEvent) {
 
   ev.preventDefault();
   ctxTarget.value = pending;
-  ctxMenuPos.value = { x: ev.clientX, y: ev.clientY };
+  ctxMenuPos.value = { x: ev.clientX + view.dx, y: ev.clientY + view.dy };
   ctxMenuVisible.value = true;
 }
 
@@ -496,16 +511,16 @@ watch(
         <!-- Title block (with copy-id button and source-URL arrow) is
              rendered inline at the top of the body by the cross-provider
              `Title` helper. The header here only carries the
-             non-title chrome: feedback button and timestamps. The
-             "open this column alone" affordance lives in the host's
-             column chrome. -->
+             non-title chrome: the feedback button. No date: a message
+             shows its own, and a document's other stamps are in its
+             frontmatter. The "open this column alone" affordance lives
+             in the host's column chrome. -->
         <p class="meta">
           <FeedbackButton
             :entity-uuid="chat.markdown_uuid"
             entity-kind="conversation"
             label="Conversation"
           />
-          <span v-if="chat.created_at"> · {{ chat.created_at }}</span>
         </p>
       </header>
       <ul v-if="problems.length || problemErrors.length" class="problems">
@@ -608,8 +623,9 @@ watch(
         <li v-for="e in docLevelOutgoing" :key="e.edge_uuid">
           <span class="edge-arrow" aria-hidden="true">→</span>
           <!-- Producers should set `label` to the human-readable
-               handle they want shown in the list (e.g. "Greek" /
-               "English" for perseus' cross-language edges). When
+               handle they want shown in the list (perseus labels a
+               cross-edition edge with the counterpart edition's short
+               id, e.g. "perseus-eng2"). When
                absent, we fall back to the destination doc's title
                and finally the bare uuid. When BOTH label and title
                are set we show "label (title)" — label first, since
@@ -629,7 +645,7 @@ watch(
           >
         </li>
       </ul>
-      <div @click="onBodyClick">
+      <div class="doc-body">
         <ChatBody
           :body="chat.body"
           :markdown-uuid="chat.markdown_uuid"
@@ -642,6 +658,8 @@ watch(
           :remote-context="remoteContext"
           @remote-media="remoteRefs = $event"
           @remote-load="allow('url', $event)"
+          @frame-link="onFrameLink"
+          @frame-contextmenu="onPaneContextMenu"
         />
       </div>
     </template>
@@ -671,7 +689,12 @@ watch(
 </template>
 
 <style scoped>
+/* A column: the chrome at its own height, then the body, which scrolls
+   inside its frame and takes what is left — never less than most of the
+   pane, so a long problems list cannot squeeze it away. */
 .chat-preview {
+  display: flex;
+  flex-direction: column;
   height: 100%;
   overflow-y: auto;
   /* No padding at the *top*. A sticky message header stops at the
@@ -682,6 +705,17 @@ watch(
      scrolls away with the content instead. */
   padding: 0 1rem 0.75rem;
   box-sizing: border-box;
+  /* Reading text: never below 14px, whatever the density. */
+  font-size: max(14px, calc(var(--datalib-font-size) + 2px));
+}
+.chat-preview > * {
+  flex: none;
+}
+.doc-body {
+  flex: 1 1 0;
+  min-height: 70%;
+  /* The frame pads its own body. */
+  margin: 0 -1rem -0.75rem;
 }
 .chat-preview > .empty,
 .chat-preview > .error,
@@ -703,7 +737,7 @@ watch(
   padding: 1rem;
 }
 .error {
-  color: #e35d6a;
+  color: var(--datalib-error-fg);
 }
 .problems {
   /* Above the body and the edges: what render could not do to this
@@ -828,14 +862,14 @@ watch(
   cursor: default;
 }
 .remote-host {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--datalib-mono);
 }
 .remote-host-count {
   margin-left: 0.3rem;
   color: var(--datalib-muted);
 }
 .remote-load-all {
-  border-color: var(--datalib-accent, #6366f1);
+  border-color: var(--datalib-accent);
 }
 .remote-rules-label {
   font-size: 0.75rem;
@@ -856,10 +890,10 @@ watch(
   cursor: pointer;
 }
 .remote-rule-forget:hover {
-  color: #e35d6a;
+  color: var(--datalib-error-fg);
 }
 .remote-banner-error {
-  color: #e35d6a;
+  color: var(--datalib-error-fg);
 }
 .outgoing-edges {
   /* The doc-level outgoing edges list sits above the rendered body
@@ -894,7 +928,7 @@ watch(
   transition: background-color 100ms ease-in-out;
 }
 .edge-source-link:hover {
-  background: rgba(99, 102, 241, 0.28);
+  background: color-mix(in srgb, var(--datalib-accent) 28%, transparent);
 }
 .edge-dst-title {
   color: var(--datalib-muted, #94a3b8);
@@ -912,7 +946,7 @@ watch(
   background: var(--datalib-input-bg, #fff);
   color: var(--datalib-fg, #000);
   border: 1px solid var(--datalib-border, #ccc);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
   min-width: 180px;
   padding: 4px 0;
@@ -931,67 +965,5 @@ watch(
   height: 1px;
   background: var(--datalib-border, #ccc);
   margin: 4px 0;
-}
-</style>
-
-<style>
-/* Markdown styling for the v-html body. Unscoped so the rules reach
-   inside `v-html`; still shadow-local since this lands in the card's
-   shadow root. */
-.markdown-body {
-  font-size: 0.9rem;
-  line-height: 1.45;
-}
-.markdown-body p {
-  margin: 0.4rem 0;
-}
-.markdown-body pre {
-  /* Fixed dark, not `--datalib-code-bg`: the highlight theme we inject
-     is github-*dark* and does not switch with the app's, so painting a
-     code block on the light-mode token left dark-theme token colors on
-     a near-white background. Inline `code` below is unhighlighted and
-     does follow the theme. */
-  background: #0d1117;
-  color: #e6edf3;
-  padding: 0.6rem 0.75rem;
-  border-radius: 4px;
-  overflow-x: auto;
-  font-size: 0.82rem;
-}
-.markdown-body code {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 0.85em;
-}
-.markdown-body :not(pre) > code {
-  background: var(--datalib-code-bg, #f0f0f0);
-  padding: 0 0.25rem;
-  border-radius: 2px;
-}
-.markdown-body details {
-  margin: 0.4rem 0;
-  padding: 0.25rem 0.5rem;
-  border: 1px solid var(--datalib-border);
-  border-radius: 4px;
-  background: var(--datalib-card-bg);
-}
-.markdown-body details > summary {
-  cursor: pointer;
-  font-size: 0.85rem;
-  color: var(--datalib-muted);
-}
-.markdown-body details[open] > summary {
-  margin-bottom: 0.4rem;
-}
-.markdown-body img {
-  max-width: 100%;
-  max-height: 60vh;
-  width: auto;
-  height: auto;
-}
-.markdown-body blockquote {
-  border-left: 3px solid var(--datalib-border);
-  margin: 0.5rem 0;
-  padding-left: 0.75rem;
-  color: var(--datalib-muted);
 }
 </style>

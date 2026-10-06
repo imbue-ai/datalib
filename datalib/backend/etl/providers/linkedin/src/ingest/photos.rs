@@ -3,8 +3,10 @@
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobCas;
+use datalib_etl::download_problems::RunProblem;
 use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService};
 use datalib_etl::progress::Progress;
+use datalib_etl::stop::StopFlag;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::Row;
@@ -64,19 +66,42 @@ pub struct PhotoSummary {
     pub gave_up: bool,
 }
 
+impl PhotoSummary {
+    /// The `phase:photos` row a run that left photos unfetched leaves.
+    /// Nothing is recorded for those connections, so every run tries them
+    /// again and this row is the whole truth each time.
+    pub fn problem(&self) -> Option<RunProblem> {
+        if self.transient == 0 && !self.gave_up {
+            return None;
+        }
+        let gave_up = if self.gave_up {
+            ", and the run stopped trying after too many in a row, leaving the rest unfetched"
+        } else {
+            ""
+        };
+        Some(RunProblem::phase(
+            "photos",
+            format!(
+                "{} connections' photos could not be fetched{gave_up}; they are tried again next run",
+                self.transient
+            ),
+        ))
+    }
+}
+
 pub async fn fetch_connection_photos(
     db: &RawDb,
     cas: &BlobCas,
     progress: &Progress,
+    stop: &StopFlag,
     max_consecutive_failures: u64,
 ) -> Result<PhotoSummary> {
-    // The connections table may be absent (user excluded it) — nothing
-    // to do. load_payloads errors on a missing table, so treat that as
-    // empty.
-    let connections = db
-        .load_payloads(datalib_etl::pin::Reads::Own, "connections")
-        .await
-        .unwrap_or_default();
+    // The connections table is absent when the export has no
+    // Connections.csv — nothing to do.
+    if !table_exists(db.pool(), "connections").await? {
+        return Ok(PhotoSummary::default());
+    }
+    let connections = db.load_payloads("connections").await?;
     if connections.is_empty() {
         return Ok(PhotoSummary::default());
     }
@@ -104,6 +129,9 @@ pub async fn fetch_connection_photos(
     let mut summary = PhotoSummary::default();
     let mut consecutive_failures: u64 = 0;
     for p in &connections {
+        if stop.requested() {
+            break;
+        }
         let url = field(p, "URL");
         if url.is_empty() {
             continue;
@@ -177,28 +205,19 @@ pub struct PhotoBlob {
     pub content_type: Option<String>,
 }
 
-pub async fn load_photo_blobs(
-    db: &RawDb,
-    reads: datalib_etl::pin::Reads<'_>,
-) -> Result<std::collections::HashMap<String, PhotoBlob>> {
+pub async fn load_photo_blobs(db: &RawDb) -> Result<std::collections::HashMap<String, PhotoBlob>> {
     let pool = db.pool();
-    let table_exists: Option<String> =
-        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
-            .bind(CONTACT_PHOTOS_TABLE)
-            .fetch_optional(pool)
-            .await
-            .context("probe contact_photos")?;
     let mut out = std::collections::HashMap::new();
-    if table_exists.is_none() {
+    if !table_exists(pool, CONTACT_PHOTOS_TABLE).await? {
         return Ok(out);
     }
 
     // owner_id → blake3 for the rows that actually have bytes.
     // Audited: the only interpolation is a table name the caller chose --
-    // a literal, or that literal behind `pinned_`.
+    // a literal.
     let edges = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT id, owner_id, blake3 FROM {} WHERE blake3 IS NOT NULL",
-        reads.table(CONTACT_PHOTOS_TABLE)
+        CONTACT_PHOTOS_TABLE
     )))
     .fetch_all(pool)
     .await
@@ -232,6 +251,16 @@ pub async fn load_photo_blobs(
     }
     .await;
     loaded
+}
+
+async fn table_exists(pool: &sqlx::SqlitePool, table: &str) -> Result<bool> {
+    let found: Option<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+            .bind(table)
+            .fetch_optional(pool)
+            .await
+            .with_context(|| format!("probe {table}"))?;
+    Ok(found.is_some())
 }
 
 async fn load_cas_bytes(cas: &BlobCas, blake3: &str) -> Result<Option<(Vec<u8>, Option<String>)>> {

@@ -8,12 +8,12 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::http::{
-    default_retryability, latchkey_curl_classified, HttpRequest, HttpResponse, HttpService,
-    LatchkeySettings, Retryability,
+    default_retryability, latchkey_curl_classified, percent_encode, HttpRequest, HttpResponse,
+    HttpService, LatchkeySettings, Retryability,
 };
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use serde_json::Value;
 use tracing::warn;
 
@@ -37,6 +37,11 @@ pub struct FetchOptions {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| sync_account(opts, found)).await
+}
+
+async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = &opts.db;
     let lk = &opts.latchkey;
     let mut summary = FetchSummary::default();
@@ -55,14 +60,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     db.upsert_calendars(&rows).await?;
 
     let selected = select_calendars(
-        db,
+        &found,
         &opts.calendars,
         rows.iter().map(|c| (&c.id, c.display_name.as_deref())),
-    )
-    .await?;
+    )?;
     summary.calendars = selected.len();
 
-    let mut problems: Vec<RunProblem> = Vec::new();
     for cal in rows.iter().filter(|c| selected.contains(&c.id)) {
         if opts.control.stop.requested() {
             break;
@@ -70,15 +73,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let label = cal.display_name.as_deref().unwrap_or(&cal.id);
         opts.progress
             .set_message(&format!("syncing calendar {label}"));
-        if let Err(e) = sync_calendar(db, &cal.id, opts.window.as_ref(), lk, &mut summary).await {
-            summary.errors += 1;
-            problems.push(RunProblem::listing(
-                &format!("calendar {label}"),
-                format!("{e:#}"),
-            ));
+        let listing = format!("calendar {label}");
+        match sync_calendar(db, &cal.id, opts.window.as_ref(), lk, &mut summary).await {
+            Ok(None) => {}
+            Ok(Some(held_back)) => found.listing(&listing, held_back),
+            Err(e) => {
+                summary.errors += 1;
+                found.listing(&listing, format!("{e:#}"));
+            }
         }
     }
-    download_problems::report_run(db.pool(), &problems).await;
     Ok(summary)
 }
 
@@ -117,7 +121,7 @@ pub(crate) fn primary_id(list: &[Value]) -> Option<String> {
 pub fn calendar_list_url(page: Option<&str>) -> String {
     let mut url = format!("{BASE}/users/me/calendarList?maxResults=250&showHidden=true");
     if let Some(p) = page {
-        url.push_str(&format!("&pageToken={}", encode(p)));
+        url.push_str(&format!("&pageToken={}", percent_encode(p)));
     }
     url
 }
@@ -136,14 +140,16 @@ pub(crate) fn calendar_row(c: &Value) -> Option<CalendarRow> {
 
 /// One calendar: the changes since its sync token, or everything when
 /// it has none. A full listing is the calendar as it is, so what it
-/// does not name is dropped.
+/// does not name is dropped — unless it listed an event it could not
+/// identify, which could be any stored one; then nothing is, and the
+/// returned reason says why.
 async fn sync_calendar(
     db: &RawDb,
     calendar_id: &str,
     window: Option<&Window>,
     lk: &LatchkeySettings,
     summary: &mut FetchSummary,
-) -> Result<()> {
+) -> Result<Option<String>> {
     // Google refuses a sync token beside a time bound, so a windowed
     // calendar is listed whole every run, and keeps no token for a later
     // unwindowed run to resume from.
@@ -175,24 +181,34 @@ async fn sync_calendar(
             }
             Err(e) => return Err(e),
         };
+        // Google sends `items` on every events reply, `[]` when there is
+        // nothing (measured live); a reply without it is not a page.
         let items = v
             .get("items")
             .and_then(Value::as_array)
             .cloned()
-            .unwrap_or_default();
+            .context("the events reply carried no `items` list")?;
         apply(db, calendar_id, &items, &known, &mut seen, summary).await?;
         page = str_of(&v, "nextPageToken");
         if page.is_none() {
             break str_of(&v, "nextSyncToken");
         }
     };
-    if full {
+    let held_back = (full && seen.unidentified > 0).then(|| {
+        format!(
+            "the listing named {} event(s) with no id, which could be any stored event, \
+             so nothing it did not name was deleted",
+            seen.unidentified
+        )
+    });
+    if full && held_back.is_none() {
         let gone: Vec<String> = known.difference(&seen.listed).cloned().collect();
         summary.events_deleted += gone.len();
         db.delete_google_events(calendar_id, &gone).await?;
     }
     let next_sync = next_sync.filter(|_| window.is_none());
-    db.set_sync_token(calendar_id, next_sync.as_deref()).await
+    db.set_sync_token(calendar_id, next_sync.as_deref()).await?;
+    Ok(held_back)
 }
 
 /// The listing of one window: every event with some part inside it —
@@ -203,11 +219,14 @@ pub fn windowed_events_url(calendar_id: &str, window: &Window, page: Option<&str
     if let Some(start) = window.start {
         url.push_str(&format!(
             "&timeMin={}",
-            encode(&format!("{start}T00:00:00Z"))
+            percent_encode(&format!("{start}T00:00:00Z"))
         ));
     }
     if let Some(end) = window.end {
-        url.push_str(&format!("&timeMax={}", encode(&format!("{end}T00:00:00Z"))));
+        url.push_str(&format!(
+            "&timeMax={}",
+            percent_encode(&format!("{end}T00:00:00Z"))
+        ));
     }
     url
 }
@@ -215,13 +234,13 @@ pub fn windowed_events_url(calendar_id: &str, window: &Window, page: Option<&str
 pub fn events_url(calendar_id: &str, sync_token: Option<&str>, page: Option<&str>) -> String {
     let mut url = format!(
         "{BASE}/calendars/{}/events?maxResults=2500&showDeleted=true&singleEvents=false",
-        encode(calendar_id)
+        percent_encode(calendar_id)
     );
     if let Some(t) = sync_token {
-        url.push_str(&format!("&syncToken={}", encode(t)));
+        url.push_str(&format!("&syncToken={}", percent_encode(t)));
     }
     if let Some(p) = page {
-        url.push_str(&format!("&pageToken={}", encode(p)));
+        url.push_str(&format!("&pageToken={}", percent_encode(p)));
     }
     url
 }
@@ -245,6 +264,7 @@ async fn apply(
     for item in items {
         let Some(row) = GoogleEventRow::new(calendar_id, item) else {
             summary.errors += 1;
+            seen.unidentified += 1;
             continue;
         };
         if row.status.as_deref() == Some("cancelled") && row.recurring_event_id.is_none() {
@@ -292,6 +312,8 @@ struct Seen {
     listed: HashSet<String>,
     /// Series the listing deleted.
     cancelled: HashSet<String>,
+    /// Events listed without an id, which no stored row can be matched to.
+    unidentified: usize,
 }
 
 async fn get_json(url: &str, lk: &LatchkeySettings) -> Result<Value> {
@@ -353,21 +375,6 @@ fn str_of(v: &Value, key: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-}
-
-/// Percent-encode a path segment or query value. Calendar ids carry
-/// `@` and `#` (`en.usa#holiday@group.v.calendar.google.com`).
-pub fn encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

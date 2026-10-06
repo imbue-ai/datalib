@@ -22,7 +22,7 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 5;
+pub const LAYOUT_VERSION: u32 = 8;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -44,17 +44,35 @@ pub fn layout_params_with(own: serde_json::Value) -> serde_json::Value {
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
+use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
-use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::message::{timestamp_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section};
+use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
-use datalib_etl_render::html::escape_text;
+use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::html::{
+    escape_attr, escape_md_block, escape_md_inline, escape_text, md_code_span, md_link_dest,
+};
+
+/// What a provider's [`NormalizedChatItem::text`] is: what a person
+/// typed, or markdown. The renderer escapes the first where it becomes
+/// markup, so a text message saying `<b>hi</b>` shows those characters;
+/// the second it writes as it is. Either way the grid's search text is
+/// the text as given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextFormat {
+    /// A text message, a comment: nothing in it is markup.
+    Plain,
+    /// Markdown — an assistant's reply, or markdown the provider built
+    /// itself, having escaped the plain text it put inside.
+    Markdown,
+}
 
 /// Per-provider knobs the renderer parameterizes on. Values that
 /// would otherwise be hard-coded as `"signal"` / `"Signal Chat"` /
@@ -91,6 +109,8 @@ pub struct RenderProfile {
     /// new field on grid_rows). The chat-common renderer stamps this
     /// into the store so a re-run knows to invalidate stale docs.
     pub render_version: u32,
+    /// What every item's `text` is.
+    pub text_format: TextFormat,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -118,36 +138,86 @@ pub fn render_all(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    let mut summary = RenderSummary {
-        docs_total: chats.iter().map(|c| c.buckets.len()).sum(),
-        ..Default::default()
-    };
-    progress.set_length(Some(summary.docs_total as u64));
-
+    let docs_total = chats.iter().map(|c| c.buckets.len()).sum();
+    let mut renderer = ChatRenderer::new(
+        profile,
+        out_dir,
+        source_id,
+        docs_total,
+        progress,
+        on_doc_complete,
+    );
     let empty_bundle = BlobBundle::default();
     for chat in chats {
         let bundle = blobs_by_chat.get(&chat.id).unwrap_or(&empty_bundle);
-        summary.buckets.push(Bucket {
+        renderer.render_chat(chat, bundle)?;
+    }
+    Ok(renderer.finish())
+}
+
+/// [`render_all`] one chat at a time, for a provider whose chats are
+/// expensive to build: building each just before it renders puts the
+/// first document in the store at once rather than after every chat
+/// has been built, and holds one chat's bodies in memory, not all.
+pub struct ChatRenderer<'a> {
+    profile: &'a RenderProfile,
+    out_dir: &'a Path,
+    source_id: &'a str,
+    progress: &'a Progress,
+    on_doc_complete: &'a mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    summary: RenderSummary,
+}
+
+impl<'a> ChatRenderer<'a> {
+    /// `docs_total` is announced as the queue straight away.
+    pub fn new(
+        profile: &'a RenderProfile,
+        out_dir: &'a Path,
+        source_id: &'a str,
+        docs_total: usize,
+        progress: &'a Progress,
+        on_doc_complete: &'a mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    ) -> Self {
+        progress.set_length(Some(docs_total as u64));
+        Self {
+            profile,
+            out_dir,
+            source_id,
+            progress,
+            on_doc_complete,
+            summary: RenderSummary {
+                docs_total,
+                ..Default::default()
+            },
+        }
+    }
+
+    pub fn render_chat(&mut self, chat: &NormalizedChat, bundle: &BlobBundle) -> Result<()> {
+        self.summary.buckets.push(Bucket {
             key: chat.chat_uuid.clone(),
             inputs: chat.inputs.clone(),
         });
         for doc in &chat.buckets {
             let (items, reactions) = render_one(
-                profile,
+                self.profile,
                 chat,
                 doc,
-                out_dir,
-                source_id,
+                self.out_dir,
+                self.source_id,
                 bundle,
-                on_doc_complete,
+                &mut *self.on_doc_complete,
             )?;
-            summary.docs_rendered += 1;
-            summary.items_rendered += items;
-            summary.reactions_rendered += reactions;
-            progress.inc(1);
+            self.summary.docs_rendered += 1;
+            self.summary.items_rendered += items;
+            self.summary.reactions_rendered += reactions;
+            self.progress.inc(1);
         }
+        Ok(())
     }
-    Ok(summary)
+
+    pub fn finish(self) -> RenderSummary {
+        self.summary
+    }
 }
 
 /// Render one document; `(items, reactions)` rendered. Always: the
@@ -183,9 +253,7 @@ fn render_one(
             disp = chat.display
         ),
     };
-    let doc_title = format!("{chat_title} ({})", doc.period_key);
-
-    let sections = render_markdown(profile, chat, doc, &chat_title, &doc_title);
+    let sections = render_markdown(profile, chat, doc, &chat_title);
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
@@ -222,6 +290,7 @@ fn render_one(
         rows,
         sections,
         edges: Vec::new(),
+        contacts: crate::people::document_contacts(source_id, &doc.items, &chat.contacts),
         problems,
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;
@@ -287,48 +356,54 @@ fn output_paths(
 
 // Markdown
 
+/// `(2024-03)` for a time bucket; nothing for the one bucket that holds
+/// the whole chat, where "(all)" would tell the reader nothing.
+fn period_suffix(period_key: &str) -> Option<String> {
+    (period_key != Period::key_for_all()).then(|| format!("({period_key})"))
+}
+
 fn render_markdown(
     profile: &RenderProfile,
     chat: &NormalizedChat,
     doc: &NormalizedDoc,
-    // `chat_title` is the chat's own name and `title` the composed
-    // "name (period)". The frontmatter wants the composed one; the
-    // heading takes them apart, so a clamp cannot eat the period.
     chat_title: &str,
-    title: &str,
 ) -> Vec<Section> {
+    let period = period_suffix(&doc.period_key);
+    let title = match &period {
+        Some(p) => format!("{chat_title} {p}"),
+        None => chat_title.to_string(),
+    };
     let mut s = String::with_capacity(1024);
     s.push_str("---\n");
-    s.push_str(&format!("title: \"{}\"\n", title.replace('"', "\\\"")));
+    s.push_str(&format!("title: {}\n", yaml_scalar(&title)));
     s.push_str(&format!("provider: {}\n", profile.provider));
-    s.push_str(&format!("source_label: \"{}\"\n", profile.source_label));
+    s.push_str(&format!(
+        "source_label: {}\n",
+        yaml_scalar(&profile.source_label)
+    ));
     s.push_str(&format!("chat_uuid: {}\n", chat.chat_uuid));
     s.push_str(&format!("markdown_uuid: {}\n", doc.markdown_uuid));
     s.push_str(&format!("period: {}\n", doc.period_key));
-    s.push_str(&format!(
-        "display: \"{}\"\n",
-        chat.display.replace('"', "\\\"")
-    ));
+    s.push_str(&format!("display: {}\n", yaml_scalar(&chat.display)));
     if let Some(a) = &chat.account {
-        s.push_str(&format!("account: {a}\n"));
+        s.push_str(&format!("account: {}\n", yaml_scalar(a)));
     }
     if let Some(p) = &chat.project {
-        s.push_str(&format!("project: {p}\n"));
+        s.push_str(&format!("project: {}\n", yaml_scalar(p)));
     }
     if let Some(e) = &chat.external_id {
-        s.push_str(&format!("external_id: {e}\n"));
+        s.push_str(&format!("external_id: {}\n", yaml_scalar(e)));
     }
-    s.push_str(&format!("item_count: {}\n", doc.items.len()));
+    s.push_str(&format!("item_count: {}\n", message_count(doc)));
     s.push_str("---\n\n");
 
     // The chat's name and the period go in separately: a long title is
     // clamped, and `(2024-03)` — which says *which slice of the
     // conversation this file is* — must survive that.
-    let period = format!("({})", doc.period_key);
     s.push_str(
         &Title {
             text: chat_title,
-            suffix: Some(&period),
+            suffix: period.as_deref(),
             markdown_uuid: Some(&doc.markdown_uuid),
             // Public per-chat URL when the provider has one (LinkedIn
             // post, Slack permalink, …); None for backup-based providers.
@@ -379,15 +454,15 @@ fn render_orphan_reactions(doc: &NormalizedDoc) -> Option<String> {
     s.push_str("---\n\n## Reactions to messages not in this mirror\n\n");
     for group in &doc.orphan_reactions {
         s.push_str(&format!(
-            "- target `{}`:\n",
-            escape_text(&group.target_native_id)
+            "- target {}:\n",
+            md_code_span(&group.target_native_id)
         ));
         for r in &group.reactions {
             s.push_str(&format!(
                 "  - <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span> ({ts})\n",
                 uuid = r.reaction_uuid,
-                emoji = r.emoji,
-                who = escape_text(&r.reactor_display),
+                emoji = escape_md_inline(&r.emoji),
+                who = escape_md_inline(&r.reactor_display),
                 ts = timestamp_html(r.date_ms),
             ));
         }
@@ -446,7 +521,8 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 .unwrap_or("(system event)");
             s.push_str(&format!(
                 "*<small>{ts} — system: {summary}</small>*\n\n",
-                ts = timestamp_html(item.date_ms)
+                ts = timestamp_html(item.date_ms),
+                summary = escape_md_inline(summary),
             ));
             s.push_str("</div>\n\n");
             return Section::keyed(&item.message_uuid, s);
@@ -455,27 +531,46 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
             s.push_str(
                 &MessageHeader {
                     author: &item.author_display,
+                    handle: item.author_handle.as_ref(),
                     date_ms: item.date_ms,
                     source_url: item.source_url.as_deref(),
                 }
                 .render(),
             );
             s.push('\n');
+            if let Some(line) = recipients_line(&item.recipients) {
+                s.push('\n');
+                s.push_str(&line);
+                s.push('\n');
+            }
         }
     }
 
+    let body = |text: &str| match profile.text_format {
+        TextFormat::Plain => escape_md_block(text),
+        TextFormat::Markdown => text.to_string(),
+    };
+    let labelled = |text: String| {
+        if item.labels.is_empty() {
+            text
+        } else {
+            let labels: Vec<String> = item.labels.iter().map(|l| escape_md_inline(l)).collect();
+            format!("🏷 {}\n\n{text}", labels.join(" · "))
+        }
+    };
     match item.kind {
         ItemKind::Text => {
-            if let Some(text) = item.text.as_deref().filter(|t| !t.is_empty()) {
+            let text = labelled(body(item.text.as_deref().unwrap_or("")));
+            if !text.is_empty() {
                 s.push('\n');
-                s.push_str(text);
+                s.push_str(&text);
                 s.push('\n');
             }
         }
         ItemKind::Attachment => {
             if let Some(caption) = item.text.as_deref().filter(|t| !t.is_empty()) {
                 s.push('\n');
-                s.push_str(caption);
+                s.push_str(&body(caption));
                 s.push('\n');
             }
             if item.attachments.is_empty() {
@@ -503,14 +598,47 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
             s.push_str(&format!(
                 "- <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span>\n",
                 uuid = r.reaction_uuid,
-                emoji = r.emoji,
-                who = r.reactor_display,
+                emoji = escape_md_inline(&r.emoji),
+                who = escape_md_inline(&r.reactor_display),
             ));
         }
     }
 
     s.push_str("\n</div>\n\n");
     Section::keyed(&item.message_uuid, s)
+}
+
+/// Who an item was addressed to, one line straight under its header:
+/// `To <span data-handle="email:…">Will Riker</span>, …; Cc …`. The UI
+/// trusts a `data-handle` here only because nothing a sender wrote can
+/// come between the header and this line.
+fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
+    use crate::types::RecipientRole;
+    let mut groups: Vec<String> = Vec::new();
+    for role in [RecipientRole::To, RecipientRole::Cc] {
+        let names: Vec<String> = recipients
+            .iter()
+            .filter(|r| r.role == role)
+            .map(|r| {
+                let handle = r.handle.as_ref().map_or(String::new(), |h| {
+                    format!(" data-handle=\"{}\"", escape_attr(h.as_str()))
+                });
+                format!(
+                    "<span class=\"msg-recipient\"{handle}>{}</span>",
+                    escape_text(&r.display)
+                )
+            })
+            .collect();
+        if !names.is_empty() {
+            groups.push(format!(
+                "<span class=\"msg-recipients-role\">{}</span> {}",
+                role.label(),
+                names.join(", ")
+            ));
+        }
+    }
+    (!groups.is_empty())
+        .then(|| format!("<div class=\"msg-recipients\">{}</div>", groups.join("; ")))
 }
 
 fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
@@ -524,6 +652,7 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
                 .map(str::to_string)
         })
         .unwrap_or_else(|| "attachment".to_string());
+    let label = escape_md_inline(&label);
     let size = att
         .byte_len
         .map(human_bytes)
@@ -558,7 +687,7 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
     s.push('\n');
     match &att.rel_path {
         Some(rel) if att.is_image() => {
-            s.push_str(&format!("![{label}]({rel})\n"));
+            s.push_str(&format!("![{label}]({})\n", md_link_dest(rel)));
         }
         // Inline HTML5 players so audio/video attachments play straight
         // from the markdown viewer (which already passes raw HTML through
@@ -566,21 +695,28 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
         // underneath is a fallback for renderers that strip media tags.
         Some(rel) if is_audio => {
             s.push_str(&format!(
-                "<audio controls src=\"{rel}\"></audio>\n\n{kind_marker} [{label}]({rel}) — {size}\n"
+                "<audio controls src=\"{src}\"></audio>\n\n{kind_marker} [{label}]({dest}) — {size}\n",
+                src = escape_attr(rel),
+                dest = md_link_dest(rel),
             ));
         }
         Some(rel) if is_video => {
             s.push_str(&format!(
-                "<video controls src=\"{rel}\"></video>\n\n{kind_marker} [{label}]({rel}) — {size}\n"
+                "<video controls src=\"{src}\"></video>\n\n{kind_marker} [{label}]({dest}) — {size}\n",
+                src = escape_attr(rel),
+                dest = md_link_dest(rel),
             ));
         }
         Some(rel) => {
-            s.push_str(&format!("{kind_marker} [{label}]({rel}) — {size}\n"));
+            s.push_str(&format!(
+                "{kind_marker} [{label}]({dest}) — {size}\n",
+                dest = md_link_dest(rel)
+            ));
         }
         None => {
             s.push_str(&format!("{kind_marker} *[{label} (not yet fetched)]*\n",));
             if let Some(url) = &att.source_url {
-                s.push_str(&format!("*(source: {url})*\n"));
+                s.push_str(&format!("*(source: {})*\n", escape_md_inline(url)));
             }
         }
     }
@@ -634,7 +770,7 @@ fn build_grid_rows(
             .created_at(first_ts)
             .modified_at(last_ts)
             .byte_size(Some(bodies.iter().map(|b| b.len() as i64).sum()))
-            .item_count(Some(doc.items.len() as i64))
+            .item_count(Some(message_count(doc)))
             .author(chat.author.clone())
             .account(chat.account.clone())
             .org_uuid(chat.org_uuid.clone())
@@ -644,11 +780,16 @@ fn build_grid_rows(
             .conversation_name(conversation_name.clone())
             .conversation_uuid(chat.chat_uuid.clone())
             .entire_chat(entire_chat.clone())
-            .text(
+            // What was said: no system events, and none of the asides — a
+            // tool call, a harness's injected preamble — that the page
+            // folds away.
+            .body(
                 doc.items
                     .iter()
-                    .filter(|i| !matches!(i.kind, ItemKind::System))
-                    .filter_map(|i| i.text.clone())
+                    .zip(&bodies)
+                    .filter(|(i, _)| !matches!(i.kind, ItemKind::System) && !i.is_aside)
+                    .map(|(_, body)| body.as_str())
+                    .filter(|body| !body.is_empty())
                     .collect::<Vec<_>>()
                     .join("\n"),
             )
@@ -708,7 +849,7 @@ fn build_grid_rows(
                 .upstream_account(chat.upstream_account.clone())
                 .created_at(stamp_from_ms(item.date_ms, profile.stamp_precision))
                 .byte_size(Some(text.len() as i64))
-                .item_count(Some(1))
+                .item_count(item.is_message().then_some(1))
                 // An empty display is "upstream named nobody", which is a
                 // null — never a row whose author is the empty string,
                 // and never a stand-in like "unknown".
@@ -722,7 +863,7 @@ fn build_grid_rows(
                 .conversation_uuid(chat.chat_uuid.clone())
                 .message_index(Some(idx as i64))
                 .entire_chat(entire_chat.clone())
-                .text(text)
+                .body(text)
                 .qmd_path(Some(md_rel.to_string()))
                 // Per-message linkout wins; fall back to an attachment's URL.
                 .source_url(
@@ -800,7 +941,7 @@ fn reaction_row(
         .conversation_name(conversation_name.clone())
         .conversation_uuid(chat.chat_uuid.clone())
         .entire_chat(entire_chat.to_string())
-        .text(r.emoji.clone())
+        .body(r.emoji.clone())
         .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(doc.markdown_uuid.clone()))
         .build_or_record(
@@ -818,6 +959,10 @@ fn non_empty(s: &str) -> Option<String> {
 /// The message-level row's `text`, and the bytes its `byte_size` counts:
 /// the body alone, never an attachment's bytes, so the number means one
 /// thing on every provider whether or not it knows its attachments' sizes.
+fn message_count(doc: &NormalizedDoc) -> i64 {
+    doc.items.iter().filter(|i| i.is_message()).count() as i64
+}
+
 fn message_body(item: &NormalizedChatItem) -> String {
     match item.kind {
         ItemKind::Text => item.text.clone().unwrap_or_default(),
@@ -887,6 +1032,7 @@ mod tests {
 
     fn mk_chat() -> NormalizedChat {
         NormalizedChat {
+            contacts: Vec::new(),
             inputs: Vec::new(),
             id: "100".to_string(),
             chat_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
@@ -908,7 +1054,7 @@ mod tests {
                 orphan_reactions: Vec::new(),
                 items: vec![NormalizedChatItem {
                     message_uuid: "33333333-3333-3333-3333-333333333333".to_string(),
-                    author_id: "1".to_string(),
+                    author_handle: None,
                     author_display: "Picard".to_string(),
                     date_ms: Some(12442118400000),
                     text: Some("Make it so.".to_string()),
@@ -921,12 +1067,14 @@ mod tests {
                         date_ms: Some(12442118410000),
                         source_ref: None,
                     }],
+                    labels: Vec::new(),
                     system_note: None,
                     source_url: None,
                     kind_label: None,
                     source_ref: None,
                     is_aside: false,
                     unread: false,
+                    recipients: Vec::new(),
                     problems: Vec::new(),
                 }],
             }],
@@ -1076,28 +1224,36 @@ mod tests {
     }
 
     /// A message weighs its body in bytes, the document weighs the sum
-    /// of its messages and counts them, and a reaction is neither.
+    /// of its items and counts only what was said — a system note and a
+    /// tool call are in the transcript but are not messages — and a
+    /// reaction is neither.
     #[test]
-    fn document_size_and_count_are_the_sum_of_its_messages() {
+    fn document_size_is_every_item_and_its_count_is_the_messages() {
         let profile = test_profile();
         let mut chat = mk_chat();
         chat.buckets[0].items.push(NormalizedChatItem {
             message_uuid: "55555555-5555-5555-5555-555555555555".to_string(),
-            author_id: "2".to_string(),
+            author_handle: None,
             author_display: "Worf".to_string(),
             date_ms: Some(12442118420000),
             text: None,
             kind: ItemKind::System,
             attachments: vec![],
             reactions: vec![],
+            labels: Vec::new(),
             system_note: Some("Worf joined 🖖".to_string()),
             source_url: None,
             kind_label: None,
             source_ref: None,
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         });
+        chat.buckets[0].items.push(aside_item(
+            "66666666-6666-6666-6666-666666666666",
+            "tricorder scan",
+        ));
         let rows = rows_of(&profile, &chat);
 
         let by_kind = |k: &str| rows.iter().filter(|r| r.kind == k).collect::<Vec<_>>();
@@ -1107,11 +1263,14 @@ mod tests {
         // Bytes, not characters: the vulcan salute is four of them.
         assert_eq!(messages[1].byte_size, Some("Worf joined 🖖".len() as i64));
         assert_eq!(messages[1].byte_size, Some(16));
-        assert!(messages.iter().all(|m| m.item_count == Some(1)));
+        let counts: Vec<_> = messages.iter().map(|m| m.item_count).collect();
+        assert_eq!(counts, [Some(1), None], "a system note is not a message");
+        let tool = &by_kind("Tool Call")[0];
+        assert_eq!(tool.item_count, None, "nor is a tool call");
 
         let doc = &by_kind(&profile.chat_kind)[0];
-        assert_eq!(doc.byte_size, Some(11 + 16));
-        assert_eq!(doc.item_count, Some(2));
+        assert_eq!(doc.byte_size, Some(11 + 16 + "tricorder scan".len() as i64));
+        assert_eq!(doc.item_count, Some(1));
 
         let reaction = &by_kind(&profile.reaction_kind)[0];
         assert_eq!((reaction.byte_size, reaction.item_count), (None, None));
@@ -1131,6 +1290,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let chat = mk_chat();
         let md = join(&render_markdown(
@@ -1138,7 +1298,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         ));
         assert!(md.contains("Make it so."));
         assert!(md.contains("🫡 Will Riker"));
@@ -1158,7 +1317,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         ));
         assert!(
             md.contains("## <span class=\"msg-author\">Picard</span> "),
@@ -1182,13 +1340,104 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         ));
         assert!(
             md.contains("&lt;script&gt;x&lt;/script&gt; &amp; co"),
             "{md}"
         );
         assert!(!md.contains("<script>"), "{md}");
+    }
+
+    /// A text message is what someone typed, so a `<b>` in it, a
+    /// leading `#`, or a name that is markup, shows as those characters
+    /// rather than restyling the page. The grid keeps the text as typed.
+    #[test]
+    fn every_plain_field_renders_escaped() {
+        const MARKUP: &str = "<script>x</script> & co";
+        let profile = RenderProfile {
+            text_format: TextFormat::Plain,
+            ..test_profile()
+        };
+        let mut chat = mk_chat();
+        let item = &mut chat.buckets[0].items[0];
+        item.text = Some(format!("{MARKUP}\n# not a heading"));
+        item.labels = vec![MARKUP.to_string()];
+        item.reactions[0].reactor_display = MARKUP.to_string();
+        let mut attachment = chat.buckets[0].items[0].clone();
+        attachment.message_uuid = "66666666-6666-6666-6666-666666666666".to_string();
+        attachment.kind = ItemKind::Attachment;
+        attachment.text = Some(MARKUP.to_string());
+        attachment.reactions = Vec::new();
+        attachment.attachments = vec![NormalizedAttachment {
+            rel_path: None,
+            file_name: Some(format!("{MARKUP}].png")),
+            mime_type: Some("image/png".to_string()),
+            byte_len: None,
+            source_url: Some(MARKUP.to_string()),
+            ref_id: None,
+        }];
+        let mut system = chat.buckets[0].items[0].clone();
+        system.message_uuid = "77777777-7777-7777-7777-777777777777".to_string();
+        system.kind = ItemKind::System;
+        system.system_note = Some(MARKUP.to_string());
+        chat.buckets[0].items.extend([attachment, system]);
+
+        let md = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test · Bridge Crew",
+        ));
+
+        assert!(!md.contains("<script>"), "{md}");
+        assert!(!md.contains(" & co"), "{md}");
+        assert!(
+            md.contains("\n&lt;script&gt;x&lt;/script&gt; &amp; co\n\\# not a heading\n"),
+            "the body: {md}"
+        );
+        assert!(
+            md.contains("🏷 &lt;script&gt;x&lt;/script&gt; &amp; co\n"),
+            "{md}"
+        );
+        assert!(
+            md.contains("🫡 &lt;script&gt;x&lt;/script&gt; &amp; co</span>"),
+            "the reactor: {md}"
+        );
+        assert!(
+            md.contains("*[&lt;script&gt;x&lt;/script&gt; &amp; co\\].png (not yet fetched)]*"),
+            "the file name: {md}"
+        );
+        assert!(
+            md.contains("*(source: &lt;script&gt;x&lt;/script&gt; &amp; co)*"),
+            "{md}"
+        );
+        assert!(
+            md.contains("— system: &lt;script&gt;x&lt;/script&gt; &amp; co</small>"),
+            "{md}"
+        );
+
+        let typed = format!("{MARKUP}\n# not a heading");
+        let rows = rows_of(&profile, &chat);
+        assert!(
+            rows.iter()
+                .any(|r| r.content_hash == datalib_schema::grid_rows::content_hash(&typed)),
+            "the grid's text is the text as typed"
+        );
+    }
+
+    /// Markdown is the provider's to write: an assistant's reply keeps
+    /// its emphasis and its code.
+    #[test]
+    fn markdown_text_is_written_as_given() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].text = Some("**Engage** `warp(9)`".to_string());
+        let md = join(&render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test · Bridge Crew",
+        ));
+        assert!(md.contains("\n**Engage** `warp(9)`\n"), "{md}");
     }
 
     /// Every stamp in a rendered document is hoverable, not just the
@@ -1217,7 +1466,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test \u{b7} Bridge Crew",
-            "Test \u{b7} Bridge Crew (2364-04)",
         ));
 
         assert!(
@@ -1237,19 +1485,21 @@ mod tests {
     fn aside_item(uuid: &str, text: &str) -> NormalizedChatItem {
         NormalizedChatItem {
             message_uuid: uuid.to_string(),
-            author_id: "tool".to_string(),
+            author_handle: None,
             author_display: "tool".to_string(),
             date_ms: Some(12442118400000),
             text: Some(text.to_string()),
             kind: ItemKind::Text,
             attachments: vec![],
             reactions: vec![],
+            labels: Vec::new(),
             system_note: None,
             source_url: None,
             kind_label: Some("Tool Call".to_string()),
             source_ref: None,
             is_aside: true,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         }
     }
@@ -1272,7 +1522,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         ));
 
         assert_eq!(
@@ -1311,7 +1560,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         ));
 
         let class_of = |uuid: &str| {
@@ -1355,7 +1603,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
-            "Test · Bridge Crew (2364-04)",
         );
         let keys: Vec<Option<&str>> = sections.iter().map(|s| s.uuid.as_deref()).collect();
         assert_eq!(
@@ -1415,14 +1662,9 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
-        let md = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-        ));
+        let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(md.contains("not yet fetched"));
         assert!(md.contains("https://example/vscapture"));
     }
@@ -1438,18 +1680,13 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let mut chat = mk_chat();
         chat.source_url = Some("https://example.com/post/42".to_string());
 
         // Title gets the `↗` source link.
-        let md = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-        ));
+        let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://example.com/post/42"),
             "title carries the source linkout: {md}"
@@ -1475,6 +1712,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let mut chat = mk_chat();
         chat.title = Some("#bridge: Make it so.".to_string());
@@ -1489,6 +1727,37 @@ mod tests {
         assert_eq!(chat_title, "#bridge: Make it so.");
     }
 
+    /// An unbucketed chat's title read "Bridge Crew (all)" (#902); a
+    /// monthly bucket keeps its "(2364-04)".
+    #[test]
+    fn only_a_real_time_bucket_suffixes_the_title() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+
+        let monthly = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Bridge Crew",
+        ));
+        assert!(
+            monthly.contains("title: \"Bridge Crew (2364-04)\"\n"),
+            "{monthly}"
+        );
+        assert!(monthly.contains(">Bridge Crew (2364-04)</h1>"), "{monthly}");
+
+        chat.buckets[0].period_key = Period::key_for_all().to_string();
+        let whole = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Bridge Crew",
+        ));
+        assert!(whole.contains("title: \"Bridge Crew\"\n"), "{whole}");
+        assert!(whole.contains(">Bridge Crew</h1>"), "{whole}");
+        assert!(!whole.contains("(all)"), "{whole}");
+    }
+
     #[test]
     fn per_message_source_url_surfaces_in_header_and_grid_row() {
         let profile = RenderProfile {
@@ -1500,18 +1769,13 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let mut chat = mk_chat();
         chat.buckets[0].items[0].source_url = Some("https://slack.example/p123".to_string());
 
         // Message header carries a `↗` linkout.
-        let md = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-        ));
+        let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://slack.example/p123"),
             "message header carries the per-message linkout: {md}"
@@ -1540,6 +1804,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let mut chat = mk_chat();
         chat.buckets[0].items[0].kind_label = Some("LLM Response".to_string());
@@ -1560,6 +1825,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         }
     }
 
@@ -1661,13 +1927,7 @@ mod tests {
         let profile = test_profile();
         let mut chat = mk_chat();
         chat.buckets[0].items[0].date_ms = None;
-        let md = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Test",
-            "Test (2364-04)",
-        ));
+        let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(md.contains("(no timestamp)"), "{md}");
         assert!(!md.contains("1970"), "{md}");
     }
@@ -1683,6 +1943,7 @@ mod tests {
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
+            text_format: TextFormat::Markdown,
         };
         let mut chat = mk_chat();
         chat.org_uuid = Some("org-123".to_string());
@@ -1695,5 +1956,69 @@ mod tests {
             assert_eq!(r.org_uuid.as_deref(), Some("org-123"));
             assert_eq!(r.org_name.as_deref(), Some("Starfleet"));
         }
+    }
+
+    #[test]
+    fn recipients_line_names_each_with_its_handle_and_escapes_what_it_shows() {
+        use crate::types::{Recipient, RecipientRole};
+        let r = |role, display: &str, addr: &str| Recipient {
+            role,
+            display: display.to_string(),
+            handle: datalib_handle::Handle::email(addr),
+        };
+        let line = recipients_line(&[
+            r(RecipientRole::Cc, "<Q>", "q@continuum.org"),
+            r(RecipientRole::To, "Will Riker", "riker@enterprise.org"),
+            r(RecipientRole::To, "Deanna Troi", "not an address"),
+        ])
+        .unwrap();
+        assert_eq!(
+            line,
+            "<div class=\"msg-recipients\"><span class=\"msg-recipients-role\">To</span> \
+             <span class=\"msg-recipient\" data-handle=\"email:riker@enterprise.org\">Will Riker</span>, \
+             <span class=\"msg-recipient\">Deanna Troi</span>; \
+             <span class=\"msg-recipients-role\">Cc</span> \
+             <span class=\"msg-recipient\" data-handle=\"email:q@continuum.org\">&lt;Q&gt;</span></div>"
+        );
+        assert_eq!(recipients_line(&[]), None);
+    }
+
+    /// The recipients line is an HTML block; a blank line in a name
+    /// ended it, and markdown read the rest of the name (#992).
+    #[test]
+    fn a_recipient_with_a_blank_line_in_the_name_stays_in_the_line() {
+        use crate::types::{Recipient, RecipientRole};
+        let line = recipients_line(&[Recipient {
+            role: RecipientRole::To,
+            display: "Worf\n\n[x](https://e.test)".to_string(),
+            handle: None,
+        }])
+        .unwrap();
+        assert!(!line.contains('\n'), "{line}");
+    }
+
+    /// A front-matter value from upstream cannot end its line, or the
+    /// block, whatever it holds (#992).
+    #[test]
+    fn front_matter_values_stay_on_their_lines() {
+        let mut chat = mk_chat();
+        chat.display = "a\n---\nb".into();
+        chat.account = Some("acct\ntitle: forged".into());
+        chat.project = Some("p: q".into());
+        chat.external_id = Some("e\n\n".into());
+        let sections = render_markdown(&test_profile(), &chat, &chat.buckets[0], "t\n---");
+        let front = &sections[0].md;
+        let lines: Vec<&str> = front.lines().collect();
+        let close = lines[1..].iter().position(|l| *l == "---").expect("closes") + 1;
+        for line in &lines[1..close] {
+            assert!(
+                line.split_once(": ").is_some_and(|(k, _)| !k.contains(' ')),
+                "{front}"
+            );
+        }
+        assert!(
+            lines[close + 1..].iter().all(|l| !l.starts_with("title:")),
+            "{front}"
+        );
     }
 }

@@ -46,7 +46,8 @@ export function dactalView(opts?: { load?: string; q?: string }): CardRender {
     // whole thing the sandbox is for.
     frame.setAttribute("sandbox", "allow-scripts");
     frame.src = DACTAL_PAGE;
-    frame.style.cssText = "width:100%;height:100%;border:0;display:block;background:#fff";
+    frame.style.cssText =
+      "width:100%;height:100%;border:0;display:block;background:var(--datalib-bg)";
     root.appendChild(frame);
 
     // "*" because the frame's origin is opaque and cannot be named. The

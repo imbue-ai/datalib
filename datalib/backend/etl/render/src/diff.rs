@@ -434,7 +434,7 @@ mod tests {
             .source_label("Test")
             .conversation_uuid("chat")
             .entire_chat("/chat/chat")
-            .text(text)
+            .body(text)
             .author(Some(author.to_string()))
             .build()
             .unwrap()
@@ -471,7 +471,7 @@ mod tests {
             got,
             vec![
                 ("kept", "unchanged", None),
-                ("edited", "modified", Some("text")),
+                ("edited", "modified", Some("content_hash|preview")),
                 ("new", "added", None),
                 ("gone", "removed", None),
             ]
@@ -485,7 +485,7 @@ mod tests {
                 unchanged: 1
             }
         );
-        assert_eq!(rows[3].text, "bye", "a removed row is the from side's");
+        assert_eq!(rows[3].preview, "bye", "a removed row is the from side's");
     }
 
     #[test]
@@ -493,7 +493,10 @@ mod tests {
         let from = vec![row("m", "before", "Riker")];
         let to = vec![row("m", "after", "William Riker")];
         let (rows, _) = diff_rows(&from, &to);
-        assert_eq!(rows[0].diff_changed_columns.as_deref(), Some("author|text"));
+        assert_eq!(
+            rows[0].diff_changed_columns.as_deref(),
+            Some("author|content_hash|preview")
+        );
     }
 
     #[test]

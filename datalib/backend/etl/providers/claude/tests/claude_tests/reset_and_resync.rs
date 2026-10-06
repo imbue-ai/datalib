@@ -147,8 +147,8 @@ async fn a_reset_and_resync_preserves_data_tables() {
     std::env::set_var(PLAYBACK_ENV, &playback);
 
     // ── Run 1: fresh download ─────────────────────────────────────
-    // Open here and close before the store is read back: a second
-    // live connection to one file makes a `dolt_commit` fail.
+    // Open here and close before the store is read back: the file
+    // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let s1 = fetch(FetchOptions {
         export_dir: Some(api.clone()),
@@ -158,7 +158,7 @@ async fn a_reset_and_resync_preserves_data_tables() {
         ..FetchOptions::new(db.clone())
     })
     .await;
-    // Seal before closing, as `session.finish` does in production. The
+    // Seal before closing, as the session does in production. The
     // read below opens its own pool, which lands on `main`; a download
     // that never sealed left its rows on the writer's branch, where no
     // reader can see them.
@@ -200,8 +200,8 @@ async fn a_reset_and_resync_preserves_data_tables() {
     datalib_etl::doltlite_raw::reset_store(&db_path_for(&out_db))
         .await
         .unwrap();
-    // Open here and close before the store is read back: a second
-    // live connection to one file makes a `dolt_commit` fail.
+    // Open here and close before the store is read back: the file
+    // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let s2 = fetch(FetchOptions {
         export_dir: Some(api.clone()),
@@ -289,12 +289,10 @@ async fn a_reset_and_resync_preserves_data_tables() {
             messages.iter().any(|m| m.contains("reset-test: first")),
             "first commit message missing from dolt_log: {messages:?}"
         );
-        // Debug-friendly observation log. The strong correctness
-        // claim is the per-row data-table equality already
-        // asserted above; doltlite's exact behavior on a "no diff
-        // between staged tree and HEAD" commit attempt varies
-        // (return same hash / new hash with no log entry / NULL),
-        // so don't make THIS assertion load-bearing.
+        // Logged, not asserted: the per-row equality above is the
+        // correctness claim. Whether the second commit has anything to
+        // seal depends on bookkeeping; with nothing, doltlite refuses the
+        // commit ("nothing to commit") and `commit_run` returns `None`.
         eprintln!(
             "[reset_and_resync_test] first_hash={first_hash:?} \
              second_hash={second_hash:?} dolt_log_messages={messages:?}"

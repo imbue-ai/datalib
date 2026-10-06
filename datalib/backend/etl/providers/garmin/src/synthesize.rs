@@ -45,6 +45,12 @@ pub struct GarminSpec {
     /// `kind → items`.
     #[serde(default)]
     pub items: BTreeMap<String, Vec<Value>>,
+    /// `date → the day's wellness bundle`, as text. When the key is
+    /// present every other day of the window answers 404, as Garmin does
+    /// for a day with no bundle; when it is absent no wellness request
+    /// has a fixture.
+    #[serde(default)]
+    pub wellness: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +62,9 @@ pub struct SpecActivity {
     /// FIT file is binary; a fixture only needs to round-trip.
     #[serde(default)]
     pub fit: Option<String>,
+    /// An activity entered by hand: its file download answers 404.
+    #[serde(default)]
+    pub no_file: bool,
 }
 
 pub struct GarminSynth {
@@ -135,28 +144,31 @@ impl Synthesizer for GarminSynth {
             }
         }
 
-        // The weight and activity walks resume from `since` on a first
-        // run and from a week before `today` on the next, so both
-        // windows get fixtures.
-        let mut starts = vec![since, today - Duration::days(DEFAULT_REFRESH_DAYS)];
+        let mut chunk_start = since;
+        while chunk_start <= today {
+            let chunk_end = (chunk_start + Duration::days(WEIGHT_CHUNK_DAYS - 1)).min(today);
+            let body = weight_range_reply(&spec.weigh_ins, chunk_start, chunk_end);
+            put(
+                get(&format!(
+                    "/weight-service/weight/range/{}/{}?includeAll=true",
+                    chunk_start.format("%Y-%m-%d"),
+                    chunk_end.format("%Y-%m-%d")
+                )),
+                json_response(&body),
+            )?;
+            chunk_start = chunk_end + Duration::days(1);
+        }
+
+        // The activity listing starts at `since` while any of the window
+        // is still to list, and a refresh window before `today` once it
+        // is all covered, so both starts get fixtures.
+        let mut starts = vec![
+            since,
+            (today - Duration::days(DEFAULT_REFRESH_DAYS)).max(since),
+        ];
         starts.sort();
         starts.dedup();
         for start in starts {
-            let mut chunk_start = start;
-            while chunk_start <= today {
-                let chunk_end = (chunk_start + Duration::days(WEIGHT_CHUNK_DAYS - 1)).min(today);
-                let body = weight_range_reply(&spec.weigh_ins, chunk_start, chunk_end);
-                put(
-                    get(&format!(
-                        "/weight-service/weight/range/{}/{}?includeAll=true",
-                        chunk_start.format("%Y-%m-%d"),
-                        chunk_end.format("%Y-%m-%d")
-                    )),
-                    json_response(&body),
-                )?;
-                chunk_start = chunk_end + Duration::days(1);
-            }
-
             let listings: Vec<Value> = spec
                 .activities
                 .iter()
@@ -208,8 +220,27 @@ impl Synthesizer for GarminSynth {
                 .unwrap_or_else(|| format!(".FIT synthetic {id}"));
             put(
                 req_get_bytes(&format!("{base}/download-service/files/activity/{id}")),
-                zip_response(&format!("{id}_ACTIVITY.fit"), fit.as_bytes())?,
+                if a.no_file {
+                    not_found()
+                } else {
+                    zip_response(&format!("{id}_ACTIVITY.fit"), fit.as_bytes())?
+                },
             )?;
+        }
+
+        if let Some(bundles) = &spec.wellness {
+            let mut day = since;
+            while day <= today {
+                let d = day.format("%Y-%m-%d").to_string();
+                put(
+                    req_get_bytes(&format!("{base}/download-service/files/wellness/{d}")),
+                    match bundles.get(&d) {
+                        Some(bundle) => bytes_response("application/zip", bundle.as_bytes()),
+                        None => not_found(),
+                    },
+                )?;
+                day += Duration::days(1);
+            }
         }
 
         for kind in ITEM_KINDS {
@@ -278,12 +309,25 @@ fn zip_response(name: &str, bytes: &[u8]) -> Result<HttpResponse> {
         w.write_all(bytes)?;
         w.finish()?;
     }
+    Ok(bytes_response("application/zip", &buf.into_inner()))
+}
+
+fn bytes_response(content_type: &str, body: &[u8]) -> HttpResponse {
     let mut headers = BTreeMap::new();
-    headers.insert("content-type".into(), "application/zip".into());
-    Ok(HttpResponse {
+    headers.insert("content-type".into(), content_type.into());
+    HttpResponse {
         status: 200,
         headers,
-        body: buf.into_inner(),
+        body: body.to_vec(),
         duration_ms: 0,
-    })
+    }
+}
+
+fn not_found() -> HttpResponse {
+    HttpResponse {
+        status: 404,
+        headers: BTreeMap::new(),
+        body: Vec::new(),
+        duration_ms: 0,
+    }
 }

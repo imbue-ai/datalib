@@ -10,8 +10,8 @@ use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Sy
 use serde_json::{json, Value};
 
 use crate::ingest::{
-    BASE, DEFAULT_SCOPES, ENTITY_ISSUE_COMMENT, ENTITY_PR, ENTITY_PR_REVIEW,
-    ENTITY_PR_REVIEW_COMMENT, ENTITY_SELF, PER_PAGE,
+    search_url, since_param, BASE, DEFAULT_SCOPES, ENTITY_ISSUE_COMMENT, ENTITY_PR,
+    ENTITY_PR_REVIEW, ENTITY_PR_REVIEW_COMMENT, ENTITY_SELF, PER_PAGE,
 };
 
 pub struct GithubSynth {
@@ -34,6 +34,14 @@ fn pr_repo_num(rec: &Value) -> Option<(String, u64)> {
     let repo = rec.get("repo_full_name")?.as_str()?.to_string();
     let num = rec.get("pr_number")?.as_u64()?;
     Some((repo, num))
+}
+
+/// The `since` a run resumed from a cursor stamped `at` sends, by the
+/// policy the download itself runs.
+fn resumed_since(scope: &str, at: &str) -> Option<String> {
+    let at = datalib_time::parse_strict(at).ok()?;
+    let cursors = std::collections::HashMap::from([(scope.to_string(), at.to_rfc3339_secs())]);
+    datalib_etl::scope_state::since_for_scope(&at, &cursors, scope, 0, false, None)
 }
 
 impl Synthesizer for GithubSynth {
@@ -90,18 +98,35 @@ impl Synthesizer for GithubSynth {
                 })
             })
             .collect();
-        for scope in DEFAULT_SCOPES {
-            let q = format!("is:pr {scope}");
-            let url = format!(
-                "{BASE}/search/issues?q={}&per_page={PER_PAGE}&sort=updated&order=desc",
-                urlencoding::encode(&q)
-            );
-            let body = json!({
+        let search_page = |items: &[Value]| {
+            json_response(&json!({
                 "total_count": items.len(),
                 "incomplete_results": false,
                 "items": items,
-            });
-            write_fixture(out_root, &req_get(&url), &json_response(&body))?;
+            }))
+        };
+        for scope in DEFAULT_SCOPES {
+            write_fixture(
+                out_root,
+                &req_get(&search_url(scope, None)),
+                &search_page(&items),
+            )?;
+            count += 1;
+        }
+        // A sync whose cursors were stamped at the capture's own moment
+        // asks each scope what changed since; nothing had.
+        let captured_at = selves
+            .first()
+            .and_then(|(_, rec)| rec.get("_recorded_at")?.as_str());
+        for scope in DEFAULT_SCOPES {
+            let Some(since) = captured_at.and_then(|at| resumed_since(scope, at)) else {
+                break;
+            };
+            write_fixture(
+                out_root,
+                &req_get(&search_url(scope, Some(&since_param(&since)))),
+                &search_page(&[]),
+            )?;
             count += 1;
         }
 
@@ -204,10 +229,15 @@ mod tests {
         let api = d.path().join("github_api");
         fs::create_dir_all(&api).unwrap();
 
-        // self_identity
+        // self_identity, captured at a known moment
         let mut k = Map::new();
         k.insert("user_id".into(), json!(42));
-        write_event(&api, ENTITY_SELF, k, json!({"id": 42, "login": "octocat"}));
+        let mut rec = make_record(k, json!({"id": 42, "login": "octocat"}));
+        rec["_recorded_at"] = json!("2369-04-15T00:00:00+00:00");
+        diff_and_save(&api, ENTITY_SELF, &[rec], &HashMap::new(), |r| {
+            r.to_string()
+        })
+        .unwrap();
 
         // one PR
         let repo = "octocat/hello";
@@ -236,8 +266,16 @@ mod tests {
 
         let out = d.path().join("playback");
         let report = GithubSynth::new(&api).synthesize(&out).unwrap();
-        // 1 user + 3 scope searches + 1 PR detail + 3 list endpoints = 8
-        assert_eq!(report.fixtures_written, 8);
+        // 1 user + 3 scope searches + 3 resumed ones + 1 PR detail + 3
+        // list endpoints = 11
+        assert_eq!(report.fixtures_written, 11);
+
+        // a search resumed from the capture's moment finds nothing new
+        let req = req_get(&search_url(DEFAULT_SCOPES[0], Some("2369-04-15")));
+        let p = out.join("github").join(fixture_key(&req));
+        let resp: HttpResponse = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
+        let body: Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(body["items"], json!([]));
 
         // /user
         let req = req_get(&format!("{BASE}/user"));
@@ -247,12 +285,7 @@ mod tests {
         assert_eq!(body["login"], "octocat");
 
         // search fixture contains our PR
-        let q = format!("is:pr {}", DEFAULT_SCOPES[0]);
-        let url = format!(
-            "{BASE}/search/issues?q={}&per_page={PER_PAGE}&sort=updated&order=desc",
-            urlencoding::encode(&q)
-        );
-        let req = req_get(&url);
+        let req = req_get(&search_url(DEFAULT_SCOPES[0], None));
         let p = out.join("github").join(fixture_key(&req));
         let resp: HttpResponse = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
         let body: Value = serde_json::from_slice(&resp.body).unwrap();

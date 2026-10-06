@@ -4,17 +4,23 @@
 //! an author and a time says so the same way wherever it came from — a
 //! Slack message, a Signal SMS, a PR review comment. This is that line.
 
+use datalib_handle::Handle;
 use datalib_time::IsoOffsetTimestamp;
 
-use crate::html::{escape_attr, escape_text};
+use crate::html::{escape_attr, escape_md_inline};
 
 /// One message header, rendered as a `## ` line whose parts are tagged
 /// for the frontend.
 #[derive(Debug, Clone, Default)]
 pub struct MessageHeader<'a> {
     /// Who said it, as a reader should see it ("Me", "Will Riker",
-    /// "@jlpicard"). HTML-escaped at render time.
+    /// "@jlpicard"). Plain text: the span sits on a markdown line, so it
+    /// is escaped as markdown and HTML both.
     pub author: &'a str,
+    /// Who said it, as an identifier: written as `data-handle` on the
+    /// author span, where the UI turns it into a contact chip. The text
+    /// stays `author` whether or not anything resolves it.
+    pub handle: Option<&'a Handle>,
     /// When, in Unix milliseconds. `None` renders as "(no timestamp)"
     /// rather than as a stand-in instant.
     pub date_ms: Option<i64>,
@@ -39,9 +45,12 @@ impl MessageHeader<'_> {
         // room-creation notice, say). Say nothing rather than drawing an
         // empty name.
         if !self.author.is_empty() {
+            let handle = self.handle.map_or(String::new(), |h| {
+                format!(" data-handle=\"{}\"", escape_attr(h.as_str()))
+            });
             s.push_str(&format!(
-                "<span class=\"msg-author\">{}</span> ",
-                escape_text(self.author),
+                "<span class=\"msg-author\"{handle}>{}</span> ",
+                escape_md_inline(self.author),
             ));
         }
         s.push_str(&timestamp_html(self.date_ms));
@@ -93,6 +102,7 @@ mod tests {
             author: "Picard",
             date_ms: Some(12442118400000),
             source_url: None,
+            handle: None,
         };
         assert_eq!(
             h.render(),
@@ -108,6 +118,7 @@ mod tests {
             author: "<script>x</script> & co",
             date_ms: None,
             source_url: None,
+            handle: None,
         };
         let s = h.render();
         assert!(s.contains("&lt;script&gt;x&lt;/script&gt; &amp; co"), "{s}");
@@ -118,18 +129,60 @@ mod tests {
         );
     }
 
+    /// markdown-it parses the text between the span's tags as markdown,
+    /// so an HTML escape alone let a sender named `[x](url)` become a
+    /// link (#992).
+    #[test]
+    fn an_author_named_in_markdown_is_not_a_link() {
+        let h = MessageHeader {
+            author: "[x](https://e.test) ![](https://t.test/i.png) `a|b`",
+            date_ms: None,
+            source_url: None,
+            handle: None,
+        };
+        assert!(
+            h.render().starts_with(
+                "## <span class=\"msg-author\">\\[x\\](https://e.test) \
+                 !\\[\\](https://t.test/i.png) \\`a\\|b\\`</span> "
+            ),
+            "{}",
+            h.render()
+        );
+    }
+
     #[test]
     fn a_linkout_trails_the_stamp() {
         let h = MessageHeader {
             author: "Picard",
             date_ms: Some(12442118400000),
             source_url: Some("https://example.invalid/m/1?a=b&c=d"),
+            handle: None,
         };
         let s = h.render();
         assert!(s.ends_with("noreferrer\">↗</a>"), "{s}");
         assert!(
             s.contains("href=\"https://example.invalid/m/1?a=b&amp;c=d\""),
             "{s}"
+        );
+    }
+
+    /// The handle is what lets a link made after this document rendered
+    /// still find the author, so it has to reach the markdown verbatim.
+    #[test]
+    fn a_handle_rides_on_the_author_span() {
+        let riker = Handle::email("riker@enterprise.org").unwrap();
+        let h = MessageHeader {
+            author: "Will Riker",
+            handle: Some(&riker),
+            date_ms: None,
+            source_url: None,
+        };
+        assert!(
+            h.render().starts_with(
+                "## <span class=\"msg-author\" data-handle=\"email:riker@enterprise.org\">Will Riker</span> "
+            ),
+            "{}",
+            h.render()
         );
     }
 }

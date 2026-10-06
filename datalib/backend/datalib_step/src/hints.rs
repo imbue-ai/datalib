@@ -208,19 +208,21 @@ See datalib/backend/etl/providers/notion/INGEST.md for details."
             "\
 Email source: JMAP (Fastmail / generic) auth missing or expired.
 
-  1. Create an API token at https://app.fastmail.com/settings/security/tokens
-     with the 'Read-only access to mail' scope; copy it to the clipboard.
-  2. Register the two host services and attach the token to both
-     (Fastmail serves blob bytes from a separate host):
-       {LK} services register fastmail \\
-           --base-api-url=\"https://api.fastmail.com/\"
-       {LK} services register fastmail-content \\
-           --base-api-url=\"https://www.fastmailusercontent.com/\"
-       {LK} auth set fastmail         -H \"Authorization: Bearer $(pbpaste)\"
-       {LK} auth set fastmail-content -H \"Authorization: Bearer $(pbpaste)\"
-  3. Smoke-test:
-       {LK} curl -sSL https://api.fastmail.com/.well-known/jmap \\
+Fastmail is a built-in latchkey service, covering both its API host
+and the host it serves blob bytes from:
+
+  1. Log in through the browser:
+       {LK} auth browser fastmail
+     Or, for a read-only credential, create an API token at
+     https://app.fastmail.com/settings/security/tokens with the
+     'Read-only access to mail' scope, copy it, and store it:
+       {LK} auth set fastmail -H \"Authorization: Bearer $(pbpaste)\"
+  2. Smoke-test:
+       {LK} curl -sS https://api.fastmail.com/jmap/session \\
            | jq .primaryAccounts
+
+Another JMAP server needs its hosts registered as a latchkey service
+first; see datalib/backend/etl/providers/email/INGEST.md.
 
 For a **Gmail** account, prefer the REST API mode — it needs no service
 registration at all, because latchkey has a built-in `google-gmail`
@@ -247,19 +249,16 @@ See datalib/backend/etl/providers/email/INGEST.md for details."
         }
         SourceType::Garmin => {
             "\
-Garmin Connect refused the credential, or there is none.
+Garmin Connect refused the credential, or latchkey holds none.
 
-Garmin is not a latchkey service: the ingest step mints its own bearer
-from an OAuth1 token that a login writes under `api.token_dir`
-(default ~/.garth), and that token lasts about a year.
+The `garmin` service comes from latchkey's Garmin plugin, which the
+Add a source dialog installs the first time you sign in there.
 
-  1. Sign in again (prompts for email, password and the emailed MFA
-     code; nothing is stored but the resulting tokens):
-       datalib-step login garmin
+  1. Sign in again from the source's settings, or in a terminal:
+       {LK} auth browser garmin
+     A token folder garth wrote works too:
+       {LK} auth set-nocurl garmin ~/.garth
   2. Re-run the sync.
-
-A token produced by garth (`garth login`, then
-`garth.client.dump(\"~/.garth\")`) works too — the files are the same.
 
 See datalib/backend/etl/providers/garmin/INGEST.md for details."
         }

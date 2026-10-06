@@ -7,8 +7,9 @@
 // The fidelity comes from reading the app's own sources rather than
 // re-stating them: markdown-it with the same options as
 // `src/cards/renderDocument.ts`, the CSS variables lifted out of
-// `src/App.vue`, every `<style>` block of the two card components
-// verbatim, and `src/cards/chatSections.js` — the very module the
+// `src/theme.css`, the document body's own `src/cards/documentBody.css`
+// and every `<style>` block of the two card components verbatim, and
+// `src/cards/chatSections.js` — the very module the
 // component imports — inlined into the page. Nothing about the layout
 // is re-implemented here; only the preview's own chrome (the toolbar,
 // and the light/dark switch below) is new.
@@ -45,26 +46,27 @@ function vueStyles(relPath) {
 }
 
 /**
- * App.vue defines its dark tokens only inside
+ * theme.css defines its dark tokens only inside
  * `@media (prefers-color-scheme: dark)`, which no button can flip. Move
  * that block's declarations onto an explicit `:root.preview-dark` rule
  * and drop the media query, so the toolbar's switch actually decides —
  * and a reviewer on a dark OS can still see the light theme. The tokens
- * themselves are still App.vue's; only the selector changes.
+ * themselves are still theme.css's; only the selector changes.
  */
-function themeSwitchable(appCss) {
+function themeSwitchable(themeCss) {
   const media = /@media \(prefers-color-scheme: dark\)\s*\{\s*:root\s*\{([\s\S]*?)\}\s*\}/;
-  const m = appCss.match(media);
-  if (!m) throw new Error("App.vue no longer has a prefers-color-scheme block");
-  return `${appCss.replace(media, "")}\n:root.preview-dark {${m[1]}}`;
+  const m = themeCss.match(media);
+  if (!m) throw new Error("theme.css no longer has a prefers-color-scheme block");
+  return `${themeCss.replace(media, "")}\n:root.preview-dark {${m[1]}}`;
 }
 
 const css = [
-  themeSwitchable(vueStyles("src/App.vue")),
+  themeSwitchable(readFileSync(join(uiRoot, "src/theme.css"), "utf8")),
   readFileSync(
     join(pkgRoot, "node_modules/highlight.js/styles/github-dark.css"),
     "utf8",
   ),
+  readFileSync(join(uiRoot, "src/cards/documentBody.css"), "utf8"),
   vueStyles("src/cards/DocCard.ce.vue"),
   vueStyles("src/cards/ChatBody.ce.vue"),
   // Preview-only chrome. The real pane is a resizable Miller column;

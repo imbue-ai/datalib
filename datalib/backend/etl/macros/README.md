@@ -1,8 +1,9 @@
 # `datalib-etl-macros` — the derive reference
 
-Four derives, one per table shape. Each turns a row struct into the DDL, the
-column metadata and the write plumbing, so a provider's `schema_raw.rs` is
-the struct and its attribute and nothing else.
+Four table derives, one per table shape. Each turns a row struct into the
+DDL, the column metadata and the write plumbing, so a provider's
+`schema_raw.rs` is the struct and its attribute and nothing else. A fifth,
+`RawStoreHandle`, is not about tables; it is at the end.
 
 | derive | for |
 |---|---|
@@ -21,6 +22,7 @@ the struct and its attribute and nothing else.
 | `Option<i64>` | `INTEGER NULL` |
 | `f64` | `REAL NOT NULL` |
 | `Option<f64>` | `REAL NULL` |
+| `bool` | `INTEGER NOT NULL` (0 or 1) |
 
 Any other field type is a compile error pointing at the field. Add support
 here when a new shape comes up; keeping the universe narrow keeps the bind
@@ -112,9 +114,10 @@ pub struct SlackAttachmentRow {
 }
 ```
 
-emits the table DDL, two index DDLs, the `BulkUpsertable` impl, and the
-`blob_cas::CasEdgeRow` impl with `OWNING_COLUMN = "message_uuid"` and
-`REF_COLUMN = "file_id"`.
+emits the `BulkUpsertable` impl and the `blob_cas::CasEdgeRow` impl with
+`OWNING_COLUMN = "message_uuid"` and `REF_COLUMN = "file_id"`. The trait
+supplies the rest from those two names: the table DDL, an index on each of
+the owning and ref columns, and the synth-PK recipe.
 
 ## `PortableTable`
 
@@ -125,6 +128,9 @@ as the single source of truth the same way `schema_raw.rs` is.
 
 - `#[portable_table(table = "grid_rows", primary_key = "uuid")]` — both keys
   required; `primary_key` accepts a comma-separated list for composite keys.
+- `index = "name:col1,col2"` inside it — repeatable; emitted as `INDEXES`,
+  separate from `DDL`, so each store decides whether to create them. A
+  column the table does not have is a compile error.
 - `#[col(sql = "VARCHAR(96)")]` — required on every field. Nullability is
   inferred from the Rust type: `Option<T>` is nullable, anything else gets
   `NOT NULL`.
@@ -137,7 +143,37 @@ as the single source of truth the same way `schema_raw.rs` is.
   the column it follows. Declares a column that lives in the DB but is
   computed at load time and so is absent from the struct.
 
-Emits module-level `TABLES`, `DDL` and `COLUMNS`.
+Emits module-level `TABLES`, `DDL`, `COLUMNS` and `INDEXES`, and an enum
+naming every column, the derived ones included: `GridRow` gets
+`GridRowColumn`, with `as_str`, `parse` and `ALL`. Code that picks a
+column names it by that enum rather than by a string.
+
+### Searched tables
+
+`search(...)` inside `#[portable_table(...)]` says the search bar reads
+the table, and the derive then writes a `datalib_query::table::SearchTable`
+for it: the keys, the default order and what free text matches, all from
+the table's own columns. Every column named must exist, or it is a
+compile error.
+
+- `search(order = "touched_at_utc desc, uuid desc", ...)` — required: the
+  rows' order when nobody asks for one. Its first column is also a
+  group's newest row.
+- `range = "created_at_utc"` — the stamp `before:` and `after:` compare.
+- `qmd` — free text goes to the table's qmd index. Without it, at least
+  one column must say `like`.
+
+On a `#[col(...)]` or a `#[derived(...)]`:
+
+- `search` (the key is the column's name) or `search = "convo"`; with
+  `alias = "old_name"` (repeatable) for a spelling people already type,
+  and `uuid` when a value may come as `slug-uuid`.
+  On an `enum` column the key takes only the enum's words
+  (`severity:eror` is refused with the list), read off its
+  `strum::VariantArray`.
+- `sort_by = "created_at_utc"` — sorts and groups by this twin instead.
+- `is = "document"` — `is:document` keeps the rows where it is true.
+- `like` — free text is a case-insensitive substring of this column.
 
 The `BulkUpsertable` impl is **skipped for a composite primary key, and
 for an integer one**: `BulkUpsertable` keys on one column by contract
@@ -146,3 +182,13 @@ for an integer one**: `BulkUpsertable` keys on one column by contract
 store's `log` on `seq`, an `INTEGER` the store assigns as the rowid.
 Such a table still gets its DDL and column metadata; it just keeps
 writing itself.
+
+## `RawStoreHandle`
+
+Not a table derive. On a struct that holds a store's handles it
+implements `datalib_etl::store_handle::RawStoreHandle` by listing every
+`SqlitePool` and `BlobCas` field (an `Option` of either included, and a
+nested `EntityStore` / `CasEntityStore` contributing its own), in
+declaration order, so `close_all` closes every one of them. The point is
+that nothing hand-kept can forget a store: a handle that grows a second
+pool closes it without anyone editing a list.

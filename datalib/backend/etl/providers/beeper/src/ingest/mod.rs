@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use datalib_etl::download_run::DownloadRun;
+use datalib_etl::run_problems::{self, RunProblems};
 use serde::Serialize;
 use serde_json::json;
 use tracing::{info, instrument};
@@ -33,9 +34,9 @@ fn dirs_home() -> Option<PathBuf> {
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     /// Canonical network names to ingest. Empty = none (refuse;
     /// caller probably forgot to configure). Order doesn't matter.
@@ -43,9 +44,9 @@ pub struct FetchOptions {
     /// Override for the Beeper Texts data directory. Defaults to
     /// [`default_beeper_data_dir`].
     pub beeper_data_dir: Option<PathBuf>,
-    /// Download cached media bytes into the `blobs` table. When
-    /// false, blob rows are pre-seeded with metadata + source URL
-    /// only.
+    /// Copy cached media bytes into the blob CAS. When false, each
+    /// attachment still gets its `beeper_media_attachments` edge, with
+    /// a NULL `blake3`.
     pub media: bool,
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
@@ -87,6 +88,11 @@ pub struct FetchSummary {
     db = %opts.db.pool().connect_options().get_filename().display()
 ))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_beeper(opts, found)).await
+}
+
+async fn read_beeper(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     if opts.sources.is_empty() {
         anyhow::bail!("no sources configured; set e.g. `sources: [\"signal\", \"googlechat\"]`");
     }
@@ -119,7 +125,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let mut summary = FetchSummary::default();
     let result = (async {
-        index_db::ingest(
+        let unmatched = index_db::ingest(
             &index_db_path,
             &dst,
             &media_root,
@@ -127,6 +133,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             opts.media,
             &mut summary,
             &opts.progress,
+            &found,
         )
         .await?;
         // After the index.db spine is in place, walk every
@@ -134,7 +141,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // backfill external_event_id by joining on mxid. Cloud
         // bridges (slack/googlechat/…) have no local megabridge file
         // and are silently skipped.
-        megabridge::enrich(&beeper_dir, &dst, &opts.sources, &mut summary).await?;
+        megabridge::enrich(&beeper_dir, &dst, &opts.sources, &mut summary, &found).await?;
+        found.config(unmatched);
         Ok::<(), anyhow::Error>(())
     })
     .await;

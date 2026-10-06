@@ -20,11 +20,10 @@ use app_schema::runs::{
 /// the write (~0.3ms per row on a plain-SQLite file, measured).
 const FLUSH_EVERY: Duration = Duration::from_millis(200);
 
-/// How far back a snapshot looks for samples. A rate is a live
-/// question, and the snapshot is read on every `manage.rows` frame —
-/// several times a second during a run — so the window query must not
-/// scan a day-long run's every sample each time.
-const RATE_WINDOW: Duration = Duration::from_secs(10 * 60);
+/// How far back a snapshot reads the `queued` gauge, for an estimate of
+/// when a step's queue empties. Long enough that one slow page does not
+/// swing it, short enough that it follows a step that changes pace.
+pub const QUEUE_WINDOW: Duration = Duration::from_secs(2 * 60);
 
 /// The floor between two samples of one metric series. A series that
 /// changes every flush would otherwise write five rows a second for as
@@ -55,36 +54,16 @@ const RETRY_AFTER: Duration = Duration::from_millis(50);
 const OPEN_LOCK_WAIT: Duration = Duration::from_secs(30);
 const OPEN_LOCK_POLL: Duration = Duration::from_millis(20);
 
-fn connect_string(path: &Path) -> String {
-    // Percent-encode only what would otherwise terminate the path or be
-    // decoded away. SQLite percent-decodes the path portion of a URI, so
-    // a bare `%` in a directory name would eat the next two characters.
-    // Spaces are left alone — SQLite accepts them, and data roots have
-    // them (this repo lives under one).
-    let escaped = path
-        .display()
-        .to_string()
-        .replace('%', "%25")
-        .replace('?', "%3f")
-        .replace('#', "%23");
-    format!("file:{escaped}?doltlite_engine=sqlite")
-}
-
 fn options(path: &Path, create: bool) -> SqliteConnectOptions {
-    // `filename`, not `from_str`: sqlx's *URL parser* rejects query
-    // parameters it does not recognise ("unknown query parameter
-    // `doltlite_engine`"), while the filename field is handed to
-    // `sqlite3_open_v2` untouched. The URI has to go in through the door
-    // sqlx does not inspect.
     SqliteConnectOptions::new()
-        .filename(connect_string(path))
+        .filename(datalib_runtime::plain_sqlite::uri(path))
         .create_if_missing(create)
-        // Doltlite's plain-SQLite engine answers `wal` to a request for
-        // WAL and stays in rollback-journal mode, so the mode is said as
-        // it is. `runs_two_process_test` is the measurement.
+        // What the plain-SQLite engine really does: asked for WAL it
+        // answers `wal` and stays in rollback-journal mode, so a reader
+        // waits out a writer's commit (`BUSY_TIMEOUT`).
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
         // Nothing here is load-bearing, so nothing is worth an fsync. A
-        // file torn by a power cut is deleted and remade on the next
+        // file torn by a power cut is emptied and remade on the next
         // open (see `open_or_recreate`).
         .synchronous(sqlx::sqlite::SqliteSynchronous::Off)
         .busy_timeout(BUSY_TIMEOUT)
@@ -113,16 +92,8 @@ pub(crate) async fn open_existing(path: &Path) -> Result<SqlitePool, sqlx::Error
         .await
 }
 
-fn remove_with_sidecars(path: &Path) {
-    for suffix in ["", "-wal", "-shm", "-journal"] {
-        let mut p = path.as_os_str().to_os_string();
-        p.push(suffix);
-        let _ = std::fs::remove_file(PathBuf::from(p));
-    }
-}
-
 /// Where the claim on *deciding about* the store lives. Not one of the
-/// store's own sidecars, so remaking the store leaves it alone.
+/// store's own sidecars.
 fn open_lock_path(path: &Path) -> PathBuf {
     let mut p = path.as_os_str().to_os_string();
     p.push(".open-lock");
@@ -130,11 +101,10 @@ fn open_lock_path(path: &Path) -> PathBuf {
 }
 
 /// Hold the right to decide what happens to the file, for as long as
-/// the returned lock lives. [`open_or_recreate`] can delete the store
-/// and remake it, and doing that under another process's open leaves
-/// that process writing to an inode nobody will ever read — silently,
-/// until one of its statements fails with "database disk image is
-/// malformed".
+/// the returned lock lives. [`open_or_recreate`] reads the file and then
+/// may empty it; two processes doing that at once would each find the
+/// old version, and the second would empty the store the first had
+/// already remade and begun writing.
 ///
 /// A lock that cannot be taken is not worth failing an open over: the
 /// store is not load-bearing, and the window it guards is one process
@@ -156,11 +126,11 @@ async fn hold_open_lock(path: &Path) -> Option<FileLock> {
     }
 }
 
-/// Open the store and make sure its schema is there, replacing a file
-/// that will not open or was written by another schema version.
-/// `synchronous=Off` means an OS crash can leave an unreadable file
-/// behind, and losing old logs is a better outcome than a run that
-/// refuses to start.
+/// Open the store and make sure its schema is there, emptying a file
+/// that will not read or was written by another schema version, after
+/// keeping a copy of it. `synchronous=Off` means an OS crash can leave
+/// an unreadable file behind, and losing old logs is a better outcome
+/// than a run that refuses to start.
 async fn open_or_recreate(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     let _deciding = hold_open_lock(path).await;
     let why = match open_or_create(path).await {
@@ -180,16 +150,171 @@ async fn open_or_recreate(path: &Path) -> Result<SqlitePool, sqlx::Error> {
         },
         Err(e) => e.to_string(),
     };
-    tracing::warn!(
-        path = %path.display(),
-        why,
-        "run store: replacing the file"
-    );
-    remove_with_sidecars(path);
+    tracing::warn!(path = %path.display(), why, "run store: emptying the file");
+    let emptying = emptying_of(path)?;
+    keep_a_copy(path, &emptying).await;
+    empty_in_place(path, &emptying).await?;
     let pool = open_or_create(path).await?;
     install_schema(&pool).await?;
     write_meta(&pool).await?;
     Ok(pool)
+}
+
+/// How a file this build will not use is emptied. Never by deleting
+/// it: a reader that opened it first — `datalib-http`'s reads take no
+/// lock — stays on the old inode, where nobody holds a lock, so it
+/// reads the new file's journal as a crashed writer's, rolls it back
+/// and deletes it, and the new writer's commit fails.
+#[derive(Debug, PartialEq, Eq)]
+enum Emptying {
+    /// SQLite's own reset (`SQLITE_DBCONFIG_RESET_DATABASE`, then
+    /// `VACUUM`), which takes the file's lock like any write and works
+    /// on a corrupt page.
+    Reset,
+    /// Cut the file to nothing, and its journal with it. Doltlite reads
+    /// a file without SQLite's header as its own format and refuses the
+    /// reset, and it refuses every other connection's use of the file
+    /// the same way, so none can be reading or writing it.
+    Truncate,
+}
+
+fn emptying_for(head: &[u8]) -> Emptying {
+    if head.starts_with(b"SQLite format 3\0") {
+        Emptying::Reset
+    } else {
+        Emptying::Truncate
+    }
+}
+
+fn emptying_of(path: &Path) -> Result<Emptying, sqlx::Error> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(16);
+    std::fs::File::open(path)
+        .and_then(|f| f.take(16).read_to_end(&mut head))
+        .map_err(sqlx::Error::Io)?;
+    Ok(emptying_for(&head))
+}
+
+/// Where a file about to be emptied is kept: beside it, named for the
+/// moment it was set aside, in UTC. Not `runs.sqlite…`, which the app's
+/// file watcher reads as a write to the store.
+fn backup_path(path: &Path, now: &datalib_time::IsoOffsetTimestamp) -> PathBuf {
+    path.with_file_name(format!(
+        "runs.bak_{}.sqlite",
+        now.inner().naive_utc().format("%Y%m%dT%H%M%SZ")
+    ))
+}
+
+/// Copied, never renamed: a reader that opened the file keeps it under
+/// its new name but looks for its journal by the old one, which is the
+/// trap [`Emptying`] describes. A copy that fails costs the old lines
+/// and nothing else.
+async fn keep_a_copy(path: &Path, emptying: &Emptying) {
+    let to = backup_path(path, &datalib_time::IsoOffsetTimestamp::now_local());
+    let kept = match emptying {
+        Emptying::Reset => vacuum_into(path, &to).await.map_err(|e| e.to_string()),
+        Emptying::Truncate => std::fs::copy(path, &to)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+    };
+    match kept {
+        Ok(()) => tracing::warn!(copy = %to.display(), "run store: kept a copy of the old file"),
+        Err(why) => tracing::error!(
+            copy = %to.display(),
+            why,
+            "run store: could not keep a copy of the old file; its lines are gone"
+        ),
+    }
+}
+
+/// `VACUUM INTO` reads under the file's lock, so a writer of the old
+/// build still attached cannot tear the copy. The target names the
+/// plain-SQLite engine the way every open of this store does, so the
+/// copy is one a stock `sqlite3` reads.
+async fn vacuum_into(from: &Path, to: &Path) -> Result<(), sqlx::Error> {
+    use sqlx::Connection;
+
+    let bare = SqliteConnectOptions::new()
+        .filename(datalib_runtime::plain_sqlite::uri(from))
+        .busy_timeout(BUSY_TIMEOUT);
+    let mut conn = sqlx::sqlite::SqliteConnection::connect_with(&bare).await?;
+    let copied = sqlx::query("VACUUM INTO ?")
+        .bind(datalib_runtime::plain_sqlite::uri(to))
+        .execute(&mut conn)
+        .await;
+    conn.close().await?;
+    copied.map(|_| ())
+}
+
+async fn empty_in_place(path: &Path, emptying: &Emptying) -> Result<(), sqlx::Error> {
+    match emptying {
+        Emptying::Reset => reset(path).await,
+        Emptying::Truncate => {
+            let mut journal = path.as_os_str().to_os_string();
+            journal.push("-journal");
+            match std::fs::remove_file(journal) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(sqlx::Error::Io(e))
+                }
+                _ => {}
+            }
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .and_then(|f| f.set_len(0))
+                .map_err(sqlx::Error::Io)
+        }
+    }
+}
+
+/// A connection of its own, without [`options`]' pragmas: setting the
+/// journal mode reads the header, so a file too broken to read would
+/// refuse the connection that is meant to empty it.
+async fn reset(path: &Path) -> Result<(), sqlx::Error> {
+    use sqlx::Connection;
+
+    let bare = SqliteConnectOptions::new()
+        .filename(datalib_runtime::plain_sqlite::uri(path))
+        .busy_timeout(BUSY_TIMEOUT);
+    let mut conn = sqlx::sqlite::SqliteConnection::connect_with(&bare).await?;
+    set_reset_database(&mut conn, true).await?;
+    let vacuumed = sqlx::raw_sql("VACUUM").execute(&mut conn).await;
+    conn.close().await?;
+    vacuumed.map(|_| ())
+}
+
+/// Doltlite is the SQLite API; the entry point is declared here, as
+/// `etl/src/doltlite_raw.rs` does, because `libsqlite3-sys` is not a
+/// direct dependency.
+async fn set_reset_database(
+    conn: &mut sqlx::sqlite::SqliteConnection,
+    on: bool,
+) -> Result<(), sqlx::Error> {
+    use std::ffi::{c_int, c_void};
+
+    extern "C" {
+        fn sqlite3_db_config(db: *mut c_void, op: c_int, ...) -> c_int;
+    }
+    const SQLITE_DBCONFIG_RESET_DATABASE: c_int = 1009;
+
+    let mut handle = conn.lock_handle().await?;
+    let db = handle.as_raw_handle().as_ptr() as *mut c_void;
+    // Safety: `db` is the live connection sqlx just handed us, and this
+    // op takes an int and an `int*` (which may be null).
+    let rc = unsafe {
+        sqlite3_db_config(
+            db,
+            SQLITE_DBCONFIG_RESET_DATABASE,
+            c_int::from(on),
+            std::ptr::null_mut::<c_int>(),
+        )
+    };
+    if rc != 0 {
+        return Err(sqlx::Error::Protocol(format!(
+            "SQLITE_DBCONFIG_RESET_DATABASE {on}: sqlite rc {rc}"
+        )));
+    }
+    Ok(())
 }
 
 /// Which build wrote this file, beside its tables. The ladder position
@@ -282,9 +407,12 @@ pub struct Snapshot {
     /// When each step last logged anything (UTC), for telling a step
     /// that is busy but not advancing from one that has gone silent.
     pub last_log_at: BTreeMap<String, String>,
-    /// The two newest samples of every series — enough for a rate.
-    /// Oldest first within a series.
-    pub recent_samples: Vec<MetricSampleRow>,
+    /// Every sample of a queue's series — `datalib_metrics::QUEUED`, and
+    /// the running totals of what came off it, `DONE` and `DEQUEUED` — from the last
+    /// [`QUEUE_WINDOW`], plus the newest one before it, per series: where
+    /// each stood when the window opened and how it moved since. Oldest
+    /// first within a series.
+    pub queue_history: Vec<MetricSampleRow>,
 }
 
 pub async fn snapshot(data_root: &Path) -> Snapshot {
@@ -402,6 +530,16 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
 /// step that has never reported the series is absent — the reader
 /// draws "not counted", never a false zero.
 pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
+    newest_per_series(data_root, Some(name)).await
+}
+
+/// The newest sample of every series every step has reported, across
+/// every run the store keeps: what `GET /metrics` serves.
+pub async fn latest_metrics(data_root: &Path) -> Vec<MetricRow> {
+    newest_per_series(data_root, None).await
+}
+
+async fn newest_per_series(data_root: &Path, name: Option<&str>) -> Vec<MetricRow> {
     let path = runs_path(data_root);
     if !path.exists() {
         return Vec::new();
@@ -409,16 +547,16 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
     let Ok(pool) = open_existing(&path).await else {
         return Vec::new();
     };
-    // Every sample of the series, newest run first within a (step,
-    // labels) pair; the first of each pair is the answer. Two runs
+    // Every sample, newest run first within a (step, name, labels)
+    // series; the first of each is the answer. Two runs
     // started in the same instant — a test, or two ticks of a wall
     // clock at second resolution — fall back to the order the store
     // recorded them in.
     let rows = sqlx::query(
         "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
          FROM metrics m JOIN runs r ON r.run_id = m.run_id \
-         WHERE m.name = ? \
-         ORDER BY m.step, m.labels, r.started_at_utc DESC, r.rowid DESC",
+         WHERE ?1 IS NULL OR m.name = ?1 \
+         ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC",
     )
     .bind(name)
     .fetch_all(&pool)
@@ -428,17 +566,18 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
     let mut out: Vec<MetricRow> = Vec::new();
     for r in &rows {
         let step: String = r.get("step");
+        let name: String = r.get("name");
         let labels: String = r.get("labels");
         if out
             .last()
-            .is_some_and(|m| m.step == step && m.labels == labels)
+            .is_some_and(|m| m.step == step && m.name == name && m.labels == labels)
         {
             continue;
         }
         out.push(MetricRow {
             run_id: r.get("run_id"),
             step,
-            name: r.get("name"),
+            name,
             labels,
             value: r.get("value"),
             updated_at_utc: r.get("updated_at_utc"),
@@ -446,6 +585,48 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
         });
     }
     out
+}
+
+/// One metric series per (step, labels), across every run the store
+/// keeps, from `since_utc` on — plus the newest sample before it, so a
+/// series that has not moved inside the window still has the value it
+/// held there. Oldest first within a series; compacted, so a reader
+/// carries each value forward rather than assuming an interval.
+pub async fn metric_history(data_root: &Path, name: &str, since_utc: &str) -> Vec<MetricSampleRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT run_id, step, labels, ts_utc, tz_offset, value FROM ( \
+           SELECT *, ROW_NUMBER() OVER (PARTITION BY step, labels ORDER BY ts_utc DESC) AS rn \
+           FROM metric_samples WHERE name = ?1 AND ts_utc <= ?2) \
+         WHERE rn = 1 \
+         UNION ALL \
+         SELECT run_id, step, labels, ts_utc, tz_offset, value \
+           FROM metric_samples WHERE name = ?1 AND ts_utc > ?2 \
+         ORDER BY step, labels, ts_utc",
+    )
+    .bind(name)
+    .bind(since_utc)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| MetricSampleRow {
+            run_id: r.get("run_id"),
+            step: r.get("step"),
+            name: name.to_string(),
+            labels: r.get("labels"),
+            ts_utc: r.get("ts_utc"),
+            tz_offset: r.get("tz_offset"),
+            value: r.get("value"),
+        })
+        .collect()
 }
 
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
@@ -519,21 +700,28 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     .iter()
     .map(|r| (r.get::<String, _>("step"), r.get::<String, _>("ts_utc")))
     .collect();
-    // The two newest per series, by a window over the run's recent
-    // samples only. Text order is instant order, so `ts` sorts and the
-    // cutoff is a plain comparison.
-    let (cutoff, _) = datalib_time::IsoOffsetTimestamp::now_local()
-        .bump_micros(-(RATE_WINDOW.as_micros() as i64))
+    let (queue_cutoff, _) = datalib_time::IsoOffsetTimestamp::now_local()
+        .bump_micros(-(QUEUE_WINDOW.as_micros() as i64))
         .to_utc_and_offset();
-    let recent_samples = sqlx::query(
+    // The names are bound from `datalib_metrics`, the one spelling the
+    // runner writes and the ETA reads: a series this query missed would
+    // not fail, it would make the estimate count a whole run as taken
+    // off inside the window.
+    let queue_history = sqlx::query(
         "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
-           SELECT *, ROW_NUMBER() OVER \
-             (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
-           FROM metric_samples WHERE run_id = ? AND ts_utc > ?) \
-         WHERE rn <= 2 ORDER BY step, name, labels, ts_utc",
+           SELECT *, ROW_NUMBER() OVER (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
+           FROM metric_samples WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc <= ?2) \
+         WHERE rn = 1 \
+         UNION ALL \
+         SELECT step, name, labels, ts_utc, tz_offset, value FROM metric_samples \
+           WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc > ?2 \
+         ORDER BY step, name, labels, ts_utc",
     )
     .bind(&run_id)
-    .bind(&cutoff)
+    .bind(&queue_cutoff)
+    .bind(datalib_metrics::QUEUED)
+    .bind(datalib_metrics::DONE)
+    .bind(datalib_metrics::DEQUEUED)
     .fetch_all(pool)
     .await?
     .iter()
@@ -556,8 +744,86 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         metrics,
         errors,
         last_log_at,
-        recent_samples,
+        queue_history,
     })
+}
+
+/// Recent runs that any of `steps` took part in, newest first: the runs
+/// a group's dashboard can show.
+pub async fn runs_of_steps(data_root: &Path, steps: &[String], limit: i64) -> Vec<RunRow> {
+    let mut out: Vec<RunRow> = Vec::new();
+    for step in steps {
+        for r in runs(data_root, Some(step), limit).await {
+            if !out.iter().any(|x| x.run_id == r.run_id) {
+                out.push(r);
+            }
+        }
+    }
+    out.sort_by(|a, b| b.started_at_utc.cmp(&a.started_at_utc));
+    out.truncate(limit.max(0) as usize);
+    out
+}
+
+/// Every sample of every series one step reported in one run, oldest
+/// first within a series.
+pub async fn step_samples(data_root: &Path, run_id: &str, step: &str) -> Vec<MetricSampleRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT name, labels, ts_utc, tz_offset, value FROM metric_samples \
+         WHERE run_id = ? AND step = ? ORDER BY name, labels, ts_utc",
+    )
+    .bind(run_id)
+    .bind(step)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| MetricSampleRow {
+            run_id: run_id.to_string(),
+            step: step.to_string(),
+            name: r.get("name"),
+            labels: r.get("labels"),
+            ts_utc: r.get("ts_utc"),
+            tz_offset: r.get("tz_offset"),
+            value: r.get("value"),
+        })
+        .collect()
+}
+
+/// When each `warn` and `error` line one step wrote in one run was
+/// written, oldest first, as `(level, ts_utc)`.
+pub async fn step_problem_lines(
+    data_root: &Path,
+    run_id: &str,
+    step: &str,
+) -> Vec<(String, String)> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT level, ts_utc FROM log \
+         WHERE run_id = ? AND step = ? AND level IN ('warn', 'error') ORDER BY ts_utc",
+    )
+    .bind(run_id)
+    .bind(step)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| (r.get::<String, _>("level"), r.get::<String, _>("ts_utc")))
+        .collect()
 }
 
 /// One line by its `seq`, with what its process says about it.
@@ -728,8 +994,8 @@ impl std::ops::Deref for LogLine {
 
 /// The columns [`log_line_from`] reads, for a query that selects them
 /// itself: `log` as `l`, joined to `processes` as `p`.
-pub(crate) const LOG_LINE_COLUMNS: &str = "l.seq, l.run_id, l.process_id, l.step, l.attempt, \
-     l.ts_utc, l.tz_offset, l.stream, l.level, l.target, l.thread, l.msg, l.fields, \
+pub(crate) const LOG_LINE_COLUMNS: &str = "l.seq, l.run_id, l.process_id, l.step, l.group_id, \
+     l.attempt, l.ts_utc, l.tz_offset, l.stream, l.level, l.target, l.thread, l.msg, l.fields, \
      p.process, p.git_hash";
 
 pub(crate) fn log_line_from(r: &sqlx::sqlite::SqliteRow) -> LogLine {
@@ -739,6 +1005,7 @@ pub(crate) fn log_line_from(r: &sqlx::sqlite::SqliteRow) -> LogLine {
             run_id: r.get("run_id"),
             process_id: r.get("process_id"),
             step: r.get("step"),
+            group_id: r.get("group_id"),
             attempt: r.get("attempt"),
             ts_utc: r.get("ts_utc"),
             tz_offset: r.get("tz_offset"),
@@ -777,6 +1044,10 @@ pub trait LogSink: Send + Sync {
     fn log(&self, row: LogRow);
 }
 
+/// Sent to the writer thread to have it flush now, and answered once
+/// that flush is over.
+type FlushAck = tokio::sync::oneshot::Sender<()>;
+
 /// The thread behind a writer, and the handles that stop it. Dropping
 /// the sender tells the thread to flush once more and exit, which is
 /// what makes the final rows land. It must be dropped *before* joining
@@ -785,27 +1056,47 @@ pub trait LogSink: Send + Sync {
 struct Writer {
     process_id: String,
     pending: Shared,
-    stop: Mutex<Option<mpsc::Sender<()>>>,
+    flushes: Mutex<Option<mpsc::Sender<FlushAck>>>,
     handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl Writer {
+    /// Waits for the thread to open the store, so a store that will not
+    /// open is `None` here — where the caller says nothing will be
+    /// recorded — rather than a writer that takes every line and keeps
+    /// none of them.
     fn start(data_root: &Path, scope: Scope) -> Option<Self> {
         let path = runs_path(data_root);
         let process_id = scope.process.process_id.clone();
         let pending: Shared = Default::default();
         let (tx, rx) = mpsc::channel();
+        let (opened_tx, opened) = mpsc::sync_channel(1);
         let handle = std::thread::Builder::new()
             .name("run-store".into())
             .spawn({
                 let pending = pending.clone();
-                move || writer_loop(path, scope, pending, rx)
+                let path = path.clone();
+                move || writer_loop(path, scope, pending, rx, opened_tx)
             })
             .ok()?;
+        let failed = match opened.recv() {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(e),
+            Err(_) => Some("the writer thread ended before opening it".to_string()),
+        };
+        if let Some(error) = failed {
+            let _ = handle.join();
+            tracing::error!(
+                path = %path.display(),
+                error,
+                "run store: could not open it; nothing will be recorded"
+            );
+            return None;
+        }
         Some(Self {
             process_id,
             pending,
-            stop: Mutex::new(Some(tx)),
+            flushes: Mutex::new(Some(tx)),
             handle: Mutex::new(Some(handle)),
         })
     }
@@ -813,12 +1104,27 @@ impl Writer {
     fn log(&self, row: LogRow) {
         self.pending.lock().expect("run store mutex").logs.push(row);
     }
+
+    async fn flush(&self) {
+        let (ack, flushed) = tokio::sync::oneshot::channel();
+        let sent = self
+            .flushes
+            .lock()
+            .expect("run store flush mutex")
+            .as_ref()
+            .is_some_and(|tx| tx.send(ack).is_ok());
+        // A thread that has gone drops the ack, which ends the wait as
+        // surely as an answer.
+        if sent {
+            let _ = flushed.await;
+        }
+    }
 }
 
 impl Drop for Writer {
     fn drop(&mut self) {
         // Sender first — that disconnect is the loop's exit signal.
-        drop(self.stop.lock().expect("run store stop mutex").take());
+        drop(self.flushes.lock().expect("run store flush mutex").take());
         let handle = self.handle.lock().expect("run store handle mutex").take();
         if let Some(h) = handle {
             let _ = h.join();
@@ -910,6 +1216,12 @@ impl RunWriter {
             .insert(row.process_id.clone(), row);
     }
 
+    /// Returns once everything published before the call is committed,
+    /// or lost with a warning.
+    pub async fn flush(&self) {
+        self.0.flush().await;
+    }
+
     /// The runner's own process id, for a line it writes about itself.
     pub fn process_id(&self) -> &str {
         &self.0.process_id
@@ -962,6 +1274,12 @@ impl ProcessLogWriter {
 
     pub fn log(&self, row: LogRow) {
         self.0.log(row);
+    }
+
+    /// Returns once everything logged before the call is committed, or
+    /// lost with a warning.
+    pub async fn flush(&self) {
+        self.0.flush().await;
     }
 
     /// A process this one records on behalf of — a page of the app,
@@ -1021,20 +1339,31 @@ struct SeriesState {
     current: MetricRow,
 }
 
-fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, stop: mpsc::Receiver<()>) {
-    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+fn writer_loop(
+    path: PathBuf,
+    scope: Scope,
+    pending: Shared,
+    flushes: mpsc::Receiver<FlushAck>,
+    opened: mpsc::SyncSender<Result<(), String>>,
+) {
+    let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-    else {
-        return;
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            let _ = opened.send(Err(format!("build its runtime: {e}")));
+            return;
+        }
     };
     let pool = match rt.block_on(open_or_recreate(&path)) {
         Ok(pool) => pool,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "run store: open failed; nothing recorded");
+            let _ = opened.send(Err(e.to_string()));
             return;
         }
     };
+    let _ = opened.send(Ok(()));
     if let Err(e) = rt.block_on(begin(&pool, &scope)) {
         tracing::warn!(error = %e, "run store: could not record the start");
     }
@@ -1042,12 +1371,13 @@ fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, stop: mpsc::Receive
     let mut series: HashMap<SeriesKey, SeriesState> = HashMap::new();
     let mut last_prune = Instant::now();
     loop {
-        // Wake on the interval, or immediately when the writer is
-        // dropped — whose disconnect is the signal to flush and go.
-        let done = matches!(
-            stop.recv_timeout(FLUSH_EVERY),
-            Err(RecvTimeoutError::Disconnected) | Ok(())
-        );
+        // Wake on the interval, on a flush asked for, or when the writer
+        // is dropped — whose disconnect is the signal to flush and go.
+        let (ack, done) = match flushes.recv_timeout(FLUSH_EVERY) {
+            Ok(ack) => (Some(ack), false),
+            Err(RecvTimeoutError::Timeout) => (None, false),
+            Err(RecvTimeoutError::Disconnected) => (None, true),
+        };
         let batch = {
             let mut p = pending.lock().expect("run store mutex");
             std::mem::take(&mut *p)
@@ -1060,6 +1390,9 @@ fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, stop: mpsc::Receive
             // them, and a silent loss here is what makes anyone
             // distrust the store.
             tracing::warn!(error = %e, lines, "run store: write failed twice; the batch is lost");
+        }
+        if let Some(ack) = ack {
+            let _ = ack.send(());
         }
         if done {
             break;
@@ -1447,7 +1780,9 @@ async fn flush(
         && batch.processes.is_empty()
         && batch.logs.is_empty()
         && batch.metrics.is_empty();
-    if empty && !last {
+    let now = Instant::now();
+    let plan = plan_series(series, &batch.metrics, now, last);
+    if empty && !last && plan.samples.is_empty() {
         return Ok(());
     }
     let run_id = scope.run_id();
@@ -1509,13 +1844,14 @@ async fn flush(
             l.process_id.as_str()
         };
         sqlx::query(
-            "INSERT INTO log (run_id, process_id, step, attempt, ts_utc, tz_offset, stream, level, \
-                              target, thread, msg, fields) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO log (run_id, process_id, step, group_id, attempt, ts_utc, tz_offset, \
+                              stream, level, target, thread, msg, fields) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(run_id)
         .bind(process_id)
         .bind(&l.step)
+        .bind(&l.group_id)
         .bind(l.attempt)
         .bind(&l.ts_utc)
         .bind(&l.tz_offset)
@@ -1528,8 +1864,6 @@ async fn flush(
         .execute(&mut *tx)
         .await?;
     }
-    let now = Instant::now();
-    let plan = plan_series(series, &batch.metrics, now, last);
     for m in batch.metrics.values() {
         sqlx::query(
             "INSERT INTO metrics (run_id, step, name, labels, value, updated_at_utc, tz_offset) \
@@ -1565,9 +1899,13 @@ struct SeriesPlan {
 }
 
 /// A sample is due when a series has moved and the floor between
-/// samples has passed — and, on the last flush of a run, once more for
-/// whatever each series ended at, however recent its previous sample:
-/// a rate drawn to the end of the run needs that point.
+/// samples has passed. A move the floor held back is written once the
+/// floor has passed, even if the series has not moved again — at the
+/// stamp it moved at: a queue that fills and then empties in one pass
+/// would otherwise keep its peak in the history until its next move. On
+/// the last flush of a run, whatever each series ended at is written
+/// however recent its previous sample: a rate drawn to the end of the
+/// run needs that point.
 fn plan_series(
     series: &HashMap<SeriesKey, SeriesState>,
     batch: &BTreeMap<SeriesKey, MetricRow>,
@@ -1605,21 +1943,20 @@ fn plan_series(
             },
         ));
     }
-    if last {
-        for (key, s) in series {
-            if batch.contains_key(key) || s.current.value == s.last_sample_value {
-                continue;
-            }
-            plan.samples.push(s.current.clone());
-            plan.next.push((
-                key.clone(),
-                SeriesState {
-                    last_sample_at: s.last_sample_at,
-                    last_sample_value: s.current.value,
-                    current: s.current.clone(),
-                },
-            ));
+    for (key, s) in series {
+        let held_back = !batch.contains_key(key) && s.current.value != s.last_sample_value;
+        if !held_back || !(last || now - s.last_sample_at >= SAMPLE_EVERY) {
+            continue;
         }
+        plan.samples.push(s.current.clone());
+        plan.next.push((
+            key.clone(),
+            SeriesState {
+                last_sample_at: now,
+                last_sample_value: s.current.value,
+                current: s.current.clone(),
+            },
+        ));
     }
     plan
 }
@@ -1647,4 +1984,138 @@ async fn insert_sample(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A queue that fills and then empties within the sample floor: the
+    /// drop is held back, then written once the floor has passed — with
+    /// nothing new in the batch, and at the stamp it happened — rather
+    /// than leaving the peak in the history until the queue next moves.
+    #[test]
+    fn a_move_the_floor_held_back_is_written_once_it_passes() {
+        let key: SeriesKey = ("s".into(), "queued".into(), String::new());
+        let row = |value: i64, at: &str| MetricRow {
+            step: "s".into(),
+            name: "queued".into(),
+            value,
+            updated_at_utc: at.into(),
+            ..Default::default()
+        };
+        let t0 = Instant::now();
+        let mut series = HashMap::new();
+        let apply = |series: &mut HashMap<SeriesKey, SeriesState>, plan: SeriesPlan| {
+            for (k, st) in plan.next {
+                series.insert(k, st);
+            }
+            plan.samples
+                .iter()
+                .map(|m| (m.value, m.updated_at_utc.clone()))
+                .collect::<Vec<_>>()
+        };
+        let batch = |m: MetricRow| BTreeMap::from([(key.clone(), m)]);
+
+        let first = plan_series(&series, &batch(row(50, "t1")), t0, false);
+        assert_eq!(apply(&mut series, first), [(50, "t1".to_string())]);
+        let inside = plan_series(
+            &series,
+            &batch(row(0, "t2")),
+            t0 + Duration::from_secs(1),
+            false,
+        );
+        assert_eq!(apply(&mut series, inside), [], "inside the floor");
+        let quiet = plan_series(
+            &series,
+            &BTreeMap::new(),
+            t0 + Duration::from_secs(3),
+            false,
+        );
+        assert_eq!(apply(&mut series, quiet), [], "still inside the floor");
+        let after = plan_series(&series, &BTreeMap::new(), t0 + SAMPLE_EVERY, false);
+        assert_eq!(apply(&mut series, after), [(0, "t2".to_string())]);
+        let again = plan_series(&series, &BTreeMap::new(), t0 + SAMPLE_EVERY * 3, false);
+        assert_eq!(apply(&mut series, again), [], "written once");
+    }
+
+    /// A store from another schema version, with a reader that opened
+    /// it before a writer remade it — `datalib-http`'s reads take no
+    /// lock. When the remake unlinked the file, the reader stayed on
+    /// the old inode, took the new file's journal for a crashed
+    /// writer's, rolled it back and deleted it, and the writer's commit
+    /// failed with 5898 (`SQLITE_IOERR_DELETE_NOENT`). CI run
+    /// 36441513702 lost a whole writer's lines this way.
+    #[tokio::test]
+    async fn a_reader_open_across_the_remake_leaves_the_writers_journal_alone() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("runs.sqlite");
+        let planted = open_or_create(&path).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE ancient (x TEXT); PRAGMA user_version = 1")
+            .execute(&planted)
+            .await
+            .unwrap();
+        planted.close().await;
+
+        let reader = open_existing(&path).await.unwrap();
+        let tables = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'";
+        sqlx::query_scalar::<_, i64>(tables)
+            .fetch_one(&reader)
+            .await
+            .unwrap();
+
+        let writer = open_or_recreate(&path).await.unwrap();
+        let mut tx = writer.begin().await.unwrap();
+        sqlx::query(
+            "INSERT INTO log (process_id, attempt, ts_utc, level, msg) \
+             VALUES ('p', 0, 't', 'info', 'kept')",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::query_scalar::<_, i64>(tables)
+            .fetch_one(&reader)
+            .await
+            .unwrap();
+        tx.commit()
+            .await
+            .expect("the writer's commit, after a reader read mid-transaction");
+
+        let kept: Vec<String> = sqlx::query_scalar("SELECT msg FROM log")
+            .fetch_all(&reader)
+            .await
+            .unwrap();
+        assert_eq!(kept, ["kept"], "the reader sees the remade store");
+        reader.close().await;
+        writer.close().await;
+    }
+
+    /// The bytes of a file that is not a database are kept as they
+    /// were, beside the file emptied for the new store.
+    #[tokio::test]
+    async fn a_file_that_is_not_a_database_is_emptied_and_opens() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("runs.sqlite");
+        let junk = b"this is not a database, sqlite or otherwise";
+        std::fs::write(&path, junk).unwrap();
+        let pool = open_or_recreate(&path).await.expect("open the store");
+        assert!(schema_matches(&pool).await.unwrap());
+        pool.close().await;
+        let kept: Vec<_> = std::fs::read_dir(td.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.starts_with("runs.bak_"))
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(std::fs::read(td.path().join(&kept[0])).unwrap(), junk);
+    }
+
+    #[test]
+    fn the_copy_is_named_for_the_moment_in_utc() {
+        let at = datalib_time::parse_strict("2026-09-30T10:15:02-04:00").unwrap();
+        assert_eq!(
+            backup_path(Path::new("/r/system/runs/runs.sqlite"), &at),
+            Path::new("/r/system/runs/runs.bak_20260930T141502Z.sqlite")
+        );
+    }
 }

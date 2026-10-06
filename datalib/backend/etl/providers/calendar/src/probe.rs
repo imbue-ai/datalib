@@ -1,16 +1,27 @@
-//! "Test connection" for a calendar source: do these credentials reach
-//! the account, and which calendars can `calendars` name? The listing a
-//! download starts with and nothing more — no event is fetched.
+//! "Check connection" for a calendar source — do these credentials
+//! reach the account? — and the calendars `calendars` can name. Finding
+//! the account is the calendar listing on both methods, so a check runs
+//! it too and keeps only the account. No event is fetched.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use datalib_etl_calendar_config::{CalendarConfig, CalendarMethod};
-use datalib_probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
+use datalib_probe::{ProbeAccount, ProbeAsk, ProbeItem, ProbeItemKind, ProbeList, ProbeReport};
 use serde_json::Value;
 
 use crate::ingest::schema_raw::CalendarRow;
 use crate::ingest::{caldav, google, FetchSummary};
 
-pub async fn probe(config: &CalendarConfig) -> Result<ProbeReport> {
+pub async fn probe(config: &CalendarConfig, ask: ProbeAsk) -> Result<ProbeReport> {
+    let mut report = reach(config).await?;
+    match ask {
+        ProbeAsk::Account => report.items.clear(),
+        ProbeAsk::List(ProbeList::Calendars) => {}
+        ProbeAsk::List(other) => bail!("a calendar source has no `{}` list", other.as_str()),
+    }
+    Ok(report)
+}
+
+async fn reach(config: &CalendarConfig) -> Result<ProbeReport> {
     config.validate()?;
     let lk = &config.latchkey_settings;
     let mut summary = FetchSummary::default();

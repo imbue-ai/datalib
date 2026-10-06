@@ -5,8 +5,7 @@
 
 // Standalone debug A/B benchmark. Doesn't run under datalib-sync,
 // has no indicatif progress bars to corrupt, and emits its
-// measurements directly to stderr. See the sibling allow in
-// hack/sqlx_doltlite_loadtest/src/main.rs.
+// measurements directly to stderr.
 #![allow(clippy::disallowed_macros)]
 
 use std::ffi::{c_char, c_int, c_void, CString};

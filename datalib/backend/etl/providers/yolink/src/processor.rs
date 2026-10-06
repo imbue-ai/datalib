@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
@@ -42,18 +42,25 @@ impl DataProcessor for YolinkIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            sync: self.sync.clone(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        let pool = db.pool().clone();
+        ctx.run_store(pool, None, |_| async {
+            let now_ms = datalib_time::parse_strict(ctx.now)
+                .with_context(|| format!("yolink: run stamp {:?}", ctx.now))?
+                .inner()
+                .timestamp_millis();
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                sync: self.sync.clone(),
+                now_ms,
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "devices={} windows={} windows_failed={} readings={} errors={} requests={}",
+                s.devices, s.windows, s.windows_failed, s.readings, s.errors, s.requests,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "devices={} windows={} readings={} errors={} requests={}",
-            s.devices, s.windows, s.readings, s.errors, s.requests,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

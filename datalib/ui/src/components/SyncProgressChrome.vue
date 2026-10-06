@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // Lightweight sync indicator for the toolbar: a pulsing dot +
-// "syncing" while any request is open, sitting in the toolbar's flexible
-// space so it never shifts the page layout. Per-row progress lives on
+// "syncing" while any request is open, just left of the search box. Per-row progress lives on
 // the sources card; this only answers "is something running?". Click
 // reveals that card; the tooltip lists the open requests and who opened
 // each.
@@ -59,12 +58,16 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.15rem 0.6rem;
-  border: 1px solid var(--datalib-accent);
+  height: calc(var(--datalib-control-h) - 2px);
+  box-sizing: border-box;
+  padding: 0 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--datalib-accent) 45%, var(--datalib-border));
   border-radius: 9999px;
-  background: transparent;
+  background: var(--datalib-bg);
   color: var(--datalib-accent);
-  font-size: 0.78rem;
+  font: inherit;
+  font-size: var(--datalib-font-size-small);
+  font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
 }

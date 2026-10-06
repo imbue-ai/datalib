@@ -21,8 +21,6 @@ use crate::step::{
     StopSignal,
 };
 use crate::supervisor::record::{LastRun, Record};
-use crate::supervisor::tick::Budgets;
-use crate::version::tree_version;
 
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -57,9 +55,9 @@ impl RetryPolicy {
 
 pub struct Runner {
     pub data_root: PathBuf,
-    /// How many invocations of each class may run at once. Separate
-    /// budgets are what keep four downloads from starving the index.
-    pub budgets: Budgets,
+    /// Slots for named locks, over what the config declares: what
+    /// `--parallelism N` sets for `network` and `cpu`.
+    pub lock_slots: BTreeMap<String, usize>,
     pub sink: Arc<dyn EventSink>,
     pub retry: RetryPolicy,
     /// Extra environment applied to every subprocess step — run-wide
@@ -75,19 +73,23 @@ pub struct Runner {
     /// Where the loop re-reads its graph while it runs. `None` keeps the
     /// graph it was started with for the whole busy period.
     pub reload: Option<Arc<dyn crate::supervisor::reload::GraphSource>>,
+    /// How long the loop hears no announcement before it looks at its
+    /// store anyway (`supervisor::announce`).
+    pub backstop: Duration,
 }
 
 impl Runner {
     pub fn new(data_root: impl Into<PathBuf>) -> Self {
         Self {
             data_root: data_root.into(),
-            budgets: Budgets::from_parallelism(4),
+            lock_slots: BTreeMap::new(),
             sink: Arc::new(NoopSink),
             retry: RetryPolicy::default(),
             child_env: Arc::new(BTreeMap::new()),
             stop: None,
             stop_grace: crate::step::STOP_GRACE,
             reload: None,
+            backstop: crate::supervisor::announce::BACKSTOP,
         }
     }
 
@@ -111,40 +113,34 @@ impl Runner {
         self
     }
 
+    /// `--parallelism N`: N downloads and N renders at once, whatever the
+    /// config says of `network` and `cpu`.
+    pub fn parallelism(mut self, n: usize) -> Self {
+        for lock in [
+            crate::supervisor::locks::NETWORK,
+            crate::supervisor::locks::CPU,
+        ] {
+            self.lock_slots.insert(lock.to_string(), n);
+        }
+        self
+    }
+
     pub fn reload_from(mut self, source: Arc<dyn crate::supervisor::reload::GraphSource>) -> Self {
         self.reload = Some(source);
         self
     }
 }
 
-/// One `--reset` argument: a step id, optionally `+blobs` to take an
-/// ingest step's blob CAS with its store.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResetTarget {
-    pub step: StepId,
-    pub part: String,
-}
-
-impl ResetTarget {
-    pub fn parse(arg: &str) -> ResetTarget {
-        let (step, part) = arg.split_once('+').unwrap_or((arg, "store"));
-        ResetTarget {
-            step: step.to_string(),
-            part: part.to_string(),
-        }
-    }
-}
-
 impl Runner {
     /// Empty what the named steps wrote and forget that they ever ran, so
-    /// the next run does their work from the start. Each target is one
-    /// invocation of the step with `DATALIB_DAG_RESET` naming the part;
-    /// what that empties is the step's to say (`step_protocol.md` § Reset).
+    /// the next run does their work from the start. Each step is invoked
+    /// once with `DATALIB_DAG_RESET=store`; what that empties is the
+    /// step's to say (`step_protocol.md` § Reset).
     /// Nothing else runs: the caller holds the runner lock, which is what
     /// makes emptying a store safe.
-    pub async fn reset(&self, graph: &Graph, targets: &[ResetTarget]) -> Result<()> {
+    pub async fn reset(&self, graph: &Graph, steps: &[StepId]) -> Result<()> {
         let store = crate::supervisor::store::Store::open(&self.data_root).await?;
-        let result = self.reset_each(graph, targets, &store).await;
+        let result = self.reset_each(graph, steps, &store).await;
         store.close().await;
         result
     }
@@ -152,17 +148,17 @@ impl Runner {
     async fn reset_each(
         &self,
         graph: &Graph,
-        targets: &[ResetTarget],
+        steps: &[StepId],
         store: &crate::supervisor::store::Store,
     ) -> Result<()> {
-        for target in targets {
+        for step in steps {
             let &i = graph
                 .by_id
-                .get(&target.step)
-                .with_context(|| format!("--reset {}: no such step", target.step))?;
+                .get(step)
+                .with_context(|| format!("--reset {step}: no such step"))?;
             let spec = &graph.steps[i];
             let StepRun::Subprocess { argv, env, .. } = &spec.run else {
-                anyhow::bail!("--reset {}: not a subprocess step", target.step);
+                anyhow::bail!("--reset {step}: not a subprocess step");
             };
             let ctx = StepCtx {
                 step_id: spec.id.clone(),
@@ -180,7 +176,7 @@ impl Runner {
             let mut child_env = (*self.child_env).clone();
             child_env.insert(
                 crate::subprocess::ENV_RESET.to_string(),
-                target.part.clone(),
+                "store".to_string(),
             );
             self.sink.emit(&Event::StepStart {
                 step: spec.id.clone(),
@@ -204,20 +200,22 @@ impl Runner {
                 signal: None,
             });
             if let Some(error) = error {
-                anyhow::bail!("reset {}:{}: {error}", target.step, target.part);
+                anyhow::bail!("reset {step}: {error}");
             }
             // Emptied, not gone: what reads it sees a new version and runs,
             // which is how the emptiness reaches the grid; and the step
             // keeps no history, so its next run starts from nothing.
-            let version = crate::sink::read_version(&self.data_root.join(spec.output().as_str()))
-                .await
-                .with_context(|| format!("read {} after its reset", target.step))?;
+            let fingerprint = &graph.fingerprints[i];
+            let reported = result.map(|o| o.outputs).unwrap_or_default();
+            let version = reported_version(spec, fingerprint, &reported)?.unwrap_or_else(|| {
+                fresh_version(fingerprint, &format!("reset-{}", uuid::Uuid::now_v7()))
+            });
             let saved = store.load_record().await.context("load the record")?;
             let mut state = saved.clone();
             state.steps.insert(
-                target.step.clone(),
+                step.clone(),
                 crate::supervisor::record::StepRecord {
-                    version,
+                    version: Some(version),
                     ..Default::default()
                 },
             );
@@ -307,7 +305,7 @@ impl Runner {
         &self,
         graph: &Graph,
         state: &mut Record,
-        status: &mut [Option<StepStatus>],
+        status: &mut Option<StepStatus>,
         i: usize,
         st: StepStatus,
         error: Option<String>,
@@ -348,7 +346,7 @@ impl Runner {
                 entry.last_success_at = Some(stamp);
             }
         }
-        status[i] = Some(st);
+        *status = Some(st);
     }
 }
 
@@ -401,59 +399,39 @@ pub(crate) fn step_summary(r: &StepReport) -> crate::events::StepSummary {
     }
 }
 
-/// Resolve a step's reported (possibly empty) output states to
-/// concrete `(path, version)` pairs for every declared output.
-/// Reporting on an undeclared output is a contract violation.
+/// The version a step reported for the tree it writes, with its
+/// fingerprint folded in; `None` when it reported none. Reporting on any
+/// other tree is a contract violation.
 ///
-/// The step's `fingerprint` is folded into every recorded version. A step
-/// reports on its content and cannot know its own definition changed, so
-/// without this a bumped `code_version` re-runs the step while leaving the
-/// reported version identical — the tree is rebuilt and consumers skip it.
-pub(crate) fn resolve_outputs(
-    data_root: &std::path::Path,
+/// The fingerprint is folded in because a step reports on its content and
+/// cannot know its own definition changed: without it a bumped
+/// `code_version` re-runs the step while the version stays the same, and
+/// its consumers skip what the new definition wrote.
+pub(crate) fn reported_version(
     spec: &StepSpec,
     fingerprint: &str,
     reported: &[ArtifactState],
-    sink: &dyn EventSink,
-) -> Result<Vec<(String, String)>> {
+) -> Result<Option<String>> {
     let output = spec.output();
-    let mut by_path: BTreeMap<&str, &ArtifactState> = BTreeMap::new();
+    let mut version = None;
     for r in reported {
-        if r.path.as_str() != output.as_str() {
-            anyhow::bail!(
-                "step {:?} reported on {:?}, but a step writes only the tree its id names ({:?})",
-                spec.id,
-                r.path.as_str(),
-                output.as_str()
-            );
-        }
-        by_path.insert(r.path.as_str(), r);
+        anyhow::ensure!(
+            r.path.as_str() == output.as_str(),
+            "step {:?} reported on {:?}, but a step writes only the tree its id names ({:?})",
+            spec.id,
+            r.path.as_str(),
+            output.as_str()
+        );
+        version = Some(format!("{fingerprint}:{}", r.version));
     }
-    let path = output.as_str();
-    let v = match by_path.get(path) {
-        // The step vouched for a version: trust it. The mechanics
-        // behind it (row-set hash, dolt commit, cursor hash) stay
-        // the step's business.
-        Some(a) => a.version.clone(),
-        // Said nothing about its output: decide for ourselves.
-        None => {
-            sink.emit(&Event::Log {
-                step: spec.id.clone(),
-                level: crate::events::LogLevel::Info,
-                msg: format!(
-                    "reported no version for {path}; reading the whole tree to hash it. \
-                     A version the step derives from what it wrote would be cheaper."
-                ),
-                ts: None,
-                stream: None,
-                target: None,
-                thread: None,
-                fields: None,
-            });
-            tree_version(&data_root.join(path))?
-        }
-    };
-    Ok(vec![(path.to_string(), format!("{fingerprint}:{v}"))])
+    Ok(version)
+}
+
+/// The version of a step's tree when the step reported none: new every
+/// time, so each success reaches its consumers, as `make` would have it
+/// with no timestamps to compare.
+pub(crate) fn fresh_version(fingerprint: &str, invocation: &str) -> String {
+    format!("{fingerprint}:run-{invocation}")
 }
 
 /// What each consumer has not read yet, per producer: the seals (a
@@ -470,6 +448,9 @@ pub(crate) struct QueueLedger {
     /// consumer has run (a checkpoint arriving mid-pass is dropped by
     /// design), and the repeat must not count its rows twice.
     last_seen: Vec<BTreeMap<usize, String>>,
+    /// Per consumer, per producer: the rows taken off the queue so far —
+    /// the `dequeued_total{from=<producer>}` running total.
+    taken: Vec<BTreeMap<usize, u64>>,
 }
 
 /// One seal as the ledger keeps it: the qualified version, and the rows
@@ -481,6 +462,7 @@ impl QueueLedger {
         Self {
             pending: vec![BTreeMap::new(); n],
             last_seen: vec![BTreeMap::new(); n],
+            taken: vec![BTreeMap::new(); n],
         }
     }
 
@@ -526,13 +508,13 @@ impl QueueLedger {
                 continue;
             };
             let seals = self.pending[consumer].entry(p).or_default();
-            match seals.iter().position(|(v, _)| v == read) {
-                Some(idx) => {
-                    seals.drain(..=idx);
-                }
-                None if producer_done(p) => seals.clear(),
-                None => {}
-            }
+            let read_up_to = match seals.iter().position(|(v, _)| v == read) {
+                Some(idx) => idx + 1,
+                None if producer_done(p) => seals.len(),
+                None => 0,
+            };
+            let rows = rows_of(seals.drain(..read_up_to));
+            *self.taken[consumer].entry(p).or_default() += rows;
             self.publish(graph, consumer, p, sink);
         }
     }
@@ -541,7 +523,9 @@ impl QueueLedger {
     pub(crate) fn cleared(&mut self, graph: &Graph, consumer: usize, sink: &dyn EventSink) {
         let producers: Vec<usize> = self.pending[consumer].keys().copied().collect();
         for p in producers {
-            self.pending[consumer].insert(p, Vec::new());
+            let rows =
+                rows_of(std::mem::take(self.pending[consumer].entry(p).or_default()).into_iter());
+            *self.taken[consumer].entry(p).or_default() += rows;
             self.publish(graph, consumer, p, sink);
         }
     }
@@ -557,20 +541,35 @@ impl QueueLedger {
             .collect();
         self.pending = remap_by_step(&mut self.pending, from_old, &to_new);
         self.last_seen = remap_by_step(&mut self.last_seen, from_old, &to_new);
+        self.taken = remap_by_step(&mut self.taken, from_old, &to_new);
     }
 
+    /// Both halves of a queue: what is on it, and what has come off.
     fn publish(&self, graph: &Graph, consumer: usize, producer: usize, sink: &dyn EventSink) {
-        let value: u64 = self.pending[consumer]
+        let queued: u64 = self.pending[consumer]
             .get(&producer)
-            .map(|seals| seals.iter().map(|(_, n)| n.unwrap_or(0)).sum())
+            .map(|seals| rows_of(seals.iter().cloned()))
             .unwrap_or(0);
-        sink.emit(&Event::Metric {
-            step: graph.steps[consumer].id.clone(),
-            name: "queued".to_string(),
-            labels: BTreeMap::from([("from".to_string(), graph.steps[producer].id.clone())]),
-            value: value as i64,
-        });
+        let taken = self.taken[consumer].get(&producer).copied().unwrap_or(0);
+        let labels = BTreeMap::from([("from".to_string(), graph.steps[producer].id.clone())]);
+        for (name, value) in [
+            (datalib_metrics::QUEUED, queued),
+            (datalib_metrics::DEQUEUED, taken),
+        ] {
+            sink.emit(&Event::Metric {
+                step: graph.steps[consumer].id.clone(),
+                name: name.to_string(),
+                labels: labels.clone(),
+                value: value as i64,
+            });
+        }
     }
+}
+
+/// The rows some seals added, counting a seal whose producer did not
+/// say as none.
+fn rows_of(seals: impl Iterator<Item = Seal>) -> u64 {
+    seals.map(|(_, n)| n.unwrap_or(0)).sum()
 }
 
 fn remap_by_step<T>(
@@ -908,42 +907,35 @@ mod tests {
         .input(input)
     }
 
-    /// A doltlite store with one table and one commit on `main`; its head.
-    async fn committed_store(path: &std::path::Path) -> String {
-        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-        use std::str::FromStr;
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-            .unwrap()
-            .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        for sql in [
-            "CREATE TABLE t (x INTEGER)",
-            "INSERT INTO t VALUES (1)",
-            "SELECT dolt_commit('-Am', 'seal')",
-        ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
-        }
-        let head: String = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        pool.close().await;
-        head
+    // Reads whatever `slack/raw` has written and reports a version derived
+    // from it, so an early pass over a new batch is new output.
+    fn copying_middle() -> StepSpec {
+        StepSpec::new(
+            "slack/rendered",
+            StepRun::in_process(move |ctx: StepCtx| async move {
+                let dir = ctx.path_str(&ctx.step_id);
+                std::fs::create_dir_all(&dir).unwrap();
+                let read = std::fs::read_to_string(ctx.path_str("slack/raw").join("data.txt"))
+                    .unwrap_or_default();
+                std::fs::write(dir.join("out.txt"), &read).unwrap();
+                let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                let version = blake3::hash(read.as_bytes()).to_hex().to_string();
+                Ok(StepOutcome {
+                    outputs: vec![ArtifactState::versioned(&pat, version)],
+                    exit: None,
+                })
+            }),
+        )
+        .input("slack/raw")
+        .streams_output()
     }
 
-    /// A step's checkpoint and its outcome name one commit in two spellings
-    /// — a bare hash on the seal, `store:<hash>` on the outcome, as render
-    /// does. The runner reads the store rather than comparing the strings,
-    /// so finishing on the commit it last sealed moves nothing and the
-    /// consumer does not run a second time.
+    /// A step that finishes on the version it last sealed moves nothing, so
+    /// the consumer that read that seal does not run a second time. The
+    /// loop compares the strings, so a step spells one version one way on
+    /// both lines.
     #[tokio::test]
-    async fn finishing_on_the_commit_already_sealed_does_not_run_the_consumer_again() {
+    async fn finishing_on_the_version_already_sealed_does_not_run_the_consumer_again() {
         let root = tempfile::tempdir().unwrap();
         let passes = Arc::new(AtomicU32::new(0));
         let producer = StepSpec::new(
@@ -953,10 +945,7 @@ mod tests {
                 move |ctx: StepCtx| {
                     let passes = passes.clone();
                     async move {
-                        let dir = ctx.path_str(&ctx.step_id);
-                        std::fs::create_dir_all(&dir).unwrap();
-                        let head = committed_store(&dir.join("store.doltlite_db")).await;
-                        ctx.checkpoint(&head);
+                        ctx.checkpoint("c1");
                         let deadline = std::time::Instant::now() + Duration::from_secs(10);
                         while passes.load(Ordering::SeqCst) == 0 {
                             assert!(std::time::Instant::now() < deadline, "no pass on the seal");
@@ -964,7 +953,7 @@ mod tests {
                         }
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
-                            outputs: vec![ArtifactState::versioned(&pat, format!("store:{head}"))],
+                            outputs: vec![ArtifactState::versioned(&pat, "c1")],
                             exit: None,
                         })
                     }
@@ -1163,26 +1152,7 @@ mod tests {
             )
             .streams_output()
         };
-        // Reads whatever the producer has written and reports a version
-        // derived from it, so an early pass over a new batch is new output.
-        let middle = StepSpec::new(
-            "slack/rendered",
-            StepRun::in_process(move |ctx: StepCtx| async move {
-                let dir = ctx.path_str(&ctx.step_id);
-                std::fs::create_dir_all(&dir).unwrap();
-                let read = std::fs::read_to_string(ctx.path_str("slack/raw").join("data.txt"))
-                    .unwrap_or_default();
-                std::fs::write(dir.join("out.txt"), &read).unwrap();
-                let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
-                let version = blake3::hash(read.as_bytes()).to_hex().to_string();
-                Ok(StepOutcome {
-                    outputs: vec![ArtifactState::versioned(&pat, version)],
-                    exit: None,
-                })
-            }),
-        )
-        .input("slack/raw")
-        .streams_output();
+        let middle = copying_middle();
         let graph = Graph::build(vec![
             producer,
             middle,
@@ -1259,24 +1229,7 @@ mod tests {
             )
             .streams_output()
         };
-        let middle = StepSpec::new(
-            "slack/rendered",
-            StepRun::in_process(move |ctx: StepCtx| async move {
-                let dir = ctx.path_str(&ctx.step_id);
-                std::fs::create_dir_all(&dir).unwrap();
-                let read = std::fs::read_to_string(ctx.path_str("slack/raw").join("data.txt"))
-                    .unwrap_or_default();
-                std::fs::write(dir.join("out.txt"), &read).unwrap();
-                let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
-                let version = blake3::hash(read.as_bytes()).to_hex().to_string();
-                Ok(StepOutcome {
-                    outputs: vec![ArtifactState::versioned(&pat, version)],
-                    exit: None,
-                })
-            }),
-        )
-        .input("slack/raw")
-        .streams_output();
+        let middle = copying_middle();
         let graph = Graph::build(vec![
             producer,
             middle,
@@ -1767,6 +1720,41 @@ mod tests {
                 n >= 2 && queued[n - 1] == 0 && queued[n - 2] >= mid_pass,
                 "{producer}: one pass must drain the whole queue in one step, not one seal of it: {queued:?}"
             );
+
+            // Its running total of what came off: it only grows, and once
+            // the queue is empty it has taken off everything put on.
+            let dequeued: Vec<i64> = events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Metric {
+                        step,
+                        name,
+                        labels,
+                        value,
+                    } if step == "unified_index/grid"
+                        && name == datalib_metrics::DEQUEUED
+                        && labels.get("from").map(String::as_str) == Some(producer) =>
+                    {
+                        Some(*value)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                dequeued.windows(2).all(|w| w[0] <= w[1]),
+                "{producer}: the dequeued total fell: {dequeued:?}"
+            );
+            let put_on: i64 = std::iter::once(0)
+                .chain(queued.iter().copied())
+                .collect::<Vec<_>>()
+                .windows(2)
+                .map(|w| (w[1] - w[0]).max(0))
+                .sum();
+            assert_eq!(
+                dequeued.last().copied(),
+                Some(put_on),
+                "{producer}: what came off is not what went on (queue {queued:?})"
+            );
         }
     }
 
@@ -1814,7 +1802,7 @@ mod tests {
         let graph = Graph::build(specs).unwrap();
 
         let mut r = runner(root.path());
-        r.budgets = Budgets::from_parallelism(4); // exactly the number of producers
+        r = r.parallelism(4); // exactly the number of producers
         let report = tokio::time::timeout(Duration::from_secs(10), r.run(&graph))
             .await
             .expect("a streaming pass competing for ordinary slots would deadlock here")
@@ -2044,6 +2032,181 @@ mod tests {
             ran_early.load(std::sync::atomic::Ordering::SeqCst),
             "the fan-in waited for every producer: a source that finished early \
              contributed nothing until the slowest one was done"
+        );
+    }
+
+    /// A step that writes one versioned file into its own tree.
+    fn quick(id: &str, inputs: &[&str]) -> StepSpec {
+        let version = format!("{id}-v1");
+        let mut spec = StepSpec::new(
+            id,
+            StepRun::in_process(move |ctx: StepCtx| {
+                let version = version.clone();
+                async move {
+                    let dir = ctx.path_str(&ctx.step_id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("out.txt"), &version).unwrap();
+                    let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                    Ok(StepOutcome {
+                        outputs: vec![ArtifactState::versioned(&pat, version)],
+                        exit: None,
+                    })
+                }
+            }),
+        );
+        for i in inputs {
+            spec = spec.input(i);
+        }
+        spec
+    }
+
+    /// A source's own steps finish while another source is still running,
+    /// and the fan-in that reads them all finishes last. The qmd steps had
+    /// a fan-in upstream of them, and every source's search steps read
+    /// Running until the slowest source in the sync was done.
+    #[tokio::test]
+    async fn a_sources_steps_finish_before_a_slower_source_and_the_fan_in_after() {
+        let root = tempfile::tempdir().unwrap();
+        let rec = Arc::new(Recorder::default());
+        let finished = |rec: &Recorder, id: &str| {
+            rec.0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, Event::StepFinish { step, .. } if step == id))
+        };
+        let saw_fast_finish = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let slow = {
+            let (rec, saw) = (rec.clone(), saw_fast_finish.clone());
+            StepSpec::new(
+                "slow/render",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (rec, saw) = (rec.clone(), saw.clone());
+                    async move {
+                        // Bounded, so a regression fails rather than hangs.
+                        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                        while !finished(&rec, "fast/keyword")
+                            && std::time::Instant::now() < deadline
+                        {
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        }
+                        saw.store(finished(&rec, "fast/keyword"), Ordering::SeqCst);
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
+                            exit: None,
+                        })
+                    }
+                }),
+            )
+        };
+        let graph = Graph::build(vec![
+            quick("fast/render", &[]),
+            quick("fast/keyword", &["fast/render"]),
+            slow,
+            quick("slow/keyword", &["slow/render"]),
+            quick("unified_index/qmd", &["fast/keyword", "slow/keyword"]),
+        ])
+        .unwrap();
+
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = r.run(&graph).await.unwrap();
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(
+            saw_fast_finish.load(Ordering::SeqCst),
+            "fast/keyword had not finished when the slow source did: a source's own \
+             steps waited on another source"
+        );
+        let finishes: Vec<String> = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                Event::StepFinish { step, .. } => Some(step.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            finishes.last().map(String::as_str),
+            Some("unified_index/qmd"),
+            "{finishes:?}"
+        );
+    }
+
+    /// A step with nothing to do says so once nothing above it can still
+    /// change, not when the sync ends. A skipped step's row settled only
+    /// when the request closed, so it read Running behind the slowest
+    /// source in the sync.
+    #[tokio::test]
+    async fn a_skipped_step_reports_before_a_slower_source_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        let rec = Arc::new(Recorder::default());
+        let skipped = |rec: &Recorder, id: &str| {
+            rec.0.lock().unwrap().iter().any(|e| {
+                matches!(e, Event::StepFinish { step, status, .. }
+                    if step == id && *status == RunState::SkippedUpToDate)
+            })
+        };
+        let saw_skip = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let second_run = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let slow = {
+            let (rec, saw, second) = (rec.clone(), saw_skip.clone(), second_run.clone());
+            StepSpec::new(
+                "slow/render",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (rec, saw, second) = (rec.clone(), saw.clone(), second.clone());
+                    async move {
+                        if second.load(Ordering::SeqCst) {
+                            // Bounded, so a regression fails rather than hangs.
+                            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                            while !skipped(&rec, "fast/keyword")
+                                && std::time::Instant::now() < deadline
+                            {
+                                tokio::time::sleep(Duration::from_millis(2)).await;
+                            }
+                            saw.store(skipped(&rec, "fast/keyword"), Ordering::SeqCst);
+                        }
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
+                            exit: None,
+                        })
+                    }
+                }),
+            )
+        };
+        let graph = Graph::build(vec![
+            quick("fast/render", &[]),
+            quick("fast/keyword", &["fast/render"]),
+            slow,
+        ])
+        .unwrap();
+
+        let first = runner(root.path()).run(&graph).await.unwrap();
+        assert!(first.steps.iter().all(|s| s.status.is_ok()), "{first:#?}");
+
+        second_run.store(true, Ordering::SeqCst);
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = r.run(&graph).await.unwrap();
+        assert!(
+            matches!(
+                report.step("fast/keyword").status,
+                StepStatus::SkippedUpToDate
+            ),
+            "{report:#?}"
+        );
+        assert!(
+            saw_skip.load(Ordering::SeqCst),
+            "fast/keyword was up to date, but said so only after the slow source finished"
         );
     }
 
@@ -2989,7 +3152,7 @@ mod tests {
         let store = fx.root.path().join("email/raw/data.txt");
         assert!(
             store.exists(),
-            "the test needs data on disk, or hashing would give ABSENT and prove nothing"
+            "the test needs data on disk, which the loop must not read"
         );
 
         // Run 2: sync slack only. `email/raw` is out of scope and has
@@ -3166,86 +3329,51 @@ mod tests {
         assert_eq!(audit_runs.load(Ordering::SeqCst), 1);
         assert!(fx.root.path().join("slack/audit/a.txt").is_file());
     }
-    /// A consumer must notice its input *disappearing*, not just
-    /// changing. A deleted tree versions as `absent`, which differs from
-    /// a content hash like any other change, so the consumer re-runs and
-    /// gets a chance to drop the output it built from data that is gone.
+    /// A producer that reports no version gives every success a new one,
+    /// so what reads it runs again each time; one that reports the same
+    /// version run after run lets its reader skip. The loop never reads a
+    /// tree to tell the two apart.
     #[tokio::test]
-    async fn deleted_input_reruns_its_consumer() {
+    async fn an_unversioned_producer_reruns_its_reader_after_every_success() {
         let root = tempfile::tempdir().unwrap();
-
-        // Writes its tree on the first run only. After the user deletes
-        // it, the step still runs (no inputs, so always) but recreates
-        // nothing — which is how the tree stays absent.
-        let wrote = Arc::new(AtomicU32::new(0));
-        let w = wrote.clone();
-        let producer = StepSpec::new(
-            "takeout/raw",
-            StepRun::in_process(move |ctx: StepCtx| {
-                let w = w.clone();
-                async move {
-                    if w.fetch_add(1, Ordering::SeqCst) == 0 {
-                        let dir = ctx.path_str(&ctx.step_id);
-                        std::fs::create_dir_all(&dir).unwrap();
-                        std::fs::write(dir.join("chat.json"), "v1").unwrap();
-                    }
-                    Ok(StepOutcome::default())
-                }
-            }),
-        );
-
-        let runs = Arc::new(AtomicU32::new(0));
-        let rn = runs.clone();
-        let consumer = StepSpec::new(
-            "takeout/rendered_md",
-            StepRun::in_process(move |ctx: StepCtx| {
-                let rn = rn.clone();
-                async move {
-                    rn.fetch_add(1, Ordering::SeqCst);
+        let producer = |id: &'static str, version: Option<&'static str>| {
+            StepSpec::new(
+                id,
+                StepRun::in_process(move |ctx: StepCtx| async move {
                     let dir = ctx.path_str(&ctx.step_id);
                     std::fs::create_dir_all(&dir).unwrap();
-                    let out = std::path::Path::new(&dir).join("chat.md");
-                    match std::fs::read_to_string(ctx.path(&ctx.inputs[0]).join("chat.json")) {
-                        Ok(text) => std::fs::write(out, text).unwrap(),
-                        // Source gone: drop what we rendered from it.
-                        Err(_) => {
-                            let _ = std::fs::remove_file(out);
-                        }
-                    }
-                    Ok(StepOutcome::default())
-                }
-            }),
-        )
-        .input("takeout/raw");
+                    std::fs::write(dir.join("same.txt"), "unchanged").unwrap();
+                    let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                    Ok(StepOutcome {
+                        outputs: version
+                            .map(|v| ArtifactState::versioned(&pat, v))
+                            .into_iter()
+                            .collect(),
+                        exit: None,
+                    })
+                }),
+            )
+        };
+        let reads_plain = Arc::new(AtomicU32::new(0));
+        let reads_versioned = Arc::new(AtomicU32::new(0));
+        let g = Graph::build(vec![
+            producer("plain/raw", None),
+            producer("versioned/raw", Some("v1")),
+            counting_consumer("plain/rendered_md", "plain/raw", reads_plain.clone()),
+            counting_consumer(
+                "versioned/rendered_md",
+                "versioned/raw",
+                reads_versioned.clone(),
+            ),
+        ])
+        .unwrap();
 
-        let g = Graph::build(vec![producer, consumer]).unwrap();
         let r = runner(root.path());
-        assert!(r.run(&g).await.unwrap().all_ok());
-        assert_eq!(runs.load(Ordering::SeqCst), 1);
-        assert!(root.path().join("takeout/rendered_md/chat.md").is_file());
-
-        // The user deletes the raw store off disk.
-        std::fs::remove_dir_all(root.path().join("takeout/raw")).unwrap();
-
-        let rep = r.run(&g).await.unwrap();
-        assert!(rep.all_ok(), "{rep:#?}");
-        assert_eq!(
-            runs.load(Ordering::SeqCst),
-            2,
-            "a deleted input must re-run its consumer, not read as unchanged"
-        );
-        assert!(
-            !root.path().join("takeout/rendered_md/chat.md").exists(),
-            "the consumer got its chance to drop output built from data that is gone"
-        );
-
-        // And it settles: still absent next run, so nothing re-runs.
-        let rep = r.run(&g).await.unwrap();
-        assert_eq!(
-            rep.step("takeout/rendered_md").status,
-            StepStatus::SkippedUpToDate
-        );
-        assert_eq!(runs.load(Ordering::SeqCst), 2);
+        for _ in 0..3 {
+            assert!(r.run(&g).await.unwrap().all_ok());
+        }
+        assert_eq!(reads_plain.load(Ordering::SeqCst), 3);
+        assert_eq!(reads_versioned.load(Ordering::SeqCst), 1);
     }
 
     /// One source's broken render must not keep the others out of the

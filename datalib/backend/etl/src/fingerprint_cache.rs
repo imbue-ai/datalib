@@ -7,9 +7,10 @@
 //! has the measurements.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
@@ -140,36 +141,37 @@ pub const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS fingerprints (
 )";
 
 pub fn default_cache_path() -> Result<PathBuf> {
-    if let Some(dir) = std::env::var_os("DATALIB_CACHE_DIR") {
+    cache_path_from_env(|key| std::env::var_os(key), cfg!(target_os = "macos"))
+}
+
+fn cache_path_from_env(var: impl Fn(&str) -> Option<OsString>, macos: bool) -> Result<PathBuf> {
+    if let Some(dir) = var("DATALIB_CACHE_DIR") {
         return Ok(PathBuf::from(dir).join("fingerprints.sqlite"));
     }
-    if let Some(dir) = std::env::var_os("XDG_CACHE_HOME") {
+    // Bazel sets TEST_TMPDIR for every test and the processes it spawns.
+    // What follows is the developer's real cache, where every sandbox path
+    // a test scans would stay as a dead row.
+    if var("TEST_TMPDIR").is_some() {
+        bail!(
+            "DATALIB_CACHE_DIR is not set under a bazel test (TEST_TMPDIR is): \
+             point it at a directory under $TEST_TMPDIR rather than writing \
+             sandbox paths into this host's fingerprint cache"
+        );
+    }
+    if let Some(dir) = var("XDG_CACHE_HOME") {
         return Ok(PathBuf::from(dir)
             .join("datalib")
             .join("fingerprints.sqlite"));
     }
-    let home = std::env::var_os("HOME")
+    let home = var("HOME")
         .map(PathBuf::from)
         .context("neither DATALIB_CACHE_DIR, XDG_CACHE_HOME nor HOME is set")?;
-    let base = if cfg!(target_os = "macos") {
+    let base = if macos {
         home.join("Library").join("Caches")
     } else {
         home.join(".cache")
     };
     Ok(base.join("datalib").join("fingerprints.sqlite"))
-}
-
-fn connect_string(path: &Path) -> String {
-    // SQLite percent-decodes a URI's path, so anything that would
-    // terminate it or be decoded away has to be escaped. Spaces are
-    // fine and are left alone — data roots have them.
-    let escaped = path
-        .display()
-        .to_string()
-        .replace('%', "%25")
-        .replace('?', "%3f")
-        .replace('#', "%23");
-    format!("file:{escaped}?doltlite_engine=sqlite")
 }
 
 /// A host-local fingerprint cache.
@@ -189,13 +191,8 @@ impl FingerprintCache {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("create cache dir {}", dir.display()))?;
         }
-        // `filename`, not `from_str`: sqlx's URL parser rejects query
-        // parameters it does not know, while the filename field reaches
-        // `sqlite3_open_v2` verbatim — but only while sqlx has no URI
-        // parameters of its own to add, so `immutable` and `vfs` must
-        // stay unset here. See `datalib_runs::store`.
         let opts = SqliteConnectOptions::new()
-            .filename(connect_string(path))
+            .filename(datalib_runtime::plain_sqlite::uri(path))
             .create_if_missing(true)
             // Doltlite's plain-SQLite engine refuses WAL while answering
             // `wal`; say the mode it is in.
@@ -721,38 +718,57 @@ mod tests {
         assert_eq!(glob_escape("a[b"), "a[[]b");
     }
 
+    fn env<'a>(pairs: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        |key| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| OsString::from(v))
+        }
+    }
+
     #[test]
     fn the_default_path_is_a_cache_dir_not_a_data_root() {
         // Host state must not land somewhere that gets synced or copied.
-        temp_env_var("DATALIB_CACHE_DIR", Some("/tmp/explicit"), || {
-            assert_eq!(
-                default_cache_path().unwrap(),
-                PathBuf::from("/tmp/explicit/fingerprints.sqlite")
-            );
-        });
-        temp_env_var("DATALIB_CACHE_DIR", None, || {
-            temp_env_var("XDG_CACHE_HOME", Some("/tmp/xdg"), || {
-                assert_eq!(
-                    default_cache_path().unwrap(),
-                    PathBuf::from("/tmp/xdg/datalib/fingerprints.sqlite")
-                );
-            });
-        });
+        let resolve = |pairs: &[(&str, &str)], macos| cache_path_from_env(env(pairs), macos);
+        assert_eq!(
+            resolve(
+                &[("DATALIB_CACHE_DIR", "/tmp/explicit"), ("HOME", "/h")],
+                true
+            )
+            .unwrap(),
+            PathBuf::from("/tmp/explicit/fingerprints.sqlite")
+        );
+        assert_eq!(
+            resolve(&[("XDG_CACHE_HOME", "/tmp/xdg"), ("HOME", "/h")], true).unwrap(),
+            PathBuf::from("/tmp/xdg/datalib/fingerprints.sqlite")
+        );
+        assert_eq!(
+            resolve(&[("HOME", "/h")], true).unwrap(),
+            PathBuf::from("/h/Library/Caches/datalib/fingerprints.sqlite")
+        );
+        assert_eq!(
+            resolve(&[("HOME", "/h")], false).unwrap(),
+            PathBuf::from("/h/.cache/datalib/fingerprints.sqlite")
+        );
     }
 
-    /// `std::env::set_var` is unsafe from Rust 2024 and racy under a
-    /// threaded test runner; these two env tests are the only users, and
-    /// they run in one thread each.
-    fn temp_env_var(key: &str, value: Option<&str>, f: impl FnOnce()) {
-        let prev = std::env::var_os(key);
-        match value {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
-        }
-        f();
-        match prev {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
-        }
+    /// Guards the leak that left ~190k dead sandbox rows in a developer's
+    /// real cache: a bazel test must name its own cache directory.
+    #[test]
+    fn a_bazel_test_must_name_its_cache_dir() {
+        let under_test = [
+            ("TEST_TMPDIR", "/t"),
+            ("HOME", "/h"),
+            ("XDG_CACHE_HOME", "/x"),
+        ];
+        let err = cache_path_from_env(env(&under_test), true).unwrap_err();
+        assert!(err.to_string().contains("DATALIB_CACHE_DIR"), "{err}");
+
+        let named = [("TEST_TMPDIR", "/t"), ("DATALIB_CACHE_DIR", "/t/cache")];
+        assert_eq!(
+            cache_path_from_env(env(&named), true).unwrap(),
+            PathBuf::from("/t/cache/fingerprints.sqlite")
+        );
     }
 }

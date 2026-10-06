@@ -50,8 +50,8 @@ async fn chatgpt_synth_playback_extract_roundtrip() {
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
-    // Open here and close before the store is read back: a second
-    // live connection to one file makes a `dolt_commit` fail.
+    // Open here and close before the store is read back: the file
+    // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let summary = fetch(FetchOptions {
         max_pages: None,

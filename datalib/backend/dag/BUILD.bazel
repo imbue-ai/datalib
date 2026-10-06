@@ -27,8 +27,8 @@ rust_library(
         # the tree's logs; the binary already depended on it.
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/flock:datalib_flock",
+        "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/parent_watch:datalib_parent_watch",
-        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
@@ -47,7 +47,6 @@ rust_library(
         "@datalib_crates//:toml",
         "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
-        "@datalib_crates//:walkdir",
     ],
 )
 
@@ -58,6 +57,7 @@ rust_test(
     edition = "2021",
     deps = [
         "@datalib_crates//:tokio",
+        "@datalib_crates//:walkdir",
     ],
 )
 
@@ -72,7 +72,7 @@ rust_binary(
     edition = "2021",
     # Must match [workspace.package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.37.0",
+    version = "0.40.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -123,6 +123,35 @@ rust_test(
 )
 
 
+# One process reading or writing `system/supervisor.sqlite` as one of its
+# real users does; seven of them at once are `supervisor_contention_test`.
+rust_binary(
+    name = "supervisor_store_worker",
+    testonly = True,
+    srcs = ["tests/supervisor_store_worker/main.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_dag",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "supervisor_contention_test",
+    srcs = ["tests/supervisor_contention.rs"],
+    crate_root = "tests/supervisor_contention.rs",
+    data = [":supervisor_store_worker"],
+    edition = "2021",
+    env = {"STORE_WORKER": "$(rootpath :supervisor_store_worker)"},
+    deps = [
+        ":datalib_dag",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 # Live end-to-end golden: drives the real pipeline (this runner +
 # //datalib/backend/datalib_step) against real provider APIs, and snapshots the
 # produced data tree. The config, the file-based source data, and the golden
@@ -166,6 +195,8 @@ rust_test(
     ],
     deps = [
         ":datalib_dag",
+        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
+        "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:insta",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",
@@ -200,69 +231,38 @@ build_test(
     ],
 )
 
-# A puppet step for the supervisor's scenario tests: a process the loop
-# manages that does only what it is told.
+# A step that does only what it is told over a FIFO, for the harness.
 rust_binary(
-    name = "test_driver",
+    name = "puppet",
     testonly = True,
-    srcs = ["tests/driver/main.rs"],
+    srcs = ["tests/puppet/main.rs"],
     edition = "2021",
     deps = [
-        "@datalib_crates//:anyhow",
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",
     ],
 )
 
-# The supervisor's scenario tests: real driver steps, the loop in-process,
-# and a person at the controls through the store. No sleeps: every wait
-# is for an ack, an event or a commit, under a deadline.
+# Suite 1: does the loop manage processes correctly? Puppet steps, the
+# loop in-process under the one idle host, a person at the controls.
 rust_test(
     name = "supervisor_harness_test",
-    size = "medium",
-    srcs = glob(["tests/harness/*.rs"]),
-    crate_root = "tests/harness/main.rs",
-    data = [":test_driver"],
+    size = "small",
+    srcs = glob(["tests/supervisor_harness/*.rs"]),
+    crate_root = "tests/supervisor_harness/main.rs",
+    data = [":puppet"],
     edition = "2021",
-    env = {
-        "DRIVER_BIN": "$(rootpath :test_driver)",
-    },
+    env = {"PUPPET": "$(rootpath :puppet)"},
     deps = [
         ":datalib_dag",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:libc",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
-)
-
-# One process's share of the load in supervisor_writers_test.
-rust_binary(
-    name = "supervisor_writer",
-    testonly = True,
-    srcs = ["tests/supervisor_writer/main.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_dag",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-# Seven processes on one supervisor.sqlite in rollback-journal mode: every
-# write lands, no process gives up on a lock.
-rust_test(
-    name = "supervisor_writers_test",
-    size = "medium",
-    srcs = ["tests/supervisor_writers.rs"],
-    data = [":supervisor_writer"],
-    edition = "2021",
-    env = {
-        "WRITER_BIN": "$(rootpath :supervisor_writer)",
-    },
+    # The random walk runs four walks at once (`walk.rs`'s `AT_ONCE`), each
+    # a loop and its puppets; `cpu:4` claims them, so bazel does not start
+    # other tests beside it on CI's four vCPUs.
     tags = ["cpu:4"],
-    deps = [
-        ":datalib_dag",
-        "//datalib/backend/runtime:datalib_runtime",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
 )

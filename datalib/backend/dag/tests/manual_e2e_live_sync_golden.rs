@@ -242,7 +242,7 @@ fn is_storage_row(map: &serde_json::Map<String, Value>) -> bool {
 }
 
 /// Per-TABLE volatile columns: `(table, keys)` redacted only in rows of that
-/// table. Applied in [`dump_doltlite_db`], which knows the table name for
+/// table. Applied in [`dump_store`], which knows the table name for
 /// certain — no shape-sniffing required.
 const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
     ("sync_scope_config", &["updated_at_utc"]),
@@ -605,6 +605,16 @@ fn manual_e2e_live_sync_golden() {
         assert_json_snapshot!("problems", index_problems(&data_root));
     });
 
+    // The qmd index: the per-source split the qmd steps exist for.
+    insta::with_settings!({
+        snapshot_path => snap_base().join("unified_index").display().to_string(),
+        prepend_module_to_snapshot => false,
+        sort_maps => true,
+        description => "the qmd index: documents and embedding left, per source",
+    }, {
+        assert_json_snapshot!("qmd_collections", qmd_collections_report(&data_root, &cfg_out));
+    });
+
     // ── Second run: incrementality check ──────────────────────────────
     let now2 = "2026-05-21T18:05:00Z";
     let run2 = run_pipeline(&bin, &cfg_path, &run_root, now2, &[]);
@@ -614,7 +624,9 @@ fn manual_e2e_live_sync_golden() {
         run2.status.code(),
         run2.stderr_tail(40)
     );
-    assert_step_statuses_ok(&run2.run_summary().expect("run 2 run_summary"));
+    let summary2 = run2.run_summary().expect("run 2 run_summary");
+    assert_step_statuses_ok(&summary2);
+    assert_qmd_steps_follow_their_render(&summary2);
 
     // The incrementality signal comes from each stanza's own `sync_runs`
     // table, not the runner's summary. `strip_volatile_for_incrementality`
@@ -654,19 +666,13 @@ fn manual_e2e_live_sync_golden() {
     );
     let stores_before: Vec<StoreAtCommit> = ingest_steps
         .iter()
-        .flat_map(|step| {
-            ["entities", "blobs"].map(|db| data_root.join(step).join(format!("{db}.doltlite_db")))
-        })
+        .map(|step| data_root.join(step).join("entities.doltlite_db"))
         .filter(|p| p.is_file())
         .map(|p| StoreAtCommit::head(&data_root, &p))
         .collect();
 
     let now3 = "2026-05-21T18:10:00Z";
-    let reset_all = ingest_steps
-        .iter()
-        .map(|s| format!("{s}+blobs"))
-        .collect::<Vec<_>>()
-        .join(",");
+    let reset_all = ingest_steps.join(",");
     let sync_all = ingest_steps.join(",");
     let run3 = run_pipeline(
         &bin,
@@ -947,10 +953,15 @@ async fn open_readonly(path: &Path) -> sqlx::SqlitePool {
 
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .expect("sqlite uri")
-        .create_if_missing(false)
-        .read_only(true);
+    // A plain SQLite file has to say so to the doltlite-linked engine,
+    // which would otherwise take it for a doltlite store.
+    let opts = if path.extension().is_some_and(|e| e == "sqlite") {
+        SqliteConnectOptions::new().filename(datalib_runtime::plain_sqlite::uri(path))
+    } else {
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display())).expect("sqlite uri")
+    }
+    .create_if_missing(false)
+    .read_only(true);
     SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -1003,7 +1014,7 @@ impl PipelineRun {
 fn run_pipeline(
     bin: &Path,
     cfg_path: &Path,
-    log_dir: &Path,
+    run_root: &Path,
     now: &str,
     extra_args: &[&str],
 ) -> PipelineRun {
@@ -1013,6 +1024,9 @@ fn run_pipeline(
         .arg("--now")
         .arg(now)
         .args(extra_args)
+        // The run's own fingerprint cache, so run 1 is cold on every host
+        // and the host cache never sees this test.
+        .env("DATALIB_CACHE_DIR", run_root.join("fingerprint_cache"))
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn datalib-dag");
@@ -1024,7 +1038,7 @@ fn run_pipeline(
     // run and only the last 40 lines survive a failure — which is precisely
     // when you want to ask "why did that take 18 minutes?". It goes
     // beside the data root, not in it: the root is what the app serves.
-    let log = log_dir.join(format!("{}.ndjson", now.replace(':', "-")));
+    let log = run_root.join(format!("{}.ndjson", now.replace(':', "-")));
     if let Err(e) = std::fs::write(&log, &stderr) {
         eprintln!("[test] WARNING: could not write {}: {e}", log.display());
     } else {
@@ -1072,6 +1086,135 @@ fn assert_step_statuses_ok(summary: &Value) {
     );
 }
 
+/// Every source with a keyword index holds one document per markdown file
+/// qmd reads from its render tree, a source with an `embed` step has
+/// nothing left to embed, and one without still has all of it left: the
+/// embed stayed in its own collection.
+fn qmd_collections_report(data_root: &Path, cfg_text: &str) -> Value {
+    let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
+    let steps = cfg
+        .get("steps")
+        .and_then(toml::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let groups_with = |function: &str| -> std::collections::BTreeSet<String> {
+        steps
+            .iter()
+            .filter(|s| s.get("function").and_then(toml::Value::as_str) == Some(function))
+            .filter_map(|s| s.get("group").and_then(toml::Value::as_str))
+            .map(str::to_string)
+            .collect()
+    };
+    let embedded = groups_with("embed");
+    let qmd = datalib_qmd_indexer::Qmd::pinned().expect("resolve qmd");
+    let collections = datalib_qmd_indexer::Index::open(data_root, qmd)
+        .and_then(|index| index.collections())
+        .expect("read the qmd index's collections");
+
+    let mut report = serde_json::Map::new();
+    for group in groups_with("keyword_index") {
+        let c = collections
+            .iter()
+            .find(|c| c.name == group)
+            .unwrap_or_else(|| panic!("no qmd collection for {group}, which has a keyword_index"));
+        let on_disk = markdown_qmd_reads(&data_root.join(&group).join("render_markdown"));
+        assert_eq!(
+            c.documents, on_disk,
+            "{group}: the qmd collection holds {} documents; its render tree has {on_disk} \
+             markdown files qmd reads",
+            c.documents
+        );
+        let embeds = embedded.contains(&group);
+        if embeds {
+            assert_eq!(
+                c.needs_embedding, 0,
+                "{group} has an embed step, yet {} of its contents are not embedded",
+                c.needs_embedding
+            );
+        } else if c.documents > 0 {
+            assert!(
+                c.needs_embedding > 0,
+                "{group} has no embed step, yet all of it is embedded: an embed reached \
+                 beyond its own collection"
+            );
+        }
+        report.insert(
+            group,
+            serde_json::json!({
+                "documents": c.documents,
+                "embed_step": embeds,
+                "needs_embedding": c.needs_embedding,
+            }),
+        );
+    }
+    Value::Object(report)
+}
+
+/// The markdown files qmd indexes under `dir`: its glob skips hidden paths
+/// and a few build directories (`reindexCollection`), and it drops a file
+/// with no text.
+fn markdown_qmd_reads(dir: &Path) -> u64 {
+    const SKIPPED: &[&str] = &["node_modules", "vendor", "dist", "build"];
+    WalkDir::new(dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "md"))
+        .filter(|e| {
+            !e.path().strip_prefix(dir).unwrap().components().any(|c| {
+                let seg = c.as_os_str().to_string_lossy();
+                seg.starts_with('.') || SKIPPED.contains(&seg.as_ref())
+            })
+        })
+        .filter(|e| std::fs::read_to_string(e.path()).is_ok_and(|t| !t.trim().is_empty()))
+        .count() as u64
+}
+
+/// Run 2's qmd work is only where a render moved: a source's
+/// `keyword_index` reads only its render and its `embed` only that, so a
+/// source whose render did not move skips both, whatever other sources did.
+fn assert_qmd_steps_follow_their_render(summary: &Value) {
+    let steps = summary
+        .get("steps")
+        .and_then(Value::as_array)
+        .expect("run_summary.steps");
+    let find = |id: &str| {
+        steps
+            .iter()
+            .find(|s| s.get("step").and_then(Value::as_str) == Some(id))
+    };
+    let status = |s: &Value| {
+        s.get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let moved = |id: &str| {
+        find(id).is_some_and(|s| {
+            s.get("outputs").and_then(Value::as_array).is_some_and(|o| {
+                o.iter()
+                    .any(|x| x.get("changed") == Some(&Value::Bool(true)))
+            })
+        })
+    };
+    for step in steps {
+        let id = step.get("step").and_then(Value::as_str).unwrap_or("");
+        let Some(group) = id
+            .strip_suffix("/keyword_index")
+            .or_else(|| id.strip_suffix("/embed"))
+        else {
+            continue;
+        };
+        if moved(&format!("{group}/render_markdown")) {
+            continue;
+        }
+        assert_eq!(
+            status(step),
+            "skipped_up_to_date",
+            "{id} ran in run 2 though {group}'s render did not move"
+        );
+    }
+}
+
 fn step_id_list(summary: &Value) -> String {
     let mut ids: Vec<&str> = summary
         .get("steps")
@@ -1108,10 +1251,15 @@ async fn latest_sync_run(path: &Path) -> Value {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::Row;
 
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .expect("sqlite uri")
-        .create_if_missing(false)
-        .read_only(true);
+    // A plain SQLite file has to say so to the doltlite-linked engine,
+    // which would otherwise take it for a doltlite store.
+    let opts = if path.extension().is_some_and(|e| e == "sqlite") {
+        SqliteConnectOptions::new().filename(datalib_runtime::plain_sqlite::uri(path))
+    } else {
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display())).expect("sqlite uri")
+    }
+    .create_if_missing(false)
+    .read_only(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -1145,7 +1293,7 @@ async fn latest_sync_run(path: &Path) -> Value {
 /// by `problem_uuid` like every dumped table.
 fn index_problems(data_root: &Path) -> Value {
     let db = data_root.join("unified_index/grid_index/db.doltlite_db");
-    let mut dump = dump_doltlite_db(&db);
+    let mut dump = dump_store(&db);
     let mut rows = match &mut dump {
         Value::Object(map) => map
             .remove("problems")
@@ -1307,13 +1455,14 @@ enum SnapValue {
 }
 
 /// File → snapshot payload. JSONL and JSON are parsed, sorted and stripped of
-/// volatile fields; markdown is text with frontmatter redactions;
-/// `.doltlite_db` files are dumped as `{table: [rows]}` so the goldens carry
-/// the actual raw payloads. Anything else becomes a size marker.
+/// volatile fields; markdown is text with frontmatter redactions; a store —
+/// `.doltlite_db`, or a plain `.sqlite` like the blob CAS — is dumped as
+/// `{table: [rows]}` so the goldens carry the actual raw payloads. Anything
+/// else becomes a size marker.
 fn summarize_file(path: &Path) -> SnapValue {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    if name.ends_with(".doltlite_db") {
-        let mut v = dump_doltlite_db(path);
+    if name.ends_with(".doltlite_db") || name.ends_with(".sqlite") {
+        let mut v = dump_store(path);
         strip_volatile(&mut v);
         return SnapValue::Json(v);
     }
@@ -1386,11 +1535,6 @@ fn rewrite_config(text: &str) -> String {
             continue;
         };
         let function = m.get("function").and_then(|v| v.as_str()).unwrap_or("");
-        assert!(
-            function != "qmd_index",
-            "config declares a qmd_index step; the golden test deliberately \
-             excludes qmd (non-deterministic status text) — drop the step"
-        );
         let group = m.get("group").and_then(|v| v.as_str()).unwrap_or("");
         if function != "ingest" || !slack_groups.iter().any(|g| g == group) {
             continue;
@@ -1440,15 +1584,15 @@ fn canonicalize_path(rel: &Path) -> String {
     parts.join("/")
 }
 
-fn dump_doltlite_db(path: &Path) -> Value {
+fn dump_store(path: &Path) -> Value {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .expect("build tokio runtime for doltlite dump");
-    rt.block_on(dump_doltlite_db_async(path))
+        .expect("build tokio runtime for a store dump");
+    rt.block_on(dump_store_async(path))
 }
 
-async fn dump_doltlite_db_async(path: &Path) -> Value {
+async fn dump_store_async(path: &Path) -> Value {
     use std::str::FromStr;
 
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -1464,17 +1608,22 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
         "example_envelope_skeleton",
     ];
 
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .expect("sqlite uri")
-        .create_if_missing(false)
-        .read_only(true);
+    // A plain SQLite file has to say so to the doltlite-linked engine,
+    // which would otherwise take it for a doltlite store.
+    let opts = if path.extension().is_some_and(|e| e == "sqlite") {
+        SqliteConnectOptions::new().filename(datalib_runtime::plain_sqlite::uri(path))
+    } else {
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display())).expect("sqlite uri")
+    }
+    .create_if_missing(false)
+    .read_only(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
         .connect_with(opts)
         .await
-        .expect("open doltlite db");
+        .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
 
     // Tables to walk, in alphabetical order so the snapshot is stable.
     let table_rows = sqlx::query(

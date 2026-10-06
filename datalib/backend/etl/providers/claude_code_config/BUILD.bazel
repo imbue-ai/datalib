@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library")
 
 # Schema-only config crate for claude_code.
 # Bazel-only by design (no Cargo.toml). See
@@ -10,18 +10,6 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
-        "//datalib/backend/source_common:datalib_source_common",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:serde",
-    ],
-)
-
-rust_test(
-    name = "claude_code_config_unittests",
-    size = "small",
-    crate = ":datalib_etl_claude_code_config",
-    edition = "2021",
-    deps = [
-        "@datalib_crates//:toml",
+        "//datalib/backend/etl/agent_sessions_config:datalib_etl_agent_sessions_config",
     ],
 )

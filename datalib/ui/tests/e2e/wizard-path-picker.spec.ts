@@ -8,11 +8,11 @@ import { test, expect } from "@playwright/test";
 
 test("a path field types in a browser and offers no dead picker button", async ({ page }) => {
   await page.goto("/data_sources");
-  await page.getByRole("button", { name: "+ Data Source" }).click();
+  await page.getByRole("button", { name: "Add source" }).click();
 
   // WhatsApp is the descriptor that prompted the rule: one required
   // folder, which the user has open in Finder while they type it.
-  await page.getByRole("searchbox").fill("whatsapp");
+  await page.locator(".wiz-filter").fill("whatsapp");
   await page.getByRole("button", { name: /WhatsApp/ }).click();
 
   const wizard = page.getByRole("dialog");

@@ -1,7 +1,10 @@
 load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 
-exports_files(["deny.toml"])  # read by //tools:license_lists_test
+exports_files([
+    "deny.toml",  # read by //tools:license_lists_test
+    "rust-toolchain.toml",  # read by //tools:version_pins_test
+])
 
 # The Tauri shell itself is NOT built by Bazel — it is a standalone
 # cargo workspace, deliberately, so crate_universe never has to resolve
@@ -28,6 +31,29 @@ rust_test(
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
     ],
+)
+
+# Same arrangement for `src/zoom.rs`: the View menu's zoom levels and
+# the file the level is kept in. Nothing in it may reference `tauri`.
+rust_test(
+    name = "zoom_test",
+    size = "small",
+    srcs = ["src/zoom.rs"],
+    crate_root = "src/zoom.rs",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)
+
+# Same arrangement for `src/raw_store.rs`: what Browse may open a raw
+# store with, and the path check that keeps the page to stores inside
+# the data root. Nothing in it may reference `tauri`.
+rust_test(
+    name = "raw_store_test",
+    size = "small",
+    srcs = ["src/raw_store.rs"],
+    crate_root = "src/raw_store.rs",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
 )
 
 # The Node runtime that ships inside the .app, copied out of the

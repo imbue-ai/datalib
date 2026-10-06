@@ -1,6 +1,5 @@
 //! Read the whole YoLink raw store into memory for the renderer.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -115,16 +114,15 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
     let series = load_series(pool).await?;
     let scope_config = load_scope_config(pool).await;
     let reading_errors: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM pinned_yolink_readings_bookkeeping yolink_readings_bookkeeping WHERE last_error IS NOT NULL",
+        "SELECT COUNT(*) FROM yolink_readings_bookkeeping WHERE last_error IS NOT NULL",
     )
     .fetch_one(pool)
     .await
     .unwrap_or(0);
-    let reading_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM pinned_yolink_readings yolink_readings")
-            .fetch_one(pool)
-            .await
-            .context("count yolink_readings")?;
+    let reading_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM yolink_readings")
+        .fetch_one(pool)
+        .await
+        .context("count yolink_readings")?;
 
     Ok(ParsedYolink {
         head: Some(pin.commit().to_string()),
@@ -139,7 +137,7 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
 async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
     let rows = sqlx::query(
         "SELECT id, kind, start_ms, last_ts_ms, family_device_id \
-           FROM pinned_yolink_devices yolink_devices ORDER BY id",
+           FROM yolink_devices ORDER BY id",
     )
     .fetch_all(pool)
     .await
@@ -164,7 +162,7 @@ async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
 async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
     let rows = sqlx::query(
         "SELECT device_name, metric, ts_ms, value \
-           FROM pinned_yolink_readings yolink_readings ORDER BY device_name, metric, ts_ms",
+           FROM yolink_readings ORDER BY device_name, metric, ts_ms",
     )
     .fetch_all(pool)
     .await
@@ -190,7 +188,7 @@ async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
 
 async fn load_scope_config(pool: &SqlitePool) -> Vec<ScopeConfigRow> {
     let Ok(rows) =
-        sqlx::query("SELECT scope, config, updated_at FROM pinned_sync_scope_config sync_scope_config ORDER BY scope")
+        sqlx::query("SELECT scope, config, updated_at FROM sync_scope_config ORDER BY scope")
             .fetch_all(pool)
             .await
     else {
@@ -203,18 +201,4 @@ async fn load_scope_config(pool: &SqlitePool) -> Vec<ScopeConfigRow> {
             updated_at: r.get::<String, _>("updated_at"),
         })
         .collect()
-}
-
-impl ParsedYolink {
-    pub fn series_by_device(&self) -> BTreeMap<&str, Vec<&Series>> {
-        datalib_etl_timeseries_render::series::by_device(&self.series)
-    }
-
-    pub fn latest_ts_ms(&self) -> Option<i64> {
-        datalib_etl_timeseries_render::series::latest_ts_ms(&self.series)
-    }
-
-    pub fn earliest_ts_ms(&self) -> Option<i64> {
-        datalib_etl_timeseries_render::series::earliest_ts_ms(&self.series)
-    }
 }

@@ -16,4 +16,6 @@ export const CONFIG_MUTATING = [
   "wizard-select",
   "wizard-email",
   "wizard-slack",
+  // Writes the library's saved layout (system/ui-state/layout.json).
+  "containers",
 ] as const;

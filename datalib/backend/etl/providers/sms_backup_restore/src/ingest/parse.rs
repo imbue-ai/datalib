@@ -58,6 +58,8 @@ pub struct MmsRecord {
     pub text: String,
     /// Image / audio / video part blobs.
     pub blobs: Vec<MmsBlob>,
+    /// Parts whose bytes did not decode, as `(name, why)`.
+    pub failed_blobs: Vec<(String, String)>,
 }
 
 /// One `<call>` record.
@@ -176,13 +178,13 @@ fn parse_mms_body(reader: &mut Reader<&[u8]>, head: Attrs) -> Result<MmsRecord> 
                             content_type: ct.to_string(),
                             bytes,
                         }),
+                        // Named apart from the decoded parts, so a part after
+                        // this one keeps the name it always had.
                         Err(e) => {
-                            tracing::warn!(
-                                event = "sms_mms_part_base64_failed",
-                                ct,
-                                error = %e,
-                                "an MMS part's base64 did not decode; skipped it"
-                            );
+                            let name = opt(&a, "cl")
+                                .or_else(|| opt(&a, "name"))
+                                .unwrap_or_else(|| format!("undecoded{}", rec.failed_blobs.len()));
+                            rec.failed_blobs.push((name, format!("{e:#}")))
                         }
                     }
                 }
@@ -233,6 +235,7 @@ fn mms_from_attrs(a: &Attrs) -> MmsRecord {
         contact_name: opt(a, "contact_name"),
         text: String::new(),
         blobs: Vec::new(),
+        failed_blobs: Vec::new(),
     }
 }
 
@@ -338,6 +341,26 @@ mod tests {
         assert_eq!(m.blobs[0].name, "image000001.gif");
         assert_eq!(m.blobs[0].content_type, "image/gif");
         assert_eq!(&m.blobs[0].bytes[0..3], b"GIF");
+    }
+
+    /// A decoded part after one that would not decode keeps the name it
+    /// had when the bad part was skipped, so its stored edge still matches.
+    #[test]
+    fn a_part_after_one_that_will_not_decode_keeps_its_name() {
+        let gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        let xml = format!(
+            r#"<smses count="1">
+  <mms date="1781811656000" msg_box="1" address="+17015550101" m_id="NCC-1701-D">
+    <parts>
+      <part seq="0" ct="image/gif" data="%%% not base64 %%%" />
+      <part seq="1" ct="image/gif" data="{gif}" />
+    </parts>
+  </mms>
+</smses>"#
+        );
+        let (_, mms) = parse_smses(&xml).unwrap();
+        assert_eq!(mms[0].blobs[0].name, "part0.gif");
+        assert_eq!(mms[0].failed_blobs[0].0, "undecoded0");
     }
 
     #[test]

@@ -56,7 +56,7 @@ async fn the_tng_fixture_ingests_and_renders() {
         (4, 4),
         "three threads under sessions/ and one under archived_sessions/; history.jsonl is not under either"
     );
-    assert_eq!((s.threads, s.subagents), (4, 1));
+    assert_eq!((s.transcripts, s.subagents), (4, 1));
     assert_eq!(s.malformed_lines, 1, "the non-JSON line is stepped over");
     assert_eq!((s.not_transcripts, s.unreadable), (0, 0));
     assert_eq!(s.records, 35 - 1 + 11 + 14 + 29);

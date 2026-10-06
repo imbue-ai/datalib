@@ -7,6 +7,9 @@
 //! struct shapes, attributes and the Rust→SQL type mapping are in this
 //! crate's README.
 
+mod portable_search;
+
+use portable_search::{ColSearch, TableSearch};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -116,7 +119,9 @@ fn parse_table_attr(attrs: &[Attribute], struct_name: &Ident) -> syn::Result<Str
 
 /// Implement `datalib_etl::store_handle::RawStoreHandle` by reading the
 /// struct's fields: every `SqlitePool` and every `BlobCas`, in declaration
-/// order, and nothing else.
+/// order, and nothing else; a `BlobCas` is closed but never committed. A
+/// field that is itself a handle (`EntityStore`, `CasEntityStore`)
+/// contributes every pool it reports.
 ///
 /// The point is exhaustiveness. A handle that grows a second store is the
 /// shape that has already gone wrong here — `RawStoreSession::finish`
@@ -139,6 +144,9 @@ enum StoreField {
     Cas,
     OptionalPool,
     OptionalCas,
+    /// A handle that is itself a `RawStoreHandle`: `datalib_etl`'s
+    /// `EntityStore` or `CasEntityStore`, which a provider's `RawDb` wraps.
+    Nested,
 }
 
 fn classify_store_field(ty: &Type) -> Option<StoreField> {
@@ -149,6 +157,7 @@ fn classify_store_field(ty: &Type) -> Option<StoreField> {
     match seg.ident.to_string().as_str() {
         "SqlitePool" => Some(StoreField::Pool),
         "BlobCas" => Some(StoreField::Cas),
+        "EntityStore" | "CasEntityStore" => Some(StoreField::Nested),
         "Option" => {
             let PathArguments::AngleBracketed(args) = &seg.arguments else {
                 return None;
@@ -170,25 +179,39 @@ fn expand_raw_store_handle(input: DeriveInput) -> syn::Result<TokenStream2> {
     let name = &input.ident;
     let fields = collect_named_fields(&input)?;
     let mut pushes: Vec<TokenStream2> = Vec::new();
+    let mut versioned: Vec<TokenStream2> = Vec::new();
     for f in &fields {
         let ident = f.ident.as_ref().expect("named field");
         match classify_store_field(&f.ty) {
-            Some(StoreField::Pool) => pushes.push(quote! { out.push(&self.#ident); }),
+            Some(StoreField::Pool) => {
+                pushes.push(quote! { out.push(&self.#ident); });
+                versioned.push(quote! { out.push(&self.#ident); });
+            }
             Some(StoreField::Cas) => pushes.push(quote! { out.push(self.#ident.pool()); }),
-            Some(StoreField::OptionalPool) => pushes.push(quote! {
-                if let Some(p) = self.#ident.as_ref() { out.push(p); }
-            }),
+            Some(StoreField::OptionalPool) => {
+                let push = quote! { if let Some(p) = self.#ident.as_ref() { out.push(p); } };
+                pushes.push(push.clone());
+                versioned.push(push);
+            }
             Some(StoreField::OptionalCas) => pushes.push(quote! {
                 if let Some(c) = self.#ident.as_ref() { out.push(c.pool()); }
             }),
+            Some(StoreField::Nested) => {
+                pushes.push(quote! {
+                    out.extend(::datalib_etl::store_handle::RawStoreHandle::pools(&self.#ident));
+                });
+                versioned.push(quote! {
+                    out.extend(::datalib_etl::store_handle::RawStoreHandle::versioned_pools(&self.#ident));
+                });
+            }
             None => {}
         }
     }
     if pushes.is_empty() {
         return Err(syn::Error::new_spanned(
             name,
-            "#[derive(RawStoreHandle)] found no store field; add a SqlitePool or BlobCas, \
-             or drop the derive",
+            "#[derive(RawStoreHandle)] found no store field; add a SqlitePool, BlobCas \
+             or EntityStore, or drop the derive",
         ));
     }
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
@@ -199,6 +222,13 @@ fn expand_raw_store_handle(input: DeriveInput) -> syn::Result<TokenStream2> {
             fn pools(&self) -> ::std::vec::Vec<&::sqlx::sqlite::SqlitePool> {
                 let mut out = ::std::vec::Vec::new();
                 #(#pushes)*
+                out
+            }
+
+            fn versioned_pools(&self) -> ::std::vec::Vec<&::sqlx::sqlite::SqlitePool> {
+                #[allow(unused_mut)]
+                let mut out = ::std::vec::Vec::new();
+                #(#versioned)*
                 out
             }
         }
@@ -837,11 +867,19 @@ struct PortableColumn {
     /// `#[derived]` column has no field to bind, so it calls a
     /// `derived_<column>()` method the struct must provide by hand.
     bind: TokenStream2,
+    span: proc_macro2::Span,
+    search: ColSearch,
+    variants: Option<TokenStream2>,
 }
 
 fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     let struct_name = input.ident.clone();
-    let (table, primary_key) = parse_portable_table_attr(&input.attrs, &struct_name)?;
+    let PortableTableAttr {
+        table,
+        primary_key,
+        indexes,
+        search,
+    } = parse_portable_table_attr(&input.attrs, &struct_name)?;
     let fields = collect_named_fields(&input)?;
 
     let mut columns: Vec<PortableColumn> = Vec::new();
@@ -849,7 +887,11 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     for f in &fields {
         let ident = f.ident.as_ref().expect("named field");
         let name = ident.to_string();
-        let ColAttr { sql, is_enum } = parse_col_attr(f)?;
+        let ColAttr {
+            sql,
+            is_enum,
+            search,
+        } = parse_col_attr(f)?;
         if name == primary_key.trim() {
             pk_is_text = matches!(classify(&f.ty), Some(PromotedKind::TextNotNull));
         }
@@ -891,10 +933,26 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
                      add support to `classify` rather than binding this column by hand",
             )),
         };
-        columns.push(PortableColumn { name, decl, bind });
+        let variants = is_enum.then(|| {
+            let inner = portable_search::option_inner(&f.ty);
+            quote! { <#inner as ::strum::VariantArray>::VARIANTS }
+        });
+        columns.push(PortableColumn {
+            name,
+            decl,
+            bind,
+            span: ident.span(),
+            search,
+            variants,
+        });
         // Load-time-derived columns trail their host field, always
         // nullable (they are absent from the struct).
-        for (dname, dsql) in parse_derived_attrs(f)? {
+        for Derived {
+            name: dname,
+            sql: dsql,
+            search,
+        } in parse_derived_attrs(f)?
+        {
             // No field to bind, so the struct supplies the value
             // through a method named for the column. A missing one is a
             // compile error, which is the point: adding a derived
@@ -905,8 +963,39 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
                 decl: format!("{dname} {dsql}"),
                 name: dname,
                 bind: quote! { self.#hook() },
+                span: ident.span(),
+                search,
+                variants: None,
             });
         }
+    }
+
+    // An index naming a column the table does not have would fail at
+    // `CREATE INDEX` on the first open of every store; say so at compile
+    // time instead.
+    let mut index_ddl_lits: Vec<LitStr> = Vec::new();
+    for (lit, ix) in &indexes {
+        if let Some(unknown) = ix
+            .columns
+            .iter()
+            .find(|c| !columns.iter().any(|col| &col.name == *c))
+        {
+            return Err(syn::Error::new_spanned(
+                lit,
+                format!(
+                    "index {} names {unknown:?}, which is not a column of {table}",
+                    ix.name
+                ),
+            ));
+        }
+        index_ddl_lits.push(LitStr::new(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS {name} ON {table}({cols})",
+                name = ix.name,
+                cols = ix.columns.join(", "),
+            ),
+            proc_macro2::Span::call_site(),
+        ));
     }
 
     let mut decl_lines: Vec<String> = columns.iter().map(|c| c.decl.clone()).collect();
@@ -915,6 +1004,9 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     let ddl = format!("CREATE TABLE IF NOT EXISTS {table} (\n    {body}\n)");
 
     let table_lit = LitStr::new(&table, proc_macro2::Span::call_site());
+    // `quote` repeats only iterables, so the table name rides along once
+    // per index.
+    let index_table_lits = vec![table_lit.clone(); index_ddl_lits.len()];
     let struct_name_lit = LitStr::new(&struct_name.to_string(), proc_macro2::Span::call_site());
     let ddl_lit = LitStr::new(&ddl, proc_macro2::Span::call_site());
     let col_lits: Vec<LitStr> = columns
@@ -972,8 +1064,28 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
+    let cols: Vec<portable_search::Col> = columns
+        .iter()
+        .map(|c| portable_search::Col {
+            name: &c.name,
+            span: c.span,
+            search: &c.search,
+            variants: c.variants.as_ref(),
+        })
+        .collect();
+    let described = portable_search::expand(
+        &struct_name,
+        &input.vis,
+        &table,
+        &primary_key,
+        &cols,
+        search,
+    )?;
+
     Ok(quote! {
         #write_path
+
+        #described
 
         /// `(table_name, Rust struct name)` for the table this schema defines.
         pub const TABLES: &[(&str, &str)] = &[(#table_lit, #struct_name_lit)];
@@ -985,19 +1097,35 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
         /// Column names, in declaration order (struct fields plus any
         /// load-time-derived columns).
         pub const COLUMNS: &[(&str, &[&str])] = &[(#table_lit, &[#(#col_lits),*])];
+
+        /// `(table_name, CREATE INDEX IF NOT EXISTS …)` for each declared
+        /// `index`. Separate from `DDL` so a store creates them only when
+        /// it wants them.
+        pub const INDEXES: &[(&str, &str)] = &[#((#index_table_lits, #index_ddl_lits)),*];
     })
+}
+
+/// `#[portable_table(...)]`, parsed. Each index keeps its literal so an
+/// error can point at it.
+struct PortableTableAttr {
+    table: String,
+    primary_key: String,
+    indexes: Vec<(LitStr, IndexSpec)>,
+    search: Option<TableSearch>,
 }
 
 fn parse_portable_table_attr(
     attrs: &[Attribute],
     struct_name: &Ident,
-) -> syn::Result<(String, String)> {
+) -> syn::Result<PortableTableAttr> {
     for attr in attrs {
         if !attr.path().is_ident("portable_table") {
             continue;
         }
         let mut table: Option<String> = None;
         let mut primary_key: Option<String> = None;
+        let mut indexes: Vec<(LitStr, IndexSpec)> = Vec::new();
+        let mut search: Option<TableSearch> = None;
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("table") {
                 table = Some(meta.value()?.parse::<LitStr>()?.value());
@@ -1005,9 +1133,18 @@ fn parse_portable_table_attr(
             } else if meta.path.is_ident("primary_key") {
                 primary_key = Some(meta.value()?.parse::<LitStr>()?.value());
                 Ok(())
+            } else if meta.path.is_ident("index") {
+                let lit: LitStr = meta.value()?.parse()?;
+                let spec = parse_index_spec(&lit)?;
+                indexes.push((lit, spec));
+                Ok(())
+            } else if meta.path.is_ident("search") {
+                search = Some(portable_search::parse_table_search(&meta)?);
+                Ok(())
             } else {
                 Err(meta.error(
-                    "unknown #[portable_table(...)] key; supported keys: `table`, `primary_key`",
+                    "unknown #[portable_table(...)] key; supported keys: `table`, `primary_key`, \
+                     `index`, `search`",
                 ))
             }
         })?;
@@ -1017,7 +1154,12 @@ fn parse_portable_table_attr(
         let primary_key = primary_key.ok_or_else(|| {
             syn::Error::new_spanned(attr, "#[portable_table(primary_key = \"...\")] is required")
         })?;
-        return Ok((table, primary_key));
+        return Ok(PortableTableAttr {
+            table,
+            primary_key,
+            indexes,
+            search,
+        });
     }
     Err(syn::Error::new_spanned(
         struct_name,
@@ -1030,6 +1172,7 @@ struct ColAttr {
     /// `#[col(sql = "…", enum)]`: the field is a `Copy` enum with
     /// `as_str(self) -> &'static str`, bound as that text.
     is_enum: bool,
+    search: ColSearch,
 }
 
 fn parse_col_attr(field: &Field) -> syn::Result<ColAttr> {
@@ -1039,6 +1182,7 @@ fn parse_col_attr(field: &Field) -> syn::Result<ColAttr> {
         }
         let mut sql: Option<String> = None;
         let mut is_enum = false;
+        let mut search = ColSearch::default();
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("sql") {
                 sql = Some(meta.value()?.parse::<LitStr>()?.value());
@@ -1046,13 +1190,22 @@ fn parse_col_attr(field: &Field) -> syn::Result<ColAttr> {
             } else if meta.path.is_ident("enum") {
                 is_enum = true;
                 Ok(())
+            } else if search.parse_meta(&meta)? {
+                Ok(())
             } else {
-                Err(meta.error("unknown #[col(...)] key; supported keys: `sql`, `enum`"))
+                Err(meta.error(format!(
+                    "unknown #[col(...)] key; supported keys: `sql`, `enum`, {}",
+                    portable_search::COL_KEYS
+                )))
             }
         })?;
         let sql =
             sql.ok_or_else(|| syn::Error::new_spanned(attr, "#[col(sql = \"...\")] is required"))?;
-        return Ok(ColAttr { sql, is_enum });
+        return Ok(ColAttr {
+            sql,
+            is_enum,
+            search,
+        });
     }
     Err(syn::Error::new_spanned(
         field,
@@ -1060,7 +1213,13 @@ fn parse_col_attr(field: &Field) -> syn::Result<ColAttr> {
     ))
 }
 
-fn parse_derived_attrs(field: &Field) -> syn::Result<Vec<(String, String)>> {
+struct Derived {
+    name: String,
+    sql: String,
+    search: ColSearch,
+}
+
+fn parse_derived_attrs(field: &Field) -> syn::Result<Vec<Derived>> {
     let mut out = Vec::new();
     for attr in &field.attrs {
         if !attr.path().is_ident("derived") {
@@ -1068,6 +1227,7 @@ fn parse_derived_attrs(field: &Field) -> syn::Result<Vec<(String, String)>> {
         }
         let mut name: Option<String> = None;
         let mut sql: Option<String> = None;
+        let mut search = ColSearch::default();
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("name") {
                 name = Some(meta.value()?.parse::<LitStr>()?.value());
@@ -1075,8 +1235,13 @@ fn parse_derived_attrs(field: &Field) -> syn::Result<Vec<(String, String)>> {
             } else if meta.path.is_ident("sql") {
                 sql = Some(meta.value()?.parse::<LitStr>()?.value());
                 Ok(())
+            } else if search.parse_meta(&meta)? {
+                Ok(())
             } else {
-                Err(meta.error("unknown #[derived(...)] key; supported keys: `name`, `sql`"))
+                Err(meta.error(format!(
+                    "unknown #[derived(...)] key; supported keys: `name`, `sql`, {}",
+                    portable_search::COL_KEYS
+                )))
             }
         })?;
         let name = name.ok_or_else(|| {
@@ -1091,7 +1256,7 @@ fn parse_derived_attrs(field: &Field) -> syn::Result<Vec<(String, String)>> {
                 "#[derived(name = \"...\", sql = \"...\")] needs `sql`",
             )
         })?;
-        out.push((name, sql));
+        out.push(Derived { name, sql, search });
     }
     Ok(out)
 }

@@ -1,213 +1,218 @@
-/* The sources card's own markup and the panels it opens. A plain file
-   rather than the component's <style>: the panels are teleported to
-   <body> (their components' scoped styles live in the head), so this
-   is imported into the head once by cards/libs/sourcesView.ts, and
-   also handed to the card as a style source for what stays in its
-   shadow root. */
-/* The card fills its shadow root's box and bounds itself — which is
-   what lets the grid scroll on its own. `min-height: 0` is the part
-   that makes a flex child actually shrink rather than overflow. */
-.m2 {
+/* The Sources card (SourcesCard.ce.vue). A plain file,
+   handed to the card as a style source after tableGrid.css: the grid
+   draws its cells outside Vue, so a scoped style would never reach
+   them, and everything here is scoped under `.sx` instead. */
+
+.sx {
   position: absolute;
   inset: 0;
-  min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 8px 12px 12px;
-  box-sizing: border-box;
+  min-height: 0;
   overflow: hidden;
+  font-size: var(--datalib-font-size);
+  color: var(--datalib-fg);
+  background: var(--datalib-bg);
 }
-.m2-head { display: flex; align-items: flex-start; gap: 16px; flex: 0 0 auto; }
-/* The two header actions travel together, pinned right. */
-.m2-head-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-/* Sized to sit level with "+ Data Source", but outlined rather than
-   filled: running what is already configured is the routine act, adding
-   a source the deliberate one, and only one of them should read as the
-   primary thing to do on this screen. */
-.m2-runall {
-  padding: 8px 14px;
-  font-size: inherit;
-  font-weight: 600;
-  white-space: nowrap;
-}
-/* Sized to sit level with the two buttons beside it, but plain: it
-   opens a panel, it doesn't do anything to the pipeline. */
-.m2-add {
-  padding: 8px 14px;
-  border: 1px solid var(--datalib-accent);
-  border-radius: 5px;
-  background: var(--datalib-accent);
-  color: #fff;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-.m2-add:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.m2-msg { margin: 12px 0 0; font-size: 13px; }
-.m2-msg.bad { color: var(--datalib-log-error); }
-.m2-msg.good { color: var(--datalib-muted); }
-/* One line beside the header's buttons, whatever its length; the hover
-   has the whole of it. */
-.m2-head-msg {
-  margin: 0;
-  align-self: center;
+.sx-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px var(--datalib-pad);
+  border-bottom: 1px solid var(--datalib-border-soft);
+}
+.sx-line {
   flex: 1 1 auto;
   min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.sx-line-ok {
+  color: var(--datalib-muted);
+}
+.sx-line-bad {
+  color: var(--datalib-error-fg);
+}
+
+.sx-btn {
+  flex: 0 0 auto;
+  height: var(--datalib-control-h);
+  padding: 0 10px;
+  font: inherit;
+  font-weight: 600;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  cursor: pointer;
+}
+.sx-btn:hover:not(:disabled) {
+  background: var(--datalib-hover);
+}
+.sx-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sx-btn-primary {
+  border-color: var(--datalib-accent);
+  background: var(--datalib-accent);
+  color: var(--datalib-on-accent);
+}
+.sx-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--datalib-accent) 85%, black);
+}
+.sx-btn-danger {
+  color: var(--datalib-error-fg);
+}
+
+/* A notice about the config, as a strip across the card. */
+.sx-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 6px var(--datalib-pad);
+  border-bottom: 1px solid var(--datalib-error-border);
+  background: var(--datalib-error-bg);
+  color: var(--datalib-error-fg);
+}
+.sx-strip-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sx-strip code {
+  font-family: var(--datalib-mono);
+  font-size: var(--datalib-font-size-small);
+}
+.sx-empty {
+  margin: 0;
+  padding: var(--datalib-pad);
+  color: var(--datalib-muted);
+}
+
+/* The table: the grid fills this box and scrolls inside it. */
+.sx-grid {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.sx .grid-pane {
+  --slick-font-size-base: var(--datalib-font-size);
+  --slick-header-font-size: var(--datalib-font-size-small);
+  --slick-header-font-weight: 600;
+  --slick-header-text-color: var(--datalib-faint);
+  --slick-header-background-color: var(--datalib-surface-2);
+  --slick-cell-border-right: none;
+  --slick-header-column-border-right: none;
+  --slick-cell-border-bottom: 1px solid var(--datalib-border-soft);
+}
+.sx .slick-header-column {
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* A group's name reads heavier than its steps'; the problem counts
+   after it are pills in the state's colour. */
+.sx .tg-badge {
+  border: none;
+  font-size: var(--datalib-font-size-small);
+  font-weight: 600;
+}
+.sx .tg-chip-error {
+  color: var(--datalib-error-fg);
+  background: var(--datalib-error-bg);
+}
+.sx .tg-chip-warning {
+  color: var(--datalib-warn-fg);
+  background: var(--datalib-warn-bg);
+}
+.sx .tg-chip {
+  border-radius: var(--datalib-radius);
+}
+
+/* Status: a dot in the state's colour, the word, then when. */
+.sx-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  min-width: 0;
+  white-space: nowrap;
+}
+.sx-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.sx-spinner {
+  width: 10px;
+  height: 10px;
+}
+.sx-when {
+  color: var(--datalib-faint);
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.m2-invalid {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--datalib-log-error);
-  border-radius: 5px;
-  max-width: 90ch;
+.sx-tone-ok {
+  color: var(--datalib-ok);
 }
-.m2-invalid > span { color: var(--datalib-fg); }
-.m2-dropped {
-  margin: 0;
-  padding-left: 1.1rem;
-  color: var(--datalib-fg);
-  font-size: 12.5px;
-  line-height: 1.6;
+.sx-tone-ok .sx-dot {
+  background: var(--datalib-ok-dot);
 }
-.m2-invalid-why { color: var(--datalib-muted) !important; font-size: 12.5px; line-height: 1.55; }
-
-.m2-grid {
-  margin-top: 8px;
-  /* A definite height is what makes the grid scroll internally — both
-     ways. */
-  flex: 1 1 auto;
-  min-height: 180px;
-  position: relative;
-}
-.m2-foot {
-  flex: 0 0 auto;
-  max-height: 52vh;
-  overflow-y: auto;
-}
-.m2-empty { color: var(--datalib-muted); font-size: 14px; margin-top: 16px; }
-
-/* The per-step log panel. Modal, because it is a full answer to a
-   question the grid can only gesture at, and because the grid behind it
-   repaints whenever a step moves — a panel docked inside it would be
-   fighting that. */
-.m2-logs-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  z-index: 50;
-}
-.m2-logs {
-  background: var(--datalib-bg);
-  border: 1px solid var(--datalib-border);
-  border-radius: 8px;
-  width: min(920px, 100%);
-  max-height: 100%;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
-}
-/* The log panel is a grid and wants the room: wide for its columns,
-   tall enough that following a run is not a keyhole. */
-.m2-logs-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--datalib-border);
-  flex: 0 0 auto;
-}
-.m2-logs-head h3 { margin: 0 0 3px; font-size: 15px; }
-.m2-logs-head p { margin: 0; font-size: 12px; color: var(--datalib-muted); }
-.m2-logs-head button { margin-left: auto; }
-.m2-logs-note { margin: 0; padding: 16px; font-size: 13px; color: var(--datalib-muted); max-width: 70ch; }
-.m2-logs-note.bad { color: var(--datalib-log-error); }
-/* The history panel is a grid rather than a list, and wider than the
-   log: nine columns, and the table list is the one worth the room. */
-.m2-history { width: min(1400px, 100%); height: min(720px, 100%); }
-/* `position: relative`, because the viewer fills it absolutely — see
-   the WebKit note above it. */
-.m2-history-grid { position: relative; flex: 1 1 auto; min-height: 0; margin: 0 16px 16px; }
-
-/* Cell renderers build plain DOM, so their classes can't be scoped. */
-.m2-history-hash {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
-.m2-history-label { display: inline-flex; align-items: baseline; gap: 8px; }
-.m2-history-store { font-weight: 600; }
-.m2-history-table { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-/* Two lines in one row's height, like the size cell. */
-.m2-history-when { display: inline-flex; flex-direction: column; line-height: 1.25; justify-content: center; height: 100%; }
-.m2-history-when .m2-cell-dir { font-size: 11px; }
-.m2-history-run {
-  padding: 0;
-  margin: 0;
-  background: transparent;
-  border: none;
+.sx-tone-run {
   color: var(--datalib-accent);
-  font: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  cursor: pointer;
-  text-decoration: underline dotted;
 }
-/* The same control as `button.copy-uuid` in ChatBody: a greyed glyph
-   that lights up on hover and flashes its verdict. */
-.m2-copy-id {
-  filter: grayscale(1);
-  display: inline-flex;
-  align-items: center;
-  padding: 0;
-  margin: 0;
-  background: transparent;
+.sx-tone-warn {
+  color: var(--datalib-warn-fg);
+}
+.sx-tone-warn .sx-dot {
+  background: var(--datalib-warn-dot);
+}
+.sx-tone-error {
+  color: var(--datalib-error-fg);
+  font-weight: 600;
+}
+.sx-tone-muted {
+  color: var(--datalib-muted);
+}
+.sx-tone-muted .sx-dot {
+  background: var(--datalib-border);
+}
+
+/* The row's buttons: quiet until the row is under the pointer. */
+.sx .tg-icon-btn {
+  width: 22px;
+  height: 20px;
+  border-radius: var(--datalib-radius);
+}
+.sx .tg-switch {
+  width: 24px;
+  height: 14px;
   border: none;
-  color: inherit;
-  font: inherit;
-  font-size: 0.9em;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0.55;
+  background: var(--datalib-border);
 }
-.m2-copy-id:hover { opacity: 1; }
-.m2-copy-id.copied { color: #16a34a; opacity: 1; filter: none; }
-.m2-copy-id.copy-failed { color: #dc2626; opacity: 1; filter: none; }
-
-/* The sparkline itself, shared by the size column and the status bar.
-   Unscoped along with the rest of this block because the cell renderers
-   build plain DOM.
-
-   `vector-effect: non-scaling-stroke` is load-bearing: the svg is
-   stretched from its 120-unit box to whatever the column is wide, and
-   without it the stroke stretches too — a 1px line drawn as an ellipse
-   two pixels wide horizontally and one vertically. */
-
-.m2-btn {
-  padding: 2px 9px;
-  border: 1px solid var(--datalib-border);
-  border-radius: 4px;
-  background: var(--datalib-card-bg);
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+.sx .tg-switch-knob {
+  top: 2px;
+  left: 2px;
+  background: #fff;
 }
-.m2-btn:hover:not(:disabled) { background: var(--datalib-hover); }
-.m2-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.m2-btn.danger:hover:not(:disabled) { border-color: var(--datalib-log-error); color: var(--datalib-log-error); }
-.m2-btn.muted { color: var(--datalib-muted); }
-.m2-btn.muted:hover:not(:disabled) { color: var(--datalib-fg); }
+.sx .tg-switch[aria-checked="true"] {
+  background: var(--datalib-accent);
+}
+.sx .tg-switch[aria-checked="true"] .tg-switch-knob {
+  left: 12px;
+  background: #fff;
+}
+
+/* The size plot: a quiet track, the number over it. */
+.sx .tg-plot {
+  background: var(--datalib-surface-2);
+  border-radius: var(--datalib-radius);
+}

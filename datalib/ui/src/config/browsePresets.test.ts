@@ -16,10 +16,18 @@ describe("browseColumns", () => {
   });
 
   /// The text column is the reason the grid is worth looking at. No
-  /// preset may drop it, and it reads last because it is the widest.
-  it("always ends with the contents column", () => {
-    for (const type of [...browsePresetTypes(), "some_type_we_never_heard_of"]) {
-      expect(browseColumns(type)!.at(-1)).toBe("snippet");
+  /// preset may drop it, and only what the row is and what it is called
+  /// come before it, so it is on screen however narrow the card.
+  it("shows the contents right after the row's kind and name", () => {
+    for (const type of [...browsePresetTypes(), "some_type_we_never_heard_of", "diff"]) {
+      const cols = browseColumns(type)!;
+      const before = cols.slice(0, cols.indexOf("snippet"));
+      expect(cols).toContain("snippet");
+      expect(
+        before.filter(
+          (c) => !["kind", "conversation_name", "diff_status", "diff_changed_columns"].includes(c),
+        ),
+      ).toEqual([]);
     }
   });
 
@@ -40,7 +48,7 @@ describe("browseColumns", () => {
   });
 
   /// The unified projection keeps the grid's own defaults: there the
-  /// Provider and Source columns are the whole point, and a preset
+  /// Source column is the whole point, and a preset
   /// tuned for one source would hide them.
   it("has no preset for the index group", () => {
     expect(browseColumns(null)).toBeNull();
@@ -71,6 +79,29 @@ describe("browseColumns", () => {
     expect(browseColumns("claude")).toContain("org_name");
     expect(browseColumns("slack")).not.toContain("org_name");
   });
+
+  /// One stamp per browse: when a document was last touched, except a
+  /// calendar's, whose created_at is when the event happens.
+  it("shows Touched, and Created only for a calendar", () => {
+    for (const type of [...browsePresetTypes(), "some_type_we_never_heard_of"]) {
+      const cols = browseColumns(type)!;
+      expect(cols).not.toContain("modified_at");
+      if (type === "calendar") {
+        expect(cols).toContain("created_at");
+        expect(cols).not.toContain("touched_at");
+      } else {
+        expect(cols).toContain("touched_at");
+        expect(cols).not.toContain("created_at");
+      }
+    }
+  });
+
+  /// A Slack thread's conversation name is its channel's name.
+  it("gives Slack one place", () => {
+    const slack = browseColumns("slack")!;
+    expect(slack).toContain("channel");
+    expect(slack).not.toContain("conversation_name");
+  });
 });
 
 describe("browseQuery", () => {
@@ -86,7 +117,6 @@ describe("browseQuery", () => {
     expect(browseQuery("slack-diff", "diff")).toBe("source_id:slack-diff -change:unchanged");
     const cols = browseColumns("diff")!;
     expect(cols.slice(0, 2)).toEqual(["diff_status", "diff_changed_columns"]);
-    expect(cols.at(-1)).toBe("snippet");
   });
 });
 

@@ -20,7 +20,10 @@ fn api_form(cursor: &str) -> String {
     }
 }
 
+/// `now` is the run's pinned clock: the floor it sets is a request
+/// parameter, so a wall-clock floor makes a replayed run ask something new.
 pub fn since_for_scope(
+    now: &datalib_time::IsoOffsetTimestamp,
     state: &HashMap<String, String>,
     scope: &str,
     refresh_window_days: u32,
@@ -51,7 +54,8 @@ pub fn since_for_scope(
         if refresh_window_days == 0 {
             return None;
         }
-        let floor = Utc::now() - ChronoDuration::days(refresh_window_days as i64);
+        let floor =
+            now.inner().with_timezone(&Utc) - ChronoDuration::days(refresh_window_days as i64);
         let floor = floor.to_rfc3339_opts(SecondsFormat::Secs, true);
         // Both are RFC 3339 at seconds precision in UTC, so the
         // lexicographic min is the chronological one.
@@ -60,7 +64,7 @@ pub fn since_for_scope(
     if refresh_window_days == 0 {
         return None;
     }
-    let floor = Utc::now() - ChronoDuration::days(refresh_window_days as i64);
+    let floor = now.inner().with_timezone(&Utc) - ChronoDuration::days(refresh_window_days as i64);
     Some(floor.to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
@@ -143,7 +147,15 @@ mod tests {
     fn a_stored_cursor_reaches_the_api_at_seconds_precision_in_utc() {
         let s = state_with(&[("a", "2026-06-01T02:00:00.000000+02:00")]);
         assert_eq!(
-            since_for_scope(&s, "a", 7, false, None).as_deref(),
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "a",
+                7,
+                false,
+                None
+            )
+            .as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
     }
@@ -151,14 +163,32 @@ mod tests {
     #[test]
     fn full_returns_none_regardless_of_state_or_window() {
         let s = state_with(&[("created_by_me", "2026-01-01T00:00:00Z")]);
-        assert_eq!(since_for_scope(&s, "created_by_me", 7, true, None), None);
+        assert_eq!(
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "created_by_me",
+                7,
+                true,
+                None
+            ),
+            None
+        );
     }
 
     #[test]
     fn state_present_takes_priority_over_window() {
         let s = state_with(&[("created_by_me", "2026-06-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope(&s, "created_by_me", 7, false, None).as_deref(),
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "created_by_me",
+                7,
+                false,
+                None
+            )
+            .as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
     }
@@ -166,14 +196,31 @@ mod tests {
     #[test]
     fn no_state_no_window_returns_none() {
         let s = state_with(&[]);
-        assert_eq!(since_for_scope(&s, "created_by_me", 0, false, None), None);
+        assert_eq!(
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "created_by_me",
+                0,
+                false,
+                None
+            ),
+            None
+        );
     }
 
     #[test]
     fn no_state_with_window_uses_window_floor() {
         let s = state_with(&[]);
-        let got =
-            since_for_scope(&s, "created_by_me", 7, false, None).expect("expected window floor");
+        let got = since_for_scope(
+            &datalib_time::IsoOffsetTimestamp::now_local(),
+            &s,
+            "created_by_me",
+            7,
+            false,
+            None,
+        )
+        .expect("expected window floor");
         let parsed = chrono::DateTime::parse_from_rfc3339(&got).expect("rfc3339");
         let ago = Utc::now().signed_duration_since(parsed.with_timezone(&Utc));
         assert!(
@@ -200,7 +247,15 @@ mod tests {
         // Every store predating `sync_scope_config`. Must not re-walk.
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope(&s, "a", 365, false, None).as_deref(),
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "a",
+                365,
+                false,
+                None
+            )
+            .as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
     }
@@ -209,7 +264,15 @@ mod tests {
     fn unchanged_window_keeps_the_cursor() {
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope(&s, "a", 30, false, Some(&prior(30))).as_deref(),
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "a",
+                30,
+                false,
+                Some(&prior(30))
+            )
+            .as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
     }
@@ -219,7 +282,15 @@ mod tests {
         // Store is already a superset; nothing to fetch.
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope(&s, "a", 7, false, Some(&prior(30))).as_deref(),
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "a",
+                7,
+                false,
+                Some(&prior(30))
+            )
+            .as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
     }
@@ -234,8 +305,15 @@ mod tests {
                 .to_rfc3339_opts(SecondsFormat::Secs, true)
                 .as_str(),
         )]);
-        let got = since_for_scope(&s, "a", 365, false, Some(&prior(30)))
-            .expect("expected a widened floor");
+        let got = since_for_scope(
+            &datalib_time::IsoOffsetTimestamp::now_local(),
+            &s,
+            "a",
+            365,
+            false,
+            Some(&prior(30)),
+        )
+        .expect("expected a widened floor");
         assert!(
             (364..=366).contains(&days_back(&got)),
             "expected ~365d back, got {got}"
@@ -248,7 +326,15 @@ mod tests {
         // reason to give up its precision and re-walk what it covers.
         let s = state_with(&[("a", "2020-01-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope(&s, "a", 365, false, Some(&prior(30))).as_deref(),
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "a",
+                365,
+                false,
+                Some(&prior(30))
+            )
+            .as_deref(),
             Some("2020-01-01T00:00:00Z")
         );
     }
@@ -256,7 +342,17 @@ mod tests {
     #[test]
     fn window_widened_to_unbounded_drops_the_filter() {
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
-        assert_eq!(since_for_scope(&s, "a", 0, false, Some(&prior(30))), None);
+        assert_eq!(
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "a",
+                0,
+                false,
+                Some(&prior(30))
+            ),
+            None
+        );
     }
 
     #[test]
@@ -265,11 +361,27 @@ mod tests {
         // narrowing, so the cursor stands.
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
         assert_eq!(
-            since_for_scope(&s, "a", 30, false, Some(&prior(0))).as_deref(),
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "a",
+                30,
+                false,
+                Some(&prior(0))
+            )
+            .as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
         assert_eq!(
-            since_for_scope(&s, "a", 0, false, Some(&prior(0))).as_deref(),
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "a",
+                0,
+                false,
+                Some(&prior(0))
+            )
+            .as_deref(),
             Some("2026-06-01T00:00:00Z")
         );
     }
@@ -277,7 +389,17 @@ mod tests {
     #[test]
     fn full_still_wins_over_a_widened_window() {
         let s = state_with(&[("a", "2026-06-01T00:00:00Z")]);
-        assert_eq!(since_for_scope(&s, "a", 365, true, Some(&prior(30))), None);
+        assert_eq!(
+            since_for_scope(
+                &datalib_time::IsoOffsetTimestamp::now_local(),
+                &s,
+                "a",
+                365,
+                true,
+                Some(&prior(30))
+            ),
+            None
+        );
     }
 
     #[test]

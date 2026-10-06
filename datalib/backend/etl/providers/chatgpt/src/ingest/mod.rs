@@ -4,16 +4,21 @@ pub mod api;
 pub mod db;
 pub mod schema_raw;
 
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::DateTime;
+use datalib_etl::blob_cas::CasEdgeAccumulator;
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
+use datalib_etl::download_problems::DownloadProblem;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::http::IMPERSONATE_MARKER_HEADER;
 use datalib_etl::latchkey::latchkey_curl_command;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_problems::Reason;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -41,9 +46,9 @@ pub struct FetchOptions {
     /// account for the service.
     pub latchkey: LatchkeySettings,
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     /// Seals what has been written so far, so render can start on the
     /// early conversations while the rest are still arriving. `None` --
@@ -116,6 +121,13 @@ pub struct FetchSummary {
     db = %opts.db.pool().connect_options().get_filename().display()
 ))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| download(opts, found))
+        .await
+}
+
+async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
@@ -149,7 +161,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
 
     // Run-scoped `(file_id → blake3)` cache: loaded once up-front so
-    // the per-file dedupe check inside `fetch_attachments_for` is a
+    // the per-file dedupe check inside `fetch_attachments` is a
     // HashMap hit instead of a SQLite round trip. Successful
     // downloads insert into it so files referenced by multiple
     // conversations in the same run hit the cache on every reference
@@ -170,248 +182,51 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             "signed in as this account"
         );
 
+        let mut walk = Walk::new(found);
         if !opts.conv_uuids.is_empty() {
-            opts.progress.set_length(Some(opts.conv_uuids.len() as u64));
-            for raw in &opts.conv_uuids {
-                if opts.control.stop.requested() {
-                    info!(
-                        event = "chatgpt_interrupted",
-                        "told to stop; leaving the rest for the next run"
-                    );
-                    break;
-                }
-                opts.progress.inc(1);
-                opts.progress.set_message(raw);
-                let target = datalib_etl::ids::normalize_id_token(raw);
-                match client.get_conversation(&target).await {
-                    Ok(full) => {
-                        let full = canonicalize_conversation_payload(&full);
-                        let (title, update_time) = title_and_update_time(&full);
-                        let payload =
-                            serde_json::to_string(&full).context("serialize conversation")?;
-                        upsert_conversations(
-                            &db,
-                            &[ConversationUpsert {
-                                id: target.clone(),
-                                title,
-                                update_time,
-                                payload,
-                            }],
-                            &now,
-                        )
-                        .await?;
-                        summary.fetched += 1;
-                        fetch_attachments_for(
-                            &mut client,
-                            &db,
-                            &full,
-                            &mut summary,
-                            &mut blake3_by_file,
-                            &now,
-                        )
-                        .await;
-                        // The store is consistent here and nowhere earlier:
-                        // the conversation row and the blobs it names have
-                        // both landed. Sealing between the two would publish
-                        // a message pointing at bytes no reader can resolve.
-                        if let Some(sealer) = opts.sealer.as_ref() {
-                            sealer.wrote(1).await;
-                        }
-                        info!(event = "chatgpt_fetch_single_ok", raw = raw, id = %target, "fetched one conversation by id");
-                    }
-                    Err(e) => {
-                        warn!(event = "chatgpt_fetch_error", raw = raw, id = %target, error = %e, "a conversation could not be fetched");
-                        return Err(anyhow::anyhow!("fetch {raw}: {e}"));
-                    }
-                }
-            }
-            return Ok::<(), anyhow::Error>(());
-        }
-
-        opts.progress.set_message("listing conversations");
-        let Listing {
-            items: listing,
-            complete: listing_complete,
-        } = list_all_conversations(&mut client, opts.max_pages, since_secs, &opts.progress)
-            .instrument(info_span!("chatgpt_list"))
+            fetch_named(
+                &mut client,
+                &db,
+                &opts,
+                &mut summary,
+                &mut blake3_by_file,
+                &now,
+                &mut walk,
+            )
             .await?;
-        info!(
-            event = "chatgpt_listing",
-            convs = listing.len(),
-            complete = listing_complete,
-            "listed the conversations"
-        );
-        summary.listing = listing.len();
-
-        // A complete walk is an authoritative census of the account, so a
-        // conversation we hold that it did not name has been deleted on
-        // chatgpt.com. An incomplete one says nothing: the pages it never
-        // asked for are full of conversations that still exist, which is
-        // why this is gated rather than always-on. With `since` configured
-        // most runs stop early and prune nothing, which is the conservative
-        // side to err on.
-        if listing_complete {
-            let keep: std::collections::HashSet<String> = listing
-                .iter()
-                .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
-                .map(String::from)
-                .collect();
-            summary.pruned = db.prune_conversations(&keep).await?;
-        }
-
-        // Skip-check: bulk-read existing `(id, update_time)` for every
-        // listed id, then compare to the listing's update_time. Rows
-        // we don't have at all → missing. Rows whose stored update_time
-        // differs from the listing's → stale. Both fall into the work
-        // queue; everything else is up-to-date and skipped.
-        let listed_ids: Vec<&str> = listing
-            .iter()
-            .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
-            .collect();
-        let existing = db.existing_update_times(&listed_ids).await?;
-
-        // Prioritize: missing > stale > already-good. Same intent as
-        // the JSONL implementation's "spend our 429 budget on new
-        // work" ordering.
-        let mut missing: Vec<&Value> = Vec::new();
-        let mut stale: Vec<&Value> = Vec::new();
-        let mut up_to_date: usize = 0;
-        for item in &listing {
-            let Some(cid) = item.get("id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            // `since` scope filter: out-of-scope items are never
-            // detail-fetched. Items with an unparseable `update_time`
-            // fall through in scope (fetch rather than silently drop).
-            // The filter only gates fetching — already-stored rows are
-            // untouched — so moving `since` further back later
-            // backfills the newly-in-scope conversations as missing.
-            if let (Some(cutoff), Some(api_secs)) = (
+        } else {
+            fetch_listed(
+                &mut client,
+                &db,
+                &opts,
                 since_secs,
-                item.get("update_time").and_then(update_time_secs),
-            ) {
-                if api_secs < cutoff {
-                    summary.out_of_scope += 1;
-                    continue;
-                }
-            }
-            match existing.get(cid) {
-                None => missing.push(item),
-                // Canonicalize both sides to a whole-second epoch before
-                // comparing. The stored value is the *detail* endpoint's
-                // Unix-epoch float; `item`'s is the *listing* endpoint's
-                // ISO-8601 string — comparing the raw JSON encodings
-                // never matches, so every conversation looks stale and
-                // gets re-fetched (see `update_time_secs`). Either side
-                // failing to canonicalize falls through to `stale`, the
-                // safe (re-fetch) direction.
-                Some(stored) => {
-                    let stored_secs = stored_update_time_secs(stored);
-                    let api_secs = item.get("update_time").and_then(update_time_secs);
-                    match (stored_secs, api_secs) {
-                        (Some(a), Some(b)) if a == b => up_to_date += 1,
-                        _ => stale.push(item),
-                    }
-                }
-            }
+                &mut summary,
+                &mut blake3_by_file,
+                &now,
+                &mut walk,
+            )
+            .await?;
         }
-        info!(
-            event = "chatgpt_priority_split",
-            missing = missing.len(),
-            stale = stale.len(),
-            up_to_date = up_to_date,
-            out_of_scope = summary.out_of_scope,
-            "sorted the listing into what to fetch"
-        );
-        summary.skipped += up_to_date;
-
-        let ordered: Vec<&Value> = missing.into_iter().chain(stale).collect();
-        opts.progress.set_length(Some(ordered.len() as u64));
-        for item in ordered {
-            // Asked to stop: the conversation that just landed sealed with
-            // its blobs, so end here.
-            if opts.control.stop.requested() {
-                info!(
-                    event = "chatgpt_interrupted",
-                    "told to stop; leaving the rest for the next run"
-                );
-                break;
-            }
-            opts.progress.inc(1);
-            if let Some(limit) = opts.limit {
-                if summary.fetched + summary.errors >= limit {
-                    info!(
-                        event = "chatgpt_limit_reached",
-                        limit = limit,
-                        "reached the configured fetch limit; stopping here"
-                    );
-                    break;
-                }
-            }
-            let Some(cid) = item.get("id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            opts.progress.set_message(cid);
-            match client.get_conversation(cid).await {
-                Ok(full) => {
-                    let full = canonicalize_conversation_payload(&full);
-                    let (title, update_time) = title_and_update_time(&full);
-                    let payload = match serde_json::to_string(&full) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            warn!(event = "chatgpt_serialize_error", cid = cid, error = %e, "a conversation could not be serialized for the store");
-                            summary.errors += 1;
-                            continue;
-                        }
-                    };
-                    upsert_conversations(
-                        &db,
-                        &[ConversationUpsert {
-                            id: cid.to_string(),
-                            title,
-                            update_time,
-                            payload,
-                        }],
-                        &now,
-                    )
-                    .await?;
-                    summary.fetched += 1;
-                    fetch_attachments_for(
-                        &mut client,
-                        &db,
-                        &full,
-                        &mut summary,
-                        &mut blake3_by_file,
-                        &now,
-                    )
-                    .await;
-                    // Consistent here and nowhere earlier: the conversation
-                    // row and the blobs it names have both landed.
-                    if let Some(sealer) = opts.sealer.as_ref() {
-                        sealer.wrote(1).await;
-                    }
-                    if opts.sleep_between > Duration::ZERO {
-                        sleep(opts.sleep_between).await;
-                    }
-                }
-                Err(ChatGPTError::RateLimited { path, reason }) => {
-                    warn!(
-                        event = "chatgpt_rate_limit_giveup",
-                        path = %path,
-                        reason = %reason,
-                        fetched = summary.fetched,
-                        "giving up on this request after the rate-limit retries"
-                    );
-                    break;
-                }
-                Err(ChatGPTError::Permanent(msg)) => {
-                    warn!(event = "chatgpt_fetch_error", cid = cid, error = %msg, "a conversation could not be fetched");
-                    let _ = db.record_conversation_error(cid, &msg).await;
-                    summary.errors += 1;
-                }
-            }
+        if !walk.rate_limited && !opts.control.stop.requested() {
+            retry_attachments(
+                &mut client,
+                &db,
+                &opts,
+                &mut summary,
+                &mut blake3_by_file,
+                &mut walk,
+            )
+            .await?;
         }
-        Ok(())
+        // A rate limit may have left named conversations unchecked, so
+        // their `config:` rows stand, and it ended the run before every
+        // listing and phase was tried.
+        if walk.rate_limited {
+            walk.found.cut_short();
+        } else {
+            walk.found.config(std::mem::take(&mut walk.config_problems));
+        }
+        Ok::<(), anyhow::Error>(())
     };
 
     let result = work.await;
@@ -420,6 +235,413 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
+}
+
+/// What one run could not do, and what the retry pass needs to know
+/// about the walk.
+struct Walk {
+    found: RunProblems,
+    config_problems: Vec<DownloadProblem>,
+    /// Conversations whose attachments the walk already tried this run.
+    attachments_tried: HashSet<String>,
+    /// The give-up policy tripped; every further request would too.
+    rate_limited: bool,
+}
+
+/// Why a conversation's attachments were not all tried.
+enum Cut {
+    Stopped,
+    /// The give-up guard tripped, with why.
+    RateLimited(String),
+}
+
+impl Walk {
+    fn new(found: RunProblems) -> Self {
+        Self {
+            found,
+            config_problems: Vec::new(),
+            attachments_tried: HashSet::new(),
+            rate_limited: false,
+        }
+    }
+
+    fn rate_limited(&mut self, fetched: usize, left: usize, reason: &str) {
+        self.rate_limited = true;
+        self.found.phase(
+            "conversations",
+            format!("rate-limited after {fetched} fetched; {left} left for the next run: {reason}"),
+        );
+    }
+}
+
+/// `conv_uuids`: exactly the named conversations, no listing.
+async fn fetch_named(
+    client: &mut ChatGPTClient,
+    db: &RawDb,
+    opts: &FetchOptions,
+    summary: &mut FetchSummary,
+    blake3_by_file: &mut HashMap<String, String>,
+    now: &IsoOffsetTimestamp,
+    walk: &mut Walk,
+) -> Result<()> {
+    opts.progress.set_length(Some(opts.conv_uuids.len() as u64));
+    for (i, raw) in opts.conv_uuids.iter().enumerate() {
+        if opts.control.stop.requested() {
+            info!(
+                event = "chatgpt_interrupted",
+                "told to stop; leaving the rest for the next run"
+            );
+            break;
+        }
+        opts.progress.inc(1);
+        opts.progress.set_message(raw);
+        let target = datalib_etl::ids::normalize_id_token(raw);
+        match client.get_conversation(&target).await {
+            Ok(full) => {
+                let cut = save_conversation(
+                    client,
+                    db,
+                    opts,
+                    &target,
+                    &full,
+                    summary,
+                    blake3_by_file,
+                    now,
+                )
+                .await?;
+                match cut {
+                    None => {}
+                    Some(Cut::Stopped) => break,
+                    Some(Cut::RateLimited(reason)) => {
+                        walk.rate_limited(summary.fetched, opts.conv_uuids.len() - i, &reason);
+                        break;
+                    }
+                }
+                walk.attachments_tried.insert(target.clone());
+                info!(event = "chatgpt_fetch_single_ok", raw = raw, id = %target, "fetched one conversation by id");
+            }
+            // The transport refused it because of the stop.
+            Err(_) if opts.control.stop.requested() => break,
+            Err(ChatGPTError::RateLimited { reason, .. }) => {
+                walk.rate_limited(summary.fetched, opts.conv_uuids.len() - i, &reason);
+                break;
+            }
+            Err(ChatGPTError::Permanent(msg)) if msg.contains("HTTP 404") => {
+                walk.config_problems.push(DownloadProblem::not_found(
+                    "conv_uuids",
+                    raw,
+                    format!("chatgpt.com has no conversation with this id: {msg}"),
+                ));
+            }
+            Err(ChatGPTError::Permanent(msg)) => {
+                warn!(event = "chatgpt_fetch_error", raw = raw, id = %target, error = %msg, "a conversation could not be fetched");
+                db.record_conversation_error(&target, &msg).await?;
+                summary.errors += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The listing walk, then every listed conversation that is missing or
+/// stale.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_listed(
+    client: &mut ChatGPTClient,
+    db: &RawDb,
+    opts: &FetchOptions,
+    since_secs: Option<i64>,
+    summary: &mut FetchSummary,
+    blake3_by_file: &mut HashMap<String, String>,
+    now: &IsoOffsetTimestamp,
+    walk: &mut Walk,
+) -> Result<()> {
+    opts.progress.set_message("listing conversations");
+    let Listing {
+        items: listing,
+        complete: listing_complete,
+        failed,
+        rate_limited,
+    } = list_all_conversations(client, opts.max_pages, since_secs, &opts.progress)
+        .instrument(info_span!("chatgpt_list"))
+        .await;
+    if let Some(e) = failed {
+        if opts.control.stop.requested() {
+            return Ok(());
+        }
+        // With nothing listed and nothing stored there is nothing to
+        // fall back on: the run did nothing at all.
+        if listing.is_empty() && !db.has_any_conversation().await? {
+            return Err(anyhow::anyhow!("list conversations: {e}"));
+        }
+        walk.found.listing("conversations", e);
+        // Every detail fetch would be refused the same way.
+        if rate_limited {
+            walk.rate_limited = true;
+            return Ok(());
+        }
+    }
+    info!(
+        event = "chatgpt_listing",
+        convs = listing.len(),
+        complete = listing_complete,
+        "listed the conversations"
+    );
+    summary.listing = listing.len();
+
+    // A complete walk is an authoritative census of the account, so a
+    // conversation we hold that it did not name has been deleted on
+    // chatgpt.com. An incomplete one says nothing: the pages it never
+    // asked for are full of conversations that still exist, which is
+    // why this is gated rather than always-on. With `since` configured
+    // most runs stop early and prune nothing, which is the conservative
+    // side to err on.
+    if listing_complete {
+        let keep: HashSet<String> = listing
+            .iter()
+            .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
+            .map(String::from)
+            .collect();
+        summary.pruned = db.prune_conversations(&keep).await?;
+    }
+
+    // Skip-check: bulk-read existing `(id, update_time)` for every
+    // listed id, then compare to the listing's update_time. Rows
+    // we don't have at all → missing. Rows whose stored update_time
+    // differs from the listing's → stale. Both fall into the work
+    // queue; everything else is up-to-date and skipped.
+    let listed_ids: Vec<&str> = listing
+        .iter()
+        .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
+        .collect();
+    let existing = db.existing_update_times(&listed_ids).await?;
+
+    // Prioritize: missing > stale > already-good. Same intent as
+    // the JSONL implementation's "spend our 429 budget on new
+    // work" ordering.
+    let mut missing: Vec<&Value> = Vec::new();
+    let mut stale: Vec<&Value> = Vec::new();
+    let mut up_to_date: usize = 0;
+    for item in &listing {
+        let Some(cid) = item.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        // `since` scope filter: out-of-scope items are never
+        // detail-fetched. Items with an unparseable `update_time`
+        // fall through in scope (fetch rather than silently drop).
+        // The filter only gates fetching — already-stored rows are
+        // untouched — so moving `since` further back later
+        // backfills the newly-in-scope conversations as missing.
+        if let (Some(cutoff), Some(api_secs)) = (
+            since_secs,
+            item.get("update_time").and_then(update_time_secs),
+        ) {
+            if api_secs < cutoff {
+                summary.out_of_scope += 1;
+                continue;
+            }
+        }
+        match existing.get(cid) {
+            None => missing.push(item),
+            // Canonicalize both sides to a whole-second epoch before
+            // comparing. The stored value is the *detail* endpoint's
+            // Unix-epoch float; `item`'s is the *listing* endpoint's
+            // ISO-8601 string — comparing the raw JSON encodings
+            // never matches, so every conversation looks stale and
+            // gets re-fetched (see `update_time_secs`). Either side
+            // failing to canonicalize falls through to `stale`, the
+            // safe (re-fetch) direction.
+            Some(stored) => {
+                let stored_secs = stored_update_time_secs(stored);
+                let api_secs = item.get("update_time").and_then(update_time_secs);
+                match (stored_secs, api_secs) {
+                    (Some(a), Some(b)) if a == b => up_to_date += 1,
+                    _ => stale.push(item),
+                }
+            }
+        }
+    }
+    info!(
+        event = "chatgpt_priority_split",
+        missing = missing.len(),
+        stale = stale.len(),
+        up_to_date = up_to_date,
+        out_of_scope = summary.out_of_scope,
+        "sorted the listing into what to fetch"
+    );
+    summary.skipped += up_to_date;
+
+    let ordered: Vec<&Value> = missing.into_iter().chain(stale).collect();
+    opts.progress.set_length(Some(ordered.len() as u64));
+    for (i, item) in ordered.iter().enumerate() {
+        // Asked to stop: the conversation that just landed sealed with
+        // its blobs, so end here.
+        if opts.control.stop.requested() {
+            info!(
+                event = "chatgpt_interrupted",
+                "told to stop; leaving the rest for the next run"
+            );
+            break;
+        }
+        opts.progress.inc(1);
+        if let Some(limit) = opts.limit {
+            if summary.fetched + summary.errors >= limit {
+                info!(
+                    event = "chatgpt_limit_reached",
+                    limit = limit,
+                    "reached the configured fetch limit; stopping here"
+                );
+                break;
+            }
+        }
+        let Some(cid) = item.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        opts.progress.set_message(cid);
+        match client.get_conversation(cid).await {
+            Ok(full) => {
+                let cut =
+                    save_conversation(client, db, opts, cid, &full, summary, blake3_by_file, now)
+                        .await?;
+                match cut {
+                    None => {}
+                    Some(Cut::Stopped) => break,
+                    Some(Cut::RateLimited(reason)) => {
+                        walk.rate_limited(summary.fetched, ordered.len() - i, &reason);
+                        break;
+                    }
+                }
+                walk.attachments_tried.insert(cid.to_string());
+                if opts.sleep_between > Duration::ZERO {
+                    sleep(opts.sleep_between).await;
+                }
+            }
+            Err(_) if opts.control.stop.requested() => break,
+            // Every later request would be refused too. What is left is
+            // still missing or stale, so the next run's skip-check
+            // queues it again.
+            Err(ChatGPTError::RateLimited { path, reason }) => {
+                warn!(
+                    event = "chatgpt_rate_limit_giveup",
+                    path = %path,
+                    reason = %reason,
+                    fetched = summary.fetched,
+                    "giving up on this request after the rate-limit retries"
+                );
+                walk.rate_limited(summary.fetched, ordered.len() - i, &reason);
+                break;
+            }
+            Err(ChatGPTError::Permanent(msg)) => {
+                warn!(event = "chatgpt_fetch_error", cid = cid, error = %msg, "a conversation could not be fetched");
+                db.record_conversation_error(cid, &msg).await?;
+                summary.errors += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Store one fetched conversation with its attachments, and seal. A
+/// [`Cut`] when the attachments were cut short: nothing of it is written,
+/// so the next run finds it missing or stale and starts it over.
+#[allow(clippy::too_many_arguments)]
+async fn save_conversation(
+    client: &mut ChatGPTClient,
+    db: &RawDb,
+    opts: &FetchOptions,
+    id: &str,
+    full: &Value,
+    summary: &mut FetchSummary,
+    blake3_by_file: &mut HashMap<String, String>,
+    now: &IsoOffsetTimestamp,
+) -> Result<Option<Cut>> {
+    let full = canonicalize_conversation_payload(full);
+    let attach =
+        match fetch_attachments(client, &full, summary, blake3_by_file, &opts.control.stop).await {
+            Ok(attach) => attach,
+            Err(cut) => return Ok(Some(cut)),
+        };
+    let (title, update_time) = title_and_update_time(&full);
+    let payload = serde_json::to_string(&full).context("serialize conversation")?;
+    upsert_conversations(
+        db,
+        &[ConversationUpsert {
+            id: id.to_string(),
+            title,
+            update_time,
+            payload,
+        }],
+        now,
+    )
+    .await?;
+    summary.fetched += 1;
+    flush_attachments(db, &attach).await?;
+    // The store is consistent here and nowhere earlier: the conversation
+    // row and the blobs it names have both landed. Sealing between the
+    // two would publish a message pointing at bytes no reader can
+    // resolve.
+    if let Some(sealer) = opts.sealer.as_ref() {
+        sealer.wrote(1).await;
+    }
+    Ok(None)
+}
+
+/// The walk reaches a conversation's attachments only while it fetches
+/// that conversation, and an unchanged one is not fetched again. So after
+/// the walk, every attachment that has not landed is tried again from the
+/// conversation the store already holds.
+async fn retry_attachments(
+    client: &mut ChatGPTClient,
+    db: &RawDb,
+    opts: &FetchOptions,
+    summary: &mut FetchSummary,
+    blake3_by_file: &mut HashMap<String, String>,
+    walk: &mut Walk,
+) -> Result<()> {
+    let pending: Vec<String> = db
+        .conversations_with_unfetched_attachments()
+        .await?
+        .into_iter()
+        .filter(|cid| !walk.attachments_tried.contains(cid))
+        .collect();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    info!(
+        event = "chatgpt_attachment_retry",
+        conversations = pending.len(),
+        "trying again the attachments earlier runs did not land"
+    );
+    for cid in &pending {
+        if opts.control.stop.requested() {
+            break;
+        }
+        let Some(conv) = db.load_conversation_payload(cid).await? else {
+            continue;
+        };
+        let attach =
+            match fetch_attachments(client, &conv, summary, blake3_by_file, &opts.control.stop)
+                .await
+            {
+                Ok(attach) => attach,
+                Err(Cut::Stopped) => break,
+                Err(Cut::RateLimited(reason)) => {
+                    walk.rate_limited = true;
+                    walk.found.phase(
+                        "attachments",
+                        format!(
+                            "stopped at the rate limit; the rest is left for the next run: {reason}"
+                        ),
+                    );
+                    break;
+                }
+            };
+        flush_attachments(db, &attach).await?;
+        if let Some(sealer) = opts.sealer.as_ref() {
+            sealer.wrote(1).await;
+        }
+    }
+    Ok(())
 }
 
 /// Top-level arrays the API returns as a *set*, in an order that varies
@@ -559,32 +781,14 @@ async fn upsert_conversations(
     Ok(())
 }
 
-/// Walk a conversation tree and pull every attachment + asset-pointer
-/// blob into the DB. Per the design doc we skip when we already have
-/// bytes (signed URLs rotate; bytes don't). Failures bump
-/// `attempt_count` and record `last_error`; they don't fail the sync.
-async fn fetch_attachments_for(
-    client: &mut ChatGPTClient,
-    db: &RawDb,
-    conv: &Value,
-    summary: &mut FetchSummary,
-    blake3_by_file: &mut std::collections::HashMap<String, String>,
-    now: &IsoOffsetTimestamp,
-) {
-    let Some(cid) = conv
-        .get("conversation_id")
-        .or_else(|| conv.get("id"))
-        .and_then(|v| v.as_str())
-    else {
-        return;
+/// Every attachment and asset pointer a conversation's messages name, as
+/// `(file_id, name, mime)`, each file once: identical assets often appear
+/// under several parts (asset_pointer + attachments mirror).
+fn attachment_targets(conv: &Value) -> Vec<(String, Option<String>, Option<String>)> {
+    let Some(mapping) = conv.get("mapping").and_then(|v| v.as_object()) else {
+        return Vec::new();
     };
-    let mapping = match conv.get("mapping").and_then(|v| v.as_object()) {
-        Some(m) => m,
-        None => return,
-    };
-    // Dedupe by file_id within a conversation: identical assets often
-    // appear under multiple parts (asset_pointer + attachments mirror).
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut targets: Vec<(String, Option<String>, Option<String>)> = Vec::new();
     for node in mapping.values() {
         let Some(msg) = node.get("message").and_then(|v| v.as_object()) else {
@@ -618,52 +822,67 @@ async fn fetch_attachments_for(
             .and_then(|c| c.get("parts"))
             .and_then(|v| v.as_array())
         {
-            for p in parts {
-                let Some(obj) = p.as_object() else { continue };
-                if obj.get("content_type").and_then(|v| v.as_str()) != Some("image_asset_pointer") {
-                    continue;
-                }
-                let Some(ptr) = obj.get("asset_pointer").and_then(|v| v.as_str()) else {
-                    continue;
-                };
-                let id = ptr
-                    .strip_prefix("sediment://")
-                    .or_else(|| ptr.strip_prefix("file-service://"))
-                    .unwrap_or(ptr)
-                    .to_string();
-                if seen.insert(id.clone()) {
-                    targets.push((id, None, Some("image/*".into())));
+            for id in parts.iter().filter_map(image_asset_file_id) {
+                if seen.insert(id.to_string()) {
+                    targets.push((id.to_string(), None, Some("image/*".into())));
                 }
             }
         }
     }
-    let mut attach = datalib_etl::blob_cas::CasEdgeAccumulator::new();
-    for (file_id, name, mime) in targets {
+    targets
+}
+
+/// Pull every attachment + asset-pointer blob a conversation names. We
+/// skip a file whose bytes we already have (signed URLs rotate; bytes
+/// don't). A failure becomes the edge's `last_error` and does not fail
+/// the sync; a file chatgpt.com no longer has is a warning the retry pass
+/// leaves alone. A [`Cut`] when a stop or the give-up guard ended it:
+/// what it fetched is dropped rather than recorded.
+async fn fetch_attachments(
+    client: &mut ChatGPTClient,
+    conv: &Value,
+    summary: &mut FetchSummary,
+    blake3_by_file: &mut HashMap<String, String>,
+    stop: &datalib_etl::stop::StopFlag,
+) -> std::result::Result<CasEdgeAccumulator, Cut> {
+    let mut attach = CasEdgeAccumulator::new();
+    let Some(cid) = conv
+        .get("conversation_id")
+        .or_else(|| conv.get("id"))
+        .and_then(|v| v.as_str())
+    else {
+        return Ok(attach);
+    };
+    for (file_id, name, mime) in attachment_targets(conv) {
         if let Some(blake3) = blake3_by_file.get(&file_id) {
             attach.add_known(cid, &file_id, blake3.clone());
             summary.skipped_blobs += 1;
             continue;
         }
-        match download_one_file(client, &file_id, name.as_deref(), mime.as_deref()).await {
-            Ok(Some((bytes, content_type))) => {
+        match download_one_file(client, &file_id, mime.as_deref()).await {
+            Ok((bytes, content_type)) => {
                 let blake3 = datalib_etl::blob_cas::blake3_hex(&bytes);
                 blake3_by_file.insert(file_id.clone(), blake3);
                 attach.add_fetched(cid, &file_id, bytes, content_type, name.clone());
                 summary.new_blobs += 1;
             }
-            Ok(None) => {
-                attach.add_failed(cid, &file_id, "no bytes");
+            Err(_) if stop.requested() => return Err(Cut::Stopped),
+            Err(FileError::RateLimited(reason)) => return Err(Cut::RateLimited(reason)),
+            Err(FileError::Gone(reason)) => {
+                attach.add_skipped(cid, &file_id, Reason::NotFound, reason);
                 summary.failed_blobs += 1;
             }
-            Err(e) => {
-                warn!(event = "chatgpt_media_unexpected_err", file_id = %file_id, error = %e, "a media download failed in a way this build does not classify");
-                attach.add_failed(cid, &file_id, e.to_string());
+            Err(FileError::Failed(reason)) => {
+                attach.add_failed(cid, &file_id, reason);
                 summary.failed_blobs += 1;
             }
         }
     }
+    Ok(attach)
+}
 
-    let flush_result = attach
+async fn flush_attachments(db: &RawDb, attach: &CasEdgeAccumulator) -> Result<()> {
+    attach
         .flush(db.pool(), db.cas(), |conv_id, file_id, blake3| {
             ConversationAttachmentRow {
                 id: ConversationAttachmentRow::pk_recipe(conv_id, file_id),
@@ -672,52 +891,76 @@ async fn fetch_attachments_for(
                 blake3: blake3.map(String::from),
             }
         })
-        .await;
-    if let Err(e) = flush_result {
-        warn!(event = "chatgpt_attachment_flush_err", conv = %cid, error = %e, "a conversation's attachments could not be written");
+        .await
+        .context("write a conversation's attachments")
+}
+
+/// The file id an `image_asset_pointer` content part points at, its
+/// `sediment://` or `file-service://` scheme stripped; `None` for any
+/// other part.
+pub fn image_asset_file_id(part: &Value) -> Option<&str> {
+    let obj = part.as_object()?;
+    if obj.get("content_type").and_then(Value::as_str) != Some("image_asset_pointer") {
+        return None;
     }
-    let _ = now;
+    let ptr = obj.get("asset_pointer").and_then(Value::as_str)?;
+    Some(
+        ptr.strip_prefix("sediment://")
+            .or_else(|| ptr.strip_prefix("file-service://"))
+            .unwrap_or(ptr),
+    )
 }
 
 /// Fetch one attachment's bytes via the two-hop dance: metadata via
 /// latchkey (auth attached), then `latchkey curl -fSL` on the signed
-/// URL (no auth — Azure rejects the chatgpt cookie). On success returns
-/// `(bytes, content_type)` for the caller to feed into the
-/// per-conversation [`BlobBundle`]. `Ok(None)` means "no bytes for
-/// this file" — caller logs a stub edge row + bookkeeping error.
+/// URL (no auth — Azure rejects the chatgpt cookie). The error says why
+/// there are no bytes; it becomes the edge's problem.
 async fn download_one_file(
     client: &mut ChatGPTClient,
     file_id: &str,
-    name: Option<&str>,
     mime: Option<&str>,
-) -> Result<Option<(Vec<u8>, Option<String>)>> {
-    let _ = name; // upstream_name is no longer stored on the edge row
-                  // Step 1: metadata fetch.
+) -> std::result::Result<(Vec<u8>, Option<String>), FileError> {
     let meta = match client
         .get(&format!("/backend-api/files/{file_id}/download"))
         .await
     {
-        Ok(v) => v,
-        Err(e) => {
-            warn!(
-                event = "chatgpt_media_meta_failed",
-                file_id = file_id,
-                error = %e,
-                "a file's metadata could not be fetched"
-            );
-            return Ok(None);
+        Ok(meta) => meta,
+        Err(ChatGPTError::RateLimited { reason, .. }) => {
+            return Err(FileError::RateLimited(reason))
         }
+        Err(ChatGPTError::Permanent(msg))
+            if msg.contains("HTTP 404") || msg.contains("HTTP 410") =>
+        {
+            return Err(FileError::Gone(format!("file metadata: {msg}")))
+        }
+        Err(e) => return Err(FileError::Failed(format!("file metadata: {e}"))),
     };
+    download_signed(client, &meta, file_id, mime)
+        .await
+        .map_err(|e| FileError::Failed(format!("{e:#}")))
+}
+
+/// Why a file has no bytes; the text becomes the edge's problem.
+enum FileError {
+    /// chatgpt.com no longer has it. Trying again cannot help until the
+    /// conversation changes, and a refetch of it tries its files again.
+    Gone(String),
+    /// The give-up guard tripped.
+    RateLimited(String),
+    /// Anything else, which the next run tries again.
+    Failed(String),
+}
+
+/// The second hop: the bytes behind the signed URL the metadata names.
+async fn download_signed(
+    client: &ChatGPTClient,
+    meta: &Value,
+    file_id: &str,
+    mime: Option<&str>,
+) -> Result<(Vec<u8>, Option<String>)> {
     let signed = match meta.get("download_url").and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => s.to_string(),
-        _ => {
-            warn!(
-                event = "chatgpt_media_no_download_url",
-                file_id = file_id,
-                "a file's metadata carries no download URL; skipped it"
-            );
-            return Ok(None);
-        }
+        _ => anyhow::bail!("the file's metadata carries no download URL"),
     };
 
     // Step 2: signed-URL GET via latchkey shim. We write to a tempfile
@@ -750,18 +993,15 @@ async fn download_one_file(
             .chars()
             .rev()
             .collect();
-        warn!(
-            event = "chatgpt_media_failed",
-            file_id = file_id,
-            exit = proc.status.code().unwrap_or(-1),
-            stderr = %tail.trim(),
-            "a file could not be downloaded"
+        anyhow::bail!(
+            "signed-URL download exit {}: {}",
+            proc.status.code().unwrap_or(-1),
+            tail.trim()
         );
-        return Ok(None);
     }
     let bytes =
         std::fs::read(tmp.path()).with_context(|| format!("read tempfile for {file_id}"))?;
-    Ok(Some((bytes, mime.map(String::from))))
+    Ok((bytes, mime.map(String::from)))
 }
 
 /// A conversation listing, and whether it is the *whole* listing.
@@ -774,8 +1014,13 @@ async fn download_one_file(
 struct Listing {
     items: Vec<Value>,
     /// True only when the walk ran out of conversations rather than out of
-    /// permission to look: it reached `total`, or a page came back empty.
+    /// permission to look: it reached `total`, or a page's `items` came
+    /// back an empty array.
     complete: bool,
+    /// The page that failed and why. The pages before it are kept.
+    failed: Option<String>,
+    /// The page failed because the give-up guard tripped.
+    rate_limited: bool,
 }
 
 #[instrument(skip_all, fields(max_pages, since_secs))]
@@ -784,21 +1029,29 @@ async fn list_all_conversations(
     max_pages: Option<usize>,
     since_secs: Option<i64>,
     progress: &datalib_etl::progress::Progress,
-) -> Result<Listing> {
+) -> Listing {
     let mut items: Vec<Value> = Vec::new();
     let mut offset = 0usize;
     let mut pages = 0usize;
     let mut complete = false;
+    let mut failed = None;
+    let mut rate_limited = false;
     loop {
-        let page = client
-            .list_conversations_page(offset, PAGE_SIZE)
-            .await
-            .map_err(|e| anyhow::anyhow!("list page offset={offset}: {e}"))?;
-        let page_items: Vec<Value> = page
-            .get("items")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
+        let page = match client.list_conversations_page(offset, PAGE_SIZE).await {
+            Ok(page) => page,
+            Err(e) => {
+                rate_limited = matches!(e, ChatGPTError::RateLimited { .. });
+                failed = Some(format!("page at offset {offset}: {e}"));
+                break;
+            }
+        };
+        let page_items = match page_items(&page) {
+            Ok(page_items) => page_items,
+            Err(e) => {
+                failed = Some(format!("page at offset {offset}: {e}"));
+                break;
+            }
+        };
         let total = page.get("total").and_then(|v| v.as_u64());
         info!(
             event = "chatgpt_listing_page",
@@ -855,7 +1108,25 @@ async fn list_all_conversations(
         }
         sleep(SLEEP_BETWEEN).await;
     }
-    Ok(Listing { items, complete })
+    Listing {
+        items,
+        complete,
+        failed,
+        rate_limited,
+    }
+}
+
+/// A 200 that is not a listing page is no evidence the listing ended:
+/// read as an empty page it would make the walk complete and prune
+/// everything the pages before it did not name.
+fn page_items(page: &Value) -> std::result::Result<Vec<Value>, String> {
+    match page.get("items") {
+        Some(Value::Array(items)) => Ok(items.clone()),
+        _ => {
+            let preview: String = page.to_string().chars().take(120).collect();
+            Err(format!("answered with no `items` array: {preview}"))
+        }
+    }
 }
 
 /// Parse a `since` config value — full RFC 3339 or bare `YYYY-MM-DD`

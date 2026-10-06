@@ -131,48 +131,6 @@ where
     out
 }
 
-/// One `warn!` per problem, in a shape every provider shares so a reader
-/// grepping `download_problem` finds all of them — and one `problems`
-/// row each in the raw store, keyed `config:<setting>:<value>`, which is
-/// what reaches the screen. The rows are the whole truth every run: a
-/// run's list replaces the last one's, so an entry the config no longer
-/// names, or that upstream now has, is gone. Recording never fails the
-/// run; a store that cannot take the rows is said and passed over.
-pub async fn report(pool: &sqlx::SqlitePool, problems: &[DownloadProblem]) {
-    use datalib_problems::{Outcome, Problem, Reason, Severity};
-    for p in problems {
-        tracing::warn!(
-            event = "download_problem",
-            setting = %p.setting,
-            value = %p.value,
-            reason = p.reason.as_str(),
-            detail = %p.detail,
-            "a configured entry does not exist upstream; continuing without it",
-        );
-    }
-    let rows: Vec<(String, Outcome, Problem)> = problems
-        .iter()
-        .map(|p| {
-            let reason = match p.reason {
-                ProblemReason::NotFound => Reason::NotFound,
-                ProblemReason::Forbidden => Reason::Forbidden,
-            };
-            (
-                format!("{CONFIG_PREFIX}{}:{}", p.setting, p.value),
-                Outcome::Dropped,
-                Problem::field(&p.setting, reason, &p.detail).severity(Severity::Warning),
-            )
-        })
-        .collect();
-    if let Err(e) = replace_prefixed(pool, &[CONFIG_PREFIX], &rows).await {
-        tracing::warn!(
-            error = %format!("{e:#}"),
-            "download_problem: could not record the configured entries that did not resolve; \
-             the Manage row will not show them"
-        );
-    }
-}
-
 /// The sweep key's prefix of a configured entry's row: every row
 /// [`report`] writes, and only those, so a run's report can replace the
 /// last one's whole.
@@ -271,51 +229,6 @@ impl RunProblem {
     }
 }
 
-/// As [`report`], for what a run could not do as a whole: one `warn!`
-/// per problem under `event = "run_problem"`, and one `problems` row
-/// each keyed `listing:<name>` / `phase:<name>`. Every row of both kinds
-/// is replaced each run — call it with an empty slice on a clean run so
-/// the last run's rows go. An error, because the reader has nothing
-/// current for that listing or phase; two problems on one key keep the
-/// first's detail.
-pub async fn report_run(pool: &sqlx::SqlitePool, problems: &[RunProblem]) {
-    use datalib_problems::{Outcome, Problem, Reason, Severity};
-    for p in problems {
-        tracing::warn!(
-            event = "run_problem",
-            kind = p.kind.as_str(),
-            name = %p.name,
-            detail = %p.detail,
-            "part of the run did not happen; what it would have written was left as it was",
-        );
-    }
-    let mut seen = std::collections::HashSet::new();
-    let rows: Vec<(String, Outcome, Problem)> = problems
-        .iter()
-        .filter(|p| seen.insert(p.key()))
-        .map(|p| {
-            let problem = if p.forbidden {
-                Problem::record(Reason::Forbidden, &p.detail).severity(Severity::Warning)
-            } else {
-                Problem::record(Reason::FetchFailed, &p.detail).severity(Severity::Error)
-            };
-            (p.key(), Outcome::Dropped, problem)
-        })
-        .collect();
-    let prefixes: Vec<String> = RunProblemKind::VARIANTS
-        .iter()
-        .map(|k| k.key_prefix())
-        .collect();
-    let prefixes: Vec<&str> = prefixes.iter().map(String::as_str).collect();
-    if let Err(e) = replace_prefixed(pool, &prefixes, &rows).await {
-        tracing::warn!(
-            error = %format!("{e:#}"),
-            "run_problem: could not record what the run could not do; \
-             the Manage row will not show it"
-        );
-    }
-}
-
 /// One record a download could not fetch, named by the id **upstream**
 /// uses for it.
 ///
@@ -341,7 +254,7 @@ pub struct RecordProblem {
 /// [`report_records`] writes, and only those, so a run's report
 /// replaces the last one's whole and a record that fetches this time
 /// stops being a problem.
-const RECORD_PREFIX: &str = "record:";
+pub const RECORD_PREFIX: &str = "record:";
 
 impl RecordProblem {
     pub fn new(table: &str, id: &str, detail: impl Into<String>) -> Self {
@@ -357,20 +270,77 @@ impl RecordProblem {
     }
 }
 
-/// Records this run could not fetch. Replaces the previous run's set,
-/// so one that succeeds this time drops off by itself.
-pub async fn report_records(pool: &sqlx::SqlitePool, problems: &[RecordProblem]) {
+/// An entry the download read and chose not to store: no usable key, or
+/// a kind the mirror does not hold. Named by `entry`, whatever names it
+/// stably in the export (a URL, the entry's own text); the key hashes it,
+/// so the length and contents of `entry` never reach the sweep key.
+#[derive(Debug, Clone)]
+pub struct SkippedRecord {
+    pub entry: String,
+    pub problem: datalib_problems::Problem,
+}
+
+/// The sweep key's prefix of a [`report_skipped`] row.
+pub const SKIPPED_PREFIX: &str = "skipped:";
+
+/// A configured entry upstream has sent nothing new for a while, named
+/// the way the config names it.
+#[derive(Debug, Clone)]
+pub struct SilentEntry {
+    pub name: String,
+    /// Since when, in words the reader can act on.
+    pub detail: String,
+}
+
+/// The sweep key's prefix of a [`report_silent`] row.
+const SILENT_PREFIX: &str = "silent:";
+
+/// One row to write: its sweep key, what became of the thing, and why.
+pub(crate) type Row = (String, datalib_problems::Outcome, datalib_problems::Problem);
+
+pub(crate) fn config_rows(problems: &[DownloadProblem]) -> Vec<Row> {
     use datalib_problems::{Outcome, Problem, Reason, Severity};
-    for p in problems {
-        tracing::warn!(
-            event = "record_problem",
-            table = %p.table,
-            id = %p.id,
-            detail = %p.detail,
-            "a record upstream named could not be fetched; it is missing from the mirror",
-        );
-    }
-    let rows: Vec<(String, Outcome, Problem)> = problems
+    problems
+        .iter()
+        .map(|p| {
+            let reason = match p.reason {
+                ProblemReason::NotFound => Reason::NotFound,
+                ProblemReason::Forbidden => Reason::Forbidden,
+            };
+            (
+                format!("{CONFIG_PREFIX}{}:{}", p.setting, p.value),
+                Outcome::Dropped,
+                Problem::field(&p.setting, reason, &p.detail).severity(Severity::Warning),
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn run_rows(problems: &[RunProblem]) -> Vec<Row> {
+    use datalib_problems::{Outcome, Problem, Reason, Severity};
+    problems
+        .iter()
+        .map(|p| {
+            let problem = if p.forbidden {
+                Problem::record(Reason::Forbidden, &p.detail).severity(Severity::Warning)
+            } else {
+                Problem::record(Reason::FetchFailed, &p.detail).severity(Severity::Error)
+            };
+            (p.key(), Outcome::Dropped, problem)
+        })
+        .collect()
+}
+
+pub(crate) fn run_prefixes() -> Vec<String> {
+    RunProblemKind::VARIANTS
+        .iter()
+        .map(|k| k.key_prefix())
+        .collect()
+}
+
+pub(crate) fn record_rows(problems: &[RecordProblem]) -> Vec<Row> {
+    use datalib_problems::{Outcome, Problem, Reason, Severity};
+    problems
         .iter()
         .map(|p| {
             (
@@ -379,32 +349,88 @@ pub async fn report_records(pool: &sqlx::SqlitePool, problems: &[RecordProblem])
                 Problem::record(Reason::FetchFailed, &p.detail).severity(Severity::Error),
             )
         })
-        .collect();
-    if let Err(e) = replace_prefixed(pool, &[RECORD_PREFIX], &rows).await {
-        tracing::warn!(
-            error = %format!("{e:#}"),
-            "record_problem: could not record the records that would not fetch; \
-             the Manage row will not show them"
-        );
-    }
+        .collect()
 }
 
-/// Delete every entity-scoped row whose key starts with one of
-/// `prefixes`, then write `rows`, in one transaction. A key that was
-/// there before keeps its `first_seen_at_utc`, so the screen can say
-/// how long a listing has been failing.
-async fn replace_prefixed(
+pub(crate) fn record_prefix(table: &str) -> String {
+    format!("{RECORD_PREFIX}{table}:")
+}
+
+pub(crate) fn skipped_rows(part: &str, skipped: &[SkippedRecord]) -> Vec<Row> {
+    skipped
+        .iter()
+        .map(|s| {
+            let hash = blake3::hash(s.entry.as_bytes()).to_hex();
+            (
+                format!("{}{}", skipped_prefix(part), &hash[..16]),
+                datalib_problems::Outcome::Dropped,
+                s.problem.clone(),
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn skipped_prefix(part: &str) -> String {
+    format!("{SKIPPED_PREFIX}{part}:")
+}
+
+pub(crate) fn silent_rows(silent: &[SilentEntry]) -> Vec<Row> {
+    use datalib_problems::{Outcome, Problem, Reason, Severity};
+    silent
+        .iter()
+        .map(|s| {
+            (
+                format!("{SILENT_PREFIX}{}", s.name),
+                Outcome::Ok,
+                Problem::record(Reason::Silent, &s.detail).severity(Severity::Warning),
+            )
+        })
+        .collect()
+}
+
+pub(crate) const CONFIG_SWEEP: &str = CONFIG_PREFIX;
+pub(crate) const SILENT_SWEEP: &str = SILENT_PREFIX;
+
+/// The rows a run has a verdict on: every entity-scoped row whose key
+/// starts with `prefix`, less the ones `keep` says the run did not try
+/// again (it is given the key with the prefix taken off).
+pub(crate) struct Sweep {
+    pub prefix: String,
+    pub keep: Option<Untried>,
+}
+
+/// Says, of a key with its sweep prefix taken off, whether the run left
+/// it untried.
+pub(crate) type Untried = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// SQLite's default bound-parameter limit is far above this; one
+/// statement per chunk keeps a big sweep from being one statement per row.
+const KEY_CHUNK: usize = 500;
+
+/// Delete what `sweeps` cover, then write `rows`, in one transaction. A
+/// key that was there before keeps its `first_seen_at_utc`, so the screen
+/// can say how long something has been failing; two rows on one key keep
+/// the first, since the key is the row's identity.
+pub(crate) async fn apply(
     pool: &sqlx::SqlitePool,
-    prefixes: &[&str],
-    rows: &[(String, datalib_problems::Outcome, datalib_problems::Problem)],
+    sweeps: &[Sweep],
+    rows: Vec<Row>,
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
     use datalib_problems::{ProblemRow, Scope, ScopeKind, Stage};
     use datalib_table::BulkUpsertable as _;
+    use std::collections::{HashMap, HashSet};
+
+    let mut seen = HashSet::new();
+    let rows: Vec<Row> = rows
+        .into_iter()
+        .filter(|(key, _, _)| seen.insert(key.clone()))
+        .collect();
+
     let mut tx = pool.begin().await.context("begin")?;
-    let mut first_seen: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    for prefix in prefixes {
+    let mut first_seen: HashMap<String, String> = HashMap::new();
+    let mut gone: Vec<String> = Vec::new();
+    for sweep in sweeps {
         // `INSTR(x, ?) = 1` rather than `LIKE`: `_` in a value is a
         // wildcard to LIKE.
         let earlier: Vec<(String, String)> = sqlx::query_as(
@@ -412,20 +438,63 @@ async fn replace_prefixed(
              WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
         )
         .bind(ScopeKind::Entity.as_str())
-        .bind(prefix)
+        .bind(&sweep.prefix)
         .fetch_all(&mut *tx)
         .await
-        .with_context(|| format!("read the last run's {prefix} problems"))?;
-        first_seen.extend(earlier);
-        sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1")
-            .bind(ScopeKind::Entity.as_str())
-            .bind(prefix)
-            .execute(&mut *tx)
+        .with_context(|| format!("read the last run's {} problems", sweep.prefix))?;
+        for (key, first) in earlier {
+            let kept = sweep
+                .keep
+                .as_ref()
+                .is_some_and(|keep| keep(key.strip_prefix(sweep.prefix.as_str()).unwrap_or(&key)));
+            if !kept {
+                gone.push(key.clone());
+            }
+            first_seen.insert(key, first);
+        }
+    }
+    let unswept: Vec<&str> = rows
+        .iter()
+        .map(|(key, _, _)| key.as_str())
+        .filter(|key| !first_seen.contains_key(*key))
+        .collect();
+    for chunk in unswept.chunks(KEY_CHUNK) {
+        // Audited: only `?` placeholders are built, one per key; every
+        // key is bound.
+        let sql = format!(
+            "SELECT scope_key, first_seen_at_utc FROM problems \
+             WHERE scope_kind = ? AND scope_key IN ({})",
+            vec!["?"; chunk.len()].join(",")
+        );
+        let mut q = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
+            .bind(ScopeKind::Entity.as_str());
+        for key in chunk {
+            q = q.bind(*key);
+        }
+        let earlier = q
+            .fetch_all(&mut *tx)
             .await
-            .with_context(|| format!("clear the last run's {prefix} problems"))?;
+            .context("read the rows this run writes again")?;
+        gone.extend(earlier.iter().map(|(key, _)| key.clone()));
+        first_seen.extend(earlier);
+    }
+    for chunk in gone.chunks(KEY_CHUNK) {
+        // Audited: as above.
+        let sql = format!(
+            "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN ({})",
+            vec!["?"; chunk.len()].join(",")
+        );
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(ScopeKind::Entity.as_str());
+        for key in chunk {
+            q = q.bind(key);
+        }
+        q.execute(&mut *tx)
+            .await
+            .context("clear the rows this run has a verdict on")?;
     }
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    for (key, outcome, problem) in rows {
+    let mut stored = Vec::with_capacity(rows.len());
+    for (key, outcome, problem) in &rows {
         let row = ProblemRow {
             first_seen_at_utc: first_seen.get(key).cloned().unwrap_or_else(|| now.clone()),
             last_seen_at_utc: now.clone(),
@@ -447,197 +516,16 @@ async fn replace_prefixed(
             .execute(&mut *tx)
             .await
             .with_context(|| format!("record {key}"))?;
+        stored.push(row);
     }
-    tx.commit().await.context("commit")
+    tx.commit().await.context("commit")?;
+    datalib_problems::note_recorded(&stored);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A record that would not fetch is a `problems` row keyed by the id
-    /// upstream uses, and the next run's report replaces it — so one
-    /// that fetches this time stops being a problem without anyone
-    /// deleting anything.
-    #[tokio::test]
-    async fn a_record_that_would_not_fetch_is_reported_until_it_does() {
-        use datalib_problems::Severity;
-        let d = tempfile::tempdir().unwrap();
-        let pool = crate::doltlite_raw::open(&d.path().join("r.doltlite_db"), &[])
-            .await
-            .unwrap();
-        let rows = |pool: &sqlx::SqlitePool| {
-            let pool = pool.clone();
-            async move {
-                sqlx::query_as::<_, (String, String, String)>(
-                    "SELECT scope_key, severity, sample FROM problems ORDER BY scope_key",
-                )
-                .fetch_all(&pool)
-                .await
-                .unwrap()
-            }
-        };
-
-        report_records(
-            &pool,
-            &[
-                RecordProblem::new("gmail_messages", "1a0b526fbb117cd1", "HTTP 403"),
-                RecordProblem::new("gmail_messages", "1a0ac00e42c0c4b8", "HTTP 500"),
-            ],
-        )
-        .await;
-        let first = rows(&pool).await;
-        assert_eq!(first.len(), 2);
-        assert_eq!(first[0].0, "record:gmail_messages:1a0ac00e42c0c4b8");
-        assert_eq!(
-            first[0].1,
-            Severity::Error.as_str(),
-            "the record is missing from the mirror, not stale"
-        );
-        assert_eq!(first[0].2, "HTTP 500");
-
-        // The next run gets one of them.
-        report_records(
-            &pool,
-            &[RecordProblem::new(
-                "gmail_messages",
-                "1a0b526fbb117cd1",
-                "HTTP 403",
-            )],
-        )
-        .await;
-        let second = rows(&pool).await;
-        assert_eq!(
-            second.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
-            ["record:gmail_messages:1a0b526fbb117cd1"],
-            "the one that fetched is no longer a problem"
-        );
-
-        // And a clean run clears the lot.
-        report_records(&pool, &[]).await;
-        assert!(rows(&pool).await.is_empty());
-    }
-
-    /// A run's report replaces the last one's: an entry the config no
-    /// longer names, or that upstream now has, is gone the next run.
-    #[tokio::test]
-    async fn a_reports_rows_are_the_whole_truth_for_that_run() {
-        let d = tempfile::tempdir().unwrap();
-        let pool = crate::doltlite_raw::open(&d.path().join("p.doltlite_db"), &[])
-            .await
-            .unwrap();
-        let keys = |pool: &sqlx::SqlitePool| {
-            let pool = pool.clone();
-            async move {
-                sqlx::query_scalar::<_, String>("SELECT scope_key FROM problems ORDER BY scope_key")
-                    .fetch_all(&pool)
-                    .await
-                    .unwrap()
-            }
-        };
-        report(
-            &pool,
-            &[
-                DownloadProblem::not_found("only_labels", "Recieved", "no such label"),
-                DownloadProblem::forbidden("channels", "C9", "private"),
-            ],
-        )
-        .await;
-        assert_eq!(
-            keys(&pool).await,
-            ["config:channels:C9", "config:only_labels:Recieved"]
-        );
-        report(
-            &pool,
-            &[DownloadProblem::not_found(
-                "only_labels",
-                "Recieved",
-                "no such label",
-            )],
-        )
-        .await;
-        assert_eq!(keys(&pool).await, ["config:only_labels:Recieved"]);
-        report(&pool, &[]).await;
-        assert!(keys(&pool).await.is_empty());
-        pool.close().await;
-    }
-
-    /// A run's listing and phase rows replace the last run's, both kinds
-    /// at once, and leave the configured-entry rows alone. A key seen
-    /// again keeps its `first_seen_at_utc`.
-    #[tokio::test]
-    async fn run_problems_replace_their_own_kinds_and_keep_first_seen() {
-        let d = tempfile::tempdir().unwrap();
-        let pool = crate::doltlite_raw::open(&d.path().join("p.doltlite_db"), &[])
-            .await
-            .unwrap();
-        let rows = |pool: &sqlx::SqlitePool| {
-            let pool = pool.clone();
-            async move {
-                sqlx::query_as::<_, (String, String, String, String)>(
-                    "SELECT scope_key, severity, reason, first_seen_at_utc FROM problems \
-                     ORDER BY scope_key",
-                )
-                .fetch_all(&pool)
-                .await
-                .unwrap()
-            }
-        };
-        report(
-            &pool,
-            &[DownloadProblem::not_found(
-                "only_labels",
-                "x",
-                "no such label",
-            )],
-        )
-        .await;
-        report_run(
-            &pool,
-            &[
-                RunProblem::listing("workouts", "HTTP 500"),
-                RunProblem::phase("weight", "cursor"),
-                RunProblem::listing("workouts", "a second failure on the same key"),
-            ],
-        )
-        .await;
-        let first = rows(&pool).await;
-        assert_eq!(
-            first
-                .iter()
-                .map(|r| (r.0.as_str(), r.1.as_str(), r.2.as_str()))
-                .collect::<Vec<_>>(),
-            [
-                ("config:only_labels:x", "warning", "not_found"),
-                ("listing:workouts", "error", "fetch_failed"),
-                ("phase:weight", "error", "fetch_failed"),
-            ]
-        );
-        let workouts_first_seen = first[1].3.clone();
-
-        report_run(&pool, &[RunProblem::listing("workouts", "HTTP 502")]).await;
-        let second = rows(&pool).await;
-        assert_eq!(
-            second.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
-            ["config:only_labels:x", "listing:workouts"],
-            "the phase row went; the config row is not this report's to touch"
-        );
-        assert_eq!(
-            second[1].3, workouts_first_seen,
-            "a key seen again keeps when it was first seen"
-        );
-
-        report_run(&pool, &[]).await;
-        assert_eq!(
-            rows(&pool)
-                .await
-                .iter()
-                .map(|r| r.0.as_str())
-                .collect::<Vec<_>>(),
-            ["config:only_labels:x"]
-        );
-        pool.close().await;
-    }
 
     /// strum and serde are independent derives producing independent
     /// strings; the agreement is a real check, not a tautology.

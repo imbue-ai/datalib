@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { contextMenuRowByUuid } from "./grid-helpers";
+import { GRID, contextMenuRowByUuid } from "./grid-helpers";
 
 // Pin the contract: a right-click on a grid row opens the grid's
 // context menu — with our own items ahead of the grid's — and the
@@ -13,7 +13,7 @@ test("right-click on a grid row suppresses the native browser menu", async ({ pa
   const data = (await resp.json()) as { rows: unknown[] };
   expect(data.rows.length, "fixture must have at least one row").toBeGreaterThan(0);
 
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   // Capture-phase listener at window: this is the last point at which the

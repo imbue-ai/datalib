@@ -23,6 +23,16 @@ group = "claude_chats"
 function = "render_markdown"
 inputs = ["claude_chats/ingest"]
 
+[[steps]]
+group = "claude_chats"
+function = "keyword_index"
+inputs = ["claude_chats/render_markdown"]
+
+[[steps]]
+group = "claude_chats"
+function = "embed"
+inputs = ["claude_chats/keyword_index"]
+
 [[groups]]
 id = "unified_index"
 
@@ -33,8 +43,8 @@ inputs = ["claude_chats/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["claude_chats/render_markdown"]
+function = "qmd_aggregator"
+inputs = ["claude_chats/keyword_index", "claude_chats/embed"]
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

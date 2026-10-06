@@ -1,23 +1,49 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Render preview</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-/* Only there to be hidden behind the gate; lays nothing out itself. */
-.datalib-cards {
-  display: contents;
-}
+<style>/* The app's look: every colour, the type and the density, as CSS
+   custom properties. They inherit through a card's shadow root, so a
+   card that reads `var(--datalib-*)` follows the theme and the
+   density switch without knowing either exists. */
 
 :root {
   color-scheme: light dark;
+  --datalib-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --datalib-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --datalib-radius: 6px;
+
+  /* The ground the chrome sits on, the sidebar, and the cards on it.
+     `--datalib-bg` is a card's own background, as it always was. */
+  --datalib-ground: #ececee;
+  --datalib-sidebar: #e2e2e6;
   --datalib-bg: #ffffff;
-  --datalib-fg: #1a1a1a;
-  --datalib-muted: #6b6b6b;
-  --datalib-border: #d8d8d8;
+  --datalib-surface: #ffffff;
+  --datalib-surface-2: #f5f5f7;
+  --datalib-card-bg: #f5f5f7;
+  --datalib-fg: #1d1d1f;
+  --datalib-muted: #6e6e73;
+  --datalib-faint: #86868b;
+  --datalib-border: #d2d2d7;
+  --datalib-border-soft: #e5e5ea;
   --datalib-input-bg: #ffffff;
-  --datalib-code-bg: #f4f4f4;
-  --datalib-hover: #f0f0f0;
-  --datalib-accent: #2563eb;
-  --datalib-card-bg: #fafafa;
+  --datalib-code-bg: #f2f2f5;
+  --datalib-hover: rgba(0, 0, 0, 0.05);
+  --datalib-selected: #d1d1d6;
+  --datalib-accent: #1f5fd1;
+  --datalib-on-accent: #ffffff;
+  --datalib-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+
+  /* States: what went right, what needs a person, what broke. */
+  --datalib-ok: #1f7a3a;
+  --datalib-ok-dot: #28a745;
+  --datalib-warn-fg: #8a5300;
+  --datalib-warn-bg: #fff4db;
+  --datalib-warn-border: #f0d59a;
+  --datalib-warn-dot: #e5a100;
+  --datalib-error-fg: #a3321a;
+  --datalib-error-bg: #fdeeea;
+  --datalib-error-border: #f1c4b8;
+
   /* Log severity highlights: dark shades on the light background… */
   --datalib-log-error: #991b1b;
   --datalib-log-warn: #854d0e;
@@ -26,75 +52,86 @@
 
 
 
+/* Density: the status bar's density control (density.ts) sets
+   `--datalib-density` on <html>, from 0 (the most on screen) to 1 in
+   eighths. It moves spacing only — row and control heights, padding,
+   gaps, the toolbar and status bar — each between its value at 0 and
+   its value at 1. Text and icons keep one size; making
+   everything larger is the browser's zoom (⌘+ / ⌘−, also in the
+   desktop app). */
+:root {
+  --datalib-density: 0;
+  --datalib-font-size: 12px;
+  --datalib-font-size-small: 11px;
+  --datalib-title-size: 13px;
+  --datalib-icon-size: 14px;
+  --datalib-row-h: calc(24px + 12px * var(--datalib-density));
+  --datalib-control-h: calc(24px + 8px * var(--datalib-density));
+  --datalib-pad: calc(8px + 8px * var(--datalib-density));
+  --datalib-gap: calc(8px + 8px * var(--datalib-density));
+  --datalib-toolbar-h: calc(38px + 12px * var(--datalib-density));
+  --datalib-statusbar-h: calc(26px + 8px * var(--datalib-density));
+}
+
 html,
 body,
 #app {
-  background: var(--datalib-bg);
+  background: var(--datalib-ground);
   color: var(--datalib-fg);
   margin: 0;
   min-height: 100vh;
 }
 
 body {
-  font-family: system-ui, sans-serif;
+  font-family: var(--datalib-font);
+  font-size: var(--datalib-font-size);
 }
 
 a {
   color: var(--datalib-accent);
 }
 
-.datalib-shell {
-  /* Viewport-pinned flex column: the toolbar takes its natural height
-     and the routed view flexes into the rest, so full-height views
-     (MillerView) reach the bottom without guessing the chrome height.
-     min-height (not height) so taller views (sync) still
-     scroll the page normally. */
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-  box-sizing: border-box;
-  padding: 1rem;
-}
-/* A band across the top: tinted, hairline below, full-bleed by
-   countering the shell's 1rem padding. */
-.datalib-toolbar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin: -1rem -1rem 0.75rem;
-  padding: 0.4rem 1rem;
-  background: var(--datalib-card-bg);
-  border-bottom: 1px solid var(--datalib-border);
-}
-.datalib-spacer {
-  flex: 1;
-}
-.datalib-tool {
-  padding: 0.25rem 0.75rem;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--datalib-fg);
-  font: inherit;
-  line-height: 1.4;
-  cursor: pointer;
-}
-.datalib-tool:hover {
-  background: var(--datalib-hover);
-  border-color: var(--datalib-border);
+/* Section headings inside cards: small capitals, the way the Dashboard card
+   labels its panels. */
+.datalib-section-title {
+  margin: 0;
+  font-size: var(--datalib-font-size-small);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--datalib-muted);
 }
 
 :root.preview-dark {
-    --datalib-bg: #1a1b1e;
-    --datalib-fg: #e6e6e6;
-    --datalib-muted: #9aa0a6;
-    --datalib-border: #2f3136;
-    --datalib-input-bg: #232428;
+    --datalib-ground: #141518;
+    --datalib-sidebar: #1a1b1f;
+    --datalib-bg: #202126;
+    --datalib-surface: #202126;
+    --datalib-surface-2: #18191c;
+    --datalib-card-bg: #18191c;
+    --datalib-fg: #ececee;
+    --datalib-muted: #a0a2a9;
+    --datalib-faint: #7c7e86;
+    --datalib-border: #34363d;
+    --datalib-border-soft: #2a2c31;
+    --datalib-input-bg: #26272c;
     --datalib-code-bg: #2a2b2f;
-    --datalib-hover: #2a2b2f;
+    --datalib-hover: rgba(255, 255, 255, 0.06);
+    --datalib-selected: #2e3036;
     --datalib-accent: #6ea8fe;
-    --datalib-card-bg: #232428;
+    --datalib-on-accent: #0d1a30;
+    --datalib-shadow: none;
+
+    --datalib-ok: #7fd39a;
+    --datalib-ok-dot: #4cc47a;
+    --datalib-warn-fg: #f3c66f;
+    --datalib-warn-bg: #2e2615;
+    --datalib-warn-border: #5a4620;
+    --datalib-warn-dot: #e0a93a;
+    --datalib-error-fg: #ff9a85;
+    --datalib-error-bg: #33201c;
+    --datalib-error-border: #5c342b;
+
     /* …and light shades on the dark background. */
     --datalib-log-error: #f87171;
     --datalib-log-warn: #facc15;
@@ -218,273 +255,12 @@ code.hljs {
   /* purposely ignored */
   
 }
+/* How a rendered document body looks: the markdown, the per-message
+   wrappers, and what the UI decorates onto them. Its own file because
+   it goes into the document frame (`docFrame.ts`), not a shadow root,
+   and `tools/render_preview.mjs` reads it too. Colours and sizes are
+   theme.css's tokens. */
 
-.chat-preview {
-  height: 100%;
-  overflow-y: auto;
-  /* No padding at the *top*. A sticky message header stops at the
-     scrollport's padding edge, while the content behind it keeps
-     scrolling up through that padding and stays visible — so a top
-     padding shows a sliver of text floating above the pinned bar. The
-     gap comes back below as padding on the first child, where it
-     scrolls away with the content instead. */
-  padding: 0 1rem 0.75rem;
-  box-sizing: border-box;
-}
-.chat-preview > .empty,
-.chat-preview > .error,
-.chat-header {
-  padding-top: 0.75rem;
-}
-.chat-header h2 {
-  margin: 0 0 0.25rem;
-  font-size: 1.1rem;
-}
-.meta {
-  font-size: 0.8rem;
-  color: var(--datalib-muted);
-  margin: 0 0 0.25rem;
-}
-.empty,
-.error {
-  color: var(--datalib-muted);
-  padding: 1rem;
-}
-.error {
-  color: #e35d6a;
-}
-.problems {
-  /* Above the body and the edges: what render could not do to this
-     document is the first thing a reader should see. */
-  list-style: none;
-  padding: 0;
-  margin: 0 0 0.5rem;
-  font-size: 0.85rem;
-  border-top: 1px solid var(--datalib-border);
-  border-bottom: 1px solid var(--datalib-border);
-}
-.problem {
-  display: flex;
-  gap: 0.5rem;
-  align-items: baseline;
-  padding: 0.25rem 0;
-}
-.problem-severity {
-  flex: 0 0 auto;
-  font-size: 0.7rem;
-  line-height: 1rem;
-  padding: 0 0.4rem;
-  border-radius: 0.5rem;
-  text-transform: uppercase;
-  background: color-mix(in srgb, currentColor 12%, transparent);
-}
-.problem-error .problem-severity {
-  color: var(--datalib-log-error);
-}
-.problem-warning .problem-severity {
-  color: var(--datalib-log-warn);
-}
-.problem-info .problem-severity {
-  color: var(--datalib-muted);
-}
-.problem-text {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.problem-jump {
-  color: inherit;
-  text-decoration: underline dotted;
-}
-.problem-sample {
-  display: inline-block;
-  margin-left: 0.4rem;
-  font-size: 0.75rem;
-  opacity: 0.8;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  vertical-align: bottom;
-}
-/* The remote-images banner: above the body with the problems, since
-   what the document would fetch from elsewhere is something to know
-   before reading it. Muted once everything is loaded. */
-.remote-banner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 0.6rem;
-  margin: 0 0 0.5rem;
-  padding: 0.4rem 0;
-  font-size: 0.8rem;
-  color: var(--datalib-muted);
-  border-top: 1px solid var(--datalib-border);
-  border-bottom: 1px solid var(--datalib-border);
-}
-.remote-banner--pending {
-  color: inherit;
-}
-.remote-banner-text,
-.remote-banner-rules,
-.remote-banner-error {
-  flex: 1 1 100%;
-}
-.remote-banner-hosts,
-.remote-banner-actions,
-.remote-banner-rules {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-  align-items: center;
-}
-.remote-banner-actions,
-.remote-banner-links {
-  margin-left: auto;
-}
-.remote-banner-links {
-  font-size: 0.75rem;
-  color: var(--datalib-muted);
-}
-.remote-banner-links a {
-  color: inherit;
-  text-decoration: underline dotted;
-}
-.remote-host,
-.remote-action,
-.remote-rule {
-  font: inherit;
-  font-size: 0.75rem;
-  line-height: 1.3;
-  padding: 0.1rem 0.5rem;
-  color: inherit;
-  background: var(--datalib-input-bg, #fff);
-  border: 1px solid var(--datalib-border, #d8d8d8);
-  border-radius: 999px;
-}
-.remote-host,
-.remote-action {
-  cursor: pointer;
-}
-.remote-host:hover,
-.remote-action:hover {
-  background: var(--datalib-hover, #f0f0f0);
-}
-.remote-host:disabled,
-.remote-action:disabled,
-.remote-rule-forget:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.remote-host {
-  font-family: ui-monospace, Menlo, monospace;
-}
-.remote-host-count {
-  margin-left: 0.3rem;
-  color: var(--datalib-muted);
-}
-.remote-load-all {
-  border-color: var(--datalib-accent, #6366f1);
-}
-.remote-rules-label {
-  font-size: 0.75rem;
-}
-.remote-rule {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-.remote-rule-forget {
-  font: inherit;
-  font-size: 0.7rem;
-  line-height: 1;
-  padding: 0 0.15rem;
-  color: var(--datalib-muted);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
-.remote-rule-forget:hover {
-  color: #e35d6a;
-}
-.remote-banner-error {
-  color: #e35d6a;
-}
-.outgoing-edges {
-  /* The doc-level outgoing edges list sits above the rendered body
-     and below the meta line. List markers off so the leading arrow
-     glyph stands in. */
-  list-style: none;
-  padding: 0;
-  margin: 0 0 0.5rem;
-  font-size: 0.85rem;
-  border-top: 1px solid var(--datalib-border);
-  border-bottom: 1px solid var(--datalib-border);
-  padding: 0.4rem 0;
-}
-.outgoing-edges li {
-  margin: 0.15rem 0;
-}
-.edge-arrow {
-  color: var(--datalib-muted, #94a3b8);
-  margin-right: 0.4rem;
-}
-.edge-source-link {
-  /* Match the inline span styling in `ChatBody.ce.vue`: dotted muted
-     underline so it reads as a link without the "external blue"
-     baggage, and the same hover fill so source and destination
-     (lit up via `.hover-dst`) share a color. */
-  color: inherit;
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-decoration-color: var(--datalib-muted, #94a3b8);
-  text-underline-offset: 2px;
-  border-radius: 3px;
-  transition: background-color 100ms ease-in-out;
-}
-.edge-source-link:hover {
-  background: rgba(99, 102, 241, 0.28);
-}
-.edge-dst-title {
-  color: var(--datalib-muted, #94a3b8);
-  margin-left: 0.4rem;
-  font-size: 0.8rem;
-}
-.ctx-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1500;
-  background: transparent;
-}
-.ctx-menu {
-  position: fixed;
-  background: var(--datalib-input-bg, #fff);
-  color: var(--datalib-fg, #000);
-  border: 1px solid var(--datalib-border, #ccc);
-  border-radius: 4px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-  min-width: 180px;
-  padding: 4px 0;
-  z-index: 1501;
-  font-size: 14px;
-}
-.ctx-item {
-  padding: 8px 16px;
-  cursor: pointer;
-  user-select: none;
-}
-.ctx-item:hover {
-  background: var(--datalib-accent, #eee);
-}
-.ctx-divider {
-  height: 1px;
-  background: var(--datalib-border, #ccc);
-  margin: 4px 0;
-}
-
-
-/* Markdown styling for the v-html body. Unscoped so the rules reach
-   inside `v-html`; still shadow-local since this lands in the card's
-   shadow root. */
 .markdown-body {
   font-size: 0.9rem;
   line-height: 1.45;
@@ -501,12 +277,12 @@ code.hljs {
   background: #0d1117;
   color: #e6edf3;
   padding: 0.6rem 0.75rem;
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   overflow-x: auto;
   font-size: 0.82rem;
 }
 .markdown-body code {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--datalib-mono);
   font-size: 0.85em;
 }
 .markdown-body :not(pre) > code {
@@ -518,7 +294,7 @@ code.hljs {
   margin: 0.4rem 0;
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--datalib-border);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   background: var(--datalib-card-bg);
 }
 .markdown-body details > summary {
@@ -542,7 +318,6 @@ code.hljs {
   color: var(--datalib-muted);
 }
 
-
 /* An unbroken token longer than the pane — a hash, a base64 blob, a
    URL with no slashes to break at — otherwise runs off the edge of its
    card and is simply not readable. `break-word` (not `anywhere`) so
@@ -561,8 +336,7 @@ code.hljs {
   overflow-x: auto;
 }
 
-/* Per-message wrappers emitted by ingest. Unscoped on purpose so the rules
-   reach inside `v-html`. */
+/* Per-message wrappers emitted by ingest. */
 .chat-body .msg {
   scroll-margin-top: 1rem;
   padding: 0.5rem 0.75rem;
@@ -581,7 +355,7 @@ code.hljs {
 .chat-body > [class^="diff-"] > details.tool-group {
   border: 1px solid var(--datalib-border, #d8d8d8);
   border-left-width: 3px;
-  border-radius: 8px;
+  border-radius: calc(var(--datalib-radius) + 2px);
   background: var(--datalib-card-bg, #fafafa);
   margin: 0.4rem 0;
 }
@@ -621,7 +395,7 @@ code.hljs {
   border-radius: 2px;
 }
 .chat-body .msg--claude {
-  border-left-color: var(--datalib-accent, #6366f1);
+  border-left-color: var(--datalib-accent);
 }
 .chat-body .msg--chatgpt {
   border-left-color: #16a34a;
@@ -751,7 +525,7 @@ code.hljs {
   color: var(--datalib-muted, #94a3b8);
   background: transparent;
   border: 1px solid var(--datalib-border, #d8d8d8);
-  border-radius: 4px;
+  border-radius: var(--datalib-radius);
   cursor: pointer;
 }
 .chat-body button.msg-jump:hover {
@@ -780,11 +554,11 @@ code.hljs {
 }
 .chat-body .msg.selected {
   background: var(--datalib-hover, #f0f0f0);
-  border-color: var(--datalib-accent, #6366f1);
+  border-color: var(--datalib-accent);
   /* `outline` (not a thicker border) so moving the selection doesn't
      reflow; the negative offset lays it over the card's own edge so
      the two read as one highlighted border rather than two rings. */
-  outline: 2px solid var(--datalib-accent, #6366f1);
+  outline: 2px solid var(--datalib-accent);
   outline-offset: -1px;
 }
 /* Inline span baked by ingest for sub-section edge anchors (today
@@ -814,12 +588,12 @@ code.hljs {
 }
 .chat-body span[data-section-uuid].edge-source:hover,
 .chat-body [data-section-uuid].hover-dst {
-  background: rgba(99, 102, 241, 0.28);
+  background: color-mix(in srgb, var(--datalib-accent) 28%, transparent);
   border-radius: 3px;
 }
 .chat-body span[data-section-uuid].selected {
   background: var(--datalib-card-bg, #1f2937);
-  outline: 2px solid var(--datalib-accent, #6366f1);
+  outline: 2px solid var(--datalib-accent);
   border-radius: 3px;
 }
 /* A remote image or media element held back by the sanitizer
@@ -913,6 +687,59 @@ code.hljs {
 .chat-body .msg-author {
   font-weight: 600;
 }
+.chat-body .msg-recipients {
+  font-size: 0.8rem;
+  color: var(--datalib-muted, #94a3b8);
+  margin: 0 0 0.3rem;
+}
+.chat-body .msg-recipients .msg-recipient {
+  color: var(--datalib-fg, inherit);
+}
+/* A handle the contacts app can name: a chip. One it cannot yet: the
+   source's own text, marked as clickable to link it. */
+.chat-body .handle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 999px;
+}
+.chat-body .handle-resolved,
+.chat-body .handle-linkable {
+  cursor: pointer;
+}
+.chat-body .handle-resolved {
+  padding: 0 0.5rem 0 0.15rem;
+  background: var(--datalib-hover, #f0f0f0);
+}
+.chat-body .handle-stale {
+  opacity: 0.7;
+  font-style: italic;
+}
+.chat-body .handle-initial {
+  /* Decoration: a copy carries the name and identifier, not the disc. */
+  user-select: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.3em;
+  height: 1.3em;
+  border-radius: 50%;
+  font-size: 0.75em;
+  background: var(--datalib-accent, #4f46e5);
+  color: #fff;
+}
+.chat-body .handle-mark {
+  width: 0.9em;
+  height: 0.9em;
+  opacity: 0.6;
+}
+.chat-body .handle-linkable::after {
+  content: "+";
+  font-weight: 400;
+  color: var(--datalib-muted, #94a3b8);
+}
+.chat-body .handle-chip:hover {
+  outline: 1px solid var(--datalib-border, #d8d8d8);
+}
 .chat-body .msg-ts {
   font-size: 0.75rem;
   font-weight: 400;
@@ -983,6 +810,293 @@ code.hljs {
 }
 
 
+/* A column: the chrome at its own height, then the body, which scrolls
+   inside its frame and takes what is left — never less than most of the
+   pane, so a long problems list cannot squeeze it away. */
+.chat-preview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  /* No padding at the *top*. A sticky message header stops at the
+     scrollport's padding edge, while the content behind it keeps
+     scrolling up through that padding and stays visible — so a top
+     padding shows a sliver of text floating above the pinned bar. The
+     gap comes back below as padding on the first child, where it
+     scrolls away with the content instead. */
+  padding: 0 1rem 0.75rem;
+  box-sizing: border-box;
+  /* Reading text: never below 14px, whatever the density. */
+  font-size: max(14px, calc(var(--datalib-font-size) + 2px));
+}
+.chat-preview > * {
+  flex: none;
+}
+.doc-body {
+  flex: 1 1 0;
+  min-height: 70%;
+  /* The frame pads its own body. */
+  margin: 0 -1rem -0.75rem;
+}
+.chat-preview > .empty,
+.chat-preview > .error,
+.chat-header {
+  padding-top: 0.75rem;
+}
+.chat-header h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+}
+.meta {
+  font-size: 0.8rem;
+  color: var(--datalib-muted);
+  margin: 0 0 0.25rem;
+}
+.empty,
+.error {
+  color: var(--datalib-muted);
+  padding: 1rem;
+}
+.error {
+  color: var(--datalib-error-fg);
+}
+.problems {
+  /* Above the body and the edges: what render could not do to this
+     document is the first thing a reader should see. */
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--datalib-border);
+  border-bottom: 1px solid var(--datalib-border);
+}
+.problem {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.25rem 0;
+}
+.problem-severity {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  line-height: 1rem;
+  padding: 0 0.4rem;
+  border-radius: 0.5rem;
+  text-transform: uppercase;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.problem-error .problem-severity {
+  color: var(--datalib-log-error);
+}
+.problem-warning .problem-severity {
+  color: var(--datalib-log-warn);
+}
+.problem-info .problem-severity {
+  color: var(--datalib-muted);
+}
+.problem-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.problem-jump {
+  color: inherit;
+  text-decoration: underline dotted;
+}
+.problem-sample {
+  display: inline-block;
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  opacity: 0.8;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+/* The remote-images banner: above the body with the problems, since
+   what the document would fetch from elsewhere is something to know
+   before reading it. Muted once everything is loaded. */
+.remote-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+  margin: 0 0 0.5rem;
+  padding: 0.4rem 0;
+  font-size: 0.8rem;
+  color: var(--datalib-muted);
+  border-top: 1px solid var(--datalib-border);
+  border-bottom: 1px solid var(--datalib-border);
+}
+.remote-banner--pending {
+  color: inherit;
+}
+.remote-banner-text,
+.remote-banner-rules,
+.remote-banner-error {
+  flex: 1 1 100%;
+}
+.remote-banner-hosts,
+.remote-banner-actions,
+.remote-banner-rules {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+.remote-banner-actions,
+.remote-banner-links {
+  margin-left: auto;
+}
+.remote-banner-links {
+  font-size: 0.75rem;
+  color: var(--datalib-muted);
+}
+.remote-banner-links a {
+  color: inherit;
+  text-decoration: underline dotted;
+}
+.remote-host,
+.remote-action,
+.remote-rule {
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  padding: 0.1rem 0.5rem;
+  color: inherit;
+  background: var(--datalib-input-bg, #fff);
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+}
+.remote-host,
+.remote-action {
+  cursor: pointer;
+}
+.remote-host:hover,
+.remote-action:hover {
+  background: var(--datalib-hover, #f0f0f0);
+}
+.remote-host:disabled,
+.remote-action:disabled,
+.remote-rule-forget:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.remote-host {
+  font-family: var(--datalib-mono);
+}
+.remote-host-count {
+  margin-left: 0.3rem;
+  color: var(--datalib-muted);
+}
+.remote-load-all {
+  border-color: var(--datalib-accent);
+}
+.remote-rules-label {
+  font-size: 0.75rem;
+}
+.remote-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.remote-rule-forget {
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+  color: var(--datalib-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.remote-rule-forget:hover {
+  color: var(--datalib-error-fg);
+}
+.remote-banner-error {
+  color: var(--datalib-error-fg);
+}
+.outgoing-edges {
+  /* The doc-level outgoing edges list sits above the rendered body
+     and below the meta line. List markers off so the leading arrow
+     glyph stands in. */
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--datalib-border);
+  border-bottom: 1px solid var(--datalib-border);
+  padding: 0.4rem 0;
+}
+.outgoing-edges li {
+  margin: 0.15rem 0;
+}
+.edge-arrow {
+  color: var(--datalib-muted, #94a3b8);
+  margin-right: 0.4rem;
+}
+.edge-source-link {
+  /* Match the inline span styling in `ChatBody.ce.vue`: dotted muted
+     underline so it reads as a link without the "external blue"
+     baggage, and the same hover fill so source and destination
+     (lit up via `.hover-dst`) share a color. */
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--datalib-muted, #94a3b8);
+  text-underline-offset: 2px;
+  border-radius: 3px;
+  transition: background-color 100ms ease-in-out;
+}
+.edge-source-link:hover {
+  background: color-mix(in srgb, var(--datalib-accent) 28%, transparent);
+}
+.edge-dst-title {
+  color: var(--datalib-muted, #94a3b8);
+  margin-left: 0.4rem;
+  font-size: 0.8rem;
+}
+.ctx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  background: transparent;
+}
+.ctx-menu {
+  position: fixed;
+  background: var(--datalib-input-bg, #fff);
+  color: var(--datalib-fg, #000);
+  border: 1px solid var(--datalib-border, #ccc);
+  border-radius: var(--datalib-radius);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  min-width: 180px;
+  padding: 4px 0;
+  z-index: 1501;
+  font-size: 14px;
+}
+.ctx-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+.ctx-item:hover {
+  background: var(--datalib-accent, #eee);
+}
+.ctx-divider {
+  height: 1px;
+  background: var(--datalib-border, #ccc);
+  margin: 4px 0;
+}
+
+
+.doc-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+
   body { margin: 0; background: var(--datalib-bg); color: var(--datalib-fg);
          font-family: system-ui, sans-serif; }
   .preview-bar { position: sticky; top: 0; z-index: 2; display: flex; gap: 1rem;
@@ -1043,22 +1157,22 @@ code.hljs {
 <td>Source Size</td>
 <td><code>beeper/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-8e89-ade7-0034cbfbbf3b" data-section-uuid="00000000-0000-8e89-ade7-0034cbfbbf3b"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>beeper/ingest/blobs.doltlite_db</code></td>
+<td><code>beeper/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-8361-a80f-ac112cb57471" data-section-uuid="00000000-0000-8361-a80f-ac112cb57471"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8ddf-8c7c-a461ab616caa" data-section-uuid="00000000-0000-8ddf-8c7c-a461ab616caa"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>beeper/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>beeper/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>2 rows</td>
-<td><span id="m-00000000-0000-8a89-8037-bc83fdca2a55" data-section-uuid="00000000-0000-8a89-8037-bc83fdca2a55"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8938-af40-d9d73386596e" data-section-uuid="00000000-0000-8938-af40-d9d73386596e"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -1174,10 +1288,10 @@ code.hljs {
 </div>
 </section>
 <section class="preview-source" id="src-chatgpt-api">
-<h2 class="preview-source-name">chatgpt-api <span class="preview-count">4 documents</span></h2>
+<h2 class="preview-source-name">chatgpt-api <span class="preview-count">5 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">chatgpt-api/render_markdown/00000000-0000-8020-9a72-3216b3199332/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8020-9a72-3216b3199332">Sonnet on a Cat Named Spot (all) <a class="source-link" href="https://chatgpt.com/c/68fa0001-fake-7000-8000-positronic0001" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8020-9a72-3216b3199332">Sonnet on a Cat Named Spot <a class="source-link" href="https://chatgpt.com/c/68fa0001-fake-7000-8000-positronic0001" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b80ee6f-7000-8ad0-9d27-1518a6f22855" data-section-uuid="0b80ee6f-7000-8ad0-9d27-1518a6f22855" class="msg msg--chatgpt">
 <h2><span class="msg-author">System</span> <time class="msg-ts" datetime="2370-10-24T08:00:00+00:00" title="2370-10-24 08:00:00 UTC">Sat Oct 24th, 2370 at 08:00</time></h2>
 <p>User is Lt. Cmdr. Data, a sentient android. Prefers precise, literal language.</p>
@@ -1211,7 +1325,7 @@ Thou art my muse, my console saboteur.</p>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">chatgpt-api/render_markdown/00000000-0000-89af-8390-876943e6455b/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-89af-8390-876943e6455b" title="I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom? (all)">I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization,… (all) <a class="source-link" href="https://chatgpt.com/c/68fa0003-fake-7000-8000-positronic0003" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-89af-8390-876943e6455b" title="I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?">I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization,… <a class="source-link" href="https://chatgpt.com/c/68fa0003-fake-7000-8000-positronic0003" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b80f8bc-2800-8865-8223-8642d24bac73" data-section-uuid="0b80f8bc-2800-8865-8223-8642d24bac73" class="msg msg--chatgpt">
 <h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-26T08:00:00+00:00" title="2370-10-26 08:00:00 UTC">Mon Oct 26th, 2370 at 08:00</time></h2>
 <p>I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?</p>
@@ -1223,8 +1337,24 @@ Thou art my muse, my console saboteur.</p>
 </div>
 </div>
 <div class="preview-doc">
+<h3 class="preview-name">chatgpt-api/render_markdown/00000000-0000-8bd2-8afb-b21d3b87dfa5/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8bd2-8afb-b21d3b87dfa5">Holodeck Cave on Risa <a class="source-link" href="https://chatgpt.com/c/68fa0004-fake-7000-8000-positronic0004" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-0b80fde2-8400-8962-9633-fc71ef31ea85" data-section-uuid="0b80fde2-8400-8962-9633-fc71ef31ea85" class="msg msg--chatgpt">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-27T08:00:00+00:00" title="2370-10-27 08:00:00 UTC">Tue Oct 27th, 2370 at 08:00</time></h2>
+<p>What is Holodeck Cave on Risa like?</p>
+</div>
+<div id="m-0b80fde3-6e60-8e35-9992-a7dae32f8fff" data-section-uuid="0b80fde3-6e60-8e35-9992-a7dae32f8fff" class="msg msg--chatgpt">
+<h2><span class="msg-author">gpt-5</span> <time class="msg-ts" datetime="2370-10-27T08:01:00+00:00" title="2370-10-27 08:01:00 UTC">Tue Oct 27th, 2370 at 08:01</time></h2>
+<p>I'm not aware of any lounge named &quot;Holodeck Cave&quot; on Risa. However, Risa is home to several notable resorts that offer unique experiences:</p>
+<p><strong>Ten Forward Annex</strong>: Located in the central plaza of Risa, the annex is a lounge with a synthesizer bar and a viewport onto the pleasure planet's twin moons. Guests can book a table by the window.</p>
+<p><strong>Jamaharon Springs</strong>: Situated at the northern tip of the island, the springs open onto the sea. See <a href="https://example.com/risa">the Risa tourism board</a> for hours. Visitors can soak in the warm rock pools.</p>
+<p>If you have a specific resort in mind, feel free to ask!</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
 <h3 class="preview-name">chatgpt-api/render_markdown/00000000-0000-8d7f-8279-1fc2e44e05fd/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8d7f-8279-1fc2e44e05fd">Polynomial Fit for Sensor Calibration (all) <a class="source-link" href="https://chatgpt.com/c/68fa0002-fake-7000-8000-positronic0002" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8d7f-8279-1fc2e44e05fd">Polynomial Fit for Sensor Calibration <a class="source-link" href="https://chatgpt.com/c/68fa0002-fake-7000-8000-positronic0002" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b80f395-cc00-8c75-88a8-5469fcb42c53" data-section-uuid="0b80f395-cc00-8c75-88a8-5469fcb42c53" class="msg msg--chatgpt">
 <h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-25T08:00:00+00:00" title="2370-10-25 08:00:00 UTC">Sun Oct 25th, 2370 at 08:00</time></h2>
 <p>Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python.</p>
@@ -1263,22 +1393,22 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 <td>Source Size</td>
 <td><code>chatgpt-api/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-81f5-a220-ad1cdf647ea8" data-section-uuid="00000000-0000-81f5-a220-ad1cdf647ea8"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>chatgpt-api/ingest/blobs.doltlite_db</code></td>
+<td><code>chatgpt-api/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-84a3-84cf-1f2eddeefd5e" data-section-uuid="00000000-0000-84a3-84cf-1f2eddeefd5e"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8e8e-bfa6-85f21f6d0e1c" data-section-uuid="00000000-0000-8e8e-bfa6-85f21f6d0e1c"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>chatgpt-api/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>chatgpt-api/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>0 rows</td>
-<td><span id="m-00000000-0000-87c1-9d06-bc01e465744a" data-section-uuid="00000000-0000-87c1-9d06-bc01e465744a"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8df9-b479-b68a1e1d758f" data-section-uuid="00000000-0000-8df9-b479-b68a1e1d758f"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -1298,7 +1428,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 <td>Table</td>
 <td><code>chatgpt-api/ingest/entities.doltlite_db#conversations</code></td>
 <td></td>
-<td>3 rows</td>
+<td>4 rows</td>
 <td><span id="m-00000000-0000-8710-b041-6c312503e484" data-section-uuid="00000000-0000-8710-b041-6c312503e484"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -1317,7 +1447,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 <h2 class="preview-source-name">claude-api <span class="preview-count">7 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">claude-api/render_markdown/00000000-0000-8184-b70f-0aace9f02d6c/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8184-b70f-0aace9f02d6c">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8184-b70f-0aace9f02d6c">Klingon Diplomatic Greeting Drafting <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b75b540-c500-86b8-b4d6-30f1d383d742" data-section-uuid="0b75b540-c500-86b8-b4d6-30f1d383d742" class="msg msg--claude">
 <h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-14T10:00:00+00:00" title="2369-04-14 10:00:00 UTC">Mon Apr 14th, 2369 at 10:00</time></h2>
 <p>Look up the Klingon greeting &quot;nuqneH&quot; and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.</p>
@@ -1373,7 +1503,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">claude-api/render_markdown/00000000-0000-88a2-ab0d-6718dcb64052/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-88a2-ab0d-6718dcb64052">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-88a2-ab0d-6718dcb64052">Borg Encryption Signature Lookup <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b75bf56-8e80-86b3-b6bc-65f8d47ee5e9" data-section-uuid="0b75bf56-8e80-86b3-b6bc-65f8d47ee5e9" class="msg msg--claude">
 <h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-16T09:00:00+00:00" title="2369-04-16 09:00:00 UTC">Wed Apr 16th, 2369 at 09:00</time></h2>
 <p>Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.</p>
@@ -1418,7 +1548,8 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 <div id="m-0b75bf57-ee10-8410-b150-cd2fa6faefec" data-section-uuid="0b75bf57-ee10-8410-b150-cd2fa6faefec" class="msg msg--claude">
 <h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time></h2>
 <details><summary>Tool result: starfleet_db_query</summary>
-<p>Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.</p>
+<pre><code>Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.
+</code></pre>
 </details>
 </div>
 </details>
@@ -1426,7 +1557,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">claude-api/render_markdown/00000000-0000-89b3-8bed-0eecc97d45ce/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-89b3-8bed-0eecc97d45ce">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-89b3-8bed-0eecc97d45ce">Tricorder Image Diagnostic <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b75ba14-bb40-8501-9598-88138f280023" data-section-uuid="0b75ba14-bb40-8501-9598-88138f280023" class="msg msg--claude">
 <h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-15T08:30:00+00:00" title="2369-04-15 08:30:00 UTC">Tue Apr 15th, 2369 at 08:30</time></h2>
 <p>What's wrong with this medical-tricorder readout?</p>
@@ -1440,7 +1571,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">claude-api/render_markdown/00000000-0000-8a01-8633-71325d50b8d7/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8a01-8633-71325d50b8d7">Claude Project · Stellar Cartography (all) <a class="source-link" href="https://claude.ai/project/70000002-1701-4d00-8000-000000000702" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8a01-8633-71325d50b8d7">Claude Project · Stellar Cartography <a class="source-link" href="https://claude.ai/project/70000002-1701-4d00-8000-000000000702" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-00000000-0000-85bc-9aba-534fad04c8f7" data-section-uuid="00000000-0000-85bc-9aba-534fad04c8f7" class="msg msg--claude">
 <h2><span class="msg-author">Description</span> <span class="msg-ts">(no timestamp)</span></h2>
 <p>Scratch project for charting questions. Carries no timestamps: the export omitted created_at and updated_at, which is the shape this fixture exists to pin.</p>
@@ -1462,7 +1593,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">claude-api/render_markdown/00000000-0000-8c45-a404-118e0e422b6b/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8c45-a404-118e0e422b6b">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8c45-a404-118e0e422b6b">Claude Project · Bridge Operations <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b5016d5-ce80-81dc-9685-d9bd0bb507f9" data-section-uuid="0b5016d5-ce80-81dc-9685-d9bd0bb507f9" class="msg msg--claude">
 <h2><span class="msg-author">Description</span> <time class="msg-ts" datetime="2364-03-01T09:00:00+00:00" title="2364-03-01 09:00:00 UTC">Sun Mar 1st, 2364 at 09:00</time></h2>
 <p>Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.</p>
@@ -1489,7 +1620,7 @@ Medical emergencies route directly to Sickbay (Crusher).</p>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">claude-api/render_markdown/00000000-0000-8fda-8a1d-506771450366/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8fda-8a1d-506771450366">Poisoned: a message with an unreadable stamp (all) <a class="source-link" href="https://claude.ai/chat/c0000006-1701-4d00-8000-00000000c006" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8fda-8a1d-506771450366">Poisoned: a message with an unreadable stamp <a class="source-link" href="https://claude.ai/chat/c0000006-1701-4d00-8000-00000000c006" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b75c4b3-d900-8b7b-8e0c-d46db3ce97ce" data-section-uuid="0b75c4b3-d900-8b7b-8e0c-d46db3ce97ce" class="msg msg--claude">
 <h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time></h2>
 <p>Computer, what stardate is it?</p>
@@ -1519,22 +1650,22 @@ Medical emergencies route directly to Sickbay (Crusher).</p>
 <td>Source Size</td>
 <td><code>claude-api/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-8bd9-b6c0-1c0e35f193d1" data-section-uuid="00000000-0000-8bd9-b6c0-1c0e35f193d1"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>claude-api/ingest/blobs.doltlite_db</code></td>
+<td><code>claude-api/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-839a-87a2-8a684a16f655" data-section-uuid="00000000-0000-839a-87a2-8a684a16f655"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-872d-b3c1-3c9f93c8ad82" data-section-uuid="00000000-0000-872d-b3c1-3c9f93c8ad82"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>claude-api/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>claude-api/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>0 rows</td>
-<td><span id="m-00000000-0000-8f73-9116-81b4a07bdd64" data-section-uuid="00000000-0000-8f73-9116-81b4a07bdd64"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8615-9fce-74ab65b75df9" data-section-uuid="00000000-0000-8615-9fce-74ab65b75df9"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -1594,7 +1725,7 @@ Medical emergencies route directly to Sickbay (Crusher).</p>
 <h2 class="preview-source-name">claude-code <span class="preview-count">4 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">claude-code/render_markdown/00000000-0000-83df-8efb-7b99abfef902/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-83df-8efb-7b99abfef902">Scan the emitter logs since stardate 41153.7 for phase drift events. (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-83df-8efb-7b99abfef902">Scan the emitter logs since stardate 41153.7 for phase drift events.</h1>
 <div id="m-0b50ea32-0988-8257-ac0d-e1b50fe1120b" data-section-uuid="0b50ea32-0988-8257-ac0d-e1b50fe1120b" class="msg msg--claude_code">
 <h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-11T10:00:37+00:00" title="2364-04-11 10:00:37 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
 <p>Scan the emitter logs since stardate 41153.7 for phase drift events.</p>
@@ -1629,7 +1760,7 @@ logs/emitter/41156.1.log:phase drift 0.31
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">claude-code/render_markdown/00000000-0000-8a77-bcf1-64f2ad0583fa/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8a77-bcf1-64f2ad0583fa">Why does the replicator return cold Earl Grey? Screenshot attached. (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8a77-bcf1-64f2ad0583fa">Why does the replicator return cold Earl Grey? Screenshot attached.</h1>
 <details class="tool-group">
 <summary>🛠 1 tool step</summary>
 <div id="m-0b50eb28-c598-8781-b43c-456d6ca61946" data-section-uuid="0b50eb28-c598-8781-b43c-456d6ca61946" class="msg msg--claude_code">
@@ -1669,7 +1800,7 @@ logs/emitter/41156.1.log:phase drift 0.31
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">claude-code/render_markdown/00000000-0000-8b27-94b8-759d35b8fe6b/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8b27-94b8-759d35b8fe6b">Deflector dish drift (all) <a class="source-link" href="https://claude.ai/code/cse_01TNGdeflector" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8b27-94b8-759d35b8fe6b">Deflector dish drift <a class="source-link" href="https://claude.ai/code/cse_01TNGdeflector" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b50ea31-afb0-897e-bd11-b4be3d00e9db" data-section-uuid="0b50ea31-afb0-897e-bd11-b4be3d00e9db" class="msg msg--claude_code">
 <h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-11T10:00:14+00:00" title="2364-04-11 10:00:14 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
 <p>The deflector dish is 0.3 degrees off axis. Find why the realignment script fails.</p>
@@ -1866,7 +1997,7 @@ last calibration: stardate 41153.7
 <h2 class="preview-source-name">codex <span class="preview-count">5 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">codex/render_markdown/00000000-0000-86ab-b7b0-53153bf8d22e/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-86ab-b7b0-53153bf8d22e">Data (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-86ab-b7b0-53153bf8d22e">Data</h1>
 <div id="m-0b50ea34-a580-81f9-af86-355aaceb9bb7" data-section-uuid="0b50ea34-a580-81f9-af86-355aaceb9bb7" class="msg msg--codex">
 <h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-11T10:03:28+00:00" title="2364-04-11 10:03:28 UTC">Sat Apr 11th, 2364 at 10:03</time></h2>
 <p>Scan the aft sensor logs for drift and report the worst hour.</p>
@@ -1896,7 +2027,7 @@ last calibration: stardate 41153.7
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">codex/render_markdown/00000000-0000-8791-bfaa-35b2f6b12135/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8791-bfaa-35b2f6b12135">The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8791-bfaa-35b2f6b12135">The deflector dish drifts 0.3 degrees every hour. Find out why and fix it.</h1>
 <details class="tool-group">
 <summary>🛠 3 tool steps</summary>
 <div id="m-0b50ea31-afb0-820e-bf44-e826e6d1a2b7" data-section-uuid="0b50ea31-afb0-820e-bf44-e826e6d1a2b7" class="msg msg--codex">
@@ -2040,7 +2171,7 @@ The user interrupted the previous turn on purpose.
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">codex/render_markdown/00000000-0000-8a78-90c5-dbad27c044ff/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8a78-90c5-dbad27c044ff">Why does the replicator return cold Earl Grey? Screenshot attached. (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8a78-90c5-dbad27c044ff">Why does the replicator return cold Earl Grey? Screenshot attached.</h1>
 <div id="m-0b50f04f-73a0-8dab-94c2-970f97d98056" data-section-uuid="0b50f04f-73a0-8dab-94c2-970f97d98056" class="msg msg--codex">
 <h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-12T14:30:28+00:00" title="2364-04-12 14:30:28 UTC">Sun Apr 12th, 2364 at 14:30</time></h2>
 <p>Why does the replicator return cold Earl Grey? Screenshot attached.</p>
@@ -2070,8 +2201,7 @@ The user interrupted the previous turn on purpose.
 </details>
 </div>
 <div id="m-0b50f050-17b0-8264-a550-0ca48652be52" data-section-uuid="0b50f050-17b0-8264-a550-0ca48652be52" class="msg msg--codex">
-<p>*<small><time class="msg-ts" datetime="2364-04-12T14:31:10+00:00" title="2364-04-12 14:31:10 UTC">Sun Apr 12th, 2364 at 14:31</time> — system: context compacted</p>
-<p>Earlier in this thread: the replicator's pattern buffer 7 was found offline.</small>*</p>
+<p><em><small><time class="msg-ts" datetime="2364-04-12T14:31:10+00:00" title="2364-04-12 14:31:10 UTC">Sun Apr 12th, 2364 at 14:31</time> — system: context compacted  Earlier in this thread: the replicator's pattern buffer 7 was found offline.</small></em></p>
 </div>
 </details>
 <div id="m-0b50f050-3308-845c-8470-ce2122b0b0a9" data-section-uuid="0b50f050-3308-845c-8470-ce2122b0b0a9" class="msg msg--codex">
@@ -2082,7 +2212,7 @@ The user interrupted the previous turn on purpose.
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">codex/render_markdown/00000000-0000-8bef-8ff5-58a96f311ccd/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8bef-8ff5-58a96f311ccd">Audit the warp core containment logs and tell me what you find. (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8bef-8ff5-58a96f311ccd">Audit the warp core containment logs and tell me what you find.</h1>
 <details class="tool-group">
 <summary>🛠 1 tool step</summary>
 <div id="m-0b50f455-34d0-8b79-97d2-e8fe49e87953" data-section-uuid="0b50f455-34d0-8b79-97d2-e8fe49e87953" class="msg msg--codex">
@@ -2223,7 +2353,7 @@ Output:
 <h2 class="preview-source-name">facebook <span class="preview-count">14 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-80d5-a95b-fe11f630248a/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-80d5-a95b-fe11f630248a">Facebook · Two views of the bridge before alpha shift. (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-80d5-a95b-fe11f630248a">Facebook · Two views of the bridge before alpha shift.</h1>
 <div id="m-0b751fcc-e1c0-8cfc-af76-63e50c166b7e" data-section-uuid="0b751fcc-e1c0-8cfc-af76-63e50c166b7e" class="msg msg--facebook">
 <h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-16T09:30:00+00:00" title="2369-03-16 09:30:00 UTC">Sun Mar 16th, 2369 at 09:30</time></h2>
 <p>Two views of the bridge before alpha shift.</p>
@@ -2236,7 +2366,7 @@ Output:
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-82fd-b937-8667bd212330/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-82fd-b937-8667bd212330">Facebook · Jean-Luc Picard added a life event from January 5, 2364: Took command of the En… (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-82fd-b937-8667bd212330">Facebook · Jean-Luc Picard added a life event from January 5, 2364: Took command of the En…</h1>
 <div id="m-0b7534ef-a600-815d-afff-30d4689cfd5c" data-section-uuid="0b7534ef-a600-815d-afff-30d4689cfd5c" class="msg msg--facebook">
 <h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-20T12:00:00+00:00" title="2369-03-20 12:00:00 UTC">Thu Mar 20th, 2369 at 12:00</time></h2>
 <p><strong>Took command of the Enterprise</strong></p>
@@ -2330,7 +2460,7 @@ Output:
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8ba6-97c6-f48500bf8e47/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8ba6-97c6-f48500bf8e47">Facebook · Happy birthday, Number One. The bridge is yours for the day. (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8ba6-97c6-f48500bf8e47">Facebook · Happy birthday, Number One. The bridge is yours for the day.</h1>
 <div id="m-0b752b10-cb00-884d-9f04-a02d1c74c917" data-section-uuid="0b752b10-cb00-884d-9f04-a02d1c74c917" class="msg msg--facebook">
 <h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-18T14:00:00+00:00" title="2369-03-18 14:00:00 UTC">Tue Mar 18th, 2369 at 14:00</time></h2>
 <p>Happy birthday, Number One. The bridge is yours for the day.</p>
@@ -2358,7 +2488,7 @@ Output:
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8d5b-9ccc-4069d9d92992/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8d5b-9ccc-4069d9d92992">Facebook · Ten Forward Nights (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8d5b-9ccc-4069d9d92992">Facebook · Ten Forward Nights</h1>
 <div id="m-0b7574a1-30c0-81cf-8ff9-c592d6aff132" data-section-uuid="0b7574a1-30c0-81cf-8ff9-c592d6aff132" class="msg msg--facebook">
 <h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T20:50:00+00:00" title="2369-04-01 20:50:00 UTC">Tue Apr 1st, 2369 at 20:50</time></h2>
 <p>Off-duty evenings on Deck 10.</p>
@@ -2376,7 +2506,7 @@ Output:
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8dca-8614-69a1a3d92c28/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8dca-8614-69a1a3d92c28">Facebook · Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff. (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8dca-8614-69a1a3d92c28">Facebook · Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.</h1>
 <div id="m-0b751ce7-4e00-8aa3-96fc-fc3bb74c0111" data-section-uuid="0b751ce7-4e00-8aa3-96fc-fc3bb74c0111" class="msg msg--facebook">
 <h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-15T20:00:00+00:00" title="2369-03-15 20:00:00 UTC">Sat Mar 15th, 2369 at 20:00</time></h2>
 <p>Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.</p>
@@ -2386,7 +2516,7 @@ Output:
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8e1c-8c2e-c30f42ab6c8b/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8e1c-8c2e-c30f42ab6c8b">Facebook · Ten Forward Nights (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8e1c-8c2e-c30f42ab6c8b">Facebook · Ten Forward Nights</h1>
 <div id="m-0b7574aa-5880-8869-a53f-321f7cade7cd" data-section-uuid="0b7574aa-5880-8869-a53f-321f7cade7cd" class="msg msg--facebook">
 <h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T21:00:00+00:00" title="2369-04-01 21:00:00 UTC">Tue Apr 1st, 2369 at 21:00</time></h2>
 <p>Ten Forward Nights</p>
@@ -2414,22 +2544,22 @@ Output:
 <td>Source Size</td>
 <td><code>facebook/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-86e3-ad4e-e82f016fe3d4" data-section-uuid="00000000-0000-86e3-ad4e-e82f016fe3d4"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>facebook/ingest/blobs.doltlite_db</code></td>
+<td><code>facebook/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-8d07-a232-f1f3385aaf86" data-section-uuid="00000000-0000-8d07-a232-f1f3385aaf86"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-83a9-b667-ce7baf8edeca" data-section-uuid="00000000-0000-83a9-b667-ce7baf8edeca"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>facebook/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>facebook/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>4 rows</td>
-<td><span id="m-00000000-0000-8735-9c5f-4ce67de11963" data-section-uuid="00000000-0000-8735-9c5f-4ce67de11963"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8d40-ab7b-19ac32970891" data-section-uuid="00000000-0000-8d40-ab7b-19ac32970891"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -2541,22 +2671,22 @@ Output:
 <td>Source Size</td>
 <td><code>garmin/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-8d3d-b49f-91db8d6251f4" data-section-uuid="00000000-0000-8d3d-b49f-91db8d6251f4"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>garmin/ingest/blobs.doltlite_db</code></td>
+<td><code>garmin/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-86fc-9507-49c005d109ec" data-section-uuid="00000000-0000-86fc-9507-49c005d109ec"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8697-a5fe-0c732cc4b82e" data-section-uuid="00000000-0000-8697-a5fe-0c732cc4b82e"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>garmin/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>garmin/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
-<td>1 row</td>
-<td><span id="m-00000000-0000-8660-910a-f5a7f131e4e6" data-section-uuid="00000000-0000-8660-910a-f5a7f131e4e6"><code>00000000</code></span></td>
+<td>2 rows</td>
+<td><span id="m-00000000-0000-859e-8398-92c7dc18e553" data-section-uuid="00000000-0000-859e-8398-92c7dc18e553"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -2564,6 +2694,13 @@ Output:
 <td>‹size›</td>
 <td></td>
 <td><span id="m-00000000-0000-8788-9340-8adc4d8b5b8f" data-section-uuid="00000000-0000-8788-9340-8adc4d8b5b8f"><code>00000000</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>garmin/ingest/entities.doltlite_db#coverage</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-00000000-0000-8353-bff2-e55b96fd60ee" data-section-uuid="00000000-0000-8353-bff2-e55b96fd60ee"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
@@ -3067,24 +3204,24 @@ Output:
 <section class="preview-source" id="src-google-takeout">
 <h2 class="preview-source-name">google-takeout <span class="preview-count">6 documents</span></h2>
 <div class="preview-doc">
-<h3 class="preview-name">google-takeout/render_markdown/00000000-0000-8830-94e2-2c31bfd74503/2364-03.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-812f-9844-4a65a81cafc0">Google Voice · Jean-Luc Picard (2364-03)</h1>
-<div id="m-0b50188d-4280-82f6-ab06-f5d0adeade6f" data-section-uuid="0b50188d-4280-82f6-ab06-f5d0adeade6f" class="msg msg--google_takeout">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2364-03-01T17:00:00+00:00" title="2364-03-01 17:00:00 UTC">Sun Mar 1st, 2364 at 17:00</time></h2>
+<h3 class="preview-name">google-takeout/render_markdown/00000000-0000-811b-999e-be378270a4c8/2364-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-899d-b389-49d722966107">Google Voice · Jean-Luc Picard (2364-03)</h1>
+<div id="m-0b50188d-4280-875d-b6ae-81fe30608308" data-section-uuid="0b50188d-4280-875d-b6ae-81fe30608308" class="msg msg--google_takeout">
+<h2><span class="msg-author" data-handle="tel:+12025550101">Jean-Luc Picard</span> <time class="msg-ts" datetime="2364-03-01T17:00:00+00:00" title="2364-03-01 17:00:00 UTC">Sun Mar 1st, 2364 at 17:00</time></h2>
 <p>Number One, report to the bridge.</p>
 </div>
-<div id="m-0b50188e-a210-8e31-9bbd-8818752ca48d" data-section-uuid="0b50188e-a210-8e31-9bbd-8818752ca48d" class="msg msg--google_takeout">
+<div id="m-0b50188e-a210-834f-a043-6506959b931b" data-section-uuid="0b50188e-a210-834f-a043-6506959b931b" class="msg msg--google_takeout">
 <h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2364-03-01T17:01:30+00:00" title="2364-03-01 17:01:30 UTC">Sun Mar 1st, 2364 at 17:01</time></h2>
 <p>On my way, Captain.
 Riker out.</p>
 </div>
-<div id="m-0b501890-01a0-81db-b4a4-b6e3f799e4d3" data-section-uuid="0b501890-01a0-81db-b4a4-b6e3f799e4d3" class="msg msg--google_takeout">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2364-03-01T17:03:00+00:00" title="2364-03-01 17:03:00 UTC">Sun Mar 1st, 2364 at 17:03</time></h2>
+<div id="m-0b501890-01a0-8621-aed0-ae4ef59b0e09" data-section-uuid="0b501890-01a0-8621-aed0-ae4ef59b0e09" class="msg msg--google_takeout">
+<h2><span class="msg-author" data-handle="tel:+12025550101">Jean-Luc Picard</span> <time class="msg-ts" datetime="2364-03-01T17:03:00+00:00" title="2364-03-01 17:03:00 UTC">Sun Mar 1st, 2364 at 17:03</time></h2>
 <p>Here is the sensor reading.</p>
 <p><img src="blobs/846b6adacbeb3968.jpg" alt="Jean-Luc Picard - Text - 2364-03-01T09_00_00Z-1-1.jpg"></p>
 </div>
-<div id="m-0b501dea-8d00-8bd3-8553-5f6e83993f5e" data-section-uuid="0b501dea-8d00-8bd3-8553-5f6e83993f5e" class="msg msg--google_takeout">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2364-03-02T18:00:00+00:00" title="2364-03-02 18:00:00 UTC">Mon Mar 2nd, 2364 at 18:00</time></h2>
+<div id="m-0b501dea-8d00-8ed9-8a44-2b8899d19c0e" data-section-uuid="0b501dea-8d00-8ed9-8a44-2b8899d19c0e" class="msg msg--google_takeout">
+<h2><span class="msg-author" data-handle="tel:+12025550101">Jean-Luc Picard</span> <time class="msg-ts" datetime="2364-03-02T18:00:00+00:00" title="2364-03-02 18:00:00 UTC">Mon Mar 2nd, 2364 at 18:00</time></h2>
 <p><strong>Voicemail:</strong> Number One, the away team is ready. Make it so.</p>
 <p><audio controls src="blobs/1971bd86278d9dc6.mp3"></audio></p>
 <p>🔊 <a href="blobs/1971bd86278d9dc6.mp3">Jean-Luc Picard - Voicemail - 2364-03-02T10_00_00Z.mp3</a> — size unknown</p>
@@ -3092,10 +3229,21 @@ Riker out.</p>
 </div>
 </div>
 <div class="preview-doc">
+<h3 class="preview-name">google-takeout/render_markdown/00000000-0000-819a-843b-b8b8c4ffdc90/2364-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-867f-aeba-06833685caa7">Google Voice · +12025550190 (2364-03)</h1>
+<div id="m-0b5028a5-2200-8788-8ea2-a11c5b54142e" data-section-uuid="0b5028a5-2200-8788-8ea2-a11c5b54142e" class="msg msg--google_takeout">
+<h2><span class="msg-author" data-handle="tel:+12025550190">Ferengi Commerce Authority</span> <time class="msg-ts" datetime="2364-03-04T20:00:00+00:00" title="2364-03-04 20:00:00 UTC">Wed Mar 4th, 2364 at 20:00</time></h2>
+<p><strong>Voicemail:</strong> Greetings, valued customer. You have won a free holodeck program.</p>
+<p><audio controls src="blobs/5b1a259c45cfa10e.mp3"></audio></p>
+<p>🔊 <a href="blobs/5b1a259c45cfa10e.mp3"> - Voicemail - 2364-03-04T12_00_00Z.mp3</a> — size unknown</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
 <h3 class="preview-name">google-takeout/render_markdown/00000000-0000-8841-8b6d-116feade3563/2025-02.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-897b-9ac3-fd20d06375e5">Google Chat · Jean-Luc Picard, William Riker (2025-02)</h1>
 <div id="m-0194f4c9-3698-8368-9caa-de73830de593" data-section-uuid="0194f4c9-3698-8368-9caa-de73830de593" class="msg msg--google_takeout">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2025-02-11T11:33:35+00:00" title="2025-02-11 11:33:35 UTC">Tue Feb 11th, 2025 at 11:33</time></h2>
+<h2><span class="msg-author" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</span> <time class="msg-ts" datetime="2025-02-11T11:33:35+00:00" title="2025-02-11 11:33:35 UTC">Tue Feb 11th, 2025 at 11:33</time></h2>
 <p>Number One, set a course for Risa.</p>
 </div>
 </div>
@@ -3104,27 +3252,16 @@ Riker out.</p>
 <h3 class="preview-name">google-takeout/render_markdown/00000000-0000-8841-8b6d-116feade3563/2025-03.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8a9f-9645-8fe420244325">Google Chat · Jean-Luc Picard, William Riker (2025-03)</h1>
 <div id="m-0195683a-d140-87f9-bdf6-234da6d6880c" data-section-uuid="0195683a-d140-87f9-bdf6-234da6d6880c" class="msg msg--google_takeout">
-<h2><span class="msg-author">William Riker</span> <time class="msg-ts" datetime="2025-03-05T21:34:00+00:00" title="2025-03-05 21:34:00 UTC">Wed Mar 5th, 2025 at 21:34</time></h2>
+<h2><span class="msg-author" data-handle="email:riker@enterprise.starfleet">William Riker</span> <time class="msg-ts" datetime="2025-03-05T21:34:00+00:00" title="2025-03-05 21:34:00 UTC">Wed Mar 5th, 2025 at 21:34</time></h2>
 <p>Aye, sir.</p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
-<h3 class="preview-name">google-takeout/render_markdown/00000000-0000-8de4-922c-0e86b76c5175/2364-03.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-854b-af17-7ee68f534440">Google Voice · Wesley Crusher (2364-03)</h1>
-<div id="m-0b502347-d780-83c2-a1c6-83f601fbf087" data-section-uuid="0b502347-d780-83c2-a1c6-83f601fbf087" class="msg msg--google_takeout">
+<h3 class="preview-name">google-takeout/render_markdown/00000000-0000-8a29-a97a-3aa759a898ef/2364-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8c41-9460-69513e7ac609">Google Voice · Wesley Crusher (2364-03)</h1>
+<div id="m-0b502347-d780-87b9-9615-14926b2ecdf0" data-section-uuid="0b502347-d780-87b9-9615-14926b2ecdf0" class="msg msg--google_takeout">
 <p><em><small><time class="msg-ts" datetime="2364-03-03T19:00:00+00:00" title="2364-03-03 19:00:00 UTC">Tue Mar 3rd, 2364 at 19:00</time> — system: Missed call — Wesley Crusher</small></em></p>
-</div>
-</div>
-</div>
-<div class="preview-doc">
-<h3 class="preview-name">google-takeout/render_markdown/00000000-0000-8dfc-9fc6-5e0e91900c22/2364-03.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8147-8d71-753bf990ea10">Google Voice · +15550900 (2364-03)</h1>
-<div id="m-0b5028a5-2200-891d-8096-c16348aadba0" data-section-uuid="0b5028a5-2200-891d-8096-c16348aadba0" class="msg msg--google_takeout">
-<h2><span class="msg-author">Ferengi Commerce Authority</span> <time class="msg-ts" datetime="2364-03-04T20:00:00+00:00" title="2364-03-04 20:00:00 UTC">Wed Mar 4th, 2364 at 20:00</time></h2>
-<p><strong>Voicemail:</strong> Greetings, valued customer. You have won a free holodeck program.</p>
-<p><audio controls src="blobs/5b1a259c45cfa10e.mp3"></audio></p>
-<p>🔊 <a href="blobs/5b1a259c45cfa10e.mp3"> - Voicemail - 2364-03-04T12_00_00Z.mp3</a> — size unknown</p>
 </div>
 </div>
 </div>
@@ -3147,22 +3284,22 @@ Riker out.</p>
 <td>Source Size</td>
 <td><code>google-takeout/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-877c-9cdc-4597c96ff7ac" data-section-uuid="00000000-0000-877c-9cdc-4597c96ff7ac"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>google-takeout/ingest/blobs.doltlite_db</code></td>
+<td><code>google-takeout/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-8a29-bf67-027be5676644" data-section-uuid="00000000-0000-8a29-bf67-027be5676644"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8aa5-b14e-80e236748077" data-section-uuid="00000000-0000-8aa5-b14e-80e236748077"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>google-takeout/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>google-takeout/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>5 rows</td>
-<td><span id="m-00000000-0000-8d70-9468-cd8e8b34b09d" data-section-uuid="00000000-0000-8d70-9468-cd8e8b34b09d"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-812f-99cb-77b7fe27d783" data-section-uuid="00000000-0000-812f-99cb-77b7fe27d783"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -3175,7 +3312,7 @@ Riker out.</p>
 <td>Table</td>
 <td><code>google-takeout/ingest/entities.doltlite_db#chat_attachments</code></td>
 <td></td>
-<td>1 row</td>
+<td>2 rows</td>
 <td><span id="m-00000000-0000-87ba-820e-b8cfeb43e26a" data-section-uuid="00000000-0000-87ba-820e-b8cfeb43e26a"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -3217,7 +3354,7 @@ Riker out.</p>
 <td>Table</td>
 <td><code>google-takeout/ingest/entities.doltlite_db#ingested_files</code></td>
 <td></td>
-<td>8 rows</td>
+<td>11 rows</td>
 <td><span id="m-00000000-0000-8697-9555-8469b6656bdc" data-section-uuid="00000000-0000-8697-9555-8469b6656bdc"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -3238,7 +3375,7 @@ Riker out.</p>
 <td>Table</td>
 <td><code>google-takeout/ingest/entities.doltlite_db#maps_saved_places</code></td>
 <td></td>
-<td>0 rows</td>
+<td>2 rows</td>
 <td><span id="m-00000000-0000-8357-bf61-01531b45e4e6" data-section-uuid="00000000-0000-8357-bf61-01531b45e4e6"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -3252,7 +3389,7 @@ Riker out.</p>
 <td>Table</td>
 <td><code>google-takeout/ingest/entities.doltlite_db#voice_bills</code></td>
 <td></td>
-<td>0 rows</td>
+<td>2 rows</td>
 <td><span id="m-00000000-0000-82b4-a32d-ffe1ac0e8072" data-section-uuid="00000000-0000-82b4-a32d-ffe1ac0e8072"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -3280,7 +3417,7 @@ Riker out.</p>
 <td>Table</td>
 <td><code>google-takeout/ingest/entities.doltlite_db#youtube_watch_history</code></td>
 <td></td>
-<td>0 rows</td>
+<td>3 rows</td>
 <td><span id="m-00000000-0000-8600-824f-ad718271ef73" data-section-uuid="00000000-0000-8600-824f-ad718271ef73"><code>00000000</code></span></td>
 </tr>
 </tbody>
@@ -3292,7 +3429,7 @@ Riker out.</p>
 <h2 class="preview-source-name">linkedin <span class="preview-count">7 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">linkedin/render_markdown/00000000-0000-8027-9f1f-73b03617467e/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8027-9f1f-73b03617467e">LinkedIn · Jean-Luc Picard, William Riker (all)</h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8027-9f1f-73b03617467e">LinkedIn · Jean-Luc Picard, William Riker</h1>
 <div id="m-0b75a070-6680-881c-a54a-36b690506dbf" data-section-uuid="0b75a070-6680-881c-a54a-36b690506dbf" class="msg msg--linkedin">
 <h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-10T09:00:00+00:00" title="2369-04-10 09:00:00 UTC">Thu Apr 10th, 2369 at 09:00</time></h2>
 <p>Number One, the bridge is yours.</p>
@@ -3309,7 +3446,7 @@ Riker out.</p>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">linkedin/render_markdown/00000000-0000-84c5-a0e7-167d60e47f98/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-84c5-a0e7-167d60e47f98">LinkedIn · Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast… (all) <a class="source-link" href="https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A2369041208000000002" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-84c5-a0e7-167d60e47f98">LinkedIn · Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast… <a class="source-link" href="https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A2369041208000000002" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b75aa93-eba0-8d7e-aecf-f814af3527d5" data-section-uuid="0b75aa93-eba0-8d7e-aecf-f814af3527d5" class="msg msg--linkedin">
 <p><em><small><time class="msg-ts" datetime="2369-04-12T08:15:00+00:00" title="2369-04-12 08:15:00 UTC">Sat Apr 12th, 2369 at 08:15</time> — system: Original post not included in the LinkedIn export — <a href="https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A2369041208000000002">https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A2369041208000000002</a></small></em></p>
 </div>
@@ -3328,7 +3465,7 @@ Riker out.</p>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">linkedin/render_markdown/00000000-0000-8878-b482-b77c75689e79/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8878-b482-b77c75689e79">LinkedIn · Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste… (all) <a class="source-link" href="https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A2369041114000000001" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8878-b482-b77c75689e79">LinkedIn · Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste… <a class="source-link" href="https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A2369041114000000001" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b75a6a9-6b00-8a4e-a7c0-9a4b04cc20dc" data-section-uuid="0b75a6a9-6b00-8a4e-a7c0-9a4b04cc20dc" class="msg msg--linkedin">
 <h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2369-04-11T14:00:00+00:00" title="2369-04-11 14:00:00 UTC">Fri Apr 11th, 2369 at 14:00</time></h2>
 <p>Thrilled to share: the Enterprise has completed its survey of the Mintaka system. &quot;Fascinating&quot; barely covers it.</p>
@@ -3354,15 +3491,15 @@ Riker out.</p>
 </thead>
 <tbody>
 <tr>
-<td>Company</td>
+<td>Org</td>
 <td>Starfleet</td>
 </tr>
 <tr>
-<td>Position</td>
+<td>Title</td>
 <td>Captain</td>
 </tr>
 <tr>
-<td>Email Address</td>
+<td>Email</td>
 <td><a href="mailto:jlpicard@starfleet.gov">jlpicard@starfleet.gov</a></td>
 </tr>
 <tr>
@@ -3386,11 +3523,11 @@ Riker out.</p>
 </thead>
 <tbody>
 <tr>
-<td>Company</td>
+<td>Org</td>
 <td>Starfleet</td>
 </tr>
 <tr>
-<td>Position</td>
+<td>Title</td>
 <td>Commander</td>
 </tr>
 <tr>
@@ -3414,11 +3551,11 @@ Riker out.</p>
 </thead>
 <tbody>
 <tr>
-<td>Company</td>
+<td>Org</td>
 <td>Starfleet</td>
 </tr>
 <tr>
-<td>Position</td>
+<td>Title</td>
 <td>Lt. Commander, Operations</td>
 </tr>
 <tr>
@@ -3448,22 +3585,22 @@ Riker out.</p>
 <td>Source Size</td>
 <td><code>linkedin/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-801a-aee1-8f706574061b" data-section-uuid="00000000-0000-801a-aee1-8f706574061b"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>linkedin/ingest/blobs.doltlite_db</code></td>
+<td><code>linkedin/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-8f90-98af-6b94dec8a4af" data-section-uuid="00000000-0000-8f90-98af-6b94dec8a4af"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8f64-a189-6da1bc3ebf3b" data-section-uuid="00000000-0000-8f64-a189-6da1bc3ebf3b"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>linkedin/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>linkedin/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>3 rows</td>
-<td><span id="m-00000000-0000-8a47-a025-4513aa077fac" data-section-uuid="00000000-0000-8a47-a025-4513aa077fac"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-854c-aa20-b019b1f3dc29" data-section-uuid="00000000-0000-854c-aa20-b019b1f3dc29"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -3547,22 +3684,22 @@ Riker out.</p>
 <td>Source Size</td>
 <td><code>notion/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-8770-8cbd-edbb96f9dca9" data-section-uuid="00000000-0000-8770-8cbd-edbb96f9dca9"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>notion/ingest/blobs.doltlite_db</code></td>
+<td><code>notion/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-8dcc-af8f-6d0c69ca0372" data-section-uuid="00000000-0000-8dcc-af8f-6d0c69ca0372"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-834e-b659-e0fb4d00f27a" data-section-uuid="00000000-0000-834e-b659-e0fb4d00f27a"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>notion/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>notion/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>0 rows</td>
-<td><span id="m-00000000-0000-8174-b2ba-177a2cb7e48b" data-section-uuid="00000000-0000-8174-b2ba-177a2cb7e48b"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8bde-8fbc-c9c52a38c0c7" data-section-uuid="00000000-0000-8bde-8fbc-c9c52a38c0c7"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -4212,27 +4349,27 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <p>Status report.</p>
 </div>
 <div id="m-0b50e80d-1260-8b85-858a-bd344f43db9d" data-section-uuid="0b50e80d-1260-8b85-858a-bd344f43db9d" class="msg msg--signal">
-<h2><span class="msg-author">Will Riker</span> <time class="msg-ts" datetime="2364-04-11T00:01:00+00:00" title="2364-04-11 00:01:00 UTC">Sat Apr 11th, 2364 at 00:01</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550101">Will Riker</span> <time class="msg-ts" datetime="2364-04-11T00:01:00+00:00" title="2364-04-11 00:01:00 UTC">Sat Apr 11th, 2364 at 00:01</time></h2>
 <p>All decks at green status, Captain.</p>
 </div>
 <div id="m-0b50e80d-fcc0-8e69-9de4-0813c16e8139" data-section-uuid="0b50e80d-fcc0-8e69-9de4-0813c16e8139" class="msg msg--signal">
-<h2><span class="msg-author">Data Soong</span> <time class="msg-ts" datetime="2364-04-11T00:02:00+00:00" title="2364-04-11 00:02:00 UTC">Sat Apr 11th, 2364 at 00:02</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550102">Data Soong</span> <time class="msg-ts" datetime="2364-04-11T00:02:00+00:00" title="2364-04-11 00:02:00 UTC">Sat Apr 11th, 2364 at 00:02</time></h2>
 <p>Sensors detect an unidentified vessel.</p>
 </div>
 <div id="m-0b50e80e-e720-8ca7-a20a-9b515bbeca87" data-section-uuid="0b50e80e-e720-8ca7-a20a-9b515bbeca87" class="msg msg--signal">
-<h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2364-04-11T00:03:00+00:00" title="2364-04-11 00:03:00 UTC">Sat Apr 11th, 2364 at 00:03</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550103">Geordi La Forge</span> <time class="msg-ts" datetime="2364-04-11T00:03:00+00:00" title="2364-04-11 00:03:00 UTC">Sat Apr 11th, 2364 at 00:03</time></h2>
 <p>Warp engines online. Ready for your order.</p>
 </div>
 <div id="m-0b50e80f-d180-8026-a033-ba8d92689881" data-section-uuid="0b50e80f-d180-8026-a033-ba8d92689881" class="msg msg--signal">
-<h2><span class="msg-author">Worf Rozhenko</span> <time class="msg-ts" datetime="2364-04-11T00:04:00+00:00" title="2364-04-11 00:04:00 UTC">Sat Apr 11th, 2364 at 00:04</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550104">Worf Rozhenko</span> <time class="msg-ts" datetime="2364-04-11T00:04:00+00:00" title="2364-04-11 00:04:00 UTC">Sat Apr 11th, 2364 at 00:04</time></h2>
 <p>Shields at maximum, Captain.</p>
 </div>
 <div id="m-0b50e810-bbe0-8f30-9bcf-80b3ecd24d27" data-section-uuid="0b50e810-bbe0-8f30-9bcf-80b3ecd24d27" class="msg msg--signal">
-<h2><span class="msg-author">Deanna Troi</span> <time class="msg-ts" datetime="2364-04-11T00:05:00+00:00" title="2364-04-11 00:05:00 UTC">Sat Apr 11th, 2364 at 00:05</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550105">Deanna Troi</span> <time class="msg-ts" datetime="2364-04-11T00:05:00+00:00" title="2364-04-11 00:05:00 UTC">Sat Apr 11th, 2364 at 00:05</time></h2>
 <p>I'm sensing a deep curiosity from them.</p>
 </div>
 <div id="m-0b50e811-a640-86f2-917f-46a407bd8f4e" data-section-uuid="0b50e811-a640-86f2-917f-46a407bd8f4e" class="msg msg--signal">
-<h2><span class="msg-author">Beverly Crusher</span> <time class="msg-ts" datetime="2364-04-11T00:06:00+00:00" title="2364-04-11 00:06:00 UTC">Sat Apr 11th, 2364 at 00:06</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550106">Beverly Crusher</span> <time class="msg-ts" datetime="2364-04-11T00:06:00+00:00" title="2364-04-11 00:06:00 UTC">Sat Apr 11th, 2364 at 00:06</time></h2>
 <p>Sickbay reports no casualties.</p>
 </div>
 <div id="m-0b50e812-90a0-8088-94f0-b91182c9739d" data-section-uuid="0b50e812-90a0-8088-94f0-b91182c9739d" class="msg msg--signal">
@@ -4240,7 +4377,7 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <p>Mr. Data, open hailing frequencies.</p>
 </div>
 <div id="m-0b50e813-7b00-8fd4-a5c4-b30bff7c27a6" data-section-uuid="0b50e813-7b00-8fd4-a5c4-b30bff7c27a6" class="msg msg--signal">
-<h2><span class="msg-author">Data Soong</span> <time class="msg-ts" datetime="2364-04-11T00:08:00+00:00" title="2364-04-11 00:08:00 UTC">Sat Apr 11th, 2364 at 00:08</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550102">Data Soong</span> <time class="msg-ts" datetime="2364-04-11T00:08:00+00:00" title="2364-04-11 00:08:00 UTC">Sat Apr 11th, 2364 at 00:08</time></h2>
 <p>Hailing frequencies open, sir.</p>
 </div>
 <div id="m-0b50e814-6560-88ab-8c9d-8c2e0b1a4a6d" data-section-uuid="0b50e814-6560-88ab-8c9d-8c2e0b1a4a6d" class="msg msg--signal">
@@ -4268,22 +4405,22 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <td>Source Size</td>
 <td><code>signal/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-8364-9834-5ee3a255888f" data-section-uuid="00000000-0000-8364-9834-5ee3a255888f"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>signal/ingest/blobs.doltlite_db</code></td>
+<td><code>signal/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-836f-953d-f407e5aba404" data-section-uuid="00000000-0000-836f-953d-f407e5aba404"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8c47-9b4e-24b8197929c7" data-section-uuid="00000000-0000-8c47-9b4e-24b8197929c7"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>signal/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>signal/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>0 rows</td>
-<td><span id="m-00000000-0000-8067-bb55-fb154ffdca6b" data-section-uuid="00000000-0000-8067-bb55-fb154ffdca6b"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8aa9-9068-5875590d7614" data-section-uuid="00000000-0000-8aa9-9068-5875590d7614"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -4343,13 +4480,13 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <h2 class="preview-source-name">slack-diff <span class="preview-count">3 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">slack-diff/render_markdown/00000000-0000-8209-b9a9-5e8e8a2f0239/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8209-b9a9-5e8e8a2f0239">#bridge: Mr. Data, status report. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8209-b9a9-5e8e8a2f0239">#bridge: Mr. Data, status report. <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698f2-dea0-80a4-9df7-8e06bc0e78b6" data-section-uuid="0b7698f2-dea0-80a4-9df7-8e06bc0e78b6" class="msg msg--slack">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:08:20+00:00" title="2369-05-28 15:08:20 UTC">Wed May 28th, 2369 at 15:08</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_PICARD">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:08:20+00:00" title="2369-05-28 15:08:20 UTC">Wed May 28th, 2369 at 15:08</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Mr. Data, status report.</p>
 </div>
 <div id="m-0b7698f4-6540-876f-bf97-b10f5b2e219b" data-section-uuid="0b7698f4-6540-876f-bf97-b10f5b2e219b" class="msg msg--slack">
-<h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:10:00+00:00" title="2369-05-28 15:10:00 UTC">Wed May 28th, 2369 at 15:10</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_DATA">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:10:00+00:00" title="2369-05-28 15:10:00 UTC">Wed May 28th, 2369 at 15:10</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.</p>
 <ul>
 <li><span id="m-0b7698f4-6540-82e1-b8cb-ab9692be4027" data-section-uuid="0b7698f4-6540-82e1-b8cb-ab9692be4027">:robot_face: Lt. Cmdr. Data</span></li>
@@ -4358,12 +4495,12 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </ul>
 </div>
 <div id="m-0b7698f5-ebe0-8854-9dea-f0305886ccd8" data-section-uuid="0b7698f5-ebe0-8854-9dea-f0305886ccd8" class="msg msg--slack">
-<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:11:40+00:00" title="2369-05-28 15:11:40 UTC">Wed May 28th, 2369 at 15:11</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_RIKER">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:11:40+00:00" title="2369-05-28 15:11:40 UTC">Wed May 28th, 2369 at 15:11</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Set a course, Mr. Data. Warp factor five.</p>
 </div>
 <div class="diff-added">
 <div id="m-0b769902-20e0-8688-8f6a-e4f4ec4bf796" data-section-uuid="0b769902-20e0-8688-8f6a-e4f4ec4bf796" class="msg msg--slack">
-<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:25:00+00:00" title="2369-05-28 15:25:00 UTC">Wed May 28th, 2369 at 15:25</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001100001100?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_WORF">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:25:00+00:00" title="2369-05-28 15:25:00 UTC">Wed May 28th, 2369 at 15:25</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001100001100?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Long-range sensors confirm it, Captain: a Warbird, decloaking.</p>
 </div>
 </div>
@@ -4371,10 +4508,10 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack-diff/render_markdown/00000000-0000-8827-877d-5fdc4dc4394b/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8827-877d-5fdc4dc4394b">#bridge: I recommend raising shields *now*, Captain. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8827-877d-5fdc4dc4394b">#bridge: I recommend raising shields *now*, Captain. <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div class="diff-modified">
 <div id="m-0b7698f7-7280-8270-9f6a-d2006be91a93" data-section-uuid="0b7698f7-7280-8270-9f6a-d2006be91a93" class="msg msg--slack">
-<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:13:20+00:00" title="2369-05-28 15:13:20 UTC">Wed May 28th, 2369 at 15:13</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_WORF">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:13:20+00:00" title="2369-05-28 15:13:20 UTC">Wed May 28th, 2369 at 15:13</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>I recommend raising <del>shields,</del><ins>shields <strong>now</strong>,</ins> Captain.</p>
 <ul>
 <li><span id="m-0b7698f7-7280-8aef-a980-fc3c5f4bf06a" data-section-uuid="0b7698f7-7280-8aef-a980-fc3c5f4bf06a"><ins>🛡️ Jean-Luc Picard</ins></span></li>
@@ -4385,10 +4522,10 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack-diff/render_markdown/00000000-0000-8c02-a5c8-c13c049e1e6d/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8c02-a5c8-c13c049e1e6d">#bridge: Shields up. Red alert. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8c02-a5c8-c13c049e1e6d">#bridge: Shields up. Red alert. <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div class="diff-added">
 <div id="m-0b769903-a780-8ace-afc7-445f6377a51b" data-section-uuid="0b769903-a780-8ace-afc7-445f6377a51b" class="msg msg--slack unread first-unread">
-<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:26:40+00:00" title="2369-05-28 15:26:40 UTC">Wed May 28th, 2369 at 15:26</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_RIKER">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:26:40+00:00" title="2369-05-28 15:26:40 UTC">Wed May 28th, 2369 at 15:26</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Shields up. Red alert.</p>
 </div>
 </div>
@@ -4399,13 +4536,13 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <h2 class="preview-source-name">slack <span class="preview-count">13 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-8087-98c3-35796eae6f68/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8087-98c3-35796eae6f68">#ten-forward: Anyone up for poker tonight? (all) <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8087-98c3-35796eae6f68">#ten-forward: Anyone up for poker tonight? <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698fa-7fc0-89d7-af94-d89a1724367f" data-section-uuid="0b7698fa-7fc0-89d7-af94-d89a1724367f" class="msg msg--slack unread first-unread">
-<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:16:40+00:00" title="2369-05-28 15:16:40 UTC">Wed May 28th, 2369 at 15:16</time> <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_RIKER">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:16:40+00:00" title="2369-05-28 15:16:40 UTC">Wed May 28th, 2369 at 15:16</time> <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Anyone up for poker tonight?</p>
 </div>
 <div id="m-0b7698fc-0660-889a-8ed4-b5b9b5c39786" data-section-uuid="0b7698fc-0660-889a-8ed4-b5b9b5c39786" class="msg msg--slack">
-<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:18:20+00:00" title="2369-05-28 15:18:20 UTC">Wed May 28th, 2369 at 15:18</time> <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D&amp;thread_ts=12604000600.000600&amp;cid=C_TENFWD" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_WORF">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:18:20+00:00" title="2369-05-28 15:18:20 UTC">Wed May 28th, 2369 at 15:18</time> <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D&amp;thread_ts=12604000600.000600&amp;cid=C_TENFWD" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>I do not understand the appeal of this Earth game.</p>
 <ul>
 <li><span id="m-0b7698fc-0660-8600-bd5c-0f3bd86e511a" data-section-uuid="0b7698fc-0660-8600-bd5c-0f3bd86e511a">😂 William T. Riker</span></li>
@@ -4415,49 +4552,49 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-80d6-b5a5-2617d0679dab/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-80d6-b5a5-2617d0679dab">@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-80d6-b5a5-2617d0679dab">@William T. Riker, Worf: Noted, Mr. Worf. Phasers on stun. <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698ff-2340-8846-8c6a-4796fd32ae08" data-section-uuid="0b7698ff-2340-8846-8c6a-4796fd32ae08" class="msg msg--slack">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:21:44+00:00" title="2369-05-28 15:21:44 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_PICARD">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:21:44+00:00" title="2369-05-28 15:21:44 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Noted, Mr. Worf. Phasers on stun.</p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-8119-8c96-61dfdcca24d4/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8119-8c96-61dfdcca24d4">#bridge: Shields up. Red alert. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8119-8c96-61dfdcca24d4">#bridge: Shields up. Red alert. <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b769903-a780-8b46-b987-b030e43d4ae0" data-section-uuid="0b769903-a780-8b46-b987-b030e43d4ae0" class="msg msg--slack unread first-unread">
-<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:26:40+00:00" title="2369-05-28 15:26:40 UTC">Wed May 28th, 2369 at 15:26</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_RIKER">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:26:40+00:00" title="2369-05-28 15:26:40 UTC">Wed May 28th, 2369 at 15:26</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Shields up. Red alert.</p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-811d-904c-516d04a43f68/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-811d-904c-516d04a43f68">#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-811d-904c-516d04a43f68">#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698fd-8d00-84ad-8dc9-0a79dbe69904" data-section-uuid="0b7698fd-8d00-84ad-8dc9-0a79dbe69904" class="msg msg--slack">
-<h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:20:00+00:00" title="2369-05-28 15:20:00 UTC">Wed May 28th, 2369 at 15:20</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_DATA">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:20:00+00:00" title="2369-05-28 15:20:00 UTC">Wed May 28th, 2369 at 15:20</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.</p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-81d7-a9c9-0ee77752a4e6/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-81d7-a9c9-0ee77752a4e6">#engineering: Warp core efficiency at 99.7%. (all) <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-81d7-a9c9-0ee77752a4e6">#engineering: Warp core efficiency at 99.7%. <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698f8-f920-898c-8557-00e23e5954e1" data-section-uuid="0b7698f8-f920-898c-8557-00e23e5954e1" class="msg msg--slack">
-<h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:15:00+00:00" title="2369-05-28 15:15:00 UTC">Wed May 28th, 2369 at 15:15</time> <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_DATA">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:15:00+00:00" title="2369-05-28 15:15:00 UTC">Wed May 28th, 2369 at 15:15</time> <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Warp core efficiency at 99.7%.</p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-84d6-b1f0-0b22f0528e5c/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-84d6-b1f0-0b22f0528e5c">#bridge: Mr. Data, status report. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-84d6-b1f0-0b22f0528e5c">#bridge: Mr. Data, status report. <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698f2-dea0-84c2-a732-f51e3d0eed12" data-section-uuid="0b7698f2-dea0-84c2-a732-f51e3d0eed12" class="msg msg--slack">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:08:20+00:00" title="2369-05-28 15:08:20 UTC">Wed May 28th, 2369 at 15:08</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_PICARD">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:08:20+00:00" title="2369-05-28 15:08:20 UTC">Wed May 28th, 2369 at 15:08</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Mr. Data, status report.</p>
 </div>
 <div id="m-0b7698f4-6540-8740-8097-5bd209562812" data-section-uuid="0b7698f4-6540-8740-8097-5bd209562812" class="msg msg--slack">
-<h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:10:00+00:00" title="2369-05-28 15:10:00 UTC">Wed May 28th, 2369 at 15:10</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_DATA">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:10:00+00:00" title="2369-05-28 15:10:00 UTC">Wed May 28th, 2369 at 15:10</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.</p>
 <ul>
 <li><span id="m-0b7698f4-6540-818f-992e-43c8ace221e6" data-section-uuid="0b7698f4-6540-818f-992e-43c8ace221e6">:robot_face: Lt. Cmdr. Data</span></li>
@@ -4466,29 +4603,29 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </ul>
 </div>
 <div id="m-0b7698f5-ebe0-8636-907d-ec3c06dd8caf" data-section-uuid="0b7698f5-ebe0-8636-907d-ec3c06dd8caf" class="msg msg--slack">
-<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:11:40+00:00" title="2369-05-28 15:11:40 UTC">Wed May 28th, 2369 at 15:11</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_RIKER">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:11:40+00:00" title="2369-05-28 15:11:40 UTC">Wed May 28th, 2369 at 15:11</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Set a course, Mr. Data. Warp factor five.</p>
 </div>
 <div id="m-0b769902-20e0-82a9-bcd1-b91ee7c07e1d" data-section-uuid="0b769902-20e0-82a9-bcd1-b91ee7c07e1d" class="msg msg--slack">
-<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:25:00+00:00" title="2369-05-28 15:25:00 UTC">Wed May 28th, 2369 at 15:25</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001100001100?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_WORF">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:25:00+00:00" title="2369-05-28 15:25:00 UTC">Wed May 28th, 2369 at 15:25</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001100001100?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Long-range sensors confirm it, Captain: a Warbird, decloaking.</p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-8630-8d5e-f4aae259bc1c/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8630-8d5e-f4aae259bc1c">@William T. Riker: Captain, the away team roster is ready for your review. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8630-8d5e-f4aae259bc1c">@William T. Riker: Captain, the away team roster is ready for your review. <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698ff-13a0-808c-b7ce-cea9b1aeadd7" data-section-uuid="0b7698ff-13a0-808c-b7ce-cea9b1aeadd7" class="msg msg--slack">
-<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:21:40+00:00" title="2369-05-28 15:21:40 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_RIKER">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:21:40+00:00" title="2369-05-28 15:21:40 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Captain, the away team roster is ready for your review.</p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-89a0-9bd6-7e928c9b2396/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-89a0-9bd6-7e928c9b2396">@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. (all) <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-89a0-9bd6-7e928c9b2396">@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698ff-1b70-8b07-b467-aa4ec3751924" data-section-uuid="0b7698ff-1b70-8b07-b467-aa4ec3751924" class="msg msg--slack unread first-unread">
-<h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:21:42+00:00" title="2369-05-28 15:21:42 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_DATA">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:21:42+00:00" title="2369-05-28 15:21:42 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Sir, I have completed my analysis of the Romulan signature.</p>
 <ul>
 <li><span id="m-0b7698ff-1b70-8f75-a07f-0a2448f23b31" data-section-uuid="0b7698ff-1b70-8f75-a07f-0a2448f23b31">👍 Jean-Luc Picard</span></li>
@@ -4498,18 +4635,18 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-8ac1-a181-7b8e737cbd85/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8ac1-a181-7b8e737cbd85">@William T. Riker: Thank you, Number One. Make it so. (all) <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8ac1-a181-7b8e737cbd85">@William T. Riker: Thank you, Number One. Make it so. <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698ff-1788-803e-99f1-66c2a1e051e2" data-section-uuid="0b7698ff-1788-803e-99f1-66c2a1e051e2" class="msg msg--slack">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:21:41+00:00" title="2369-05-28 15:21:41 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_PICARD">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:21:41+00:00" title="2369-05-28 15:21:41 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Thank you, Number One. Make it so.</p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-8b0f-9140-61eaa37493ff/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8b0f-9140-61eaa37493ff">#bridge: New combadge prototypes — thoughts? (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8b0f-9140-61eaa37493ff">#bridge: New combadge prototypes — thoughts? <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698fc-0660-82bf-8e80-6e3a63abace6" data-section-uuid="0b7698fc-0660-82bf-8e80-6e3a63abace6" class="msg msg--slack">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:18:20+00:00" title="2369-05-28 15:18:20 UTC">Wed May 28th, 2369 at 15:18</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_PICARD">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:18:20+00:00" title="2369-05-28 15:18:20 UTC">Wed May 28th, 2369 at 15:18</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>New combadge prototypes — thoughts?</p>
 <p>🖼 <em>[Delta shield prototype (not yet fetched)]</em>
 <em>(source: <a href="https://files.slack.com/files-pri/T_NCC1701D-F_DELTA_SHIELD/delta_shield.png">https://files.slack.com/files-pri/T_NCC1701D-F_DELTA_SHIELD/delta_shield.png</a>)</em></p>
@@ -4518,9 +4655,9 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-8bff-b36c-0096661fd9fa/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8bff-b36c-0096661fd9fa">#bridge: I recommend raising shields *now*, Captain. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8bff-b36c-0096661fd9fa">#bridge: I recommend raising shields *now*, Captain. <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698f7-7280-8ed4-adc1-7d90bde8bac5" data-section-uuid="0b7698f7-7280-8ed4-adc1-7d90bde8bac5" class="msg msg--slack">
-<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:13:20+00:00" title="2369-05-28 15:13:20 UTC">Wed May 28th, 2369 at 15:13</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_WORF">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:13:20+00:00" title="2369-05-28 15:13:20 UTC">Wed May 28th, 2369 at 15:13</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>I recommend raising shields <strong>now</strong>, Captain.</p>
 <ul>
 <li><span id="m-0b7698f7-7280-8566-b59f-177891072cf9" data-section-uuid="0b7698f7-7280-8566-b59f-177891072cf9">🛡️ Jean-Luc Picard</span></li>
@@ -4530,9 +4667,9 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-8d9c-9316-43944fcd9e60/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8d9c-9316-43944fcd9e60">@William T. Riker, Worf: I must object to beaming down unarmed. (all) <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8d9c-9316-43944fcd9e60">@William T. Riker, Worf: I must object to beaming down unarmed. <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-0b7698ff-1f58-8154-ac8f-29f1f51d27f8" data-section-uuid="0b7698ff-1f58-8154-ac8f-29f1f51d27f8" class="msg msg--slack">
-<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:21:43+00:00" title="2369-05-28 15:21:43 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><span class="msg-author" data-handle="slack:T_NCC1701D/U_WORF">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:21:43+00:00" title="2369-05-28 15:21:43 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>I must object to beaming down unarmed.</p>
 </div>
 </div>
@@ -4556,22 +4693,22 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <td>Source Size</td>
 <td><code>slack/ingest</code></td>
 <td>‹size›</td>
-<td>11 files</td>
+<td>10 files</td>
 <td><span id="m-00000000-0000-828b-b39d-73c49d6cb65c" data-section-uuid="00000000-0000-828b-b39d-73c49d6cb65c"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>slack/ingest/blobs.doltlite_db</code></td>
+<td><code>slack/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-8461-96d3-9668d6f2bbec" data-section-uuid="00000000-0000-8461-96d3-9668d6f2bbec"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-82dc-b3bb-cac0a58e1932" data-section-uuid="00000000-0000-82dc-b3bb-cac0a58e1932"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>slack/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>slack/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>0 rows</td>
-<td><span id="m-00000000-0000-8bce-8de9-f2ca1ce6677d" data-section-uuid="00000000-0000-8bce-8de9-f2ca1ce6677d"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8e1d-8172-8ddcd05eb415" data-section-uuid="00000000-0000-8e1d-8172-8ddcd05eb415"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -4603,6 +4740,13 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </tr>
 <tr>
 <td>Table</td>
+<td><code>slack/ingest/entities.doltlite_db#coverage</code></td>
+<td></td>
+<td>6 rows</td>
+<td><span id="m-00000000-0000-832f-a345-ae979cf8e91d" data-section-uuid="00000000-0000-832f-a345-ae979cf8e91d"><code>00000000</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
 <td><code>slack/ingest/entities.doltlite_db#messages</code></td>
 <td></td>
 <td>16 rows</td>
@@ -4626,7 +4770,7 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <td>Table</td>
 <td><code>slack/ingest/entities.doltlite_db#slack_attachments</code></td>
 <td></td>
-<td>0 rows</td>
+<td>1 row</td>
 <td><span id="m-00000000-0000-8847-ab80-7567f44dac43" data-section-uuid="00000000-0000-8847-ab80-7567f44dac43"><code>00000000</code></span></td>
 </tr>
 <tr>
@@ -4651,54 +4795,54 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <section class="preview-source" id="src-sms-backup-restore">
 <h2 class="preview-source-name">sms-backup-restore <span class="preview-count">4 documents</span></h2>
 <div class="preview-doc">
-<h3 class="preview-name">sms-backup-restore/render_markdown/00000000-0000-83b7-8634-b998de183abe/2369-04.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8266-b01c-f32b24bb5077">SMS · Worf (2369-04)</h1>
-<div id="m-0b75b74a-9ec0-8413-a1c0-b622f9f6de1a" data-section-uuid="0b75b74a-9ec0-8413-a1c0-b622f9f6de1a" class="msg msg--sms_backup_restore">
+<h3 class="preview-name">sms-backup-restore/render_markdown/00000000-0000-8709-8732-c5f02579e8d6/2369-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-855f-95df-ac820a5ee885">SMS · Deanna Troi (2369-04)</h1>
+<div id="m-0b75b781-8d40-89bb-8299-ebbc766db091" data-section-uuid="0b75b781-8d40-89bb-8299-ebbc766db091" class="msg msg--sms_backup_restore">
+<p><em><small><time class="msg-ts" datetime="2369-04-14T20:30:00+00:00" title="2369-04-14 20:30:00 UTC">Mon Apr 14th, 2369 at 20:30</time> — system: Outgoing call — Deanna Troi (4:00)</small></em></p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">sms-backup-restore/render_markdown/00000000-0000-8a32-861f-a85bca667a83/2369-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8250-8933-d174d885412c">SMS · Worf (2369-04)</h1>
+<div id="m-0b75b74a-9ec0-83ec-af8b-969533e62bc5" data-section-uuid="0b75b74a-9ec0-83ec-af8b-969533e62bc5" class="msg msg--sms_backup_restore">
 <p><em><small><time class="msg-ts" datetime="2369-04-14T19:30:00+00:00" title="2369-04-14 19:30:00 UTC">Mon Apr 14th, 2369 at 19:30</time> — system: Missed call — Worf</small></em></p>
 </div>
-<div id="m-0b75ba67-2100-845e-8bda-57462af17a38" data-section-uuid="0b75ba67-2100-845e-8bda-57462af17a38" class="msg msg--sms_backup_restore">
-<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-04-15T10:00:00+00:00" title="2369-04-15 10:00:00 UTC">Tue Apr 15th, 2369 at 10:00</time></h2>
+<div id="m-0b75ba67-2100-8288-a8b2-df54cf9b6b1c" data-section-uuid="0b75ba67-2100-8288-a8b2-df54cf9b6b1c" class="msg msg--sms_backup_restore">
+<h2><span class="msg-author" data-handle="tel:+12025550102">Worf</span> <time class="msg-ts" datetime="2369-04-15T10:00:00+00:00" title="2369-04-15 10:00:00 UTC">Tue Apr 15th, 2369 at 10:00</time></h2>
 <p>Today is a good day to die.</p>
 </div>
-<div id="m-0b75ba68-0b60-8a18-9920-d12cd4ae0795" data-section-uuid="0b75ba68-0b60-8a18-9920-d12cd4ae0795" class="msg msg--sms_backup_restore">
-<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-04-15T10:01:00+00:00" title="2369-04-15 10:01:00 UTC">Tue Apr 15th, 2369 at 10:01</time></h2>
+<div id="m-0b75ba68-0b60-887e-b930-8855bf9650de" data-section-uuid="0b75ba68-0b60-887e-b930-8855bf9650de" class="msg msg--sms_backup_restore">
+<h2><span class="msg-author" data-handle="tel:+12025550102">Worf</span> <time class="msg-ts" datetime="2369-04-15T10:01:00+00:00" title="2369-04-15 10:01:00 UTC">Tue Apr 15th, 2369 at 10:01</time></h2>
 <p>Bat'leth practice at 0700.</p>
 <p><img src="blobs/937a72665cf9fcb9.gif" alt="batleth.gif"></p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
-<h3 class="preview-name">sms-backup-restore/render_markdown/00000000-0000-8778-81e2-ad9a18b8b36d/2369-04.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8b55-84fa-9edb0c4558a0">SMS · Jean-Luc Picard (2369-04)</h1>
-<div id="m-0b75b713-b040-8616-854b-e21d7794aa69" data-section-uuid="0b75b713-b040-8616-854b-e21d7794aa69" class="msg msg--sms_backup_restore">
+<h3 class="preview-name">sms-backup-restore/render_markdown/00000000-0000-8c57-9571-2bd28212d376/2369-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8c31-a4d6-9c39528e96d0">SMS · Jean-Luc Picard (2369-04)</h1>
+<div id="m-0b75b713-b040-84e2-aa8e-c1c59f7a1ca4" data-section-uuid="0b75b713-b040-84e2-aa8e-c1c59f7a1ca4" class="msg msg--sms_backup_restore">
 <p><em><small><time class="msg-ts" datetime="2369-04-14T18:30:00+00:00" title="2369-04-14 18:30:00 UTC">Mon Apr 14th, 2369 at 18:30</time> — system: Incoming call — Jean-Luc Picard (1:35)</small></em></p>
 </div>
-<div id="m-0b75ba30-3280-857a-917d-3932bd8d489b" data-section-uuid="0b75ba30-3280-857a-917d-3932bd8d489b" class="msg msg--sms_backup_restore">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></h2>
+<div id="m-0b75ba30-3280-85bd-b058-e3f81fd3f403" data-section-uuid="0b75ba30-3280-85bd-b058-e3f81fd3f403" class="msg msg--sms_backup_restore">
+<h2><span class="msg-author" data-handle="tel:+12025550101">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></h2>
 <p>Make it so. 🚀</p>
 </div>
-<div id="m-0b75ba31-1ce0-87cb-86d2-e66164237728" data-section-uuid="0b75ba31-1ce0-87cb-86d2-e66164237728" class="msg msg--sms_backup_restore">
+<div id="m-0b75ba31-1ce0-8607-a757-33aa9851eb7b" data-section-uuid="0b75ba31-1ce0-8607-a757-33aa9851eb7b" class="msg msg--sms_backup_restore">
 <h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2369-04-15T09:01:00+00:00" title="2369-04-15 09:01:00 UTC">Tue Apr 15th, 2369 at 09:01</time></h2>
 <p>Aye, Captain.</p>
 </div>
-<div id="m-0b75ba32-0740-8c8b-ba4a-607c6ac1dd3b" data-section-uuid="0b75ba32-0740-8c8b-ba4a-607c6ac1dd3b" class="msg msg--sms_backup_restore">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-15T09:02:00+00:00" title="2369-04-15 09:02:00 UTC">Tue Apr 15th, 2369 at 09:02</time></h2>
+<div id="m-0b75ba32-0740-8993-adf7-73c1d3d06442" data-section-uuid="0b75ba32-0740-8993-adf7-73c1d3d06442" class="msg msg--sms_backup_restore">
+<h2><span class="msg-author" data-handle="tel:+12025550101">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-15T09:02:00+00:00" title="2369-04-15 09:02:00 UTC">Tue Apr 15th, 2369 at 09:02</time></h2>
 <p>The Enterprise approaches.</p>
 <p><img src="blobs/3af2399847fcb127.png" alt="viewscreen.png"></p>
 </div>
-<div id="m-0b75ba32-f1a0-8e54-9cb0-0d3c8e59ba23" data-section-uuid="0b75ba32-f1a0-8e54-9cb0-0d3c8e59ba23" class="msg msg--sms_backup_restore">
+<div id="m-0b75ba32-f1a0-824c-915f-32273472fad4" data-section-uuid="0b75ba32-f1a0-824c-915f-32273472fad4" class="msg msg--sms_backup_restore">
 <h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2369-04-15T09:03:00+00:00" title="2369-04-15 09:03:00 UTC">Tue Apr 15th, 2369 at 09:03</time></h2>
 <p>Captain's log, supplemental.</p>
 <p><audio controls src="blobs/722dc947668381e9.m4a"></audio></p>
 <p>🔊 <a href="blobs/722dc947668381e9.m4a">captainslog.m4a</a> — size unknown</p>
-</div>
-</div>
-</div>
-<div class="preview-doc">
-<h3 class="preview-name">sms-backup-restore/render_markdown/00000000-0000-88e5-980a-a16ffb044514/2369-04.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8b04-af6b-a98ec0de44e9">SMS · Deanna Troi (2369-04)</h1>
-<div id="m-0b75b781-8d40-843f-80ff-e68214c168c8" data-section-uuid="0b75b781-8d40-843f-80ff-e68214c168c8" class="msg msg--sms_backup_restore">
-<p><em><small><time class="msg-ts" datetime="2369-04-14T20:30:00+00:00" title="2369-04-14 20:30:00 UTC">Mon Apr 14th, 2369 at 20:30</time> — system: Outgoing call — Deanna Troi (4:00)</small></em></p>
 </div>
 </div>
 </div>
@@ -4721,22 +4865,22 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <td>Source Size</td>
 <td><code>sms-backup-restore/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-8a35-a540-630d0aa1cfba" data-section-uuid="00000000-0000-8a35-a540-630d0aa1cfba"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>sms-backup-restore/ingest/blobs.doltlite_db</code></td>
+<td><code>sms-backup-restore/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-8e30-aaa6-03972c3086f5" data-section-uuid="00000000-0000-8e30-aaa6-03972c3086f5"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-88a7-92ad-f5a193a4d09b" data-section-uuid="00000000-0000-88a7-92ad-f5a193a4d09b"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>sms-backup-restore/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>sms-backup-restore/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>3 rows</td>
-<td><span id="m-00000000-0000-8f27-a13d-5dcc9dafc3ff" data-section-uuid="00000000-0000-8f27-a13d-5dcc9dafc3ff"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8cd4-8b68-9f471a1cd695" data-section-uuid="00000000-0000-8cd4-8b68-9f471a1cd695"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -5342,6 +5486,20 @@ Worf has asked that no one serve gagh.</p>
 </tr>
 <tr>
 <td>Table</td>
+<td><code>tng_calendar/ingest/entities.doltlite_db#dav_unconfirmed</code></td>
+<td></td>
+<td>0 rows</td>
+<td><span id="m-00000000-0000-8565-aae3-1bb608d5edec" data-section-uuid="00000000-0000-8565-aae3-1bb608d5edec"><code>00000000</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>tng_calendar/ingest/entities.doltlite_db#dav_unstored</code></td>
+<td></td>
+<td>0 rows</td>
+<td><span id="m-00000000-0000-8fd7-b242-94f39f5c616c" data-section-uuid="00000000-0000-8fd7-b242-94f39f5c616c"><code>00000000</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
 <td><code>tng_calendar/ingest/entities.doltlite_db#google_events</code></td>
 <td></td>
 <td>0 rows</td>
@@ -5367,7 +5525,7 @@ Worf has asked that no one serve gagh.</p>
 </div>
 </section>
 <section class="preview-source" id="src-tng-contacts-diff">
-<h2 class="preview-source-name">tng_contacts-diff <span class="preview-count">3 documents</span></h2>
+<h2 class="preview-source-name">tng_contacts-diff <span class="preview-count">5 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts-diff/render_markdown/00000000-0000-8195-8ee2-d14cb601f004/index.md</h3>
 <div class="chat-body markdown-body"><div class="diff-added">
@@ -5402,6 +5560,31 @@ Worf has asked that no one serve gagh.</p>
 </div>
 </div>
 <div class="preview-doc">
+<h3 class="preview-name">tng_contacts-diff/render_markdown/00000000-0000-819d-aad9-cb628fc3bec0/index.md</h3>
+<div class="chat-body markdown-body"><div class="diff-removed">
+<h1 class="page-title" data-page-title-uuid="00000000-0000-819d-aad9-cb628fc3bec0">Kalita</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Title</td>
+<td>Maquis pilot</td>
+</tr>
+<tr>
+<td>Phone (work)</td>
+<td>+1-555-BADLANDS</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<div class="preview-doc">
 <h3 class="preview-name">tng_contacts-diff/render_markdown/00000000-0000-825c-a3c4-1fb84e9bfce6/index.md</h3>
 <div class="chat-body markdown-body"><div class="diff-modified">
 <h1 class="page-title" data-page-title-uuid="00000000-0000-825c-a3c4-1fb84e9bfce6">Jean-Luc Picard</h1>
@@ -5414,6 +5597,10 @@ Worf has asked that no one serve gagh.</p>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>Group</td>
+<td>Senior Staff</td>
+</tr>
 <tr>
 <td>Org</td>
 <td>Starfleet — USS Enterprise <del>NCC-1701-D</del><ins>NCC-1701-E</ins></td>
@@ -5431,6 +5618,10 @@ Worf has asked that no one serve gagh.</p>
 <td>+1-555-NCC-1701</td>
 </tr>
 <tr>
+<td>Phone (cell)</td>
+<td>tel:+1-202-555-0101</td>
+</tr>
+<tr>
 <td><ins>Phone (home)</ins></td>
 <td><ins>+33-555-LABARRE</ins></td>
 </tr>
@@ -5441,6 +5632,35 @@ Worf has asked that no one serve gagh.</p>
 <tr>
 <td>Note</td>
 <td>Make it so.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_contacts-diff/render_markdown/00000000-0000-8429-b938-7d1e51384182/index.md</h3>
+<div class="chat-body markdown-body"><div class="diff-removed">
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8429-b938-7d1e51384182">Ro Laren</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Title</td>
+<td>Maquis cell leader</td>
+</tr>
+<tr>
+<td>Email (work)</td>
+<td><a href="mailto:ro.laren@maquis.badlands">ro.laren@maquis.badlands</a></td>
+</tr>
+<tr>
+<td>Note</td>
+<td>Resigned her commission. Last seen in the Badlands.</td>
 </tr>
 </tbody>
 </table>
@@ -5515,6 +5735,10 @@ Worf has asked that no one serve gagh.</p>
 </thead>
 <tbody>
 <tr>
+<td>Group</td>
+<td>Senior Staff</td>
+</tr>
+<tr>
 <td>Org</td>
 <td>Starfleet — USS Enterprise NCC-1701-E</td>
 </tr>
@@ -5529,6 +5753,10 @@ Worf has asked that no one serve gagh.</p>
 <tr>
 <td>Phone (work)</td>
 <td>+1-555-NCC-1701</td>
+</tr>
+<tr>
+<td>Phone (cell)</td>
+<td>tel:+1-202-555-0101</td>
 </tr>
 <tr>
 <td>Phone (home)</td>
@@ -5639,6 +5867,10 @@ Worf has asked that no one serve gagh.</p>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>Group</td>
+<td>Senior Staff</td>
+</tr>
 <tr>
 <td>Org</td>
 <td>Starfleet — USS Enterprise NCC-1701-D</td>
@@ -5767,22 +5999,8 @@ Worf has asked that no one serve gagh.</p>
 <td>Source Size</td>
 <td><code>tng_contacts/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>2 files</td>
 <td><span id="m-00000000-0000-861c-8d00-be0043b71820" data-section-uuid="00000000-0000-861c-8d00-be0043b71820"><code>00000000</code></span></td>
-</tr>
-<tr>
-<td>Store</td>
-<td><code>tng_contacts/ingest/blobs.doltlite_db</code></td>
-<td>‹size›</td>
-<td></td>
-<td><span id="m-00000000-0000-88f6-9cf1-47d87b310ec3" data-section-uuid="00000000-0000-88f6-9cf1-47d87b310ec3"><code>00000000</code></span></td>
-</tr>
-<tr>
-<td>Table</td>
-<td><code>tng_contacts/ingest/blobs.doltlite_db#cas_objects</code></td>
-<td></td>
-<td>1 row</td>
-<td><span id="m-00000000-0000-889b-9b9e-e3cb5e1e3c46" data-section-uuid="00000000-0000-889b-9b9e-e3cb5e1e3c46"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -5807,10 +6025,17 @@ Worf has asked that no one serve gagh.</p>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>tng_contacts/ingest/entities.doltlite_db#contact_photos</code></td>
+<td><code>tng_contacts/ingest/entities.doltlite_db#contact_categories</code></td>
+<td></td>
+<td>4 rows</td>
+<td><span id="m-00000000-0000-8f98-b83b-67e66eab4b75" data-section-uuid="00000000-0000-8f98-b83b-67e66eab4b75"><code>00000000</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>tng_contacts/ingest/entities.doltlite_db#contact_group_members</code></td>
 <td></td>
 <td>2 rows</td>
-<td><span id="m-00000000-0000-8702-920f-55668a94f119" data-section-uuid="00000000-0000-8702-920f-55668a94f119"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8497-9cec-1c68e1fc4a4e" data-section-uuid="00000000-0000-8497-9cec-1c68e1fc4a4e"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
@@ -5818,6 +6043,20 @@ Worf has asked that no one serve gagh.</p>
 <td></td>
 <td>9 rows</td>
 <td><span id="m-00000000-0000-8705-8b70-e0a88b95679c" data-section-uuid="00000000-0000-8705-8b70-e0a88b95679c"><code>00000000</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>tng_contacts/ingest/entities.doltlite_db#dav_unconfirmed</code></td>
+<td></td>
+<td>0 rows</td>
+<td><span id="m-00000000-0000-83eb-b583-df2094428b5d" data-section-uuid="00000000-0000-83eb-b583-df2094428b5d"><code>00000000</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>tng_contacts/ingest/entities.doltlite_db#dav_unstored</code></td>
+<td></td>
+<td>0 rows</td>
+<td><span id="m-00000000-0000-8eba-a644-23aa8f874d3b" data-section-uuid="00000000-0000-8eba-a644-23aa8f874d3b"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
@@ -5834,34 +6073,11 @@ Worf has asked that no one serve gagh.</p>
 <section class="preview-source" id="src-tng-email">
 <h2 class="preview-source-name">tng_email <span class="preview-count">5 documents</span></h2>
 <div class="preview-doc">
-<h3 class="preview-name">tng_email/render_markdown/00000000-0000-8122-b783-2a8a56a812fd/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8122-b783-2a8a56a812fd">Mission Briefing — Sector 001 (all) <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
-<div id="m-019b8d62-7a80-82a3-8841-350e81850d03" data-section-uuid="019b8d62-7a80-82a3-8841-350e81850d03" class="msg msg--email">
-<h2><span class="msg-author">Starfleet Command &lt;command@starfleet.gov&gt;</span> <time class="msg-ts" datetime="2026-01-05T09:00:00+00:00" title="2026-01-05 09:00:00 UTC">Mon Jan 5th, 2026 at 09:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
-<p>🏷 Inbox</p>
-<p>Captain Picard, You are hereby ordered to proceed at maximum warp to the Romulan Neutral Zone. Investigate reports of unusual subspace activity near outpost 23. Per General Order 12, you have full discretion. Make it so. — Admiral Hayes</p>
-</div>
-<div id="m-019b8db4-e040-8722-8431-7a5b58391e0f" data-section-uuid="019b8db4-e040-8722-8431-7a5b58391e0f" class="msg msg--email">
-<h2><span class="msg-author">Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-05T10:30:00+00:00" title="2026-01-05 10:30:00 UTC">Mon Jan 5th, 2026 at 10:30</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-002%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
-<p>🏷 Inbox · Sent</p>
-<p>Number One, Set a course for the Neutral Zone, warp 9. Brief the senior staff at 1400 hours. I want Mr. Data running long-range scans the moment we cross into the buffer region. Engage. — Picard</p>
-</div>
-<div id="m-019b8dde-1320-8508-ba52-d6fafa558797" data-section-uuid="019b8dde-1320-8508-ba52-d6fafa558797" class="msg msg--email unread first-unread">
-<h2><span class="msg-author">Geordi La Forge &lt;laforge@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-05T11:15:00+00:00" title="2026-01-05 11:15:00 UTC">Mon Jan 5th, 2026 at 11:15</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-003%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
-<p>🏷 Inbox</p>
-<p>Captain, Warp core diagnostics attached. We can sustain warp 9 for approximately twelve hours before we need to drop out for a coolant cycle. I would recommend a brief stop at Starbase 173 if the mission allows. — Geordi</p>
-<h3>Attachments</h3>
-<ul>
-<li><a href="blobs/789575fe99512ab2.txt">warp_diagnostics.txt</a></li>
-</ul>
-</div>
-</div>
-</div>
-<div class="preview-doc">
-<h3 class="preview-name">tng_email/render_markdown/00000000-0000-85f1-96fb-20c6da0089b0/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-85f1-96fb-20c6da0089b0">Your shore leave awaits! (all) <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:risa-promo-001%40risa.tourism" target="_blank" rel="noopener noreferrer">↗</a></h1>
-<div id="m-019b9251-e800-8ce5-ba2f-3b154223b88f" data-section-uuid="019b9251-e800-8ce5-ba2f-3b154223b88f" class="msg msg--email">
-<h2><span class="msg-author">Risa Tourism Board &lt;hello@risa.tourism&gt;</span> <time class="msg-ts" datetime="2026-01-06T08:00:00+00:00" title="2026-01-06 08:00:00 UTC">Tue Jan 6th, 2026 at 08:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:risa-promo-001%40risa.tourism" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h3 class="preview-name">tng_email/render_markdown/00000000-0000-81c2-ac6e-558cd94c8895/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-81c2-ac6e-558cd94c8895">Your shore leave awaits! <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:risa-promo-001%40risa.tourism" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-019b9251-e800-8ca5-8cdf-3cd10603d0f3" data-section-uuid="019b9251-e800-8ca5-8cdf-3cd10603d0f3" class="msg msg--email">
+<h2><span class="msg-author" data-handle="email:hello@risa.tourism">Risa Tourism Board &lt;hello@risa.tourism&gt;</span> <time class="msg-ts" datetime="2026-01-06T08:00:00+00:00" title="2026-01-06 08:00:00 UTC">Tue Jan 6th, 2026 at 08:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:risa-promo-001%40risa.tourism" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<div class="msg-recipients"><span class="msg-recipients-role">To</span> <span class="msg-recipient" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</span></div>
 <p>🏷 Category Promotions · Inbox</p>
 <h1>Greetings Captain Picard!</h1>
 <p><img src="https://risa.tourism/images/temtibi-lagoon.jpg" alt="Temtibi Lagoon at sunset"></p>
@@ -5873,24 +6089,53 @@ Worf has asked that no one serve gagh.</p>
 </div>
 </div>
 <div class="preview-doc">
-<h3 class="preview-name">tng_email/render_markdown/00000000-0000-86b2-9f70-4c9213a35fc3/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-86b2-9f70-4c9213a35fc3">Captain's Log — Stardate 80124.1 (all) <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:log-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
-<div id="m-019b98c1-db00-8f7e-a06b-6374625547c6" data-section-uuid="019b98c1-db00-8f7e-a06b-6374625547c6" class="msg msg--email">
-<h2><span class="msg-author">Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-07T14:00:00+00:00" title="2026-01-07 14:00:00 UTC">Wed Jan 7th, 2026 at 14:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:log-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
-<p>🏷 Sent</p>
-<p>Captain's log, stardate 80124.1. The Enterprise has arrived at the Neutral Zone. Long-range scans have detected three Romulan warbirds holding position at the edge of sensor range. I have ordered yellow alert and dispatched a coded message to Starfleet Command. We continue our investigation. — Picard</p>
-</div>
-</div>
-</div>
-<div class="preview-doc">
-<h3 class="preview-name">tng_email/render_markdown/00000000-0000-8cf7-86f2-5150c6dd412e/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8cf7-86f2-5150c6dd412e">Bridge status display (all) <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bridge-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
-<div id="m-019b97af-3280-8c0d-869f-725e342039d3" data-section-uuid="019b97af-3280-8c0d-869f-725e342039d3" class="msg msg--email">
-<h2><span class="msg-author">LCARS Status &lt;lcars@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-07T09:00:00+00:00" title="2026-01-07 09:00:00 UTC">Wed Jan 7th, 2026 at 09:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bridge-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h3 class="preview-name">tng_email/render_markdown/00000000-0000-848a-8bbe-bf3f6bed391e/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-848a-8bbe-bf3f6bed391e">Bridge status display <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bridge-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-019b97af-3280-8f16-979e-afe19c268630" data-section-uuid="019b97af-3280-8f16-979e-afe19c268630" class="msg msg--email">
+<h2><span class="msg-author" data-handle="email:lcars@enterprise.starfleet">LCARS Status &lt;lcars@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-07T09:00:00+00:00" title="2026-01-07 09:00:00 UTC">Wed Jan 7th, 2026 at 09:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bridge-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<div class="msg-recipients"><span class="msg-recipients-role">To</span> <span class="msg-recipient" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</span></div>
 <p>🏷 Inbox</p>
 <p>Bridge status display below:</p>
 <p><img src="blobs/491fbd09cfa629f6.png" alt="LCARS"></p>
 <p>End of report.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_email/render_markdown/00000000-0000-8708-9f53-15db76337ff7/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8708-9f53-15db76337ff7">Mission Briefing — Sector 001 <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-019b8d62-7a80-88c2-8062-f1b656c84835" data-section-uuid="019b8d62-7a80-88c2-8062-f1b656c84835" class="msg msg--email">
+<h2><span class="msg-author" data-handle="email:command@starfleet.gov">Starfleet Command &lt;command@starfleet.gov&gt;</span> <time class="msg-ts" datetime="2026-01-05T09:00:00+00:00" title="2026-01-05 09:00:00 UTC">Mon Jan 5th, 2026 at 09:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<div class="msg-recipients"><span class="msg-recipients-role">To</span> <span class="msg-recipient" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</span>; <span class="msg-recipients-role">Cc</span> <span class="msg-recipient" data-handle="email:riker@enterprise.starfleet">William Riker</span></div>
+<p>🏷 Starred · Important · Inbox</p>
+<p>Captain Picard, You are hereby ordered to proceed at maximum warp to the Romulan Neutral Zone. Investigate reports of unusual subspace activity near outpost 23. Per General Order 12, you have full discretion. Make it so. — Admiral Hayes</p>
+</div>
+<div id="m-019b8db4-e040-88dc-8f8b-9e73422dcff3" data-section-uuid="019b8db4-e040-88dc-8f8b-9e73422dcff3" class="msg msg--email">
+<h2><span class="msg-author" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-05T10:30:00+00:00" title="2026-01-05 10:30:00 UTC">Mon Jan 5th, 2026 at 10:30</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-002%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<div class="msg-recipients"><span class="msg-recipients-role">To</span> <span class="msg-recipient" data-handle="email:riker@enterprise.starfleet">William Riker</span></div>
+<p>🏷 Inbox · Sent</p>
+<p>Number One, Set a course for the Neutral Zone, warp 9. Brief the senior staff at 1400 hours. I want Mr. Data running long-range scans the moment we cross into the buffer region. Engage. — Picard</p>
+</div>
+<div id="m-019b8dde-1320-86d3-965a-083aad10c428" data-section-uuid="019b8dde-1320-86d3-965a-083aad10c428" class="msg msg--email unread first-unread">
+<h2><span class="msg-author" data-handle="email:laforge@enterprise.starfleet">Geordi La Forge &lt;laforge@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-05T11:15:00+00:00" title="2026-01-05 11:15:00 UTC">Mon Jan 5th, 2026 at 11:15</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-003%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<div class="msg-recipients"><span class="msg-recipients-role">To</span> <span class="msg-recipient" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</span>; <span class="msg-recipients-role">Cc</span> <span class="msg-recipient" data-handle="email:riker@enterprise.starfleet">William Riker</span></div>
+<p>🏷 Inbox</p>
+<p>Captain, Warp core diagnostics attached. We can sustain warp 9 for approximately twelve hours before we need to drop out for a coolant cycle. I would recommend a brief stop at Starbase 173 if the mission allows. — Geordi</p>
+<h3>Attachments</h3>
+<ul>
+<li><a href="blobs/789575fe99512ab2.txt">warp_diagnostics.txt</a></li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_email/render_markdown/00000000-0000-88b7-a1e0-06d73bd4289d/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-88b7-a1e0-06d73bd4289d">Captain's Log — Stardate 80124.1 <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:log-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-019b98c1-db00-89bf-8e74-14d9155da327" data-section-uuid="019b98c1-db00-89bf-8e74-14d9155da327" class="msg msg--email">
+<h2><span class="msg-author" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-07T14:00:00+00:00" title="2026-01-07 14:00:00 UTC">Wed Jan 7th, 2026 at 14:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:log-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<div class="msg-recipients"><span class="msg-recipients-role">To</span> <span class="msg-recipient" data-handle="email:command@starfleet.gov">Starfleet Command</span></div>
+<p>🏷 Important · Sent</p>
+<p>Captain's log, stardate 80124.1. The Enterprise has arrived at the Neutral Zone. Long-range scans have detected three Romulan warbirds holding position at the edge of sensor range. I have ordered yellow alert and dispatched a coded message to Starfleet Command. We continue our investigation. — Picard</p>
 </div>
 </div>
 </div>
@@ -5913,22 +6158,22 @@ Worf has asked that no one serve gagh.</p>
 <td>Source Size</td>
 <td><code>tng_email/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-8781-ba6c-a1937ea67209" data-section-uuid="00000000-0000-8781-ba6c-a1937ea67209"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>tng_email/ingest/blobs.doltlite_db</code></td>
+<td><code>tng_email/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-85cf-91bc-399ed15a2887" data-section-uuid="00000000-0000-85cf-91bc-399ed15a2887"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8ce1-9fb1-8079e525103e" data-section-uuid="00000000-0000-8ce1-9fb1-8079e525103e"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>tng_email/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>tng_email/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>6 rows</td>
-<td><span id="m-00000000-0000-8edf-85c4-b3b61852e376" data-section-uuid="00000000-0000-8edf-85c4-b3b61852e376"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8963-af57-ff7ea30c7928" data-section-uuid="00000000-0000-8963-af57-ff7ea30c7928"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -5974,10 +6219,10 @@ Worf has asked that no one serve gagh.</p>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>tng_email/ingest/entities.doltlite_db#gmail_messages</code></td>
+<td><code>tng_email/ingest/entities.doltlite_db#fetched_messages</code></td>
 <td></td>
 <td>0 rows</td>
-<td><span id="m-00000000-0000-87e6-9b12-91e0aec7b32d" data-section-uuid="00000000-0000-87e6-9b12-91e0aec7b32d"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8a9e-b700-c1eeb7939032" data-section-uuid="00000000-0000-8a9e-b700-c1eeb7939032"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
@@ -5985,6 +6230,20 @@ Worf has asked that no one serve gagh.</p>
 <td></td>
 <td>1 row</td>
 <td><span id="m-00000000-0000-8f17-8b9e-86120856503b" data-section-uuid="00000000-0000-8f17-8b9e-86120856503b"><code>00000000</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>tng_email/ingest/entities.doltlite_db#listed_messages</code></td>
+<td></td>
+<td>0 rows</td>
+<td><span id="m-00000000-0000-8169-be0d-93a71a7ba19f" data-section-uuid="00000000-0000-8169-be0d-93a71a7ba19f"><code>00000000</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>tng_email/ingest/entities.doltlite_db#listed_whole</code></td>
+<td></td>
+<td>0 rows</td>
+<td><span id="m-00000000-0000-80fb-8c74-e2d4e510b404" data-section-uuid="00000000-0000-80fb-8c74-e2d4e510b404"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
@@ -6113,7 +6372,7 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 <h3 class="preview-name">whatsapp/render_markdown/00000000-0000-85d4-ab68-75d0abe7a50d/2364-04.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-841f-8f79-b06ed948a94a">WhatsApp · William Riker (2364-04)</h1>
 <div id="m-0b50e813-7b00-865f-83ff-884bf91cff1b" data-section-uuid="0b50e813-7b00-865f-83ff-884bf91cff1b" class="msg msg--whatsapp">
-<h2><span class="msg-author">William Riker</span> <time class="msg-ts" datetime="2364-04-11T00:08:00+00:00" title="2364-04-11 00:08:00 UTC">Sat Apr 11th, 2364 at 00:08</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550102">William Riker</span> <time class="msg-ts" datetime="2364-04-11T00:08:00+00:00" title="2364-04-11 00:08:00 UTC">Sat Apr 11th, 2364 at 00:08</time></h2>
 <p>Captain, a private word about Commander Data?</p>
 </div>
 <div id="m-0b50e814-6560-82f8-8cb9-3dbb6e4021c7" data-section-uuid="0b50e814-6560-82f8-8cb9-3dbb6e4021c7" class="msg msg--whatsapp">
@@ -6121,7 +6380,7 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 <p>Come in, Number One.</p>
 </div>
 <div id="m-0b50e817-2480-8350-a74f-e058a12258ec" data-section-uuid="0b50e817-2480-8350-a74f-e058a12258ec" class="msg msg--whatsapp">
-<h2><span class="msg-author">William Riker</span> <time class="msg-ts" datetime="2364-04-11T00:12:00+00:00" title="2364-04-11 00:12:00 UTC">Sat Apr 11th, 2364 at 00:12</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550102">William Riker</span> <time class="msg-ts" datetime="2364-04-11T00:12:00+00:00" title="2364-04-11 00:12:00 UTC">Sat Apr 11th, 2364 at 00:12</time></h2>
 <p>🖼 <em>[holodeck-poker-night.jpg (not yet fetched)]</em>
 <em>(source: Media/WhatsApp Images/holodeck-poker-night.jpg)</em></p>
 </div>
@@ -6135,19 +6394,19 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 <p>Status report.</p>
 </div>
 <div id="m-0b50e80d-1260-8d9f-acd4-f839b7f89b1b" data-section-uuid="0b50e80d-1260-8d9f-acd4-f839b7f89b1b" class="msg msg--whatsapp">
-<h2><span class="msg-author">William Riker</span> <time class="msg-ts" datetime="2364-04-11T00:01:00+00:00" title="2364-04-11 00:01:00 UTC">Sat Apr 11th, 2364 at 00:01</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550102">William Riker</span> <time class="msg-ts" datetime="2364-04-11T00:01:00+00:00" title="2364-04-11 00:01:00 UTC">Sat Apr 11th, 2364 at 00:01</time></h2>
 <p>All decks at green status, Captain.</p>
 </div>
 <div id="m-0b50e80d-fcc0-8005-909f-857e006cd9de" data-section-uuid="0b50e80d-fcc0-8005-909f-857e006cd9de" class="msg msg--whatsapp">
-<h2><span class="msg-author">Data</span> <time class="msg-ts" datetime="2364-04-11T00:02:00+00:00" title="2364-04-11 00:02:00 UTC">Sat Apr 11th, 2364 at 00:02</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550103">Data</span> <time class="msg-ts" datetime="2364-04-11T00:02:00+00:00" title="2364-04-11 00:02:00 UTC">Sat Apr 11th, 2364 at 00:02</time></h2>
 <p>Sensors detect an unidentified vessel.</p>
 </div>
 <div id="m-0b50e80e-e720-89bf-8465-174dc07feb8c" data-section-uuid="0b50e80e-e720-89bf-8465-174dc07feb8c" class="msg msg--whatsapp">
-<h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2364-04-11T00:03:00+00:00" title="2364-04-11 00:03:00 UTC">Sat Apr 11th, 2364 at 00:03</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550104">Geordi La Forge</span> <time class="msg-ts" datetime="2364-04-11T00:03:00+00:00" title="2364-04-11 00:03:00 UTC">Sat Apr 11th, 2364 at 00:03</time></h2>
 <p>Warp engines online. Ready for your order.</p>
 </div>
 <div id="m-0b50e80f-d180-8d67-a0c8-59eadba4b4c3" data-section-uuid="0b50e80f-d180-8d67-a0c8-59eadba4b4c3" class="msg msg--whatsapp">
-<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2364-04-11T00:04:00+00:00" title="2364-04-11 00:04:00 UTC">Sat Apr 11th, 2364 at 00:04</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550105">Worf</span> <time class="msg-ts" datetime="2364-04-11T00:04:00+00:00" title="2364-04-11 00:04:00 UTC">Sat Apr 11th, 2364 at 00:04</time></h2>
 <p>Shields at maximum, Captain.</p>
 </div>
 <div id="m-0b50e810-bbe0-817e-84fc-3b5903d9a10d" data-section-uuid="0b50e810-bbe0-817e-84fc-3b5903d9a10d" class="msg msg--whatsapp">
@@ -6155,7 +6414,7 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 <p><img src="blobs/ade2b43c28300670.jpg" alt="bridge-viewscreen.jpg"></p>
 </div>
 <div id="m-0b50e811-a640-8b94-a752-fe955e6453e0" data-section-uuid="0b50e811-a640-8b94-a752-fe955e6453e0" class="msg msg--whatsapp">
-<h2><span class="msg-author">Data</span> <time class="msg-ts" datetime="2364-04-11T00:06:00+00:00" title="2364-04-11 00:06:00 UTC">Sat Apr 11th, 2364 at 00:06</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550103">Data</span> <time class="msg-ts" datetime="2364-04-11T00:06:00+00:00" title="2364-04-11 00:06:00 UTC">Sat Apr 11th, 2364 at 00:06</time></h2>
 <p>Hailing frequencies open, sir.</p>
 </div>
 <div id="m-0b50e812-90a0-8688-bbc1-5a80e14d22f9" data-section-uuid="0b50e812-90a0-8688-bbc1-5a80e14d22f9" class="msg msg--whatsapp">
@@ -6168,17 +6427,17 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 </ul>
 </div>
 <div id="m-0b50e815-4fc0-80f2-af4f-05e409dee22b" data-section-uuid="0b50e815-4fc0-80f2-af4f-05e409dee22b" class="msg msg--whatsapp">
-<h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2364-04-11T00:10:00+00:00" title="2364-04-11 00:10:00 UTC">Sat Apr 11th, 2364 at 00:10</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550104">Geordi La Forge</span> <time class="msg-ts" datetime="2364-04-11T00:10:00+00:00" title="2364-04-11 00:10:00 UTC">Sat Apr 11th, 2364 at 00:10</time></h2>
 <p><video controls src="blobs/51e1f3961849ab15.mp4"></video></p>
 <p>🎞 <a href="blobs/51e1f3961849ab15.mp4">warp-core-diagnostic.mp4</a> — 512 B</p>
 </div>
 <div id="m-0b50e816-3a20-8ba5-98f2-de7649752c7b" data-section-uuid="0b50e816-3a20-8ba5-98f2-de7649752c7b" class="msg msg--whatsapp">
-<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2364-04-11T00:11:00+00:00" title="2364-04-11 00:11:00 UTC">Sat Apr 11th, 2364 at 00:11</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550105">Worf</span> <time class="msg-ts" datetime="2364-04-11T00:11:00+00:00" title="2364-04-11 00:11:00 UTC">Sat Apr 11th, 2364 at 00:11</time></h2>
 <p><audio controls src="blobs/72228b6ea7fc6ac5.opus"></audio></p>
 <p>🔊 <a href="blobs/72228b6ea7fc6ac5.opus">tactical-briefing.opus</a> — 640 B</p>
 </div>
 <div id="m-0b50e818-0ee0-86db-9aed-bf1f41862b26" data-section-uuid="0b50e818-0ee0-86db-9aed-bf1f41862b26" class="msg msg--whatsapp unread first-unread">
-<h2><span class="msg-author">Data</span> <time class="msg-ts" datetime="2364-04-11T00:13:00+00:00" title="2364-04-11 00:13:00 UTC">Sat Apr 11th, 2364 at 00:13</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550103">Data</span> <time class="msg-ts" datetime="2364-04-11T00:13:00+00:00" title="2364-04-11 00:13:00 UTC">Sat Apr 11th, 2364 at 00:13</time></h2>
 <p>Sensor sweep complete: nothing on long range.</p>
 </div>
 </div>
@@ -6187,7 +6446,7 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 <h3 class="preview-name">whatsapp/render_markdown/00000000-0000-8a99-9206-1d7e42e1b482/2364-04.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-87d5-aa33-f523d8017fb7">WhatsApp · Data (2364-04)</h1>
 <div id="m-0b50e818-f940-8338-a476-1e9f46231681" data-section-uuid="0b50e818-f940-8338-a476-1e9f46231681" class="msg msg--whatsapp">
-<h2><span class="msg-author">Data</span> <time class="msg-ts" datetime="2364-04-11T00:14:00+00:00" title="2364-04-11 00:14:00 UTC">Sat Apr 11th, 2364 at 00:14</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550103">Data</span> <time class="msg-ts" datetime="2364-04-11T00:14:00+00:00" title="2364-04-11 00:14:00 UTC">Sat Apr 11th, 2364 at 00:14</time></h2>
 <p>Captain, I have a question about humour.</p>
 </div>
 <div id="m-0b50e819-e3a0-8671-a627-5f3eb75b189a" data-section-uuid="0b50e819-e3a0-8671-a627-5f3eb75b189a" class="msg msg--whatsapp">
@@ -6200,7 +6459,7 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 <h3 class="preview-name">whatsapp/render_markdown/00000000-0000-8b1c-9241-3a10a9e8b6d0/2364-04.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8d70-8098-9100d1daedab">WhatsApp · Worf (2364-04)</h1>
 <div id="m-0b50e81b-b860-83fd-88c2-2f8ca4d6ba7d" data-section-uuid="0b50e81b-b860-83fd-88c2-2f8ca4d6ba7d" class="msg msg--whatsapp">
-<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2364-04-11T00:17:00+00:00" title="2364-04-11 00:17:00 UTC">Sat Apr 11th, 2364 at 00:17</time></h2>
+<h2><span class="msg-author" data-handle="tel:+17015550105">Worf</span> <time class="msg-ts" datetime="2364-04-11T00:17:00+00:00" title="2364-04-11 00:17:00 UTC">Sat Apr 11th, 2364 at 00:17</time></h2>
 <p>Sir, I request permission to run a tactical drill.</p>
 </div>
 </div>
@@ -6224,22 +6483,22 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 <td>Source Size</td>
 <td><code>whatsapp/ingest</code></td>
 <td>‹size›</td>
-<td>4 files</td>
+<td>3 files</td>
 <td><span id="m-00000000-0000-8f4c-b365-c0f656f665bf" data-section-uuid="00000000-0000-8f4c-b365-c0f656f665bf"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
-<td><code>whatsapp/ingest/blobs.doltlite_db</code></td>
+<td><code>whatsapp/ingest/blobs.sqlite</code></td>
 <td>‹size›</td>
 <td></td>
-<td><span id="m-00000000-0000-83a0-8183-daf1252a4b28" data-section-uuid="00000000-0000-83a0-8183-daf1252a4b28"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8aab-9ba6-c5f2c049032b" data-section-uuid="00000000-0000-8aab-9ba6-c5f2c049032b"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
-<td><code>whatsapp/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td><code>whatsapp/ingest/blobs.sqlite#cas_objects</code></td>
 <td></td>
 <td>3 rows</td>
-<td><span id="m-00000000-0000-885b-814f-6d8016e5ca77" data-section-uuid="00000000-0000-885b-814f-6d8016e5ca77"><code>00000000</code></span></td>
+<td><span id="m-00000000-0000-8b05-9923-3abbc7fb6ab4" data-section-uuid="00000000-0000-8b05-9923-3abbc7fb6ab4"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Store</td>
@@ -6374,6 +6633,13 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 <td></td>
 <td>2304 rows</td>
 <td><span id="m-00000000-0000-80fd-ae6c-552f5b095dec" data-section-uuid="00000000-0000-80fd-ae6c-552f5b095dec"><code>00000000</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>yolink/ingest/entities.doltlite_db#yolink_windows</code></td>
+<td></td>
+<td>0 rows</td>
+<td><span id="m-00000000-0000-8671-a004-9471fe41e177" data-section-uuid="00000000-0000-8671-a004-9471fe41e177"><code>00000000</code></span></td>
 </tr>
 </tbody>
 </table>
@@ -6612,7 +6878,7 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 <h2 class="preview-source-name">zz-synthetic <span class="preview-count">4 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">zz-synthetic/samples/render_markdown/sample-edges/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-edges">Edge cases (all) <a class="source-link" href="https://example.invalid/chat/sample-edges" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-edges">Edge cases <a class="source-link" href="https://example.invalid/chat/sample-edges" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-s3-undated" data-section-uuid="s3-undated" class="msg msg--claude">
 <h2><span class="msg-author">Unknown sender</span> <span class="msg-ts">(no timestamp)</span></h2>
 <p>Who sent this, and when?</p>
@@ -6637,7 +6903,7 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">zz-synthetic/samples/render_markdown/sample-group/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-group">Bridge Crew (all) <a class="source-link" href="https://example.invalid/chat/sample-group" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-group">Bridge Crew <a class="source-link" href="https://example.invalid/chat/sample-group" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-s2-picard" data-section-uuid="s2-picard" class="msg msg--claude">
 <h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00+00:00" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time> <a class="source-link" href="https://example.invalid/archive/s2-picard" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Senior staff, my ready room at 0900.</p>
@@ -6668,7 +6934,7 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">zz-synthetic/samples/render_markdown/sample-long/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-long">Nacelle diagnostic dump (all) <a class="source-link" href="https://example.invalid/chat/sample-long" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-long">Nacelle diagnostic dump <a class="source-link" href="https://example.invalid/chat/sample-long" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-s4-ask" data-section-uuid="s4-ask" class="msg msg--claude">
 <h2><span class="msg-author">Geordi La Forge</span> <time class="msg-ts" datetime="2369-05-14T16:10:00+00:00" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Can you paste the whole port-nacelle conduit dump? I want to see every line, not a summary.</p>
@@ -6788,7 +7054,7 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">zz-synthetic/samples/render_markdown/sample-tool-run/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-tool-run">Sensor sweep of the Argolis cluster (all) <a class="source-link" href="https://example.invalid/chat/sample-tool-run" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="sample-tool-run">Sensor sweep of the Argolis cluster <a class="source-link" href="https://example.invalid/chat/sample-tool-run" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-s1-user" data-section-uuid="s1-user" class="msg msg--claude">
 <h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-14T16:10:00+00:00" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Can you check the long-range sensor logs for anything moving in the Argolis cluster, and summarize what you find?</p>
@@ -6895,6 +7161,20 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 export const LONG_MESSAGE_PX = 360;
 
 /**
+ * The pane `el` scrolls in. In the document frame that is the frame's
+ * own root, which scrolls as the viewport does: its top is the
+ * viewport's, whatever it has scrolled by.
+ * @param {Element} el
+ * @returns {{ pane: Element, top: number, isViewport: boolean } | null}
+ */
+function scrollPane(el) {
+  const pane = el.closest(".chat-preview");
+  if (!pane) return null;
+  const isViewport = pane === el.ownerDocument.scrollingElement;
+  return { pane, top: isViewport ? 0 : pane.getBoundingClientRect().top, isViewport };
+}
+
+/**
  * Scroll `el` to the top of its scrollport.
  *
  * Sets scrollTop directly rather than calling `scrollIntoView`, which
@@ -6904,9 +7184,9 @@ export const LONG_MESSAGE_PX = 360;
  * @param {HTMLElement} el
  */
 export function scrollSectionToTop(el) {
-  const pane = el.closest(".chat-preview");
-  if (!pane) return;
-  pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+  const p = scrollPane(el);
+  if (!p) return;
+  p.pane.scrollTop += el.getBoundingClientRect().top - p.top;
 }
 
 /**
@@ -6956,15 +7236,16 @@ export function metaHost(el) {
  * @param {HTMLElement} control
  */
 function addHeaderControl(host, separator, control) {
+  const doc = host.ownerDocument;
   const link = host.querySelector(":scope > .source-link");
   if (!link) {
-    host.append(document.createTextNode(separator), control);
+    host.append(doc.createTextNode(separator), control);
     return;
   }
   link.before(
-    document.createTextNode(separator),
+    doc.createTextNode(separator),
     control,
-    document.createTextNode(" "),
+    doc.createTextNode(" "),
   );
 }
 
@@ -6975,7 +7256,7 @@ function addHeaderControl(host, separator, control) {
  */
 export function injectCopyUuidButtons(root) {
   const button = (uuid, label) => {
-    const btn = document.createElement("button");
+    const btn = root.ownerDocument.createElement("button");
     btn.type = "button";
     btn.className = "copy-uuid";
     btn.dataset.uuid = uuid;
@@ -7061,7 +7342,8 @@ export function decorateLongMessages(root, opts = {}) {
     if (el.scrollHeight <= clampPx) continue;
     el.classList.add("msg--long", "msg--clamped");
 
-    const more = document.createElement("button");
+    const doc = root.ownerDocument;
+    const more = doc.createElement("button");
     more.type = "button";
     more.className = "msg-expand";
     more.textContent = "Show more";
@@ -7076,10 +7358,10 @@ export function decorateLongMessages(root, opts = {}) {
 
     const host = metaHost(el);
     if (!host) continue;
-    const nav = document.createElement("span");
+    const nav = doc.createElement("span");
     nav.className = "msg-nav";
     const jump = (glyph, label, target) => {
-      const b = document.createElement("button");
+      const b = doc.createElement("button");
       b.type = "button";
       b.className = "msg-jump";
       b.textContent = glyph;
@@ -7109,11 +7391,13 @@ export function decorateLongMessages(root, opts = {}) {
     // The threshold/rootMargin pair is the standard detection: with the
     // root's top edge pulled in by 1px, a header sitting at `top: 0`
     // can no longer be fully visible, so its ratio drops below 1.
-    const pane = el.closest(".chat-preview");
-    if (!pane) continue;
+    const p = scrollPane(el);
+    if (!p) continue;
+    // The frame's viewport is observed through its document; an
+    // implicit root would be the app's window, not the frame's.
     const io = new IntersectionObserver(
       ([entry]) => host.classList.toggle("is-stuck", entry.intersectionRatio < 1),
-      { root: pane, threshold: [1], rootMargin: "-1px 0px 0px 0px" },
+      { root: p.isViewport ? el.ownerDocument : p.pane, threshold: [1], rootMargin: "-1px 0px 0px 0px" },
     );
     io.observe(host);
     root.__chatStickyObservers.push(io);

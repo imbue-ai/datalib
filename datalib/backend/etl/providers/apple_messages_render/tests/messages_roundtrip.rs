@@ -2,8 +2,9 @@
 //! rendered the way the render step renders it. What is Messages-shaped
 //! and so covered nowhere else: bodies read out of `attributedBody`,
 //! tapbacks folded onto their messages and unfolded by a removal, the
-//! join tables keyed by the config's override, and `skip_churn` making
-//! an untouched database no commit at all.
+//! join tables keyed on their UNIQUE pair, `skip_churn` making an
+//! untouched database no commit at all, and the newest message read out
+//! of `chat.db-wal`, where Messages leaves it.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -25,6 +26,7 @@ const BRIDGE: &str = "iMessage;+;chat240603120915";
 
 struct Fixture {
     _dir: tempfile::TempDir,
+    messages: PathBuf,
     db: PathBuf,
     raw: PathBuf,
     out: PathBuf,
@@ -33,19 +35,19 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        let db = dir.path().join("chat.db");
-        std::fs::copy(fixture_db(), &db).expect("stage chat.db");
-        // A Bazel runfile is read-only and `fs::copy` keeps the mode;
-        // the tests play Messages writing to the database.
-        let mut perms = std::fs::metadata(&db).expect("stat").permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        perms.set_readonly(false);
-        std::fs::set_permissions(&db, perms).expect("chmod");
+        // Laid out as `~/Library/Messages` is, since the folder is what
+        // the wizard writes into the config.
+        let messages = dir.path().join("Messages");
+        std::fs::create_dir_all(&messages).expect("mkdir Messages");
+        let db = messages.join("chat.db");
+        stage_writable(&fixture_db(), &db);
+        stage_writable(&wal_of(&fixture_db()), &wal_of(&db));
         let raw = dir.path().join("ingest");
         std::fs::create_dir_all(&raw).expect("mkdir ingest");
         Self {
             out: dir.path().join("render_markdown"),
             _dir: dir,
+            messages,
             db,
             raw,
         }
@@ -53,8 +55,8 @@ impl Fixture {
 
     async fn ingest(&self) -> Result<Option<String>> {
         let config = AppleMessagesConfig {
-            database: Some(LocalPath {
-                path: self.db.clone(),
+            messages: Some(LocalPath {
+                path: self.messages.clone(),
             }),
             ..Default::default()
         };
@@ -127,6 +129,22 @@ impl Fixture {
     }
 }
 
+fn wal_of(db: &std::path::Path) -> PathBuf {
+    let mut wal = db.as_os_str().to_os_string();
+    wal.push("-wal");
+    PathBuf::from(wal)
+}
+
+/// A Bazel runfile is read-only and `fs::copy` keeps the mode; the tests
+/// play Messages writing to the database.
+fn stage_writable(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::copy(from, to).unwrap_or_else(|e| panic!("stage {}: {e}", from.display()));
+    let mut perms = std::fs::metadata(to).expect("stat").permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(to, perms).expect("chmod");
+}
+
 fn fixture_db() -> PathBuf {
     let p = PathBuf::from(
         std::env::var("APPLE_MESSAGES_TNG_DB").expect("APPLE_MESSAGES_TNG_DB must be set"),
@@ -189,15 +207,15 @@ async fn bodies_tapbacks_and_attachments_render() -> Result<()> {
         .flat_map(|d| d.rows.iter())
         .filter(|r| r.kind == "Messages Message")
         .collect();
-    assert_eq!(items.len(), 7, "seven messages, no tapback rows among them");
+    assert_eq!(items.len(), 8, "eight messages, no tapback rows among them");
     let picture = items
         .iter()
         .find(|r| r.upstream_id.as_deref() == Some("A1B2C3D4-0003-4000-8000-000000000003"))
         .expect("the attachment message");
     assert!(
-        !picture.text.contains('\u{fffc}'),
+        !picture.preview.contains('\u{fffc}'),
         "U+FFFC is not text: {:?}",
-        picture.text
+        picture.preview
     );
     Ok(())
 }
@@ -232,6 +250,32 @@ async fn marking_a_message_unread_and_read_again_rerenders_its_chat() -> Result<
     fx.ingest().await?.expect("the flags commit");
     let (docs, _, _) = fx.render(Some(&second)).await;
     assert!(!pages(&docs, BRIDGE).contains("unread"));
+    Ok(())
+}
+
+/// The newest message is only in `chat.db-wal`, as Messages leaves it
+/// while running. It reaches the page: a mirror that read `chat.db` alone
+/// would drop it without a word.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_newest_message_is_read_out_of_the_wal() -> Result<()> {
+    const IN_WAL: &str = "Sensor recalibration complete, Captain.";
+
+    // The fixture really does keep it out of the main file.
+    let bare = tempfile::tempdir()?;
+    let main_only = bare.path().join("chat.db");
+    stage_writable(&fixture_db(), &main_only);
+    let pool = mirror::open_sqlite(&main_only, false).await?;
+    let without_wal: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM message WHERE ROWID = 12")
+        .fetch_one(&pool)
+        .await?;
+    pool.close().await;
+    assert_eq!(without_wal, 0, "rowid 12 must be in the WAL alone");
+
+    let fx = Fixture::new();
+    fx.ingest().await?.expect("first ingest commits");
+    let (docs, _, _) = fx.render(None).await;
+    let bridge = pages(&docs, BRIDGE);
+    assert!(bridge.contains(IN_WAL), "{bridge}");
     Ok(())
 }
 
@@ -276,5 +320,28 @@ async fn a_second_run_renders_only_what_moved() -> Result<()> {
         Some(chat_uuid("messages", BRIDGE).as_str())
     );
     assert!(pages(&docs, BRIDGE).contains("Recalibrating now."));
+    Ok(())
+}
+
+/// Two join tables are declared `UNIQUE` but not `PRIMARY KEY`; the
+/// mirror keys them on that pair, so `dolt_diff` names their rows rather
+/// than diffing them by position.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_join_tables_are_keyed_on_their_unique_pair() -> Result<()> {
+    let fx = Fixture::new();
+    fx.ingest().await?.expect("first ingest commits");
+    let pool = mirror::open_sqlite(&dr::db_path_for(&fx.raw), false).await?;
+    for (table, key) in [
+        ("chat_handle_join", ["chat_id", "handle_id"]),
+        ("message_attachment_join", ["message_id", "attachment_id"]),
+    ] {
+        let got: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+                .bind(table)
+                .fetch_all(&pool)
+                .await?;
+        assert_eq!(got, key, "{table}");
+    }
+    pool.close().await;
     Ok(())
 }

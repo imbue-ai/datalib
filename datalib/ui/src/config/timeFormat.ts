@@ -27,6 +27,27 @@ export function formatStamp(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? iso : STAMP_FMT.format(d);
 }
 
+/// The day and the minute, `Sun, Sep 28 @ 08:59`, for a picker that
+/// lists many stamps under one relative label: "3 days ago" six times
+/// over tells the entries apart only with this beside it.
+const SHORT_DAY_FMT = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+});
+const SHORT_TIME_FMT = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+export function formatShortStamp(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${SHORT_DAY_FMT.format(d)} @ ${SHORT_TIME_FMT.format(d)}`;
+}
+
 /// The whole stamp to the millisecond, `2026-09-22 14:07:47.190`, in the
 /// viewer's own zone: a step's own tracing lines are stamped in UTC and
 /// the runner's in local time, and showing the digits as written would
@@ -127,4 +148,26 @@ export function formatRelative(iso: string | null, now: number): string {
     }
   }
   return "seconds ago";
+}
+
+const CLOCK_FMT = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+/// The time of day to the second, `09:38:33`, for an axis over one run:
+/// a run is minutes long far more often than it crosses a midnight.
+export function formatClock(ms: number): string {
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? "" : CLOCK_FMT.format(d);
+}
+
+/// A span of seconds the way an estimate reads: `52 sec`, `25 min`,
+/// `1.4 h`. The same words the server's hovers use (`manage::queue`).
+export function formatDuration(secs: number): string {
+  if (secs < 60) return `${Math.round(secs)} sec`;
+  if (secs < 3600) return `${Math.round(secs / 60)} min`;
+  return `${(secs / 3600).toFixed(1)} h`;
 }

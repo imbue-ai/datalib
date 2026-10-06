@@ -141,6 +141,27 @@ FAMILIES: list[Family] = [
         ],
     ),
     Family(
+        name="rust",
+        why=(
+            "Bazel builds the backend with RUST_VERSION; the Tauri shell "
+            "is built by the host's cargo, which takes its version from "
+            "datalib/tauri/rust-toolchain.toml. A machine whose default "
+            "toolchain was older failed run.sh on crates needing a newer "
+            "rustc while bazel was green. The release job installs the "
+            "same toolchain by name before it builds the shell."
+        ),
+        canonical="MODULE.bazel",
+        sites=[
+            ("MODULE.bazel", r'^RUST_VERSION = "([^"]+)"'),
+            ("datalib/tauri/rust-toolchain.toml", r'^channel = "([^"]+)"'),
+            # The step's name and both rustup lines; they must agree too.
+            (
+                ".github/workflows/release.yml",
+                r"(?:Install Rust \(|rustup toolchain install |rustup default )(\d+\.\d+\.\d+)",
+            ),
+        ],
+    ),
+    Family(
         name="pyright",
         why=(
             "Two packagings of the same tool. `uv run pyright` resolves "

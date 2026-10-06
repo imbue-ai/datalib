@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { clickRowByUuid } from "./grid-helpers";
+import { EVERY_ROW, clickRowByUuid, docBody } from "./grid-helpers";
 
 // Regression test for the off-by-one bug: clicking a grid row in the
 // message list highlighted a *different* message in the document pane
@@ -34,7 +34,7 @@ test("clicked grid row highlights the section with the matching uuid", async ({
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as { rows: Row[] };
 
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   // Build the set of rows we'll exercise: every non-Chat row whose
@@ -105,7 +105,8 @@ test("clicked grid row highlights the section with the matching uuid", async ({
     // test exists to *report*, not to time out on. So the wait is
     // swallowed, and a card that never gets a selection falls through
     // to the null case below.
-    await card
+    const body = docBody(card);
+    await body
       .locator(".msg.selected")
       .first()
       .waitFor({ timeout: 2_000 })
@@ -114,10 +115,12 @@ test("clicked grid row highlights the section with the matching uuid", async ({
     // Scoped to *this* card, not to `.chat-preview` at large. The
     // previous pick's card can still be in the DOM, and an unscoped
     // lookup would happily read its selection and call it this row's.
-    const selectedSectionUuid = await card
+    // Bounded: with nothing selected, an unbounded read would wait out
+    // the whole test instead of reporting the mismatch.
+    const selectedSectionUuid = await body
       .locator(".msg.selected")
       .first()
-      .getAttribute("data-section-uuid")
+      .getAttribute("data-section-uuid", { timeout: 1_000 })
       .catch(() => null);
     if (selectedSectionUuid !== pick.uuid) {
       mismatches.push({

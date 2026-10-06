@@ -1,0 +1,60 @@
+# The sign-in suite (datalib/ui/tests/e2e_auth/) on a mac: the wizard's
+# latchkey flows against the real latchkey, curl router and browser, with
+# the third-party sites faked. Not a merge gate — it starts a backend and
+# often a Chromium per test — so it runs nightly and on demand.
+name: latchkey-auth
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: latchkey-auth-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-auth:
+    name: e2e_auth (macOS)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: true
+          external-cache: false
+      # The contributor org, as a PR run uses: this is never what a
+      # release replays. `.bazelrc`'s BuildBuddy block has the reasoning.
+      - name: Configure BuildBuddy remote cache
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+              cat > .bazelrc.user <<EOF
+          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
+          build --config=buildbuddy
+          EOF
+          fi
+      - name: bazel test //datalib/ui:e2e_auth_test
+        run: bazel test --config=ci //datalib/ui:e2e_auth_test --test_output=errors
+      # The Playwright report and traces, which a red run is read from.
+      - name: Keep the report
+        if: failure()
+        run: |
+          set -euo pipefail
+          zip="$(bazel info bazel-testlogs --config=ci)/datalib/ui/e2e_auth_test/test.outputs/outputs.zip"
+          mkdir -p e2e-auth-report
+          if [[ -f "${zip}" ]]; then cp -L "${zip}" e2e-auth-report/; fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure() && hashFiles('e2e-auth-report/outputs.zip') != ''
+        with:
+          name: e2e-auth-report
+          path: e2e-auth-report/outputs.zip
+          retention-days: 7

@@ -414,12 +414,12 @@ mod tests {
         let sinks: Vec<Arc<dyn ProgressSink>> = vec![a.clone(), b.clone()];
         let fan = FanOut::new(sinks);
 
-        fan.metric("rows_upserted", &[("table", "messages")], 12);
+        fan.metric("rows_upserted_total", &[("table", "messages")], 12);
 
         for (name, sink) in [("first", &a), ("second", &b)] {
             assert_eq!(
                 *sink.metrics.lock().unwrap(),
-                vec![("rows_upserted".to_string(), 12)],
+                vec![("rows_upserted_total".to_string(), 12)],
                 "FanOut must forward metric to its {name} sink",
             );
         }

@@ -1,7 +1,7 @@
 // A field whose backend type is a closed enum is a dropdown, not a text
 // box — `kind: "select"` in `ui/src/config/catalog.ts`.
 import { test, expect, type Page } from "@playwright/test";
-import { expandGroup, MANAGE_WITH_CONFIG } from "./grid-helpers";
+import { expandGroup, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 // Structural, matching data-sources-name.spec.ts: each field's <label>
@@ -16,9 +16,9 @@ async function openManager(page: Page) {
 
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {
@@ -30,8 +30,8 @@ test.afterEach(async ({ page }) => {
 });
 
 test("an enum-backed field is a dropdown of its values", async ({ page }) => {
-  await page.getByRole("button", { name: "+ Data Source" }).click();
-  await page.getByRole("searchbox").fill("signal");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await page.locator(".wiz-filter").fill("signal");
   await wizard(page)
     .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })
     .click();
@@ -64,7 +64,7 @@ test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   await expect(page.getByText("Added Phone Signal.")).toBeVisible();
   await expandGroup(page, "phone-signal");
   await expect(
-    page.locator('.tg-grid .slick-row[data-key="phone-signal/render_markdown"]'),
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="phone-signal/render_markdown"]'),
   ).toBeVisible();
   await expect(page.locator(".m2-editor")).toHaveValue(/period = "year"/);
 });

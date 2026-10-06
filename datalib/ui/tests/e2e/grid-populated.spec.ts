@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { expectGridPainted } from "./grid-helpers";
+import { GRID, expectGridPainted } from "./grid-helpers";
 
 // Smoke test: the grid actually renders rows from the TNG fixture.
 
@@ -11,7 +11,7 @@ test("the grid populates with rows from the fixture", async ({ page, request }) 
   expect(data.rows.length, "fixture must have at least one row").toBeGreaterThan(0);
 
   // Grid surfaces them.
-  await page.goto("/");
+  await page.goto(GRID);
   const firstRow = page.locator(".grid-box .slick-row").first();
   await expect(firstRow).toBeVisible({ timeout: 10_000 });
 

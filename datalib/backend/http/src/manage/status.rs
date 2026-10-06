@@ -10,8 +10,7 @@ use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::{Diagnostic, Severity};
 
 /// One row's status, in the shape the Status column draws. The rules
-/// here fill `key`, `label`, `at`, `last_success_at` and `detail`; the
-/// assembly adds a fraction and segments where a run is in flight.
+/// here fill `key`, `label`, `at`, `last_success_at` and `detail`.
 pub type StatusView = datalib_columns::Status;
 
 /// The word each status key stands for. `skipped_up_to_date` is the
@@ -24,7 +23,7 @@ pub const STATUS_LABELS: &[(&str, &str)] = &[
     ("config_blocked", "Can\u{2019}t run"),
     ("running", "Running"),
     ("queued", "Queued"),
-    ("paused", "Paused"),
+    ("off", "Off"),
     ("succeeded", "Succeeded"),
     ("skipped_up_to_date", "Up to date"),
     ("failed", "Failed"),
@@ -150,7 +149,7 @@ pub fn step_status(
                 "up to date so far; runs again if what it reads moves before the sync ends".into(),
             ),
         ),
-        Some(StateKind::Paused) => view("paused", ended, detail),
+        Some(StateKind::Off) => view("off", ended, detail),
         Some(StateKind::Blocked) => view("blocked", ended, detail),
         _ => match last {
             None => view("never_run", None, None),
@@ -250,13 +249,13 @@ mod tests {
             "queued"
         );
 
-        let paused = step_status(
-            Some(&at(StateKind::Paused, Some("paused by claude"))),
+        let turned_off = step_status(
+            Some(&at(StateKind::Off, Some("turned off by claude"))),
             None,
             None,
         );
-        assert_eq!(paused.label, "Paused");
-        assert_eq!(paused.detail.as_deref(), Some("paused by claude"));
+        assert_eq!(turned_off.label, "Off");
+        assert_eq!(turned_off.detail.as_deref(), Some("turned off by claude"));
     }
 
     /// At rest — idle, stale, failed — the row is the last outcome and

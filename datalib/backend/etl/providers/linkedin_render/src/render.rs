@@ -1,8 +1,7 @@
 //! Render LinkedIn's message-shaped feeds into markdown via the shared
 //! chat renderer.
 
-use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
@@ -11,8 +10,9 @@ use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile
 use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
+use datalib_etl_render::inputs::{changed_rows, keys_reading, Bucket, Input, Inputs, RawRange};
 use serde_json::Value;
 
 use crate::ids;
@@ -30,7 +30,11 @@ use datalib_schema::providers::Provider;
 ///     bits (`datalib_id`'s v8 layout). The raw `connections` key is the
 ///     profile URL now, so an existing root resets and downloads again;
 ///     every uuid moved.
-pub const RENDER_VERSION: u32 = 4;
+/// v6: a connection's page uses the shared contact labels — Org, Title,
+///     Email — rather than the export's column names.
+/// v7: a post of several lines loses the quotes the export puts around
+///     each line.
+pub const RENDER_VERSION: u32 = 7;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -42,6 +46,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "LinkedIn Reaction".to_string(),
         chat_entity_kind: ids::KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 
@@ -84,13 +89,9 @@ pub fn render(
                 // load error as "absent" rather than failing the render.
                 loaded.push((
                     table,
-                    datalib_etl::doltlite_raw::load_payloads_with_id(
-                        db.pool(),
-                        datalib_etl::pin::Reads::At(&pin),
-                        table,
-                    )
-                    .await
-                    .unwrap_or_default(),
+                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), table)
+                        .await
+                        .unwrap_or_default(),
                 ));
             }
             let changed = changed_rows(db.pool(), range, &pin, &message_tables()).await?;
@@ -107,38 +108,9 @@ pub fn render(
         chats.extend(build_chats(source_id, table, rows, account, account_inputs));
     }
 
-    // What to render: the chats the driver found stale, plus the ones a
-    // new or changed row maps to — through the rows just loaded, since
-    // the conversation id lives inside the payload. A removed row's chat
-    // reaches here through the driver, having declared the row.
-    let forward = changed.map(|changed| {
-        let mut keys: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for chat in &chats {
-            if chat
-                .inputs
-                .iter()
-                .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
-            {
-                keys.insert(chat.chat_uuid.clone());
-            }
-        }
-        keys
-    });
-    let render = range.narrow(forward.as_ref());
-    let mut outcome = FeedOutcome {
-        new_head: Some(new_head),
-        buckets: render
-            .iter()
-            .flatten()
-            .map(|key| Bucket {
-                key: key.clone(),
-                inputs: Vec::new(),
-            })
-            .collect(),
-    };
-    if let Some(render) = &render {
-        chats.retain(|c| render.contains(&c.chat_uuid));
-    }
+    // The conversation id lives inside the payload, so a changed row
+    // maps to its chat only through the rows just loaded.
+    let mut outcome = narrow_docs(&mut chats, chat_key, changed, range, new_head);
 
     let blobs: HashMap<String, BlobBundle> = HashMap::new();
     let s = cc_render_all(
@@ -152,6 +124,40 @@ pub fn render(
     )?;
     outcome.buckets.extend(s.buckets);
     Ok(outcome)
+}
+
+pub(crate) fn chat_key(c: &NormalizedChat) -> (&str, &[Input]) {
+    (c.chat_uuid.as_str(), c.inputs.as_slice())
+}
+
+/// What to render: the documents the driver found stale, plus the ones a
+/// new or changed row maps to through the rows just loaded. A removed
+/// row's document reaches here through the driver, having declared the
+/// row. `docs` keeps only those; the outcome names each with nothing.
+pub(crate) fn narrow_docs<T>(
+    docs: &mut Vec<T>,
+    key_of: impl Fn(&T) -> (&str, &[Input]),
+    changed: Option<HashMap<String, HashSet<String>>>,
+    range: RawRange<'_>,
+    new_head: String,
+) -> FeedOutcome {
+    let forward = changed.map(|changed| keys_reading(&changed, docs.iter().map(&key_of)));
+    let render = range.narrow(forward.as_ref());
+    let outcome = FeedOutcome {
+        new_head: Some(new_head),
+        buckets: render
+            .iter()
+            .flatten()
+            .map(|key| Bucket {
+                key: key.clone(),
+                inputs: Vec::new(),
+            })
+            .collect(),
+    };
+    if let Some(render) = &render {
+        docs.retain(|d| render.contains(key_of(d).0));
+    }
+    outcome
 }
 
 /// Rows as `(row id, payload)`: the id is what the conversation declares
@@ -190,21 +196,21 @@ fn build_chats(
                 let id = ids::message(source_id, table, row_id, date_ms);
                 NormalizedChatItem {
                     message_uuid: id.uuid,
-                    author_id: nonempty(field(p, "SENDER PROFILE URL"))
-                        .unwrap_or(from)
-                        .to_string(),
+                    author_handle: None,
                     author_display: nonempty(from).unwrap_or("Unknown").to_string(),
                     date_ms,
                     text: nonempty(content).map(str::to_string),
                     kind: ItemKind::Text,
                     attachments: Vec::new(),
                     reactions: Vec::new(),
+                    labels: Vec::new(),
                     system_note: None,
                     source_url: None,
                     kind_label: None,
                     source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                     is_aside: false,
                     unread: false,
+                    recipients: Vec::new(),
                     problems,
                 }
             })
@@ -218,6 +224,7 @@ fn build_chats(
 
         let conversation = ids::conversation(source_id, table, &conv);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: format!("{table}:{conv}"),
@@ -265,11 +272,11 @@ fn participants(rows: &[&Value]) -> String {
     }
 }
 
-fn field<'a>(p: &'a Value, key: &str) -> &'a str {
+pub(crate) fn field<'a>(p: &'a Value, key: &str) -> &'a str {
     p.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
-fn nonempty(s: &str) -> Option<&str> {
+pub(crate) fn nonempty(s: &str) -> Option<&str> {
     let t = s.trim();
     (!t.is_empty()).then_some(t)
 }

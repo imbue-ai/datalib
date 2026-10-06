@@ -1,0 +1,18 @@
+[package]
+name = "datalib-embedding-map"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "datalib_embedding_map"
+path = "src/lib.rs"
+
+# This manifest exists for crate_universe's third-party resolution: it is
+# where `umap-rs` and the `ndarray` it takes enter the lockfile.
+# BUILD.bazel is the dep truth.
+[dependencies]
+ndarray = "0.17"
+rayon = "1.10"
+umap-rs = "0.4.5"

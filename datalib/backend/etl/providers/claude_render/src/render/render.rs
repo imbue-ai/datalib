@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms, json_pretty_sorted};
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
@@ -17,7 +18,9 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_text, md_code_block};
 use datalib_etl_render::inputs::Inputs;
 
 use super::ids;
@@ -48,7 +51,7 @@ use datalib_schema::providers::Provider;
 /// v8: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout), so a sync's rows land in adjacent
 ///     leaves of the render store and the index.
-pub const RENDER_VERSION: u32 = 8;
+pub const RENDER_VERSION: u32 = 9;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -61,6 +64,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Claude Reaction".to_string(),
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -85,6 +89,7 @@ fn project_profile() -> RenderProfile {
         // different uuid.
         chat_entity_kind: ids::KIND_PROJECT,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -326,13 +331,14 @@ fn build_chat(
             let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
             items.push(NormalizedChatItem {
                 message_uuid: block_id.uuid.clone(),
-                author_id: btype.to_string(),
+                author_handle: None,
                 author_display: block_author,
                 date_ms: block_ms,
                 text: filter_nonempty(body),
                 kind: ItemKind::Text,
                 attachments: Vec::new(),
                 reactions: Vec::new(),
+                labels: Vec::new(),
                 system_note: None,
                 source_url: None,
                 kind_label: Some(kind_for_block(btype).to_string()),
@@ -342,6 +348,7 @@ fn build_chat(
                 )),
                 is_aside: matches!(btype, "tool_use" | "tool_result"),
                 unread: false,
+                recipients: Vec::new(),
                 problems: block_problems,
             });
         }
@@ -358,13 +365,14 @@ fn build_chat(
         };
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
-            author_id: sender.to_string(),
+            author_handle: None,
             author_display: author_display.clone(),
             date_ms: msg_ms,
             text: filter_nonempty(body),
             kind,
             attachments: norm_atts,
             reactions: Vec::new(),
+            labels: Vec::new(),
             system_note: None,
             source_url: None,
             kind_label: Some(kind_label.to_string()),
@@ -374,6 +382,7 @@ fn build_chat(
             )),
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: msg_problems,
         });
     }
@@ -422,6 +431,7 @@ fn build_chat(
             source_ref: None,
             items,
         }],
+        contacts: Vec::new(),
         inputs: inputs.declared(),
     }
 }
@@ -492,13 +502,14 @@ fn build_project_page(
         let doc_id = ids::project_document(source_id, &doc.doc_uuid, ms);
         items.push(NormalizedChatItem {
             message_uuid: doc_id.uuid.clone(),
-            author_id: "project_doc".into(),
+            author_handle: None,
             author_display: label,
             date_ms: ms,
             text: body,
             kind: ItemKind::Text,
             attachments: Vec::new(),
             reactions: Vec::new(),
+            labels: Vec::new(),
             system_note: None,
             source_url: None,
             kind_label: Some("Project Knowledge".to_string()),
@@ -508,6 +519,7 @@ fn build_project_page(
             )),
             is_aside: false,
             unread: false,
+            recipients: Vec::new(),
             problems: Vec::new(),
         });
     }
@@ -547,6 +559,7 @@ fn build_project_page(
             source_ref: None,
             items,
         }],
+        contacts: Vec::new(),
         inputs: project.inputs.declared(),
     }
 }
@@ -584,19 +597,21 @@ fn project_item(
 ) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id: kind_label.to_string(),
+        author_handle: None,
         author_display: author_display.to_string(),
         date_ms: id.at,
         text: Some(text),
         kind: ItemKind::Text,
         attachments: Vec::new(),
         reactions: Vec::new(),
+        labels: Vec::new(),
         system_note: None,
         source_url: None,
         kind_label: Some(kind_label.to_string()),
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }
@@ -619,16 +634,6 @@ fn kind_for_block(block_type: &str) -> &'static str {
 
 fn filter_nonempty(s: String) -> Option<String> {
     (!s.trim().is_empty()).then_some(s)
-}
-
-/// Parse an ISO-8601 timestamp to unix millis; `None` on anything
-/// unparseable — the caller records that through `own_stamp_ms` before
-/// falling back to a bumped previous time, and to `None` when there is
-/// no previous time either.
-fn iso_to_ms(s: &str) -> Option<i64> {
-    datalib_time::parse_strict(s)
-        .ok()
-        .map(|t| t.to_unix_millis())
 }
 
 // Block / attachment rendering (the markdown that becomes item.text).
@@ -691,8 +696,8 @@ fn block_body_md(
                 .unwrap_or("tool");
             let msg = raw_obj.get("message").and_then(Value::as_str);
             let summary = match msg {
-                Some(m) => format!("Tool use: {name} — {m}"),
-                None => format!("Tool use: {name}"),
+                Some(m) => format!("Tool use: {} — {}", escape_text(name), escape_text(m)),
+                None => format!("Tool use: {}", escape_text(name)),
             };
             let mut out = vec![
                 format!("<details><summary>{summary}</summary>"),
@@ -717,6 +722,7 @@ fn block_body_md(
                 .get("is_error")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let name = escape_text(name);
             let summary = if is_err {
                 format!("Tool result: {name} (error)")
             } else {
@@ -738,12 +744,13 @@ fn block_body_md(
     lines.join("\n")
 }
 
+/// A tool's output is shown as it came back, in a code block, whether it
+/// is one string or a list of text parts: it is the tool's, and nothing
+/// in it is markup for this page.
 fn render_tool_result_content(content: Option<&Value>, out: &mut Vec<String>) {
     match content {
         Some(Value::String(s)) => {
-            out.push("```".into());
-            out.push(s.trim_end().into());
-            out.push("```".into());
+            out.push(md_code_block("", s.trim_end()));
         }
         Some(Value::Array(items)) => {
             for item in items {
@@ -754,13 +761,8 @@ fn render_tool_result_content(content: Option<&Value>, out: &mut Vec<String>) {
                                 .and_then(Value::as_str)
                                 .is_some_and(|t| !t.is_empty()) =>
                     {
-                        out.push(
-                            m.get("text")
-                                .and_then(Value::as_str)
-                                .unwrap()
-                                .trim_end()
-                                .into(),
-                        );
+                        let text = m.get("text").and_then(Value::as_str).unwrap();
+                        out.push(md_code_block("", text.trim_end()));
                         out.push(String::new());
                     }
                     Value::Object(_) => {
@@ -770,16 +772,11 @@ fn render_tool_result_content(content: Option<&Value>, out: &mut Vec<String>) {
                         out.push(String::new());
                     }
                     other => {
-                        out.push("```".into());
-                        out.push(
-                            match other {
-                                Value::String(s) => s.clone(),
-                                v => v.to_string(),
-                            }
-                            .trim_end()
-                            .into(),
-                        );
-                        out.push("```".into());
+                        let text = match other {
+                            Value::String(s) => s.clone(),
+                            v => v.to_string(),
+                        };
+                        out.push(md_code_block("", text.trim_end()));
                         out.push(String::new());
                     }
                 }
@@ -802,26 +799,6 @@ fn json_is_empty(v: &Value) -> bool {
         Value::Bool(false) | Value::Null => true,
         Value::Number(n) => n.as_f64() == Some(0.0),
         _ => false,
-    }
-}
-
-fn json_pretty_sorted(v: &Value) -> String {
-    serde_json::to_string_pretty(&canonicalize(v)).unwrap_or_default()
-}
-
-fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
     }
 }
 
@@ -848,50 +825,25 @@ fn attachment_meta(at: &AttachmentRow) -> (Option<&str>, Option<&str>, bool) {
 /// Render a Claude `attachments[]` text item inline (extracted upload
 /// text; the binary is not retained).
 fn render_extracted_attachment(label: &str, extracted: Option<&str>) -> String {
-    let header_label = if label.is_empty() { "(unnamed)" } else { label };
+    let header_label = if label.is_empty() {
+        "(unnamed)".to_string()
+    } else {
+        escape_md_inline(label)
+    };
     let body = extracted.unwrap_or("").trim();
     if body.is_empty() {
         return format!("**[attachment: {header_label}]** *(no extracted content)*");
     }
-    let quoted: String = body.lines().map(|l| format!("> {l}\n")).collect();
+    let quoted: String = escape_md_block(body)
+        .lines()
+        .map(|l| format!("> {l}\n"))
+        .collect();
     format!("**[attachment: {header_label}]**\n{quoted}")
-}
-
-fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => {
-            let mut out: String = c.to_uppercase().collect();
-            for rest in chars {
-                out.extend(rest.to_lowercase());
-            }
-            out
-        }
-    }
 }
 
 #[cfg(test)]
 mod project_doc_tests {
     use super::*;
-
-    /// The parse helper must answer `None` for anything it cannot read,
-    /// so the caller falls through to inheriting the previous item's
-    /// stamp and — when there is none — to a null `created_at`.
-    #[test]
-    fn iso_to_ms_refuses_to_invent_a_timestamp() {
-        assert_eq!(
-            iso_to_ms("2026-04-14T09:15:00-07:00"),
-            Some(1_776_183_300_000)
-        );
-        for bad in ["", "not a date", "2026-04-14", "2026-04-14T09:15:00"] {
-            assert_eq!(
-                iso_to_ms(bad),
-                None,
-                "iso_to_ms({bad:?}) fabricated a stamp"
-            );
-        }
-    }
 
     #[test]
     fn short_docs_are_untouched() {
@@ -935,5 +887,46 @@ mod project_doc_tests {
     fn zero_ceiling_still_names_the_document() {
         let out = clamp_doc_text("anything", Some(0));
         assert!(out.contains("showing 0 of 8 bytes"), "got {out:?}");
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+    use serde_json::json;
+
+    const MARKUP: &str = "<script>x</script> & co";
+
+    /// A tool's name, its output and an upload's text came from the tool
+    /// or the file, not from the page: none of it may open a tag.
+    #[test]
+    fn tool_traffic_in_markup_renders_escaped() {
+        let used = json!({"name": MARKUP, "message": MARKUP, "input": {}});
+        let md = block_body_md("tool_use", None, used.as_object().unwrap());
+        assert!(
+            md.starts_with(
+                "<details><summary>Tool use: &lt;script&gt;x&lt;/script&gt; &amp; co — \
+                 &lt;script&gt;x&lt;/script&gt; &amp; co</summary>"
+            ),
+            "{md}"
+        );
+
+        let result = json!({
+            "name": MARKUP,
+            "content": [{"type": "text", "text": "```\n</details>\n```"}],
+        });
+        let md = block_body_md("tool_result", None, result.as_object().unwrap());
+        assert!(md.contains("Tool result: &lt;script&gt;"), "{md}");
+        assert!(
+            md.contains("````\n```\n</details>\n```\n````"),
+            "the output stays inside its own fence: {md}"
+        );
+
+        let md = render_extracted_attachment(MARKUP, Some(MARKUP));
+        assert_eq!(
+            md,
+            "**[attachment: &lt;script&gt;x&lt;/script&gt; &amp; co]**\n\
+             > &lt;script&gt;x&lt;/script&gt; &amp; co\n"
+        );
     }
 }

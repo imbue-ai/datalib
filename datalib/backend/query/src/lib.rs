@@ -6,10 +6,13 @@
 //! text, kept exactly as typed — quotes and leading `-` included — so a
 //! consumer that forwards it to a search engine can keep its meaning.
 //!
-//! This is the grammar and nothing more. What a key names, and what free
-//! text matches, belongs to whoever serves the rows: the unified grid maps
-//! keys to `grid_rows` columns and sends free text to qmd; the run log
-//! maps them to `log` columns and reads free text as a substring.
+//! What a key names, and what free text matches, belongs to whoever
+//! serves the rows: the unified grid maps keys to `grid_rows` columns and
+//! sends free text to qmd; the run log maps them to `log` columns and
+//! reads free text as a substring. A table can say so in its schema:
+//! `table` is the shape of that description.
+
+pub mod table;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
@@ -113,7 +116,7 @@ fn unquote(s: &str) -> String {
     out
 }
 
-fn tokenize(s: &str) -> Vec<String> {
+pub fn tokenize(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut in_quote = false;

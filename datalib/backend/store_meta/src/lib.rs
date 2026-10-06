@@ -39,8 +39,6 @@ const UNKNOWN: &str = "unknown";
 pub enum StoreKind {
     /// A source's entities and sync bookkeeping (`<group>/ingest/entities`).
     Raw,
-    /// A source's blob CAS (`<group>/ingest/blobs`).
-    Blobs,
     /// A source's render store (`<group>/render_markdown`).
     Render,
     /// The grid index (`unified_index/grid_index`).
@@ -52,8 +50,11 @@ pub enum StoreKind {
     RemoteMedia,
     /// `system/runs/runs.sqlite`: every run's step states, log and metrics.
     Runs,
-    /// `system/supervisor.sqlite`: requests, pauses, and the loop's facts.
+    /// `system/supervisor.sqlite`: requests, steps turned off, and the loop's facts.
     Supervisor,
+    /// `datalib_curated/datalib_contacts/contacts.doltlite_db`: contacts a person
+    /// made and the handles they linked to them.
+    Contacts,
 }
 
 impl StoreKind {

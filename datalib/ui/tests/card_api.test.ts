@@ -9,7 +9,7 @@ import type { CardCtx } from "@/cards/types";
 const ctx = { cardId: "0192f6a0-0000-7000-8000-000000000000", cardType: "gridView" } as CardCtx;
 
 /// Exports that are functions but make no request.
-const NO_REQUEST = new Set(["remoteMediaUrl", "progressFraction", "healthSnapshot"]);
+const NO_REQUEST = new Set(["remoteMediaUrl", "healthSnapshot"]);
 
 afterEach(() => {
   vi.unstubAllGlobals();

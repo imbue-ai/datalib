@@ -7,11 +7,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl::title::Title;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::escape_text;
+use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_span, md_link_dest};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::section::{join, Section};
+use datalib_etl_render::title::Title;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
@@ -108,6 +109,7 @@ fn render_one(
         rows: row.into_iter().collect(),
         sections,
         edges: edges(event),
+        contacts: Vec::new(),
         problems,
     })
 }
@@ -227,17 +229,23 @@ fn render_markdown(
     fm.push_str(&format!("source_id: {source_id}\n"));
     fm.push_str(&format!("provider: {}\n", profile.provider));
     fm.push_str(&format!("kind: {}\n", kind_of(event)));
-    fm.push_str(&format!("calendar: {}\n", yaml_safe(&event.calendar_label)));
-    fm.push_str(&format!("title: {}\n", yaml_safe(title_of(event))));
-    fm.push_str(&format!("external_id: {}\n", yaml_safe(&event.upstream_id)));
+    fm.push_str(&format!(
+        "calendar: {}\n",
+        yaml_scalar(&event.calendar_label)
+    ));
+    fm.push_str(&format!("title: {}\n", yaml_scalar(title_of(event))));
+    fm.push_str(&format!(
+        "external_id: {}\n",
+        yaml_scalar(&event.upstream_id)
+    ));
     if let Some(s) = start_instant {
         fm.push_str(&format!("start: {s}\n"));
     }
     if let Some(ts) = &event.created {
-        fm.push_str(&format!("created: {}\n", yaml_safe(ts)));
+        fm.push_str(&format!("created: {}\n", yaml_scalar(ts)));
     }
     if let Some(ts) = &event.modified_at {
-        fm.push_str(&format!("modified_at: {}\n", yaml_safe(ts)));
+        fm.push_str(&format!("modified_at: {}\n", yaml_scalar(ts)));
     }
     fm.push_str("---\n\n");
 
@@ -296,7 +304,7 @@ fn render_markdown(
     }
     out.push_str("| | |\n| --- | --- |\n");
     for (k, v) in &facts {
-        out.push_str(&format!("| {k} | {} |\n", cell(v)));
+        out.push_str(&format!("| {k} | {} |\n", escape_md_inline(v)));
     }
     out.push('\n');
 
@@ -311,7 +319,7 @@ fn render_markdown(
                 who.push_str(" (optional)");
             }
             let response = a.response.as_deref().map(response_word).unwrap_or("—");
-            out.push_str(&format!("| {} | {response} |\n", cell(&who)));
+            out.push_str(&format!("| {} | {response} |\n", escape_md_inline(&who)));
         }
         out.push('\n');
     }
@@ -331,7 +339,10 @@ fn render_markdown(
     {
         out.push_str("## Occurrences\n\n");
         for r in rules {
-            out.push_str(&format!("Rule: `RRULE:{}`\n\n", r.replace('`', "")));
+            out.push_str(&format!(
+                "Rule: {}\n\n",
+                md_code_span(&format!("RRULE:{r}"))
+            ));
         }
         if !changed.is_empty() {
             out.push_str("Changed:\n\n");
@@ -345,11 +356,12 @@ fn render_markdown(
                     .title
                     .as_deref()
                     .filter(|t| Some(*t) != event.title.as_deref())
-                    .map(|t| format!(" — {}", escape_text(t)))
+                    .map(|t| format!(" — {}", escape_md_inline(t)))
                     .unwrap_or_default();
                 out.push_str(&format!(
-                    "- {} → {now}{title}\n",
-                    c.original_start.display()
+                    "- {} → {}{title}\n",
+                    escape_md_inline(&c.original_start.display()),
+                    escape_md_inline(&now),
                 ));
             }
             out.push('\n');
@@ -357,14 +369,14 @@ fn render_markdown(
         if !cancelled.is_empty() {
             out.push_str("Cancelled:\n\n");
             for c in cancelled {
-                out.push_str(&format!("- {}\n", c.display()));
+                out.push_str(&format!("- {}\n", escape_md_inline(&c.display())));
             }
             out.push('\n');
         }
         if !rdates.is_empty() {
             out.push_str("Added dates:\n\n");
             for d in rdates {
-                out.push_str(&format!("- {}\n", d.display()));
+                out.push_str(&format!("- {}\n", escape_md_inline(&d.display())));
             }
             out.push('\n');
         }
@@ -374,9 +386,9 @@ fn render_markdown(
         out.push_str("## Links\n\n");
         for l in &event.links {
             out.push_str(&format!(
-                "- [{}](<{}>)\n",
-                escape_text(&l.label).replace(['[', ']'], ""),
-                l.url.replace(['<', '>'], "")
+                "- [{}]({})\n",
+                escape_md_inline(&l.label),
+                md_link_dest(&l.url)
             ));
         }
         out.push('\n');
@@ -393,11 +405,14 @@ fn build_grid_row(
     start: Option<String>,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
+    // What the event is, when and where, and what it says, before the
+    // calendar and the guest list, which fill a cell with addresses.
     let title = title_of(event).to_string();
     let mut text: Vec<String> = vec![title.clone()];
     text.extend(when_line(event));
     text.extend(repeats_lines(event));
     text.extend(event.location.clone());
+    text.extend(event.description.clone());
     text.push(event.calendar_label.clone());
     if let Some(o) = &event.organizer {
         text.extend(person_line(o.name.as_deref(), o.email.as_deref()));
@@ -408,7 +423,6 @@ fn build_grid_row(
             .iter()
             .filter_map(|a| person_line(a.person.name.as_deref(), a.person.email.as_deref())),
     );
-    text.extend(event.description.clone());
 
     GridRow::builder()
         .uuid(event.event_uuid.clone())
@@ -416,11 +430,16 @@ fn build_grid_row(
         .kind(kind_of(event).to_string())
         .source_label(profile.source_label.clone())
         .is_document(true)
+        .item_count(Some(1))
         .created_at(start)
         // The grid orders a document's stamps created-then-modified, and
         // an event is nearly always last edited before it happens. The
         // edit stamp is on the page; the row carries only when it happens.
         .modified_at(None)
+        // Newest-first means most recently changed, and the start can be
+        // years ahead. Every event has one of these in practice: Google
+        // always sends `updated`, and RFC 5545 requires `DTSTAMP`.
+        .touched_at(event.modified_at.clone().or_else(|| event.created.clone()))
         .author(
             event
                 .organizer
@@ -433,7 +452,7 @@ fn build_grid_row(
         .conversation_name(Some(title))
         .conversation_uuid(event.event_uuid.clone())
         .entire_chat(format!("/chat/{}", event.event_uuid))
-        .text(text.join("\n"))
+        .body(text.join("\n"))
         .qmd_path(Some(md_rel.to_string()))
         .source_url(event.source_url.clone())
         .upstream_id(Some(event.upstream_id.clone()))
@@ -515,45 +534,20 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-/// A table cell: HTML escaped, pipes escaped, one line.
-fn cell(s: &str) -> String {
-    escape_text(s).replace('|', "\\|").replace('\n', " ")
-}
-
-/// Plain text as a markdown block that reads as it was typed: HTML
-/// escaped, a line that would open a heading or a quote escaped, and
-/// every line break kept.
+/// Plain text as a markdown block that reads as it was typed, every
+/// line break kept.
 fn text_block(s: &str) -> String {
     s.trim()
         .lines()
-        .map(|line| {
-            let line = escape_text(line.trim_end());
-            match line.chars().next() {
-                Some('#') => format!("\\{line}"),
-                _ => line,
-            }
-        })
+        .map(|line| escape_md_block(line.trim_end()))
         .collect::<Vec<_>>()
         .join("<br>\n")
-}
-
-fn yaml_safe(s: &str) -> String {
-    if s.chars().any(|c| ":#[]{}&*?,|>'\"%@`\n".contains(c)) {
-        format!(
-            "\"{}\"",
-            s.replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', " ")
-        )
-    } else {
-        s.to_string()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Attendee, OccurrenceRef, Person, SeriesRef};
+    use crate::types::{Attendee, EventLink, OccurrenceRef, Person, SeriesRef};
 
     const SERIES: &str = "11111111-1111-8111-8111-111111111111";
     const MOVED: &str = "22222222-2222-8222-8222-222222222222";
@@ -626,6 +620,49 @@ mod tests {
         }
     }
 
+    /// Everything an invite carries is text: the title, the place, a
+    /// guest's name, a link's label, the zone a changed time is in.
+    #[test]
+    fn an_event_in_markup_renders_escaped() {
+        const MARKUP: &str = "<script>x</script> & co";
+        let mut event = series();
+        event.title = Some(MARKUP.into());
+        event.location = Some(MARKUP.into());
+        event.description = Some(MARKUP.into());
+        event.attendees[0].person.name = Some(MARKUP.into());
+        event.links = vec![EventLink {
+            label: format!("{MARKUP}]"),
+            url: "https://e.invalid/join?id=1&pw=<2>".into(),
+        }];
+        if let EventShape::Series { changed, .. } = &mut event.shape {
+            changed[0].title = Some(format!("moved: {MARKUP}"));
+        }
+        let md = join(&render_markdown(&profile(), &event, "tng_calendar", None));
+        let (_, body) = md
+            .split_once("---\n\n")
+            .expect("front matter, then the body");
+        assert!(!body.contains("<script>"), "{body}");
+        let escaped = "&lt;script&gt;x&lt;/script&gt; &amp; co";
+        assert!(body.contains(&format!("| Where | {escaped} |")), "{body}");
+        assert!(
+            body.contains(&format!("## Description\n\n{escaped}\n")),
+            "{body}"
+        );
+        assert!(
+            body.contains(&format!(
+                "| {escaped} &lt;troi@enterprise.test&gt; | Maybe |"
+            )),
+            "{body}"
+        );
+        assert!(body.contains(&format!(" — moved: {escaped}\n")), "{body}");
+        assert!(
+            body.contains(&format!(
+                "- [{escaped}\\]](<https://e.invalid/join?id=1&pw=%3C2%3E>)"
+            )),
+            "{body}"
+        );
+    }
+
     #[test]
     fn a_series_document_says_how_it_repeats_and_what_changed() {
         let md = join(&render_markdown(
@@ -676,10 +713,16 @@ mod tests {
             row.modified_at, None,
             "an edit before the event would sort after it"
         );
+        assert_eq!(
+            row.touched_at.as_deref(),
+            Some("2026-09-02T16:00:00+00:00"),
+            "newest-first sorts an event by its last edit, not its start"
+        );
         assert_eq!(row.author.as_deref(), Some("Jean-Luc Picard"));
         assert_eq!(row.channel.as_deref(), Some("Bridge"));
-        assert!(row.text.contains("Weekly on Monday and Thursday"));
-        assert!(row.text.contains("troi@enterprise.test"));
+        assert!(row.preview.contains("Weekly on Monday and Thursday"));
+        // What the event says comes before the guest list.
+        assert!(row.preview.contains("Ship's status."));
     }
 
     #[test]

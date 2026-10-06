@@ -10,7 +10,6 @@ use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_garmin::auth::Credentials;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::{GarminApi, DAILY_METRICS};
@@ -32,7 +31,7 @@ async fn run_with(raw: &Path, api: &GarminApi, progress: Progress) -> FetchSumma
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
     let summary = fetch(FetchOptions {
         db: db.clone(),
-        creds: Credentials::fixed("playback"),
+        latchkey: Default::default(),
         api: api.clone(),
         today: chrono::NaiveDate::from_ymd_opt(2369, 4, 15).unwrap(),
         progress,
@@ -71,12 +70,12 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     std::fs::create_dir_all(&raw).unwrap();
 
     let report = GarminSynth::new(spec_path()).synthesize(&playback).unwrap();
-    // 3 account/device + 20 metrics × 15 days + 2 walk windows × (1
-    // weight chunk + 1 activity page) + 2 × (detail + zip) + 5 item
-    // listings.
+    // 3 account/device + 20 metrics × 15 days + 1 weight chunk + an
+    // activity page for each of the two starts a listing takes + 2 ×
+    // (detail + zip) + 5 item listings.
     assert_eq!(
         report.fixtures_written,
-        3 + DAILY_METRICS.len() * 15 + 4 + 4 + 5
+        3 + DAILY_METRICS.len() * 15 + 1 + 2 + 4 + 5
     );
     std::env::set_var(PLAYBACK_ENV, &playback);
 
@@ -157,8 +156,27 @@ async fn garmin_synth_playback_ingest_roundtrip() {
             "SELECT COUNT(*) FROM sync_scope_state WHERE scope LIKE 'garmin:%'"
         )
         .await,
-        (DAILY_METRICS.len() + 2) as i64,
-        "one cursor per metric, plus weight and activities"
+        1,
+        "no walk keeps a cursor: only the FIT edges' repair mark"
+    );
+    assert_eq!(
+        count(
+            &raw,
+            "SELECT COUNT(*) FROM coverage \
+             WHERE scope = 'activities' AND lo = '2369-04-01' AND hi = '2369-04-15'"
+        )
+        .await,
+        1,
+        "the activity listing covered the window"
+    );
+    assert_eq!(
+        count(
+            &raw,
+            "SELECT COUNT(*) FROM garmin_daily WHERE fetched_on = '2369-04-15'"
+        )
+        .await,
+        (DAILY_METRICS.len() * 15) as i64,
+        "every day carries the date it was fetched on"
     );
 
     // The FIT bytes are in the CAS, unzipped.
@@ -194,8 +212,8 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     assert_eq!(s2.activity_files, 0, "a stored FIT file is not re-pulled");
     assert_eq!(
         s2.days,
-        DAILY_METRICS.len() * 8,
-        "cursor at the 15th, refresh_days=7: the 8th through the 15th again"
+        DAILY_METRICS.len() * 7,
+        "refresh_days=7: the 8th, fetched on the 15th, has settled; the 9th through the 15th have not"
     );
     assert_eq!(
         lengths.0.lock().unwrap().first().copied().flatten(),

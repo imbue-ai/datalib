@@ -26,9 +26,7 @@ fn fixture() -> PathBuf {
 }
 
 async fn rows(db: &RawDb, table: &str) -> Vec<serde_json::Value> {
-    db.load_payloads(datalib_etl::pin::Reads::Own, table)
-        .await
-        .unwrap_or_default()
+    db.load_payloads(table).await.unwrap_or_default()
 }
 
 #[test]
@@ -46,7 +44,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
     rt.block_on(async {
         // ── ingest ───────────────────────────────────────────────
         // The test owns the store: one connection for the ingest and the
-        // assertions both, because two is what breaks a doltlite file.
+        // assertions both, because the file takes one writer at a time.
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = ingest::fetch(FetchOptions {
             db: db.clone(),
@@ -151,7 +149,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         // ☕ that the export had mangled.
         let check_in = docs
             .iter()
-            .find(|d| d.rows.iter().any(|r| r.text.contains("Tea, Earl Grey, hot.")))
+            .find(|d| d.rows.iter().any(|r| r.preview.contains("Tea, Earl Grey, hot.")))
             .expect("check-in post rendered");
         let md = fs::read_to_string(&check_in.md_path)?;
         assert!(md.contains("Tea, Earl Grey, hot. ☕"), "{md}");
@@ -166,7 +164,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         // materialized beside the page, so the markdown embeds them.
         let photo_post = docs
             .iter()
-            .find(|d| d.rows.iter().any(|r| r.text.contains("Two views of the bridge")))
+            .find(|d| d.rows.iter().any(|r| r.preview.contains("Two views of the bridge")))
             .expect("photo post rendered");
         let md = fs::read_to_string(&photo_post.md_path)?;
         assert_eq!(
@@ -246,4 +244,167 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         Ok::<(), anyhow::Error>(())
     })?;
     Ok(())
+}
+
+// ── what a run could not read ──────────────────────────────────────
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &dest);
+        } else {
+            fs::copy(entry.path(), &dest).unwrap();
+        }
+    }
+}
+
+const ALBUM_1: &str = "your_facebook_activity/posts/album/1.json";
+
+/// A private copy of the fixture export with a second album chunk, so
+/// the album table is fed by two files, and a store.
+struct Export {
+    _tmp: tempfile::TempDir,
+    root: PathBuf,
+    db: RawDb,
+}
+
+impl Export {
+    async fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("export");
+        copy_tree(&fixture(), &root);
+        fs::write(
+            root.join(ALBUM_1),
+            r#"{"name": "Holodeck Three", "photos": [], "description": "Dixon Hill."}"#,
+        )
+        .unwrap();
+        let db = RawDb::open(&db_path_for(&tmp.path().join("raw")))
+            .await
+            .unwrap();
+        Self {
+            _tmp: tmp,
+            root,
+            db,
+        }
+    }
+
+    async fn sync(&self) -> ingest::FetchSummary {
+        ingest::fetch(FetchOptions {
+            db: self.db.clone(),
+            input_path: self.root.clone(),
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn problems(&self) -> Vec<(String, String, String, String)> {
+        sqlx::query_as(
+            "SELECT scope_key, severity, reason, sample FROM problems ORDER BY scope_key",
+        )
+        .fetch_all(self.db.pool())
+        .await
+        .unwrap()
+    }
+}
+
+/// A chunk that would not read leaves the table it shares with its
+/// siblings unpruned — its rows are not in this run's set, and that says
+/// nothing about whether they went — and is a `listing:` row until it
+/// reads again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_chunk_that_will_not_read_keeps_its_rows_and_is_a_problem_until_it_reads() {
+    let e = Export::new().await;
+    e.sync().await;
+    assert_eq!(rows(&e.db, ALBUMS_TABLE).await.len(), 2);
+
+    let good = fs::read(e.root.join(ALBUM_1)).unwrap();
+    fs::write(e.root.join(ALBUM_1), "{\"name\": ").unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.parse_errors, 1);
+    assert_eq!(rows(&e.db, ALBUMS_TABLE).await.len(), 2, "nothing pruned");
+    let keys: Vec<String> = e.problems().await.into_iter().map(|r| r.0).collect();
+    assert!(
+        keys.contains(&format!("listing:file {ALBUM_1}")),
+        "{keys:?}"
+    );
+
+    fs::write(e.root.join(ALBUM_1), good).unwrap();
+    e.sync().await;
+    let keys: Vec<String> = e.problems().await.into_iter().map(|r| r.0).collect();
+    assert!(keys.iter().all(|k| !k.starts_with("listing:")), "{keys:?}");
+    e.db.clone().close().await;
+}
+
+/// A walk that could not read part of the export deletes nothing: a
+/// directory it failed to list looks exactly like one whose files went.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_walk_error_deletes_nothing() {
+    let e = Export::new().await;
+    e.sync().await;
+
+    fs::remove_file(e.root.join(ALBUM_1)).unwrap();
+    std::os::unix::fs::symlink(e.root.join("nowhere"), e.root.join("lost_album")).unwrap();
+    e.sync().await;
+    assert_eq!(rows(&e.db, ALBUMS_TABLE).await.len(), 2, "nothing pruned");
+    let keys: Vec<String> = e.problems().await.into_iter().map(|r| r.0).collect();
+    assert!(keys.contains(&"listing:files".to_string()), "{keys:?}");
+    e.db.clone().close().await;
+}
+
+/// A media file the export left out is a warning on its edge — the
+/// export is what it is, nothing failed — and says what the read said.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_media_file_the_export_left_out_is_a_warning() {
+    let e = Export::new().await;
+    e.sync().await;
+    let media: Vec<_> = e
+        .problems()
+        .await
+        .into_iter()
+        .filter(|r| r.0.starts_with("media_blobs:"))
+        .collect();
+    assert_eq!(media.len(), 1, "{media:?}");
+    let (key, severity, reason, sample) = &media[0];
+    assert!(
+        key.ends_with("#your_facebook_activity/posts/media/videos/600000000000001.mp4"),
+        "{key}"
+    );
+    assert_eq!(
+        (severity.as_str(), reason.as_str()),
+        ("warning", "not_found")
+    );
+    assert!(
+        sample.starts_with("media file not in the export: "),
+        "{sample}"
+    );
+    e.db.clone().close().await;
+}
+
+/// The same, on the fixture's own two-file table: both reactions files
+/// land in one table, and one failing to parse once pruned every row it
+/// had contributed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reactions_file_that_will_not_parse_keeps_its_rows() {
+    let e = Export::new().await;
+    e.sync().await;
+    assert_eq!(rows(&e.db, REACTIONS_TABLE).await.len(), 4);
+
+    let broken = "your_facebook_activity/comments_and_reactions/likes_and_reactions_1.json";
+    fs::write(e.root.join(broken), "{ not json").unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.parse_errors, 1);
+    assert_eq!(
+        rows(&e.db, REACTIONS_TABLE).await.len(),
+        4,
+        "nothing pruned"
+    );
+    let keys: Vec<String> = e.problems().await.into_iter().map(|r| r.0).collect();
+    assert!(keys.contains(&format!("listing:file {broken}")), "{keys:?}");
+    e.db.clone().close().await;
 }

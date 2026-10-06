@@ -1,81 +1,22 @@
-//! Provider-agnostic contact model consumed by [`crate::render`].
+//! What [`crate::render`] takes: a `DatalibContact` — who the person is —
+//! and what rendering it as a document needs besides, which is the
+//! render framework's business and never part of the person.
 
-/// One contact (a person or entity), normalized so a single renderer
-/// serves every contact-style provider. The provider's render stage
-/// builds these; the renderer never reaches back into provider rows.
+use datalib_contact_schema::DatalibContact;
+
 #[derive(Debug, Clone)]
-pub struct NormalizedContact {
-    /// Stable UUID for this contact — used as the `markdown_uuid` and
-    /// the grid-row `uuid`. The provider mints it (each owns its uuidv5
-    /// namespace); for LinkedIn it's derived from the profile URL.
-    pub contact_uuid: String,
-    /// Stable UUID of the group this contact belongs to (a vCard
-    /// addressbook, or LinkedIn's single "connections" group). Surfaces
-    /// as the grid `conversation_uuid` so the UI can group members.
+pub struct ContactDoc {
+    pub contact: DatalibContact,
+    /// The document's id: its `markdown_uuid` and grid row `uuid`,
+    /// minted by the provider through `datalib_id` from `contact.key`.
+    pub doc_uuid: String,
+    /// The address book, or LinkedIn's single "connections" list, the
+    /// card is filed in: the grid's `conversation_uuid` and `channel`.
     pub group_uuid: String,
-    /// Human label for the group — the grid `channel` /
-    /// `conversation_name`, and (slugified) the on-disk directory name.
     pub group_label: String,
-    /// Display name (`FN`, "First Last", …). Falls back to
-    /// `external_id` then the uuid when absent.
-    pub display_name: Option<String>,
-    /// Upstream identifier surfaced as `external_id` and a frontmatter
-    /// key, and stored in `grid_rows.upstream_id`: the exact
-    /// `natural_key` the provider fed `datalib_id::entity_id` to mint
-    /// `contact_uuid`, so the round-trip check regenerates the row.
-    pub external_id: Option<String>,
-    /// The upstream account `contact_uuid` was minted under, for
+    /// The account the id was minted under, for
     /// `grid_rows.upstream_account`; `None` when the record names none.
     pub upstream_account: Option<String>,
-    /// When the contact came to be, where the source says (LinkedIn's
-    /// "Connected On"). A vCard does not say; a person does not have a
-    /// creation event. Never fabricated.
-    pub created_at: Option<String>,
-    /// When the record last changed, where the source says (vCard
-    /// `REV:`). Never fabricated.
-    pub modified_at: Option<String>,
-    /// Canonical web URL for this contact, if any (the LinkedIn profile
-    /// URL). Wired into the page Title's copy-link and the grid
-    /// `source_url`.
-    pub source_url: Option<String>,
-    /// Ordered (label, value) detail rows. Rendered as a markdown table
-    /// and folded into the grid row's search text, in this order.
-    pub fields: Vec<ContactField>,
-    /// Inline photo bytes, materialized into a sibling `blobs/` dir at
-    /// render time. `None` for URL-only or photoless contacts.
-    pub photo: Option<ContactPhoto>,
-    /// URL-only photo (no bytes yet). Rendered as a "Photo URL" field.
-    /// Fetching the bytes into blob_cas is a deferred enhancement (e.g.
-    /// pulling a connection's picture off their LinkedIn page).
-    pub photo_url: Option<String>,
-    /// Every raw row this contact was built from — what the processor
-    /// declares through `RenderCtx::declare_bucket`. Empty only for a
-    /// provider that has not declared its inputs yet.
+    /// Every raw row the card was built from, for incrementality.
     pub inputs: Vec<datalib_etl_render::inputs::Input>,
-}
-
-/// A single labelled detail rendered in the contact's table.
-#[derive(Debug, Clone)]
-pub struct ContactField {
-    pub label: String,
-    pub value: String,
-}
-
-impl ContactField {
-    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
-        Self {
-            label: label.into(),
-            value: value.into(),
-        }
-    }
-}
-
-/// Decoded photo bytes plus a content-type guess. The renderer writes
-/// these into a sibling `blobs/` directory.
-#[derive(Debug, Clone)]
-pub struct ContactPhoto {
-    pub bytes: Vec<u8>,
-    /// `image/jpeg`, `image/png`, …. Defaults to
-    /// `application/octet-stream` when the source didn't say.
-    pub content_type: String,
 }

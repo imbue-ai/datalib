@@ -11,7 +11,7 @@ changed. **Read [`lightroom/INGEST.md`](../lightroom/INGEST.md) first**;
 this document covers only what is WhatsApp-shaped, and the one thing the
 engine does not do here: the attachments.
 
-Unlike the other two mirror sources this one **renders**. The render
+Unlike `lightroom` and `apple_photos`, this one **renders**. The render
 crate (`datalib_etl_whatsapp_render`) reads the mirrored tables straight
 off the pinned commit and turns them into the chat-common markdown, so
 there is a `render_markdown` step and the messages reach `grid_rows`.
@@ -40,32 +40,29 @@ backup carries no UNIQUE index to hang it on anyway. So the mirror keys
 every table on what msgstore declares — the rowid.
 
 That is fine because **the rowids do not move between backups of one
-phone.** Measured on two real backups a week apart (2026-06-01 →
-06-07), joining `jid`, `chat` and `message` across them on their natural
+phone.** Measured on two real backups a week apart, joining `jid`, `chat` and `message` across them on their natural
 keys: `_id` differed for 0 of 13, 0 of 4 and 0 of 10 rows. The tables
 are `AUTOINCREMENT`, and a restore copies the database file rather than
 re-importing it. The events that would renumber — a schema migration
-that rebuilds a table, a phone-to-phone transfer — read as one full
-"removed, added" commit, which is the honest record of what happened.
+that rebuilds a table, a phone-to-phone transfer — read as one commit
+that rewrites every renumbered row, which is the honest record of what
+happened.
 
 The one table that *does* renumber is `props`, which WhatsApp rewrites
 wholesale, and it is excluded by default (below).
 
-An earlier version of this provider re-keyed nine hand-picked tables on
-their natural keys at ingest time: eleven hundred lines of column lists
-and rowid→key maps, defending against a renumbering the measurement
-says does not occur, and dropping the other 260-odd tables on the
-floor. Identity now lives where it is used: render resolves the rowid
-graph to natural keys and mints the uuids from those
-(`schema_raw::whatsapp_message_uuid`), so a uuid never contains a rowid
-even though the store is keyed on them.
+Identity lives where it is used: render resolves the rowid graph to
+natural keys and mints the uuids from those
+(`whatsapp_render/src/render/ids.rs`; a message is
+`(chat jid, key_id, from_me)`), so a uuid never contains a rowid even
+though the store is keyed on them.
 
 ## Read state: one mark per chat
 
 msgstore has no per-message "read" flag. Each `chat` row carries a read
 mark instead, `last_read_message_row_id`: an incoming message whose
-`_id` is past it is unread. Checked on the real backup above
-(2026-09-24): that rule counts exactly each chat's
+`_id` is past it is unread. Checked on the real backup above: that rule
+counts exactly each chat's
 `unseen_message_count`. A chat nothing was read in points the mark at
 the seed row, `_id` 1, so everything in it counts; a chat with only the
 account's own messages leaves it NULL. `last_read_message_sort_id` is
@@ -73,7 +70,7 @@ the same mark in `sort_id` terms, and `sort_id` equals `_id` on every
 row we have seen. Render reads the row-id form (`whatsapp_render`'s
 `parse.rs`).
 
-The fixture (`whatsapp_make_fixture`) now builds `chat` with the real
+The fixture (`whatsapp_make_fixture`) builds `chat` with the real
 table's columns in the real order, and fills the message pointers the
 way the phone does: newest message for last/display, the spec's
 `last_read_message_id` (else the newest) for the read mark and the read
@@ -133,10 +130,10 @@ The database names attachments; the bytes are in `Media/`, in the
 clear. After the mirror run, the ingest walks `Media/` (through the host
 fingerprint cache, so an unchanged tree is a stat per file), puts any
 new bytes into the sidecar blob CAS keyed by blake3, and drops-and-
-refills `wa_media_files` — the one table this provider authors
-(`schema_raw.rs`). It sits in the same store as the mirrored tables and
-survives the engine's per-run drop because it is named in
-`MirrorOptions::sidecar_tables`.
+refills `wa_media_files` (`schema_raw.rs`). It and `wa_db_contacts` are
+the two tables this provider authors; they sit in the same store as the
+mirrored tables and survive the engine's per-run drop because they are
+named in `MirrorOptions::sidecar_tables`.
 
 `wa_media_files.relative_path` is anchored at the backup root, with the
 `Media/` prefix, because that is exactly how `message_media.file_path`
@@ -145,6 +142,22 @@ A backup pulled without `Media/` mirrors fine and renders every
 attachment as a placeholder; copying `Media/` in later and re-running
 fills them in — render's diff scan follows a changed registry row back
 to its message.
+
+## When part of a backup will not read
+
+msgstore is the backup: if it will not decrypt or mirror, the step
+fails. The two things beside it cost only themselves, as `problems`
+rows, and every run tries them again:
+
+| what failed | its row | what is kept |
+| --- | --- | --- |
+| `wa.db` will not decrypt or read | `phase:wa.db contacts` | the stored `wa_db_contacts` |
+| part of `Media/` will not list | `listing:media` | the whole registry: the drop-and-refill is held back, since a file the walk could not see is not gone |
+| a media file's bytes will not read | `record:wa_media_files:<relative_path>` | its registry row, so the message names the file and says it is not fetched |
+
+A run reads again every file whose bytes the CAS lacks, so the
+`record:` rows are replaced whole each run that walks `Media/`; a run
+without `Media/` leaves them as they were.
 
 ## What render does with it
 

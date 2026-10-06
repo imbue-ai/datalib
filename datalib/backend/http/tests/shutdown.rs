@@ -78,29 +78,17 @@ fn start(root: &Path) -> Server {
     let token = wait_for_file(&root.join("system/api-token"), "api token")
         .trim()
         .to_string();
-    let server = Server {
+    // The signal handlers are registered before the url file is written,
+    // so a SIGINT from here on is a shutdown, never a death by signal.
+    Server {
         child,
         origin,
         token,
         stderr,
-    };
-    // The url file lands before `axum::serve` — and with it the signal
-    // handler — is up. Serving a request is what says both are.
-    server.request("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-    server
+    }
 }
 
 impl Server {
-    fn request(&self, raw: &str) -> String {
-        let host = self.origin.trim_start_matches("http://");
-        let mut sock = TcpStream::connect(host).expect("connect");
-        sock.set_read_timeout(Some(STARTUP)).unwrap();
-        sock.write_all(raw.as_bytes()).unwrap();
-        let mut got = Vec::new();
-        sock.read_to_end(&mut got).expect("read response");
-        String::from_utf8_lossy(&got).into_owned()
-    }
-
     /// Holds `GET /api/sync/stream` open and returns once the first
     /// frame arrived, so the connection is established at the server
     /// too. The stream stays open for as long as the returned socket

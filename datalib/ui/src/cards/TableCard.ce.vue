@@ -82,7 +82,7 @@ onBeforeUnmount(() => unsubscribe?.());
 .table-card-error {
   padding: 8px 12px;
   color: var(--datalib-log-error);
-  font-size: 13px;
+  font-size: var(--datalib-font-size);
 }
 .table-card-grid {
   position: relative;

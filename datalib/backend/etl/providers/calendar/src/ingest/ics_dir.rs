@@ -2,6 +2,7 @@
 //! Apple Calendar export. Each file is one calendar and the whole of
 //! it, so an event a re-read file no longer carries was deleted.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -10,6 +11,8 @@ use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_problems::{Outcome, Problem, Reason};
 use tracing::warn;
 
 use super::db::RawDb;
@@ -30,6 +33,11 @@ const CHECKPOINT_SCOPE: &str = "calendar/ics";
 const ACCOUNT_ID: &str = "ics";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_folder(opts, found)).await
+}
+
+async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = &opts.db;
     db.upsert_account(&AccountRow {
         id: ACCOUNT_ID.into(),
@@ -61,32 +69,72 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     summary.files_skipped = changes.unchanged;
     opts.progress.set_length(Some(scan.files.len() as u64));
     opts.progress.inc(changes.unchanged as u64);
-    for f in changes.needs_reading() {
+    let mut read: BTreeSet<&str> = BTreeSet::new();
+    found.extend(scan.walk_problems());
+    for f in changes.needs_reading_by_path() {
         if opts.control.stop.requested() {
             break;
         }
         opts.progress
             .set_message(&format!("reading {}", f.path.display()));
-        match ingest_one(db, &opts.input_path, &f.path, &mut summary).await {
+        match ingest_one(db, &scan.given_resolved, &f.path, &mut summary).await {
             // Stamped only after a clean read, so a crash mid-file leaves
             // no cursor and the next run reads it again.
-            Ok(()) => file_checkpoint::record_file_pool(db.pool(), CHECKPOINT_SCOPE, f).await?,
+            Ok(without_uid) => {
+                let mut tx = db.pool().begin().await.context("begin ics stamp tx")?;
+                file_checkpoint::record_file_with_problem(
+                    &mut tx,
+                    CHECKPOINT_SCOPE,
+                    f,
+                    no_uid_problem(without_uid),
+                )
+                .await?;
+                tx.commit().await.context("commit ics stamp tx")?;
+                read.insert(f.rel.as_str());
+            }
+            // Not stamped, so the next run reads it again.
             Err(e) => {
                 summary.errors += 1;
-                warn!(event = "calendar_ics_ingest_failed", path = %f.path.display(), error = %format!("{e:#}"), "an ics file could not be read");
+                found.listing(&format!("ics {}", f.rel), format!("{e:#}"));
             }
         }
         opts.progress.inc(1);
     }
+
+    // A file is the whole of its calendar, so a file that is gone takes
+    // its calendar with it.
+    for rel in changes.gone_by_path(&read) {
+        let calendar_id = calendar_id(&scan.given_resolved, &scan.root.join(rel));
+        summary.events_deleted += db
+            .delete_file_calendar(&calendar_id, CHECKPOINT_SCOPE, rel)
+            .await?;
+        summary.files_removed += 1;
+    }
     Ok(summary)
 }
 
+/// The `file:` row of a file whose events have no `UID`: nothing tells
+/// one apart from the next run's, so they are not stored.
+fn no_uid_problem(without_uid: usize) -> Option<(Outcome, Problem)> {
+    (without_uid > 0).then(|| {
+        (
+            Outcome::Dropped,
+            Problem::record(
+                Reason::NoIdentity,
+                &format!("{without_uid} events have no UID, so they cannot be stored"),
+            ),
+        )
+    })
+}
+
+/// Store one file's calendar; returns how many of its events had no
+/// `UID` and were left out.
 async fn ingest_one(
     db: &RawDb,
     root: &Path,
     file: &Path,
     summary: &mut FetchSummary,
-) -> Result<()> {
+) -> Result<usize> {
     let body = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
     let split = ical::split_file(&body);
     let calendar_id = calendar_id(root, file);
@@ -105,10 +153,7 @@ async fn ingest_one(
         time_zone: split.time_zone.clone(),
     }])
     .await?;
-    if split.events_without_uid > 0 {
-        summary.errors += split.events_without_uid;
-        warn!(event = "calendar_ics_event_without_uid", path = %file.display(), n = split.events_without_uid, "events with no UID cannot be told apart from one run to the next; skipped them");
-    }
+    summary.errors += split.events_without_uid;
 
     let existing = db.ics_uids(&calendar_id).await?;
     let rows: Vec<IcsObjectRow> = split
@@ -132,7 +177,8 @@ async fn ingest_one(
         .collect();
     gone.sort();
     summary.events_deleted += gone.len();
-    db.delete_ics_uids(&calendar_id, &gone).await
+    db.delete_ics_uids(&calendar_id, &gone).await?;
+    Ok(split.events_without_uid)
 }
 
 /// The file's path under the configured directory, without `.ics`:
@@ -158,6 +204,183 @@ fn relative(root: &Path, file: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ics(uid: &str) -> String {
+        format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:{uid}\r\n\
+             DTSTART:23640101T090000Z\r\nSUMMARY:{uid}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        )
+    }
+
+    struct Env {
+        input: tempfile::TempDir,
+        input_path: PathBuf,
+        _store: tempfile::TempDir,
+        _cache_dir: tempfile::TempDir,
+        db: RawDb,
+        cache: FingerprintCache,
+    }
+
+    impl Env {
+        async fn new() -> Self {
+            let input = tempfile::tempdir().unwrap();
+            let store = tempfile::tempdir().unwrap();
+            let cache_dir = tempfile::tempdir().unwrap();
+            let db = RawDb::open(&store.path().join("c.doltlite_db"))
+                .await
+                .unwrap();
+            let cache = FingerprintCache::open(&cache_dir.path().join("fp.sqlite"))
+                .await
+                .unwrap();
+            Self {
+                input_path: input.path().to_path_buf(),
+                input,
+                _store: store,
+                _cache_dir: cache_dir,
+                db,
+                cache,
+            }
+        }
+
+        async fn fetch(&self) -> FetchSummary {
+            fetch(FetchOptions {
+                db: self.db.clone(),
+                input_path: self.input_path.clone(),
+                cache: self.cache.clone(),
+                progress: Progress::default(),
+                control: DownloadControl::default(),
+            })
+            .await
+            .unwrap()
+        }
+
+        async fn calendars(&self) -> Vec<String> {
+            sqlx::query_scalar("SELECT id FROM calendars ORDER BY id")
+                .fetch_all(self.db.pool())
+                .await
+                .unwrap()
+        }
+
+        async fn problems(&self) -> Vec<(String, String)> {
+            sqlx::query_as("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+                .fetch_all(self.db.pool())
+                .await
+                .unwrap()
+        }
+
+        async fn uids(&self) -> Vec<String> {
+            sqlx::query_scalar("SELECT uid FROM ics_objects ORDER BY uid")
+                .fetch_all(self.db.pool())
+                .await
+                .unwrap()
+        }
+    }
+
+    /// #898: deleting a whole `.ics` file left its events in the store.
+    #[tokio::test]
+    async fn a_deleted_file_takes_its_calendar_with_it() {
+        let e = Env::new().await;
+        std::fs::write(e.input.path().join("Bridge.ics"), ics("red-alert")).unwrap();
+        std::fs::write(e.input.path().join("Holodeck.ics"), ics("dixon-hill")).unwrap();
+        e.fetch().await;
+        assert_eq!(e.uids().await, vec!["dixon-hill", "red-alert"]);
+
+        std::fs::remove_file(e.input.path().join("Holodeck.ics")).unwrap();
+        let second = e.fetch().await;
+        assert_eq!(second.events_deleted, 1);
+        assert_eq!(second.files_removed, 1);
+        assert_eq!(e.uids().await, vec!["red-alert"]);
+        assert_eq!(e.calendars().await, vec!["Bridge"]);
+        e.db.close().await;
+    }
+
+    /// Through a symlinked input, so the calendar is keyed against the
+    /// resolved path the scan reports, not the spelling configured.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_moved_file_keeps_its_events_under_the_new_path() {
+        let mut e = Env::new().await;
+        let real = e.input.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = e.input.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        e.input_path = link;
+        std::fs::write(real.join("Holodeck.ics"), ics("dixon-hill")).unwrap();
+        e.fetch().await;
+
+        std::fs::create_dir(real.join("Deck 11")).unwrap();
+        std::fs::rename(real.join("Holodeck.ics"), real.join("Deck 11/Holodeck.ics")).unwrap();
+        e.fetch().await;
+        assert_eq!(e.uids().await, vec!["dixon-hill"]);
+        assert_eq!(e.calendars().await, vec!["Deck 11/Holodeck"]);
+        e.db.close().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_walk_error_deletes_nothing() {
+        let e = Env::new().await;
+        std::fs::write(e.input.path().join("Bridge.ics"), ics("red-alert")).unwrap();
+        std::fs::write(e.input.path().join("Holodeck.ics"), ics("dixon-hill")).unwrap();
+        e.fetch().await;
+
+        std::fs::remove_file(e.input.path().join("Holodeck.ics")).unwrap();
+        std::os::unix::fs::symlink(
+            e.input.path().join("nowhere"),
+            e.input.path().join("Dangling.ics"),
+        )
+        .unwrap();
+        let second = e.fetch().await;
+        assert_eq!(second.events_deleted, 0);
+        assert_eq!(e.uids().await, vec!["dixon-hill", "red-alert"]);
+        e.db.close().await;
+    }
+
+    /// Events without a UID are a row on their file, standing until the
+    /// file is read again.
+    #[tokio::test]
+    async fn events_without_a_uid_are_a_row_on_their_file() {
+        let e = Env::new().await;
+        let path = e.input.path().join("Bridge.ics");
+        let no_uid = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+             DTSTART:23640101T090000Z\r\nSUMMARY:drill\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        std::fs::write(&path, format!("{}{no_uid}", ics("red-alert"))).unwrap();
+        e.fetch().await;
+        assert_eq!(
+            e.problems().await,
+            [(
+                "file:calendar/ics:Bridge.ics".to_string(),
+                "no_identity".to_string()
+            )]
+        );
+
+        std::fs::write(&path, ics("red-alert")).unwrap();
+        e.fetch().await;
+        assert!(e.problems().await.is_empty());
+        e.db.close().await;
+    }
+
+    /// A file that will not read is a row, and is read again next run.
+    #[tokio::test]
+    async fn a_file_that_will_not_read_is_a_row() {
+        let e = Env::new().await;
+        let path = e.input.path().join("Holodeck.ics");
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        e.fetch().await;
+        assert_eq!(
+            e.problems().await,
+            [(
+                "listing:ics Holodeck.ics".to_string(),
+                "fetch_failed".to_string()
+            )]
+        );
+
+        std::fs::write(&path, ics("dixon-hill")).unwrap();
+        e.fetch().await;
+        assert!(e.problems().await.is_empty());
+        assert_eq!(e.uids().await, vec!["dixon-hill"]);
+        e.db.close().await;
+    }
 
     #[test]
     fn a_calendar_is_keyed_by_its_path_under_the_root() {

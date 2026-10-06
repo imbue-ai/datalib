@@ -59,6 +59,12 @@ pub struct MarkdownRow {
     /// changed, as the source wrote it.
     #[col(sql = "VARCHAR(40)")]
     pub modified_at: Option<String>,
+    /// The document row's `grid_rows.item_count`, likewise, so what a
+    /// whole store holds is a sum over this table rather than a scan of
+    /// every row. Never NULL from a render: the render store refuses a
+    /// document that does not count what it holds.
+    #[col(sql = "BIGINT")]
+    pub item_count: Option<i64>,
     /// Path to the rendered markdown file, relative to the **data
     /// root** — `<stanza>/render_markdown/...`, derived by
     /// `grid_index::apply_one` stripping the data root off the absolute

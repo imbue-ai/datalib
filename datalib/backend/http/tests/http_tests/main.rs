@@ -9,6 +9,7 @@
 mod applet;
 mod auth_endpoint;
 mod config_init;
+mod config_upgrade;
 mod dactal_csp;
 mod dag_run_state;
 mod feedback_endpoint;
@@ -22,5 +23,8 @@ mod remote_media;
 mod request_log;
 mod runs_endpoints;
 mod server_log;
+mod support;
 mod sync_loop;
 mod ui_events;
+mod ui_state;
+mod watch_os;

@@ -12,8 +12,10 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
+use datalib_etl_render::html::{escape_md_block, md_link_dest};
+use datalib_etl_render::inputs::{changed_rows, Input, Inputs};
 use serde_json::Value;
 
 use crate::ids;
@@ -21,7 +23,7 @@ use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
 use crate::processor::{FeedOutcome, Source};
 
-use crate::render::{parse_date_ms, RENDER_VERSION};
+use crate::render::{chat_key, field, narrow_docs, nonempty, parse_date_ms, RENDER_VERSION};
 use datalib_schema::providers::Provider;
 
 /// Author label for the export owner. Every share and comment in these
@@ -38,6 +40,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "LinkedIn Post Reaction".to_string(),
         chat_entity_kind: ids::KIND_POST,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -69,20 +72,12 @@ pub fn render_posts(
             let pin = db.pin().expect("a reader is pinned at open").clone();
             // A feed the user didn't export has no table; treat a load
             // error as "absent" rather than failing the render.
-            let shares = datalib_etl::doltlite_raw::load_payloads_with_id(
-                db.pool(),
-                datalib_etl::pin::Reads::At(&pin),
-                "shares",
-            )
-            .await
-            .unwrap_or_default();
-            let comments = datalib_etl::doltlite_raw::load_payloads_with_id(
-                db.pool(),
-                datalib_etl::pin::Reads::At(&pin),
-                "comments",
-            )
-            .await
-            .unwrap_or_default();
+            let shares = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "shares")
+                .await
+                .unwrap_or_default();
+            let comments = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "comments")
+                .await
+                .unwrap_or_default();
             let changed = changed_rows(db.pool(), range, &pin, &["shares", "comments"]).await?;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
@@ -96,36 +91,7 @@ pub fn render_posts(
 
     let mut chats = build_post_chats(source_id, &shares, &comments, account, account_inputs);
 
-    // What to render: the threads the driver found stale, plus the ones a
-    // new or changed row maps to through the rows just loaded. A removed
-    // row's thread reaches here through the driver, having declared the
-    // row.
-    let forward = changed.map(|changed| {
-        chats
-            .iter()
-            .filter(|c| {
-                c.inputs
-                    .iter()
-                    .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
-            })
-            .map(|c| c.chat_uuid.clone())
-            .collect::<std::collections::HashSet<String>>()
-    });
-    let render = range.narrow(forward.as_ref());
-    let mut outcome = FeedOutcome {
-        new_head: Some(new_head),
-        buckets: render
-            .iter()
-            .flatten()
-            .map(|key| Bucket {
-                key: key.clone(),
-                inputs: Vec::new(),
-            })
-            .collect(),
-    };
-    if let Some(render) = &render {
-        chats.retain(|c| render.contains(&c.chat_uuid));
-    }
+    let mut outcome = narrow_docs(&mut chats, chat_key, changed, range, new_head);
 
     let blobs: HashMap<String, BlobBundle> = HashMap::new();
     let s = cc_render_all(
@@ -207,9 +173,7 @@ fn build_post_chats(
         // isn't in the export when we only have comments on it.
         if let Some((row_id, s)) = thread.share {
             let date = field(s, "Date");
-            let mut body = nonempty(field(s, "ShareCommentary"))
-                .unwrap_or("")
-                .to_string();
+            let mut body = share_commentary(s).unwrap_or_default();
             // Append the shared link / media so a link-only repost still
             // has a non-empty body.
             for k in ["SharedUrl", "MediaUrl"] {
@@ -255,6 +219,7 @@ fn build_post_chats(
         let post = ids::post(source_id, &key);
         let comment_payloads: Vec<&Value> = thread.comments.iter().map(|(_, c)| *c).collect();
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: thread.inputs.declared(),
             path_prefix: None,
             id: format!("posts:{key}"),
@@ -290,31 +255,33 @@ fn me_item(
     body: String,
     url: &str,
 ) -> NormalizedChatItem {
-    let mut text = body;
+    let mut text = escape_md_block(&body);
     if let Some(u) = nonempty(url) {
         if !text.is_empty() {
             text.push_str("\n\n");
         }
-        text.push_str(&format!("[🔗 View on LinkedIn]({u})"));
+        text.push_str(&format!("[🔗 View on LinkedIn]({})", md_link_dest(u)));
     }
     let mut problems = Vec::new();
     let date_ms = own_stamp_ms(Some(date), "Date", parse_date_ms, &mut problems);
     let id = mint(date_ms);
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id: "me".to_string(),
+        author_handle: None,
         author_display: ME.to_string(),
         date_ms,
         text: nonempty(&text).map(str::to_string),
         kind: ItemKind::Text,
         attachments: linkout(url),
         reactions: Vec::new(),
+        labels: Vec::new(),
         system_note: None,
         source_url: None,
         kind_label: None,
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems,
     }
 }
@@ -332,19 +299,21 @@ fn post_placeholder(
     let id = ids::post_origin(source_id, key, date_ms);
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id: "linkedin".to_string(),
+        author_handle: None,
         author_display: "LinkedIn".to_string(),
         date_ms,
         text: None,
         kind: ItemKind::System,
         attachments: linkout(url),
         reactions: Vec::new(),
+        labels: Vec::new(),
         system_note: Some(note),
         source_url: None,
         kind_label: None,
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread: false,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }
@@ -390,9 +359,31 @@ fn post_urn(link: &str) -> Option<String> {
     }
 }
 
+/// A post's text. The export writes a post of several lines with each
+/// line in quotes of its own inside the quoted CSV field, so it reads
+/// `first"` / `""` / `"second` once parsed; those quotes are undone when
+/// every line has them. A quote inside a line is the post's own.
+fn share_commentary(share: &Value) -> Option<String> {
+    let text = nonempty(field(share, "ShareCommentary"))?;
+    Some(without_line_quotes(text).unwrap_or_else(|| text.to_string()))
+}
+
+fn without_line_quotes(text: &str) -> Option<String> {
+    if !text.contains('\n') {
+        return None;
+    }
+    let whole = format!("\"{text}\"");
+    let lines = whole
+        .split('\n')
+        .map(|line| line.strip_prefix('"')?.strip_suffix('"'))
+        .collect::<Option<Vec<&str>>>()?;
+    Some(lines.join("\n"))
+}
+
 fn thread_title(share: Option<&Value>, comments: &[&Value]) -> String {
-    let snippet = share
-        .and_then(|s| nonempty(field(s, "ShareCommentary")))
+    let commentary = share.and_then(share_commentary);
+    let snippet = commentary
+        .as_deref()
         .or_else(|| comments.first().and_then(|c| nonempty(field(c, "Message"))));
     match snippet {
         Some(text) => {
@@ -413,15 +404,6 @@ fn truncate(s: &str, max: usize) -> String {
         out.push('…');
         out
     }
-}
-
-fn field<'a>(p: &'a Value, key: &str) -> &'a str {
-    p.get(key).and_then(Value::as_str).unwrap_or("")
-}
-
-fn nonempty(s: &str) -> Option<&str> {
-    let t = s.trim();
-    (!t.is_empty()).then_some(t)
 }
 
 #[cfg(test)]
@@ -464,6 +446,26 @@ mod tests {
             "SharedUrl": "", "MediaUrl": "", "Visibility": "PUBLIC",
         })
     }
+    /// Regression: a post of several paragraphs rendered with a stray
+    /// `"` ending its first line and a `""` line between paragraphs.
+    #[test]
+    fn a_multi_line_post_loses_the_exports_line_quotes() {
+        assert_eq!(
+            share_commentary(&share("l", "d", "Engage.\"\n\"\"\n\"Make it \"so\".")).as_deref(),
+            Some("Engage.\n\nMake it \"so\".")
+        );
+        assert_eq!(
+            share_commentary(&share("l", "d", "\"Fascinating\" barely covers it.")).as_deref(),
+            Some("\"Fascinating\" barely covers it."),
+            "one line is left as written"
+        );
+        assert_eq!(
+            share_commentary(&share("l", "d", "Line one\nLine two")).as_deref(),
+            Some("Line one\nLine two"),
+            "lines without the quotes are left as written"
+        );
+    }
+
     fn comment(link: &str, date: &str, msg: &str) -> Value {
         json!({ "Date": date, "Link": link, "Message": msg })
     }
@@ -496,6 +498,29 @@ mod tests {
         assert_eq!(chats[0].display, "Post: My post body");
         // Whole-post linkout on the thread header / chat-level row.
         assert_eq!(chats[0].source_url.as_deref(), Some(ugc));
+    }
+
+    /// A post and a comment are what was typed: escaped on the page,
+    /// as typed in the thread's title.
+    #[test]
+    fn a_post_in_markup_renders_escaped() {
+        let ugc = "https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A1";
+        let shares = vec![share(ugc, "2026-05-07 16:41:18", "<script>x</script> & co")];
+        let comments = vec![comment(ugc, "2026-05-08 09:00:00", "# <b>co</b>")];
+        let chats = build_post_chats("li", &with_ids(&shares), &with_ids(&comments), None, &[]);
+        let items = &chats[0].buckets[0].items;
+        assert_eq!(
+            items[0].text.as_deref(),
+            Some(&*format!(
+                "&lt;script&gt;x&lt;/script&gt; &amp; co\n\n[🔗 View on LinkedIn]({ugc})"
+            ))
+        );
+        assert!(items[1]
+            .text
+            .as_deref()
+            .unwrap()
+            .starts_with("\\# &lt;b&gt;co&lt;/b&gt;\n"));
+        assert_eq!(chats[0].display, "Post: <script>x</script> & co");
     }
 
     #[test]

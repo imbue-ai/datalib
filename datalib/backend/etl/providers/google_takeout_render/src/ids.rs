@@ -3,7 +3,7 @@
 //! Google Chat; a Voice row's id is the one the ingest minted from the
 //! export, unique across Voice. Both are provider-global.
 
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::GoogleTakeout;
@@ -16,28 +16,14 @@ pub const KIND_VOICE_CONVERSATION: &str = "voice_conversation";
 pub const KIND_VOICE_MONTH: &str = "voice_month";
 pub const KIND_VOICE_MESSAGE: &str = "voice_message";
 
-fn identity(
-    source_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    date_ms: Option<i64>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(date_ms),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn space(source_id: &str, space: &str) -> Identity {
-    identity(source_id, KIND_SPACE, space.to_string(), None)
+    IDS.mint(source_id, KIND_SPACE, space.to_string(), None)
 }
 
 pub fn space_month(source_id: &str, space: &str, period_key: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_SPACE_MONTH,
         composite_key(&[space, period_key]),
@@ -46,12 +32,12 @@ pub fn space_month(source_id: &str, space: &str, period_key: &str) -> Identity {
 }
 
 pub fn message(source_id: &str, message_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(source_id, KIND_MESSAGE, message_id.to_string(), date_ms)
+    IDS.mint(source_id, KIND_MESSAGE, message_id.to_string(), date_ms)
 }
 
 /// `chat_id` carries its `voice:` prefix, as the bucket does.
 pub fn voice_conversation(source_id: &str, chat_id: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_VOICE_CONVERSATION,
         chat_id.to_string(),
@@ -60,7 +46,7 @@ pub fn voice_conversation(source_id: &str, chat_id: &str) -> Identity {
 }
 
 pub fn voice_month(source_id: &str, chat_id: &str, period_key: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_VOICE_MONTH,
         composite_key(&[chat_id, period_key]),
@@ -69,7 +55,7 @@ pub fn voice_month(source_id: &str, chat_id: &str, period_key: &str) -> Identity
 }
 
 pub fn voice_message(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(source_id, KIND_VOICE_MESSAGE, row_id.to_string(), date_ms)
+    IDS.mint(source_id, KIND_VOICE_MESSAGE, row_id.to_string(), date_ms)
 }
 
 #[cfg(test)]

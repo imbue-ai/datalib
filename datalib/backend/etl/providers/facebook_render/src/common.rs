@@ -4,10 +4,13 @@
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::BulkUpsertable as _;
-use datalib_etl_chat_common::render::RenderProfile;
-use datalib_etl_chat_common::types::NormalizedAttachment;
+use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
+use datalib_etl_chat_common::types::{
+    ItemKind, NormalizedAttachment, NormalizedChatItem, UpstreamRef,
+};
 use datalib_etl_facebook::ingest::schema_raw::MediaBlobRow;
 use datalib_etl_render::inputs::Inputs;
+use datalib_id::Identity;
 use datalib_schema::providers::Provider;
 use serde_json::Value;
 
@@ -15,7 +18,7 @@ use serde_json::Value;
 /// v2: ids are minted through `datalib_id`, every row carries its
 ///     backpointer, and an item's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved.
-pub const RENDER_VERSION: u32 = 2;
+pub const RENDER_VERSION: u32 = 3;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
@@ -25,6 +28,7 @@ pub fn profile(
     chat_kind: &str,
     message_kind: &str,
     chat_entity_kind: &'static str,
+    text_format: TextFormat,
 ) -> RenderProfile {
     RenderProfile {
         stamp_precision: crate::ids::STAMP_PRECISION,
@@ -35,6 +39,7 @@ pub fn profile(
         reaction_kind: "Facebook Reaction".to_string(),
         chat_entity_kind,
         render_version: RENDER_VERSION,
+        text_format,
     }
 }
 
@@ -145,6 +150,40 @@ pub fn media_caption(media: &Value, album_name: Option<&str>) -> Option<String> 
     str_field(media, "description")
         .or_else(|| str_field(media, "title").filter(|t| Some(*t) != album_name))
         .map(strip_mentions)
+}
+
+/// One item of a feed: an attachment item when it carries any, else a
+/// text one.
+pub fn chat_item(
+    item_id: Identity,
+    author_display: String,
+    date_ms: Option<i64>,
+    text: Option<String>,
+    attachments: Vec<NormalizedAttachment>,
+) -> NormalizedChatItem {
+    NormalizedChatItem {
+        message_uuid: item_id.uuid,
+        author_handle: None,
+        author_display,
+        date_ms,
+        text,
+        kind: if attachments.is_empty() {
+            ItemKind::Text
+        } else {
+            ItemKind::Attachment
+        },
+        attachments,
+        reactions: Vec::new(),
+        labels: Vec::new(),
+        system_note: None,
+        source_url: None,
+        kind_label: None,
+        source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
+        is_aside: false,
+        unread: false,
+        recipients: Vec::new(),
+        problems: Vec::new(),
+    }
 }
 
 fn mime_for(uri: &str) -> Option<String> {

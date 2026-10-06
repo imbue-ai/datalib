@@ -7,9 +7,9 @@
 // has to be true while they are parked:
 //
 //   1. **The Pipeline table shows the whole chain in flight at once.**
-//      A download's Activity cell counts its checkpoints; its render and
-//      the index behind it read Running *while the download is still
-//      Running* — not queued behind it.
+//      The index's Queue cell counts the work its producers handed it;
+//      each render and the index behind it read Running *while the
+//      download is still Running* — not queued behind it.
 //   2. **Rows reach the Explore grid before the download that produced
 //      them finishes.** The grid was opened and searched before the sync
 //      began, and is never touched again; it refetches itself when the
@@ -24,7 +24,7 @@
 // Both are states to wait for, not frames to catch: nothing upstream can
 // finish while the hold is in place.
 //
-// `qmd_index` is deliberately not in this config: its sink is an FTS
+// The qmd steps are deliberately not in this config: their sink is an FTS
 // index rewritten in place, which cannot be read mid-write, so it is a
 // barrier by design and says nothing about streaming — and its model
 // load is the slowest thing in the suite.
@@ -33,18 +33,22 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from "@
 import { rmSync, writeFileSync } from "node:fs";
 import {
   expandGroup,
-  pipelineRow,
-  searchAndSettle,
-  settleRow,
-  settleRunner,
-  stampsBefore,
-  statusOf,
+  GRID,
+  type GridApi,
   MANAGE_WITH_CONFIG,
-  TABLE_ROWS,
+  pipelineRow,
+  readRow,
+  savedConfig,
   SEARCH_ROWS,
+  searchAndSettle,
   searchHeader,
   selectRowByUuid,
-  type GridApi,
+  settleRow,
+  settleRunner,
+  shownCards,
+  stampsBefore,
+  statusOf,
+  TABLE_ROWS,
 } from "./grid-helpers";
 import { expectSanePaints, watchPaints } from "./paint-watch";
 
@@ -98,16 +102,16 @@ async function writeConfig(page: Page, text: string) {
 }
 
 /// One reading of the Pipeline rows this spec watches — each row's
-/// status word and its Activity text — so "at once" means one reading.
+/// status word and its Queue — so "at once" means one reading.
 async function readRows(page: Page, ids: readonly string[]) {
-  const status: Record<string, string | null> = {};
-  const activity: Record<string, string> = {};
+  const status: Record<string, string> = {};
+  const queue: Record<string, string> = {};
   for (const id of ids) {
-    status[id] = await statusOf(page, id);
-    const chips = pipelineRow(page, id).locator('[col-id="activity"] .tg-chips');
-    activity[id] = (await chips.count()) ? ((await chips.first().getAttribute("title")) ?? "") : "";
+    const drawn = await readRow(page, id);
+    status[id] = drawn.status;
+    queue[id] = drawn.queue;
   }
-  return { status, activity };
+  return { status, queue };
 }
 
 /// Mark every Pipeline row's element, let `frames` more answers for the
@@ -153,7 +157,7 @@ let original = "";
 test.beforeEach(async ({ page, request }) => {
   dataRoot = await resolveDataRoot(request);
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {
@@ -232,7 +236,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     // rows before it has any. Not touched again after this: the point
     // is that it updates itself.
     const grid = await context.newPage();
-    await grid.goto("/");
+    await grid.goto(GRID);
     await searchAndSettle(grid, `source_id:${SOURCES[0]}`);
     await expect(grid.getByText("no matches.")).toBeVisible();
 
@@ -286,14 +290,11 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
 
     // ── 1. the Pipeline table shows the whole chain in flight ───────
     // Every row Running in one reading: both downloads, the render
-    // behind each, and the index behind both. A download counts its
-    // seals (the runner records every checkpoint as a metric, and the
-    // Activity cell draws it); the index says where its work came from.
+    // behind each, and the index behind both, with a figure in the
+    // index's Queue: the scheduler keeps a `queued` gauge per producer.
     let last = await readRows(page, STEPS);
     const inFlight = () =>
-      STEPS.every((id) => last.status[id] === "Running") &&
-      /\bcheckpoints \d+/.test(last.activity[INGESTS[0]]) &&
-      /queued/.test(last.activity[INDEX]);
+      STEPS.every((id) => last.status[id] === "Running") && /^[\d,]+$/.test(last.queue[INDEX]);
     await expect
       .poll(
         async () => {
@@ -386,7 +387,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
       .toBe("Running");
 
     await pipelineRow(page, ingest).locator('[col-id="status"] .tg-status').dblclick();
-    const log = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+    const log = shownCards(page).filter({ has: page.locator(".rl-panel") });
     const lines = log.locator(".rl-grid .slick-row:not(.slick-group)");
     await expect(lines.first()).toBeVisible({ timeout: 10_000 });
     const before = await logLineCount(log);
@@ -429,7 +430,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     const was = await stampsBefore(page, steps);
 
     const grid = await context.newPage();
-    await grid.goto("/");
+    await grid.goto(GRID);
     await searchAndSettle(grid, `source_id:${id}`);
     const activeUuid = () =>
       grid.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.activeUuid());
@@ -443,10 +444,10 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
 
     // Newest first, so the rows the rest of the download brings land
     // above the ones already there.
-    const created = searchHeader(grid, "created_at");
+    const touched = searchHeader(grid, "touched_at");
     await expect(async () => {
-      if (!(await created.locator(".slick-sort-indicator-desc").count())) await created.click();
-      await expect(created.locator(".slick-sort-indicator-desc")).toHaveCount(1, { timeout: 500 });
+      if (!(await touched.locator(".slick-sort-indicator-desc").count())) await touched.click();
+      await expect(touched.locator(".slick-sort-indicator-desc")).toHaveCount(1, { timeout: 500 });
     }).toPass({ timeout: 10_000 });
 
     const picked = (await grid.evaluate(() =>

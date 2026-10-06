@@ -5,6 +5,10 @@
 // plus nested ones for tool_use / tool_result / thinking blocks);
 // `renderDocument` runs markdown-it and the sanitizer once per body.
 //
+// The body is drawn inside a frame whose policy runs no script
+// (`docFrame.ts`). `body` is the frame's `<body>`: the decorations below
+// work on it, and its events are wired to the handlers here.
+//
 // `selectedSectionUuid` picks which section to scroll to and visually
 // highlight via the `.msg.selected` CSS rule. The value must match the
 // grid row's `uuid` exactly — for messages that's the message UUID;
@@ -13,13 +17,24 @@
 
 // NOTE: no side-effect CSS imports here — this component renders
 // inside a shadow root, so document-head styles don't reach it. The
-// highlight.js stylesheet is injected by documentView's vueCard call
-// (imported with `?inline`).
-import { ref, computed, watch, nextTick, onMounted } from "vue";
+// body's stylesheet (`documentBody.css`) goes in with the frame's document.
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
 import type { EdgeOut } from "@/api";
 import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remoteMedia";
+import {
+  copyWithHandles,
+  decorateHandles,
+  hoverCard,
+  type DatalibContact,
+  type Decorated,
+  type HoverCard,
+  type Who,
+} from "./contacts";
+import HandleHoverCard from "./HandleHoverCard.ce.vue";
+import HandlePopover from "./HandlePopover.ce.vue";
 import { renderDocument } from "./renderDocument";
-import { isBrowserClick } from "./chatLink";
+import { isBrowserClick, linkFromClick, type ClickedLink } from "./chatLink";
+import { DOC_FRAME_SRCDOC, asElement, forwardAppKeys, mirrorDensity } from "./docFrame";
 // Shared with `tools/chat_preview.mjs`, which inlines this same file so
 // the preview page behaves like the app rather than imitating it.
 import {
@@ -39,7 +54,7 @@ const props = defineProps<{
    * `data-edge-id="…"` so the user-visible styling + click handler
    * pick it up. Limitations: only the FIRST edge per source anchor
    * is used; spans whose source anchors overlap inside the body are
-   * not specially handled (see `docs/edges.md`).
+   * not specially handled (see `docs/dev/edges.md`).
    */
   outgoingEdges?: EdgeOut[];
   /**
@@ -80,10 +95,16 @@ const emit = defineEmits<{
   /**
    * Fired when the cursor enters or leaves an `.edge-source` span.
    * Payload is the edge's destination — `{ md, anchor }` — or null
-   * on hover-out. The parent forwards this to MillerView so other
-   * columns can highlight whatever the source points at.
+   * on hover-out. The parent publishes it on the card bus so other
+   * cards can highlight whatever the source points at.
    */
   (e: "hover-edge", target: { md: string; anchor: string | null } | null): void;
+  /** A link in a framed body was clicked: the frame never navigates
+   *  itself, so the card decides where it goes. */
+  (e: "frame-link", link: ClickedLink): void;
+  /** A right-click in a framed body, with the frame's window (whose
+   *  selection it is) and where the frame sits in this one. */
+  (e: "frame-contextmenu", ev: MouseEvent, view: { win: Window; dx: number; dy: number }): void;
 }>();
 
 const sanitized = computed(() =>
@@ -94,7 +115,13 @@ const sanitized = computed(() =>
 );
 const html = computed(() => sanitized.value.html);
 watch(sanitized, (s) => emit("remote-media", s.remote), { immediate: true });
-const root = ref<HTMLElement | null>(null);
+const frameEl = ref<HTMLIFrameElement | null>(null);
+const frameBody = ref<HTMLElement | null>(null);
+/// The element the body is in: the frame's `<body>`, or the in-place div.
+const body = frameBody;
+/// What the frame's body holds now.
+let painted: string | null = null;
+let frameStops: (() => void)[] = [];
 
 // A re-render that only let an image through must not scroll the
 // reader back to the selected section; only a new body earns that.
@@ -106,8 +133,89 @@ watch(
   },
 );
 
+type ChipTarget = {
+  handle: string;
+  shownAs: string;
+  resolved: DatalibContact | null;
+  x: number;
+  y: number;
+};
+const chipTarget = ref<ChipTarget | null>(null);
+const decorated = ref<Decorated | null>(null);
+const NOBODY: Who = { mine: null, accounts: [] };
+
+async function redrawHandles() {
+  if (!body.value) return;
+  decorated.value = await decorateHandles(body.value);
+}
+
+/// Where the frame's viewport sits in this window: the hover card and
+/// the popover are drawn out here, over the frame, from points inside it.
+function frameOrigin(): { x: number; y: number } {
+  const r = frameEl.value?.getBoundingClientRect();
+  return { x: r?.left ?? 0, y: r?.top ?? 0 };
+}
+
+const HOVER_DELAY_MS = 350;
+const hovered = ref<{ card: HoverCard; x: number; y: number } | null>(null);
+let hoverChip: HTMLElement | null = null;
+let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+
+function onChipOver(ev: MouseEvent) {
+  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
+  if (!chip || chip === hoverChip) return;
+  hoverChip = chip;
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => {
+    if (chipTarget.value) return;
+    const handle = chip.dataset.handle ?? "";
+    const rect = chip.getBoundingClientRect();
+    const at = frameOrigin();
+    hovered.value = {
+      card: hoverCard(
+        handle,
+        chip.dataset.shownAs ?? "",
+        decorated.value?.who[handle] ?? NOBODY,
+        decorated.value?.canLink ?? false,
+      ),
+      x: at.x + rect.left,
+      y: at.y + rect.bottom,
+    };
+  }, HOVER_DELAY_MS);
+}
+
+function onChipOut(ev: MouseEvent) {
+  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
+  if (!chip) return;
+  const to = asElement(ev.relatedTarget);
+  if (to && chip.contains(to)) return;
+  clearTimeout(hoverTimer);
+  hoverChip = null;
+  hovered.value = null;
+}
+
+function onHandleChipClick(ev: MouseEvent) {
+  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
+  // Without a contacts app there is nothing to change; the hover card is
+  // all a chip has to say.
+  if (!chip || !decorated.value?.canLink) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  clearTimeout(hoverTimer);
+  hovered.value = null;
+  const handle = chip.dataset.handle ?? "";
+  const at = frameOrigin();
+  chipTarget.value = {
+    handle,
+    shownAs: chip.dataset.shownAs ?? "",
+    resolved: decorated.value.who[handle]?.mine ?? null,
+    x: at.x + ev.clientX,
+    y: at.y + ev.clientY,
+  };
+}
+
 function onRemoteChipClick(ev: MouseEvent) {
-  const chip = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>("button.remote-media");
+  const chip = asElement(ev.target)?.closest<HTMLButtonElement>("button.remote-media");
   if (!chip) return;
   ev.preventDefault();
   ev.stopPropagation();
@@ -116,7 +224,7 @@ function onRemoteChipClick(ev: MouseEvent) {
 }
 
 async function onCopyClick(ev: MouseEvent) {
-  const btn = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>("button.copy-uuid");
+  const btn = asElement(ev.target)?.closest<HTMLButtonElement>("button.copy-uuid");
   if (!btn) return;
   ev.preventDefault();
   ev.stopPropagation();
@@ -141,7 +249,7 @@ async function onCopyClick(ev: MouseEvent) {
  * Build a (src_anchor_uuid → first matching EdgeOut) lookup over the
  * outgoing edges that have a span-level source (`src_anchor_uuid !==
  * null`). When the renderer baked the same anchor uuid into multiple
- * edges, we keep only the first — see docs/edges.md, "Limitations".
+ * edges, we keep only the first — see docs/dev/edges.md, "Limitations".
  */
 const edgeBySrcAnchor = computed<Map<string, EdgeOut>>(() => {
   const m = new Map<string, EdgeOut>();
@@ -159,10 +267,10 @@ const edgeBySrcAnchor = computed<Map<string, EdgeOut>>(() => {
  * background. Click handling lives below via `onBodyEdgeClick`.
  */
 function decorateEdgeSources() {
-  if (!root.value) return;
+  if (!body.value) return;
   const lookup = edgeBySrcAnchor.value;
   if (lookup.size === 0) return;
-  for (const el of root.value.querySelectorAll<HTMLElement>("[data-section-uuid]")) {
+  for (const el of body.value.querySelectorAll<HTMLElement>("[data-section-uuid]")) {
     const anchor = el.getAttribute("data-section-uuid") ?? "";
     const edge = lookup.get(anchor);
     if (!edge) continue;
@@ -172,9 +280,7 @@ function decorateEdgeSources() {
 }
 
 function onBodyEdgeClick(ev: MouseEvent) {
-  const t = ev.target;
-  if (!(t instanceof Element)) return;
-  const el = t.closest<HTMLElement>(".edge-source[data-edge-id]");
+  const el = asElement(ev.target)?.closest<HTMLElement>(".edge-source[data-edge-id]");
   if (!el) return;
   // Honor modifier clicks / non-primary buttons the same way
   // `chat_link.ts` does for inline `<a href="/chat/…">` links: let
@@ -190,9 +296,7 @@ function onBodyEdgeClick(ev: MouseEvent) {
 }
 
 function onBodyMouseOver(ev: MouseEvent) {
-  const t = ev.target;
-  if (!(t instanceof Element)) return;
-  const el = t.closest<HTMLElement>(".edge-source[data-edge-id]");
+  const el = asElement(ev.target)?.closest<HTMLElement>(".edge-source[data-edge-id]");
   if (!el) return;
   const edge = (props.outgoingEdges ?? []).find((e) => e.edge_uuid === el.dataset.edgeId);
   if (!edge) return;
@@ -205,12 +309,10 @@ function onBodyMouseOver(ev: MouseEvent) {
 function onBodyMouseOut(ev: MouseEvent) {
   // mouseout fires both when leaving the span entirely AND when
   // moving between child nodes; relatedTarget tells us which.
-  const from = ev.target;
-  if (!(from instanceof Element)) return;
-  const span = from.closest<HTMLElement>(".edge-source[data-edge-id]");
+  const span = asElement(ev.target)?.closest<HTMLElement>(".edge-source[data-edge-id]");
   if (!span) return;
-  const to = ev.relatedTarget;
-  if (to instanceof Element && span.contains(to)) return;
+  const to = asElement(ev.relatedTarget);
+  if (to && span.contains(to)) return;
   emit("hover-edge", null);
 }
 
@@ -218,24 +320,24 @@ function onBodyMouseOut(ev: MouseEvent) {
  * Mark the hover destination (if any) on the body. Adds `.hover-dst`
  * to the matching `[data-section-uuid="X"]` so CSS can style it as
  * an incoming-edge target. Single-target by design — overlapping
- * spans are out of scope (see docs/edges.md).
+ * spans are out of scope (see docs/dev/edges.md).
  */
 function applyHoverDst() {
-  if (!root.value) return;
-  for (const el of root.value.querySelectorAll(".hover-dst")) {
+  if (!body.value) return;
+  for (const el of body.value.querySelectorAll(".hover-dst")) {
     el.classList.remove("hover-dst");
   }
   const anchor = props.hoverAnchorUuid;
   if (!anchor) return;
-  const target = root.value.querySelector<HTMLElement>(
+  const target = body.value.querySelector<HTMLElement>(
     `[data-section-uuid="${anchor.replace(/"/g, '\\"')}"]`,
   );
   if (target) target.classList.add("hover-dst");
 }
 
 function applySelection(scroll = true) {
-  if (!root.value) return;
-  for (const el of root.value.querySelectorAll(".msg.selected")) {
+  if (!body.value) return;
+  for (const el of body.value.querySelectorAll(".msg.selected")) {
     el.classList.remove("selected");
   }
   if (!props.selectedSectionUuid) return;
@@ -244,7 +346,7 @@ function applySelection(scroll = true) {
   // HTML id but not a valid bare CSS selector (the digit-prefixed
   // chunks need escaping). `[data-section-uuid="…"]` keeps the
   // matching pure string equality.
-  const target = root.value.querySelector<HTMLElement>(
+  const target = body.value.querySelector<HTMLElement>(
     `[data-section-uuid="${props.selectedSectionUuid.replace(/"/g, '\\"')}"]`,
   );
   if (!target) return;
@@ -256,24 +358,96 @@ function applySelection(scroll = true) {
   if (scroll) scrollSectionToTop(target);
 }
 
-watch(html, async () => {
-  await nextTick();
-  if (root.value) {
-    injectCopyUuidButtons(root.value);
-    decorateRemoteMedia(root.value);
-    decorateLongMessages(root.value);
+/// Fill the frame and decorate.
+function paint() {
+  const el = body.value;
+  if (!el) return;
+  if (painted !== html.value) {
+    el.innerHTML = html.value;
+    painted = html.value;
   }
+  injectCopyUuidButtons(el);
+  decorateRemoteMedia(el);
+  decorateLongMessages(el);
+  void redrawHandles();
   decorateEdgeSources();
   applySelection(bodyChanged);
   bodyChanged = false;
   applyHoverDst();
+}
+
+function onFrameLinkClick(ev: MouseEvent) {
+  if (ev.defaultPrevented) return;
+  const link = linkFromClick(ev);
+  if (!link) return;
+  ev.preventDefault();
+  emit("frame-link", link);
+}
+
+function releaseFrame() {
+  for (const stop of frameStops) stop();
+  frameStops = [];
+  frameBody.value = null;
+  painted = null;
+}
+
+/// Also on every reload: a frame moved in the DOM loads its document again.
+function onFrameLoad() {
+  releaseFrame();
+  const frame = frameEl.value;
+  const doc = frame?.contentDocument;
+  const win = doc?.defaultView;
+  if (!frame || !doc?.body || !win) return;
+  const on = <K extends keyof DocumentEventMap>(type: K, fn: (ev: DocumentEventMap[K]) => void) => {
+    doc.addEventListener(type, fn);
+    frameStops.push(() => doc.removeEventListener(type, fn));
+  };
+  on("click", (ev) => {
+    onHandleChipClick(ev);
+    onBodyEdgeClick(ev);
+    onCopyClick(ev);
+    onRemoteChipClick(ev);
+    onFrameLinkClick(ev);
+  });
+  on("auxclick", onFrameLinkClick);
+  on("mouseover", (ev) => {
+    onBodyMouseOver(ev);
+    onChipOver(ev);
+  });
+  on("mouseout", (ev) => {
+    onBodyMouseOut(ev);
+    onChipOut(ev);
+  });
+  on("copy", (ev) => copyWithHandles(ev, doc.body));
+  on("contextmenu", (ev) => {
+    const r = frame.getBoundingClientRect();
+    emit("frame-contextmenu", ev, { win, dx: r.left, dy: r.top });
+  });
+  frameStops.push(mirrorDensity(doc), forwardAppKeys(doc));
+  doc.documentElement.dataset.markdownUuid = props.markdownUuid ?? "";
+  frameBody.value = doc.body;
+  bodyChanged = true;
+  paint();
+}
+onBeforeUnmount(releaseFrame);
+watch(
+  () => props.markdownUuid,
+  (uuid) => {
+    const doc = frameBody.value?.ownerDocument;
+    if (doc) doc.documentElement.dataset.markdownUuid = uuid ?? "";
+  },
+);
+
+watch(html, async () => {
+  await nextTick();
+  paint();
 });
 watch(
   () => props.selectedSectionUuid,
   async () => {
     // nextTick guards against a parent setting the prop in the same
-    // tick that it loads a new conversation: we want the v-html patch
-    // to land before we look for `[data-section-uuid]`.
+    // tick that it loads a new conversation: the new body must be painted
+    // before we look for `[data-section-uuid]`.
     await nextTick();
     applySelection();
   },
@@ -292,472 +466,32 @@ watch(
     applyHoverDst();
   },
 );
-onMounted(() => {
-  if (root.value) {
-    injectCopyUuidButtons(root.value);
-    decorateRemoteMedia(root.value);
-    decorateLongMessages(root.value);
-  }
-  decorateEdgeSources();
-  applySelection();
-  applyHoverDst();
-});
+onMounted(paint);
 </script>
 
 <template>
-  <div
-    class="chat-body markdown-body"
-    ref="root"
-    v-html="html"
-    @click="
-      (ev) => {
-        onBodyEdgeClick(ev);
-        onCopyClick(ev);
-        onRemoteChipClick(ev);
-      }
-    "
-    @mouseover="onBodyMouseOver"
-    @mouseout="onBodyMouseOut"
-  ></div>
+  <iframe
+    ref="frameEl"
+    class="doc-frame"
+    title="Document"
+    :srcdoc="DOC_FRAME_SRCDOC"
+    @load="onFrameLoad"
+  ></iframe>
+  <HandleHoverCard v-if="hovered" v-bind="hovered" />
+  <HandlePopover
+    v-if="chipTarget"
+    :key="chipTarget.handle"
+    v-bind="chipTarget"
+    @close="chipTarget = null"
+    @changed="redrawHandles"
+  />
 </template>
 
 <style>
-/* An unbroken token longer than the pane — a hash, a base64 blob, a
-   URL with no slashes to break at — otherwise runs off the edge of its
-   card and is simply not readable. `break-word` (not `anywhere`) so
-   only the token that would overflow gets broken, and intrinsic widths
-   are left alone. */
-.chat-body {
-  overflow-wrap: break-word;
-}
-/* A table wider than the pane scrolls itself rather than pushing the
-   column out. `width: max-content` keeps it from stretching to fill
-   when it is narrow. */
-.chat-body table {
+.doc-frame {
   display: block;
-  width: max-content;
-  max-width: 100%;
-  overflow-x: auto;
-}
-
-/* Per-message wrappers emitted by ingest. Unscoped on purpose so the rules
-   reach inside `v-html`. */
-.chat-body .msg {
-  scroll-margin-top: 1rem;
-  padding: 0.5rem 0.75rem;
-  border-left: 3px solid transparent;
-  margin: 0.5rem 0;
-}
-/* Every outermost item — a message, or a whole run of tool steps — is a
-   card, so where one ends and the next begins is drawn rather than
-   inferred from whitespace. Nested block sections (tool_use, thinking)
-   stay flat inside their parent; only direct children of the body get
-   the box. Declared BEFORE the per-provider rules below so their
-   `border-left-color` still wins. */
-.chat-body > .msg,
-.chat-body > details.tool-group,
-.chat-body > [class^="diff-"] > .msg,
-.chat-body > [class^="diff-"] > details.tool-group {
-  border: 1px solid var(--datalib-border, #d8d8d8);
-  border-left-width: 3px;
-  border-radius: 8px;
-  background: var(--datalib-card-bg, #fafafa);
-  margin: 0.4rem 0;
-}
-/* A diff group's document (docs/dev/plans/completed/diff_renderer.md): a whole
-   section wrapped by what happened to it between the two commits, and
-   inside a modified one the words that moved. The tints sit over the
-   card background so they read in either colour scheme. */
-.chat-body .diff-added,
-.chat-body .diff-removed,
-.chat-body .diff-modified {
-  border-left: 4px solid;
-  border-radius: 8px;
-  padding: 0.25rem 0.6rem;
-  margin: 0.5rem 0;
-}
-.chat-body .diff-added {
-  border-left-color: #22c55e;
-  background: rgba(34, 197, 94, 0.1);
-}
-.chat-body .diff-removed {
-  border-left-color: #ef4444;
-  background: rgba(239, 68, 68, 0.08);
-}
-.chat-body .diff-modified {
-  border-left-color: #eab308;
-  background: rgba(234, 179, 8, 0.07);
-}
-.chat-body ins {
-  background: rgba(34, 197, 94, 0.28);
-  text-decoration: none;
-  border-radius: 2px;
-}
-.chat-body del {
-  background: rgba(239, 68, 68, 0.22);
-  text-decoration: line-through;
-  text-decoration-color: rgba(239, 68, 68, 0.7);
-  border-radius: 2px;
-}
-.chat-body .msg--claude {
-  border-left-color: var(--datalib-accent, #6366f1);
-}
-.chat-body .msg--chatgpt {
-  border-left-color: #16a34a;
-}
-.chat-body .msg--slack {
-  border-left-color: #4a154b;
-}
-/* Perseus sections carry polytonic Greek (Greek Extended, U+1F00–
-   U+1FFF: precomposed accented vowels). The body otherwise inherits
-   `system-ui`, which on macOS resolves to `.AppleSystemUIFont` — and
-   that font has NO polytonic glyphs. The browser then falls back
-   per-character and decomposes each precomposed vowel into base +
-   combining mark, rendering the accent at a default advance (floating
-   up and to the right of the letter) instead of over it. Naming fonts
-   that actually contain the precomposed glyphs makes the browser use
-   their (correctly placed) baked-in forms instead of that broken
-   fallback. Every face named here was verified to contain the
-   precomposed Greek Extended glyphs (via a CoreText coverage probe);
-   `Noto Sans` / `GFS Neohellenic` are sans faces built for polytonic
-   Greek, `Helvetica Neue` / `Lucida Grande` are the macOS sans
-   fallbacks that also cover the block. We deliberately end in generic
-   `sans-serif` (which maps to Helvetica, NOT the polytonic-less
-   `.AppleSystemUIFont` that `system-ui` resolves to) so the broken
-   fallback can never re-enter. Applies to the English sections too,
-   which is harmless. */
-.chat-body .msg--perseus {
-  font-family:
-    "Noto Sans", "GFS Neohellenic", "Helvetica Neue", "Lucida Grande", "Arial Unicode MS",
-    sans-serif;
-}
-/* Per-block sections (tool_use / tool_result / thinking). Nested
-   inside their parent message wrapper, so we keep them visually
-   subordinate: thinner left border, lighter accent. The selection
-   outline below picks the same accent so the highlight still pops. */
-.chat-body .msg--block {
-  border-left-width: 2px;
-  margin: 0.35rem 0;
-  padding: 0.35rem 0.6rem;
-}
-.chat-body .msg--tool-use {
-  border-left-color: #a78bfa;
-}
-.chat-body .msg--tool-result {
-  border-left-color: #c4b5fd;
-}
-.chat-body .msg--thinking {
-  border-left-color: #94a3b8;
-}
-/* A message too tall to scroll past comfortably shows its first
-   screenful and says so. `--clamped` is toggled by the button
-   `decorateLongMessages` appends; `--long` stays for as long as the
-   message is long, which is what the sticky header keys off. */
-.chat-body > .msg.msg--clamped {
-  max-height: 22rem;
-  overflow: hidden;
-  position: relative;
-}
-.chat-body > .msg.msg--clamped::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0 0;
-  height: 5rem;
-  background: linear-gradient(to bottom, transparent, var(--datalib-card-bg, #fafafa));
-  pointer-events: none;
-}
-.chat-body > .msg.msg--clamped.selected::after {
-  background: linear-gradient(to bottom, transparent, var(--datalib-hover, #f0f0f0));
-}
-.chat-body > .msg > button.msg-expand {
-  display: block;
-  margin: 0.4rem auto 0;
-  padding: 0.1rem 0.6rem;
-  font: inherit;
-  font-size: 0.75rem;
-  color: var(--datalib-muted, #94a3b8);
-  background: var(--datalib-input-bg, #fff);
-  border: 1px solid var(--datalib-border, #d8d8d8);
-  border-radius: 999px;
-  cursor: pointer;
-}
-.chat-body > .msg > button.msg-expand:hover {
-  color: inherit;
-}
-.chat-body > .msg.msg--clamped > button.msg-expand {
-  position: absolute;
-  left: 50%;
-  bottom: 0.4rem;
-  transform: translateX(-50%);
-  z-index: 2;
-  margin: 0;
-}
-/* While you are inside a long message its header stays put, so the
-   author, the time and the jump controls are never something you have
-   to scroll back up for. Only long messages: pinning every header
-   would leave a stack of them on screen. The negative margins let the
-   pinned bar cover the card's full width rather than letting content
-   slide through the padding beside it. */
-.chat-body > .msg.msg--long > h2:has(> .msg-author) {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--datalib-card-bg, #fafafa);
-  margin: -0.5rem -0.75rem 0.15rem;
-  padding: 0.3rem 0.75rem 0.25rem;
-}
-.chat-body > .msg.msg--long.selected > h2:has(> .msg-author) {
-  background: var(--datalib-hover, #f0f0f0);
-}
-/* Only while it is actually pinned: an edge and a shadow, so the line
-   of text passing beneath the bar reads as passing beneath it rather
-   than as having gone missing. `.is-stuck` is set by the observer in
-   `chatSections.js`. */
-.chat-body > .msg.msg--long > h2.is-stuck {
-  border-bottom: 1px solid var(--datalib-border, #d8d8d8);
-  box-shadow: 0 4px 6px -4px rgba(0, 0, 0, 0.35);
-}
-.chat-body .msg-nav {
-  margin-left: auto;
-  display: inline-flex;
-  gap: 0.15rem;
-}
-.chat-body button.msg-jump {
-  font: inherit;
-  font-size: 0.7rem;
-  line-height: 1;
-  padding: 0.15rem 0.35rem;
-  color: var(--datalib-muted, #94a3b8);
-  background: transparent;
-  border: 1px solid var(--datalib-border, #d8d8d8);
-  border-radius: 4px;
-  cursor: pointer;
-}
-.chat-body button.msg-jump:hover {
-  color: inherit;
-  background: var(--datalib-hover, #f0f0f0);
-}
-/* A message the account had not read upstream when it was rendered
-   (chat-common's `unread`). The first one in a document opens with a
-   "New" rule, the way the upstream apps mark where you left off. The
-   rule is drawn inside the card, not above it: a clamped card is
-   `overflow: hidden` and would clip anything outside its box. Declared
-   before `.selected` so a selection still wins the border. */
-.chat-body .msg.unread {
-  border-left-color: #e01e5a;
-}
-.chat-body .msg.first-unread::before {
-  content: "New";
-  display: block;
-  margin: -0.5rem -0.75rem 0.4rem;
-  padding: 0.1rem 0.75rem;
-  border-bottom: 1px solid #e01e5a;
-  color: #e01e5a;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-align: right;
-}
-.chat-body .msg.selected {
-  background: var(--datalib-hover, #f0f0f0);
-  border-color: var(--datalib-accent, #6366f1);
-  /* `outline` (not a thicker border) so moving the selection doesn't
-     reflow; the negative offset lays it over the card's own edge so
-     the two read as one highlighted border rather than two rings. */
-  outline: 2px solid var(--datalib-accent, #6366f1);
-  outline-offset: -1px;
-}
-/* Inline span baked by ingest for sub-section edge anchors (today
-   only: perseus first-word wrappers). When the span happens to also
-   be the source of an outgoing edge, `.edge-source` is added by
-   ChatBody at mount time and the user gets a link-y dotted
-   underline (in the muted color so it doesn't read as "external
-   link blue"); the hover fill calls out the target and the
-   `.hover-dst` class on the matching destination anchor mirrors the
-   same fill across whichever column the destination lives in.
-
-   `.selected` on the same span is how we highlight the destination
-   side after navigating via an edge (click-driven, persistent),
-   distinct from `.hover-dst` (hover-driven, transient).
-
-   We deliberately scope these to `span[data-section-uuid]` so the
-   block-level `.msg.selected` styling above (which adds a 2px
-   outline + 4px left border) doesn't accidentally fire for inline
-   word-wrappers. */
-.chat-body span[data-section-uuid].edge-source {
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-decoration-color: var(--datalib-muted, #94a3b8);
-  text-underline-offset: 2px;
-  cursor: pointer;
-  transition: background-color 100ms ease-in-out;
-}
-.chat-body span[data-section-uuid].edge-source:hover,
-.chat-body [data-section-uuid].hover-dst {
-  background: rgba(99, 102, 241, 0.28);
-  border-radius: 3px;
-}
-.chat-body span[data-section-uuid].selected {
-  background: var(--datalib-card-bg, #1f2937);
-  outline: 2px solid var(--datalib-accent, #6366f1);
-  border-radius: 3px;
-}
-/* A remote image or media element held back by the sanitizer
-   (`remoteMedia.ts`) has no source to show; the placeholder before it
-   says what it is and where it would load from. An email's tracking
-   pixel gets the same chip — that it is there is the point. */
-.chat-body .remote-blocked {
-  display: none;
-}
-.chat-body button.remote-media {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.35rem;
-  max-width: 100%;
-  margin: 0.15rem 0;
-  padding: 0.2rem 0.6rem;
-  font: inherit;
-  font-size: 0.8rem;
-  line-height: 1.3;
-  color: var(--datalib-muted, #94a3b8);
-  background: var(--datalib-card-bg, #fafafa);
-  border: 1px dashed var(--datalib-border, #d8d8d8);
-  border-radius: 6px;
-  cursor: pointer;
-  text-align: left;
-}
-.chat-body button.remote-media:hover {
-  color: inherit;
-  border-style: solid;
-  background: var(--datalib-hover, #f0f0f0);
-}
-.chat-body .remote-media .remote-media-icon {
-  filter: grayscale(1);
-  opacity: 0.7;
-}
-.chat-body .remote-media .remote-media-host {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.chat-body .remote-media .remote-media-alt {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 24rem;
-  font-style: italic;
-}
-.chat-body .remote-media--pixel {
-  font-size: 0.7rem;
-  padding: 0.1rem 0.45rem;
-  opacity: 0.8;
-}
-/* Attachment images arrive at their original resolution; without a
-   cap a phone photo renders thousands of pixels wide inside the pane.
-   Fit the column width and keep tall images from swallowing the whole
-   scrollport; `width/height: auto` preserves the aspect ratio under
-   whichever constraint bites. */
-.chat-body img {
-  max-width: 100%;
-  max-height: 60vh;
-  width: auto;
-  height: auto;
-}
-.chat-body .msg-meta {
-  color: var(--datalib-muted, #94a3b8);
-  font-size: 0.85rem;
-  margin: 0 0 0.5rem;
-}
-.chat-body .msg-meta a {
-  color: inherit;
-  text-decoration: underline;
-}
-/* The chat-common message header. It is a real `## ` heading because
-   qmd cuts its chunks at the best nearby break point and scores an h2
-   far above a blank line — so the heading is what makes every message
-   start a preferred chunk boundary. On screen it should read as
-   Slack's one-line "Name  time", not as a document section, hence the
-   reset below. `:has()` keeps it off an h2 that came from the message
-   *body* (someone pasting markdown with their own headings). */
-.chat-body .msg h2:has(> .msg-author) {
-  font-size: 1em;
-  font-weight: 400;
-  line-height: 1.3;
-  margin: 0 0 0.15rem;
-  padding: 0;
-  border: none;
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-.chat-body .msg-author {
-  font-weight: 600;
-}
-.chat-body .msg-ts {
-  font-size: 0.75rem;
-  font-weight: 400;
-  color: var(--datalib-muted, #94a3b8);
-  /* The full instant is in `title`; say so with the cursor. */
-  cursor: help;
-}
-/* A run of adjacent tool steps, folded into one line until asked for. */
-.chat-body details.tool-group {
-  margin: 0.35rem 0;
-}
-.chat-body details.tool-group > summary {
-  cursor: pointer;
-  font-size: 0.8rem;
-  color: var(--datalib-muted, #94a3b8);
-  list-style-position: outside;
-}
-.chat-body details.tool-group > summary {
-  padding: 0.35rem 0.6rem;
-}
-.chat-body details.tool-group[open] > summary {
-  border-bottom: 1px solid var(--datalib-border, #d8d8d8);
-}
-/* Inside a group every step has the same author and near-identical
-   time, so the header is there for its anchor and its copy button, not
-   to be read. */
-.chat-body details.tool-group .msg h2:has(> .msg-author) {
-  font-size: 0.8em;
-  opacity: 0.7;
-}
-.chat-body button.copy-uuid {
-  /* The 🆔 glyph is a saturated purple that outshouts the message it
-     sits next to; grey it out so it reads as a control rather than as
-     content. The `copied` / `copy-failed` states below re-colour on
-     purpose, so they drop the filter. */
-  filter: grayscale(1);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  vertical-align: baseline;
-  padding: 0;
-  margin: 0;
-  background: transparent;
-  border: none;
-  color: inherit;
-  font: inherit;
-  /* The glyph is a control, not text: smaller than what it sits beside. */
-  font-size: 0.75em;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0.55;
-}
-/* Opacity only. A hover border would draw a box a different shape from
-   the glyph inside it, which reads as the control changing rather than
-   as it lighting up. */
-.chat-body button.copy-uuid:hover {
-  opacity: 1;
-}
-.chat-body button.copy-uuid.copied {
-  color: #16a34a;
-  opacity: 1;
-  filter: none;
-}
-.chat-body button.copy-uuid.copy-failed {
-  color: #dc2626;
-  opacity: 1;
-  filter: none;
+  width: 100%;
+  height: 100%;
+  border: 0;
 }
 </style>

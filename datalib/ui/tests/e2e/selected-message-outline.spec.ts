@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { clickRowByUuid } from "./grid-helpers";
+import { EVERY_ROW, clickRowByUuid, docBody, inDocFrame } from "./grid-helpers";
 
 // The focused message in the document pane gets a visible
 // "highlight window" — an accent-colored outline on all four
@@ -22,7 +22,7 @@ test("selected message has a visible accent-colored outline", async ({ page, req
   const pick = data.rows.find((r) => r.kind !== "Chat" && r.message_index != null);
   expect(pick, "fixture must contain a message row").not.toBeUndefined();
 
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   // Match on row uuid, not (conversation_uuid, message_index). Some
@@ -33,7 +33,7 @@ test("selected message has a visible accent-colored outline", async ({ page, req
   // assert against.
   await clickRowByUuid(page, pick!.uuid);
 
-  const selected = page.locator(`.chat-preview [data-section-uuid="${pick!.uuid}"].selected`);
+  const selected = await inDocFrame(page, `[data-section-uuid="${pick!.uuid}"].selected`);
   await expect(selected).toBeVisible({ timeout: 10_000 });
 
   // Verify the outline is actually drawn — non-zero width and a
@@ -57,7 +57,7 @@ test("selected message has a visible accent-colored outline", async ({ page, req
   expect(outline.color).not.toMatch(/rgba?\([^)]*,\s*0\s*\)$/);
 
   // And: a sibling un-selected section must NOT have the outline.
-  const other = page.locator(`.chat-preview [data-section-uuid]:not(.selected)`);
+  const other = docBody(page).locator(`[data-section-uuid]:not(.selected)`);
   if ((await other.count()) > 0) {
     // Browsers report a default `outline-width: medium` (≈3px) even
     // when `outline-style: none` — the actual line is only drawn when

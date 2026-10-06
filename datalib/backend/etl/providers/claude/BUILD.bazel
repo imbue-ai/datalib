@@ -30,6 +30,7 @@ rust_library(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",
         "//datalib/backend/probe:datalib_probe",
+        "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",

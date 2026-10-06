@@ -20,14 +20,15 @@
 #                           by the vite build (datalib/ui/tools/thirdPartyNotices.ts)
 #   curl-impersonate/       the notices packed with the impersonating curl
 #   doltlite/               DoltLite's Apache-2.0 notice and license text
+#   latchkey-garmin/        the MIT license of the Garmin latchkey plugin
+#                           datalib-http embeds (third-party/latchkey-garmin)
 #   node/LICENSE            the notice of the Node runtime the binaries
 #                           fetch on first use (runtime.manifest)
 #
-# The last four come out of Bazel (//third-party:bundled_licenses and
-# //datalib/ui:dist). cargo-about is the one tool this needs on PATH
-# beyond bazel: `brew install cargo-about`, or the pinned download in
-# release.yml. It fetches crate sources itself, so it needs the network
-# on a cold machine. The qmd and latchkey trees in the runtime asset keep
+# The last five come out of Bazel (//third-party:bundled_licenses and
+# //datalib/ui:dist), and so does cargo-about itself (a pinned release,
+# //third-party/cargo-about). It needs `cargo` on PATH and fetches crate
+# sources itself, so it needs the network on a cold machine. The qmd and latchkey trees in the runtime asset keep
 # each package's own LICENSE file inside node_modules and are not
 # repeated here.
 
@@ -50,8 +51,7 @@ fail() { printf 'third_party_notices: error: %s\n' "$*" >&2; exit 1; }
 # //tools:stage_tarball_test hands the two Bazel outputs over as
 # runfiles and stands in for cargo-about, which cannot run in the
 # sandbox (it needs cargo and the crate sources).
-cargo_about="${CARGO_ABOUT:-cargo-about}"
-command -v "$cargo_about" >/dev/null 2>&1 || fail "cargo-about not found on PATH (brew install cargo-about)"
+cargo_about="${CARGO_ABOUT:-}"
 
 if [[ -n "${THIRD_PARTY_NOTICES_BAZEL_BIN:-}" ]]; then
     bin="$THIRD_PARTY_NOTICES_BAZEL_BIN"
@@ -63,9 +63,16 @@ else
     else
         fail "neither bazelisk nor bazel found on PATH"
     fi
-    log "building //third-party:bundled_licenses //datalib/ui:dist"
-    (cd "$repo_root" && "$bazel" build //third-party:bundled_licenses //datalib/ui:dist >&2)
+    targets=(//third-party:bundled_licenses //datalib/ui:dist)
+    [[ -n "$cargo_about" ]] || targets+=(//third-party/cargo-about:cargo_about)
+    log "building ${targets[*]}"
+    (cd "$repo_root" && "$bazel" build "${targets[@]}" >&2)
     bin="$(cd "$repo_root" && "$bazel" info bazel-bin)"
+fi
+
+[[ -n "$cargo_about" ]] || cargo_about="$bin/third-party/cargo-about/cargo-about"
+if [[ -z "${CARGO_ABOUT:-}" ]]; then
+    command -v cargo >/dev/null 2>&1 || fail "cargo not found on PATH (cargo-about runs it)"
 fi
 
 rm -rf "$dest"
@@ -95,6 +102,7 @@ directory is those notices.
 | `ui-bundle.md` | every npm package bundled into the web UI that `datalib-http` serves |
 | `curl-impersonate/` | `curl-impersonate`: curl-impersonate, curl, BoringSSL, nghttp2, nghttp3, ngtcp2, brotli, zstd, zlib |
 | `doltlite/` | DoltLite (Apache-2.0), the SQLite fork linked into every binary; SQLite itself is public domain |
+| `latchkey-garmin/` | latchkey-garmin (MIT), the latchkey plugin `datalib-http` embeds and installs for Garmin |
 | `node/LICENSE` | the Node.js runtime `runtime.manifest` names, fetched on first use |
 
 The runtime asset itself carries the same Node notice beside its
@@ -102,7 +110,7 @@ binary, and the `qmd` and `latchkey` package trees in it carry each
 package's own license file inside `node_modules/`.
 EOF
 
-for f in README.md rust-crates.md ui-bundle.md doltlite/LICENSE.md node/LICENSE curl-impersonate/LICENSE-curl; do
+for f in README.md rust-crates.md ui-bundle.md doltlite/LICENSE.md node/LICENSE curl-impersonate/LICENSE-curl latchkey-garmin/LICENSE; do
     [[ -s "$dest/$f" ]] || fail "missing or empty: $dest/$f"
 done
 log "notices assembled at $dest"

@@ -2,24 +2,24 @@
 //! a **download** processor ([`ContactsIngest`] — live CardDAV server sync
 //! or file-backed `.vcf` ingest, chosen by which method table is set) and a **render**
 //! processor ([`ContactsRender`]). [`plan_ingest`] / [`plan_render`] build the
-//! per-wave processors the orchestrator drives, owning every carddav-specific decision (which
+//! per-wave processors the orchestrator drives, owning every contacts-specific decision (which
 //! download mode) so the orchestrator destructures nothing.
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
-use datalib_etl_contacts_config::{CarddavSync, ContactsConfig};
+use datalib_etl_contacts_config::{ContactsConfig, ContactsMethod};
 
 use crate::ingest;
 
-/// Ingest wave: `carddav` → live CardDAV server; `vcf` → file mode
-/// (`.vcf` tree under its `path`, no account override).
+/// Ingest wave: `fastmail` or `carddav` → live CardDAV server; `vcf` →
+/// file mode (`.vcf` tree under its `path`, no account override).
 pub fn plan_ingest(
     ctx: PlanContext,
     config: ContactsConfig,
@@ -27,28 +27,37 @@ pub fn plan_ingest(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let latchkey = config.latchkey_settings.clone();
-    let mode = match (config.carddav, config.vcf) {
-        (Some(sync), _) => DownloadMode::Server(sync),
-        (None, Some(vcf)) => DownloadMode::File {
+    let mode = match config
+        .method()
+        .with_context(|| format!("contacts source {name}"))?
+    {
+        ContactsMethod::Carddav {
+            server_url,
+            addressbooks,
+        } => DownloadMode::Server {
+            server_url: server_url.to_string(),
+            addressbooks: addressbooks.to_vec(),
+        },
+        ContactsMethod::Vcf(vcf) => DownloadMode::File {
             input_path: vcf.path(),
             account_id_override: None,
         },
-        (None, None) => anyhow::bail!(
-            "contacts source {name} names neither `carddav` (a server) nor `vcf` (a directory of .vcf files)"
-        ),
     };
     Ok(vec![Box::new(ContactsIngest {
-        id: format!("carddav/{name}/download"),
+        id: format!("contacts/{name}/download"),
         raw_path,
         mode,
         latchkey,
     })])
 }
 
-/// Which download path carddav takes for this source.
+/// Which download path contacts takes for this source.
 enum DownloadMode {
     /// Live CardDAV server sync.
-    Server(CarddavSync),
+    Server {
+        server_url: String,
+        addressbooks: Vec<String>,
+    },
     /// File-backed `.vcf` ingest (e.g. a Google/Fastmail export).
     File {
         input_path: PathBuf,
@@ -56,7 +65,7 @@ enum DownloadMode {
     },
 }
 
-/// Carddav's download processor. Owns its raw doltlite store end to end.
+/// Contacts' download processor. Owns its raw doltlite store end to end.
 pub struct ContactsIngest {
     id: String,
     raw_path: PathBuf,
@@ -74,62 +83,60 @@ impl DataProcessor for ContactsIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        // The source owns the store: open it, hand the orchestrator only an
-        // opaque interrupt-commit hook, do the work, commit, close.
-        let entity_db = ingest::db_path_for(&self.raw_path);
-        let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(
-                db.pool().clone(),
-                db.cas().map(|cas| cas.pool().clone()),
-                entity_db,
-            )
-            .await;
-
-        let summary = match &self.mode {
-            DownloadMode::Server(sync) => {
-                let s = ingest::fetch(ingest::FetchOptions {
-                    db,
-                    server_url: sync.server_url.clone(),
-                    addressbooks: sync.addressbooks.clone(),
-                    latchkey: self.latchkey.clone(),
-                    progress: ctx.progress.clone(),
-                    control: ctx.control.clone(),
-                })
-                .await?;
-                format!(
-                    "addressbooks={} new={} updated={} deleted={} errors={} requests={}",
-                    s.addressbooks,
-                    s.contacts_new,
-                    s.contacts_updated,
-                    s.contacts_deleted,
-                    s.errors,
-                    s.requests,
-                )
-            }
-            DownloadMode::File {
-                input_path,
-                account_id_override,
-            } => {
-                let s = ingest::vcf_dir::fetch(ingest::vcf_dir::FetchOptions {
-                    db,
-                    input_path: input_path.clone(),
-                    cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
-                        .await?,
-                    account_id_override: account_id_override.clone(),
-                    progress: ctx.progress.clone(),
-                    control: ctx.control.clone(),
-                })
-                .await?;
-                format!(
-                    "addressbooks={} new={} updated={} files_skipped={} errors={}",
-                    s.addressbooks, s.contacts_new, s.contacts_updated, s.files_skipped, s.errors,
-                )
-            }
-        };
-
-        // The source's post-download commit + pool close (uniform across
-        // providers); keeps the old `{stats} commit={h}` summary suffix.
-        session.finish(ctx, summary).await
+        let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
+        let pool = db.pool().clone();
+        ctx.run_store(pool, None, |_| async {
+            Ok(match &self.mode {
+                DownloadMode::Server {
+                    server_url,
+                    addressbooks,
+                } => {
+                    let s = ingest::fetch(ingest::FetchOptions {
+                        db,
+                        server_url: server_url.clone(),
+                        addressbooks: addressbooks.clone(),
+                        latchkey: self.latchkey.clone(),
+                        progress: ctx.progress.clone(),
+                        control: ctx.control.clone(),
+                    })
+                    .await?;
+                    format!(
+                        "addressbooks={} new={} updated={} deleted={} errors={} requests={}",
+                        s.addressbooks,
+                        s.contacts_new,
+                        s.contacts_updated,
+                        s.contacts_deleted,
+                        s.errors,
+                        s.requests,
+                    )
+                }
+                DownloadMode::File {
+                    input_path,
+                    account_id_override,
+                } => {
+                    let s = ingest::vcf_dir::fetch(ingest::vcf_dir::FetchOptions {
+                        db,
+                        input_path: input_path.clone(),
+                        cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
+                            .await?,
+                        account_id_override: account_id_override.clone(),
+                        progress: ctx.progress.clone(),
+                        control: ctx.control.clone(),
+                    })
+                    .await?;
+                    format!(
+                        "addressbooks={} new={} updated={} deleted={} files_skipped={} files_removed={} errors={}",
+                        s.addressbooks,
+                        s.contacts_new,
+                        s.contacts_updated,
+                        s.contacts_deleted,
+                        s.files_skipped,
+                        s.files_removed,
+                        s.errors,
+                    )
+                }
+            })
+        })
+        .await
     }
 }

@@ -105,9 +105,7 @@ impl RawDb {
     /// fingerprint cache, not here. These are sqlite-level `BEGIN…COMMIT`s
     /// that flush the working set; the single version-control
     /// `dolt_commit` happens once at end of scan (see [`Self::commit`]).
-    /// Per-batch flushing keeps both our Rust memory and doltlite's
-    /// in-transaction buffer bounded on a tens-of-millions-of-rows
-    /// scan. Returns the wall time.
+    /// Returns the wall time.
     pub async fn write_batch(
         &self,
         files: &[FileRow],
@@ -125,11 +123,9 @@ impl RawDb {
         Ok(started.elapsed())
     }
 
-    /// Compact the doltlite chunk store via `dolt_gc()`, reclaiming the
-    /// immutable-chunk novelty accumulated across the scan's per-batch
-    /// commits. Without this a large scan's on-disk size is dominated
-    /// by write amplification (observed ~7 KB/row across hundreds of
-    /// commits, vs ~1 KB/row of actual data). Returns the wall time.
+    /// `dolt_gc()`: reclaims the pages the scan's per-batch transactions
+    /// left behind, which otherwise dominate a large scan's file size.
+    /// Returns the wall time.
     pub async fn gc(&self) -> Result<std::time::Duration> {
         let started = std::time::Instant::now();
         sqlx::query("SELECT dolt_gc()")
@@ -193,11 +189,9 @@ impl RawDb {
 
     /// Summarize what the most recent commit changed in `files` and
     /// `dirs` relative to its parent commit, read from doltlite's
-    /// `dolt_diff_<table>` system tables. Because the scan
-    /// truncate-and-rebuilds, a row deleted and re-inserted identically
-    /// hashes to the same prolly-tree entry and shows as `unchanged`
-    /// (so it isn't counted) — only genuinely changed entries surface as
-    /// added/modified/removed.
+    /// `dolt_diff_<table>` system tables. A row the truncate-and-rebuild
+    /// re-inserted identically is no change, so only genuinely changed
+    /// entries surface as added/modified/removed.
     pub async fn diff_counts_since_parent(&self) -> Option<DiffCounts> {
         let rows = sqlx::query(
             "SELECT diff_type, COUNT(*) AS n FROM ( \

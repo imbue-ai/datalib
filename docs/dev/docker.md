@@ -8,19 +8,19 @@ security model the walkthrough's bind-mount rules rest on.
 
 ## What is in the image
 
-`ghcr.io/imbue-ai/datalib:<tag>` is Ubuntu 24.04 plus:
+`ghcr.io/imbue-ai/datalib:<tag>` is Ubuntu 26.04 plus:
 
-- the release tarball, unpacked whole at `/opt/datalib` and linked into
-  `/usr/local/bin`: every binary (`datalib-dag`, `datalib-step`,
+- the release tarball, unpacked whole at `/opt/datalib`, with these
+  linked into `/usr/local/bin`: `datalib-dag`, `datalib-step`,
   `datalib-http` with the web UI embedded, `datalib-applet`,
   `datalib-migrate-config`, `datalib-doltlite` — also as plain
-  `doltlite` — and the two `latchkey-curl-*` binaries) and the
-  `latchkey` launcher, plus the release's `runtime-<triple>.tar.gz`
+  `doltlite` — `latchkey-curl-router`, `curl-impersonate` and the
+  `latchkey` launcher; plus the release's `runtime-<triple>.tar.gz`
   asset unpacked beside them as `runtime/` — the Node runtime plus the
   lockfile-pinned `qmd` and `latchkey` package trees the binaries
   resolve beside themselves, checked against its published sha256 at
-  build time. There is no Node, npm or npx in the image; nothing is
-  fetched from a registry at build or run time, and the first-use fetch
+  build time. There is no Node, npm or npx on the image's `PATH`;
+  nothing is fetched from a registry at build or run time, and the first-use fetch
   a tarball install does (`runtime_fetch.md`) never fires here;
 - qmd's three models pre-fetched into `/root/.cache/qmd/models` by
   `datalib-step pull-models`, each from its pinned HuggingFace revision
@@ -42,8 +42,8 @@ Published for `linux/amd64` and `linux/arm64` from
 `docker-publish` job in
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
 on every `v*` tag. The image is not built from source: it consumes the
-Linux tarballs the same release just produced, so what a user pulls is
-byte-for-byte what `curl | sh` installs.
+Linux gnu tarballs the same release just produced, so what a user pulls
+is byte-for-byte what `curl | sh` installs on a glibc host.
 
 ## The demo library
 
@@ -57,12 +57,15 @@ and grid-indexes them. That run is also the one end-to-end smoke test
 of the shipped pipeline: a tarball whose binaries cannot ingest the
 fixtures fails the image build.
 
-The semantic index is deliberately not built at image time. The
-config's `qmd_index` step sits below a `BUILD-TIME CUT` marker that the
-Dockerfile drops for its run and keeps in the shipped file, so the
-first sync in a container builds it. Embedding under the arm64 leg's
-QEMU emulation would add tens of minutes to every release for an index
-that takes about a minute natively.
+The image carries half of the search index. Each source's
+`keyword_index` (qmd's BM25 index, a couple of seconds for the whole
+demo) runs at image time, so a free-text search answers the moment the
+container starts. Its `embed` steps and `qmd_aggregator` sit below a
+`BUILD-TIME CUT` marker that the Dockerfile drops for its run and keeps
+in the shipped file, so the first sync in a container adds the
+embeddings. Embedding under the arm64 leg's QEMU emulation would add
+tens of minutes to every release for an index that takes about a minute
+natively.
 
 ## Checking the walkthrough against an image
 
@@ -88,28 +91,10 @@ DATALIB_DOCKER_IMAGE=ghcr.io/imbue-ai/datalib:latest datalib/docker/doc_test.sh
 
 ## Building locally
 
-```sh
-# Both arches against the latest tagged release, into the buildx cache
-# only: a "does it still build?" smoke.
-scripts/build_docker.sh
-
-# Same, but load the host-native arch into the local daemon so you can
-# `docker run` it.
-scripts/build_docker.sh --load
-
-# Against tarballs you built yourself, named like the release's. The
-# easiest source of a current Linux build is a PR's CI: the "bazel test
-# //..." check uploads the x86_64 glibc tarball as an artifact for
-# three days, built in the same mode the release uses.
-scripts/build_docker.sh --tarball-dir /path/to/tarballs --load
-
-# Push to your own registry.
-REPO=your-fork/datalib IMAGE_NAME=ghcr.io/your-fork/datalib scripts/build_docker.sh --push
-```
-
-Don't run `docker build` on the directory directly: the Dockerfile
-expects `dist/<arch>/*.tar.gz` and `demo/` in its context, and
-`build_docker.sh` is what stages them.
+`scripts/build_docker.sh` stages the build context and runs `docker
+buildx`; [`datalib/docker/README.md`](../../datalib/docker/README.md)
+§ "Building locally" has its modes. Don't run `docker build` on the
+directory directly.
 
 ## Security model
 

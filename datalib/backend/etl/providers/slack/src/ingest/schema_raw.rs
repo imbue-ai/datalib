@@ -192,7 +192,13 @@ pub const MESSAGES_BY_CHANNEL_TS_INDEX_DDL: &str =
 pub const MESSAGES_BY_THREAD_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS messages_by_thread ON messages(thread_root_uuid)";
 
-/// `replies_pages` — bookkeeping for `conversations.replies` walks.
+/// `replies_pages` — what the store holds of each thread's replies: one
+/// row per thread, keyed like its root message
+/// ([`slack_thread_key`]). `latest_reply` is the newest reply the last
+/// whole read of the thread reached, and null on a thread only ever
+/// tried; a failed read is in this row's sidecar. A thread is owed while
+/// its root lists a newer `latest_reply` than this
+/// (`RawDb::threads_owed`).
 pub const REPLIES_PAGES_DDL: &str = "CREATE TABLE IF NOT EXISTS replies_pages (
     id           TEXT PRIMARY KEY,
     channel_id   TEXT NOT NULL,
@@ -317,16 +323,11 @@ pub fn slack_thread_key(team_id: &str, channel_id: &str, thread_ts: &str) -> Str
     format!("{team_id}#{channel_id}#{thread_ts}")
 }
 
-/// The three parts of a [`slack_thread_key`], for a render that has
-/// only the key in hand — the driver names stale buckets by it.
-pub fn split_thread_key(key: &str) -> Option<(&str, &str, &str)> {
+/// The three parts of a [`slack_message_key`] or a [`slack_thread_key`],
+/// for a render that has only the key in hand.
+pub fn split_key(key: &str) -> Option<(&str, &str, &str)> {
     let mut it = key.splitn(3, '#');
     Some((it.next()?, it.next()?, it.next()?))
-}
-
-/// Composite-key recipe for [`RepliesPagesRow`]'s primary key.
-pub fn replies_page_id_recipe(channel_id: &str, thread_ts: &str) -> String {
-    format!("{channel_id}:{thread_ts}")
 }
 
 pub fn full_ddl() -> Vec<String> {
@@ -338,6 +339,7 @@ pub fn full_ddl() -> Vec<String> {
         MESSAGES_BY_CHANNEL_TS_INDEX_DDL.to_string(),
         MESSAGES_BY_THREAD_INDEX_DDL.to_string(),
         REPLIES_PAGES_DDL.to_string(),
+        datalib_etl::coverage::DDL.to_string(),
         ChannelReadStateRow::ddl(),
         BookmarkRow::ddl(),
         BOOKMARKS_BY_CHANNEL_INDEX_DDL.to_string(),

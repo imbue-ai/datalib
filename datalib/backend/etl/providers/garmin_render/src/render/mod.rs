@@ -13,4 +13,4 @@ pub mod render;
 /// that an existing `index.md` must be re-rendered.
 /// v2: ids are minted through `datalib_id` under the configured source
 ///     and every row carries its backpointer. Every uuid moved.
-pub const RENDER_VERSION: u32 = 2;
+pub const RENDER_VERSION: u32 = 5;

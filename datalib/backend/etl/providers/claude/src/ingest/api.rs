@@ -19,6 +19,11 @@ pub const CLAUDE_ORIGIN: &str = "https://claude.ai";
 pub enum ClaudeError {
     #[error("forbidden: {0}")]
     Forbidden(String),
+    /// The shared retry loop's give-up policy tripped on a rate limit or
+    /// an outage; every request after it is refused the same way, so the
+    /// caller stops.
+    #[error("gave up retrying: {0}")]
+    RateLimited(String),
     #[error("{0}")]
     Permanent(String),
 }
@@ -66,7 +71,12 @@ impl ClaudeClient {
 
         let body = resp.body_str();
         if resp.status == 403 {
-            return Err(ClaudeError::Forbidden(format!("GET {path} -> HTTP 403")));
+            // Cloudflare's bot wall is a 403 too; its marker is what tells
+            // a block from a credential that may not do this.
+            return Err(ClaudeError::Forbidden(format!(
+                "GET {path} -> HTTP 403 cf-mitigated={:?}",
+                resp.header("cf-mitigated")
+            )));
         }
         if resp.status != 200 {
             return Err(ClaudeError::Permanent(format!(
@@ -151,5 +161,8 @@ impl ClaudeClient {
 }
 
 fn map_transport_error(e: HttpError) -> ClaudeError {
-    ClaudeError::Permanent(e.to_string())
+    match e {
+        HttpError::GaveUp { .. } => ClaudeError::RateLimited(e.to_string()),
+        other => ClaudeError::Permanent(other.to_string()),
+    }
 }

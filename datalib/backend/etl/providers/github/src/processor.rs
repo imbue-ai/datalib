@@ -48,41 +48,45 @@ impl DataProcessor for GithubIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let now = datalib_time::parse_strict(ctx.now)
+            .with_context(|| format!("github: run stamp {:?}", ctx.now))?;
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let targets = self
-            .sync
-            .pull_requests
-            .iter()
-            .map(|s| ingest::parse_pr_ref(s))
-            .collect::<Result<Vec<_>>>()
-            .context("parse github pull_requests refs")?;
-        let s = ingest::fetch(ingest::FetchOptions {
-            latchkey: self.latchkey.clone(),
-            // Same fix as gitlab: don't force full_sync, so discovery narrows
-            // via saved `sync_scope_state`. Unlike gitlab, github's per-PR
-            // loop has no skip optimization yet, so every discovered PR still
-            // gets four API calls — but narrowing keeps the discovered set
-            // small to begin with.
-            refresh_window_days: self
+        let pool = db.pool().clone();
+        ctx.run_store(pool, None, |_| async {
+            let targets = self
                 .sync
-                .refresh_window_days
-                .map(|v| v.max(0) as u32)
-                .unwrap_or(0),
-            max_prs: self.sync.max_prs.map(|v| v as usize),
-            targets,
-            sleep_between: Duration::ZERO,
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
-            ..ingest::FetchOptions::new(db)
-        })
-        .await?;
-        let summary = format!(
-            "prs(new={}) issue_comments(new={}) reviews(new={}) review_comments(new={}) \
+                .pull_requests
+                .iter()
+                .map(|s| ingest::parse_pr_ref(s))
+                .collect::<Result<Vec<_>>>()
+                .context("parse github pull_requests refs")?;
+            let s = ingest::fetch(ingest::FetchOptions {
+                latchkey: self.latchkey.clone(),
+                // Same fix as gitlab: don't force full_sync, so discovery narrows
+                // via saved `sync_scope_state`. Unlike gitlab, github's per-PR
+                // loop has no skip optimization yet, so every discovered PR still
+                // gets four API calls — but narrowing keeps the discovered set
+                // small to begin with.
+                refresh_window_days: self
+                    .sync
+                    .refresh_window_days
+                    .map(|v| v.max(0) as u32)
+                    .unwrap_or(0),
+                max_prs: self.sync.max_prs.map(|v| v as usize),
+                targets,
+                sleep_between: Duration::ZERO,
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+                ..ingest::FetchOptions::new(db, now)
+            })
+            .await?;
+            Ok(format!(
+                "prs(new={}) issue_comments(new={}) reviews(new={}) review_comments(new={}) \
              pruned={}",
-            s.new_prs, s.new_issue_comments, s.new_reviews, s.new_review_comments, s.pruned,
-        );
-        session.finish(ctx, summary).await
+                s.new_prs, s.new_issue_comments, s.new_reviews, s.new_review_comments, s.pruned,
+            ))
+        })
+        .await
     }
 }

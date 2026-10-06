@@ -1,20 +1,21 @@
-# Slack Extract
+# Slack ingest
 
-`slack-ingest` mirrors a Slack workspace into a single doltlite db
-at `<out>/raw/<name>/entities.doltlite_db`. Per-entity tables (channels, users,
-messages, replies, files, and the account's read states, saved items and
-channel bookmarks) are each keyed by their upstream Slack identifier; payloads are stored as JSONB blobs in a `payload` column
-alongside per-run bookkeeping and file/blob bytes. The old
-`<out>/raw_api/<method>/events.jsonl` tree was retired with the
-doltlite port — see
-[`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
+The ingest step of a `slack` group mirrors a Slack workspace into
+`<data_root>/<group>/ingest/entities.doltlite_db`, with the blob CAS
+beside it (`slack-ingest` does the same from the command line). The
+tables (`src/ingest/schema_raw.rs`) are `workspaces`, `users`,
+`channels`, `messages`, `replies_pages`, `slack_attachments` (the edges
+to file bytes in the CAS), and the account's own state:
+`channel_read_states`, `saved_items` and `bookmarks`. Each row is keyed
+by its upstream Slack identifier — a message and a thread by
+`{team}#{channel}#{ts}` — with the response stored as JSONB in
+`payload` and a `<table>_bookkeeping` sidecar beside each table.
 
 ## Auth
 
-The downloader does not handle Slack tokens directly. It shells out to
-[`latchkey curl`](https://github.com/imbue-ai/latchkey), which signs
-requests using a token stored in the host keyring under the `slack`
-service. `latchkey` must be on `PATH` for the binary to run.
+The downloader does not handle Slack tokens directly. It runs
+`latchkey curl`, which puts the token latchkey holds for the `slack`
+service on each request ([`docs/dev/latchkey.md`](../../../../../docs/dev/latchkey.md)).
 
 Required Slack OAuth scopes (user token):
 
@@ -31,9 +32,10 @@ tables and nothing else (see "The account's own state" below).
 ### File downloads
 
 File bytes live on `https://files.slack.com/`, which the `slack`
-service's `baseApiUrls` covers as of latchkey 2.11.2. No extra service
-registration is needed — the same `slack` credential signs both
-`slack.com/api/` and `files.slack.com/` requests.
+service's `baseApiUrls` covers. No extra service registration is
+needed: the same `slack` credential signs both `slack.com/api/` and
+`files.slack.com/` requests, and both go through the same transport, so
+a file download is retried, rate-limited and replayed like an API call.
 
 ## API surface used
 
@@ -42,23 +44,24 @@ registration is needed — the same `slack` credential signs both
 | `auth.test`                 | Identify the workspace + the calling user |
 | `conversations.list`        | Enumerate channels                       |
 | `users.list`                | Enumerate workspace users                |
-| `conversations.history`     | Per-channel forward pass + refresh window |
-| `conversations.replies`     | Threaded replies for every parent message |
+| `conversations.history`     | Each channel's uncovered stretches + refresh window |
+| `conversations.replies`     | The replies of each thread the store owes |
 | `client.counts`             | How far the account has read, per conversation |
 | `saved.list`                | The account's "Saved for later" items    |
 | `bookmarks.list`            | A conversation's header bookmarks        |
 
-`shapes.rs` is the shape-of-the-response catalog: which path holds the
-items, what counts as the cursor key, how to dedup.
+`shapes.rs` knows each method's response shape: where its items are and
+what each is keyed by.
 
 The first three are also the whole of `datalib-step probe slack`
-(`src/probe.rs`), which is what the wizard's "Test connection" runs:
-it lists every channel the account can see as a `channel` item and
-every DM as a `conversation` item (path = Slack's id, title = what the
-sync will call it), and the `channels` / `dm_conversations` pickers
-are built from that. It always asks for all four surfaces, whatever
-`dms` says — nothing is stored, and the DM picker has to be ready
-before the toggle is on.
+(`src/probe.rs`). The wizard's "Check connection" runs it for
+`auth.test` alone. Each picker's "Load" asks for one list:
+`--list channels` pages `conversations.list` for channels only, as
+`channel` items; `--list conversations` pages `users.list` and then
+`conversations.list` for `im,mpim`, as `conversation` items (path =
+Slack's id, title = what the sync will call it). The two never share
+a listing, so a workspace's directory is read only by someone who
+wants to pick DMs.
 
 ## Channels and DMs
 
@@ -76,15 +79,10 @@ either bare or inside a pasted link — `Copy link` on a DM gives
 `ingest/mod.rs` reads the id out of any of Slack's link shapes. A DM
 has no channel name to match, so folding both into one list would
 silently drop every DM. `dm_conversations` set with `dms = false` is a
-config error, because both silent readings of it are wrong. (An
-earlier `dm_users` named *people* instead, and resolved them through
-the user directory; a conversation id is one string with one meaning,
-so it replaced that outright — a config still carrying `dm_users`
-fails to load rather than mirroring every DM.)
+config error, because both silent readings of it are wrong.
 
 What the surfaces actually look like on the wire (checked against the
-live API 2026-08-31 — worth knowing, because the differences are what
-the code is shaped around):
+live API; the differences are what the code is shaped around):
 
 | Field | `public/private_channel` | `im` (1:1 DM) | `mpim` (group DM) |
 |---|---|---|---|
@@ -95,11 +93,13 @@ the code is shaped around):
 
 Two consequences, both load-bearing:
 
-  * **`members_only` cannot be applied to a DM.** A 1:1 DM has no
-    `is_member` field, so the predicate that selects channels rejects
-    every one of them. On a real workspace this was 99 of 203 DM rows.
-    Hence the `is_dm` column: the `is_member` predicate runs only
-    against `is_dm = 0`. `is_archived` applies to everything.
+  * **The member filter cannot be applied to a DM.** With neither
+    `channels` nor `all_channels` set, the walk keeps only channels the
+    account is a member of (`members_only`). A 1:1 DM has no
+    `is_member` field, so that predicate would reject every one of them
+    — on a real workspace, 99 of 203 DM rows. Hence the `is_dm` column:
+    the `is_member` predicate runs only against `is_dm = 0`.
+    `is_archived` applies to everything.
   * **Both DM shapes reduce to one participant list.** `dm_user_ids`
     stores `user` or `members` verbatim, comma-joined, and
     `dm_counterparts` subtracts the `auth.test` user at read time. One
@@ -121,27 +121,61 @@ for (`YYYY-MM-DD` or RFC 3339, default `DEFAULT_SINCE` = 2024-01-01), so
 "mirror just the last week" is `since` set to seven days ago.
 
 `refresh_window_days` is *not* that knob, despite reading like one. It
-adds a trailing re-query on top of the forward walk so edits and
-reactions on already-stored messages get picked up; it never narrows a
-run's range. Setting it to 7 on a fresh store still walks everything
-from `since`, and setting it on an existing store only adds API calls.
+re-reads the trailing days of what is already mirrored, so edits and
+reactions on stored messages get picked up; it never narrows a run's
+range. Setting it to 7 on a fresh store still walks everything from
+`since`, and setting it on an existing store only adds API calls. The
+window is counted back from the run's own clock (`FetchOptions::now`,
+which the step pins), as the age of a listing sweep is.
 
-Its default also differs by entry point: the `slack-ingest` CLI
-defaults to `DEFAULT_REFRESH_WINDOW_DAYS` (30), while a config-driven
-run (`params.sync`) treats an unset value as 0 — no refresh pass.
+Unset, it is `DEFAULT_REFRESH_WINDOW_DAYS` (30), for a configured
+source and for the `slack-ingest` CLI alike. `0` turns the pass off.
 
-## Resume + dedup
+## What a run still owes
 
-The dedup index doubles as the resume cursor:
+Nothing in the store is a cursor, and nothing records that a channel,
+a thread or a file is "done". Each run asks the store what it holds
+and fetches the difference
+([`sync_state.md`](/docs/dev/plans/sync_state.md) §2), so a run that is
+stopped or killed anywhere leaves a store the next run finishes, with
+nothing to remember in between.
 
-  * For each channel, take `max(ts)` across all recorded `history`
-    pages and start the next forward pass there.
-  * For the trailing refresh window, re-query that range — the dedup
-    pass collapses no-op refreshes to zero writes.
+| Kind | Wanted | Held | Owed |
+|---|---|---|---|
+| a channel's history | everything from `since` on | the `coverage` spans of scope `history:<channel>` | the gaps |
+| a thread's replies | each stored root's `latest_reply` | `replies_pages.latest_reply` for that thread | a root with replies whose stamp is absent, empty or older |
+| a file's bytes | an edge in `slack_attachments`, written with its message | the edge's `blake3` | an edge with no `blake3`, when `media` is on |
 
-A page is skipped if every item in it matches a prior capture by
-canonical content hash, so re-running soon after a successful run is
-cheap.
+**History.** `conversations.history` returns a stretch newest first.
+Each page is one transaction: its messages, an edge for each file they
+carry, and a `coverage` span for the stretch the page settles, from its
+oldest message up to where the page before left off (the last page
+reaches the bottom of the stretch). A walk cut off after its first page
+has covered the top, and the next run walks what is under it. The spans
+are over top-level messages only; a reply's `ts` never moves them. The
+newest message stored is never read as "fetched up to here".
+
+The range wanted has no top. A walk covers up to the newest message it
+saw, not up to "now", so every run asks each channel for what is newer
+than that (one request when there is nothing), and a message that only
+becomes visible late is not skipped. A channel with no messages has no
+span, and is asked from `since` each run.
+
+A span's ends are `ts`es padded to one width (`ts_key`), so they sort as
+instants do. The TNG fixtures' stardate `ts`es have an eleventh digit.
+
+**Threads.** After a channel's history, `RawDb::threads_owed` asks the
+store which roots list a newer `latest_reply` than the thread's
+`replies_pages` stamp, or have replies and no stamp. It is a query over
+every stored root, not over the roots this run happened to list, so a
+root stored by a run that died before its replies is owed. The two
+fields are read out of the root's payload with `json_extract`. The stamp
+is written by the transaction that stores the thread's last page.
+
+**Files.** See [Attachments](#attachments).
+
+A message that did not change is rewritten identically, which doltlite
+stores as no change.
 
 ## Noticing a deleted message
 
@@ -155,12 +189,25 @@ and that is worth knowing before you rely on it.
 
 ### Top-level messages: inside the refresh window, and only there
 
-`refresh_window_days` makes every run re-walk the last N days of each
-channel. Anything we hold in that range that the re-walk did not return
-has been deleted upstream, so we delete our copy.
+`refresh_window_days` makes every run re-read the last N days of what
+each channel has covered. A top-level message we hold in that range that
+the re-read did not return has been deleted upstream, so we delete our
+copy. History is strictly ordered, so each page lists a stretch whole,
+and what it lacks there is deleted in that page's transaction.
 
-**It defaults to off** (`0`), so out of the box we notice nothing. Set it
-to how far back you want deletions caught:
+Only top-level messages are judged this way. `conversations.history`
+lists a thread's root and never its replies, so a reply missing from the
+re-walk is not evidence of anything and is left alone. The one way the
+window removes a reply is with its root: when a root is gone, its
+replies and the thread's `replies_pages` row go with it, because nothing
+would ever ask for that thread again. A reply that was also sent to the
+channel (`thread_broadcast`) does appear in history, but it is stored as
+a reply and treated as one here.
+
+It defaults to 30 days. Without it we would notice nothing: no deleted
+message, no edit, and no new reply on a thread whose root is older than
+the newest message we hold. Set it to how far back you want those
+caught, or to `0` to turn the pass off:
 
 ```toml
 [steps.params.api]
@@ -174,26 +221,22 @@ from last year stays in our copy indefinitely.
 
 ### Thread replies: when the thread is re-fetched anyway
 
-A thread is re-walked when its newest reply is newer than the one we
-stored. `conversations.replies` hands back the whole thread, so a reply
-we hold that is missing from it was deleted, and we drop it.
+A thread is read again when its root lists a newer reply than the one
+its stamp holds. `conversations.replies` hands back the whole thread, so
+a reply we hold that is missing from it was deleted, and we drop it in
+the transaction that stores the thread's last page.
 
 The catch: **deleting a reply does not make a thread look stale.** The
 newest reply either stays where it was or moves *backwards*, and neither
 reads as "something new here". So a deleted reply is noticed the next
 time somebody posts in that thread, and not before.
 
-### Two cases where we deliberately delete nothing
+### A page that claims more and gives no cursor
 
-- **The walk stopped short.** Slack pages with a cursor, and a response
-  that claims there is more without supplying one leaves us holding part
-  of a range. We keep everything: a range we only partly read looks
-  exactly like a range whose messages were all deleted.
-- **`force_full_walk`** — the re-walk triggered by turning `media` on or
-  raising the attachment size cap (see the next section). It re-reads
-  everything and would be an ideal moment to reconcile, but it skips the
-  refresh-window pass as redundant, and that pass is where the comparison
-  lives. A missed detection rather than a wrong one.
+Slack pages with a cursor. A response with `has_more` and no cursor to
+ask with is not a listing of anything: its messages are stored, nothing
+is deleted and nothing is covered or stamped, and the channel (or the
+thread) is reported as failed, so the next run asks again.
 
 ### Deleting our copy is not as final as it sounds
 
@@ -204,51 +247,75 @@ The raw store is versioned, so a pruned row stays in history.
 guesses itself: if a prune turns out to be wrong, the rows are still
 there.
 
-## Config changes the cursor would otherwise swallow
+## A changed config
 
-The resume cursor above answers "where do I start?" entirely from stored
-data, which means it stops consulting the config that set it. `since` is
-only read on the cold-start arm, so widening it would silently do
-nothing — and structurally *could* not do anything, because the forward
-walk only moves forward while a widened `since` asks to go backwards.
+No record is kept of the config a run had, because nothing needs one:
+what is owed is computed from the config a run has now.
 
-So the scope-affecting params are recorded after each successful run via
-`datalib_etl::scope_config` (scope key `slack:download`, stored in
-the raw store's `sync_scope_config` table), and the next run diffs them.
-This is the one piece of bookkeeping outside the dedup index that
-participates in the resume decision.
-
-| Change | Reaction |
+| Change | What it does |
 |---|---|
-| `since` earlier | Walk `[since, min(ts)]` per channel — the window below what's mirrored. The forward resume cursor is untouched. Runs before the reply pass so backfilled thread roots get their replies. |
-| `since` later | No-op |
-| `media` off → on | Re-walk from `since`, including already-mirrored threads: attachment rows only exist for messages walked while the knob was on, and reply attachments are fetched only inside `paginate_replies`. |
-| `blob_size_limit_bytes` raised/lifted, with `media` on | Same re-walk, same reason |
-| `blob_size_limit_bytes` relaxed, with `media` off | No-op — no blobs are fetched either way |
+| `since` earlier | A gap below what each channel has covered, walked once. |
+| `since` later | Nothing. What is stored stays; nothing here deletes it. |
+| `media` off → on | Every edge without bytes is owed, and fetched from its stored message. No channel is walked again. |
+| `common.blob_size_limit_bytes` raised | The edges skipped for their size are still without bytes, so they are fetched. |
+| a new channel, or `dms` on | The conversation has no coverage, so it is walked from `since`. |
 
-Only widenings do work; a narrowed knob leaves an on-disk superset and
-nothing in the pipeline deletes. `channels` and `refresh_window_days` are
-deliberately *not* recorded — a newly listed channel has no rows so it
-cold-starts on its own, and the refresh window is re-applied every run.
+Turning `dms` on also needs a fresh `conversations.list`: the cached
+sweep was taken under the narrower `types` and holds no DM rows at all.
+The sweep marker is keyed on `dms`, so flipping the knob misses the
+six-hour TTL rather than mirroring nothing until it expires. A sweep
+marker only says "do not list again yet"; it is not progress.
 
-`dms` and `dm_conversations` aren't recorded either, for the same reason one
-level up: a newly listed DM has no message rows, so it cold-starts from
-`since` unaided. What turning `dms` on *does* need is a fresh
-`conversations.list` — the cached sweep was taken under the narrower
-`types` and holds no DM rows at all. That is handled by keying the
-sweep marker on `dms`, so flipping the knob misses the six-hour TTL
-rather than silently mirroring nothing until it expires.
+## When part of a sync fails
 
-Two rules worth knowing when reading the code:
+Only `auth.test` failing fails the step, or a channel listing that
+fails with no channels stored from an earlier one: without either
+there is nothing to walk. Anything else that fails is a `problems` row,
+and the sync goes on with the rest.
 
-  * **An absent blob plans no work.** Data roots synced before this
-    existed have no record, and treating that as "unknown, therefore
-    re-download" would backfill every mirror at once on upgrade.
-  * **The blob is recorded only when no channel failed.** Per-channel
-    errors are warned and stepped over, so a run can return `Ok` without
-    having covered everything; recording anyway would drop a scheduled
-    backfill permanently, since — unlike the resume cursor — bookkeeping
-    doesn't self-heal from stored rows.
+- **A listing** — `users.list`, `conversations.list`, or one channel's
+  `conversations.history` — is a `listing:` row (`listing:users.list`,
+  `listing:conversations.history <channel>`). The run walks what an
+  earlier listing stored. A run that gets to its end replaces the last
+  run's rows, so the next run that lists cleanly clears them.
+- **A thread** whose `conversations.replies` fails is a row on the
+  thread's own stamp (`replies_pages:<team>#<channel>#<ts>`, the key its
+  root message has), an error while its replies have never been read and
+  a warning once they have. Render names the root's grid row, so the
+  problem shows on the thread's document. The stamp did not move, so the
+  thread is still owed and the next run asks again; the read that
+  succeeds clears the row. Storing the root again does not.
+
+A channel whose history fails still has its owed threads and files
+fetched on that run: they are in the store whatever the walk did.
+
+## Attachments
+
+Each file a stored message carries that Slack serves (not a tombstone,
+not hosted elsewhere) is a `slack_attachments` row, written without a
+`blake3` in the transaction that stores the message, whether or not
+`media` is on. The bytes are owed from then on.
+
+When `media` is on, each channel's owed files are fetched after its
+history and threads, from the file object the stored message carries:
+a batch of `FILE_BATCH` goes into the blob CAS, then one transaction
+gives their edges a `blake3`. A file whose bytes we already hold, under
+any message, is not fetched again.
+
+A file that does not land — the fetch failed, or it is over
+`common.blob_size_limit_bytes` — keeps its edge without bytes, with
+`last_error` set on `slack_attachments_bookkeeping` and a `problems` row
+keyed `slack_attachments:<row id>`: `fetch_failed` (an error — the file
+is missing) for a failure, `over_size_limit` (a warning) for a skip. It
+is still owed, so every run tries it again: a transient failure
+recovers, a size skip is judged against today's limit, and either way
+the `problems` row is rewritten or cleared.
+
+The stored `url_private_download` does not expire: it has no signature
+in it, and the credential signs each request. Checked against the live
+API: files from 2024 still answered 200 by their stored URL. A file that
+is gone, or that the account cannot see, answers 302 (to a 404), which
+is recorded as a failure.
 
 ## The account's own state
 
@@ -273,7 +340,7 @@ otherwise), leaves that table as it was, and does not stop the sync.
   account follows (the `conversations.history` copy has neither).
   Those two are volatile on `messages` too
   (`MESSAGE_VOLATILE_PATHS`), so reading a thread is not an edit to its
-  root, and the history copy no longer overwrites the replies copy. A
+  root, and the history copy does not overwrite the replies copy. A
   thread is only re-fetched when it has a new reply, so its mark is as
   fresh as its last reply, not as the last sync.
 - **`saved_items`**, from `saved.list`: in progress, completed and
@@ -288,7 +355,7 @@ otherwise), leaves that table as it was, and does not stop the sync.
   listed (its label is in the channel's `properties.tabs`). A
   conversation is asked only when its `properties.tabs` shows a
   `bookmarks` or `folder` tab, or when we already hold bookmarks for it.
-  On a real workspace (2026-09-24) 75 of 128 channels had no such tab, and
+  On a real workspace 75 of 128 channels had no such tab, and
   none of the 25 of those we asked held a bookmark. Listed at most once
   per `MANIFEST_TTL`, like the channel list. The listing is not paged,
   so it is the conversation's whole set, and a bookmark it no longer
@@ -300,7 +367,7 @@ token with `not_allowed_token_type`, and no List turned up through
 
 Render reads both marks: a top-level message after its conversation's
 `last_read`, or a reply after its followed thread's, renders unread
-(`slack_render/TRANSLATE.md`).
+([`slack_render/TRANSLATE.md`](../slack_render/TRANSLATE.md)).
 
 ## Rate limits
 
@@ -309,12 +376,13 @@ methods, as HTTP `200` with an `{"ok":false,"error":"ratelimited"}`
 body. Both are handled centrally by the shared `latchkey_curl`
 chokepoint — `api::slack_retryability` teaches it to recognize the
 200-body form, after which it honors `Retry-After` / backs off and
-enforces the source's `extract_params` give-up policy. When it gives
-up, the call surfaces as `SlackError::Permanent`.
+enforces the source's `common.download_params` give-up policy. When it
+gives up, the call surfaces as `SlackError::Permanent`.
 
 ## Sample data
 
-A curated [Star Trek: TNG-themed
-fixture](tests/fixtures/slack_api/) demonstrates the raw wire format
-and lives next to the code under test. The Python translator currently
-reads it from this location as well.
+[`tests/fixtures/slack_api/`](tests/fixtures/slack_api/) is a TNG-themed
+capture of the API, one `raw_api/<method>/` tape per method, replayed by
+`:slack_tests` and by the central fixture pipeline.
+[`tests/fixtures/slack_api_v2/`](tests/fixtures/slack_api_v2/README.md)
+is the same workspace one sync later.

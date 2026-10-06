@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
-use tracing::warn;
 
 use super::hash::{hash_file, hash_symlink_target, hash_tree, Blake3, TreeChild};
 use super::metrics::WalkerCounters;
@@ -46,13 +45,17 @@ impl ScanResult {
     }
 }
 
-/// One unreadable entry. Surfaced to the caller so it can land in
-/// `<table>_bookkeeping.last_error` per the framework's universal
-/// pattern.
+/// One entry the walk could not record, for the run's `problems` rows.
 pub struct WalkerError {
+    /// `files` or `dirs`: the table the entry's row would be in, or
+    /// `files` when the walk could not learn which.
+    pub table: &'static str,
     pub id: String,
     pub message: String,
 }
+
+/// A directory's children as `(name, root-relative id)`.
+type Children = Vec<(String, String)>;
 
 pub struct WalkerSummary {
     pub rehashed: usize,
@@ -198,8 +201,13 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             dir_path,
             &mut self.config_cache,
             &mut self.cascade_cache,
+            &mut self.errors,
         );
         let dir_effective = dir_cascade.effective();
+        // Whether this directory lost a child this run. Its fingerprint
+        // then asks the next run for a real readdir, which is the only
+        // way that run can find the child again (or fail again, and say so).
+        let mut rescan = false;
 
         // Enumerate children: from the in-memory cache when this is
         // demonstrably the same directory, unmodified; otherwise via a
@@ -230,13 +238,19 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                 .unwrap_or_default()
         } else {
             match self.read_children(dir_path, dir_rel) {
-                Ok(v) => v,
+                Ok((names, non_utf8)) => {
+                    rescan |= !non_utf8.is_empty();
+                    self.errors.extend(non_utf8);
+                    names
+                }
                 Err(e) => {
                     self.counters.stat_errors.fetch_add(1, Ordering::Relaxed);
                     self.errors.push(WalkerError {
+                        table: "dirs",
                         id: dir_rel.to_string(),
                         message: format!("readdir: {e}"),
                     });
+                    rescan = true;
                     Vec::new()
                 }
             }
@@ -258,9 +272,11 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                     if e.kind() != std::io::ErrorKind::NotFound {
                         self.counters.stat_errors.fetch_add(1, Ordering::Relaxed);
                         self.errors.push(WalkerError {
+                            table: "files",
                             id: child_rel.clone(),
                             message: format!("stat: {e}"),
                         });
+                        rescan = true;
                     }
                     continue;
                 }
@@ -285,6 +301,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                     &child_path,
                     &mut self.config_cache,
                     &mut self.cascade_cache,
+                    &mut self.errors,
                 )
                 .effective();
                 matches_ignore(&eff, &child_rel, true, self.root)
@@ -327,9 +344,11 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                             Err(e) => {
                                 self.counters.read_errors.fetch_add(1, Ordering::Relaxed);
                                 self.errors.push(WalkerError {
+                                    table: "files",
                                     id: child_rel.clone(),
                                     message: format!("hash: {e:#}"),
                                 });
+                                rescan = true;
                                 continue;
                             }
                         }
@@ -344,9 +363,11 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                         Err(e) => {
                             self.counters.read_errors.fetch_add(1, Ordering::Relaxed);
                             self.errors.push(WalkerError {
+                                table: "files",
                                 id: child_rel.clone(),
                                 message: format!("read_link: {e}"),
                             });
+                            rescan = true;
                             continue;
                         }
                     };
@@ -421,7 +442,11 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         // change", which cannot tell one directory from a *different*
         // directory that happens to share an mtime — see
         // [`same_dir_unmodified`].
-        let stamp_kind = self.default_stamp_kind;
+        let stamp_kind = if rescan {
+            StampKind::Rescan
+        } else {
+            self.default_stamp_kind
+        };
         let fingerprint = Fingerprint {
             abs_path: fp_abs(self.root, dir_rel),
             kind: EntryKind::Dir,
@@ -437,37 +462,41 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         Ok((dir_hash, dir_size, dir_entries))
     }
 
+    /// The children's `(name, rel)` pairs, and the ones whose names are
+    /// not UTF-8, which no row can key.
     fn read_children(
         &self,
         dir_path: &Path,
         dir_rel: &str,
-    ) -> std::io::Result<Vec<(String, String)>> {
-        let mut out: Vec<(String, String)> = Vec::new();
+    ) -> std::io::Result<(Children, Vec<WalkerError>)> {
+        let mut out: Children = Vec::new();
+        let mut non_utf8 = Vec::new();
         for entry in std::fs::read_dir(dir_path)? {
             let entry = entry?;
             let name_os = entry.file_name();
             if name_os == BREADCRUMB_FILENAME {
                 continue;
             }
+            let rel_of = |name: &str| {
+                if dir_rel.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{dir_rel}/{name}")
+                }
+            };
             let Some(name) = name_os.to_str() else {
                 self.counters.non_utf8_paths.fetch_add(1, Ordering::Relaxed);
-                warn!(
-                    event = "fsindex_skip_non_utf8_path",
-                    path = %dir_path.join(&name_os).display(),
-                    "a path is not UTF-8; skipped it"
-                );
+                non_utf8.push(WalkerError {
+                    table: "files",
+                    id: rel_of(&name_os.to_string_lossy()),
+                    message: "the name is not UTF-8, so it cannot be indexed".to_string(),
+                });
                 continue;
             };
-            let name = name.to_string();
-            let child_rel = if dir_rel.is_empty() {
-                name.clone()
-            } else {
-                format!("{dir_rel}/{name}")
-            };
-            out.push((name, child_rel));
+            out.push((name.to_string(), rel_of(name)));
         }
         out.sort();
-        Ok(out)
+        Ok((out, non_utf8))
     }
 }
 
@@ -476,6 +505,7 @@ fn cascade_for_dir(
     dir: &Path,
     config_cache: &mut HashMap<PathBuf, Option<FsindexYaml>>,
     cascade_cache: &mut HashMap<PathBuf, OptionsCascade>,
+    errors: &mut Vec<WalkerError>,
 ) -> OptionsCascade {
     if let Some(cached) = cascade_cache.get(dir) {
         return cached.clone();
@@ -493,12 +523,13 @@ fn cascade_for_dir(
             .or_insert_with(|| match options::load_at(&d) {
                 Ok(y) => y,
                 Err(err) => {
-                    warn!(
-                        event = "fsindex_options_parse_error",
-                        dir = %d.display(),
-                        error = %err,
-                        "a directory's options file did not parse"
-                    );
+                    errors.push(WalkerError {
+                        table: "dirs",
+                        id: rel_id(root, &d),
+                        message: format!(
+                            "{BREADCRUMB_FILENAME} did not parse, so it was not applied: {err:#}"
+                        ),
+                    });
                     None
                 }
             });
@@ -508,6 +539,17 @@ fn cascade_for_dir(
         cascade_cache.insert(d.clone(), cascade.clone());
     }
     cascade
+}
+
+/// The row id of a path under the root: slash-separated, `""` for the
+/// root itself.
+fn rel_id(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .iter()
+        .map(|c| c.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn fp_abs(root: &Path, rel: &str) -> String {

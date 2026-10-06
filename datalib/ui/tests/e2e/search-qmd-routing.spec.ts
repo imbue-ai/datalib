@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { searchAndSettle } from "./grid-helpers";
+import { GRID, searchAndSettle } from "./grid-helpers";
 
 // Free-text search routes through qmd (BM25 + vector + reranker by
 // default). The bug this guards: previously the Rust backend did
@@ -9,7 +9,7 @@ import { searchAndSettle } from "./grid-helpers";
 // as the literal "earl grey").
 
 async function qmdSearch(page: import("@playwright/test").Page, q: string) {
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
   // Settle first, then assert. The score column is only ever populated
   // by qmd-routed rows, so once the grid is painting this query its

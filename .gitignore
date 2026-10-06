@@ -6,6 +6,8 @@ __pycache__/
 .mypy_cache/
 *.egg-info/
 dist/
+# The vendored plugin's built files are its source here.
+!/third-party/latchkey-garmin/dist/
 build/
 # Bazel's convenience symlinks (bazel-bin, bazel-out, bazel-testlogs,
 # bazel-datalib). Anchored: bazel only ever creates them in the

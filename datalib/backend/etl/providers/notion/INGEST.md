@@ -35,7 +35,7 @@ tells you.
 
 **Discovery.** Two modes.
 
-With `sync.roots` empty — the default — the mirror is the whole
+With `api.roots` empty — the default — the mirror is the whole
 workspace, discovered through `POST /v1/search` sorted
 `last_edited_time` descending, 100 at a time, **stopping at the first
 result older than where the last run finished**. Page objects come back
@@ -59,8 +59,8 @@ ordinary page objects, so the walk queues nothing but `object: "page"`
 and never queries a data source for its rows. The data-source objects
 search also returns are containers, and are skipped.
 
-It is stored per source as `sync_scope_state.last_seen_at`, alongside a
-config blob, so widening `refresh_window_days` re-examines that window
+It is stored per source as `sync_scope_state.last_seen_at_utc`, alongside a
+config blob (`sync_scope_config`), so widening `refresh_window_days` re-examines that window
 instead of being suppressed by a point recorded under the narrower
 setting. It is written only after the pages land — a point recorded over
 a failed pass would skip that window forever.
@@ -68,23 +68,21 @@ a failed pass would skip that window forever.
 Do not confuse it with `start_cursor` / `next_cursor`, which page
 *within* one walk and do not survive it.
 
-With `sync.roots` set, the mirror is those pages and everything under
+With `api.roots` set, the mirror is those pages and everything under
 them, walked through the `<page>` and `<database>` links in each body.
 No search, and no resume cursor: the walk is the enumeration.
 
-**Per page**, two requests where the block walk needed one per container
-block:
+**Per page**, two requests:
 
 1. `GET /v1/pages/{id}` — properties, parent, icon, cover, `in_trash`.
 2. `GET /v1/pages/{id}/markdown` — the body, already rendered.
 
-Plus `GET /v1/comments?block_id={page_id}` when comments are enabled;
-one call returns the page's whole discussion set, including threads
-anchored to blocks inside it.
-
-Measured over 12 pages of a real workspace: the old block walk needed a
-median of 11 requests per page (≥60 on the deepest), 241 in total
-against 36 for the same pages now.
+Plus `GET /v1/comments?block_id={page_id}` when `api.comments` is on
+(the default); one call returns the page's whole discussion set,
+including threads anchored to blocks inside it. A page whose
+`last_edited_time` has not moved since the stored row is not fetched
+again — unless part of its last fetch failed (see "When part of a sync
+fails") — but the walk still descends into its stored child pages.
 
 **The block tree is not mirrored.** There is no `blocks` table and no
 block renderer. Notion renders the page; we store what it returns.
@@ -150,6 +148,69 @@ Truncation itself is rare: one page in a random 70, and that one a
 permanent `drive` embed. Size truncation is rarer still and sits in a
 few very large pages, which is why the cap is per page.
 
+## When part of a sync fails
+
+The step fails only when it can do nothing: the credential is refused
+(401) before anything was fetched, the first page of search results does
+not come back, the store will not take a write, or every page it tried
+failed. Anything smaller is a `problems` row, and the rest of the run
+goes on.
+
+Two things end the walk early without failing the step: the shared
+retry guard giving up on the service (every request after would give up
+too), and a 401 once pages have been fetched. The walk stops where it
+is, the run leaves one row (`phase:rate_limit` or `phase:credential`),
+and returns as a success so what it fetched is committed: the store
+commits only when the download succeeds. The resume cursor does not move
+and nothing past that point is marked failed, so the next run picks up
+the rest through search and the retry set.
+
+| what failed | its row | what clears it |
+|---|---|---|
+| a page object | `pages:<id>` | the page fetching |
+| a page's comments listing | `pages:<id>`, a warning (the page is stored) | the page fetching whole |
+| comments the credential may not read (403: an integration without the read-comments capability) | one `listing:comments`, a warning; comments are not asked for again that run, and no page is marked failed | a run that reads comments |
+| a page's body | `page_markdown:<id>` | the body fetching |
+| a truncated subtree's follow-up | `page_markdown:<id>`, a warning | the body fetching whole |
+| more subtrees than `MAX_HOLE_FOLLOWUPS` | `page_markdown:<id>`, a deliberate-loss warning | the page changing so it needs fewer |
+| an attachment's bytes | `notion_attachments:<page>#<slot>` | the bytes landing, or the body no longer linking it |
+| a user | `users:<id>` | the user fetching |
+| a configured root Notion has not got (404) or will not show (403) | `config:roots:<value>` | the root fetching, or leaving the config |
+| a search page after the first | `listing:search` | a search that reaches the resume cursor |
+
+Each of those clears only by being tried again, and upstream has not
+moved any of them, so a run fetches them again on its own:
+`RawDb::pages_to_refetch` names every page with a failed object, comments
+listing, body or attachment, plus any whose stored body is older than
+its stored object. Such a page is not skipped as unchanged, and in search
+mode it is queued beside what search named, since search names only what
+moved. An attachment is retried by fetching its page again because its
+signed URL lives only in the response that named it. A failed user is
+asked for again at the end of every run. The follow-up cap is left out:
+fetching the page again gets the same body.
+
+**A 404 is a deletion, not a failure.** Notion answers it for a page
+deleted or no longer shared with the credential. The ingest deletes
+nothing (see "Deletions"), so a page the store holds stays as it was;
+what goes is its failure rows and the reasons it was in the retry set,
+and a stub that never fetched goes whole (`RawDb::retire_page`). A body
+that answers 404 is marked current at the page's `last_edited_time`, so
+it is asked for again only once the page is edited; a user that answers
+404 loses its failure, an attachment its failed edge, and comments read
+as none. A configured root that answers 404 is still a `config:` row.
+
+A search cut short holds the resume cursor where it was, so the next run
+reads that window again. A page that failed does not hold it: it is in
+the retry set. A page fetched again only to fail again does not count
+toward "every page failed", so one page a 5xx keeps failing does not fail
+every steady-state run.
+
+The body is stored last, after the attachments, comments and users: a
+stop part-way through a page leaves its stored body behind its stored
+object, which puts it in the retry set. A request the transport refused
+because of the stop is not a problem, and a stopped run leaves the last
+run's `listing:` and `config:` rows standing.
+
 ## Most pages have no body
 
 In a random 70-page sample of a real workspace, **50 (71%) returned
@@ -161,14 +222,15 @@ document.
 ## Rate limits
 
 ~3 requests/second per connection, plus a workspace-wide limit that
-scales with plan. `429`/`5xx` retry with `Retry-After` is handled
-centrally in `latchkey_curl`. Expect roughly one empty-body response per
-130 requests on a long walk — retry covers it, but a naive loop would
-silently truncate.
+scales with plan. `429` and `502`–`504` are retried, honouring
+`Retry-After`, by the shared HTTP layer
+(`datalib_etl::http::default_retryability`). Expect roughly one
+empty-body response per 130 requests on a long walk; a loop that read
+one as the end of a listing would silently truncate.
 
 ## Schema
 
-`<root>/<name>/ingest/entities.doltlite_db`:
+`<data_root>/<group>/ingest/entities.doltlite_db`:
 
 | table | holds |
 |---|---|
@@ -194,7 +256,8 @@ seen on pages, people properties and comments are resolved with
 `GET /v1/users/{id}` and cached in `users`. One request per user, once
 ever. It has to work this way: `GET /v1/users` (list all) is not
 available to a personal access token. A user that cannot be read falls
-back to an id prefix rather than failing the page.
+back to an id prefix rather than failing the page, and is a `users:<id>`
+row until a later run reads it.
 
 **A comment names a `block_id` and carries no quote of what it is
 about.** So `GET /v1/blocks/{id}` runs for **commented blocks only** —
@@ -224,13 +287,11 @@ the run.
 What this narrows is the **render** — writing files, building
 `grid_rows`, hashing — which is where the cost is. It does not narrow
 the read: the store's rows are still walked once and filtered in
-memory. If that read ever dominates, it is the thing to fix, and this
-paragraph is the honest description of what is and is not incremental
-today.
+memory.
 
 ## Deletions
 
-Render no longer walks everything, so absence from a run means nothing
+Render does not walk everything, so absence from a run means nothing
 and a deletion has to be **named**. Two passes, because a page and its
 threads are separate documents with separate `conversation_uuid`s:
 
@@ -245,13 +306,10 @@ Both ask the store rather than inferring from what the parse returned.
 parse result may simply be one whose body has not arrived yet; deleting
 on that reading would destroy a live document.
 
-## Not built yet
-
-- A trash pass (`filter: {in_trash: true}`) — deletions are currently
-  noticed by absence from the render sweep rather than by asking Notion
-  what it trashed.
-- Data-source schema, and the `entity_id_str` port (see
-  `docs/dev/entity_ids.md`, which still lists notion as pending).
+The ingest itself never deletes a page or a comment, so a page deleted
+or trashed in Notion stays in the mirror. `pages.in_trash` is stored
+when a trashed page is seen, and render does not read it. A trash pass
+(`filter: {in_trash: true}`) is not built, nor is a data-source schema.
 
 Every number above was measured against a live workspace, not read off
 Notion's documentation.

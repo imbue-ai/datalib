@@ -155,10 +155,9 @@ async fn parse_async(
     period: Period,
     range: RawRange<'_>,
 ) -> Result<ParsedBeeper> {
-    // Pinned at open — at the driver's commit, else HEAD — with the views
-    // installed before anything reads. No commit means nothing has been
-    // committed here to render: emptiness, not a reason to read the
-    // working set.
+    // Opened at the driver's commit, else HEAD. No commit means nothing
+    // has been committed here to render: emptiness, not a reason to read
+    // the working set.
     let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
         .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?
@@ -173,7 +172,7 @@ async fn parse_async(
     let room_rows = sqlx::query(
         "SELECT id, source, network, native_room_id, external_room_id,
                 external_workspace_id, account_id, title, description, is_dm
-         FROM pinned_rooms rooms",
+         FROM rooms",
     )
     .fetch_all(&pool)
     .await
@@ -224,7 +223,7 @@ async fn parse_async(
                     UNION
                     SELECT e.room_uuid
                       FROM dolt_diff_beeper_media_attachments d
-                      JOIN pinned_events e ON e.id = coalesce(d.to_event_uuid, d.from_event_uuid)
+                      JOIN events e ON e.id = coalesce(d.to_event_uuid, d.from_event_uuid)
                      WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
                 )
                 WHERE room_uuid IS NOT NULL
@@ -264,11 +263,10 @@ async fn parse_async(
     // native_user_id. Stored separately rather than joined into
     // the event SELECT so a single user appearing in many events
     // only round-trips once.
-    let user_rows =
-        sqlx::query("SELECT id, native_user_id, display_name, full_name FROM pinned_users users")
-            .fetch_all(&pool)
-            .await
-            .context("read users")?;
+    let user_rows = sqlx::query("SELECT id, native_user_id, display_name, full_name FROM users")
+        .fetch_all(&pool)
+        .await
+        .context("read users")?;
     let mut user_label: HashMap<String, String> = HashMap::new();
     for r in &user_rows {
         let id: String = r.try_get("id")?;
@@ -289,7 +287,7 @@ async fn parse_async(
     // other ported provider grabs that metadata at render time.
     let blob_rows = sqlx::query(
         "SELECT id, event_uuid, ref_id, blake3
-         FROM pinned_beeper_media_attachments beeper_media_attachments",
+         FROM beeper_media_attachments",
     )
     .fetch_all(&pool)
     .await
@@ -375,7 +373,7 @@ async fn parse_async(
                 MIN(timestamp_ms) AS first_ms,
                 MAX(timestamp_ms) AS last_ms,
                 COUNT(*) AS event_count
-         FROM pinned_events events
+         FROM events
          WHERE event_type != 'REACTION'{room_filter}
          GROUP BY room_uuid, period_key
          ORDER BY room_uuid, period_key"
@@ -409,7 +407,7 @@ async fn parse_async(
                 reply_to_native_event_id, edit_of_native_event_id,
                 reaction_emoji, reaction_target_native_event_id,
                 {period_expr} AS period_key
-         FROM pinned_events events
+         FROM events
          WHERE 1 = 1{room_filter}
          ORDER BY room_uuid, timestamp_ms"
     );

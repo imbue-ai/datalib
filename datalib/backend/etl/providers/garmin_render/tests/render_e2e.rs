@@ -8,7 +8,6 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_garmin::auth::Credentials;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::GarminApi;
@@ -33,7 +32,7 @@ async fn ingest(raw: &Path, playback: &Path) {
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
     let s = fetch(FetchOptions {
         db: db.clone(),
-        creds: Credentials::fixed("playback"),
+        latchkey: Default::default(),
         api: GarminApi {
             since: Some("2369-04-01".into()),
             ..Default::default()
@@ -88,7 +87,7 @@ async fn renders_the_weight_page_then_skips_an_unchanged_store() {
     assert_eq!(doc.rows.len(), 2, "1 page row + 1 device row");
     let page_row = doc.rows.iter().find(|r| r.kind == "Garmin Weight").unwrap();
     assert_eq!(page_row.author.as_deref(), Some("Jean-Luc Picard"));
-    assert!(page_row.text.contains("77.6 kg"), "{}", page_row.text);
+    assert!(page_row.preview.contains("77.6 kg"), "{}", page_row.preview);
     assert!(
         page_row
             .created_at
@@ -138,7 +137,7 @@ async fn renders_the_weight_page_then_skips_an_unchanged_store() {
     let texts = |d: &RenderedMarkdown| {
         d.rows
             .iter()
-            .map(|r| (r.uuid.clone(), r.text.clone()))
+            .map(|r| (r.uuid.clone(), r.preview.clone()))
             .collect::<Vec<_>>()
     };
     assert_eq!(texts(&again[0]), texts(doc));

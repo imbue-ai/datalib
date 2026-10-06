@@ -9,3 +9,9 @@ mod child_prune;
 mod incremental_render;
 mod live;
 mod playback_roundtrip;
+mod run_problems;
+
+/// The fixture's pinned clock, as the pipeline's `--now` sets it.
+pub fn tng_now() -> datalib_time::IsoOffsetTimestamp {
+    datalib_time::parse_strict("2369-04-15T00:00:00+00:00").unwrap()
+}

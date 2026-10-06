@@ -21,9 +21,11 @@ const PARENT_PIPE_FD: libc::c_int = 3;
 
 pub const ENV_STEP: &str = "DATALIB_DAG_STEP";
 /// The run this invocation belongs to — the id every row of
-/// `system/runs/runs.sqlite` carries — and which attempt of the step this is
-/// within it (1 for the first). Stamp them into anything you write that
-/// should be joinable back to the run.
+/// `system/runs/runs.sqlite` carries — and which attempt of this
+/// invocation it is: 1 for the first, counting up only as the runner
+/// retries a failure. A step started again later in the same run starts
+/// at 1 again. Stamp them into anything you write that should be
+/// joinable back to the run.
 pub const ENV_RUN_ID: &str = "DATALIB_DAG_RUN_ID";
 pub const ENV_ATTEMPT: &str = "DATALIB_DAG_ATTEMPT";
 /// The step's group id, its group's `type`, and its function — the two
@@ -49,8 +51,7 @@ pub const ENV_READS: &str = "DATALIB_READS";
 /// prefer it over sampling their own clock.
 pub const ENV_NOW: &str = "DATALIB_DAG_NOW";
 /// Set by `datalib-dag --reset`, and then the step does no work: it
-/// empties what the value names — `store`, or `blobs` for an ingest
-/// step's store and its blob CAS with it — commits that, and exits. The
+/// empties what the value names — always `store` — commits that, and exits. The
 /// runner then forgets the step ever succeeded, so the next run does its
 /// work from the start.
 pub const ENV_RESET: &str = "DATALIB_DAG_RESET";
@@ -252,7 +253,7 @@ pub(crate) async fn run_subprocess(
     }
     // Its own process group, so a signal aimed at the step reaches what
     // the step spawned. A step is often a wrapper around something else
-    // — `qmd_index` runs `node qmd embed` — and a `kill(pid)` the step
+    // — `embed` runs qmd's embedding under node — and a `kill(pid)` the step
     // does not forward leaves that grandchild running after the runner
     // is gone. The cost is that a terminal's Ctrl-C no longer reaches
     // steps directly, which changes nothing: `interrupt_children` is
@@ -448,30 +449,56 @@ const ENVELOPE_LIFTED: &[&str] = &[
     "fields",
 ];
 
-/// A forwarded line from either pipe. Structured tracing output (JSON
-/// with a `level` field, e.g. tracing-subscriber's JSON format) is
-/// unwrapped — its message, severity, target, thread and timestamp
-/// become the event's, and its other fields ride along as `fields` — so
-/// nothing downstream parses an envelope out of a string. Everything
-/// else — progress bars, plain chatter — is the line itself at `info`.
+/// A forwarded line from either pipe. Structured tracing output is
+/// unwrapped ([`parse_envelope`]) so nothing downstream parses an
+/// envelope out of a string; everything else — progress bars, plain
+/// chatter — is the line itself at `info`.
 fn unwrap_line(step: &str, stream: Stream, line: &str) -> Event {
-    let plain = || Event::Log {
-        step: step.to_string(),
-        level: LogLevel::Info,
-        msg: line.to_string(),
-        ts: None,
-        stream: Some(stream),
-        target: None,
-        thread: None,
-        fields: None,
-    };
+    match parse_envelope(line) {
+        Some(e) => Event::Log {
+            step: step.to_string(),
+            level: e.level,
+            msg: e.msg,
+            ts: e.ts,
+            stream: Some(stream),
+            target: e.target,
+            thread: e.thread,
+            fields: e.fields,
+        },
+        None => Event::Log {
+            step: step.to_string(),
+            level: LogLevel::Info,
+            msg: line.to_string(),
+            ts: None,
+            stream: Some(stream),
+            target: None,
+            thread: None,
+            fields: None,
+        },
+    }
+}
+
+/// One line of structured tracing output taken apart: its message,
+/// severity, target, thread and timestamp, and the rest of what it
+/// carried as `fields`. The gateway reads an applet's stderr with it too.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Envelope {
+    pub level: LogLevel,
+    pub msg: String,
+    pub ts: Option<String>,
+    pub target: Option<String>,
+    pub thread: Option<String>,
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// `None` for a line that is not a JSON object with a `level` —
+/// tracing-subscriber's JSON format, or a Python step's logging.
+pub fn parse_envelope(line: &str) -> Option<Envelope> {
     let Ok(serde_json::Value::Object(mut env)) = serde_json::from_str::<serde_json::Value>(line)
     else {
-        return plain();
+        return None;
     };
-    let Some(level_word) = env.get("level").and_then(|l| l.as_str()) else {
-        return plain();
-    };
+    let level_word = env.get("level").and_then(|l| l.as_str())?;
     // tracing-subscriber spells the level in capitals; `warning` is
     // what a Python step's logging module writes.
     let level = match level_word.to_ascii_lowercase().as_str() {
@@ -508,16 +535,14 @@ fn unwrap_line(step: &str, stream: Stream, line: &str) -> Event {
             fields.entry(k).or_insert(v);
         }
     }
-    Event::Log {
-        step: step.to_string(),
+    Some(Envelope {
         level,
         msg,
         ts,
-        stream: Some(stream),
         target,
         thread,
         fields: (!fields.is_empty()).then_some(fields),
-    }
+    })
 }
 
 fn retag(ev: Event, id: &str) -> Event {
@@ -851,7 +876,9 @@ mod tests {
 
         let (stop, stop_rx) = tokio::sync::watch::channel(false);
         let mut runner = Runner::new(root.path()).stop_on(stop_rx);
-        runner.budgets.network = 1;
+        runner
+            .lock_slots
+            .insert(crate::supervisor::locks::NETWORK.into(), 1);
         let round = tokio::spawn(async move { runner.run(&g).await });
 
         let count = || std::fs::read_dir(&started).unwrap().count();
@@ -1010,11 +1037,11 @@ mod tests {
 
     /// A step written against the older protocol reports
     /// `{"path": …, "changed": true}` and no version. That must not fail
-    /// the step — the row is dropped with a warning and the runner
-    /// content-hashes the output, which is what `changed: true` resolved
-    /// to before the version became the only signal.
+    /// the step: the row is dropped with a warning, and the success gets a
+    /// version of its own, new each time, which is what `changed: true`
+    /// meant.
     #[tokio::test]
-    async fn outcome_row_without_a_version_warns_and_falls_back_to_hashing() {
+    async fn outcome_row_without_a_version_warns_and_gets_a_fresh_version() {
         let root = tempfile::tempdir().unwrap();
         let spec = StepSpec::new(
             "legacy/raw",
@@ -1036,12 +1063,8 @@ mod tests {
             rep.all_ok(),
             "a versionless row must not fail the step: {rep:#?}"
         );
-        // Fell back to the content hash rather than recording nothing.
-        // (Recorded versions carry the step fingerprint as a prefix.)
         let version = &rep.step("legacy/raw").outputs[0].1;
-        let hashed = version.rsplit(':').next().unwrap();
-        assert_ne!(hashed, crate::version::ABSENT);
-        assert_eq!(hashed.len(), 64, "blake3 hex, i.e. the fallback ran");
+        assert!(version.contains(":run-"), "{version}");
 
         let warned = rec.0.lock().unwrap().iter().any(|e| {
             matches!(e, Event::Log { level: LogLevel::Warn, msg, .. } if msg.contains("no version"))
@@ -1137,7 +1160,7 @@ mod tests {
     /// A seal a child announces on stdout reaches the event stream once.
     /// It used to arrive twice -- forwarded from the wire, and again from
     /// the scheduler when the signal reached it -- so every subprocess
-    /// step's `checkpoints` metric read double, and the Manage screen
+    /// step's `checkpoints_total` metric read double, and the Manage screen
     /// counted four seals for a download that made two.
     #[tokio::test]
     async fn a_subprocess_checkpoint_reaches_the_event_stream_once() {
@@ -1340,12 +1363,10 @@ mod tests {
         assert!(r.run(&g).await.unwrap().all_ok());
         assert!(crate::supervisor::record::recorded(root.path()).await.steps["src/raw"].succeeded);
 
-        r.reset(&g, &[crate::scheduler::ResetTarget::parse("src/raw+blobs")])
-            .await
-            .unwrap();
+        r.reset(&g, &["src/raw".to_string()]).await.unwrap();
         assert_eq!(
             std::fs::read_to_string(&log).unwrap(),
-            "run\nblobs\n",
+            "run\nstore\n",
             "the reset invocation names the part and does nothing else"
         );
         let after = crate::supervisor::record::recorded(root.path())
@@ -1358,10 +1379,7 @@ mod tests {
             (false, None, None),
             "a reset step has never succeeded"
         );
-        let err = r
-            .reset(&g, &[crate::scheduler::ResetTarget::parse("nope/raw")])
-            .await
-            .unwrap_err();
+        let err = r.reset(&g, &["nope/raw".to_string()]).await.unwrap_err();
         assert!(err.to_string().contains("no such step"), "{err:#}");
     }
 

@@ -8,10 +8,9 @@
 // keep columns that are *meaningless* for a source from ever appearing:
 // no Channel on a GitHub browse, no Project on WhatsApp.
 //
-// The sets come from the per-provider mapping in `docs/dev/grid_rows.md`,
-// corrected against a real index where the two disagreed — that doc's
-// `account` / `project` / `channel` table lists eight providers and at
-// least eight more populate `channel`.
+// The sets come from what each provider's render crate puts in each
+// column (the rules are `docs/dev/grid_rows.md` § "Column conventions"),
+// checked against a real index.
 
 import type { SearchRow } from "@/api";
 
@@ -21,20 +20,25 @@ import type { SearchRow } from "@/api";
 /// ignores an unknown column id without complaint.
 export type BrowseColumn = keyof SearchRow;
 
-/// Columns every source's browse opens with, in this order. `kind` leads
-/// because it is the within-source discriminator even among documents
-/// (Claude has chats and projects, Notion has pages and comment
-/// threads). Both stamps, because a Browse is one row per document and
-/// "last touched" is what tells a live thread from a dead one.
-const ALWAYS: BrowseColumn[] = [
-  "kind",
-  "created_at",
-  "modified_at",
-  "conversation_name",
-  "snippet",
-];
+/// Columns every source's browse opens with, in this order, before the
+/// type's `EXTRA`. `kind` leads because it is the within-source
+/// discriminator even among documents (Claude has chats and projects,
+/// Notion has pages and comment threads); then what the document is
+/// called and what it says, so the text is on screen at any width. One
+/// stamp: a Browse is one row per document, and when it was last touched
+/// is what tells a live thread from a dead one. Unlike Modified, Touched
+/// is never empty on a row that has a stamp at all. A type can swap the
+/// stamp (`STAMP`) or leave a column out (`OMIT`).
+const ALWAYS: BrowseColumn[] = ["kind", "conversation_name", "snippet", "touched_at"];
 
-/// Extra columns per source type, inserted before `snippet`.
+/// The stamp a type shows in place of `touched_at`.
+const STAMP: Record<string, BrowseColumn> = {
+  // An event's created_at is when it happens, often years ahead; its
+  // touched_at is only when it was last edited.
+  calendar: "created_at",
+};
+
+/// Extra columns per source type, after `ALWAYS`.
 const EXTRA: Record<string, BrowseColumn[]> = {
   // Channelled group chat: who said it, and where.
   slack: ["channel", "author"],
@@ -77,11 +81,18 @@ const EXTRA: Record<string, BrowseColumn[]> = {
   pdf: ["author", "byte_size", "item_count"],
 };
 
+/// Columns of `ALWAYS` a source type leaves out.
+const OMIT: Record<string, BrowseColumn[]> = {
+  // A thread's conversation name is its channel's name again
+  // (`#general`, `@Picard`), so Channel alone says where it is.
+  slack: ["conversation_name"],
+};
+
 /// Every source type this file names a preset for. Exists so a test can
 /// check them against the catalog: a key misspelled here is not an
 /// error, it silently falls through to the generic preset below.
 export function browsePresetTypes(): string[] {
-  return Object.keys(EXTRA);
+  return [...new Set([...Object.keys(EXTRA), ...Object.keys(OMIT), ...Object.keys(STAMP)])];
 }
 
 /// The columns a Browse of a source of this type opens with, or `null`
@@ -91,7 +102,12 @@ export function browseColumns(type: string | null): BrowseColumn[] | null {
   if (!type) return null;
   if (type === DIFF_TYPE) return DIFF_COLUMNS;
   const extra = EXTRA[type] ?? ["channel", "author", "account", "project"];
-  return [...ALWAYS.slice(0, -1), ...extra, "snippet"];
+  const omit = OMIT[type] ?? [];
+  const stamp = STAMP[type] ?? "touched_at";
+  const always = ALWAYS.filter((c) => !omit.includes(c)).map((c) =>
+    c === "touched_at" ? stamp : c,
+  );
+  return [...always, ...extra];
 }
 
 /// A diff group (`docs/dev/plans/completed/diff_renderer.md`) is not a source
@@ -105,11 +121,10 @@ const DIFF_COLUMNS: BrowseColumn[] = [
   "diff_changed_columns",
   "kind",
   "conversation_name",
+  "snippet",
   "channel",
   "author",
-  "created_at",
-  "modified_at",
-  "snippet",
+  "touched_at",
 ];
 
 /// The name a Browse card opens with: "Slack documents", or for a diff,

@@ -2,7 +2,6 @@
 
 pub mod api;
 pub mod db;
-pub mod photos;
 pub mod schema_raw;
 pub mod vcf_dir;
 
@@ -10,11 +9,15 @@ pub use db::{db_path_for, RawDb};
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
+use datalib_etl::dav::state as dav_state;
+use datalib_etl::dav::sync::{CollectionSync, Page};
+use datalib_etl::download_problems;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
-use tracing::{info, warn};
+use datalib_etl::run_problems::{self, RunProblems};
+use tracing::info;
 
-use api::{DavError, Multistatus};
+use api::ContactProps;
 use datalib_etl::dav::absolutize;
 use db::{addressbook_pk, ContactRow};
 
@@ -25,9 +28,9 @@ pub struct FetchOptions {
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
     /// The store this run writes into, opened and closed by the caller.
-    /// A download never opens a store of its own: two live connections to
-    /// one `.doltlite_db` make each other's `dolt_commit` fail. See
-    /// `datalib/backend/etl/README.md`.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
     pub db: RawDb,
     /// Root URL of the user's CardDAV server. We start discovery
     /// here (PROPFIND for `current-user-principal`), then at the host's
@@ -37,9 +40,9 @@ pub struct FetchOptions {
     /// `https://www.googleapis.com/carddav/v1/principals/`.
     pub server_url: String,
     /// Restrict the run to the named addressbooks (matched against
-    /// the addressbook's `displayname`). `None` = sync every
+    /// the addressbook's `displayname`). Empty = sync every
     /// addressbook the server lists under the principal.
-    pub addressbooks: Option<Vec<String>>,
+    pub addressbooks: Vec<String>,
     pub progress: Progress,
     pub control: DownloadControl,
 }
@@ -57,14 +60,21 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| sync_account(opts, found)).await
+}
+
+async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
     let account_id = host_for_account(&opts.server_url)?;
 
-    // ── Discovery ──────────────────────────────────────────────────
-    let (principal_url, home_set_url) =
-        discover(&opts.server_url, &mut summary, &opts.latchkey).await?;
+    let Reached {
+        principal_url,
+        home_set_url,
+        books,
+    } = reach(&opts.server_url, &mut summary, &opts.latchkey).await?;
     let server_url = opts.server_url.trim_end_matches('/').to_string();
     db.upsert_account(
         &account_id,
@@ -73,19 +83,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         Some(home_set_url.as_str()),
     )
     .await?;
-    info!(
-        event = "carddav_discovery",
-        principal = %principal_url,
-        addressbook_home_set = %home_set_url,
-        "discovered the principal and the addressbook home"
-    );
-
-    let books = list_addressbooks(&home_set_url, &mut summary, &opts.latchkey).await?;
-    info!(
-        event = "carddav_addressbook_count",
-        n = books.len(),
-        "listed the addressbooks"
-    );
     for book in &books {
         db.upsert_addressbook(
             &account_id,
@@ -98,58 +95,77 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     summary.addressbooks = books.len();
 
-    // ── Per-addressbook sync ──────────────────────────────────────
-    let only_named = opts.addressbooks.as_deref();
+    report_unmatched_names(&found, &opts.addressbooks, &books)?;
+
+    let mut synced_ids: Vec<String> = Vec::new();
     for book in &books {
-        if let Some(want) = only_named {
-            let matches = book
-                .display_name
-                .as_deref()
-                .map(|d| want.iter().any(|w| w == d))
-                .unwrap_or(false);
-            if !matches {
-                continue;
-            }
+        let named = book
+            .display_name
+            .as_deref()
+            .is_some_and(|d| opts.addressbooks.iter().any(|w| w == d));
+        if !opts.addressbooks.is_empty() && !named {
+            continue;
+        }
+        if opts.control.stop.requested() {
+            break;
         }
         let book_id = addressbook_pk(&account_id, &book.href);
-        let prev_token = db.sync_token(&book_id).await?.unwrap_or_default();
         opts.progress
             .set_message(&format!("syncing addressbook {}", book.href));
-        match sync_addressbook(
-            &db,
-            &book_id,
-            &book.url,
-            &prev_token,
-            &mut summary,
-            &opts.latchkey,
-        )
-        .await
-        {
-            Ok(()) => {}
+        synced_ids.push(book_id.clone());
+        let synced = sync_addressbook(&db, &book_id, &book.url, &mut summary, &opts.latchkey).await;
+        let listing = format!(
+            "addressbook {}",
+            book.display_name.as_deref().unwrap_or(&book.href)
+        );
+        match synced {
+            Ok(None) => {}
+            Ok(Some(cut_short)) => found.listing(
+                &listing,
+                format!("{cut_short}; nothing it has not reached is deleted until it finishes"),
+            ),
             Err(e) => {
                 summary.errors += 1;
-                warn!(
-                    event = "carddav_addressbook_sync_failed",
-                    addressbook = %book.href,
-                    error = %e,
-                    "an addressbook could not be synced"
-                );
+                found.listing(&listing, format!("{e:#}"));
             }
         }
     }
-
-    // Lift inline vCard photos into the per-source CAS (consistent
-    // contact_photos shape). Best-effort: a CAS hiccup shouldn't fail an
-    // otherwise-good contacts sync.
-    // Through the handle's own CAS, so nothing here opens a second
-    // store. `None` is a reader, which never reaches this path.
-    if let Some(cas) = db.cas() {
-        if let Err(e) = photos::lift_photos_to_cas(&db, cas).await {
-            warn!(event = "carddav_photo_lift_failed", error = %e, "a photo could not be lifted out of its vCard");
-        }
-    }
-
+    dav_state::collect_unstored(db.pool(), &found, "contacts", &synced_ids).await;
     Ok(summary)
+}
+
+/// A configured name no address book has is reported and costs only
+/// itself — unless none matches, which fails the run rather than
+/// falling back to every address book the filter was there to exclude.
+fn report_unmatched_names(
+    found: &RunProblems,
+    configured: &[String],
+    books: &[Book],
+) -> Result<()> {
+    let names = || {
+        books
+            .iter()
+            .map(|b| b.display_name.as_deref().unwrap_or(&b.href))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let resolution = download_problems::resolve_configured("addressbooks", configured, |want| {
+        books
+            .iter()
+            .any(|b| b.display_name.as_deref() == Some(want))
+            .then_some(())
+            .ok_or_else(|| format!("no address book has that name; the account has {}", names()))
+    });
+    let nothing_resolved = resolution.nothing_resolved();
+    found.config(resolution.problems);
+    if nothing_resolved {
+        anyhow::bail!(
+            "none of the configured addressbooks ({}) exists; the account has {}",
+            configured.join(", "),
+            names()
+        );
+    }
+    Ok(())
 }
 
 /// Resource the orchestrator carries around per addressbook —
@@ -157,12 +173,45 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 /// absolute URL we hit for REPORTs (server URL + href, with the
 /// usual care around already-absolute hrefs).
 #[derive(Debug, Clone)]
-struct Book {
+pub(crate) struct Book {
     href: String,
     url: String,
-    display_name: Option<String>,
+    pub(crate) display_name: Option<String>,
     description: Option<String>,
     ctag: Option<String>,
+}
+
+/// What discovery and the addressbook listing found: everything a run
+/// needs before it syncs, and all a probe reports.
+pub(crate) struct Reached {
+    pub(crate) principal_url: String,
+    home_set_url: String,
+    pub(crate) books: Vec<Book>,
+}
+
+pub(crate) async fn reach(
+    server_url: &str,
+    summary: &mut FetchSummary,
+    latchkey: &LatchkeySettings,
+) -> Result<Reached> {
+    let (principal_url, home_set_url) = discover(server_url, summary, latchkey).await?;
+    info!(
+        event = "carddav_discovery",
+        principal = %principal_url,
+        addressbook_home_set = %home_set_url,
+        "discovered the principal and the addressbook home"
+    );
+    let books = list_addressbooks(&home_set_url, summary, latchkey).await?;
+    info!(
+        event = "carddav_addressbook_count",
+        n = books.len(),
+        "listed the addressbooks"
+    );
+    Ok(Reached {
+        principal_url,
+        home_set_url,
+        books,
+    })
 }
 
 async fn discover(
@@ -225,67 +274,80 @@ async fn list_addressbooks(
     Ok(out)
 }
 
+/// Keeps one address book in step with `sync-collection` from its
+/// stored token. Returns why the listing stopped short, if it did.
 async fn sync_addressbook(
     db: &RawDb,
     book_id: &str,
     book_url: &str,
-    prev_token: &str,
     summary: &mut FetchSummary,
     latchkey: &LatchkeySettings,
+) -> Result<Option<String>> {
+    let token = db.sync_token(book_id).await?;
+    let mut sync = CollectionSync::new(&api::KIND, book_url, token, latchkey);
+    let stored = store_pages(db, book_id, &mut sync, summary).await;
+    summary.requests += sync.requests();
+    stored?;
+    if let Some(cut_short) = sync.cut_short() {
+        return Ok(Some(cut_short.to_string()));
+    }
+    for href in dav_state::finish_listing(db.pool(), book_id).await? {
+        db.delete_contact(book_id, &href).await?;
+        summary.contacts_deleted += 1;
+    }
+    Ok(None)
+}
+
+async fn store_pages(
+    db: &RawDb,
+    book_id: &str,
+    sync: &mut CollectionSync<'_>,
+    summary: &mut FetchSummary,
 ) -> Result<()> {
-    summary.requests += 1;
-    let body = api::body_sync_collection(prev_token);
-    let ms = match api::report(book_url, &body, latchkey).await {
-        Ok(ms) => ms,
-        Err(DavError::Http {
-            status: 403 | 405 | 501,
-            ..
-        }) => {
-            // Server explicitly doesn't support sync-collection.
-            // Fall back to a multiget over what we already have plus
-            // a discovery walk. Not implemented yet — record the
-            // error and move on.
-            warn!(
-                event = "carddav_sync_collection_unsupported",
-                addressbook_url = %book_url,
-                "the server does not support sync-collection; walking whole"
-            );
-            return Ok(());
+    while let Some(page) = sync.next_page::<ContactProps>().await? {
+        if page.begins_whole {
+            let stored = db.contact_hrefs(book_id).await?;
+            dav_state::begin_whole(db.pool(), book_id, &stored).await?;
         }
-        Err(e) => return Err(anyhow::anyhow!("sync-collection REPORT: {e}")),
-    };
-    apply_multistatus(db, book_id, &ms, summary).await?;
-    if let Some(token) = &ms.sync_token {
-        db.set_sync_token(book_id, token).await?;
+        let token = page.token.clone();
+        let (listed, deleted) = (page.listed.clone(), page.deleted.clone());
+        let unstored = apply(db, book_id, page, summary).await?;
+        dav_state::settle_page(db.pool(), book_id, &listed, &deleted, &unstored).await?;
+        db.set_sync_token(book_id, token.as_deref()).await?;
     }
     Ok(())
 }
 
-async fn apply_multistatus(
+/// Store what one page changed and drop what it deleted. Returns what
+/// it named and could not store, with why.
+async fn apply(
     db: &RawDb,
     book_id: &str,
-    ms: &Multistatus,
+    page: Page<ContactProps>,
     summary: &mut FetchSummary,
-) -> Result<()> {
-    let changed = api::changed_contacts(ms);
-    let deleted = api::deleted_hrefs(ms);
-
-    // Pre-fetch existing etags so we can tell `new` from `updated`.
+) -> Result<Vec<(String, String)>> {
     let existing = db.contact_etags_by_href(book_id).await?;
-
-    let mut rows: Vec<ContactRow> = Vec::with_capacity(changed.len());
-    for (href, (etag, vcard)) in &changed {
+    let mut unstored: Vec<(String, String)> = page
+        .unfetched
+        .into_iter()
+        .map(|href| {
+            (
+                href,
+                "the address book listed this card, but did not return it when asked".to_string(),
+            )
+        })
+        .collect();
+    let mut rows: Vec<ContactRow> = Vec::with_capacity(page.changed.len());
+    for r in &page.changed {
+        let vcard = r.props.vcard.as_deref().unwrap_or_default();
         let Some(uid) = api::vcard_uid(vcard) else {
-            warn!(
-                event = "carddav_vcard_missing_uid",
-                href = %href,
-                "a vCard has no UID; keyed on its href"
-            );
-            summary.errors += 1;
+            unstored.push((
+                r.href.clone(),
+                "the vCard has no UID, so it cannot be stored".to_string(),
+            ));
             continue;
         };
-        let was_known = existing.contains_key(href);
-        if was_known {
+        if existing.contains_key(&r.href) {
             summary.contacts_updated += 1;
         } else {
             summary.contacts_new += 1;
@@ -293,20 +355,20 @@ async fn apply_multistatus(
         rows.push(ContactRow::new(
             book_id.to_string(),
             uid,
-            href.clone(),
-            etag.clone(),
+            r.href.clone(),
+            r.props.etag.clone(),
             api::vcard_fn(vcard),
             api::vcard_rev(vcard),
             vcard,
         ));
     }
+    summary.errors += unstored.len();
     db.upsert_contacts(&rows).await?;
-
-    for href in &deleted {
+    for href in &page.deleted {
         db.delete_contact(book_id, href).await?;
         summary.contacts_deleted += 1;
     }
-    Ok(())
+    Ok(unstored)
 }
 
 /// Account identifier: the URL host. One latchkey credential entry

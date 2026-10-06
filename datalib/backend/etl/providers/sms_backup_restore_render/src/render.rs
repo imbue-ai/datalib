@@ -8,12 +8,11 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, Bucket, Buckets, RenderProfile,
-};
+use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::Value;
@@ -22,6 +21,7 @@ use crate::ids;
 
 use datalib_etl_sms_backup_restore::ingest::schema_raw::SmsAttachmentRow;
 use datalib_etl_sms_backup_restore::ingest::{db_path_for, RawDb};
+use datalib_handle::Handle;
 use datalib_schema::providers::Provider;
 
 /// v2: a row whose `date` field is missing or non-numeric gets a null
@@ -31,14 +31,16 @@ use datalib_schema::providers::Provider;
 ///     backpointer, and a message's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved, `chat_uuid`
 ///     among them.
-pub const RENDER_VERSION: u32 = 3;
+/// v5: an incoming message's author carries the sender's `tel:` handle.
+/// v6: a `+1` number without ten digits after the 1 has no handle.
+pub const RENDER_VERSION: u32 = 6;
 
-/// Projection for [`BlobBundle::load`] over the SMS CAS edge: the
+/// Projection for [`BlobBundle::load_many`] over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
 /// falls back to `cas_objects`.
 const SMS_BLOB_PROJECTION: &str = "SELECT ref_name AS ref_id, blake3, \
             NULL AS content_type, NULL AS upstream_name \
-     FROM pinned_sms_attachments sms_attachments \
+     FROM sms_attachments \
      WHERE ref_name IN ({placeholders}) AND blake3 IS NOT NULL";
 
 fn profile() -> RenderProfile {
@@ -53,8 +55,11 @@ fn profile() -> RenderProfile {
         reaction_kind: "SMS Reaction".to_string(),
         chat_entity_kind: ids::KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
+
+pub use datalib_etl_chat_common::RenderOutcome;
 
 pub fn render(
     raw_dir: &Path,
@@ -78,18 +83,12 @@ pub fn render(
             };
             let pin = db.pin().expect("a reader is pinned at open").clone();
             let loaded = async {
-                let messages = datalib_etl::doltlite_raw::load_payloads_with_id(
-                    db.pool(),
-                    datalib_etl::pin::Reads::At(&pin),
-                    "sms_messages",
-                )
-                .await?;
-                let calls = datalib_etl::doltlite_raw::load_payloads_with_id(
-                    db.pool(),
-                    datalib_etl::pin::Reads::At(&pin),
-                    "sms_calls",
-                )
-                .await?;
+                let messages =
+                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "sms_messages")
+                        .await?;
+                let calls =
+                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "sms_calls")
+                        .await?;
                 let blobs = load_blobs(&db, &messages).await?;
                 let scan = scan_diff(db.pool(), range.cursor, &pin).await?;
                 anyhow::Ok((messages, calls, blobs, scan))
@@ -105,75 +104,20 @@ pub fn render(
     // No early return on an empty store: a reset one still has to
     // name the conversations it lost, so their documents go.
     let all_chats = build_chats(source_id, &messages, &calls);
-
-    // Narrow to the conversations the diff named and the ones the driver
-    // found stale through their declared inputs. Everything else is
-    // byte-identical to what the store already holds.
-    let mut outcome = RenderOutcome {
-        new_head: scan.new_head.clone(),
-        scan_elapsed: scan.scan_elapsed,
-        ..Default::default()
-    };
-    // The driver names stale buckets by chat uuid; the chats are by key.
-    let by_uuid: HashMap<&str, &str> = all_chats
-        .iter()
-        .map(|c| (c.chat_uuid.as_str(), c.id.as_str()))
-        .collect();
-    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
-        by_uuid.get(key).map(|id| id.to_string())
-    });
-    // Named buckets first, with no documents: a conversation this run
-    // looked at that has no message or call left builds no chat, and
-    // chat-common never sees it. The rendered ones follow and replace
-    // that.
-    outcome.buckets = narrowed
-        .render
-        .iter()
-        .flatten()
-        .map(|key| ids::conversation(source_id, key).uuid)
-        .chain(narrowed.gone.iter().cloned())
-        .map(|key| Bucket {
-            key,
-            inputs: Vec::new(),
-        })
-        .collect();
-    let chats: Vec<NormalizedChat> = match &narrowed.render {
-        None => all_chats,
-        Some(changed) => {
-            let before = all_chats.len();
-            let kept: Vec<NormalizedChat> = all_chats
-                .into_iter()
-                .filter(|c| changed.contains(&c.id))
-                .collect();
-            outcome.skipped = before.saturating_sub(kept.len());
-            kept
-        }
-    };
-    let s = cc_render_all(
+    render_changed(
         &profile(),
-        &chats,
-        out_root,
-        source_id,
+        all_chats,
+        scan,
+        range,
+        |id| ids::conversation(source_id, id).uuid,
         &blobs,
-        progress,
-        on_doc_complete,
-    )?;
-    outcome.rendered = s.docs_rendered;
-    outcome.buckets.extend(s.buckets);
-    Ok(outcome)
-}
-
-/// What one render pass did, and what the caller must act on: the cursor
-/// to stamp and the conversations that went away.
-#[derive(Debug, Clone, Default)]
-pub struct RenderOutcome {
-    pub rendered: usize,
-    pub skipped: usize,
-    pub new_head: Option<String>,
-    pub scan_elapsed: Option<std::time::Duration>,
-    /// Every conversation rendered, with the documents considered for it
-    /// — what the processor declares through `RenderCtx::declare_bucket`.
-    pub buckets: Buckets,
+        RenderTarget {
+            out_root,
+            source_id,
+            progress,
+            on_doc_complete,
+        },
+    )
 }
 
 /// Which conversations moved since `last_render_hash`.
@@ -226,19 +170,13 @@ async fn load_blobs(
             bag.push(r);
         }
     }
-    let mut out: HashMap<String, BlobBundle> = HashMap::new();
-    for (id, mut refs) in refs_by_chat {
-        refs.sort();
-        refs.dedup();
-        if refs.is_empty() {
-            continue;
-        }
-        let slices: Vec<&str> = refs.iter().map(String::as_str).collect();
-        let bundle =
-            BlobBundle::load(db.pool(), db.cas().pool(), SMS_BLOB_PROJECTION, &slices).await?;
-        out.insert(id, bundle);
-    }
-    Ok(out)
+    BlobBundle::load_many(
+        db.pool(),
+        db.cas().pool(),
+        SMS_BLOB_PROJECTION,
+        refs_by_chat,
+    )
+    .await
 }
 
 fn chat_id(v: &Value) -> String {
@@ -328,6 +266,7 @@ fn build_chats(
 
         let conversation = ids::conversation(source_id, &id);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: id.clone(),
@@ -372,23 +311,21 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
             let duration = v.get("duration").and_then(Value::as_i64).unwrap_or(0);
             NormalizedChatItem {
                 message_uuid,
-                author_id: v
-                    .get("conversation_key")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string(),
+                author_handle: None,
                 author_display: display.to_string(),
                 date_ms,
                 text: None,
                 kind: ItemKind::System,
                 attachments: Vec::new(),
                 reactions: Vec::new(),
+                labels: Vec::new(),
                 system_note: Some(call_note(call_type, duration, display)),
                 source_url: None,
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
                 unread: false,
+                recipients: Vec::new(),
                 problems: Vec::new(),
             }
         }
@@ -399,18 +336,13 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 .get("conversation_display")
                 .and_then(Value::as_str)
                 .unwrap_or("Unknown");
-            let author_display = if is_me {
-                "Me".to_string()
+            let (author_handle, author_display) = if is_me {
+                (None, "Me".to_string())
             } else {
-                display.to_string()
-            };
-            let author_id = if is_me {
-                "me".to_string()
-            } else {
-                v.get("conversation_key")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string()
+                // A group MMS joins its numbers with `~`, which `tel`
+                // refuses: the backup does not say which one sent it.
+                let address = v.get("address").and_then(Value::as_str).unwrap_or("");
+                (Handle::tel(address), display.to_string())
             };
             // SMS body lives in `body`; MMS body in `text`.
             let text = v
@@ -437,7 +369,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
 
             NormalizedChatItem {
                 message_uuid,
-                author_id,
+                author_handle,
                 author_display,
                 date_ms,
                 text,
@@ -448,6 +380,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 },
                 attachments,
                 reactions: Vec::new(),
+                labels: Vec::new(),
                 system_note: None,
                 source_url: None,
                 kind_label: None,
@@ -456,6 +389,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 // Only an explicit `read="0"` on a message someone else
                 // sent: an older store's rows carry no `read` at all.
                 unread: !is_me && v.get("read").and_then(Value::as_bool) == Some(false),
+                recipients: Vec::new(),
                 problems: Vec::new(),
             }
         }
@@ -587,6 +521,39 @@ mod tests {
             .map(|i| i.text.as_deref().unwrap())
             .collect();
         assert_eq!(unread, vec!["unread"]);
+    }
+
+    /// An incoming text names its sender's number as a `tel:` handle, so
+    /// a contact linked in WhatsApp or Messages reaches it too. Mine, a
+    /// number without its country code and a group MMS name nobody.
+    #[test]
+    fn an_incoming_message_carries_its_senders_number() {
+        let row = |id: &str, kind: &str, address: &str, is_me: bool| {
+            json!({"id":id,"kind":kind,"conversation_key":address,"conversation_display":"Jean-Luc Picard",
+                   "date":1778277198761i64,"is_me":is_me,"address":address,"body":id,"attachments":[]})
+        };
+        let messages = vec![
+            row("theirs", "sms", "+1 (555) 012-3456", false),
+            row("mine", "sms", "+15550123456", true),
+            row("local", "sms", "5550123456", false),
+            row("group", "mms", "+15550123456~+15550109876", false),
+        ];
+        let chats = build_chats("sms", &with_ids(&messages), &[]);
+        let handle_of = |id: &str| {
+            chats
+                .iter()
+                .flat_map(|c| &c.buckets)
+                .flat_map(|b| &b.items)
+                .find(|i| i.source_ref.as_ref().unwrap().native_id == id)
+                .unwrap()
+                .author_handle
+                .as_ref()
+                .map(|h| h.as_str().to_string())
+        };
+        assert_eq!(handle_of("theirs").as_deref(), Some("tel:+15550123456"));
+        assert_eq!(handle_of("mine"), None);
+        assert_eq!(handle_of("local"), None);
+        assert_eq!(handle_of("group"), None);
     }
 
     #[test]

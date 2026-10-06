@@ -15,14 +15,15 @@ export function documentPickerView(): CardRender {
     ctx.setTitle("Open document");
     const style = document.createElement("style");
     style.textContent = `
-      .dp { font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--datalib-fg, inherit); }
-      .dp-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border, #8884); }
-      .dp-row { display: flex; align-items: baseline; gap: .6rem; padding: 6px 12px; cursor: pointer; border-bottom: 1px solid var(--datalib-border, #8882); }
-      .dp-row:hover { background: var(--datalib-hover, rgba(127,127,127,.12)); }
+      :host { display: block; height: 100%; position: relative; }
+      .dp { position: absolute; inset: 0; overflow-y: auto; font: var(--datalib-font-size)/1.5 var(--datalib-font); color: var(--datalib-fg, inherit); }
+      .dp-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border-soft); }
+      .dp-row { display: flex; align-items: baseline; gap: .6rem; padding: 6px 12px; cursor: pointer; border-bottom: 1px solid var(--datalib-border-soft); }
+      .dp-row:hover { background: var(--datalib-hover); }
       .dp-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .dp-title--untitled { opacity: .55; font-style: italic; }
-      .dp-kind { flex: 0 0 auto; opacity: .55; font-size: 12px; }
-      .dp-date { flex: 0 0 auto; opacity: .45; font-size: 12px; font-variant-numeric: tabular-nums; }
+      .dp-kind { flex: 0 0 auto; color: var(--datalib-muted); font-size: var(--datalib-font-size-small); }
+      .dp-date { flex: 0 0 auto; color: var(--datalib-faint); font-size: var(--datalib-font-size-small); font-variant-numeric: tabular-nums; }
       .dp-empty { padding: 16px 12px; opacity: .5; }
     `;
     root.appendChild(style);

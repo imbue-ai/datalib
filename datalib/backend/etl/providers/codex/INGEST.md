@@ -18,13 +18,15 @@ have a parser of its own.
 
 ## What is on disk
 
-The Codex home (`CODEX_HOME`, by default `~/.codex`) holds:
+The Codex home (what Codex calls `CODEX_HOME`) holds the files below.
+The source reads `~/.codex` unless `sessions.path` names another; it
+does not read the `CODEX_HOME` variable itself.
 
 ```
 sessions/YYYY/MM/DD/rollout-<timestamp>-<thread id>.jsonl   one file per thread
 archived_sessions/…                                        where an older Codex moved an archived thread
 history.jsonl        {session_id, ts, text} per prompt typed; an index, not read
-state_5.sqlite       threads(id, title, cwd, archived, …); plain SQLite, not read yet
+state_5.sqlite       threads(id, title, cwd, archived, …); plain SQLite, not read
 ```
 
 The ingest walks `sessions/` and `archived_sessions/`, each under its
@@ -75,7 +77,7 @@ that reason: a build that reads only one signal titles half of them
 `(untitled)`, or files an injected AGENTS.md as something the person
 said, and only one of the two generations would catch it.
 
-Measured on this machine: 20 rollouts from Codex 0.104–0.115, none
+Measured on one machine: 20 rollouts from Codex 0.104–0.115, none
 with a tool call, and one real 0.155.1 audit session with 18 `exec`
 calls and 3 `wait` calls. A 0.155 `exec` is a `custom_tool_call` whose
 `input` is **JavaScript** (`await tools.exec_command({cmd: …})`), and
@@ -93,8 +95,8 @@ the parent's title in its display name, not a section of the parent.
 ## What the store holds
 
 Two tables, no bookkeeping sidecar (a live thread's file is re-read
-whole on every sync, and unchanged rows are free under doltlite's
-content addressing):
+whole on every sync, and an unchanged row is no change;
+[doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)):
 
 - `transcripts` — one row per rollout. `id` is the thread id. The
   payload is what the file says about the thread as a whole: the
@@ -108,11 +110,23 @@ content addressing):
   (its order). Everything else is `payload->>'$.type'` and
   `payload->>'$.payload.type'`.
 
-The **title** is the first `user_message` event's text, cut to a line
-of at most 100 characters, or a sub-agent's nickname. Codex's own
+The **title** is a sub-agent's nickname, else the first typed prompt
+(from the tags or the events, above), cut to a line of at most 100
+characters. Codex's own
 `threads.title` in `state_5.sqlite` is the same first prompt on every
 thread measured here; reading that database (and its `archived` flag)
 is open, and the reason `path` is the home rather than `sessions/`.
+
+A sync that cannot read part of the home goes on and leaves a
+`problems` row, the same way `claude_code` does (its INGEST.md
+§"When part of a read fails"; the walk is shared): lines stepped over
+inside a rollout are one `file:codex/<dir>:<path>` row per file, a
+torn last line excepted; a rollout that would not open is
+`record:transcripts:<dir>/<path>`; an entry the walk could not read is
+`listing:codex/<dir>`. A missing `sessions/` fails a first sync and is
+a `listing:codex/sessions` row after that; a missing
+`archived_sessions/` is nothing to report, since only an older Codex
+made it.
 
 **Transcripts are full of secrets.** A tool output can hold the
 output of `env` or the contents of `.env`. The store keeps the line as

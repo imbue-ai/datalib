@@ -1,8 +1,8 @@
-//! The Problems cell: how many errors and warnings a step's store holds,
-//! from the `problems{severity=…}` metrics the step reported at the end
-//! of its last run. Red and yellow when there are any, green when the
-//! step counted and found none, and nothing at all when it has never
-//! counted — a missing series is "unknown", never a false zero.
+//! The counts after a Manage row's name: how many errors and warnings a
+//! step's store holds, from the `problems{severity=…}` metrics the step
+//! reported at the end of its last run. A red and a yellow number when
+//! there are any; nothing when there are none, or when the step has
+//! never counted.
 
 use std::collections::HashMap;
 
@@ -41,43 +41,33 @@ pub fn counts_by_step(latest: &[MetricRow]) -> HashMap<String, ProblemCounts> {
     out
 }
 
-/// The chips the cell draws. `None` (no counts) draws nothing.
+/// The chips drawn after the name: bare numbers, the words on hover.
 pub fn chips(counts: Option<&ProblemCounts>) -> Vec<Chip> {
     let Some(c) = counts else {
         return Vec::new();
     };
     let since = format!("as of run {}", c.run_id);
-    if c.errors == 0 && c.warnings == 0 {
-        return vec![Chip {
-            kind: ChipKind::Ok,
-            text: "0".into(),
-            title: format!("No errors or warnings recorded, {since}"),
-        }];
-    }
+    let plural = |n: i64| if n == 1 { "" } else { "s" };
     let mut out = Vec::new();
     if c.errors > 0 {
         out.push(Chip {
             kind: ChipKind::Error,
-            text: format!("{} error{}", c.errors, if c.errors == 1 { "" } else { "s" }),
+            text: c.errors.to_string(),
             title: format!(
-                "{} record{} dropped, {since} \u{2014} double-click to see them",
-                c.errors,
-                if c.errors == 1 { "" } else { "s" }
+                "{n} error{s}: {n} record{s} dropped, {since} \u{2014} double-click to see them",
+                n = c.errors,
+                s = plural(c.errors)
             ),
         });
     }
     if c.warnings > 0 {
         out.push(Chip {
             kind: ChipKind::Warning,
-            text: format!(
-                "{} warning{}",
-                c.warnings,
-                if c.warnings == 1 { "" } else { "s" }
-            ),
+            text: c.warnings.to_string(),
             title: format!(
-                "{} record{} kept with something lost, {since} \u{2014} double-click to see them",
-                c.warnings,
-                if c.warnings == 1 { "" } else { "s" }
+                "{n} warning{s}: {n} record{s} kept with something lost, {since} \u{2014} double-click to see them",
+                n = c.warnings,
+                s = plural(c.warnings)
             ),
         });
     }
@@ -107,7 +97,7 @@ mod tests {
             sample("slack/render_markdown", "severity=loud", 99, "r9"),
             sample("mail/render_markdown", "severity=warning", 0, "r8"),
             MetricRow {
-                name: "rows_upserted".into(),
+                name: "rows_upserted_total".into(),
                 ..sample("mail/ingest", "", 500, "r8")
             },
         ];
@@ -134,30 +124,39 @@ mod tests {
         );
     }
 
-    /// Green zero only when the step counted; nothing when it never has.
+    /// Numbers only, red before yellow, and nothing at all for a clean
+    /// count — a green zero after every name was noise.
     #[test]
-    fn a_counted_zero_is_green_and_an_uncounted_step_draws_nothing() {
+    fn counts_draw_as_bare_numbers_and_a_clean_or_missing_count_draws_nothing() {
         assert!(chips(None).is_empty());
-        let zero = chips(Some(&ProblemCounts {
+        assert!(chips(Some(&ProblemCounts {
             run_id: "r1".into(),
             ..Default::default()
-        }));
-        assert_eq!(zero.len(), 1);
-        assert_eq!(zero[0].kind, ChipKind::Ok);
-        assert_eq!(zero[0].text, "0");
+        }))
+        .is_empty());
         let some = chips(Some(&ProblemCounts {
             errors: 1,
-            warnings: 2,
+            warnings: 12,
             run_id: "r1".into(),
         }));
         assert_eq!(
             some.iter()
                 .map(|c| (c.kind, c.text.as_str()))
                 .collect::<Vec<_>>(),
-            vec![
-                (ChipKind::Error, "1 error"),
-                (ChipKind::Warning, "2 warnings")
-            ]
+            vec![(ChipKind::Error, "1"), (ChipKind::Warning, "12")]
+        );
+        assert!(some[0].title.starts_with("1 error: 1 record dropped"));
+        let warnings_only = chips(Some(&ProblemCounts {
+            warnings: 3,
+            run_id: "r1".into(),
+            ..Default::default()
+        }));
+        assert_eq!(
+            warnings_only
+                .iter()
+                .map(|c| (c.kind, c.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(ChipKind::Warning, "3")]
         );
     }
 }

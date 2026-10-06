@@ -15,6 +15,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
         "//datalib/backend/etl/providers/contacts_config:datalib_etl_contacts_config",
         "//datalib/backend/etl/providers/contacts:datalib_etl_contacts",

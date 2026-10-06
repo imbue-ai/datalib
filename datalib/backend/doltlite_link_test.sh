@@ -46,6 +46,8 @@ fixture_dir="$(cd "$(dirname "$vcf")" && pwd)"
 
 root="${TEST_TMPDIR:-$(mktemp -d)}/root"
 mkdir -p "$root"
+# Not the host's fingerprint cache: this test's paths are gone by the next run.
+export DATALIB_CACHE_DIR="$root/fingerprint_cache"
 cat > "$root/config.toml" <<CONFIG
 [[groups]]
 id = "contacts"

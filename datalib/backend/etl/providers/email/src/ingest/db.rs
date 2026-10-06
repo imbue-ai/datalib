@@ -1,20 +1,16 @@
 //! Open + non-DDL data-manipulation for the JMAP raw store.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::sqlite::SqlitePool;
 use sqlx::{Row, Sqlite, Transaction};
 
-use datalib_etl::blob_cas::{self, BlobCas};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{full_ddl, EmailKeywordRow, EmailMailboxRow};
+use super::schema_raw::{full_ddl, EmailKeywordRow, EmailMailboxRow, LADDER};
 pub use super::schema_raw::{EmailRow, BLOB_KIND_EML};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -27,35 +23,9 @@ pub fn state_scope(account_id: &str, type_name: &str) -> String {
 
 // RawDb
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
-}
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
     // ── state tokens ────────────────────────────────────────────────
 
     pub async fn load_state(&self, account_id: &str, type_name: &str) -> Result<Option<String>> {
@@ -71,44 +41,28 @@ impl RawDb {
     pub async fn load_scope(&self, scope: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind(scope)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("select state token")?;
         Ok(row.and_then(|r| r.try_get::<String, _>("last_seen_at_utc").ok()))
     }
 
     pub async fn save_scope(&self, scope: &str, token: &str) -> Result<()> {
-        dr::upsert_scope_state(&self.pool, scope, token).await
+        dr::upsert_scope_state(self.pool(), scope, token).await
     }
 
     // ── loads (consumed by render) ───────────────────────────────
 
     pub async fn load_accounts(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "accounts").await
+        dr::load_payloads(self.pool(), "accounts").await
     }
 
     pub async fn load_mailboxes(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "mailboxes").await
+        dr::load_payloads(self.pool(), "mailboxes").await
     }
 
     pub async fn load_threads(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "threads").await
-    }
-
-    pub async fn thread_email_counts(&self) -> Result<HashMap<String, i64>> {
-        let rows = sqlx::query("SELECT id, email_count FROM threads")
-            .fetch_all(&self.pool)
-            .await
-            .context("select thread_email_counts")?;
-        let mut out = HashMap::with_capacity(rows.len());
-        for r in rows {
-            let id: String = r.try_get("id").unwrap_or_default();
-            let n: Option<i64> = r.try_get("email_count").ok();
-            if !id.is_empty() {
-                out.insert(id, n.unwrap_or(0));
-            }
-        }
-        Ok(out)
+        dr::load_payloads(self.pool(), "threads").await
     }
 
     pub async fn load_emails(&self) -> Result<Vec<LoadedEmail>> {
@@ -119,7 +73,7 @@ impl RawDb {
              FROM emails
              ORDER BY thread_id, received_at, id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select emails")?;
         let mut out = Vec::with_capacity(rows.len());
@@ -158,7 +112,7 @@ impl RawDb {
     pub async fn load_email_joins(&self) -> Result<EmailJoins> {
         let mut mailboxes: HashMap<String, Vec<String>> = HashMap::new();
         for r in sqlx::query("SELECT email_id, mailbox_id FROM email_mailboxes")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("load email_mailboxes")?
         {
@@ -170,7 +124,7 @@ impl RawDb {
         }
         let mut keywords: HashMap<String, Vec<String>> = HashMap::new();
         for r in sqlx::query("SELECT email_id, keyword FROM email_keywords")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("load email_keywords")?
         {
@@ -187,18 +141,84 @@ impl RawDb {
         })
     }
 
-    pub async fn known_email_ids(&self) -> Result<HashSet<String>> {
-        let rows = sqlx::query("SELECT id FROM emails WHERE blob_id != ''")
-            .fetch_all(&self.pool)
+    /// This account's mailbox rows: id → name.
+    pub async fn mailbox_names(&self, account_id: &str) -> Result<BTreeMap<String, String>> {
+        let rows: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT id, name FROM mailboxes WHERE account_id = ?")
+                .bind(account_id)
+                .fetch_all(self.pool())
+                .await
+                .context("select the account's mailboxes")?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, name)| (id, name.unwrap_or_default()))
+            .collect())
+    }
+
+    /// Up to `limit` emails filed under `mailbox_id` with an id after
+    /// `after`, in id order: each one's id, account and payload.
+    pub async fn emails_filed_under(
+        &self,
+        mailbox_id: &str,
+        after: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String, Value)>> {
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT e.id, e.account_id, json(e.payload) FROM email_mailboxes m
+             JOIN emails e ON e.id = m.email_id
+             WHERE m.mailbox_id = ? AND e.id > ?
+             ORDER BY e.id
+             LIMIT ?",
+        )
+        .bind(mailbox_id)
+        .bind(after)
+        .bind(limit as i64)
+        .fetch_all(self.pool())
+        .await
+        .with_context(|| format!("select the emails filed under {mailbox_id}"))?;
+        rows.into_iter()
+            .map(|(id, account, payload)| {
+                let v = serde_json::from_str(&payload)
+                    .with_context(|| format!("parse the payload of email {id}"))?;
+                Ok((id, account, v))
+            })
+            .collect()
+    }
+
+    /// Delete this account's emails an authoritative enumeration did not
+    /// name, and the threads left with none. Only for a walk that listed
+    /// every message the account has. Returns how many emails went.
+    pub async fn prune_emails_to(
+        &self,
+        account_id: &str,
+        seen: &BTreeSet<String>,
+    ) -> Result<usize> {
+        let held: Vec<String> = sqlx::query_scalar("SELECT id FROM emails WHERE account_id = ?")
+            .bind(account_id)
+            .fetch_all(self.pool())
             .await
-            .context("select known_email_ids")?;
-        let mut out = HashSet::with_capacity(rows.len());
-        for r in rows {
-            if let Ok(id) = r.try_get::<String, _>("id") {
-                out.insert(id);
-            }
+            .context("list the account's emails")?;
+        let gone: Vec<String> = held
+            .iter()
+            .filter(|id| !seen.contains(id.as_str()))
+            .cloned()
+            .collect();
+        self.delete_emails(&gone).await?;
+        let mut tx = self.pool().begin().await.context("begin thread prune tx")?;
+        for sql in [
+            "DELETE FROM threads_bookkeeping WHERE id IN (SELECT id FROM threads \
+             WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails))",
+            "DELETE FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails)",
+        ] {
+            sqlx::query(sql)
+                .bind(account_id)
+                .execute(&mut *tx)
+                .await
+                .context("delete threads with no emails")?;
         }
-        Ok(out)
+        tx.commit().await.context("commit thread prune tx")?;
+        datalib_etl::prune::record("emails", held.len(), gone.len());
+        Ok(gone.len())
     }
 
     // ── hard-deletes (JMAP destroy + parent-id cascades) ────────────
@@ -208,7 +228,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("begin delete mailboxes tx")?;
@@ -232,24 +252,12 @@ impl RawDb {
         if ids.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin delete emails tx")?;
-        for id in ids {
-            for sql in [
-                "DELETE FROM email_mailboxes WHERE email_id = ?",
-                "DELETE FROM email_keywords WHERE email_id = ?",
-                "DELETE FROM email_blobs_bookkeeping
-                   WHERE id IN (SELECT id FROM email_blobs WHERE email_id = ?)",
-                "DELETE FROM email_blobs WHERE email_id = ?",
-                "DELETE FROM emails WHERE id = ?",
-                "DELETE FROM emails_bookkeeping WHERE id = ?",
-            ] {
-                sqlx::query(sql)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await
-                    .with_context(|| format!("delete email {id}"))?;
-            }
-        }
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin delete emails tx")?;
+        delete_emails_in_tx(&mut tx, ids).await?;
         tx.commit().await.context("commit delete emails tx")?;
         Ok(())
     }
@@ -263,7 +271,7 @@ impl RawDb {
         let rows = sqlx::query(
             "SELECT DISTINCT blob_id, blake3 FROM email_blobs WHERE blake3 IS NOT NULL",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("loaded_blob_ids")?;
         let mut out = HashMap::with_capacity(rows.len());
@@ -276,6 +284,39 @@ impl RawDb {
         }
         Ok(out)
     }
+}
+
+/// Delete these email rows with their joins, `.eml` edges and sidecars.
+pub async fn delete_emails_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<()> {
+    for id in ids {
+        // The `.eml`'s fetch problem goes with it: an email upstream no
+        // longer has cannot fail to download.
+        sqlx::query(
+            "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN \
+             (SELECT 'email_blobs:' || id FROM email_blobs WHERE email_id = ?)",
+        )
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("forget the problems of email {id}"))?;
+        for sql in [
+            "DELETE FROM email_mailboxes WHERE email_id = ?",
+            "DELETE FROM email_keywords WHERE email_id = ?",
+            "DELETE FROM email_blobs_bookkeeping
+               WHERE id IN (SELECT id FROM email_blobs WHERE email_id = ?)",
+            "DELETE FROM email_blobs WHERE email_id = ?",
+            "DELETE FROM emails WHERE id = ?",
+            "DELETE FROM emails_bookkeeping WHERE id = ?",
+        ] {
+            sqlx::query(sql)
+                .bind(id)
+                .execute(&mut **tx)
+                .await
+                .with_context(|| format!("delete email {id}"))?;
+        }
+    }
+    Ok(())
 }
 
 // Email join-table refresh
@@ -454,7 +495,7 @@ mod tests {
         let rows = vec![
             MailboxRow::from_jmap_payload(
                 "A1",
-                &json!({"id": "M1", "name": "Inbox", "role": "inbox", "totalEmails": 42}),
+                &json!({"id": "M1", "name": "Inbox", "role": "inbox"}),
             )
             .unwrap(),
             MailboxRow::from_jmap_payload(
@@ -462,18 +503,69 @@ mod tests {
                 &json!({"id": "M2", "name": "Sent", "role": "sent"}),
             )
             .unwrap(),
+            MailboxRow::from_jmap_payload("A2", &json!({"id": "M3", "name": "Inbox"})).unwrap(),
         ];
         bulk(&db, &rows).await;
-        let mboxes = db.load_mailboxes().await.unwrap();
-        assert_eq!(mboxes.len(), 2);
-        // promoted columns
-        let row: (String, i64) =
-            sqlx::query_as("SELECT name, total_emails FROM mailboxes WHERE id = 'M1'")
+        assert_eq!(db.load_mailboxes().await.unwrap().len(), 3);
+        let a1 = db.mailbox_names("A1").await.unwrap();
+        assert_eq!(
+            a1.into_iter().collect::<Vec<_>>(),
+            vec![
+                ("M1".to_string(), "Inbox".to_string()),
+                ("M2".to_string(), "Sent".to_string())
+            ]
+        );
+    }
+
+    /// A store an older build wrote, with the mailbox counts as columns
+    /// and in the content payload, opens on the first rung: the columns
+    /// are gone, the payload keeps everything but the counts, and the
+    /// rest of the store is untouched.
+    #[tokio::test]
+    async fn the_first_rung_takes_the_counts_out_of_the_mailbox_row() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("j.doltlite_db");
+        {
+            let ddl = full_ddl();
+            let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+            let pool = dr::open(&path, &ddl).await.unwrap();
+            for sql in [
+                "ALTER TABLE mailboxes ADD COLUMN total_emails INTEGER NULL",
+                "ALTER TABLE mailboxes ADD COLUMN unread_emails INTEGER NULL",
+                "INSERT INTO mailboxes (id, payload, account_id, name, role, total_emails, unread_emails)
+                 VALUES ('M1', jsonb('{\"id\":\"M1\",\"name\":\"Inbox\",\"totalEmails\":42,\"unreadEmails\":3,\"totalThreads\":40}'),
+                         'A1', 'Inbox', 'inbox', 42, 3)",
+            ] {
+                sqlx::query(sql).execute(&pool).await.unwrap();
+            }
+            dr::commit_run(&pool, "an older build's rows")
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        let db = RawDb::open(&path).await.expect("the rung carries it");
+        let payload: String = sqlx::query_scalar("SELECT json(payload) FROM mailboxes")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&payload).unwrap(),
+            json!({"id": "M1", "name": "Inbox"})
+        );
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('mailboxes')")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert!(!columns.iter().any(|c| c.contains("emails")), "{columns:?}");
+        let version: String =
+            sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
                 .fetch_one(db.pool())
                 .await
                 .unwrap();
-        assert_eq!(row.0, "Inbox");
-        assert_eq!(row.1, 42);
+        assert_eq!(version, super::LADDER.len().to_string());
+        db.close().await;
     }
 
     #[tokio::test]

@@ -35,6 +35,7 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/fsindex_config:datalib_etl_fsindex_config",
+        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",

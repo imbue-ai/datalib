@@ -5,6 +5,9 @@
 
 pub mod artifact;
 pub mod config;
+pub mod config_array;
+pub mod config_lex;
+pub mod config_order;
 pub mod diagnostics;
 pub mod events;
 pub mod graph;
@@ -12,7 +15,6 @@ pub mod lock;
 pub mod run_state;
 pub mod runs_sink;
 pub mod scheduler;
-pub mod sink;
 pub mod step;
 pub mod subprocess;
 pub mod supervisor;

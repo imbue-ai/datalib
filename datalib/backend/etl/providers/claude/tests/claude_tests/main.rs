@@ -13,3 +13,4 @@ mod live;
 mod playback_roundtrip;
 mod progress_countdown;
 mod reset_and_resync;
+mod run_problems;

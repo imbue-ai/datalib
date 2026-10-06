@@ -36,7 +36,7 @@ const configPath = () => `${dataRoot()}/config.toml`;
 const readConfig = () => readFileSync(configPath(), "utf8");
 const writeConfig = (text: string) => writeFileSync(configPath(), text);
 
-const tabs = (page: Page) => page.getByRole("button", { name: "Data sources" });
+const toolbar = (page: Page) => page.getByRole("searchbox", { name: "Search your data" });
 const gate = (page: Page) => page.locator(".cfg-error");
 
 let original = "";
@@ -80,11 +80,11 @@ test("a broken entry costs that entry, and nothing else", async ({ page, request
   await page.goto("/data_sources");
   // No gate, and the app is fully navigable.
   await expect(gate(page)).toHaveCount(0);
-  await expect(tabs(page)).toBeVisible();
+  await expect(toolbar(page)).toBeVisible();
 
   // The dropped entry is on its own row, saying why — not missing, and
   // not wearing a status from some earlier run.
-  const row = page.locator('.tg-grid .slick-row[data-key="broken/ingest"]');
+  const row = page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="broken/ingest"]');
   await expect(row).toBeVisible();
   await expect(row.locator('[col-id="status"] .tg-status')).toHaveAttribute(
     "title",
@@ -106,7 +106,7 @@ test("a step naming a group the config lacks says so on its Edit button", async 
   await expect(gate(page)).toHaveCount(0);
   const edit = await rowMenuEntry(
     page,
-    page.locator('.tg-grid .slick-row[data-key="ghost/ingest"]'),
+    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="ghost/ingest"]'),
     "Edit settings…",
   ).open();
   await expect(edit).toHaveClass(MENU_DISABLED);
@@ -121,7 +121,7 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   request,
 }) => {
   await page.goto("/data_sources");
-  await expect(tabs(page)).toBeVisible();
+  await expect(toolbar(page)).toBeVisible();
   await expect(gate(page)).toHaveCount(0);
   // The Manage table's element, marked: the cards wait behind the gate
   // rather than being thrown away, so the same one comes back.
@@ -137,7 +137,7 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   await expect(gate(page)).toBeVisible();
   await expect(page.getByRole("heading", { name: "This config file can’t be read" })).toBeVisible();
   // The tabs go with it: none of them can do anything now.
-  await expect(tabs(page)).toHaveCount(0);
+  await expect(toolbar(page)).toHaveCount(0);
   // And the screen names the problem and where it is, rather than
   // leaving the user to find it.
   await expect(page.locator(".diags")).toContainText("line 2");
@@ -153,11 +153,12 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   await page.locator("#cfg-editor").fill(original);
   await page.getByRole("button", { name: "Save config" }).click();
 
-  // The gate lifts by itself — no reload. This direction is the one
-  // that is easy to get wrong, and the one an agent fixing the config
-  // depends on.
+  // The gate lifts by itself — no reload — on the save's own refetch,
+  // which does not wait for the file watcher to report the write. This
+  // direction is the one that is easy to get wrong: the cards behind the
+  // gate have to come back as they were.
   await expect(gate(page)).toHaveCount(0);
-  await expect(tabs(page)).toBeVisible();
+  await expect(toolbar(page)).toBeVisible();
   await expect(
     page.locator(".tg-grid[data-probe]"),
     "the cards were rebuilt behind the gate, losing their state",
@@ -166,7 +167,7 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
 
 test("a config with no unified_index applet blocks too", async ({ page, request }) => {
   await page.goto("/data_sources");
-  await expect(tabs(page)).toBeVisible();
+  await expect(toolbar(page)).toBeVisible();
 
   // Valid TOML, a valid config, and useless: every view in the app is
   // served by the applet this drops. `PUT /api/config` would accept
@@ -179,7 +180,7 @@ test("a config with no unified_index applet blocks too", async ({ page, request 
   await expect(
     page.getByRole("heading", { name: "This config declares no Unified Index" }),
   ).toBeVisible();
-  await expect(tabs(page)).toHaveCount(0);
+  await expect(toolbar(page)).toHaveCount(0);
 
   // No diagnostics at all: nothing in the file is wrong. What is wrong
   // is what the file does not say, which is why `app_ready` is its own

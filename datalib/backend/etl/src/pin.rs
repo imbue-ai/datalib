@@ -1,301 +1,135 @@
-//! Reading a doltlite store at a pinned commit.
+//! Which commit of a doltlite store a reader reads, and whether that commit
+//! is readable at all.
 //!
-//! A plain `SELECT` reads doltlite's working set, which lives in the file and
-//! is shared across processes, so it can return rows a writer has not
-//! committed yet. A consumer reading a store whose producer is still running
-//! must read committed state instead: `dolt_at_<table>('<hash>')`.
+//! A reader opens `<store>@<hash>` read-only (`datalib_pin::open_at`, through
+//! [`crate::doltlite_raw::open_reader`]), so its plain table names read that
+//! commit and nothing a writer has in flight
+//! (docs/dev/doltlite.md#three-ways-to-read-one-commit).
 //!
-//! [`install_views`] does that once per connection rather than once per query,
-//! by creating a `pinned_<table>` view over each table. Queries then read
-//! `pinned_users` where they used to read `users`, and are otherwise
-//! untouched — no pin has to be threaded down to the code running the query.
-//!
-//! **Why the views are named distinctly instead of shadowing the tables.** A
-//! temp view named `users` would shadow the real `users`, and every existing
-//! query would be pinned with no edit at all. It would also mean a pass that
-//! forgot to install the views silently read the working set. A distinct name
-//! turns that into `no such table: pinned_users` — loud and immediate rather
-//! than a quiet wrong answer. It also leaves writes through the real names
-//! working, so a pool that reads and writes is unaffected.
-//!
-//! See `docs/dev/plans/completed/streaming_steps_plan.md`, and its §"The sink contract"
-//! before a consumer treats an empty read as an empty store: "I could not
-//! read this" and "there is nothing here" must stay different answers, or
-//! render deletes every document the source used to have.
+//! Read P1 in `datalib/backend/dag/README.md` § "What a sink owes its
+//! consumers" before a consumer treats an empty read as an empty store: "I
+//! could not read this" and "there is nothing here" must stay different
+//! answers, or render deletes every document the source used to have.
 
 use anyhow::Result;
 
 /// The commit a store is read at. The type lives in `datalib_pin`, with
 /// its reasons, so the search applet and the app server pin the same way
 /// without linking this crate.
-pub use datalib_pin::{is_missing_table, Pin};
+pub use datalib_pin::{is_missing_table, missing_schema, Missing, Pin};
 
-/// Prefix for the per-connection pinned views: `users` is read as
-/// `pinned_users`.
-pub const VIEW_PREFIX: &str = "pinned_";
-
-/// Whose store a read is against.
-///
-/// The helpers that build a query around a table name — `load_payloads` and
-/// friends — are used from both sides of a store: the download step reads the
-/// store it is writing, and render reads somebody else's. Those want opposite
-/// things. The owner wants its own working set, which is the whole point of
-/// having one. Everyone else must read committed state, or they see rows the
-/// writer has not finished with.
-///
-/// A regex cannot tell those apart at the call site, and a default would pick
-/// one of them silently. So the parameter is mandatory: every caller answers
-/// the question, and `Own` is greppable when you want to audit the answers.
-#[derive(Debug, Clone, Copy)]
-pub enum Reads<'a> {
-    /// This process owns the store and is reading what it wrote.
-    Own,
-    /// Somebody else owns it: read at `pin`, through the views
-    /// [`install_views`] created.
-    At(&'a Pin),
-}
-
-impl Reads<'_> {
-    /// The name this read should use for `table`.
-    pub fn table(&self, table: &str) -> String {
-        match self {
-            Reads::Own => table.to_string(),
-            Reads::At(_) => format!("{VIEW_PREFIX}{table}"),
-        }
-    }
-}
-
-/// The commit this store is at now, or `None` when it has no commits.
+/// The commit this store is at now, or `None` when there is nothing
+/// readable to pin: no commit, or none that holds a table.
 ///
 /// For a consumer driven by [`crate::doltlite_raw::scan_buckets`], prefer the
 /// `new_head` that scan already returned: the diff and the reads that follow
 /// it must name one commit, and sampling HEAD a second time can pick up a
 /// commit the diff did not see. This is for the consumers that do no diff at
-/// all, and for a sibling store (a blob CAS) with a HEAD of its own.
+/// all.
 pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
-    let commit = datalib_pin::head(pool).await?;
-    if commit.is_none() {
-        // Every caller turns this into "nothing to read". The render paths
-        // now skip on it rather than reporting a completed pass over zero
-        // rows, but this line is still the only place the difference between
-        // "absent" and "empty" is stated rather than inferred.
+    let Some(commit) = datalib_pin::head(pool).await? else {
+        // Every caller turns this into "nothing to read", which is not the
+        // same as the store being empty.
         tracing::warn!(
-            store = %store_filename(pool),
+            store = %store_path(pool).display(),
             "no commit to pin: reading this store as empty, which is not the \
              same as it being empty",
         );
         return Ok(None);
-    }
-    // The same answer reached the other way. A doltlite file is born with an
-    // initialization commit, so HEAD resolves even for a store whose tables
-    // have never been committed -- and there every pinned view would be the
-    // empty one, which reads as a source that lost all its rows.
-    if !carries_committed_schema(pool).await {
+    };
+    if !readable_at(&store_path(pool), &commit).await? {
         tracing::warn!(
-            store = %store_filename(pool),
+            store = %store_path(pool).display(),
             "no commit carries this store's tables: unreadable, not empty",
         );
         return Ok(None);
     }
-    Ok(commit)
+    Ok(Some(commit))
 }
 
-/// The file a pool is against, for a log line.
-fn store_filename(pool: &sqlx::SqlitePool) -> String {
-    pool.connect_options().get_filename().display().to_string()
-}
-
-/// Whether any commit in this store carries a schema.
+/// Whether the store's HEAD holds any of its tables.
 ///
-/// A doltlite file gets an "Initialize data repository" commit when it is
-/// created, before any DDL — so `dolt_hashof('HEAD')` answers for a store
-/// whose tables have never been committed at all. That is the dangerous
-/// shape, because it does not look like an error anywhere:
-///
-/// - `head` returns a real hash, so the store reads as pinnable;
-/// - `install_views` finds the tables in `sqlite_master` but no `dolt_at_`
-///   module for them, so every view becomes the empty `WHERE 0` one;
-/// - the consumer reads zero rows and reports a *completed* walk;
-/// - and a sweep over what the walk did not produce deletes every
-///   document the source had.
-///
-/// It is reachable: a download that created its tables and wrote rows, then
-/// died before its first commit, leaves exactly this.
-///
-/// A store that has committed anything has a `dolt_at_<table>` module per
-/// committed table, so their total absence is the signal — whether the
-/// tables are there uncommitted, or not there yet at all. **A file with no
-/// tables counts as unreadable too**: that is the shape an owner's `open`
-/// leaves behind between creating the file and its first `CREATE TABLE`,
-/// and under streaming a consumer opens exactly there. No view gets
-/// created, so the consumer's first read fails with `no such table:
-/// pinned_<t>` — a loud failure over a producer doing nothing wrong.
+/// A doltlite file is born with an "Initialize data repository" commit that
+/// holds nothing, so HEAD answers for a store whose tables have never been
+/// committed — a writer that died between its `CREATE TABLE` and its first
+/// commit, or one a reader opened in the moment between. Read as a store,
+/// that commit is a source with no rows, and a consumer that took it so
+/// would sweep every document the source had.
 pub async fn carries_committed_schema(pool: &sqlx::SqlitePool) -> bool {
-    let modules: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM pragma_module_list WHERE name LIKE 'dolt_at_%'")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-    modules > 0
-}
-
-/// Create one `pinned_<table>` view per table on this connection, and return
-/// how many. Call it once, when a store is opened for reading.
-///
-/// The views are temp-schema objects, so they last exactly as long as the
-/// connection, are invisible to every other reader of the file, and write
-/// nothing to it. Our pools are size 1 with recycling disabled (see
-/// `doltlite_raw`'s `open_disables_connection_recycling`) because doltlite's
-/// own session state is per-connection, so one call covers the pool's life.
-///
-/// There is deliberately no "install them unpinned" path. A caller with no
-/// commit to pin to is already in trouble — the store has nothing committed —
-/// and building views over the bare tables would answer that by handing back
-/// the working set, which is the failure this module exists to prevent.
-///
-/// **Nothing here may read `dolt_status`.** It looks like a read, but a
-/// reader running it while a writer commits to the same file makes that
-/// `dolt_commit` fail with `commit conflict` — measured by
-/// `a_churning_reader_never_makes_the_writers_commit_fail` in
-/// `tests/doltlite_two_process.rs`; in doltlite 0.50.3 the vtab's filter ends
-/// in `chunkStorePut`, staging the working catalog even on a read-only
-/// connection. Under streaming the writer is live by design, so a reader that
-/// asks whether the store is dirty breaks the producer it is reading.
-pub async fn install_views(pool: &sqlx::SqlitePool, pin: &Pin) -> Result<usize> {
-    // `sqlite_*` are the engine's own bookkeeping tables; SQLite refuses to
-    // create a view over some of them, and a reader has no business in them.
-    let names: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-    )
-    .fetch_all(pool)
-    .await?;
-    let tables: Vec<&String> = names.iter().filter(|t| is_table_name(t)).collect();
-    let commit = pin.commit();
-
-    let modules: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_module_list WHERE name LIKE 'dolt_at_%'")
-            .fetch_all(pool)
-            .await?;
-    let pinnable: std::collections::HashSet<&str> = modules
-        .iter()
-        .filter_map(|m| m.strip_prefix("dolt_at_"))
-        .collect();
-
-    for t in &tables {
-        // A table with no `dolt_at_` module did not exist at this commit, so
-        // its pinned contents are empty. `WHERE 0` keeps the view's columns
-        // while returning nothing.
-        //
-        // That is only honest because `head` has already refused the store
-        // where *nothing* is committed. Here some other table is committed,
-        // so this one is genuinely newer than the pin and genuinely empty at
-        // it. Without that check the same branch would quietly turn "this
-        // store has never been committed" into "this source has no rows",
-        // which is what makes a consumer delete everything.
-        let body = if pinnable.contains(t.as_str()) {
-            format!("SELECT * FROM dolt_at_{t}('{commit}')")
-        } else {
-            format!("SELECT * FROM main.{t} WHERE 0")
-        };
-        create_view(pool, t, &body).await?;
+    match datalib_pin::head(pool).await {
+        Ok(Some(head)) => readable_at(&store_path(pool), &head).await.unwrap_or(false),
+        _ => false,
     }
-    Ok(tables.len())
 }
 
-async fn create_view(pool: &sqlx::SqlitePool, table: &str, body: &str) -> Result<()> {
-    // Audited: `table` passed `is_table_name`, and `body` was built by the
-    // caller from a static template plus that same name and a hash `Pin::at`
-    // validated as 40 hex characters. Nothing here came from upstream data.
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "CREATE TEMP VIEW IF NOT EXISTS {VIEW_PREFIX}{table} AS {body}"
-    )))
-    .execute(pool)
-    .await?;
-    Ok(())
+/// Whether `pin` holds a table, asked of the store at that commit.
+pub(crate) async fn readable_at(path: &std::path::Path, pin: &Pin) -> Result<bool> {
+    let at = datalib_pin::open_at(path, pin).await?;
+    let holds = datalib_pin::holds_a_table(&at).await;
+    at.close().await;
+    Ok(holds?)
 }
 
-fn is_table_name(s: &str) -> bool {
-    !s.is_empty()
-        && s.bytes()
-            .next()
-            .is_some_and(|b| b.is_ascii_lowercase() || b == b'_')
-        && s.bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+fn store_path(pool: &sqlx::SqlitePool) -> std::path::PathBuf {
+    pool.connect_options().get_filename().to_path_buf()
 }
 
 #[cfg(test)]
-mod view_tests {
-    //! Each of these guards one property the streaming design rests on, and
-    //! each fails loudly if doltlite or SQLite stops behaving this way.
+mod reader_tests {
+    //! Each of these guards one property a reader of somebody else's store
+    //! rests on, and each fails loudly if doltlite stops behaving this way.
 
     use super::*;
+    use crate::doltlite_raw;
 
-    /// Tables `dolt_status` reports dirty. Asked of a *writer's* own pool
-    /// only; `install_views` says why a reader must never run it.
-    async fn dirty_table_count(pool: &sqlx::SqlitePool) -> Option<i64> {
-        sqlx::query_scalar("SELECT count(*) FROM dolt_status")
-            .fetch_one(pool)
-            .await
-            .ok()
+    async fn count(pool: &sqlx::SqlitePool, sql: &'static str) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await
     }
 
-    async fn store(dir: &std::path::Path, name: &str, ddl: &[&str]) -> sqlx::SqlitePool {
-        crate::doltlite_raw::open(&dir.join(name), ddl)
+    // A doltlite file with nothing written into it yet, which
+    // `doltlite_raw::open` never leaves behind.
+    async fn bare_store(path: &std::path::Path) -> sqlx::SqlitePool {
+        sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(path)
+                    .create_if_missing(true),
+            )
             .await
             .unwrap()
     }
 
-    /// The point of the `pinned_` prefix over shadowing the real table name: a
-    /// query that runs without the views installed must fail, not silently
-    /// read the working set. This is the whole safety argument for the naming,
-    /// so it gets a test of its own.
+    /// The premise every consumer rests on: a reader sees the commit it
+    /// was opened at, not the writer's working set, and a table that
+    /// commit does not have is missing — never silently empty.
     #[tokio::test]
-    async fn a_missing_pinned_view_fails_loudly() {
+    async fn a_reader_reads_its_commit_not_the_working_set() {
         let dir = tempfile::tempdir().unwrap();
-        let pool = store(
-            dir.path(),
-            "missing.doltlite_db",
-            &["CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY)"],
-        )
-        .await;
-        let err = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pinned_notes")
-            .fetch_one(&pool)
-            .await
-            .expect_err("reading a view nobody installed must be an error");
-        assert!(
-            err.to_string().contains("no such table"),
-            "expected a missing-table error, got: {err}"
-        );
-    }
-
-    /// The premise of the whole plan: with the views installed, ordinary
-    /// queries see committed state while the producer's working set is dirty.
-    #[tokio::test]
-    async fn pinned_views_read_the_commit_not_the_working_set() {
-        let dir = tempfile::tempdir().unwrap();
-        let pool = store(
-            dir.path(),
-            "pinned.doltlite_db",
+        let path = dir.path().join("pinned.doltlite_db");
+        let pool = doltlite_raw::open(
+            &path,
             &[
                 "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, nick TEXT)",
                 "CREATE TABLE IF NOT EXISTS msgs (id TEXT PRIMARY KEY, who TEXT)",
             ],
         )
-        .await;
-        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
-            return; // stock libsqlite3 dev build: no dolt_at_ to pin to.
+        .await
+        .unwrap();
+        if !doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
         }
-        for (t, id, other) in [("users", "u1", "ann"), ("msgs", "m1", "u1")] {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "INSERT INTO {t} VALUES (?, ?)"
-            )))
-            .bind(id)
-            .bind(other)
+        sqlx::query("INSERT INTO users VALUES ('u1', 'ann')")
             .execute(&pool)
             .await
             .unwrap();
-        }
-        let commit = crate::doltlite_raw::commit_run(&pool, "seed")
+        sqlx::query("INSERT INTO msgs VALUES ('m1', 'u1')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let commit = doltlite_raw::commit_run(&pool, "seed")
             .await
             .unwrap()
             .unwrap();
@@ -310,63 +144,65 @@ mod view_tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO later VALUES ('x')")
-            .execute(&pool)
-            .await
-            .unwrap();
 
-        install_views(&pool, &Pin::at(&commit).unwrap())
+        let reader = doltlite_raw::open_reader(&path, Some(&commit))
             .await
+            .unwrap()
             .unwrap();
-
-        let count = |sql: &'static str| {
-            let pool = pool.clone();
-            async move {
-                sqlx::query_scalar::<_, i64>(sql)
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap()
-            }
-        };
-        assert_eq!(count("SELECT COUNT(*) FROM users").await, 2, "working set");
         assert_eq!(
-            count("SELECT COUNT(*) FROM pinned_users").await,
+            count(&pool, "SELECT COUNT(*) FROM users").await.unwrap(),
+            2,
+            "working set"
+        );
+        assert_eq!(
+            count(&reader, "SELECT COUNT(*) FROM users").await.unwrap(),
             1,
-            "pinned"
+            "the commit"
         );
         assert_eq!(
-            count("SELECT COUNT(*) FROM pinned_users u JOIN pinned_msgs m ON m.who = u.id").await,
+            count(
+                &reader,
+                "SELECT COUNT(*) FROM users u JOIN msgs m ON m.who = u.id"
+            )
+            .await
+            .unwrap(),
             1,
-            "a join across two pinned views is pinned on both sides"
+            "a join reads one commit on both sides"
         );
-        assert_eq!(
-            count("SELECT COUNT(*) FROM pinned_later").await,
-            0,
-            "a table that did not exist at the pin reads empty, not dirty"
+        let e = count(&reader, "SELECT COUNT(*) FROM later")
+            .await
+            .unwrap_err();
+        assert!(
+            is_missing_table(&e, "later"),
+            "a table newer than the pin: {e}"
         );
+        reader.close().await;
+        pool.close().await;
     }
 
-    /// The one thing a reader can say about the store this whole file is
-    /// careful not to read: it is dirty, so somebody wrote rows and never
-    /// sealed them. A pinned read cannot tell those rows from a source that
-    /// holds nothing, which is how three live tests came to download a page
-    /// and then assert on zero rows.
+    /// The one thing a reader can say about what it cannot see: the store
+    /// is dirty, so somebody wrote rows and never sealed them. A reader at
+    /// the commit cannot tell those rows from a source that holds nothing,
+    /// which is how three live tests came to download a page and then
+    /// assert on zero rows.
     #[tokio::test]
     async fn a_writer_that_never_sealed_leaves_the_store_dirty() {
         let dir = tempfile::tempdir().unwrap();
-        let pool = crate::doltlite_raw::open(
-            &dir.path().join("unsealed.doltlite_db"),
+        let path = dir.path().join("unsealed.doltlite_db");
+        let pool = doltlite_raw::open(
+            &path,
             &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY)"],
         )
         .await
         .unwrap();
-        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+        if !doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
+        let dirty = "SELECT count(*) FROM dolt_status";
         assert_eq!(
-            dirty_table_count(&pool).await,
-            Some(0),
-            "a freshly opened store is sealed by the open itself"
+            count(&pool, dirty).await.unwrap(),
+            0,
+            "the open seals itself"
         );
 
         sqlx::query("INSERT INTO entities VALUES ('never-sealed')")
@@ -374,80 +210,27 @@ mod view_tests {
             .await
             .unwrap();
         assert_eq!(
-            dirty_table_count(&pool).await,
-            Some(1),
+            count(&pool, dirty).await.unwrap(),
+            1,
             "a row nobody committed has to be visible as dirtiness, or the \
              reader has nothing at all to warn about"
         );
 
-        // And the read really is blind to it: HEAD is still the schema
-        // commit, which has no rows.
-        let pin = head(&pool)
+        let reader = doltlite_raw::open_reader(&path, None)
             .await
             .unwrap()
-            .expect("the open commits a schema");
-        install_views(&pool, &pin).await.unwrap();
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_entities")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(n, 0, "the pinned read sees an empty store, not the row");
-
-        crate::doltlite_raw::commit_run(&pool, "seal")
-            .await
-            .unwrap();
-        assert_eq!(dirty_table_count(&pool).await, Some(0), "sealing cleans it");
-    }
-
-    /// The guarantee every pinned render now rests on, stated once against a
-    /// store shaped like a provider's: a row written but not committed must
-    /// not be visible through the views, and one that *was* committed must.
-    ///
-    /// Each provider gets this property by construction — it opens with
-    /// `open_reader`, pins, installs the views, and reads `pinned_<table>`,
-    /// and the repo lint refuses a render read that does not. This test is
-    /// what makes that chain mean something: if `install_views` ever stopped
-    /// excluding the working set, every provider would silently start
-    /// rendering half-written rows and no provider test would notice, because
-    /// none of them writes uncommitted data on purpose.
-    #[tokio::test]
-    async fn an_uncommitted_row_is_invisible_through_the_views() {
-        let dir = tempfile::tempdir().unwrap();
-        let pool = crate::doltlite_raw::open(
-            &dir.path().join("provider.doltlite_db"),
-            &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT)"],
-        )
-        .await
-        .unwrap();
-        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
-            return;
-        }
-        sqlx::query("INSERT INTO entities VALUES ('committed', 'a')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        let commit = crate::doltlite_raw::commit_run(&pool, "one entity")
-            .await
-            .unwrap()
-            .unwrap();
-        // The shape a download mid-run leaves behind.
-        sqlx::query("INSERT INTO entities VALUES ('in-flight', 'b')")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        install_views(&pool, &Pin::at(&commit).unwrap())
-            .await
-            .unwrap();
-        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM pinned_entities ORDER BY id")
-            .fetch_all(&pool)
-            .await
             .unwrap();
         assert_eq!(
-            ids,
-            vec!["committed".to_string()],
-            "the pinned view must show the committed row and not the in-flight one"
+            count(&reader, "SELECT COUNT(*) FROM entities")
+                .await
+                .unwrap(),
+            0,
+            "the reader sees the schema commit, not the row"
         );
+        reader.close().await;
+        doltlite_raw::commit_run(&pool, "seal").await.unwrap();
+        assert_eq!(count(&pool, dirty).await.unwrap(), 0, "sealing cleans it");
+        pool.close().await;
     }
 
     /// `dolt_log().date` has one-second resolution, so a burst of commits --
@@ -457,13 +240,14 @@ mod view_tests {
     #[tokio::test]
     async fn head_tracks_head_through_a_burst_of_same_second_commits() {
         let dir = tempfile::tempdir().unwrap();
-        let pool = crate::doltlite_raw::open(
-            &dir.path().join("burst.doltlite_db"),
+        let path = dir.path().join("burst.doltlite_db");
+        let pool = doltlite_raw::open(
+            &path,
             &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT)"],
         )
         .await
         .unwrap();
-        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+        if !doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
 
@@ -473,66 +257,43 @@ mod view_tests {
                 .execute(&pool)
                 .await
                 .unwrap();
-            let sealed = crate::doltlite_raw::commit_run(&pool, &format!("batch {i}"))
+            let sealed = doltlite_raw::commit_run(&pool, &format!("batch {i}"))
                 .await
                 .unwrap()
                 .unwrap();
 
-            let pin = head(&pool)
+            let reader = doltlite_raw::open_reader(&path, None)
                 .await
                 .unwrap()
-                .expect("a sealed store has a head");
+                .unwrap();
             assert_eq!(
-                pin.commit(),
+                reader.pin().commit(),
                 sealed,
                 "head must name the commit just sealed, not a same-second sibling"
             );
-
-            // And the pin has to carry every row committed so far -- naming the
-            // right hash is only half of it.
-            // Safe: `pin.commit()` is validated hex, and the table name is a
-            // literal -- the same argument `install_views` makes.
-            let seen: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-                "SELECT count(*) FROM dolt_at_entities('{}')",
-                pin.commit()
-            )))
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            assert_eq!(seen, i64::from(i) + 1, "pin at batch {i} lost rows");
+            assert_eq!(
+                count(&reader, "SELECT count(*) FROM entities")
+                    .await
+                    .unwrap(),
+                i64::from(i) + 1,
+                "the reader at batch {i} lost rows"
+            );
+            reader.close().await;
         }
+        pool.close().await;
     }
 
     /// The window a fresh store is open in: the file exists and holds no
-    /// table at all.
-    ///
-    /// `connect_pool` creates the file, and every `CREATE TABLE` comes
-    /// after it — a reader that opens in between finds a doltlite file
-    /// with nothing but its birth commit. `install_views` then creates no
-    /// view, and the first read fails with `no such table: pinned_<t>`.
-    /// Under the streaming design a producer that has just created its
-    /// store is an ordinary state, not a broken one, so the answer must be
-    /// `None` — "I cannot read this yet" — which every consumer already
-    /// handles by skipping the source this pass.
+    /// table at all. Under streaming a producer that has just created its
+    /// store is an ordinary state, so the answer must be `None` — "I cannot
+    /// read this yet" — which every consumer handles by skipping the source
+    /// this pass.
     #[tokio::test]
     async fn a_store_with_no_tables_at_all_is_not_readable() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("newborn.doltlite_db");
-        // Deliberately not `doltlite_raw::open`: that creates tables and
-        // commits them. This is the file as it is between the writer's
-        // connect and its first statement.
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(
-                sqlx::sqlite::SqliteConnectOptions::new()
-                    .filename(&path)
-                    .create_if_missing(true),
-            )
-            .await
-            .unwrap();
-        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+        let pool = bare_store(&path).await;
+        if !doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
         assert!(
@@ -540,42 +301,23 @@ mod view_tests {
             "precondition: the birth commit answers, which is why a hash \
              cannot be the readiness test"
         );
-        assert!(
-            head(&pool).await.unwrap().is_none(),
-            "a store with no tables yet must read as unreadable, not as a \
-             source that has nothing"
-        );
+        assert!(head(&pool).await.unwrap().is_none());
+        assert!(doltlite_raw::open_reader(&path, None)
+            .await
+            .unwrap()
+            .is_none());
+        pool.close().await;
     }
 
     /// The shape that deletes a source: tables written, nothing committed.
-    ///
-    /// A doltlite file has an initialization commit from birth, so
-    /// `dolt_hashof('HEAD')` answers even here — and every `dolt_at_` module
-    /// is absent, so `install_views` would give each table the empty
-    /// `WHERE 0` view. The consumer then reads zero rows, calls that a
-    /// completed walk, and sweeps every document the source had.
-    ///
-    /// `head` must say `None` — "I cannot read this" — rather than hand back
-    /// a pin that reads as an empty source.
+    /// HEAD is the birth commit, which holds no table, so a reader there
+    /// would read zero rows and call it a completed walk.
     #[tokio::test]
     async fn a_store_whose_tables_were_never_committed_is_not_readable() {
         let dir = tempfile::tempdir().unwrap();
-        // Deliberately not `doltlite_raw::open`: that commits the schema on
-        // the way in, which is the guarantee. This reproduces a download
-        // that created its tables and died before its first commit.
         let path = dir.path().join("half.doltlite_db");
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(
-                sqlx::sqlite::SqliteConnectOptions::new()
-                    .filename(&path)
-                    .create_if_missing(true),
-            )
-            .await
-            .unwrap();
-        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+        let pool = bare_store(&path).await;
+        if !doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
         sqlx::query("CREATE TABLE entities (id TEXT PRIMARY KEY, body TEXT)")
@@ -586,23 +328,13 @@ mod view_tests {
             .execute(&pool)
             .await
             .unwrap();
-
-        // The store does have a commit -- the one it was born with.
-        let born_with: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
-            .fetch_optional(&pool)
+        assert!(head(&pool).await.unwrap().is_none());
+        assert!(!carries_committed_schema(&pool).await);
+        assert!(doltlite_raw::open_reader(&path, None)
             .await
-            .unwrap_or(None);
-        assert!(
-            born_with.is_some(),
-            "precondition: doltlite gives a new file an initialization commit, \
-             which is why this case cannot be caught by asking for a hash"
-        );
-
-        assert!(
-            head(&pool).await.unwrap().is_none(),
-            "a store whose schema has never been committed must read as \
-             unreadable, not as a source that lost all its rows"
-        );
+            .unwrap()
+            .is_none());
+        pool.close().await;
     }
 
     /// The other half: a store that *has* committed its schema and holds no
@@ -611,74 +343,73 @@ mod view_tests {
     #[tokio::test]
     async fn a_committed_but_empty_store_is_readable() {
         let dir = tempfile::tempdir().unwrap();
-        let pool = crate::doltlite_raw::open(
-            &dir.path().join("empty.doltlite_db"),
+        let path = dir.path().join("empty.doltlite_db");
+        let pool = doltlite_raw::open(
+            &path,
             &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT)"],
         )
         .await
         .unwrap();
-        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+        if !doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
-
-        let pin = head(&pool)
+        assert!(carries_committed_schema(&pool).await);
+        let reader = doltlite_raw::open_reader(&path, None)
             .await
             .unwrap()
             .expect("open commits the schema, so the store is readable");
-        install_views(&pool, &pin).await.unwrap();
-        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM pinned_entities")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(n, 0, "readable and empty, which is a different answer");
+        assert_eq!(
+            count(&reader, "SELECT count(*) FROM entities")
+                .await
+                .unwrap(),
+            0,
+            "readable and empty, which is a different answer"
+        );
+        reader.close().await;
+        pool.close().await;
     }
 
-    /// Pinned views are per-connection state. The design leans on that in two
-    /// directions: installing them once when a store is opened covers every
-    /// later query on that pool, and they cannot leak into anyone else's view
-    /// of the same file. Our pools are size 1 with recycling disabled, so
-    /// "this connection" and "this pool" are the same lifetime.
+    /// A reader's snapshot is the connection's, so a writer sealing more
+    /// after the reader opened moves nothing it reads.
     #[tokio::test]
-    async fn pinned_views_are_scoped_to_the_connection() {
+    async fn a_reader_does_not_move_when_the_writer_seals_again() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("scope.doltlite_db");
-        let a = crate::doltlite_raw::open(
+        let path = dir.path().join("moving.doltlite_db");
+        let pool = doltlite_raw::open(
             &path,
-            &["CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY)"],
+            &["CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY)"],
         )
         .await
         .unwrap();
-        if !crate::doltlite_raw::has_dolt_extensions(&a).await {
+        if !doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
-        sqlx::query("INSERT INTO notes VALUES (1)")
-            .execute(&a)
+        sqlx::query("INSERT INTO entities VALUES ('a')")
+            .execute(&pool)
             .await
             .unwrap();
-        let commit = crate::doltlite_raw::commit_run(&a, "one note")
+        doltlite_raw::commit_run(&pool, "one").await.unwrap();
+        let reader = doltlite_raw::open_reader(&path, None)
             .await
             .unwrap()
             .unwrap();
-        install_views(&a, &Pin::at(&commit).unwrap()).await.unwrap();
-
-        for _ in 0..3 {
-            let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_notes")
-                .fetch_one(&a)
-                .await
-                .unwrap();
-            assert_eq!(n, 1, "every later query on this pool sees the views");
-        }
-        a.close().await;
-
-        let b = crate::doltlite_raw::open(&path, &[]).await.unwrap();
-        let err = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pinned_notes")
-            .fetch_one(&b)
+        sqlx::query("INSERT INTO entities VALUES ('b')")
+            .execute(&pool)
             .await
-            .expect_err("a second connection must not inherit the pinned views");
-        assert!(
-            err.to_string().contains("no such table"),
-            "expected a missing-table error, got: {err}"
+            .unwrap();
+        doltlite_raw::commit_run(&pool, "two").await.unwrap();
+        assert_eq!(
+            count(&reader, "SELECT count(*) FROM entities")
+                .await
+                .unwrap(),
+            1
         );
-        b.close().await;
+        let e = sqlx::query("INSERT INTO entities VALUES ('c')")
+            .execute(&*reader)
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("readonly"), "a reader wrote: {e}");
+        reader.close().await;
+        pool.close().await;
     }
 }

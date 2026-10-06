@@ -11,6 +11,7 @@ use anyhow::Result;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::Buckets;
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_chat_common::{RenderProfile, RenderSummary as ChatSummary};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::providers::Provider;
@@ -25,7 +26,9 @@ use super::parse::ParsedSignal;
 ///     every row carries its backpointer, and a message's id carries
 ///     `date_sent` in its leading bits (`datalib_id`'s v8 layout).
 ///     Every uuid moved, `chat_uuid` among them.
-pub const RENDER_VERSION: u32 = 6;
+/// v8: the author span carries the sender's number as `data-handle`.
+/// v9: a `+1` number without ten digits after the 1 has no handle.
+pub const RENDER_VERSION: u32 = 9;
 
 const SOURCE_LABEL: &str = "Signal";
 const PROVIDER: Provider = Provider::Signal;
@@ -61,6 +64,7 @@ pub fn profile() -> RenderProfile {
         reaction_kind: "Signal Reaction".to_string(),
         chat_entity_kind: super::ids::KIND_CHAT,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 

@@ -1,13 +1,16 @@
-//! Read-only account probe: "do these credentials reach claude.ai, and
-//! which conversations does the account have?" One request for the
-//! account, one for the org list, and one per org for its conversation
-//! listing — no conversation is ever detail-fetched.
+//! Read-only account probe. Asked for the account, one request: "do
+//! these credentials reach claude.ai, and as whom?" Asked for the
+//! conversations, the org list and one listing per org — no
+//! conversation is ever detail-fetched.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
 use datalib_etl_claude_config::ClaudeConfig;
-use datalib_probe::{sort_newest_first, ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
+use datalib_probe::{
+    sort_newest_first, OnProgress, ProbeAccount, ProbeAsk, ProbeItem, ProbeItemKind, ProbeList,
+    ProbeProgress, ProbeReport,
+};
 
 use crate::ingest::api::ClaudeClient;
 
@@ -16,7 +19,11 @@ use crate::ingest::api::ClaudeClient;
 /// crosses a pipe as one JSON document.
 const MAX_ITEMS: usize = 500;
 
-pub async fn probe(config: &ClaudeConfig) -> Result<ProbeReport> {
+pub async fn probe(
+    config: &ClaudeConfig,
+    ask: ProbeAsk,
+    progress: OnProgress<'_>,
+) -> Result<ProbeReport> {
     config.validate()?;
     if config.api.is_none() {
         return Err(anyhow!(
@@ -30,6 +37,44 @@ pub async fn probe(config: &ClaudeConfig) -> Result<ProbeReport> {
         .current_account()
         .await
         .map_err(crate::ingest::credential_hint)?;
+    let (items, notes) = match ask {
+        ProbeAsk::Account => (Vec::new(), Vec::new()),
+        ProbeAsk::List(ProbeList::Conversations) => {
+            list_conversations(&mut client, progress).await?
+        }
+        ProbeAsk::List(other) => bail!("a Claude source has no `{}` list", other.as_str()),
+    };
+    Ok(ProbeReport {
+        mode: "api".to_string(),
+        account: ProbeAccount {
+            id: account
+                .get("uuid")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            address: account
+                .get("email_address")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            display_name: account
+                .get("full_name")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            // Conversations, not messages: claude.ai reports no message
+            // count without opening every conversation.
+            message_estimate: None,
+        },
+        items,
+        notes,
+    })
+}
+
+/// Every conversation in every org the account belongs to, newest
+/// first, with a note for an org that would not list.
+async fn list_conversations(
+    client: &mut ClaudeClient,
+    progress: OnProgress<'_>,
+) -> Result<(Vec<ProbeItem>, Vec<String>)> {
     let orgs = client
         .list_orgs()
         .await
@@ -59,6 +104,10 @@ pub async fn probe(config: &ClaudeConfig) -> Result<ProbeReport> {
             }
         };
         listed += convs.len();
+        progress(ProbeProgress {
+            done: listed as u64,
+            total: None,
+        });
         for conv in &convs {
             let Some(uuid) = conv.get("uuid").and_then(Value::as_str) else {
                 continue;
@@ -85,30 +134,7 @@ pub async fn probe(config: &ClaudeConfig) -> Result<ProbeReport> {
         ));
         items.truncate(MAX_ITEMS);
     }
-
-    Ok(ProbeReport {
-        mode: "api".to_string(),
-        account: ProbeAccount {
-            id: account
-                .get("uuid")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            address: account
-                .get("email_address")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            display_name: account
-                .get("full_name")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            // Conversations, not messages: claude.ai reports no message
-            // count without opening every conversation.
-            message_estimate: None,
-        },
-        items,
-        notes,
-    })
+    Ok((items, notes))
 }
 
 #[cfg(test)]
@@ -123,7 +149,7 @@ mod tests {
         let err = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(probe(&cfg))
+            .block_on(probe(&cfg, ProbeAsk::Account, &|_| {}))
             .expect_err("an export has no connection to test")
             .to_string();
         assert!(err.contains("no connection"), "{err}");

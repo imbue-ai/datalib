@@ -5,6 +5,7 @@ members = [
     "table",
     "app_schema",
     "unified_index",
+    "embedding_map",
     "core",
     "runtime",
     "qmd_models",
@@ -88,7 +89,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.37.0"
+version = "0.40.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false

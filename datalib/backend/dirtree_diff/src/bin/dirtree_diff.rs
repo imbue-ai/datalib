@@ -93,10 +93,7 @@ async fn main() -> Result<()> {
         store::open_reader(&args.left.db).await?
     } else {
         let unified = scratch.path().join("unified.doltlite_db");
-        store::unify(&unified, &args.left.db, &args.right.db).await?;
-        // A fresh connection, deliberately: the one that did the
-        // fetching cannot see the tables it fetched. See `store::unify`.
-        store::open_scratch(&unified).await?
+        store::unify(&unified, &args.left.db, &args.right.db).await?
     };
 
     // Directories first. A directory's tree-hash covers its subtree,

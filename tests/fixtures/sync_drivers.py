@@ -6,7 +6,7 @@ reads the same whichever door it goes through.
 The HTTP driver builds the root the way a person does in the app — the
 starter config from `POST /api/config/init`, then one `PUT /api/config`
 per source added — and syncs with `POST /api/requests`, waiting on
-`GET /api/requests` for the request to close.
+`GET /api/requests` for each request it opened to close.
 """
 
 from __future__ import annotations
@@ -74,7 +74,9 @@ class HttpDriver:
         url_file = workspace.parent / f"{workspace.name}.url"
         url_file.unlink(missing_ok=True)
         self.log_path = workspace.parent / f"{workspace.name}.server.log"
-        self._log = self.log_path.open("w")
+        # Appended to: a server started again on the same root keeps
+        # the dead one's lines.
+        self._log = self.log_path.open("a")
         argv = [
             str(http_bin),
             "--no-open",
@@ -124,19 +126,23 @@ class HttpDriver:
                 )
 
     def sync(self, roots: list[str] | None = None) -> None:
-        request = self.call("POST", "/api/requests", {"roots": roots or []})
-        print(
-            f"[sync_drivers] request {request['id']} → {request['roots']}", flush=True
-        )
-        closed = self.wait_closed(request["id"])
-        if closed["state"] != "done":
-            raise SystemExit(
-                f"request {request['id']} ended {closed['state']}"
-                f" (failed step: {closed['failed_step']}); server log: {self.log_path}\n"
-                + self.failure_log(closed["failed_step"])
-                + "\n--- server log, last lines ---\n"
-                + "\n".join(self.log_path.read_text().splitlines()[-60:])
+        """One request per source the roots belong to; waits for each."""
+        opened = self.call("POST", "/api/requests", {"roots": roots or []})
+        for request in opened:
+            print(
+                f"[sync_drivers] request {request['id']} → {request['roots']}",
+                flush=True,
             )
+        for request in opened:
+            closed = self.wait_closed(request["id"])
+            if closed["state"] != "done":
+                raise SystemExit(
+                    f"request {request['id']} ended {closed['state']}"
+                    f" (failed step: {closed['failed_step']}); server log: {self.log_path}\n"
+                    + self.failure_log(closed["failed_step"])
+                    + "\n--- server log, last lines ---\n"
+                    + "\n".join(self.log_path.read_text().splitlines()[-60:])
+                )
 
     def reset(self, targets: list[str]) -> None:
         self.call("POST", "/api/reset", {"targets": targets})
@@ -174,16 +180,25 @@ class HttpDriver:
             time.sleep(POLL_SECS)
 
     def failure_log(self, step: str | None) -> str:
-        """The failed step's warnings and errors, from the run store's log."""
+        """The failed step's newest log lines, from the run store's log."""
         if not step:
             return ""
-        lines = self.call("GET", f"/api/log?step={urllib.parse.quote(step)}")
-        return "\n".join(
-            f"  {line.get('level')}: {line.get('msg') or line.get('line')}"
-            for line in lines[-40:]
-        )
+        query = urllib.parse.urlencode({"q": f"step:{step}", "limit": 40})
+        status, lines = self.request("GET", f"/api/log?{query}")
+        if status >= 400:
+            return f"  (GET /api/log?{query} → {status}: {lines})"
+        return "\n".join(f"  {line['level']}: {line['msg']}" for line in lines)
 
     def call(self, method: str, path: str, body: object | None = None) -> Any:
+        status, answer = self.request(method, path, body)
+        if status >= 400:
+            raise SystemExit(f"{method} {path} → {status}: {answer}")
+        return answer
+
+    def request(
+        self, method: str, path: str, body: object | None = None
+    ) -> tuple[int, Any]:
+        """The status and the parsed answer, whatever the status."""
         data = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(self.origin + path, data=data, method=method)
         req.add_header("Authorization", f"Bearer {self.token}")
@@ -191,12 +206,13 @@ class HttpDriver:
             req.add_header("Content-Type", "application/json")
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
-                text = resp.read().decode()
+                status, text = resp.status, resp.read().decode()
         except urllib.error.HTTPError as e:
-            raise SystemExit(
-                f"{method} {path} → {e.code}: {e.read().decode(errors='replace')}"
-            )
-        return json.loads(text) if text else None
+            status, text = e.code, e.read().decode(errors="replace")
+        try:
+            return status, json.loads(text) if text else None
+        except json.JSONDecodeError:
+            return status, text
 
     # ── startup ─────────────────────────────────────────────────────
 

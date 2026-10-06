@@ -1,20 +1,104 @@
 //! What a process running the loop builds around it, the same whichever
 //! process that is (`datalib-dag`, or the app's server): the steps'
-//! environment and the run store's record of one busy period, what it puts
-//! right when it takes the lock, and the idle side between busy periods
-//! ([`run_idle`]).
+//! environment and the run store's record of one busy period, what it
+//! puts right when it takes the lock, and the loop's idle side.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use tokio::sync::watch;
 
 use crate::config::DagConfig;
 use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
 use crate::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_NOW, ENV_RUN_ID};
-use crate::supervisor::announce::Listener;
+use crate::supervisor::announce::{Listener, CONFIG_CHANGED};
 use crate::supervisor::store::{RequestOutcome, Store};
+
+/// What an idle host does at each turn of [`run_idle`].
+pub trait Periods {
+    /// Serve the open requests until none is left.
+    fn busy_period(&mut self, store: &Store) -> impl Future<Output = ()> + Send;
+    /// The switches or the config moved while nothing ran: bring the
+    /// record to them. The switches it recorded (step id → who turned it
+    /// off), or `None` if it could not.
+    fn settle(
+        &mut self,
+        store: &Store,
+    ) -> impl Future<Output = Option<BTreeMap<String, String>>> + Send;
+    /// What only an idle loop may do, such as a reset.
+    fn idle_work(&mut self, store: &Store) -> impl Future<Output = ()> + Send;
+    /// Resolves when something in this process wants a look that no
+    /// announcement carries.
+    fn nudged(&self) -> impl Future<Output = ()> + Send;
+}
+
+/// The loop between busy periods, for a host holding `runner-lock`: a busy
+/// period whenever a request is open, requests asked to stop before any
+/// period took them closed where they stand, the record settled when the
+/// switches or the config move, and otherwise a wait for an announcement, a
+/// nudge or `stop`. `listener` is made before the first look, so nothing
+/// announced after it is missed.
+pub async fn run_idle(
+    store: &Store,
+    listener: &mut Listener,
+    periods: &mut impl Periods,
+    stop: &mut watch::Receiver<bool>,
+) {
+    // The switches the record was last settled against, as the settle read
+    // them: a switch flipped between this loop's look and the settle's is
+    // in the record, and a comparison with the look would miss the next
+    // change. `None` until the first settle, which also clears what a
+    // dead loop left running.
+    let mut settled: Option<BTreeMap<String, String>> = None;
+    while !*stop.borrow() {
+        periods.idle_work(store).await;
+        let open = match store.open_requests().await {
+            Ok(open) => open,
+            Err(e) => {
+                tracing::error!("supervisor: could not read the open requests: {e:#}");
+                Vec::new()
+            }
+        };
+        if open.iter().any(|r| r.stop_requested_by.is_none()) {
+            periods.busy_period(store).await;
+            // Its last save holds the switches as it last read them, which
+            // may not be where they stand now.
+            settled = None;
+            continue;
+        }
+        for request in open {
+            if let Err(e) = store
+                .close_request(&request.id, RequestOutcome::Stopped, None)
+                .await
+            {
+                tracing::error!(request = %request.id, "supervisor: could not close it: {e:#}");
+            }
+        }
+        match store.turned_off().await {
+            Ok(turned_off) if settled.as_ref() != Some(&turned_off) => {
+                settled = periods.settle(store).await;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::error!("supervisor: could not read which steps are turned off: {e:#}")
+            }
+        }
+        tokio::select! {
+            heard = listener.next() => {
+                // A step's settings are in its fingerprint, so a config
+                // edit can make it stale, and the record should say so.
+                if heard.iter().any(|line| line == CONFIG_CHANGED) {
+                    settled = None;
+                }
+            }
+            () = periods.nudged() => {}
+            _ = stop.changed() => {}
+        }
+    }
+}
 
 /// The environment every step of one busy period gets on top of the
 /// host's own, and the log filter it was built with.
@@ -78,79 +162,6 @@ pub fn start_record(
     RunStoreSink::start(data_root, run_id, now, commit, retention)
 }
 
-/// What a host does in a busy period and between them; [`run_idle`] is
-/// the rest, the same for every host.
-#[allow(async_fn_in_trait)]
-pub trait Periods {
-    /// One busy period: the config loaded, a run opened, the loop served
-    /// until no request it can place is open.
-    async fn busy(&mut self, store: &Store);
-
-    /// One tick with nothing open, so a pause or a resume made while idle
-    /// reaches the record, and so do the steps a dead loop left running.
-    async fn settle(&mut self, store: &Store);
-
-    /// Work that needs the root to itself, done while idle: a reset.
-    async fn idle_work(&mut self, _store: &Store) {}
-
-    /// Resolves when something outside the store wants the host's
-    /// attention, as a queued reset does.
-    async fn nudged(&self) {
-        std::future::pending().await
-    }
-}
-
-/// Between busy periods, until `stop`: run one whenever a request is open,
-/// close those asked to stop before any period took them on, settle the
-/// record when the pauses move, and otherwise wait to be told.
-pub async fn run_idle(
-    store: &Store,
-    listener: &mut Listener,
-    stop: &mut tokio::sync::watch::Receiver<bool>,
-    periods: &mut impl Periods,
-) {
-    // The pauses the record was last settled against; `None` until the
-    // first settle, which also clears what a dead loop left running.
-    let mut settled: Option<BTreeMap<String, String>> = None;
-    while !*stop.borrow() {
-        periods.idle_work(store).await;
-        let open = match store.open_requests().await {
-            Ok(open) => open,
-            Err(e) => {
-                tracing::error!("supervisor: could not read the open requests: {e:#}");
-                Vec::new()
-            }
-        };
-        if open.iter().any(|r| r.stop_requested_by.is_none()) {
-            periods.busy(store).await;
-            continue;
-        }
-        // Asked to stop before any loop took them on: closed where they
-        // stand, since a busy period for them would do nothing.
-        for request in open {
-            if let Err(e) = store
-                .close_request(&request.id, RequestOutcome::Stopped, None)
-                .await
-            {
-                tracing::error!(request = %request.id, "supervisor: could not close it: {e:#}");
-            }
-        }
-        match store.paused().await {
-            Ok(paused) if settled.as_ref() != Some(&paused) => {
-                periods.settle(store).await;
-                settled = Some(paused);
-            }
-            Ok(_) => {}
-            Err(e) => tracing::error!("supervisor: could not read the pauses: {e:#}"),
-        }
-        tokio::select! {
-            _ = periods.nudged() => {}
-            _ = listener.next(store) => {}
-            _ = stop.changed() => {}
-        }
-    }
-}
-
 /// What [`take_over`] found to put right.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TakenOver {
@@ -195,6 +206,226 @@ mod tests {
     use crate::supervisor::record::InvocationRow;
     use crate::supervisor::record::{CurrentRun, Record};
 
+    /// The next call to be `want`, past any settle that is not it: a
+    /// settle repeated is harmless, and how many a burst of wakes makes is
+    /// not the host's to promise. A busy period or idle work out of turn
+    /// fails.
+    async fn expect(calls: &mut tokio::sync::mpsc::UnboundedReceiver<String>, want: &str) {
+        loop {
+            let got = tokio::time::timeout(std::time::Duration::from_secs(10), calls.recv())
+                .await
+                .unwrap_or_else(|_| panic!("no {want} within 10s"))
+                .unwrap_or_else(|| panic!("the host ended waiting for {want}"));
+            if got == want {
+                return;
+            }
+            assert!(got.starts_with("settle"), "{got} where {want} was due");
+        }
+    }
+
+    fn spawn_host(
+        store: &std::sync::Arc<Store>,
+        mut fake: Fake,
+        mut stop: watch::Receiver<bool>,
+    ) -> tokio::task::JoinHandle<()> {
+        let store = store.clone();
+        tokio::spawn(async move {
+            let mut listener =
+                Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
+            run_idle(&store, &mut listener, &mut fake, &mut stop).await;
+        })
+    }
+
+    /// Each call `run_idle` makes, in order, bar the idle turns: those
+    /// come once per wake, and how many wakes a burst of announcements
+    /// makes is not the host's to promise. A busy period holds until
+    /// released, then closes what it was asked to serve.
+    struct Fake {
+        calls: tokio::sync::mpsc::UnboundedSender<String>,
+        release: std::sync::Arc<tokio::sync::Notify>,
+        nudge: std::sync::Arc<tokio::sync::Notify>,
+        /// Set by the test beside a nudge: the in-memory work a nudge is for.
+        queued: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        /// A step the first settle turns off before it reads the switches:
+        /// one flipped between the host's look and the settle's.
+        turn_off_in_settle: Option<&'static str>,
+    }
+
+    impl Periods for Fake {
+        async fn busy_period(&mut self, store: &Store) {
+            let _ = self.calls.send("busy".into());
+            self.release.notified().await;
+            for r in store.open_requests().await.unwrap() {
+                if r.stop_requested_by.is_none() {
+                    store
+                        .close_request(&r.id, RequestOutcome::Done, None)
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+        async fn settle(&mut self, store: &Store) -> Option<BTreeMap<String, String>> {
+            if let Some(step) = self.turn_off_in_settle.take() {
+                store.turn_off(step, "ui").await.unwrap();
+            }
+            let turned_off = store.turned_off().await.ok();
+            let steps: Vec<&String> = turned_off.iter().flat_map(|p| p.keys()).collect();
+            let _ = self.calls.send(format!("settle {steps:?}"));
+            turned_off
+        }
+        async fn idle_work(&mut self, _: &Store) {
+            if self.queued.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                let _ = self.calls.send("work".into());
+            }
+        }
+        async fn nudged(&self) {
+            self.nudge.notified().await;
+        }
+    }
+
+    /// The idle side, woken only by announcements and nudges (its backstop
+    /// is an hour): a request starts a busy period, one asked to stop
+    /// before any period took it is closed without one, a switch settles
+    /// the record, a nudge runs the work it was for, and a stop ends it.
+    #[tokio::test]
+    async fn the_idle_host_answers_each_kind_of_wake_and_nothing_else() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(root.path()).await.unwrap());
+        let other = Store::open(root.path()).await.unwrap();
+        let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let nudge = Arc::new(tokio::sync::Notify::new());
+        let queued = Arc::new(AtomicBool::new(false));
+        let (stop_tx, stop) = watch::channel(false);
+        let fake = Fake {
+            calls: tx,
+            release: release.clone(),
+            nudge: nudge.clone(),
+            queued: queued.clone(),
+            turn_off_in_settle: None,
+        };
+        let host = spawn_host(&store, fake, stop);
+        let mut next = async |want: &str| expect(&mut calls, want).await;
+        next("settle []").await;
+
+        let served = other.open_request(&["a/x".into()], "ui").await.unwrap();
+        next("busy").await;
+        let stopped = other.open_request(&["b/x".into()], "ui").await.unwrap();
+        other.request_stop(&stopped, "ui").await.unwrap();
+        release.notify_one();
+
+        // A busy period for the stopped request would come before this.
+        other.turn_off("a/x", "ui").await.unwrap();
+        next(r#"settle ["a/x"]"#).await;
+        let closed = async |id: &str| other.request(id).await.unwrap().unwrap().closed;
+        assert_eq!(closed(&served).await, Some(Some(RequestOutcome::Done)));
+        assert_eq!(closed(&stopped).await, Some(Some(RequestOutcome::Stopped)));
+
+        queued.store(true, Ordering::SeqCst);
+        nudge.notify_one();
+        next("work").await;
+        stop_tx.send(true).unwrap();
+        host.await.unwrap();
+        assert_eq!(calls.recv().await, None, "nothing more after the stop");
+    }
+
+    /// A config edit can make a step stale, and the Manage row's Sync
+    /// offers a derived step only when the record says it is. Without a
+    /// settle on the announcement the record kept saying "up to date".
+    #[tokio::test]
+    async fn a_config_change_settles_the_record_again() {
+        use crate::supervisor::announce::{announce, listeners_dir};
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(root.path()).await.unwrap());
+        let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let (stop_tx, stop) = watch::channel(false);
+        let fake = Fake {
+            calls: tx,
+            release: Arc::new(tokio::sync::Notify::new()),
+            nudge: Arc::new(tokio::sync::Notify::new()),
+            queued: Arc::default(),
+            turn_off_in_settle: None,
+        };
+        let host = spawn_host(&store, fake, stop);
+        expect(&mut calls, "settle []").await;
+        announce(&listeners_dir(root.path()), "test", CONFIG_CHANGED);
+        expect(&mut calls, "settle []").await;
+        stop_tx.send(true).unwrap();
+        host.await.unwrap();
+    }
+
+    /// A busy period's last save holds the switches as it last read them.
+    /// Off, on and off again under it leave the switches
+    /// where they were before it, and the record where the busy period
+    /// left it; so it is settled again after every one. Found by the
+    /// harness's walk (seed 27).
+    #[tokio::test]
+    async fn a_busy_period_is_followed_by_a_settle() {
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(root.path()).await.unwrap());
+        let other = Store::open(root.path()).await.unwrap();
+        let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let (stop_tx, stop) = watch::channel(false);
+        let fake = Fake {
+            calls: tx,
+            release: release.clone(),
+            nudge: Arc::new(tokio::sync::Notify::new()),
+            queued: Arc::default(),
+            turn_off_in_settle: None,
+        };
+        let host = spawn_host(&store, fake, stop);
+        let mut next = async |want: &str| expect(&mut calls, want).await;
+        next("settle []").await;
+        other.turn_off("a/x", "ui").await.unwrap();
+        next(r#"settle ["a/x"]"#).await;
+
+        other.open_request(&["a/x".into()], "ui").await.unwrap();
+        next("busy").await;
+        other.turn_on("a/x").await.unwrap();
+        other.turn_off("a/x", "ui").await.unwrap();
+        release.notify_one();
+        next(r#"settle ["a/x"]"#).await;
+
+        stop_tx.send(true).unwrap();
+        host.await.unwrap();
+    }
+
+    /// A switch flipped between the host's look at the switches and the
+    /// settle's own read is in the record; the host must compare what it
+    /// sees next with what the settle recorded, or a turn-on that puts the
+    /// switches back where its look found them is never settled. Found by
+    /// the harness's walk (seeds 11, 15, 22, 25).
+    #[tokio::test]
+    async fn a_turn_off_landing_during_a_settle_is_not_lost() {
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(root.path()).await.unwrap());
+        let other = Store::open(root.path()).await.unwrap();
+        let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let (stop_tx, stop) = watch::channel(false);
+        let fake = Fake {
+            calls: tx,
+            release: Arc::new(tokio::sync::Notify::new()),
+            nudge: Arc::new(tokio::sync::Notify::new()),
+            queued: Arc::default(),
+            turn_off_in_settle: Some("a/x"),
+        };
+        let host = spawn_host(&store, fake, stop);
+        let mut next = async |want: &str| expect(&mut calls, want).await;
+        // The first settle looked at no switches and recorded `a/x` off.
+        next(r#"settle ["a/x"]"#).await;
+        other.turn_on("a/x").await.unwrap();
+        next("settle []").await;
+
+        stop_tx.send(true).unwrap();
+        host.await.unwrap();
+    }
+
     #[tokio::test]
     async fn what_a_dead_loop_left_open_is_closed_and_nothing_else() {
         let root = tempfile::tempdir().unwrap();
@@ -233,5 +464,20 @@ mod tests {
             take_over(&store, root.path()).await.unwrap(),
             TakenOver::default()
         );
+    }
+
+    /// A config's `[checkpoint_cadence]` reaches every step, in the form a
+    /// step decodes; a config without one leaves the step its default.
+    #[test]
+    fn the_configs_checkpoint_cadence_reaches_every_step() {
+        let with =
+            crate::config::parse("[checkpoint_cadence]\nat_most_every_secs = 2.5\n").unwrap();
+        let env = step_env(&with, None, &[], "now", "run").unwrap();
+        let cadence = crate::config::CheckpointCadence::decode(&env.vars[ENV_CHECKPOINT_CADENCE]);
+        assert_eq!(cadence.map(|c| c.at_most_every_secs), Some(2.5));
+
+        let without = crate::config::parse("").unwrap();
+        let env = step_env(&without, None, &[], "now", "run").unwrap();
+        assert!(!env.vars.contains_key(ENV_CHECKPOINT_CADENCE));
     }
 }

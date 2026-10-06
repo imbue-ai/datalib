@@ -17,8 +17,10 @@ pub const XMP_COLUMN_PATTERNS: &[&str] = &[
     "AgMetadataSearchIndex.searchIndex",
 ];
 
-/// The lightroom-owned slice of a `lightroom` source. The catalog is
-/// `catalog.path`; the doltlite mirror lands in the ingest step's tree.
+/// The lightroom-owned slice of a `lightroom` source: a catalog
+/// (`catalog.path`), a folder of Lightroom's backups (`backups.path`), or
+/// both, the backups replayed first and the catalog mirrored on top. The
+/// doltlite mirror lands in the ingest step's tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LightroomConfig {
@@ -26,8 +28,14 @@ pub struct LightroomConfig {
     /// resolved by the orchestrator's `normalize()`.
     pub common: SourceCommon,
 
-    /// The `.lrcat` to mirror.
+    /// The `.lrcat` to mirror, or one backup `.zip` holding it.
     pub catalog: Option<LocalPath>,
+
+    /// A folder of Lightroom's backups: one subfolder per backup, named
+    /// for when it was taken (`2026-09-27 1650`). Each backup not yet in
+    /// the store becomes a commit of its own, oldest first, before the
+    /// catalog is mirrored.
+    pub backups: Option<LocalPath>,
 
     /// Table-name globs to mirror. Default `["*"]` — every table in the
     /// catalog. Matched against the bare table name; `*` and `?` are the
@@ -69,6 +77,7 @@ impl Default for LightroomConfig {
         Self {
             common: SourceCommon::default(),
             catalog: None,
+            backups: None,
             include_tables: vec!["*".to_string()],
             exclude_tables: Vec::new(),
             exclude_columns: Vec::new(),
@@ -83,6 +92,12 @@ impl Default for LightroomConfig {
 
 impl LightroomConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.catalog.is_none() && self.backups.is_none() {
+            anyhow::bail!(
+                "lightroom: set `catalog.path` (a .lrcat or a backup .zip), \
+                 `backups.path` (a folder of Lightroom backups), or both"
+            );
+        }
         if self.include_tables.is_empty() {
             anyhow::bail!("include_tables is empty: nothing would be mirrored");
         }
@@ -119,8 +134,10 @@ pub type LightroomRenderConfig = datalib_source_common::BareRenderConfig;
 pub use datalib_source_common::glob_match;
 
 impl datalib_source_common::IngestMethods for LightroomConfig {
-    const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::local("catalog")];
+    const METHODS: &'static [datalib_source_common::IngestMethod] = &[
+        datalib_source_common::IngestMethod::local("catalog"),
+        datalib_source_common::IngestMethod::local("backups"),
+    ];
 }
 
 #[cfg(test)]
@@ -164,12 +181,34 @@ mod tests {
         assert!(!c.wants_table("Adobe_images"));
     }
 
+    fn local(p: &str) -> Option<LocalPath> {
+        Some(LocalPath { path: p.into() })
+    }
+
     #[test]
     fn empty_include_list_is_rejected() {
         let c = LightroomConfig {
+            catalog: local("/c.lrcat"),
             include_tables: Vec::new(),
             ..Default::default()
         };
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn a_source_reads_a_catalog_a_backups_folder_or_both_but_not_neither() {
+        for (catalog, backups) in [
+            (local("/c.lrcat"), None),
+            (None, local("/Backups")),
+            (local("/c.lrcat"), local("/Backups")),
+        ] {
+            let c = LightroomConfig {
+                catalog,
+                backups,
+                ..Default::default()
+            };
+            assert!(c.validate().is_ok(), "{c:?}");
+        }
+        assert!(LightroomConfig::default().validate().is_err());
     }
 }

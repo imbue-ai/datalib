@@ -1,21 +1,71 @@
 # YoLink Download
 
-The ingest step of a `yolink` group mirrors per-device sensor history from
-`us.yosmart.com/download/...` into a doltlite raw store. One
-forward-marching window per request:
+The ingest step of a `yolink` group mirrors per-device sensor history
+from `us.yosmart.com/download/...` into a doltlite raw store:
 
 ```
-<data_root>/<stanza>/ingest/entities.doltlite_db
-  yolink_devices    one row per configured device + its high-water cursor
+<data_root>/<group>/ingest/entities.doltlite_db
+  yolink_devices    one row per configured device + its resume cursor (last_ts_ms)
   yolink_readings   one row per sample, keyed device#ts_ms#metric
+  yolink_windows    one row per window that failed and has not fetched since, keyed device#start_ms#end_ms
 ```
 
-Each device is walked from its configured `start:` date in `window_days`
-strides (default 7, with `overlap_minutes` of deliberate re-fetch at each
-boundary), and each window is a signed-URL CSV fetched with `curl`. See
-`src/ingest/mod.rs` for the signing scheme — YoLink's public API does
-not expose historical CSVs, so it was reverse-engineered from their
-Android client.
+Each device is walked forward from its configured `start` date in
+`window_days` strides (default 7). Each request asks for one stride plus
+`overlap_minutes` (default 5), and a later run resumes from the device's
+newest stored reading less that overlap. Each window is a signed-URL CSV
+fetched with `curl`; the signing scheme is in `src/ingest/mod.rs`
+(`build_signed_url`), reverse-engineered from YoLink's Android client,
+since the public API exposes no historical CSVs. The walk ends at the
+run's pinned now (`DATALIB_DAG_NOW`), not the clock, and stops at the
+next window when the step is told to stop. What a failed window leaves
+is below.
+
+Moving a device's `start` earlier re-walks it from the new start (the
+starts are recorded in `sync_scope_config`); moving it later than the
+stored cursor skips the gap, with a warning.
+
+## When part of a sync fails
+
+Only the store failing fails the step. Everything else costs the thing
+that failed, as a row in the store's `problems` table:
+
+| what | key | when it clears |
+| --- | --- | --- |
+| a window that could not be fetched or parsed | `yolink_windows:<device>#<start_ms>#<end_ms>` | a later run asks for that window again and it fetches, or it is retired (below) |
+| a device that cannot be walked (a `start` that is not a date), one abandoned after thirty failed windows in a row, or one with no reading at all whose windows YoLink refused (most likely a wrong id) | `listing:<device>` | the next run that walks it, or for the refusals, the first run that gets it a reading |
+| a device with no reading in the last day | `silent:<device>` | it reports again |
+
+A failed window is a `yolink_windows` row. The walk goes on past it, and
+since the next run resumes from the newest reading, a window that failed
+behind it is asked for again only because its row is there: every run
+first retries the rows behind its resume point, then walks forward, and
+a window that fetches loses its row. A row ahead of the resume point is
+walked again by the forward walk, and goes once that walk has reached
+the end without failing it again. The retries count toward the same
+thirty-in-a-row budget as the forward walk.
+
+Some failures of a device that has readings have nothing a retry could
+fetch, and leave no row (or lose the one they had): a 404 or 410; a
+client error (not a timeout or a rate limit) on a window ending before
+the device's first reading, which is a `start` that predates the
+device; and a window
+ending more than 66 days before the run, the history YoLink keeps
+(below). A window of a device the config no longer names is dropped
+too, since no run asks for it. A device with no reading at all cannot
+tell a window from before it was deployed from an id YoLink does not
+know, so its refused windows leave no window rows (they would be asked
+for every run) but count toward the budget, and if the walk still has
+no reading at its end the device gets the `listing:` row above. Once a
+run gets a reading, the refusals before it are the time before the
+device was deployed and say nothing. A failed window retried after YoLink has
+expired it but before that cut-off answers empty and clears; either
+way the readings it held are gone, so retry within the retention
+window.
+
+The `listing:` and `silent:` rows are replaced whole at the end of each
+run. A run told to stop keeps the `listing:` rows it found before the
+stop, clears none, and leaves the `silent:` rows as the last run did.
 
 ## Upstream history expires. The mirror is the only durable copy.
 
@@ -25,46 +75,15 @@ get a successful, empty response — no error, no warning, nothing in the
 run summary to distinguish "that period had no readings" from "that
 period is gone".
 
-Measured against a live store on 2026-08-21. A backfill configured with
-`start: 2026-03-29` and run on 2026-08-20 returned:
-
-```
-download yolink: devices=6 windows=126 readings=150882 errors=0 requests=126
-```
-
-126 windows is 21 per device × 6 devices, which is exactly
-`ceil((2026-08-20 − 2026-03-29) / 7 days)` — every window from the
-configured start was requested and every one succeeded. Yet the earliest
-row in the store was **2026-06-15**, roughly 66 days before the fetch.
-Every one of the six devices' first reading landed within 23 minutes of
-`2026-06-15 00:00:00 UTC`.
-
-### Why that is upstream and not a bug here
-
-Three independent checks, worth repeating if you ever suspect the
-windowing:
-
-1. **Cold start really does begin at `start_ms`.** `resume_cursor`
-   returns `(start_ms, Normal)` when there is no stored one. Nothing
-   skipped ahead.
-2. **The endpoint honors the requested range.** A later incremental run
-   asked for a ~56-minute window and got 42 rows. Had the endpoint
-   ignored the start bound and returned whatever it held, that single
-   request would have returned the entire ~150k-row history.
-3. **The cutoff does not align to a window boundary.** With
-   `start: 2026-03-29` and a 7-day stride, window #11 spans
-   `2026-06-14 00:00 .. 2026-06-21 00:05`. The first row is
-   `2026-06-15 00:00:09` — **24 hours inside that window**. A windowing
-   or cursor bug would put the boundary at 2026-06-14; it doesn't.
-
-Six devices starting to report inside the same 23 minutes, at a UTC date
-boundary, is a server-side cutoff rather than six installation events —
-especially since that instant was 02:00 local for the operator. What
-this evidence does *not* establish is the exact policy (a rolling ~66-day
-retention is the obvious reading, but "the devices genuinely began
-reporting then" is not excluded from the mirror alone). Settling it needs
-a live probe: request an early window today and check whether the
-earliest served timestamp has moved forward since.
+Measured on one live account: a backfill from a start five months back
+requested every window and every one succeeded, yet all six devices'
+first readings landed within 23 minutes of one UTC midnight about 66
+days before the fetch — a server-side cutoff, not a windowing bug. The
+cutoff fell a day inside a window rather than on a window boundary, and
+a later ~56-minute request returned only that window's rows, so the
+endpoint honours the requested range. The exact policy (a rolling
+~66-day retention is the obvious reading) is not established; a live
+probe of an early window, repeated later, would settle it.
 
 ### What follows from it
 
@@ -73,14 +92,18 @@ earliest served timestamp has moved forward since.
   doltlite store is safe — that is the whole point of keeping a mirror —
   but nothing recovers what was never fetched.
 - **`errors=0` does not mean healthy.** An empty window and a quiet
-  window are indistinguishable in the summary. The same blind spot hides
-  a dead sensor: a device that stops reporting produces successful,
-  empty windows forever. On the store measured above, one freezer sat
-  silent for 14 days with clean run summaries throughout. Comparing
-  `MAX(ts_ms)` per device against wall-clock time is how you notice:
+  window are indistinguishable in the summary. A dead sensor is the
+  same: a device that stops reporting answers every window with an
+  empty body (not even the CSV header), which reads as no readings. On
+  the store measured above, one freezer sat silent for 14 days with
+  clean run summaries throughout. So every run compares each device's
+  newest reading against the clock, and one more than a day old is a
+  `silent:<device>` warning in `problems`, on the Manage row, until the
+  device reports again. To see every device's last reading (`$dl` is
+  the shell built below):
 
   ```sh
-  $dl <data_root>/<stanza>/ingest/entities.doltlite_db \
+  $dl -readonly <data_root>/<group>/ingest/entities.doltlite_db \
     "SELECT device_name, datetime(MAX(ts_ms)/1000,'unixepoch') AS last_seen
        FROM yolink_readings GROUP BY device_name ORDER BY last_seen;"
   ```
@@ -88,32 +111,27 @@ earliest served timestamp has moved forward since.
 ## Backfilling from an older store
 
 Because history expires upstream, an old raw store from a previous
-machine or a retired stanza can hold readings that no longer exist
+machine or a retired group can hold readings that no longer exist
 anywhere else. Merging one in is a two-table upsert.
 
-Everything below uses the Bazel-built shell, which links the same
-doltlite amalgamation the pipeline writes with:
+Everything below uses the doltlite shell as `$dl`
+([`docs/dev/doltlite.md`](/docs/dev/doltlite.md) has where to get it):
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite
 dl=bazel-bin/third-party/doltlite/doltlite
 ```
 
-**Stock `sqlite3` cannot open these files.** Prefer the Bazel target over
-a host `/usr/local/bin/doltlite` so the CLI can't silently disagree with
-`MODULE.bazel`'s pin.
-
 ### Check what you actually have first
 
 The `yolink_readings` primary key is
-`{device_name}#{ts_ms}#{metric}` (`schema_raw::reading_id_recipe`) and
-has been stable across schema generations, so rows for the same reading
-collide by construction and the merge needs no id rework. Confirm rather
-than assume:
+`{device_name}#{ts_ms}#{metric}` (`schema_raw::reading_id_recipe`), so
+rows for the same reading collide by construction and the merge needs no
+id rework. Confirm that the backup's ids follow the same recipe:
 
 ```sh
 # every id in the source matches the current recipe?
-$dl <backup>/ingest/entities.doltlite_db \
+$dl -readonly <backup>/ingest/entities.doltlite_db \
   "SELECT COUNT(*) AS total,
           SUM(id = device_name || '#' || ts_ms || '#' || metric) AS matching
      FROM yolink_readings;"
@@ -123,7 +141,7 @@ Then check what the merge would gain and whether the overlap agrees.
 `ATTACH` works, so this is one query:
 
 ```sh
-$dl <data_root>/<stanza>/ingest/entities.doltlite_db "
+$dl -readonly <data_root>/<group>/ingest/entities.doltlite_db "
 ATTACH DATABASE '<backup>/ingest/entities.doltlite_db' AS src;
 SELECT 'gained', COUNT(*) FROM src.yolink_readings s
   WHERE NOT EXISTS (SELECT 1 FROM yolink_readings c WHERE c.id = s.id);
@@ -139,20 +157,23 @@ A non-zero "disagreeing on value" count means the two stores fetched
 different values for the same sample and you need to decide which wins
 (`DO UPDATE SET value = excluded.value, payload = excluded.payload`
 rather than `DO NOTHING`). In the one real case measured, two fetches
-seven weeks apart produced a byte-identical overlap — 61,400 shared ids,
-zero disagreements on either `value` or `payload` — so the direction did
-not matter.
+seven weeks apart agreed on every one of 61,400 shared ids.
 
 ### The merge
 
-Back up first; this mutates the store in place.
+Back up first; this mutates the store in place. No sync may be running:
+the shell is a second writer. It works on the writer branch and then
+moves `main` to it, as every writer does (`etl/README.md` §"A writer
+works on its own branch and publishes when it seals"); a commit made on
+`main` directly would be dropped by the next sync's seal.
 
 ```sh
-cp <data_root>/<stanza>/ingest/entities.doltlite_db{,.pre-backfill}
+cp <data_root>/<group>/ingest/entities.doltlite_db{,.pre-backfill}
 ```
 
 ```sh
-$dl <data_root>/<stanza>/ingest/entities.doltlite_db <<'SQL'
+$dl <data_root>/<group>/ingest/entities.doltlite_db <<'SQL'
+SELECT dolt_connect_branch('datalib_writer');
 ATTACH DATABASE '<backup>/ingest/entities.doltlite_db' AS src;
 
 INSERT INTO yolink_readings
@@ -163,13 +184,14 @@ SELECT  id, payload, device_name, ts_ms, metric, value
     ON CONFLICT(id) DO NOTHING;
 
 INSERT INTO yolink_readings_bookkeeping
-       (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, volatile_payload)
-SELECT  id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, volatile_payload
+       (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, volatile_payload, tz_offset)
+SELECT  id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, volatile_payload, tz_offset
   FROM src.yolink_readings_bookkeeping
  WHERE true
     ON CONFLICT(id) DO NOTHING;
 
 SELECT dolt_commit('-Am', 'backfill: import history from <backup>');
+SELECT dolt_branch('-f', 'main', 'datalib_writer');
 SQL
 ```
 
@@ -191,41 +213,26 @@ Notes on the shape of that statement:
   backfilled start.
 - `dolt_log` is the undo — the whole import is one commit.
 
-The render step notices HEAD moved and re-renders on its own; the plots
+The next render sees `yolink_readings` changed and re-renders; the plots
 then cover the extended range.
 
-### Porting a store from an older schema generation
+### A backup in an older schema
 
-Not required for the merge — that reads only the two `yolink_readings*`
-tables — but if you want the backup itself to stand as a valid
-current-format store, note that `doltlite_raw::open` already
-self-heals: it applies the current DDL with `IF NOT EXISTS`, runs
-`reconcile_table_schema` to add missing columns, and commits
-`schema: apply DDL`, leaving prior commits intact. Pointing any current
-yolink step at the old store is enough.
-
-By hand it is the same thing. Between the generation that wrote
-`extract yolink …` commits and today, the entire delta was one table:
-
-```sh
-$dl <backup>/ingest/entities.doltlite_db "
-CREATE TABLE IF NOT EXISTS sync_scope_config(
-  scope TEXT PRIMARY KEY, config TEXT NOT NULL, updated_at TEXT NOT NULL);
-SELECT dolt_commit('-Am', 'schema: apply DDL');"
-```
-
-Diff the schemas before trusting that for any particular pair of stores:
-
-```sh
-diff <($dl <backup>/ingest/entities.doltlite_db ".schema" | sort) \
-     <($dl <data_root>/<stanza>/ingest/entities.doltlite_db ".schema" | sort)
-```
+The merge reads only the two `yolink_readings*` tables. To bring the
+backup itself to the current shape, point any current yolink step at
+it: opening a raw store adds missing tables and columns and commits
+`schema: apply DDL`, and refuses anything else
+(`etl/README.md` §"Schema self-healing"). If the backup predates the
+`tz_offset` bookkeeping column, drop it from the second `INSERT`.
 
 ## Config
 
-See `docs/user/config_examples/all_sources.toml` for a worked
-`yolink.download` + `yolink.render` stanza pair (`configs/dag_example.toml`
-does not carry one).
+The ingest step's `[steps.params.api]` table (`yolink_config`) takes
+`window_days`, `overlap_minutes` and one `[[steps.params.api.devices]]`
+entry per device: `name`, `kind` (`temperature_humidity` or
+`watermeter`), `start` (`YYYY-MM-DD`), `family_device_id`, `device_udid`.
+`docs/user/config_examples/all_sources.toml` has a worked group. A
+device's `name` keys its rows, so renaming one orphans its history.
 
 `family_device_id` and `device_udid` are **per-device read secrets**:
 anyone holding the pair can pull that device's entire CSV history (see
@@ -235,9 +242,9 @@ omission doesn't get "fixed" later.
 
 ## What the `airvisual` provider does differently, and why this one is left alone
 
-`airvisual` is the second time-series source (2026-09-14) and made
-four choices this provider did not; they are recorded here so nobody
-mistakes the difference for an oversight, and because **this store is
+`airvisual`, the other time-series source, made four choices this
+provider did not. They are recorded here so nobody mistakes the
+difference for an oversight, and because **this store is
 deliberately left as it is** — its upstream history expires, so any
 schema change here is a migration of the only copy, not a re-download,
 and the data is more valuable than the tidiness.
@@ -249,8 +256,9 @@ and the data is more valuable than the tidiness.
    same data as one row per (device, ts) with a `REAL` column per
    metric measured at about a tenth of the size on airvisual's data.
 2. **One transaction per device**, not per fetched window. A full
-   re-walk here is cheap and idempotent, and every SQL commit rewrites
-   the store's tree.
+   re-walk here is cheap and idempotent, and every SQL transaction
+   rewrites the pages it touches
+   ([doltlite.md § What a write costs](/docs/dev/doltlite.md#what-a-write-costs)).
 3. **A device has an `id` and a `name`.** `devices[].name` here is
    both the display label and the row key, so renaming a device
    orphans its history (the config doc says so). The step id does not
@@ -261,6 +269,6 @@ and the data is more valuable than the tidiness.
 4. **The device row is written only when it changed.** Here it is
    upserted every run through the sidecar path, which stamps
    `fetched_at_utc` and bumps `attempt_count` on an unchanged row, so
-   every run dirties the store and commits. The render no longer cares
+   every run dirties the store and commits. The render does not care
    (it gates on the driver's stale set, not on HEAD), but it is a
    commit and dead chunks per run for nothing.

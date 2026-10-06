@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "switch-libraries",
+  "description": "Lets the top bar's library menu (`ui/src/desktop.ts`) list the other libraries, open one, and go back to the libraries screen: `library_menu`, `library_switch` and `libraries_show` in src/main.rs. Switching closes this library's windows and server. `library_switch` takes a path from the page and opens it only if it is a data library. The `remote` block is REQUIRED for the same reason as in reveal-local-files.json, with the trailing `/**` load-bearing.",
+  "windows": [
+    "main",
+    "card-*"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*/**",
+      "http://localhost:*/**"
+    ]
+  },
+  "permissions": [
+    "allow-library-menu",
+    "allow-library-switch",
+    "allow-libraries-show"
+  ]
+}

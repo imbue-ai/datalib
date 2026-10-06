@@ -16,6 +16,9 @@ rust_library(
         "src/render_inputs.rs",
         "src/measurements.rs",
         "src/diff_status.rs",
+        "src/source_contact_handles.rs",
+        "src/source_contacts.rs",
+        "src/plain_text.rs",
     ],
     crate_name = "datalib_schema",
     edition = "2021",
@@ -26,8 +29,11 @@ rust_library(
     deps = [
         # `PortableTable` emits `impl ::datalib_table::BulkUpsertable`.
         "//datalib/backend/problems:datalib_problems",
+        # `search(...)` on a table emits `impl ::datalib_query::table::SearchTable`.
+        "//datalib/backend/query:datalib_query",
         "//datalib/backend/table:datalib_table",
         "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:blake3",
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",

@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "window-drag",
+  "description": "Lets the toolbar move the window. On macOS the page draws its toolbar where the title bar was (main.rs `under_title_bar`), and the toolbar's empty areas carry `data-tauri-drag-region`: pressing there starts a window drag, and a double-click zooms the window. The `remote` block is REQUIRED for the same reason as in reveal-local-files.json: the UI is loaded from `datalib-http` as an external URL, and Tauri withholds IPC from a remote origin unless it is listed, with the trailing `/**` load-bearing.",
+  "windows": [
+    "main",
+    "card-*"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*/**",
+      "http://localhost:*/**"
+    ]
+  },
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
+  ]
+}

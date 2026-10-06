@@ -74,7 +74,7 @@ async fn scans_tng_tree() {
         .await
         .unwrap();
     // The test owns the store: one connection for the scan and the
-    // assertions both, because two is what breaks a doltlite file.
+    // assertions both, because the file takes one writer at a time.
     let db = RawDb::open(&db_path).await.unwrap();
     let summary = ingest::fetch(FetchOptions {
         db: db.clone(),

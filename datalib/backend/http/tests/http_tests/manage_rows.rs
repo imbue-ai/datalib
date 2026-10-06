@@ -4,47 +4,27 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use datalib_core::app_store::AppStore;
-use datalib_http::applets::AppletRegistry;
-use datalib_http::{router, ApiToken, AppState};
+use datalib_http::{router, AppState};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 use tower::ServiceExt;
 
-const TEST_TOKEN: &str = "manage-rows-test-token";
-
-async fn state(root: &Path) -> AppState {
-    state_of(root).await
-}
-
-async fn state_of(root: &Path) -> AppState {
-    let root = Arc::new(root.to_path_buf());
-    let app = AppStore::open(root.as_path())
-        .await
-        .expect("open app stores");
-    AppState {
-        root: root.clone(),
-        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
-        app: Arc::new(app),
-        root_tx: tokio::sync::broadcast::channel(16).0,
-        usage: Default::default(),
-        newer_root: Vec::new(),
-        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
-    }
-}
+use crate::support::{state, TEST_TOKEN};
 
 async fn get_rows(root: &Path) -> serde_json::Value {
     rows_of(state(root).await).await
 }
 
 async fn rows_of(state: AppState) -> serde_json::Value {
+    rows_at(state, "/api/manage/rows").await
+}
+
+async fn rows_at(state: AppState, uri: &str) -> serde_json::Value {
     let app = router(state);
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/manage/rows")
+                .uri(uri)
                 .header("x-datalib-token", TEST_TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -105,8 +85,7 @@ async fn write_root(root: &Path, config: &str, state_json: Option<&str>) {
 }
 
 /// The tree: a row per group, its steps and applets under it by
-/// `path`, in pipeline order for the segments but config order for the
-/// rows — and the names each row shows.
+/// `path`, in config order — and the names each row shows.
 #[tokio::test]
 async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     let tmp = tempfile::tempdir().unwrap();
@@ -128,23 +107,26 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
             "identity",
             "actions",
             "status",
-            "chips",
-            "chips",
-            "count",
+            "quantity",
+            "quantity",
+            "timeseries",
             "timestamp",
             "timestamp",
             "timeseries"
         ]
     );
+    // The problem counts ride in the Name cell rather than a column.
+    assert_eq!(got["columns"][0]["badges"], "problems", "{got}");
     let rows = by_key(&got);
     assert_eq!(rows.len(), 8, "{got}");
-    // Nothing has counted its problems, so no row claims a green zero.
-    // Nothing has counted its documents either, so no row claims a
-    // zero there — an empty store and a store nobody has looked in
-    // read the same to a person, and only one of them is true.
+    // Nothing has counted its problems, so no row draws a count.
+    // Nothing has counted its items either, so no row claims a zero
+    // there — an empty store and a store nobody has looked in read the
+    // same to a person, and only one of them is true.
     for (key, row) in &rows {
         assert_eq!(row["problems"], serde_json::json!([]), "{key}: {row}");
-        assert_eq!(row["documents"], serde_json::Value::Null, "{key}: {row}");
+        let items = &row["items"]["value"];
+        assert_eq!(items, &serde_json::Value::Null, "{key}: {row}");
     }
 
     // `system/` is a group the config never named, with the run log
@@ -201,6 +183,9 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert_eq!(slack["actions"][0]["enabled"], true);
     assert_eq!(slack["actions"][1]["id"], "sync");
     assert_eq!(slack["actions"][1]["enabled"], true);
+    // Then the dashboard, on a group and on each step filed under one.
+    assert_eq!(slack["actions"][2]["id"], "dashboard");
+    assert_eq!(slack["actions"][2]["enabled"], true);
     assert_eq!(slack["disk"]["value"], serde_json::Value::Null);
     assert_eq!(slack["disk"]["unit"], "bytes");
 
@@ -220,11 +205,27 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     // A step's Browse is its group's: the same button, just as enabled.
     assert_eq!(render["actions"][0], slack["actions"][0]);
     assert_eq!(ingest["actions"][0], slack["actions"][0]);
-    assert_eq!(render["actions"][1]["enabled"], false);
-    assert!(render["actions"][1]["disabled_reason"]
+    assert_eq!(ingest["actions"][2]["id"], "dashboard");
+    // An applet has no sync to show.
+    let has_dashboard = |row: &serde_json::Value| {
+        row["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["id"] == "dashboard")
+    };
+    assert!(!has_dashboard(&rows["unified_index"]), "the applet");
+    // A render that has never run is out of date: Sync reruns it alone,
+    // and says which source to sync for fresh data.
+    assert_eq!(
+        render["seeds"],
+        serde_json::json!(["slack/render_markdown"])
+    );
+    assert_eq!(render["actions"][1]["enabled"], true, "{render}");
+    assert!(render["actions"][1]["hint"]
         .as_str()
         .unwrap()
-        .contains("Run slack/ingest"));
+        .contains("sync slack/ingest"));
 
     // The applet shares its group's id; the group's key keeps them apart.
     let applet = &rows["unified_index"];
@@ -256,10 +257,13 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     // The index group browses as the projection over every source.
     assert_eq!(index["actions"][0]["label"], "Browse every source");
     assert_eq!(index["actions"][0]["enabled"], true);
-    assert!(index["actions"][1]["disabled_reason"]
+    // With no source step, the index group syncs its own steps, which
+    // have never run.
+    assert_eq!(index["actions"][1]["enabled"], true, "{index}");
+    assert!(index["actions"][1]["hint"]
         .as_str()
         .unwrap()
-        .contains("none of this group's steps"));
+        .contains("out-of-date steps"));
     assert!(applet["actions"][0]["disabled_reason"]
         .as_str()
         .unwrap()
@@ -354,14 +358,13 @@ async fn a_finished_run_reaches_the_rows() {
         slack["status"]["last_success_at"],
         "2026-08-31T10:00:09+01:00"
     );
-    assert!(slack["status"].get("segments").is_none(), "{slack}");
 }
 
-/// The Problems cell reads the `problems{severity=…}` metrics a step
-/// reported at the end of its last run: red and yellow on the render
-/// step that counted some, a green zero on the index that counted none,
-/// nothing on the ingest step that never counted — and the group shows
-/// its last counting step's.
+/// The counts after a row's name read the `problems{severity=…}`
+/// metrics a step reported at the end of its last run: a red and a
+/// yellow number on the render step that counted some, nothing on the
+/// index that counted none or the ingest step that never counted — and
+/// the group shows its last counting step's.
 #[tokio::test]
 async fn problem_counts_reach_the_rows_from_the_run_store() {
     let tmp = tempfile::tempdir().unwrap();
@@ -405,8 +408,8 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
             .collect()
     };
     let red_and_yellow = vec![
-        ("error".to_string(), "2 errors".to_string()),
-        ("warning".to_string(), "5 warnings".to_string()),
+        ("error".to_string(), "2".to_string()),
+        ("warning".to_string(), "5".to_string()),
     ];
     assert_eq!(chips("slack/render_markdown"), red_and_yellow);
     assert_eq!(
@@ -414,19 +417,153 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
         red_and_yellow,
         "the group shows render's"
     );
-    assert_eq!(
-        chips("slack/ingest"),
-        vec![],
-        "never counted: blank, not zero"
-    );
+    assert_eq!(chips("slack/ingest"), vec![], "never counted");
     assert_eq!(
         chips("unified_index/grid_index"),
-        vec![("ok".to_string(), "0".to_string())]
+        vec![],
+        "counted none: nothing drawn"
     );
-    assert_eq!(
-        chips("group:unified_index"),
-        vec![("ok".to_string(), "0".to_string())]
-    );
+    assert_eq!(chips("group:unified_index"), vec![]);
+}
+
+/// The dashboard reads one run for a group: each step that took part
+/// with every series it reported and its warning and error lines
+/// counted up, and a step that did not, marked absent — in config order.
+#[tokio::test]
+async fn a_groups_dashboard_charts_the_run_its_steps_took_part_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    {
+        let w = datalib_runs::RunWriter::start(
+            tmp.path(),
+            "r1",
+            "2026-08-31T09:00:00.000000+00:00",
+            None,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        w.step(datalib_runs::StepRunRow {
+            run_id: "r1".into(),
+            step: "slack/ingest".into(),
+            state: "succeeded".into(),
+            attempt: 1,
+            started_at_utc: Some("2026-08-31T09:00:01.000000+00:00".into()),
+            finished_at_utc: Some("2026-08-31T09:00:09.000000+00:00".into()),
+            updated_at_utc: "2026-08-31T09:00:09.000000+00:00".into(),
+            ..Default::default()
+        });
+        w.metric(datalib_runs::MetricRow {
+            run_id: "r1".into(),
+            step: "slack/ingest".into(),
+            name: "api_requests_total".into(),
+            labels: String::new(),
+            value: 7,
+            updated_at_utc: "2026-08-31T09:00:05.000000+00:00".into(),
+            tz_offset: None,
+        });
+        for (level, ts) in [("warn", "02"), ("error", "03"), ("warn", "04")] {
+            w.log(datalib_runs::LogRow {
+                run_id: Some("r1".into()),
+                step: Some("slack/ingest".into()),
+                level: level.into(),
+                ts_utc: format!("2026-08-31T09:00:{ts}.000000+00:00"),
+                msg: "made up".into(),
+                ..Default::default()
+            });
+        }
+    }
+
+    let got = rows_of_at(tmp.path(), "/api/manage/groups/slack/dashboard").await;
+    assert_eq!(got["run"]["run_id"], "r1", "{got}");
+    assert_eq!(got["runs"].as_array().unwrap().len(), 1);
+    let steps = got["steps"].as_array().unwrap();
+    let ids: Vec<&str> = steps.iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["slack/ingest", "slack/render_markdown"]);
+    let ingest = &steps[0];
+    assert_eq!(ingest["in_run"], true);
+    assert_eq!(ingest["state"], "succeeded");
+    assert_eq!(ingest["series"][0]["name"], "api_requests_total");
+    assert_eq!(ingest["series"][0]["points"][0]["value"], 7);
+    let last = |k: &str| ingest[k].as_array().unwrap().last().unwrap()["value"].clone();
+    assert_eq!(last("warnings"), 2);
+    assert_eq!(last("errors"), 1);
+    assert_eq!(steps[1]["in_run"], false);
+
+    // A group none of whose steps ever ran has no run to show.
+    let idx = rows_of_at(tmp.path(), "/api/manage/groups/unified_index/dashboard").await;
+    assert_eq!(idx["run"], serde_json::Value::Null);
+}
+
+/// `GET /metrics` serves the run store's series in Prometheus's text
+/// format, typed by name, labelled by step and group, and only for
+/// steps the config still declares — and like every route, only with
+/// the token.
+#[tokio::test]
+async fn metrics_are_served_in_prometheus_text_format() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    {
+        let w = datalib_runs::RunWriter::start(
+            tmp.path(),
+            "r1",
+            "2026-08-31T09:00:00.000000+00:00",
+            None,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        for (step, name, labels, value) in [
+            ("slack/ingest", "api_requests_total", "", 7),
+            ("slack/ingest", "rows_upserted_total", "table=messages", 12),
+            ("slack/render_markdown", "items", "", 26),
+            ("removed/step", "items", "", 1),
+        ] {
+            w.metric(datalib_runs::MetricRow {
+                run_id: "r1".into(),
+                step: step.into(),
+                name: name.into(),
+                labels: labels.into(),
+                value,
+                updated_at_utc: "2026-08-31T09:00:05.000000+00:00".into(),
+                tz_offset: None,
+            });
+        }
+    }
+
+    let app = router(state(tmp.path()).await);
+    let get = |auth: bool| {
+        let mut req = Request::builder().uri("/metrics");
+        if auth {
+            req = req.header("authorization", format!("Bearer {TEST_TOKEN}"));
+        }
+        req.body(Body::empty()).unwrap()
+    };
+    let refused = app.clone().oneshot(get(false)).await.unwrap();
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = app.oneshot(get(true)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/plain; version=0.0.4"));
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    for line in [
+        "# TYPE datalib_step_api_requests_total counter",
+        "datalib_step_api_requests_total{step=\"slack/ingest\",group=\"slack\"} 7",
+        "datalib_step_rows_upserted_total{step=\"slack/ingest\",group=\"slack\",table=\"messages\"} 12",
+        "# TYPE datalib_step_items gauge",
+        "datalib_step_items{step=\"slack/render_markdown\",group=\"slack\"} 26",
+    ] {
+        assert!(text.lines().any(|l| l == line), "no line {line:?} in:\n{text}");
+    }
+    assert!(!text.contains("removed/step"), "{text}");
+}
+
+async fn rows_of_at(root: &Path, uri: &str) -> serde_json::Value {
+    rows_at(state(root).await, uri).await
 }
 
 /// An entry the loader drops still has a row — it is still in the
@@ -463,6 +600,43 @@ function = \"ingest\"
         .contains("no render step"));
     // Its step says the same, not something of its own.
     assert_eq!(rows["photos/ingest"]["actions"][0], photos["actions"][0]);
+}
+
+/// A download step's row names its raw store once the file exists —
+/// what Browse opens in the desktop app — and no other row names one.
+#[tokio::test]
+async fn a_download_step_names_its_raw_store_once_it_exists() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    let ingest = tmp.path().join("slack/ingest");
+    std::fs::create_dir_all(&ingest).unwrap();
+    std::fs::create_dir_all(tmp.path().join("slack/render_markdown")).unwrap();
+    std::fs::write(
+        tmp.path()
+            .join("slack/render_markdown/indexed_markdown.doltlite_db"),
+        b"CTLD",
+    )
+    .unwrap();
+    let uri = "/api/manage/rows?refresh=1";
+
+    let before = by_key(&rows_at(state(tmp.path()).await, uri).await);
+    assert_eq!(
+        before["slack/ingest"]["raw_store_path"],
+        serde_json::Value::Null
+    );
+
+    std::fs::write(ingest.join("entities.doltlite_db"), b"CTLD").unwrap();
+    let rows = by_key(&rows_at(state(tmp.path()).await, uri).await);
+    let named: Vec<(&String, &serde_json::Value)> = rows
+        .iter()
+        .filter(|(_, r)| !r["raw_store_path"].is_null())
+        .collect();
+    assert_eq!(named.len(), 1, "{named:?}");
+    assert_eq!(named[0].0, "slack/ingest");
+    assert_eq!(
+        Path::new(named[0].1["raw_store_path"].as_str().unwrap()),
+        ingest.join("entities.doltlite_db")
+    );
 }
 
 #[tokio::test]
@@ -512,44 +686,64 @@ async fn a_file_that_is_not_toml_is_an_error_not_an_empty_table() {
     assert_eq!(got["rows"].as_array().unwrap().len(), 0);
 }
 
-/// The Documents cell reads the `documents` metric the render step
-/// reports, whole store: the source's own row and the group above it
-/// show it, and every step that never reported it stays blank. That a
-/// counted zero survives as a zero is `manage::documents`' own test.
+/// The Items cell reads the `items` metric the render step reports,
+/// whole store, with the series across runs behind it and the document
+/// count in its hover: the source's own row and the group above it show
+/// it, and every step that never reported it stays blank.
 #[tokio::test]
-async fn document_counts_reach_the_rows_from_the_run_store() {
+async fn item_counts_and_their_history_reach_the_rows_from_the_run_store() {
     let tmp = tempfile::tempdir().unwrap();
     write_root(tmp.path(), CONFIG, None).await;
+    // Stamps measured back from now, so the samples stay inside the
+    // cell's window whatever day the test runs.
+    let ago = |hours: i64| {
+        datalib_time::IsoOffsetTimestamp::now_local()
+            .bump_micros(-hours * 3_600_000_000)
+            .to_utc_and_offset()
+            .0
+    };
+    for (run, stamp, items, documents) in
+        [("r1", ago(30), 1000, 1100), ("r2", ago(2), 48_210, 1204)]
     {
         let w = datalib_runs::RunWriter::start(
             tmp.path(),
-            "r1",
-            "r1",
+            run,
+            run,
             None,
             datalib_runs::Retention::default(),
         )
         .unwrap();
-        let metric = |step: &str, value: i64| datalib_runs::MetricRow {
-            run_id: "r1".into(),
-            step: step.into(),
-            name: datalib_metrics::DOCUMENTS.into(),
+        let metric = |name: &str, value: i64| datalib_runs::MetricRow {
+            run_id: run.into(),
+            step: "slack/render_markdown".into(),
+            name: name.into(),
             labels: String::new(),
             value,
-            updated_at_utc: "2026-08-31T09:00:00+00:00".into(),
+            updated_at_utc: stamp.clone(),
             tz_offset: None,
         };
-        w.metric(metric("slack/render_markdown", 1204));
+        w.metric(metric(datalib_metrics::ITEMS, items));
+        w.metric(metric(datalib_metrics::DOCUMENTS, documents));
     }
 
     let rows = by_key(&get_rows(tmp.path()).await);
-    assert_eq!(rows["slack/render_markdown"]["documents"], 1204);
+    let render = &rows["slack/render_markdown"]["items"];
+    assert_eq!(render["value"], 48_210);
+    assert_eq!(render["detail"], "48,210 items in 1,204 documents");
+    let history: Vec<i64> = render["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["value"].as_i64().unwrap())
+        .collect();
+    assert_eq!(history, [1000, 48_210]);
     assert_eq!(
-        rows["group:slack"]["documents"], 1204,
+        rows["group:slack"]["items"], *render,
         "the group shows its render step's"
     );
     for key in ["slack/ingest", "unified_index/grid_index", "system"] {
         assert_eq!(
-            rows[key]["documents"],
+            rows[key]["items"]["value"],
             serde_json::Value::Null,
             "{key}: never counted is blank, not zero"
         );

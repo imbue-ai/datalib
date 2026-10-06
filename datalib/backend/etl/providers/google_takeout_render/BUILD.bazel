@@ -15,6 +15,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/providers/google_takeout:datalib_etl_google_takeout",
         "//datalib/backend/etl/providers/google_takeout_config:datalib_etl_google_takeout_config",

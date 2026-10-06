@@ -1,48 +1,72 @@
 import { test, expect } from "@playwright/test";
-import { stubClipboard } from "./grid-helpers";
+import { cardOf, cardTitle, shownCards, stubClipboard, tabLabels } from "./grid-helpers";
 
-// The toolbar across the top is the way home: "Data sources" reveals
-// the sources card — opening one only when none is showing — and
-// "New card" is the "+" strip's gesture from the top. The status bar's
-// "Logs" reveals the log the same way. All act on the URL-synced
-// miller stack, so the path says what they did.
+// The chrome around the cards: the toolbar's search box opens a search
+// card on what was typed, and ⌘K (Ctrl+K) reaches it from anywhere;
+// the status bar's "Logs" reveals the log once. Each opens a tab of
+// its own. A new window opens on the Dashboard.
 
-async function stackPath(page: import("@playwright/test").Page): Promise<string> {
-  return decodeURIComponent(await page.evaluate(() => location.pathname));
-}
+const searchBox = (page: import("@playwright/test").Page) =>
+  page.getByRole("searchbox", { name: "Search your data" });
 
 test.describe("toolbar", () => {
-  test("Data sources opens the sources card once, then only reveals it", async ({ page }) => {
+  test("a new window opens on the Dashboard", async ({ page }) => {
     await page.goto("/");
-    await expect(page.locator(".miller-col")).toHaveCount(1);
-
-    await page.getByRole("button", { name: "Data sources" }).click();
-    await expect(page.locator(".miller-col")).toHaveCount(2);
-    await expect(page.locator(".m2-head")).toBeVisible({ timeout: 10_000 });
-    expect(await stackPath(page)).toContain("sourcesView()");
-
-    // A second press finds the card already there.
-    await page.getByRole("button", { name: "Data sources" }).click();
-    await expect(page.locator(".miller-col")).toHaveCount(2);
+    await expect(tabLabels(page)).toHaveText(["Dashboard"]);
+    await expect(shownCards(page)).toHaveCount(5);
   });
 
-  test("New card appends a gallery column", async ({ page }) => {
+  test("the search box opens a search card on what was typed", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "New card" }).click();
-    await expect(page.locator(".gv-row").first()).toBeVisible({ timeout: 10_000 });
-    expect(await stackPath(page)).toContain("galleryView()");
+    await expect(tabLabels(page)).toHaveText(["Dashboard"]);
+    await searchBox(page).fill("warp");
+    await searchBox(page).press("Enter");
+    const card = cardOf(page, 'searchView({"q":"warp"})');
+    await expect(card).toBeVisible();
+    await expect(cardTitle(card)).toHaveText("Search: warp");
+    await expect(tabLabels(page)).toHaveCount(2);
+    // The box empties, ready for the next search.
+    await expect(searchBox(page)).toHaveValue("");
+  });
+
+  test("Ctrl+K puts the caret in the search box", async ({ page }) => {
+    await page.goto("/");
+    await expect(searchBox(page)).not.toBeFocused();
+    await page.keyboard.press("Control+k");
+    await expect(searchBox(page)).toBeFocused();
   });
 
   test("the status bar's Logs opens the log over every run, once", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Logs" }).click();
-    const col = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+    const col = shownCards(page).filter({ has: page.locator(".rl-panel") });
     await expect(col).toBeVisible({ timeout: 10_000 });
-    await expect(col.locator(".miller-col-title")).toHaveText("Log · everything");
-    expect(await stackPath(page)).toContain("logView()");
+    await expect(cardTitle(col)).toHaveText("Log · everything");
+    await expect(cardOf(page, "logView()")).toHaveCount(1);
 
     await page.getByRole("button", { name: "Logs" }).click();
-    await expect(page.locator(".miller-col")).toHaveCount(2);
+    await expect(tabLabels(page)).toHaveCount(2);
+    await expect(cardOf(page, "logView()")).toHaveCount(1);
+  });
+
+  test("the status bar's density resizes the chrome, and is kept", async ({ page }) => {
+    await page.goto("/");
+    const toolbar = page.locator(".datalib-toolbar");
+    const group = page.getByRole("group", { name: "density" });
+    const slider = group.getByRole("slider", { name: "Density" });
+    await expect(slider).toHaveValue("0");
+    await expect(group.getByRole("button", { name: "More compact" })).toBeDisabled();
+    const before = (await toolbar.boundingBox())!.height;
+
+    for (let i = 0; i < 4; i++) await group.getByRole("button", { name: "More spacious" }).click();
+    await expect(slider).toHaveValue("0.5");
+    expect((await toolbar.boundingBox())!.height).toBeGreaterThan(before);
+
+    // The slider sets a step directly, and the step is kept.
+    await slider.fill("0.75");
+    await expect(slider).toHaveValue("0.75");
+    await page.reload();
+    await expect(slider).toHaveValue("0.75");
   });
 
   test("the status bar copies the data root's path in a browser", async ({ page }) => {
@@ -53,6 +77,42 @@ test.describe("toolbar", () => {
     await page.getByRole("button", { name: "Copy path" }).click();
     await expect(page.locator(".datalib-toast", { hasText: "path copied" })).toBeVisible();
     expect(await copied()).toBe(await path.textContent());
+  });
+
+  // The window's minimum width in the desktop shell (MIN_WINDOW_WIDTH)
+  // assumes the search box shrinks first and to no less than 180px, and
+  // that the library name then ellipsizes rather than sliding under it.
+  test("the search box sits at the right end and shrinks with the window", async ({ page }) => {
+    await page.goto("/");
+    const box = page.locator(".command-box");
+    const lib = page.locator(".crumb-lib");
+    const name = page.locator(".crumb-name");
+    await expect(box).toBeVisible();
+    const wide = (await box.boundingBox())!;
+    expect(wide.width).toBe(440);
+    expect(1280 - (wide.x + wide.width)).toBeLessThan(16);
+    const truncated = () => name.evaluate((el) => el.scrollWidth > el.clientWidth);
+
+    // Density 0, then 0.5 (four steps more spacious).
+    for (const larger of [0, 4]) {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      for (let i = 0; i < larger; i++)
+        await page.getByRole("button", { name: "More spacious" }).click();
+      // 700px leaves the name room whatever its random suffix measures;
+      // 600px was within a few letters of it with larger text.
+      for (const width of [700, 420]) {
+        await page.setViewportSize({ width, height: 800 });
+        const b = (await box.boundingBox())!;
+        const l = (await lib.boundingBox())!;
+        expect(b.width).toBeLessThan(440);
+        expect(b.width).toBeGreaterThanOrEqual(180);
+        expect(b.x + b.width).toBeLessThanOrEqual(width);
+        expect(b.x).toBeGreaterThanOrEqual(l.x + l.width);
+        // At 700px the search box has room to give; at 420px it is at
+        // its floor and the name gives way.
+        expect(await truncated()).toBe(width === 420);
+      }
+    }
   });
 
   test("the syncing pill is absent when nothing runs", async ({ page }) => {

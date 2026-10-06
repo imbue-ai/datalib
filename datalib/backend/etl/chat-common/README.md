@@ -1,7 +1,8 @@
 # chat-common — one markdown layout for every chat provider
 
-Ten providers hand this crate a `NormalizedChat` and get back a
-rendered `.md` plus the `grid_rows` that go with it. This file covers
+Fourteen providers' render crates hand this crate a `NormalizedChat`
+and get back a rendered `.md` plus the `grid_rows` that go with it
+(`claude_code` and `codex` through `agent_sessions_render`). This file covers
 the parts of that markdown you have to know about before changing it.
 
 ## The message header
@@ -26,6 +27,28 @@ Slack's "Today at 11:02": this file is written once and read for years,
 so a word meaning "the day this was rendered" would be wrong by the
 next morning.
 
+**The author span carries the author's handle** where the provider has
+one — `<span class="msg-author" data-handle="email:riker@enterprise.org">`
+— from `NormalizedChatItem::author_handle` (`datalib_handle`). The text
+stays what the source showed; the UI asks the contacts app, if one is
+configured, whom the handle belongs to and draws a chip
+(`ui/src/cards/contacts.ts`). The attribute is load-bearing, like
+`data-section-uuid`: it is how a contact linked after this file was
+written still finds the author. The UI trusts it only on the header
+line, since a message body can carry any attribute it likes.
+
+An item with `recipients` (an email's To and Cc) gets one more line
+straight under the header — `<div class="msg-recipients">To <span
+class="msg-recipient" data-handle="…">…</span>; Cc …</div>` — and the UI
+trusts a `data-handle` there only because it is the header's very next
+element.
+
+Each document also carries a `DatalibContact` per author handle in it
+(`src/people.rs`): the names the provider showed the handle under, less
+the handle's own `<address>`, how many items it wrote and the last one's
+stamp. A provider needs no code for this; the index sums them per source
+to say who a handle is.
+
 ## Asides: runs of tool steps fold into one `<details>`
 
 An item with `is_aside` set is machinery rather than conversation — an
@@ -39,6 +62,9 @@ frontend opens every enclosing `<details>` before it scrolls to a
 selected section (`applySelection` in `ChatBody.ce.vue`) — without
 that, clicking a tool-call row in the grid would scroll to something
 invisible.
+
+An aside keeps its own grid row, but its document's row leaves it out:
+that row's Contents is what was said, not the plumbing.
 
 Decide `is_aside` from what the item *is* upstream, not from its
 `kind_label`. ChatGPT files `system` messages under the same "Tool
@@ -86,8 +112,7 @@ to a screenful with a "Show more" pill, pins its `##` header to the top
 of the pane while you are inside it, and puts ▲ / ▼ in that pinned
 header for "start of this message" and "start of the next one".
 
-Two constraints, both learned the hard way and both easy to undo by
-accident:
+Three constraints, each easy to undo by accident:
 
 - **A clamped card cannot have a sticky header.** The clamp is
   `overflow: hidden`, and an `overflow: hidden` ancestor disables
@@ -97,8 +122,8 @@ accident:
 - **Selecting into a clamped or collapsed section has to open it
   first.** `applySelection` removes the clamp and opens every enclosing
   `<details>` before it scrolls, or a grid-row click highlights
-  something nobody can see. Two e2e specs assert the selected message is
-  actually visible; they are what catches this.
+  something nobody can see. `ui/tests/e2e/row-click-scroll.spec.ts`
+  asserts the selected message is actually on screen.
 - **A height measured before the pane has a width is nonsense.** In a
   column that has not been laid out — a hidden tab, the frame before
   first paint — every line wraps into a zero-width box, so a one-line
@@ -126,9 +151,9 @@ worth knowing about before you invent a fourth:
   reaction to a March message belongs in the March document however
   late it arrived, and beeper's parse resolves that against every event
   in the store. What is left is the case nothing can place: the target
-  was never downloaded. Only beeper produces these today, and the TNG
-  fixture has none, so this is the one path here that nothing
-  exercises.
+  was never downloaded. Only beeper produces these, and the TNG fixture
+  has none; the one test that renders one is
+  `every_timestamp_carries_the_full_instant` in `src/render.rs`.
 
 One `NormalizedChat` per *bucket* rather than per chat is the idiom for
 a period-bucketed source (beeper, signal): attachment bundles are keyed
@@ -140,10 +165,11 @@ either way, and the chat-level grid row was already one per document.
 
 **Bump `LAYOUT_VERSION` whenever you change what `render_markdown`
 writes.** Every chat provider declares it through
-`RenderProcessor::render_params` (`layout_params()`), so one edit
-changes every provider's render params and the driver re-renders all
-of them. Bumping the eight by hand is the alternative, and the one
-you forget is the one that keeps serving the old layout forever.
+`RenderProcessor::render_params` (`layout_params()`, or
+`layout_params_with(…)` beside its own knobs), so one edit changes every
+provider's render params and the driver re-renders all of them. Bumping
+fourteen render versions by hand is the alternative, and the one you
+forget is the one that keeps serving the old layout forever.
 
 It stays out of the *stored* `render_version`, which is the provider's
 alone: `datalib_step`'s render step checks that every version on disk
@@ -172,14 +198,41 @@ it without a bundler.
 `//datalib/ui:render_preview_test` regenerates the page and diffs it, so
 the checked-in copy cannot drift from the sources it was built from.
 
-## The UI sanitizes what you emit
+## Plain text is escaped; the UI sanitizes the rest
 
-A message body reaches the markdown as the sender wrote it, and the app
-renders the markdown with HTML enabled because the section wrappers are
-HTML. So before the page shows a document, `ui/src/cards/sanitize.ts`
-runs it through DOMPurify: scripts, event handlers, `javascript:` URLs,
-form controls and foreign iframes are dropped, and only the tags and
-attributes the renderers actually use survive. **A renderer that starts
-emitting a new tag or attribute has to add it there**, or the page will
-silently strip it; `ui/tests/sanitize.test.ts` is where the vocabulary
-is pinned.
+The app renders the markdown with HTML enabled, because the section
+wrappers are HTML, so anything upstream wrote has to be escaped where it
+becomes markup (`docs/dev/data_architecture_parse_and_render.md`
+§"Upstream text is escaped where it becomes markup"). This crate
+escapes every field it writes — the author, a label, a reactor, a file
+name, a system note — and an item's `text` according to the profile's
+`text_format`: `Plain` for what a person typed (a text message, a
+LinkedIn message), `Markdown` for an assistant's reply or for markdown
+the provider built itself, having escaped the plain text it put inside
+(Facebook's posts, Beeper's reply line, an email). The grid's search
+text is `text` as given either way. Front-matter values go through
+`yaml_scalar`. `datalib/ui/tests/hostile_text.test.ts` renders a
+document whose every plain field holds HTML and markdown through the
+app's own markdown-it and sanitizer, and checks each reads as typed.
+
+What markdown does reach the page, `ui/src/cards/sanitize.ts` runs
+through DOMPurify: scripts, event handlers, `javascript:` URLs and form
+controls are dropped, and only the tags and attributes the renderers
+actually use survive. **A renderer that starts emitting a new tag or
+attribute has to add it there**, or the page will silently strip it;
+`ui/tests/sanitize.test.ts` is where the vocabulary is pinned.
+
+The sanitizer is not the boundary, though. The page draws the body in a
+frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),
+so markup that gets past the sanitizer still cannot run.
+`ui/tests/e2e/document-sandbox.spec.ts` checks this by writing script
+straight into a document's frame. The UI's own code still reaches into
+the frame, so the `data-section-uuid` wrappers work as before.
+
+An `<iframe>` survives the sanitizer only when it frames
+`plots/<name>.html`, and the frame's policy allows frames from the asset
+route alone. The server runs such a page's scripts with no
+network (`DocumentKind::Plot` in `http/src/embed.rs`). It knows the page
+is a plot because the `unified_index` applet names it so. Every other
+document beside a markdown, such as an `.html` attachment in `blobs/`,
+runs no script at all.

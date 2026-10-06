@@ -187,17 +187,9 @@ pub async fn run(
         removed = report.removed,
         "diff: documents written"
     );
-    progress.metric("documents_removed", &[], report.removed as i64);
+    progress.metric("documents_removed_total", &[], report.removed as i64);
     datalib_core::layout::mark_derived_cache(&rendered_root);
-    Ok(report
-        .head
-        .map(|h| OutputClaim {
-            path: env.step.clone(),
-            version: format!("store:{h}"),
-            rows: Some(report.unsealed),
-        })
-        .into_iter()
-        .collect())
+    Ok(crate::render::claims(&env.step, &report))
 }
 
 /// One side of the comparison: what the processors emitted at one pin.
@@ -321,6 +313,8 @@ pub fn render_diff_source(
                 rows: diff.rows,
                 sections: diff.sections,
                 edges: base.md.edges.clone(),
+                // The people are the source's; a diff row only compares.
+                contacts: Vec::new(),
                 problems: base.md.problems.clone(),
             };
             fs::write(&doc.md_path, join(&doc.sections))
@@ -330,7 +324,7 @@ pub fn render_diff_source(
                 .with_context(|| format!("store diff document {}", doc.markdown_uuid))?;
             emitted.insert(doc.markdown_uuid.clone());
             docs += 1;
-            progress.metric("documents_rendered", &[], docs as i64);
+            progress.metric("documents_rendered_total", &[], docs as i64);
         }
         // Every bucket either side rendered, with what the `to` side
         // read — the declaration a later run's reverse lookup would use,
@@ -411,14 +405,14 @@ pub fn render_diff_source(
     let problems = store.problem_counts()?;
     // No storage report in a diff store (`RunEnd::storage` is `None`
     // above), so nothing is excluded from the count.
-    let documents = store.document_count(None)?;
+    let holdings = store.holdings(None)?;
     let head = store.head()?;
     store.close();
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {
         docs,
         removed: sealed.removed,
-        documents,
+        holdings,
         problems,
         head,
         // No checkpoints: the one commit seals every document.
@@ -591,6 +585,7 @@ mod tests {
                         rows: vec![],
                         sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],
                         edges: vec![],
+                        contacts: Vec::new(),
                         problems: vec![],
                     });
                     // `true`: swallow the sink's answer, as a provider that
@@ -669,6 +664,7 @@ mod tests {
             rows: vec![],
             sections: vec![],
             edges: vec![],
+            contacts: Vec::new(),
             problems: vec![],
         };
         let sections = whole_document_sections(&md).unwrap();

@@ -48,42 +48,46 @@ impl DataProcessor for GitlabIngest {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let now = datalib_time::parse_strict(ctx.now)
+            .with_context(|| format!("gitlab: run stamp {:?}", ctx.now))?;
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let targets = self
-            .sync
-            .merge_requests
-            .iter()
-            .map(|s| ingest::parse_mr_ref(s))
-            .collect::<Result<Vec<_>>>()
-            .context("parse gitlab merge_requests refs")?;
-        let s = ingest::fetch(ingest::FetchOptions {
-            latchkey: self.latchkey.clone(),
-            // full_sync stays false (FetchOptions default) so the
-            // gitlab provider honors saved `sync_scope_state` and
-            // narrows discovery via `updated_after`. The previous
-            // unconditional `true` here disabled the entire
-            // incremental path — every run re-discovered and
-            // re-fetched every MR in the user's scope; a clean re-pull
-            // is `datalib-dag --reset`.
-            refresh_window_days: self
+        let pool = db.pool().clone();
+        ctx.run_store(pool, None, |_| async {
+            let targets = self
                 .sync
-                .refresh_window_days
-                .map(|v| v.max(0) as u32)
-                .unwrap_or(0),
-            max_mrs: self.sync.max_mrs.map(|v| v as usize),
-            targets,
-            sleep_between: Duration::ZERO,
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
-            ..ingest::FetchOptions::new(db)
+                .merge_requests
+                .iter()
+                .map(|s| ingest::parse_mr_ref(s))
+                .collect::<Result<Vec<_>>>()
+                .context("parse gitlab merge_requests refs")?;
+            let s = ingest::fetch(ingest::FetchOptions {
+                latchkey: self.latchkey.clone(),
+                // full_sync stays false (FetchOptions default) so the
+                // gitlab provider honors saved `sync_scope_state` and
+                // narrows discovery via `updated_after`. The previous
+                // unconditional `true` here disabled the entire
+                // incremental path — every run re-discovered and
+                // re-fetched every MR in the user's scope; a clean re-pull
+                // is `datalib-dag --reset`.
+                refresh_window_days: self
+                    .sync
+                    .refresh_window_days
+                    .map(|v| v.max(0) as u32)
+                    .unwrap_or(0),
+                max_mrs: self.sync.max_mrs.map(|v| v as usize),
+                targets,
+                sleep_between: Duration::ZERO,
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+                ..ingest::FetchOptions::new(db, now)
+            })
+            .await?;
+            Ok(format!(
+                "mrs(new={} skipped_unchanged={}) discussions(new={}) pruned={} requests={}",
+                s.new_mrs, s.skipped_unchanged_mrs, s.new_discussions, s.pruned, s.requests,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "mrs(new={} skipped_unchanged={}) discussions(new={}) pruned={} requests={}",
-            s.new_mrs, s.skipped_unchanged_mrs, s.new_discussions, s.pruned, s.requests,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

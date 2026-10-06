@@ -22,14 +22,20 @@ the daemon bookkeeping `skip_churn` drops. What the tests need from it:
     or 3000–3005 (remove), pointing at a message by `p:0/<guid>`,
   * a group chat with a rename event (`item_type = 2`),
   * `date` as nanoseconds since 2001-01-01,
-  * two join tables declared UNIQUE but not PRIMARY KEY.
+  * two join tables declared UNIQUE but not PRIMARY KEY,
+  * a message that is only in `chat.db-wal`: the database is in WAL
+    mode and the newest message was never checkpointed, which is how
+    Messages leaves it while running. A reader that drops the WAL loses
+    that message and nothing tells it so.
 
 Content is TNG-themed, per this repo's fixture convention.
 """
 
 import os
+import shutil
 import sqlite3
 import sys
+import tempfile
 
 SCHEMA = [
     "CREATE TABLE _SqliteDatabaseProperties (key TEXT, value TEXT, UNIQUE(key))",
@@ -163,6 +169,7 @@ GUID = {
     8: "A1B2C3D4-0008-4000-8000-000000000008",
     9: "A1B2C3D4-0009-4000-8000-000000000009",
     10: "A1B2C3D4-0010-4000-8000-000000000010",
+    12: "A1B2C3D4-0012-4000-8000-000000000012",
 }
 
 LONG_BODY = (
@@ -189,6 +196,23 @@ MESSAGES = [
     (10, 1, 0, 1, 60 * 24 * 40, None, LONG_BODY, None, None, None),
 ]
 
+# Written after the checkpoint, so it lives only in `chat.db-wal`. Rowid
+# 12, since a test inserts 11 itself; in the bridge crew's one month.
+MESSAGES_IN_WAL = [
+    (
+        12,
+        2,
+        2,
+        0,
+        45,
+        None,
+        "Sensor recalibration complete, Captain.",
+        None,
+        None,
+        None,
+    ),
+]
+
 ATTACHMENT = (
     1,
     "F0E1D2C3-0001-4000-8000-000000000001",
@@ -200,102 +224,120 @@ ATTACHMENT = (
 )
 
 
+def insert_messages(con: sqlite3.Connection, messages: list) -> None:
+    for (
+        rowid,
+        chat,
+        handle,
+        from_me,
+        at,
+        text,
+        body,
+        attachment,
+        tapback,
+        rename,
+    ) in messages:
+        date = T0 + at * MINUTE
+        con.execute(
+            "INSERT INTO message (ROWID, guid, text, handle_id, attributedBody, service, "
+            " account, date, is_from_me, is_read, cache_has_attachments, item_type, "
+            " group_title, associated_message_guid, associated_message_type) "
+            "VALUES (?, ?, ?, ?, ?, 'iMessage', ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+            (
+                rowid,
+                GUID[rowid],
+                text,
+                handle,
+                attributed_body(body) if body is not None else None,
+                ACCOUNT,
+                date,
+                from_me,
+                1 if attachment else 0,
+                2 if rename else 0,
+                rename,
+                f"p:0/{GUID[tapback[1]]}" if tapback else None,
+                tapback[0] if tapback else 0,
+            ),
+        )
+        con.execute(
+            "INSERT INTO chat_message_join (chat_id, message_id, message_date) VALUES (?, ?, ?)",
+            (chat, rowid, date),
+        )
+        if attachment:
+            con.execute(
+                "INSERT INTO message_attachment_join (message_id, attachment_id) VALUES (?, ?)",
+                (rowid, attachment),
+            )
+
+
 def main(out_path: str) -> None:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    con = sqlite3.connect(out_path)
-    try:
-        for stmt in SCHEMA:
-            con.execute(stmt)
-        con.executemany(
-            "INSERT INTO handle (ROWID, id, country, service) VALUES (?, ?, 'US', 'iMessage')",
-            HANDLES,
-        )
-        con.executemany(
-            "INSERT INTO chat (ROWID, guid, style, state, account_id, chat_identifier, "
-            " service_name, account_login, display_name) "
-            "VALUES (?, ?, ?, 3, '1E22DDA8-6BF1-470F-8320-780789C67D13', ?, 'iMessage', ?, ?)",
-            [(r, g, style, ident, ACCOUNT, name) for r, g, ident, name, style in CHATS],
-        )
-        con.executemany(
-            "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (?, ?)",
-            CHAT_HANDLES,
-        )
-        for (
-            rowid,
-            chat,
-            handle,
-            from_me,
-            at,
-            text,
-            body,
-            attachment,
-            tapback,
-            rename,
-        ) in MESSAGES:
-            date = T0 + at * MINUTE
-            con.execute(
-                "INSERT INTO message (ROWID, guid, text, handle_id, attributedBody, service, "
-                " account, date, is_from_me, is_read, cache_has_attachments, item_type, "
-                " group_title, associated_message_guid, associated_message_type) "
-                "VALUES (?, ?, ?, ?, ?, 'iMessage', ?, ?, ?, 1, ?, ?, ?, ?, ?)",
-                (
-                    rowid,
-                    GUID[rowid],
-                    text,
-                    handle,
-                    attributed_body(body) if body is not None else None,
-                    ACCOUNT,
-                    date,
-                    from_me,
-                    1 if attachment else 0,
-                    2 if rename else 0,
-                    rename,
-                    f"p:0/{GUID[tapback[1]]}" if tapback else None,
-                    tapback[0] if tapback else 0,
-                ),
-            )
-            con.execute(
-                "INSERT INTO chat_message_join (chat_id, message_id, message_date) "
-                "VALUES (?, ?, ?)",
-                (chat, rowid, date),
-            )
-            if attachment:
-                con.execute(
-                    "INSERT INTO message_attachment_join (message_id, attachment_id) "
-                    "VALUES (?, ?)",
-                    (rowid, attachment),
-                )
-        rowid, guid, filename, uti, mime, name, size = ATTACHMENT
-        con.execute(
-            "INSERT INTO attachment (ROWID, guid, created_date, filename, uti, mime_type, "
-            " transfer_name, total_bytes, original_guid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (rowid, guid, T0 + 5 * MINUTE, filename, uti, mime, name, size, guid),
-        )
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "chat.db")
+        con = sqlite3.connect(db)
+        try:
+            write(con)
+            # Copied while the connection is open: closing it would
+            # checkpoint the WAL into the main file and delete it.
+            shutil.copyfile(db, out_path)
+            shutil.copyfile(f"{db}-wal", f"{out_path}-wal")
+        finally:
+            con.close()
 
-        con.executemany(
-            "INSERT INTO _SqliteDatabaseProperties (key, value) VALUES (?, ?)",
-            [
-                ("counter_in_all", "5"),
-                ("counter_out_all", "5"),
-                ("_ClientVersion", "19602"),
-            ],
-        )
-        con.executemany(
-            "INSERT INTO kvtable (key, value) VALUES (?, ?)",
-            [("chatVersion", b"\x01"), ("iMessage", b"\x01")],
-        )
-        con.executemany(
-            "INSERT INTO message_processing_task (guid, task_flags, reasons) VALUES (?, 4, 0)",
-            [(GUID[5],), (GUID[6],)],
-        )
-        con.execute(
-            "INSERT INTO sync_deleted_messages (guid, recordID) VALUES (?, ?)",
-            ("A1B2C3D4-0099-4000-8000-000000000099", "rec99"),
-        )
-        con.execute("INSERT INTO index_state_metrics (id, pending_count) VALUES (1, 2)")
-        con.commit()
-    finally:
-        con.close()
+
+def write(con: sqlite3.Connection) -> None:
+    for stmt in SCHEMA:
+        con.execute(stmt)
+    con.executemany(
+        "INSERT INTO handle (ROWID, id, country, service) VALUES (?, ?, 'US', 'iMessage')",
+        HANDLES,
+    )
+    con.executemany(
+        "INSERT INTO chat (ROWID, guid, style, state, account_id, chat_identifier, "
+        " service_name, account_login, display_name) "
+        "VALUES (?, ?, ?, 3, '1E22DDA8-6BF1-470F-8320-780789C67D13', ?, 'iMessage', ?, ?)",
+        [(r, g, style, ident, ACCOUNT, name) for r, g, ident, name, style in CHATS],
+    )
+    con.executemany(
+        "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (?, ?)",
+        CHAT_HANDLES,
+    )
+    insert_messages(con, MESSAGES)
+    rowid, guid, filename, uti, mime, name, size = ATTACHMENT
+    con.execute(
+        "INSERT INTO attachment (ROWID, guid, created_date, filename, uti, mime_type, "
+        " transfer_name, total_bytes, original_guid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (rowid, guid, T0 + 5 * MINUTE, filename, uti, mime, name, size, guid),
+    )
+
+    con.executemany(
+        "INSERT INTO _SqliteDatabaseProperties (key, value) VALUES (?, ?)",
+        [
+            ("counter_in_all", "5"),
+            ("counter_out_all", "5"),
+            ("_ClientVersion", "19602"),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO kvtable (key, value) VALUES (?, ?)",
+        [("chatVersion", b"\x01"), ("iMessage", b"\x01")],
+    )
+    con.executemany(
+        "INSERT INTO message_processing_task (guid, task_flags, reasons) VALUES (?, 4, 0)",
+        [(GUID[5],), (GUID[6],)],
+    )
+    con.execute(
+        "INSERT INTO sync_deleted_messages (guid, recordID) VALUES (?, ?)",
+        ("A1B2C3D4-0099-4000-8000-000000000099", "rec99"),
+    )
+    con.execute("INSERT INTO index_state_metrics (id, pending_count) VALUES (1, 2)")
+    con.commit()
+
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    con.execute("PRAGMA wal_autocheckpoint=0")
+    insert_messages(con, MESSAGES_IN_WAL)
+    con.commit()
 
 
 if __name__ == "__main__":

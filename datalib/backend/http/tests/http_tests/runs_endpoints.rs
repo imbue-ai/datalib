@@ -3,32 +3,12 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use datalib_core::app_store::AppStore;
-use datalib_http::applets::AppletRegistry;
-use datalib_http::{router, ApiToken, AppState};
+use datalib_http::router;
 use datalib_runs::{LogRow, MetricRow, Retention, RunWriter, StepRunRow};
 use std::path::Path;
-use std::sync::Arc;
 use tower::ServiceExt;
 
-const TEST_TOKEN: &str = "runs-endpoints-test-token";
-
-async fn state(root: &Path) -> AppState {
-    let root = Arc::new(root.to_path_buf());
-    let app = AppStore::open(root.as_path())
-        .await
-        .expect("open app stores");
-    AppState {
-        root: root.clone(),
-        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
-        app: Arc::new(app),
-        root_tx: tokio::sync::broadcast::channel(16).0,
-        usage: Default::default(),
-        newer_root: Vec::new(),
-        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
-    }
-}
+use crate::support::{state, TEST_TOKEN};
 
 async fn get(root: &Path, uri: &str) -> serde_json::Value {
     let app = router(state(root).await);
@@ -91,7 +71,7 @@ fn write_two_runs(root: &Path) {
         });
         w.metric(MetricRow {
             step: "slack/ingest".into(),
-            name: "rows_upserted".into(),
+            name: "rows_upserted_total".into(),
             labels: "table=slack_messages".into(),
             value: 42,
             updated_at_utc: t.into(),
@@ -158,7 +138,7 @@ async fn a_runs_steps_carry_their_numbers_and_error_counts() {
     assert_eq!(ingest["state"], "running");
     assert_eq!(ingest["progress"]["msg"], "conversations.list");
     assert_eq!(
-        ingest["progress"]["metrics"]["rows_upserted{table=slack_messages}"],
+        ingest["progress"]["metrics"]["rows_upserted_total{table=slack_messages}"],
         42
     );
     assert_eq!(ingest["progress"]["metrics"]["queued"], 7);
@@ -206,10 +186,15 @@ async fn the_log_is_read_through_the_shared_query_grammar() {
     let td = tempfile::tempdir().unwrap();
     write_two_runs(td.path());
 
-    let all = get(td.path(), "/api/log?step=slack/ingest").await;
+    let all = get(td.path(), "/api/log?q=step:slack/ingest").await;
     assert_eq!(all.as_array().unwrap().len(), 4, "both runs' lines");
 
-    let q = |q: &str| format!("/api/log?step=slack/ingest&q={}", urlencoding(q));
+    let q = |q: &str| {
+        format!(
+            "/api/log?q={}",
+            urlencoding(&format!("step:slack/ingest {q}"))
+        )
+    };
     let warned = get(td.path(), &q("level:warn")).await;
     assert_eq!(warned.as_array().unwrap().len(), 1);
     assert_eq!(warned[0]["msg"], "slow");
@@ -243,6 +228,66 @@ async fn the_log_is_read_through_the_shared_query_grammar() {
         .unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("`author:`"), "{text}");
+}
+
+/// With no cursor the log answers with its newest lines; `before_seq`
+/// pages back from the oldest one a panel holds, `after_seq` follows the
+/// tail, and both at once is refused rather than guessed at.
+#[tokio::test]
+async fn the_log_opens_on_its_newest_lines_and_pages_back() {
+    let td = tempfile::tempdir().unwrap();
+    write_two_runs(td.path());
+    let msgs = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["msg"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let all = get(td.path(), "/api/log?q=step:slack/ingest").await;
+    let newest = get(td.path(), "/api/log?q=step:slack/ingest&limit=2").await;
+    assert_eq!(msgs(&newest), msgs(&all)[2..]);
+    let oldest_held = newest[0]["seq"].as_i64().unwrap();
+    let before = get(
+        td.path(),
+        &format!("/api/log?q=step:slack/ingest&limit=2&before_seq={oldest_held}"),
+    )
+    .await;
+    assert_eq!(msgs(&before), msgs(&all)[..2]);
+    let after = get(
+        td.path(),
+        &format!("/api/log?q=step:slack/ingest&after_seq={oldest_held}"),
+    )
+    .await;
+    assert_eq!(msgs(&after), msgs(&all)[3..]);
+
+    // The panel's pickers are search terms now; a caller still sending
+    // one as a parameter is refused rather than handed every line.
+    let app = router(state(td.path()).await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/log?step=slack/ingest")
+                .header("x-datalib-token", TEST_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let app = router(state(td.path()).await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/log?after_seq=1&before_seq=9")
+                .header("x-datalib-token", TEST_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 fn urlencoding(s: &str) -> String {

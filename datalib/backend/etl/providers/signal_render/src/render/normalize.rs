@@ -5,6 +5,7 @@
 //! its parse output into the normalized types instead, so one renderer
 //! serves it and the seven other chat sources alike.
 
+use datalib_handle::Handle;
 use std::collections::HashMap;
 
 use datalib_etl::blob_cas::BlobBundle;
@@ -89,6 +90,7 @@ pub fn to_chats(
                     items,
                 }
             }],
+            contacts: Vec::new(),
             inputs: inputs.declared(),
         });
         if !doc.blobs.is_empty() {
@@ -128,7 +130,7 @@ fn to_item(
     let id = ids::message(source_id, &chat.id, &item.author_id, item.date_sent);
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id: item.author_id.clone(),
+        author_handle: author_handle(recipients, item),
         author_display: author_display(recipients, item),
         date_ms: Some(item.date_sent),
         text: item.text.clone(),
@@ -139,12 +141,14 @@ fn to_item(
         },
         attachments,
         reactions: Vec::new(),
+        labels: Vec::new(),
         system_note: None,
         source_url: None,
         kind_label: None,
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         unread: item.unread,
+        recipients: Vec::new(),
         problems: Vec::new(),
     }
 }
@@ -157,6 +161,22 @@ fn recipient_display(
         .get(&chat.recipient_id)
         .map(|r| r.display())
         .unwrap_or_else(|| format!("recipient_{}", chat.recipient_id))
+}
+
+/// A recipient's identifier is `+<e164>` where the backup has their
+/// number; an ACI or PNI is bare hex that does not say which it is, so it
+/// is no handle yet.
+fn author_handle(
+    recipients: Lookup<'_, HashMap<String, ParsedRecipient>>,
+    item: &ParsedChatItem,
+) -> Option<Handle> {
+    if item.outgoing {
+        return None;
+    }
+    recipients
+        .get(&item.author_id)
+        .and_then(|r| r.identifier.as_deref())
+        .and_then(Handle::tel)
 }
 
 fn author_display(

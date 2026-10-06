@@ -5,6 +5,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
+  savedConfig,
+  nameCell,
   MENU_DISABLED,
   SELECTED_ROWS,
   expandGroup,
@@ -22,7 +24,7 @@ async function openManager(page: Page) {
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
-test("a row's menu offers every action, and the cell under the pointer adds its own", async ({
+test("a row's menu offers the actions for its kind, grouped, wherever the pointer is", async ({
   page,
 }) => {
   await openManager(page);
@@ -33,24 +35,53 @@ test("a row's menu offers every action, and the cell under the pointer adds its 
   await expect(menuEntries(page)).toHaveText([
     "Browse every source",
     "Sync now",
-    "Pause",
+    "Turn off",
     "Edit settings…",
-    "Compare two syncs…",
-    "Show log",
+    "Rename…",
     "Show commit history",
-    "Reset (preserve attachments)…",
-    "Reset (drop attachments)…",
+    "Show step log",
+    "Show sync dashboard",
+    "Copy path",
+    "Copy id",
     "Remove from config, with everything under it",
   ]);
-  // The index rebuilds from the sources, so it is not reset by hand.
-  await expect(menuEntry(page, "Reset (preserve attachments)…")).toHaveClass(MENU_DISABLED);
+  // Compare and Reset are for a source: the index mirrors nothing to
+  // compare, and it rebuilds from the sources rather than being reset.
   await page.keyboard.press("Escape");
 
-  // The Name cell adds Rename and Copy id ahead of the row's entries.
-  await row.locator('[col-id="name"]').click({ button: "right" });
-  await expect(menuEntries(page).first()).toHaveText("Rename…");
-  await expect(menuEntries(page).nth(1)).toHaveText("Copy id");
+  // The Name cell offers the same menu as any other.
+  await nameCell(page, "group:unified_index").click({ button: "right" });
+  await expect(menuEntries(page)).toHaveCount(11);
   await page.keyboard.press("Escape");
+});
+
+/// The dashboard is the row laid out vertically: the group's section
+/// first, one per step under it, each with its row's actions — less the
+/// ones that need the config's text, which stay on the Sources card.
+test("Show sync dashboard opens the group step by step, each with its row's actions", async ({
+  page,
+}) => {
+  await openManager(page);
+  const row = groupRow(page, "unified_index");
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  await row.locator('[col-id="status"]').click({ button: "right" });
+  await menuEntry(page, "Show sync dashboard").click();
+
+  const section = (id: string) => page.locator(`.sd-section[data-step="${id}"]`);
+  await expect(section("unified_index")).toBeVisible();
+  const grid = section("unified_index/grid_index");
+  await expect(grid.locator(".sd-btn", { hasText: "Show step log" })).toBeVisible();
+  await expect(grid.locator(".sd-btn", { hasText: "Sync now" })).toBeVisible();
+  await expect(page.locator(".sd-btn", { hasText: "Edit settings…" })).toHaveCount(0);
+});
+
+/// The same card, from the row's own button rather than its menu.
+test("a row's chart button opens its group's sync dashboard", async ({ page }) => {
+  await openManager(page);
+  const row = groupRow(page, "unified_index");
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  await row.locator('[col-id="actions"] button[aria-label="Show sync dashboard"]').click();
+  await expect(page.locator('.sd-section[data-step="unified_index"]')).toBeVisible();
 });
 
 test("right-clicking inside a selection targets all of it; outside it, the one row", async ({
@@ -59,7 +90,7 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await openManager(page);
   await expandGroup(page, "unified_index");
   const grid = pipelineRow(page, "unified_index/grid_index");
-  const qmd = pipelineRow(page, "unified_index/qmd_index");
+  const qmd = pipelineRow(page, "unified_index/qmd_aggregator");
   await expect(grid).toBeVisible();
   await grid.locator('[col-id="status"]').click();
   await qmd.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
@@ -67,12 +98,14 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
 
   await qmd.locator('[col-id="status"]').click({ button: "right" });
   await expect(menuEntries(page).last()).toHaveText("Remove 2 entries from config");
-  // The one-row actions say so, and a reason names the row it came from.
+  // The one-row actions are left out, and an entry only some rows take
+  // is disabled with a reason naming the row it came from.
+  await expect(menuEntry(page, "Show step log")).toHaveCount(0);
   const history = menuEntry(page, "Show commit history");
   await expect(history).toHaveClass(MENU_DISABLED);
   await expect(history.locator(".slick-menu-content")).toHaveAttribute(
     "title",
-    /QMD index: The QMD index keeps no doltlite store/,
+    /QMD aggregator: The QMD index keeps no doltlite store/,
   );
   await page.keyboard.press("Escape");
 
@@ -86,21 +119,26 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await page.keyboard.press("Escape");
 });
 
-test("Rename edits the group's name in the cell and writes it to the config", async ({ page }) => {
+test("Rename edits the group's name in the cell and writes it to the config", async ({
+  page,
+  request,
+}) => {
   await openManager(page);
   const editor = page.locator(".m2-editor");
-  const original = await editor.inputValue();
+  const original = await savedConfig(request);
   const row = groupRow(page, "unified_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
 
-  await row.locator('[col-id="name"]').click({ button: "right" });
+  await nameCell(page, "group:unified_index").click({ button: "right" });
   await menuEntry(page, "Rename…").click();
   const input = page.locator(".tg-grid input.editor-text");
   await expect(input).toBeVisible();
   // The table repaints cells on a clock ("12 seconds ago" goes stale),
-  // and a repaint of the cell being edited would reset it under the
-  // typist. Force one of this very column and expect the same input to
-  // survive it.
+  // and a repaint of the cell being edited would put back the stored
+  // name under the typist. Type, force a repaint of this very column
+  // (synchronous, so it is over when `evaluate` returns), and expect
+  // what was typed to survive it.
+  await input.fill("Everything, indexed");
   await page
     .locator(".tg-grid")
     .first()
@@ -109,14 +147,14 @@ test("Rename edits the group's name in the cell and writes it to the config", as
         "name",
       ]);
     });
-  await page.waitForTimeout(200);
-  await expect(input).toBeVisible();
   await expect(input).toBeFocused();
-  await input.fill("Everything, indexed");
+  await expect(input).toHaveValue("Everything, indexed");
   await input.press("Enter");
 
   await expect(page.getByText("Renamed unified_index to Everything, indexed.")).toBeVisible();
-  await expect(row.locator(".tg-parent")).toHaveText("Everything, indexed");
+  await expect(nameCell(page, "group:unified_index").locator(".tg-parent")).toHaveText(
+    "Everything, indexed",
+  );
   await expect(editor).toHaveValue(/name = "Everything, indexed"/);
 
   // Put the root back for the next spec on this sandbox.

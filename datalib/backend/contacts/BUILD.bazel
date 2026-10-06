@@ -1,0 +1,37 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The contacts app's store (`datalib_curated/datalib_contacts/`): contacts a
+# person made and the handles linked to them. The `datalib_contacts`
+# applet is its one writer. Bazel-only.
+rust_library(
+    name = "datalib_contacts",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_contacts",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/contact_schema:datalib_contact_schema",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/handle:datalib_handle",
+        "//datalib/backend/store_meta:datalib_store_meta",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "contacts_unittests",
+    size = "small",
+    crate = ":datalib_contacts",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

@@ -24,6 +24,17 @@ pub const PAGE_SIZE: u32 = 100;
 pub enum NotionOfficialError {
     #[error("forbidden: {0}")]
     Forbidden(String),
+    /// Notion answers 404 for a page that does not exist and for one the
+    /// credential was never given; the two are indistinguishable.
+    #[error("not found: {0}")]
+    NotFound(String),
+    /// The credential was refused: nothing else this run asks will work.
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
+    /// The shared retry guard gave up on the service; every request after
+    /// this one would give up too.
+    #[error("{0}")]
+    GaveUp(String),
     #[error("{0}")]
     Permanent(String),
 }
@@ -34,6 +45,15 @@ pub struct NotionOfficialClient {
     /// The source's latchkey settings, forwarded onto every request this
     /// client issues (see `HttpRequest::latchkey`).
     latchkey: LatchkeySettings,
+}
+
+impl NotionOfficialError {
+    /// The run as a whole is over: the credential was refused, or the
+    /// retry guard gave up. Going on would only fail every item left, one
+    /// request at a time.
+    pub fn ends_the_run(&self) -> bool {
+        matches!(self, Self::Unauthorized(_) | Self::GaveUp(_))
+    }
 }
 
 impl Default for NotionOfficialClient {
@@ -96,8 +116,11 @@ impl NotionOfficialClient {
                 )));
             }
         };
-        let resp = latchkey_curl(&req).await.map_err(|e: HttpError| {
-            NotionOfficialError::Permanent(format!("{method} {path}: {e}"))
+        let resp = latchkey_curl(&req).await.map_err(|e: HttpError| match e {
+            HttpError::GaveUp { .. } => {
+                NotionOfficialError::GaveUp(format!("{method} {path}: {e}"))
+            }
+            e => NotionOfficialError::Permanent(format!("{method} {path}: {e}")),
         })?;
         self.network_ms
             .fetch_add(resp.duration_ms, Ordering::Relaxed);
@@ -123,12 +146,22 @@ impl NotionOfficialClient {
             tracing::Span::current().record("total_ms", req_start.elapsed().as_millis() as u64);
             return Ok(value);
         }
+        if status == 401 {
+            return Err(NotionOfficialError::Unauthorized(format!(
+                "{method} {path} -> HTTP 401"
+            )));
+        }
         if status == 403 {
             return Err(NotionOfficialError::Forbidden(format!(
                 "{method} {path} -> HTTP 403"
             )));
         }
         let preview: String = body_text.chars().take(300).collect();
+        if status == 404 {
+            return Err(NotionOfficialError::NotFound(format!(
+                "{method} {path} -> HTTP 404 body={preview:?}"
+            )));
+        }
         Err(NotionOfficialError::Permanent(format!(
             "{method} {path}: HTTP {status} body={preview:?}"
         )))

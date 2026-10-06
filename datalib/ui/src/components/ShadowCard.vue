@@ -11,7 +11,7 @@ import { compileCardSource } from "@/cards/cardSource";
 import { inCard } from "@/cards/cardScope";
 import { track } from "@/telemetry";
 import { setCardHelp } from "@/cards/help";
-import { devMode } from "@/devMode";
+import { editMode } from "@/editMode";
 import {
   ensureFrontend,
   followRenames,
@@ -23,6 +23,9 @@ import type { CardCtx, Teardown } from "@/cards/types";
 const props = defineProps<{
   source: string;
   ctx: CardCtx;
+  // As tall as its content rather than filling its slot (a card in a
+  // Page container). Cards built with vueCard honour it.
+  natural?: boolean;
 }>();
 
 const hostEl = useTemplateRef<HTMLDivElement>("hostEl");
@@ -120,7 +123,7 @@ async function runCard() {
   if (props.source.trim() === "") {
     // Sole onboarding text for an empty card — the source textarea
     // above stays blank (no placeholder), so the how-to lives here.
-    // Blank cards are created in dev mode, but one can outlive a
+    // Blank cards are created in edit mode, but one can outlive a
     // toggle to non-dev (where the source box is gone) — track the
     // flag so the text never points at a textarea that isn't there.
     const div = document.createElement("div");
@@ -133,7 +136,7 @@ async function runCard() {
       const intro = document.createElement("div");
       div.appendChild(intro);
       if (!dev) {
-        intro.textContent = "empty card — turn on dev mode to type source, or close it";
+        intro.textContent = "empty card — turn on edit mode to type source, or close it";
         return;
       }
       intro.textContent = "empty card — type source above and press Enter, e.g.:";
@@ -152,7 +155,7 @@ async function runCard() {
         div.appendChild(code);
       }
     };
-    const stop = watch(devMode, paintBlank, { immediate: true });
+    const stop = watch(editMode, paintBlank, { immediate: true });
     teardown.value = () => stop();
     return;
   }
@@ -215,7 +218,7 @@ onBeforeUnmount(tearDownCard);
 </script>
 
 <template>
-  <div ref="hostEl" class="shadow-card-host" />
+  <div ref="hostEl" class="shadow-card-host" :data-natural="natural || undefined" />
 </template>
 
 <style scoped>

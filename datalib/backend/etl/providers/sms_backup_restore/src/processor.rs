@@ -45,21 +45,28 @@ impl DataProcessor for SmsIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
-            .await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
-            db,
-            input_path: self.input_path.clone(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
+                db,
+                input_path: self.input_path.clone(),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "sms={} mms={} calls={} attachments={} blobs={} removed={} files_removed={} parse_errors={}",
+                s.sms,
+                s.mms,
+                s.calls,
+                s.attachments,
+                s.blobs_stored,
+                s.removed,
+                s.files_removed,
+                s.parse_errors,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "sms={} mms={} calls={} attachments={} blobs={} parse_errors={}",
-            s.sms, s.mms, s.calls, s.attachments, s.blobs_stored, s.parse_errors,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

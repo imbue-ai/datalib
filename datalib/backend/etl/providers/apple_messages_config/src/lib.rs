@@ -3,7 +3,7 @@
 //! anyhow), so the orchestrator can name [`AppleMessagesConfig`] without
 //! linking the provider.
 
-use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use datalib_source_common::{LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
@@ -27,23 +27,11 @@ pub const CHURN_TABLE_PATTERNS: &[&str] = &[
 /// per-row indexing state, which moves on every row it visits.
 pub const CHURN_COLUMN_PATTERNS: &[&str] = &["*.index_state"];
 
-/// Where macOS keeps the database.
-pub const DEFAULT_DATABASE: &str = "~/Library/Messages/chat.db";
-
-/// The join tables Messages declares UNIQUE but not PRIMARY KEY. The
-/// mirror keys them on that pair so `dolt_diff` can name their rows.
-pub fn join_table_keys() -> BTreeMap<String, Vec<String>> {
-    [
-        ("message_attachment_join", ["message_id", "attachment_id"]),
-        ("chat_handle_join", ["chat_id", "handle_id"]),
-    ]
-    .into_iter()
-    .map(|(t, cols)| (t.to_string(), cols.map(str::to_string).to_vec()))
-    .collect()
-}
+/// The database's name inside the Messages folder.
+pub const DATABASE_IN_FOLDER: &str = "chat.db";
 
 /// The apple_messages-owned slice of an `apple_messages` source. The
-/// `database` table is its one way in; the rest are the mirror engine's
+/// `messages` table is its one way in; the rest are the mirror engine's
 /// knobs, the same ones `apple_photos` exposes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -51,9 +39,10 @@ pub struct AppleMessagesConfig {
     /// Shared per-source envelope (paths + cross-source tunables),
     /// resolved by the orchestrator's `normalize()`.
     pub common: SourceCommon,
-    /// The `chat.db` to mirror — the app's own, or a copy of it (an
-    /// iPhone backup's `3d0d7e5f…` file is the same database).
-    pub database: Option<LocalPath>,
+    /// The Messages folder (`~/Library/Messages`), or a `chat.db` file
+    /// directly — a copy of it, or an iPhone backup's `3d0d7e5f…` file,
+    /// which is the same database. See [`chat_db_path`].
+    pub messages: Option<LocalPath>,
     /// Table-name globs to mirror. Default `["*"]`.
     pub include_tables: Vec<String>,
     /// Table-name globs to skip, applied after [`Self::include_tables`].
@@ -76,7 +65,7 @@ impl Default for AppleMessagesConfig {
     fn default() -> Self {
         Self {
             common: SourceCommon::default(),
-            database: None,
+            messages: None,
             include_tables: vec!["*".to_string()],
             exclude_tables: Vec::new(),
             exclude_columns: Vec::new(),
@@ -112,13 +101,26 @@ impl AppleMessagesConfig {
     }
 }
 
+/// The SQLite file for a configured `messages` path: `chat.db` inside it
+/// when it is a folder, the path itself when it is the database. The app
+/// has the user pick the folder because on macOS picking grants access
+/// to what was picked, and the snapshot has to read `chat.db-wal` and
+/// `chat.db-shm` beside the database too.
+pub fn chat_db_path(messages: &Path, is_dir: bool) -> PathBuf {
+    if is_dir {
+        messages.join(DATABASE_IN_FOLDER)
+    } else {
+        messages.to_path_buf()
+    }
+}
+
 /// Params for the render step — no provider-specific render knobs, so
 /// this is the shared bare envelope.
 pub type AppleMessagesRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for AppleMessagesConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] =
-        &[datalib_source_common::IngestMethod::local("database")];
+        &[datalib_source_common::IngestMethod::local("messages")];
 }
 
 #[cfg(test)]
@@ -154,5 +156,13 @@ mod tests {
         }
         .effective_excluded_columns()
         .is_empty());
+    }
+
+    #[test]
+    fn folder_or_database_path_both_resolve_to_the_database() {
+        let folder = Path::new("/Users/x/Library/Messages");
+        assert_eq!(chat_db_path(folder, true), folder.join("chat.db"));
+        let backup = Path::new("/tmp/backup/3d/3d0d7e5fb2ce288813306e4d4636395e047a3d28");
+        assert_eq!(chat_db_path(backup, false), backup);
     }
 }

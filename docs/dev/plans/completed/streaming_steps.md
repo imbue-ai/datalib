@@ -1,15 +1,18 @@
 # Streaming steps: letting a consumer start before its producer finishes
 
-**Status: landed, as [`streaming_steps_plan.md`](streaming_steps_plan.md)
-built it and the supervisor ([`../supervisor.md`](../supervisor.md))
-later took over its scheduling; kept as the record of the design. The
-paragraphs below are the proposal as written (2026-09-03).** The claims
-about what doltlite can do are verified against doltlite 0.50.3 — the
-reproducer is [`hack/doltlite_concurrent_reader/`](../../../../hack/doltlite_concurrent_reader/),
-and every number quoted below comes from running it. The design that
-follows is a proposal and has not been implemented.
+**Status: landed — the build plan that did it is deleted (git has it),
+its sink contract now lives in
+[`dag/README.md`](../../../../datalib/backend/dag/README.md#what-a-sink-owes-its-consumers),
+and the supervisor ([`../supervisor.md`](../supervisor.md)) later took
+over its scheduling; kept as the record of the design. The
+paragraphs below are the proposal as written (2026-09-03).** Its
+doltlite section is cut to the premise; what the engine does now is in
+[`doltlite.md`](../../doltlite.md). What is still worth reading here is
+the argument: § "The rule that keeps this safe" and § "Why Bazel's
+persistent workers are the better model", which
+[`../supervisor.md`](../supervisor.md) builds on.
 
-**The build plan is [`streaming_steps_plan.md`](streaming_steps_plan.md).**
+**The build plan** (deleted; `git log -- docs/dev/plans/completed/streaming_steps_plan.md`).
 Measuring the tree before writing it overturned two things below. The
 last section here recommends starting with `<source>.download →
 <source>.render`; the plan starts with `render → grid_index` instead,
@@ -57,133 +60,27 @@ we're paying for it.
 ## What we thought was in the way, and isn't
 
 The obvious worry is that reading a database somebody else is still
-writing gives you garbage. For most databases that worry is correct.
-For doltlite it isn't — but the reason is worth spelling out, because
-the naive version of "just read it" really does give you garbage.
+writing gives you garbage. For doltlite it does not have to, and this
+was the finding the proposal rested on (measured on 0.50.3 with
+[`hack/doltlite_concurrent_reader/`](../../../../hack/doltlite_concurrent_reader/)):
 
-### A little background on how doltlite stores things
+- **A plain `SELECT` can tear.** The rows a writer has written and not
+  yet committed live in the file, so a reader in another process could
+  see part of one commit mixed with part of a batch still being written.
+- **Reading a commit cannot.** `dolt_at_<table>('<hash>')` reads that
+  commit and nothing else, writes nothing to the file, and needs nothing
+  held open: a pin is just a hash, so it can be passed between processes
+  as a string and survives a peer's `dolt_gc()`.
+- **Catching up is a diff.** A consumer that re-pins reads only what
+  moved, with `dolt_diff_<table>('<from>', '<to>')`.
 
-Doltlite is a SQLite fork that keeps a commit history, like git. When a
-writer finishes a batch it calls `dolt_commit()`, which seals everything
-written so far into an immutable commit with a hash. The commits form a
-chain, and old ones stay readable forever.
-
-Before that call, the rows the writer has inserted live in something
-called the **working set**. Think of it as the staging area: real rows,
-visible, but not yet part of any commit. The important and slightly
-surprising part is that doltlite's working set lives *in the file*, and
-is shared by every process that opens that file. It is not per-connection
-scratch space.
-
-### So the naive approach is genuinely broken
-
-That sharing is exactly why a plain `SELECT` is not safe to run against
-a store somebody is writing. It reads the working set, which means it
-sees rows the writer has not committed and might still be adding to.
-
-Scenario A of the reproducer makes this concrete. A writer commits two
-rows, then inserts two more and exits without committing. A completely
-separate process then opens the file:
-
-```
-plain SELECT sees:        4
-dolt_at_t('HEAD') sees:   2
-```
-
-Four rows, where the last commit contains two. Scenario B shows what
-that looks like against a writer that is actually running: a reader
-sampling the row count watched it go `11 → 21 → 31 → 41 → 51` underneath
-itself.
-
-That is worth being precise about, because it's a sharper problem than
-it first sounds. The reader isn't seeing *old* data, which would be
-merely unhelpful. It's seeing a **torn** view — part of one commit
-mixed with part of a batch still being written. If we relaxed the
-scheduler's edges without changing anything else, this is what every
-consumer would get. Silently.
-
-### But pinning fixes it completely, and costs nothing
-
-Doltlite has a way to read a specific commit instead of the working set:
-
-```sql
-SELECT * FROM dolt_at_<table>('<commit-ish>');
-```
-
-It's a table-valued function — you call it like a function and select
-from the result. It takes `HEAD`, `HEAD~2`, or a raw commit hash, and it
-gives you back the table's normal columns as they were at that commit.
-
-If you went looking for MySQL's `SELECT ... FROM t AS OF '...'`, that's
-why you didn't find it: SQLite's grammar has no `AS OF` clause, so it's
-a parse error. The capability is there. Only the spelling is different.
-(Two docs in this tree said flatly that doltlite has no `AS OF`. Both
-have been corrected.)
-
-Two properties make this the right primitive for us:
-
-**It reads committed state only.** That's the `2` in the output above,
-against the same file at the same instant that a plain `SELECT` returned
-`4`. A dirty working set is invisible to it.
-
-**It's a pure read.** No branch is created, no `dolt_checkout` happens,
-nothing is written to the file, and nothing is left behind. This matters
-more than it might seem. We have a one-writer-per-file rule that a lot
-of correctness rests on, and a reader that had to write in order to read
-would be in direct tension with it. This one doesn't.
-
-**And a pin is just a hash.** Nothing has to be held open to keep it
-alive. A brand-new process with no inherited connection reads an old pin
-correctly, and it still does after `dolt_gc()` has reclaimed 25 chunks —
-as does a diff spanning the gc boundary. So a slow consumer can't have
-its view collected out from under it, and a pin can be passed between
-processes as a plain string. That last part matters more than it sounds:
-it means a checkpoint notification can be a hash and nothing else.
-
-Scenario C is the whole design in one line. A reader pins to a hash and
-then samples the row count ten times while the writer keeps committing:
-
-```
-counts seen over time: 11 11 11 11 11 11 11 11 11 11
-```
-
-Rock steady, for the writer's entire run. (Which number it settles on
-varies between runs — the reader pins to whatever had been committed
-when it started. That it never moves afterwards is the point.)
-Meanwhile the writer logged zero `SQLITE_BUSY` errors and the reader
-left no branches behind.
-
-### Reading just the new part
-
-A consumer that re-pins doesn't want to reprocess everything it has
-already seen. It wants the difference between its old pin and its new
-one:
-
-```sql
-SELECT * FROM dolt_diff_<table>('<from-hash>', '<to-hash>');
-```
-
-Also a table-valued function. It gives you the changed rows between any
-two commits, with `to_*` columns, `from_*` columns, and a `diff_type`
-telling you whether the row was added, modified, or removed. In the
-reproducer, the delta between two pins was 20 rows where re-reading the
-whole table would have been 41.
-
-**One trap, because it cost me an hour and will cost the next person
-one too.** There are three similarly named things:
-
-| what you write | what you get |
-|---|---|
-| `dolt_diff_<t>('<from>','<to>')` | the arbitrary two-commit row diff — **this is the one you want** |
-| `dolt_diff_<t>` with no arguments | a per-commit change log |
-| `dolt_diff` with no table suffix | a list of commits |
-
-The middle one is the trap. It has `from_commit` and `to_commit`
-columns, so it *looks* like you can filter it down to any range you
-like. You can't — it only ever holds adjacent parent-and-child pairs.
-Ask it for a range spanning several commits and it returns zero rows,
-which reads as "nothing changed" rather than as an error. Use the
-parameterized call.
+So the storage side needed nothing new; what was left was the
+notification path and per-step offset state. Doltlite has moved since
+this was written: a reader now also has a held read transaction and a
+detached open of `<file>@<hash>`, and the tree's writers seal on a
+branch of their own so a reader on `main` sees only sealed state.
+[`doltlite.md`](../../doltlite.md) § "How doltlite behaves" has the
+facts as they are now.
 
 ## What actually has to change
 

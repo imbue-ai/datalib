@@ -80,6 +80,11 @@ pub struct Parsed {
     pub samples: Vec<Sample>,
     pub unplaced: Vec<Unplaced>,
     pub stats: ParseStats,
+    /// Of `stats.bad_lines`, the ones not stored at all; the rest were
+    /// stored without the value that did not parse.
+    pub lines_dropped: usize,
+    /// The first bad line, said the way a reader can find it.
+    pub first_bad: Option<String>,
 }
 
 pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
@@ -114,6 +119,8 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
     let mut out = Vec::new();
     let mut unplaced = Vec::new();
     let mut stats = ParseStats::default();
+    let mut lines_dropped = 0;
+    let mut first_bad = None;
     for (n, line) in lines.enumerate() {
         if line.trim().is_empty() {
             continue;
@@ -123,6 +130,8 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
         let ts_s = fields.get(time_idx).and_then(|s| s.parse::<i64>().ok());
         let (Some(ts_s), true) = (ts_s, fields.len() == headers.len()) else {
             stats.bad_lines += 1;
+            lines_dropped += 1;
+            first_bad.get_or_insert_with(|| format!("line {}: {line:?}", n + 2));
             warn!(
                 event = "airvisual_bad_line",
                 file = file_label,
@@ -160,6 +169,9 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
                 Ok(v) => set(&mut sample, v),
                 Err(_) => {
                     bad = true;
+                    first_bad.get_or_insert_with(|| {
+                        format!("line {}: {} = {raw:?}", n + 2, headers[*idx])
+                    });
                     warn!(
                         event = "airvisual_bad_value",
                         file = file_label,
@@ -181,6 +193,8 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
         samples: out,
         unplaced,
         stats,
+        lines_dropped,
+        first_bad,
     })
 }
 

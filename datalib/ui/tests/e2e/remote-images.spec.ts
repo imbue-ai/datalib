@@ -4,7 +4,7 @@
 // placeholder per image naming its host and a banner counting them.
 
 import { test, expect, type Page } from "@playwright/test";
-import { SEARCH_ROWS, selectRowByUuid } from "./grid-helpers";
+import { docBody, EVERY_ROW, SEARCH_ROWS, selectRowByUuid } from "./grid-helpers";
 
 declare global {
   interface Window {
@@ -35,10 +35,10 @@ async function openMarketingEmail(page: Page) {
     (r) => r.kind === "Email" && r.conversation_name === "Your shore leave awaits!",
   );
   expect(email, "the fixture's Risa marketing email").toBeDefined();
-  await page.goto("/");
+  await page.goto(EVERY_ROW);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
   await selectRowByUuid(page, email!.uuid);
-  await expect(page.locator(".chat-preview .chat-body")).toBeVisible();
+  await expect(docBody(page)).toBeVisible();
 }
 
 test("opening an email with remote images reaches no remote host", async ({ page, context }) => {
@@ -54,7 +54,7 @@ test("opening an email with remote images reaches no remote host", async ({ page
   });
   await openMarketingEmail(page);
 
-  const chips = page.locator(".chat-preview .remote-media");
+  const chips = docBody(page).locator(".remote-media");
   await expect(chips).toHaveCount(2);
   await expect(chips.nth(0).locator(".remote-media-host")).toHaveText("risa.tourism");
   await expect(chips.nth(0).locator(".remote-media-alt")).toHaveText("Temtibi Lagoon at sunset");
@@ -75,8 +75,8 @@ test("opening an email with remote images reaches no remote host", async ({ page
 
   // No `<img>` in the document points anywhere but this origin, no
   // request left for one, and the policy had nothing to refuse.
-  const srcs = await page
-    .locator(".chat-preview img")
+  const srcs = await docBody(page)
+    .locator("img")
     .evaluateAll((imgs) => imgs.map((i) => i.getAttribute("src") ?? ""));
   expect(srcs.filter(isRemoteHost)).toEqual([]);
   expect(remoteRequests).toEqual([]);

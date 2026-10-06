@@ -8,8 +8,13 @@ exports_files(["Cargo.toml"])
 genrule(
     name = "tng_chat_db",
     srcs = ["//tests/fixtures:make_apple_messages_db.py"],
-    outs = ["tng_chat_db/chat.db"],
-    cmd = "python3 $(execpath //tests/fixtures:make_apple_messages_db.py) $@",
+    # The `-wal` holds the newest message: the pair is a database the way
+    # Messages leaves it while running.
+    outs = [
+        "tng_chat_db/chat.db",
+        "tng_chat_db/chat.db-wal",
+    ],
+    cmd = "python3 $(execpath //tests/fixtures:make_apple_messages_db.py) $(RULEDIR)/tng_chat_db/chat.db",
     visibility = ["//datalib:__subpackages__"],
 )
 

@@ -29,7 +29,7 @@ authenticate as when more than one is stored for the service
 ```
 <data_root>/<group>/ingest/
   entities.doltlite_db   # the tables below, plus a <table>_bookkeeping sidecar each
-  blobs.doltlite_db      # attachment bytes, content-addressed by blake3
+  blobs.sqlite      # attachment bytes, content-addressed by blake3
 ```
 
 `entities.doltlite_db` — the schema is `ingest/schema_raw.rs`:
@@ -40,7 +40,7 @@ authenticate as when more than one is stored for the service
 | `conversations`       | conversation               | `title`, `update_time`                              |
 | `chatgpt_attachments` | (conversation, attachment) | `conversation_id`, `file_id`, `blake3`              |
 
-`payload` is the endpoint's JSON response as text, with one change:
+`payload` is the endpoint's JSON response, stored as JSONB, with one change:
 the top-level arrays the API returns as a *set* (`safe_urls`,
 `blocked_urls`, `disabled_tool_ids`, `plugin_ids`) are sorted before
 the write, because the API returns them in a different order on every
@@ -61,8 +61,8 @@ upstream. `datalib/backend/etl/README.md` explains the split.
    reports under and is cheap.
 2. **List** `/backend-api/conversations?offset=&limit=100&order=updated`,
    newest-updated first, until the pages run out, `max_pages` is hit,
-   or — with `since` set — a page ends past the cutoff. The walk is
-   *complete* only in the first case.
+   a page fails, or — with `since` set — a page ends past the cutoff.
+   The walk is *complete* only in the first case.
 3. **Prune**, only after a complete walk: a conversation the store
    holds that the listing did not name was deleted on chatgpt.com, so
    it is deleted here (its row stays in doltlite history). An
@@ -82,10 +82,14 @@ upstream. `datalib/backend/etl/README.md` explains the split.
 6. **Seal** after each conversation and its blobs have both landed,
    never between the two, so a render that starts early never sees a
    message pointing at bytes it cannot resolve.
+7. **Retry** the attachments earlier runs did not land (below).
 
 `conv_uuids` replaces steps 2–4 with exactly the named conversations
 (bare ids or paste-able `https://chatgpt.com/c/<id>` URLs); the
 listing is never walked and nothing is pruned.
+
+A prune takes the pruned conversations' attachment edges, bookkeeping
+and `problems` rows with them.
 
 ### The skip key compares at whole seconds
 
@@ -102,24 +106,68 @@ grain.
 For every `metadata.attachments[]` entry and `asset_pointer` in a
 conversation, the walk asks `/backend-api/files/{id}/download` for a
 signed URL, fetches the bytes through `latchkey curl`, and stores them
-in `blobs.doltlite_db` keyed by blake3, with a `chatgpt_attachments`
+in `blobs.sqlite` keyed by blake3, with a `chatgpt_attachments`
 row linking the conversation's `file_id` to that hash. Signed URLs
 rotate; bytes do not, so a file whose `blake3` is already on its edge
-row is not fetched again (`datalib-dag --reset <source>/ingest+blobs`
-drops the CAS with the store, and the next sync re-pulls). A failed blob bumps its `attempt_count` and `last_error`
-and does not fail the sync. The name and MIME type render needs stay
-in the conversation payload; the edge table holds only the mapping.
+row is not fetched again (delete `blobs.sqlite` *and* reset the ingest
+step, and the next sync re-pulls). The name and MIME type render needs
+stay in the conversation payload; the edge table holds only the
+mapping.
 
-### Errors and rate limits
+A blob that does not land is still an edge row, with no `blake3`; its
+bookkeeping holds why (`last_error`), and so does its `problems` row,
+which render shows on the conversation's page. The walk reaches a
+conversation's attachments only when it fetches the conversation, and
+an unchanged one is not fetched again, so after the walk every
+conversation with such an edge is read back from the store and its
+attachments tried again. The row clears when the blob lands.
 
-A conversation the API refuses (`ChatGPTError::Permanent`) is
-recorded on its bookkeeping row through `record_object_error`, which
-is how it reaches the `problems` table and the Manage screen; the run
-moves on. A `429` is retried with `Retry-After`, or exponential
-backoff when the header is absent, inside the shared `latchkey_curl`
-chokepoint; when that gives up, `api::ChatGPTClient::get` maps the
-`HttpError::GaveUp` to `ChatGPTError::RateLimited` and the run stops
-cleanly, to resume from the same store next time.
+A file chatgpt.com answers `404` or `410` for is gone, not failed: its
+row is a `not_found` warning, and the retry pass leaves it alone. It is
+asked for again only when its conversation changes and is refetched.
+
+### When part of a sync fails
+
+Only two things fail the step: `/me` failing (the credential is not
+working), and the first listing page failing with no conversation
+stored to fall back on. Anything else is a `problems` row, and the sync
+goes on with what it has:
+
+- **A conversation that will not fetch** is recorded on its bookkeeping
+  row through `record_object_error`, keyed `conversations:<id>`, and
+  render shows it on that conversation. A conversation that never
+  fetched has no `update_time`, so the next run's skip-check queues it
+  again; the row clears when it lands.
+- **A listing page that fails** after the first keeps the pages before
+  it. The walk is then incomplete, so nothing is pruned, and the run
+  records `listing:conversations`. Every run lists again, so the next
+  clean listing clears it. A `200` whose body has no `items` array is
+  a failed page too, the first one included: only an `items` that is
+  an empty array says the listing has ended.
+- **A rate limit** — a `429` is retried with `Retry-After`, or
+  exponential backoff when the header is absent, inside the shared
+  `latchkey_curl` chokepoint; when that gives up,
+  `api::ChatGPTClient::get` maps the `HttpError::GaveUp` to
+  `ChatGPTError::RateLimited` — ends the walk, since every later request
+  would be refused too, and records `phase:conversations` with how many
+  were left. What was left is still missing or stale, so the next run's
+  skip-check queues it, and that run's report clears the row. A rate
+  limit on an attachment ends the walk the same way, its conversation
+  unwritten; one in the attachment retry ends that pass as
+  `phase:attachments`. A run cut short like this adds its rows and
+  clears none, and does not rewrite the `config:` rows, since it did not
+  check every named conversation.
+- **A named conversation** (`conv_uuids`) that answers `404` is
+  `config:conv_uuids:<value>`; any other failure is its
+  `conversations:<id>` row, as above. Every named conversation is
+  fetched every run, so both clear when it answers.
+- **An attachment** is its edge's row (see Attachments above).
+
+The `listing:`/`phase:` and `config:` rows of a run that got to its end
+replace the last run's. A run that was asked to stop clears none, and
+records nothing about a request the stop refused: a
+conversation whose attachments the stop cut short is not written at
+all, so the next run starts it over.
 
 A reset (`datalib-dag --reset`) empties all three tables and their
 bookkeeping, so the next sync's diff against the pre-reset commit is
@@ -164,11 +212,11 @@ latchkey services register chatgpt \
 latchkey auth browser chatgpt
 ```
 
-Needs latchkey >= 3.11.0 (the version this repo pins in
-`datalib/backend/runtime/src/node_runtime.rs`). chatgpt.com's page
-never calls `/api/auth/session` itself, so before that version the
-capture waited for a request that never came — and every failure mode
-of the flow is a silent hang, with no timeout.
+Needs latchkey 3.11.0 or later; the tree pins `LATCHKEY_VERSION` in
+`datalib/backend/runtime/src/node_runtime.rs`. chatgpt.com's page never
+calls `/api/auth/session` itself, so an older latchkey's capture waits
+for a request that never comes — and every failure mode of the flow is
+a silent hang, with no timeout.
 
 Smoke test after either path:
 
@@ -211,43 +259,22 @@ or a machine whose `chatgpt` service you would rather not deregister.
    and run it. zsh/bash record the literal `$(pbpaste)`, not the
    resolved token, so nothing sensitive lands in `~/.zsh_history`.
 
-### The Chrome-impersonating curl
+### Cloudflare
 
-`chatgpt.com` is fronted by Cloudflare's managed-challenge system,
-which fingerprints TLS handshakes. To clear it, requests go out
-through a Chrome-impersonating curl — the bundled `curl-impersonate`,
-reached via the router curl (`docs/dev/curl_impersonate.md`). Leave
-`LATCHKEY_CURL` unset and the downloader finds the router itself
-(`ensure_curl_router`); to set it by hand, point it at the **router**,
-which brings the impersonator along as a sibling:
+`chatgpt.com` is fronted by Cloudflare's managed challenge, which
+fingerprints TLS handshakes, so every request goes out through the
+bundled Chrome-impersonating curl. Leave `LATCHKEY_CURL` unset and the
+downloader finds it (`ensure_curl_router`); setting it by hand is in
+[`docs/dev/curl_impersonate.md`](/docs/dev/curl_impersonate.md).
 
-```sh
-bazelisk build //third-party/latchkey-curl-shims
-export LATCHKEY_CURL="$(pwd)/bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router"
-```
-
-### Why no `cf_clearance` cookie?
-
-Cloudflare gates clients with two layered checks:
-
-1. **TLS fingerprint** (JA3/JA4) — what the handshake *looks* like.
-2. **JS challenge → `cf_clearance` cookie** — issued only when the
-   fingerprint is suspect, to certify "this client passed the
-   challenge once."
-
-Because `curl-impersonate` performs a Chrome handshake from byte zero
-(patched BoringSSL + the same cipher suite ordering / ALPN / extensions
-as real Chrome), Cloudflare never elevates us to the challenge tier in
-the first place. The `cf_clearance` cookie therefore never gets
-issued and is not needed in the latchkey credential set — a single
-`Authorization: Bearer …` header is the full auth surface.
-
-If you ever *did* need it (some future tightening, or running with
-plain `curl` as `LATCHKEY_CURL`), grab it from DevTools → Application
-→ Cookies → `chatgpt.com` → row `cf_clearance` (HttpOnly, so the JS
-snippet above can't read it), copy its value to the clipboard, and
-add another header via `$(pbpaste)` so the cookie doesn't land in
-shell history either:
+Cloudflare issues a `cf_clearance` cookie only to a client whose
+fingerprint looks suspect. A Chrome handshake never gets that far, so
+the `Authorization: Bearer …` header is the whole credential. If you
+ever do need the cookie (a tightening upstream, or a plain `curl` as
+`LATCHKEY_CURL`), copy it from DevTools → Application → Cookies →
+`chatgpt.com` → `cf_clearance` (HttpOnly, so the snippet above can't
+read it) and add it through `$(pbpaste)`, so it stays out of shell
+history:
 
 ```sh
 latchkey auth set chatgpt -H "Cookie: cf_clearance=$(pbpaste)"
@@ -267,11 +294,14 @@ latchkey auth set chatgpt -H "Cookie: cf_clearance=$(pbpaste)"
 A TNG-themed fixture of the API's shapes lives at
 `tests/fixtures/chatgpt_api/` (`me.json`, `conversations.json`, one
 `conversations/<id>.json` per conversation), exposed as the Bazel
-`tng_fixture` filegroup. It is what `chatgpt_render` renders against,
-what `chatgpt_incremental_skip` and `chatgpt_playback_roundtrip` replay
-through a playback tape, and what the shared `tests/fixtures` root
-ingests (`docs/dev/testing.md` § "Watching a sync stream" is where the
-tapes are explained). `chatgpt_live`
-downloads one real conversation and snapshots it; it is `manual` and
-`#[ignore]`d, run with
-`bazelisk run //datalib/backend/etl/providers/chatgpt:chatgpt_live.update`.
+`tng_fixture` filegroup. Every hermetic test is a module of
+`:chatgpt_tests`: `chatgpt_render` renders the fixture, and
+`incremental_skip`, `playback_roundtrip` and `run_problems` (what a
+partial failure records, and when it clears) replay small snapshots of
+the same shape through a playback tape (`docs/dev/testing.md` § "Watching a sync stream" explains the
+tapes). The shared `tests/fixtures` root ingests it too.
+
+The `live` module downloads one real conversation and snapshots it.
+`:chatgpt_tests` skips it (`--skip live::`); run it with
+`bazelisk run //datalib/backend/etl/providers/chatgpt:chatgpt_live`, or
+`:chatgpt_live.update` to rewrite its snapshot.

@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::{Host, Url};
 
-use crate::embed::{is_scriptable_document, DOCUMENT_SANDBOX_CSP};
+use crate::embed::{is_scriptable_document, DocumentKind};
 use crate::AppState;
 
 /// Set to `1` to let the route reach loopback and private addresses —
@@ -414,12 +414,14 @@ async fn bytes_for(s: &AppState, q: &MediaQuery) -> Result<(String, Vec<u8>), Re
     let dir = datalib_core::layout::remote_media_dir(&s.root);
     let io = |e: std::io::Error| Refusal::Transport(format!("keep in the CAS: {e}"));
     tokio::fs::create_dir_all(&dir).await.map_err(io)?;
-    // Written beside and renamed over, so a reader never sees half a file.
-    let tmp = dir.join(format!(".{sha256}.{}", uuid::Uuid::new_v4()));
-    tokio::fs::write(&tmp, &fetched.body).await.map_err(io)?;
-    tokio::fs::rename(&tmp, cas_path(&s.root, &sha256))
-        .await
-        .map_err(io)?;
+    let dest = cas_path(&s.root, &sha256);
+    let body = fetched.body;
+    let body = tokio::task::spawn_blocking(move || {
+        datalib_runtime::atomic::write(&dest, &body).map(|()| body)
+    })
+    .await
+    .map_err(|e| Refusal::Transport(format!("keep in the CAS: {e}")))?
+    .map_err(io)?;
     let (fetched_at_utc, tz_offset) =
         datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     s.app
@@ -427,13 +429,13 @@ async fn bytes_for(s: &AppState, q: &MediaQuery) -> Result<(String, Vec<u8>), Re
             url: url.clone(),
             sha256,
             content_type: fetched.content_type.clone(),
-            byte_size: fetched.body.len() as i64,
+            byte_size: body.len() as i64,
             fetched_at_utc,
             tz_offset: Some(tz_offset),
         })
         .await
         .map_err(|e| Refusal::Transport(format!("record the fetch: {e}")))?;
-    Ok((fetched.content_type, fetched.body))
+    Ok((fetched.content_type, body))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -457,11 +459,11 @@ pub fn response(content_type: &str, body: Vec<u8>) -> Response<Body> {
         HeaderValue::from_static("nosniff"),
     );
     // An SVG is an image in an `<img>` and a document with scripts when
-    // navigated to; the sandbox keeps the second case out of this origin.
+    // navigated to; the data policy keeps the second case inert.
     if is_scriptable_document(content_type) {
         headers.insert(
             header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(DOCUMENT_SANDBOX_CSP),
+            HeaderValue::from_static(DocumentKind::Data.csp()),
         );
     }
     resp

@@ -11,10 +11,9 @@ pub async fn open_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Er
     }
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
         .create_if_missing(true)
-        // WAL / NORMAL synchronous are no-ops on doltlite (its chunk
-        // store ignores the SQLite pager journal), but harmless to leave
-        // as documentation of intent for stock-libsqlite3 builds (e.g.
-        // cargo-only unit tests).
+        // Meant for stock-libsqlite3 builds. On doltlite `journal_mode`
+        // is inert (docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility),
+        // and any `synchronous` above OFF syncs every commit.
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
     SqlitePoolOptions::new()

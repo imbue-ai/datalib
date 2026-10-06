@@ -15,6 +15,7 @@
 //! write costs" has the measurement. A record with no stamp of its own
 //! takes zero and sorts to the left edge.
 
+use datalib_time::RecordStampPrecision;
 use uuid::Uuid;
 
 /// Root namespace for every datalib-minted id. Frozen forever —
@@ -151,6 +152,80 @@ impl Identity {
             entity_kind,
             at,
         }
+    }
+}
+
+/// One provider's minting recipe: its namespace, and the precision its
+/// rows store `created_at` at, so the stamp in an id equals the row's.
+/// A provider declares one as a `const` and mints every id through it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Minter {
+    namespace: IdNamespace,
+    /// `None` for a provider none of whose ids carries a stamp.
+    precision: Option<RecordStampPrecision>,
+}
+
+impl Minter {
+    pub const fn new(namespace: IdNamespace, precision: RecordStampPrecision) -> Self {
+        Self {
+            namespace,
+            precision: Some(precision),
+        }
+    }
+
+    pub const fn unstamped(namespace: IdNamespace) -> Self {
+        Self {
+            namespace,
+            precision: None,
+        }
+    }
+
+    /// `date_ms` is the record's own upstream stamp, before the row
+    /// rounds it; `None` for a record whose row stamp is derived.
+    pub fn mint(
+        self,
+        source_id: &str,
+        entity_kind: &'static str,
+        natural_key: String,
+        date_ms: Option<i64>,
+    ) -> Identity {
+        self.mint_under(source_id, None, entity_kind, natural_key, date_ms)
+    }
+
+    /// [`Self::mint`] for a record that names its upstream account.
+    pub fn mint_in(
+        self,
+        source_id: &str,
+        account: &str,
+        entity_kind: &'static str,
+        natural_key: String,
+        date_ms: Option<i64>,
+    ) -> Identity {
+        self.mint_under(source_id, Some(account), entity_kind, natural_key, date_ms)
+    }
+
+    fn mint_under(
+        self,
+        source_id: &str,
+        account: Option<&str>,
+        entity_kind: &'static str,
+        natural_key: String,
+        date_ms: Option<i64>,
+    ) -> Identity {
+        debug_assert!(
+            date_ms.is_none() || self.precision.is_some(),
+            "{} mints unstamped ids, but was handed a stamp",
+            self.namespace.as_str()
+        );
+        let at = self.precision.and_then(|p| p.stored_ms(date_ms));
+        Identity::mint(
+            self.namespace,
+            source_id,
+            account,
+            entity_kind,
+            natural_key,
+            at,
+        )
     }
 }
 

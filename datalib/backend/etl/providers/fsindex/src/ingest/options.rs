@@ -2,7 +2,6 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -118,23 +117,13 @@ pub fn load_at(dir: &Path) -> Result<Option<FsindexYaml>> {
     Ok(Some(parsed))
 }
 
-/// Atomic breadcrumb write. Writes to `<dir>/.fsindex.yaml.tmp` then
-/// renames into place, so a partial write never leaves a half-baked
-/// breadcrumb the next scan would mis-parse.
+/// In one rename, so a scan never reads half a breadcrumb.
 pub fn write_breadcrumb(dir: &Path, yaml: &FsindexYaml) -> Result<()> {
     let path = dir.join(BREADCRUMB_FILENAME);
-    let tmp = dir.join(format!("{BREADCRUMB_FILENAME}.tmp"));
     let text = serde_yaml::to_string(yaml)
         .with_context(|| format!("serialize breadcrumb for {}", dir.display()))?;
-    {
-        let mut f = fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
-        f.write_all(text.as_bytes())
-            .with_context(|| format!("write {}", tmp.display()))?;
-        f.sync_all().ok();
-    }
-    fs::rename(&tmp, &path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
+    datalib_runtime::atomic::write(&path, text.as_bytes())
+        .with_context(|| format!("write {}", path.display()))
 }
 
 /// Blake3-hex over a stable canonical encoding of the effective

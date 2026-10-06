@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use datalib_etl_contacts::ingest::api::{
-    vcard_all, vcard_created, vcard_fn, vcard_is_group, vcard_members, vcard_n_family_given,
-    vcard_rev, vcard_uid, VcardProp,
+    split_vcards, vcard_all, vcard_categories, vcard_created, vcard_is_group, vcard_members,
+    vcard_n_family_given, vcard_rev, vcard_uid, VcardProp,
 };
 use datalib_etl_contacts::ingest::db::{LoadedRawContact, RawDb};
 use datalib_etl_render::inputs::{changed_rows, Input, RawRange};
@@ -38,13 +38,15 @@ pub struct ParsedContact {
     /// A contact group, whose `members` name the cards in it.
     pub is_group: bool,
     pub members: Vec<String>,
+    /// `CATEGORIES`, as written: Google's export files a contact under
+    /// its labels this way rather than with group cards.
+    pub categories: Vec<String>,
     /// Multi-valued properties surfaced in document order.
     pub emails: Vec<VcardProp>,
     pub phones: Vec<VcardProp>,
     pub addresses: Vec<VcardProp>,
-    /// `ORG:` parts (joined with `;` upstream). The first segment
-    /// is the company; subsequent ones are units / departments.
-    pub org: Option<String>,
+    /// `ORG:` parts, unescaped, in order: the company, then its units.
+    pub org: Vec<String>,
     pub title: Option<String>,
     pub note: Option<String>,
     /// Inline `PHOTO` payload. We decode the base64 once at parse
@@ -90,7 +92,7 @@ pub fn parse(db_path: &Path, range: RawRange<'_>) -> Result<Option<ParsedContact
     let path = db_path.to_path_buf();
     let loaded = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let Some(db) = RawDb::open_reader_at(&path, range.pin).await? else {
+            let Some(db) = RawDb::open_reader(&path, range.pin).await? else {
                 return Ok(None);
             };
             let loaded = async {
@@ -168,33 +170,6 @@ pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
     out
 }
 
-/// Split a `.vcf` body into individual `BEGIN:VCARD…END:VCARD`
-/// blocks. Tolerates CRLF / LF / mixed line endings and case-
-/// insensitive markers (RFC 6350 §3.3 says "BEGIN" / "END" are
-/// case-insensitive in practice every server emits uppercase, but
-/// stay defensive).
-fn split_vcards(body: &str) -> Vec<String> {
-    let normalized = body.replace("\r\n", "\n").replace('\r', "\n");
-    let mut out: Vec<String> = Vec::new();
-    let mut current: Option<String> = None;
-    for line in normalized.lines() {
-        let trimmed = line.trim();
-        if trimmed.eq_ignore_ascii_case("BEGIN:VCARD") {
-            current = Some(String::new());
-        }
-        if let Some(buf) = current.as_mut() {
-            buf.push_str(line);
-            buf.push('\n');
-        }
-        if trimmed.eq_ignore_ascii_case("END:VCARD") {
-            if let Some(buf) = current.take() {
-                out.push(buf);
-            }
-        }
-    }
-    out
-}
-
 /// `FN`, else the `N` line's given and family names, else the first
 /// email, else the first phone, else the organization. A card with none
 /// of these keeps `None` and is titled by its id downstream — but an
@@ -202,7 +177,7 @@ fn split_vcards(body: &str) -> Vec<String> {
 /// address, and `contacts:#93:0` says nothing where `weishi@x.test` does.
 fn display_name(block: &str, emails: &[VcardProp], phones: &[VcardProp]) -> Option<String> {
     let nonblank = |s: String| (!s.trim().is_empty()).then(|| s.trim().to_string());
-    vcard_fn(block)
+    single_text(block, "FN")
         .and_then(nonblank)
         .or_else(|| {
             vcard_n_family_given(block)
@@ -210,7 +185,7 @@ fn display_name(block: &str, emails: &[VcardProp], phones: &[VcardProp]) -> Opti
         })
         .or_else(|| emails.first().and_then(|e| nonblank(e.value.clone())))
         .or_else(|| phones.first().and_then(|p| nonblank(p.value.clone())))
-        .or_else(|| extract_single(block, "ORG").and_then(|o| nonblank(o.replace(';', " — "))))
+        .or_else(|| nonblank(org(block).join(" — ")))
 }
 
 fn parse_block(block: &str, source_path: &Path, addressbook: &str) -> Result<ParsedContact> {
@@ -230,19 +205,27 @@ fn parse_block(block: &str, source_path: &Path, addressbook: &str) -> Result<Par
         created: vcard_created(block),
         is_group: vcard_is_group(block),
         members: vcard_members(block),
+        categories: vcard_categories(block),
         emails,
         phones,
         addresses,
-        org: extract_single(block, "ORG"),
-        title: extract_single(block, "TITLE"),
-        note: extract_single(block, "NOTE"),
+        org: org(block),
+        title: single_text(block, "TITLE"),
+        note: single_text(block, "NOTE"),
         photo,
         photo_url,
     })
 }
 
-fn extract_single(vcard: &str, name: &str) -> Option<String> {
-    vcard_all(vcard, name).into_iter().next().map(|p| p.value)
+fn single_text(vcard: &str, name: &str) -> Option<String> {
+    vcard_all(vcard, name).first().map(VcardProp::text)
+}
+
+fn org(vcard: &str) -> Vec<String> {
+    vcard_all(vcard, "ORG")
+        .first()
+        .map(|p| p.text_list(';'))
+        .unwrap_or_default()
 }
 
 /// First base64-encoded photo wins; fall back to the first URL-only
@@ -429,6 +412,30 @@ mod tests {
         assert_eq!(
             name("BEGIN:VCARD\nFN: \nEMAIL:jlp@x.test\nEND:VCARD").as_deref(),
             Some("jlp@x.test")
+        );
+    }
+
+    /// RFC 6350 escapes are undone in every text a person reads, and a
+    /// structured value splits only where its `;` is not escaped — read
+    /// raw, `ORG:Starfleet\; Command` was two units and the note kept its
+    /// backslashes.
+    #[test]
+    fn text_values_are_unescaped_and_structured_ones_split_on_bare_semicolons() {
+        let card = "BEGIN:VCARD\n\
+            FN:Picard\\, Jean-Luc\n\
+            ORG:Starfleet\\; Command;USS Enterprise\\, NCC-1701-D\n\
+            TITLE:Captain\\; Diplomat\n\
+            NOTE:Make it so.\\nTea\\, Earl Grey\\, hot.\n\
+            ADR;TYPE=WORK:;;Ready Room\\, Deck 1;;;;\n\
+            END:VCARD";
+        let c = parse_block(card, Path::new("x.vcf"), "book").unwrap();
+        assert_eq!(c.display_name.as_deref(), Some("Picard, Jean-Luc"));
+        assert_eq!(c.org, ["Starfleet; Command", "USS Enterprise, NCC-1701-D"]);
+        assert_eq!(c.title.as_deref(), Some("Captain; Diplomat"));
+        assert_eq!(c.note.as_deref(), Some("Make it so.\nTea, Earl Grey, hot."));
+        assert_eq!(
+            c.addresses[0].text_list(';'),
+            ["", "", "Ready Room, Deck 1", "", "", "", ""]
         );
     }
 

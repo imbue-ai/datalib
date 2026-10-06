@@ -2,7 +2,8 @@
 //!
 //! Every source's render wave ends here, including the ones that render
 //! no documents of their own — which is how `fsindex` and `media` get a
-//! place in the UI at all.
+//! place in the UI at all, and where their Items count comes from
+//! (`SourceType::item_table`).
 //!
 //! **Scope is the raw store, not the whole tree.** `<group>/render_markdown`
 //! is datalib's own output, `system/usage.doltlite_db` already tracks it
@@ -11,11 +12,11 @@
 //! and commit — growing the store it just measured, forever, on a
 //! pipeline where nothing upstream changed.
 //!
-//! **A `Table` row carries no byte size.** doltlite is a
-//! content-addressed chunk store with no page layout — `dbstat` refuses
-//! outright — and chunks are shared between tables and between commits,
-//! so no honest per-table number exists to report. Row counts are exact
-//! and cheap; file sizes are exact and free. Those are what this emits.
+//! **A `Table` row carries no byte size.** Doltlite has no `dbstat` and
+//! shares chunks between tables and commits, so no honest per-table number
+//! exists (docs/dev/doltlite.md#query-plans-and-indexes). Row counts are
+//! exact and cheap; file sizes are exact and free. Those are what this
+//! emits.
 //!
 //! **What re-renders the report is a count, never a byte.** Both of the
 //! numbers that move on their own live on the storage side rather than
@@ -24,7 +25,7 @@
 //! growing but *not reproducible*: rebuilding the TNG fixture from
 //! byte-identical inputs moves six of its sixteen sources by 1-22
 //! bytes, in a different direction each time — so bytes stay out of
-//! the comparison (`counts_unchanged`) and out of `grid_rows.text`.
+//! the comparison (`counts_unchanged`) and out of `grid_rows.preview`.
 //! Otherwise every run rewrites a report nothing asked for and
 //! `grid_index` never gets to skip a source.
 
@@ -39,8 +40,7 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
 use datalib_schema::providers::Provider;
 
-/// The `grid_rows.source_label` — the grid's Provider column, and what
-/// `source:` filters on. One label for every source's measurements, so
+/// The `grid_rows.source_label` — what `source:` filters on. One label for every source's measurements, so
 /// `source:Storage` is "show me what everything weighs".
 ///
 /// The grid's *Source* column is not this. These rows live under the
@@ -83,11 +83,11 @@ impl Subject {
         )
     }
 
-    /// The one-line human summary that becomes `grid_rows.text` and the
+    /// The one-line human summary that becomes `grid_rows.preview` and the
     /// report's body line.
-    /// `grid_rows.text`. **Carries no byte figure**, on purpose.
+    /// `grid_rows.preview`. **Carries no byte figure**, on purpose.
     ///
-    /// `text` is a stored row, and a doltlite store's size is not
+    /// `preview` is a stored row, and a doltlite store's size is not
     /// reproducible. It drifts
     /// 1-22 bytes between rebuilds on one machine, and differs outright
     /// between machines: CI's Linux runner and a developer's Mac
@@ -181,40 +181,38 @@ async fn table_names(pool: &SqlitePool) -> Result<Vec<String>> {
 
 /// A store opened to count its rows, and whether the count reads the
 /// pin. The entity store counts at HEAD — what it holds, not what
-/// another process is mid-way through writing. The blob CAS is the one
-/// store read unpinned (`open_cas_reader` says why): counted at HEAD it
-/// would report no blobs at all.
-async fn open_for_counting(abs: &Path) -> Result<Option<(SqlitePool, bool)>> {
+/// another process is mid-way through writing. The blob CAS is plain
+/// SQLite, with no commits to pin: a reader sees only what has committed.
+async fn open_for_counting(abs: &Path) -> Result<Option<SqlitePool>> {
     if abs.file_name().and_then(|n| n.to_str()) == Some(datalib_etl::raw_layout::BLOBS_DB) {
-        return Ok(Some((
-            datalib_etl::blob_cas::open_cas_reader(abs).await?,
-            false,
-        )));
+        return Ok(Some(datalib_etl::blob_cas::open_cas_reader(abs).await?));
     }
     Ok(datalib_etl::doltlite_raw::open_reader(abs, None)
         .await?
-        .map(|reader| (reader.pool().clone(), true)))
+        .map(|reader| reader.pool().clone()))
 }
 
-async fn row_count(pool: &SqlitePool, table: &str, pinned: bool) -> Result<i64> {
-    // Audited: `table` came from `sqlite_master` on this same file, so
-    // it is an identifier the engine itself just handed us; there is no
-    // caller-supplied text in the string. `pinned_` is the view prefix
-    // `open_reader` installed.
-    let sql = format!(
-        "SELECT COUNT(*) FROM \"{}{}\"",
-        if pinned {
-            datalib_etl::pin::VIEW_PREFIX
-        } else {
-            ""
-        },
-        table.replace('"', "\"\"")
-    );
+async fn row_count(pool: &SqlitePool, table: &str) -> Result<i64> {
+    // Audited: `table` came from `sqlite_master` on this same connection,
+    // so it is an identifier the engine itself just handed us; there is no
+    // caller-supplied text in the string.
+    let sql = format!("SELECT COUNT(*) FROM \"{}\"", table.replace('"', "\"\""));
     let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_one(pool)
         .await
         .with_context(|| format!("count {table}"))?;
     row.try_get::<i64, _>(0).context("read count")
+}
+
+/// Rows in `table` of the source's own store, as `scan` counted them.
+/// `None` when the store was not counted or has no such table — which
+/// is "never counted", not zero.
+pub fn table_rows(subjects: &[Subject], table: &str) -> Option<i64> {
+    let suffix = format!(".doltlite_db#{table}");
+    subjects
+        .iter()
+        .find(|s| s.kind == MeasurementKind::Table && s.path.ends_with(&suffix))
+        .and_then(|s| s.items)
 }
 
 /// Measure one source's raw store — the tree at `raw_rel`, each database
@@ -240,7 +238,9 @@ pub async fn scan(data_root: &Path, raw_rel: &str) -> Result<Vec<Subject>> {
     if let Ok(entries) = std::fs::read_dir(&raw_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".doltlite_db") && entry.path().is_file() {
+            let is_store =
+                name.ends_with(".doltlite_db") || name == datalib_etl::raw_layout::BLOBS_DB;
+            if is_store && entry.path().is_file() {
                 stores.push((format!("{raw_rel}/{name}"), entry.path()));
             }
         }
@@ -259,7 +259,7 @@ pub async fn scan(data_root: &Path, raw_rel: &str) -> Result<Vec<Subject>> {
         // worth saying nothing about rather than failing the whole render
         // — the file's size is already recorded above, which is the half
         // that never fails.
-        let (pool, pinned) = match open_for_counting(&abs).await {
+        let pool = match open_for_counting(&abs).await {
             Ok(Some(opened)) => opened,
             Ok(None) => {
                 tracing::info!(store = %rel, "introspect: nothing committed yet; not counting");
@@ -279,7 +279,7 @@ pub async fn scan(data_root: &Path, raw_rel: &str) -> Result<Vec<Subject>> {
             }
         };
         for table in tables {
-            match row_count(&pool, &table, pinned).await {
+            match row_count(&pool, &table).await {
                 Ok(n) => subjects.push(Subject {
                     path: format!("{rel}#{table}"),
                     kind: MeasurementKind::Table,
@@ -408,7 +408,7 @@ pub fn plan(
                 .conversation_name(Some(format!("{source_id} storage")))
                 .conversation_uuid(markdown_uuid.clone())
                 .entire_chat(format!("/chat/{markdown_uuid}"))
-                .text(s.summary())
+                .body(s.summary())
                 .qmd_path(Some(qmd_rel.clone()))
                 .markdown_uuid(Some(markdown_uuid.clone()))
                 // The machine-parsable half: `upstream_id` is the
@@ -445,6 +445,7 @@ pub fn plan(
             rows,
             sections: Vec::new(),
             edges: Vec::new(),
+            contacts: Vec::new(),
             problems: Vec::new(),
         },
         samples,
@@ -456,12 +457,10 @@ pub fn plan(
 /// subjects, each with the same count. `previous` is the newest sample
 /// per subject in `source_measurements`.
 ///
-/// **Counts, never bytes.** A doltlite store's size is not reproducible:
-/// rebuilding the TNG fixture from byte-identical inputs moves six of
-/// its sixteen sources by 1-22 bytes, in a different direction each
-/// time, and a bookkeeping mutation rewrites chunks with no row added.
-/// Comparing bytes would rewrite a report nothing asked for on every
-/// run, and hand `grid_index` a diff to read forever.
+/// **Counts, never bytes**, for the reason in the module header: a store's
+/// size moves when no row did. Comparing bytes would rewrite a report
+/// nothing asked for on every run, and hand `grid_index` a diff to read
+/// forever.
 pub fn counts_unchanged(
     previous: &std::collections::HashMap<String, Option<i64>>,
     samples: &[SourceMeasurementRow],
@@ -723,7 +722,8 @@ mod tests {
             .expect("a tree row");
         assert_eq!(tree.path, "src/ingest");
         // Two, not one: doltlite leaves a zero-byte
-        // `.<name>.doltlite_db-lock` sidecar beside every store, and the
+        // `.<name>.doltlite_db-lock` sidecar beside every store it has
+        // written, and the
         // tree total counts what is actually on disk rather than only
         // the files we think of as ours.
         assert_eq!(tree.items, Some(2), "the store plus its lock sidecar");
@@ -1016,7 +1016,7 @@ mod tests {
     }
 
     /// The size must reach the row and the report, but never
-    /// `grid_rows.text`. A doltlite store's size differs between
+    /// `grid_rows.preview`. A doltlite store's size differs between
     /// machines, so a byte
     /// figure in that string made the fixture golden unable to pass on
     /// CI and a developer's machine at once.

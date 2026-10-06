@@ -2,10 +2,10 @@
 //! requests and the `multistatus` walk are [`datalib_etl::dav`]'s), and
 //! the vCard helpers the ingest and render sides share.
 
-use std::collections::HashMap;
-
 use quick_xml::events::BytesStart;
 
+use datalib_etl::content_line;
+use datalib_etl::dav::sync::{CollectionKind, ObjectProps};
 use datalib_etl::dav::{self as webdav, DavProps};
 use datalib_etl::http::{HttpService, LatchkeySettings};
 
@@ -16,6 +16,13 @@ pub use datalib_etl::dav::DavError;
 /// host; this value is just what shows up in playback fixtures +
 /// telemetry events.
 pub const HTTP_SERVICE: HttpService = HttpService::Carddav;
+
+pub const KIND: CollectionKind = CollectionKind {
+    service: HTTP_SERVICE,
+    ns_decl: r#"xmlns:card="urn:ietf:params:xml:ns:carddav""#,
+    data_prop: "card:address-data",
+    multiget: "card:addressbook-multiget",
+};
 
 pub type DavResponse = webdav::DavResponse<ContactProps>;
 pub type Multistatus = webdav::Multistatus<ContactProps>;
@@ -65,6 +72,12 @@ impl DavProps for ContactProps {
     }
 }
 
+impl ObjectProps for ContactProps {
+    fn data(&self) -> Option<&str> {
+        self.vcard.as_deref()
+    }
+}
+
 /// PROPFIND body asking for `addressbook-home-set` on a principal
 /// URL. Depth `0`.
 pub const BODY_ADDRESSBOOK_HOME_SET: &str = r#"<?xml version="1.0" encoding="utf-8"?>
@@ -89,11 +102,7 @@ pub const BODY_LIST_ADDRESSBOOKS: &str = r#"<?xml version="1.0" encoding="utf-8"
 "#;
 
 pub fn body_sync_collection(prev_token: &str) -> String {
-    webdav::body_sync_collection(
-        prev_token,
-        r#"xmlns:card="urn:ietf:params:xml:ns:carddav""#,
-        "card:address-data",
-    )
+    KIND.body_sync_collection(prev_token)
 }
 
 pub async fn propfind(
@@ -105,16 +114,34 @@ pub async fn propfind(
     webdav::propfind(HTTP_SERVICE, url, depth, body, latchkey).await
 }
 
-/// A REPORT at Depth `0`, as RFC 6578 has `sync-collection` sent.
-pub async fn report(
-    url: &str,
-    body: &str,
-    latchkey: &LatchkeySettings,
-) -> Result<Multistatus, DavError> {
-    webdav::report(HTTP_SERVICE, url, "0", body, latchkey).await
-}
-
 // vCard utility helpers
+
+/// Split a `.vcf` body into individual `BEGIN:VCARD…END:VCARD`
+/// blocks. Tolerates CRLF / LF / mixed line endings and case-
+/// insensitive markers (RFC 6350 §3.3 says "BEGIN" / "END" are
+/// case-insensitive in practice every server emits uppercase, but
+/// stay defensive).
+pub fn split_vcards(body: &str) -> Vec<String> {
+    let normalized = body.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("BEGIN:VCARD") {
+            current = Some(String::new());
+        }
+        if let Some(buf) = current.as_mut() {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+        if trimmed.eq_ignore_ascii_case("END:VCARD") {
+            if let Some(buf) = current.take() {
+                out.push(buf);
+            }
+        }
+    }
+    out
+}
 
 /// Pull the `UID` line out of a vCard. RFC 6350 §6.7.6 mandates it,
 /// but we tolerate its absence and return `None` so the caller can
@@ -155,6 +182,25 @@ pub fn vcard_members(vcard: &str) -> Vec<String> {
         .collect()
 }
 
+/// `CATEGORIES`: the groups a card says it is in, as Google's export
+/// writes them (`myContacts`, `starred`, and every label the person made).
+/// A text list (RFC 6350 §6.7.1): unescaped commas separate, `\,` is a
+/// comma in a name, and the property may repeat. In card order, each
+/// name once.
+pub fn vcard_categories(vcard: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in vcard_all(vcard, "CATEGORIES")
+        .iter()
+        .flat_map(|p| p.text_list(','))
+    {
+        let name = name.trim();
+        if !name.is_empty() && !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
 /// Pull the structured `N:` (name) line as `(family, given)`. RFC 6350
 /// §6.2.2 orders the semicolon-separated components
 /// `Family;Given;Additional;Prefixes;Suffixes`; we keep the first two
@@ -169,56 +215,35 @@ pub fn vcard_n_family_given(vcard: &str) -> Option<(String, String)> {
     Some((family, given))
 }
 
-/// All occurrences of a vCard property, in document order. vCards
-/// can repeat properties (multiple emails, phones, addresses) and
-/// render cares about each one individually.
+/// All occurrences of a vCard property, in document order, without the
+/// blank ones. vCards can repeat properties (multiple emails, phones,
+/// addresses) and render cares about each one individually.
 pub fn vcard_all(vcard: &str, name: &str) -> Vec<VcardProp> {
-    let unfolded = unfold_vcard_lines(vcard);
-    let ab_labels: Vec<(&str, &str)> = unfolded
-        .lines()
-        .filter(|line| property_name(line).eq_ignore_ascii_case("X-ABLabel"))
-        .filter_map(|line| {
-            let (head, value) = line.split_once(':')?;
-            Some((property_group(head)?, value.trim()))
-        })
+    let props: Vec<content_line::Property> = content_line::unfold(vcard)
+        .iter()
+        .filter_map(|line| content_line::parse_line(line))
         .collect();
-    let mut out = Vec::new();
-    for line in unfolded.lines() {
-        if !property_name(line).eq_ignore_ascii_case(name) {
-            continue;
-        }
-        let Some(colon) = line.find(':') else {
-            continue;
-        };
-        let head = &line[..colon];
-        let value = line[colon + 1..].trim().to_string();
-        if value.is_empty() {
-            continue;
-        }
-        // Parse the parameter block between `;` separators after the
-        // property name. We only surface a few keys callers care
-        // about; everything else is left in `raw_params`.
-        let mut params: Vec<(String, String)> = Vec::new();
-        for chunk in head.split(';').skip(1) {
-            if let Some((k, v)) = chunk.split_once('=') {
-                params.push((k.trim().to_string(), v.trim().to_string()));
-            } else if !chunk.is_empty() {
-                params.push(("TYPE".into(), chunk.trim().to_string()));
-            }
-        }
-        let ab_label = property_group(head).and_then(|group| {
-            ab_labels
-                .iter()
-                .find(|(g, _)| g.eq_ignore_ascii_case(group))
-                .map(|(_, label)| label.to_string())
-        });
-        out.push(VcardProp {
-            value,
-            params,
-            ab_label,
-        });
-    }
-    out
+    let ab_label = |group: &str| {
+        props
+            .iter()
+            .find(|p| {
+                p.name == "X-ABLABEL"
+                    && p.group
+                        .as_deref()
+                        .is_some_and(|g| g.eq_ignore_ascii_case(group))
+            })
+            .map(|p| p.text().trim().to_string())
+    };
+    props
+        .iter()
+        .filter(|p| p.name.eq_ignore_ascii_case(name))
+        .filter(|p| !p.value.trim().is_empty())
+        .map(|p| VcardProp {
+            value: p.value.trim().to_string(),
+            params: p.params.clone(),
+            ab_label: p.group.as_deref().and_then(ab_label),
+        })
+        .collect()
 }
 
 /// One occurrence of a vCard property, with its parameters preserved
@@ -226,6 +251,7 @@ pub fn vcard_all(vcard: &str, name: &str) -> Vec<VcardProp> {
 /// rather than just "email".
 #[derive(Debug, Clone)]
 pub struct VcardProp {
+    /// As written, escapes and all; [`VcardProp::text`] reads it.
     pub value: String,
     pub params: Vec<(String, String)>,
     /// The `X-ABLabel` sharing this property's group (`item1.TEL` and
@@ -240,6 +266,20 @@ impl VcardProp {
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case(key))
             .map(|(_, v)| v.as_str())
+    }
+
+    /// A TEXT value (`FN`, `NOTE`, `TITLE`) with its escapes undone.
+    pub fn text(&self) -> String {
+        content_line::unescape_text(&self.value)
+    }
+
+    /// A structured value (`ORG`, `ADR`) or a list (`CATEGORIES`), cut
+    /// where `sep` is not escaped and each part unescaped.
+    pub fn text_list(&self, sep: char) -> Vec<String> {
+        content_line::split_unescaped(&self.value, sep)
+            .into_iter()
+            .map(content_line::unescape_text)
+            .collect()
     }
 
     /// What kind of address this is, for a person to read: its
@@ -277,78 +317,11 @@ fn apple_label(label: &str) -> Option<String> {
     }
 }
 
-/// The property name of one unfolded line, `NAME[;params]:value`,
-/// without the optional `group.` prefix RFC 6350 §3.3 allows — Apple
-/// and Google both write `item1.EMAIL;…` for a labelled address, and a
-/// matcher that keeps the prefix drops every one of those.
-fn property_name(line: &str) -> &str {
-    let head_end = line.find([':', ';']).unwrap_or(line.len());
-    let head = &line[..head_end];
-    head.rsplit_once('.').map_or(head, |(_, name)| name)
-}
-
-/// The `item1` of `item1.EMAIL;TYPE=…`.
-fn property_group(head: &str) -> Option<&str> {
-    let name_end = head.find(';').unwrap_or(head.len());
-    head[..name_end].rsplit_once('.').map(|(group, _)| group)
-}
-
+/// The first non-blank value of a property, as written. The ingest keys
+/// cards by some of these (`UID`, and `FN` or `N` where there is no
+/// `UID`), so they stay escaped: unescaping one would re-key its card.
 fn extract_property(vcard: &str, name: &str) -> Option<String> {
-    let unfolded = unfold_vcard_lines(vcard);
-    for line in unfolded.lines() {
-        if property_name(line).eq_ignore_ascii_case(name) {
-            if let Some(colon) = line.find(':') {
-                let value = line[colon + 1..].trim().to_string();
-                if !value.is_empty() {
-                    return Some(value);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn unfold_vcard_lines(vcard: &str) -> String {
-    let mut out = String::with_capacity(vcard.len());
-    for line in vcard.lines() {
-        if line.starts_with(' ') || line.starts_with('\t') {
-            out.push_str(&line[1..]);
-        } else {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(line);
-        }
-    }
-    out
-}
-
-/// (`href` → (etag, vcard)) extracted from a multistatus the way
-/// sync-collection / multiget returns it. Skips responses whose
-/// own status says deleted (404 / 410) — those land in
-/// [`deleted_hrefs`] instead.
-pub fn changed_contacts(ms: &Multistatus) -> HashMap<String, (Option<String>, String)> {
-    let mut out = HashMap::new();
-    for r in &ms.responses {
-        if matches!(r.status, Some(404 | 410)) {
-            continue;
-        }
-        if let Some(v) = &r.props.vcard {
-            out.insert(r.href.clone(), (r.props.etag.clone(), v.clone()));
-        }
-    }
-    out
-}
-
-/// hrefs the server reported as gone (404 / 410) on a
-/// sync-collection response. The caller drops them from the local
-/// store via [`super::db::RawDb::delete_contact`].
-pub fn deleted_hrefs(ms: &Multistatus) -> Vec<String> {
-    ms.responses
-        .iter()
-        .filter(|r| matches!(r.status, Some(404 | 410)))
-        .map(|r| r.href.clone())
-        .collect()
+    vcard_all(vcard, name).into_iter().next().map(|p| p.value)
 }
 
 // Tests
@@ -359,6 +332,12 @@ mod tests {
 
     fn parse(body: &str) -> Multistatus {
         webdav::parse_multistatus(body).unwrap()
+    }
+
+    /// `(etag, vcard)` of the response for `href`.
+    fn card_at<'m>(ms: &'m Multistatus, href: &str) -> Option<(Option<&'m str>, &'m str)> {
+        let r = ms.responses.iter().find(|r| r.href == href)?;
+        Some((r.props.etag.as_deref(), r.props.vcard.as_deref()?))
     }
 
     /// A grouped property (`item1.EMAIL`) is the same property. Every
@@ -490,18 +469,23 @@ END:VCARD&#13;
             ms.sync_token.as_deref(),
             Some("http://example.com/sync/4242")
         );
-        let changed = changed_contacts(&ms);
-        assert_eq!(changed.len(), 1);
-        let (etag, vcard) = changed
-            .get("/dav/addressbooks/user/u%40example.com/Default/abc.vcf")
-            .unwrap();
-        assert_eq!(etag.as_deref(), Some("\"v1\""));
+        let (etag, vcard) = card_at(
+            &ms,
+            "/dav/addressbooks/user/u%40example.com/Default/abc.vcf",
+        )
+        .unwrap();
+        assert_eq!(etag, Some("\"v1\""));
         assert!(vcard.contains("UID:abc"));
         assert_eq!(vcard_uid(vcard).as_deref(), Some("abc"), "{vcard:?}");
-        let deleted = deleted_hrefs(&ms);
+        let deleted: Vec<&str> = ms
+            .responses
+            .iter()
+            .filter(|r| r.status == Some(404))
+            .map(|r| r.href.as_str())
+            .collect();
         assert_eq!(
             deleted,
-            vec!["/dav/addressbooks/user/u%40example.com/Default/gone.vcf".to_string()]
+            vec!["/dav/addressbooks/user/u%40example.com/Default/gone.vcf"]
         );
     }
 
@@ -531,6 +515,17 @@ END:VCARD&#13;
             labels("TEL"),
             vec![Some("Subspace relay".into()), Some("mobile".into())]
         );
+    }
+
+    #[test]
+    fn categories_split_on_unescaped_commas_and_repeat() {
+        let card = "BEGIN:VCARD\nCATEGORIES:myContacts,starred,Away Team\\, Delta\n\
+                    CATEGORIES:starred,Bridge\nEND:VCARD\n";
+        assert_eq!(
+            vcard_categories(card),
+            vec!["myContacts", "starred", "Away Team, Delta", "Bridge"]
+        );
+        assert!(vcard_categories("BEGIN:VCARD\nFN:Q\nEND:VCARD\n").is_empty());
     }
 
     #[test]
@@ -603,11 +598,12 @@ END:VCARD&#13;
 
         let ms = parse(SYNC_COLLECTION_FASTMAIL);
         assert_eq!(ms.sync_token.as_deref(), Some("data:,1780602923-240"));
-        let changed = changed_contacts(&ms);
-        let (etag, vcard) = changed
-            .get("/dav/addressbooks/user/picard@enterprise.test/Default/riker.vcf")
-            .expect("the CDATA vCard is kept");
-        assert_eq!(etag.as_deref(), Some("\"35513e3f\""));
+        let (etag, vcard) = card_at(
+            &ms,
+            "/dav/addressbooks/user/picard@enterprise.test/Default/riker.vcf",
+        )
+        .expect("the CDATA vCard is kept");
+        assert_eq!(etag, Some("\"35513e3f\""));
         assert_eq!(
             vcard,
             "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:riker-1\r\nFN:William Riker\r\nEND:VCARD\r\n"

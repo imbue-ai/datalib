@@ -33,23 +33,15 @@ pub fn load_account(raw_dir: &Path, range: RawRange<'_>) -> Result<Account> {
             let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
                 return Ok(Account::default());
             };
-            let pin = db.pin().expect("a reader is pinned at open").clone();
             // Either file can be absent from an export; a missing table
             // is "unknown", not a failed render.
-            let emails = datalib_etl::doltlite_raw::load_payloads_with_id(
-                db.pool(),
-                datalib_etl::pin::Reads::At(&pin),
-                "email_addresses",
-            )
-            .await
-            .unwrap_or_default();
-            let profile = datalib_etl::doltlite_raw::load_payloads_with_id(
-                db.pool(),
-                datalib_etl::pin::Reads::At(&pin),
-                "profile",
-            )
-            .await
-            .unwrap_or_default();
+            let emails =
+                datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "email_addresses")
+                    .await
+                    .unwrap_or_default();
+            let profile = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "profile")
+                .await
+                .unwrap_or_default();
             db.close().await;
             let inputs = emails
                 .iter()

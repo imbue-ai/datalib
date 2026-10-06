@@ -16,11 +16,12 @@ pub use app_schema::runs::{
 pub use datalib_runtime::build_id::{
     git_hash, git_hash_and_origin, GitHashOrigin, GIT_HASH_ENV, NO_GIT_HASH_ADVICE,
 };
-pub use query::{log_query, LogQuery, QueryError};
+pub use query::{log_query, LogCursor, LogQuery, QueryError};
 pub use store::{
-    canonical_labels, close_abandoned_run, last_log_seq, latest_metric, log_after, log_line,
-    new_process_id, open_or_create, process, process_log_after, processes, runs, snapshot,
-    snapshot_of, versions, ClosedRun, LogLine, LogSink, ProcessLogWriter, RunWriter, Snapshot,
+    canonical_labels, close_abandoned_run, last_log_seq, latest_metric, latest_metrics, log_after,
+    log_line, metric_history, new_process_id, open_or_create, process, process_log_after,
+    processes, runs, runs_of_steps, snapshot, snapshot_of, step_problem_lines, step_samples,
+    versions, ClosedRun, LogLine, LogSink, ProcessLogWriter, RunWriter, Snapshot, QUEUE_WINDOW,
 };
 pub use tracing_layer::{default_filter, filter_at, StoreLayer, DEFAULT_LEVEL};
 
@@ -102,10 +103,10 @@ impl Default for Retention {
 }
 
 /// Bumped whenever the tables change shape. A store carrying another
-/// version is deleted and remade rather than migrated: nothing in it is
+/// version is emptied and remade rather than migrated: nothing in it is
 /// load-bearing, and a migration is code that would exist only to keep
 /// old log lines.
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
 
 /// The indexes, beside the tables' own DDL. `log.seq` is the rowid, so
 /// a reader tailing "everything after N" needs no timestamp arithmetic;

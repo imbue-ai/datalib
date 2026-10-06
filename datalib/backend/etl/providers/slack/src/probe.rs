@@ -1,26 +1,32 @@
-//! Read-only workspace probe: "do these credentials reach Slack, and
-//! which channels and DMs can this account name?" The same three
-//! listing calls a download starts with (`auth.test`, `users.list`,
-//! `conversations.list`) and nothing else — no history is fetched.
-//! Channels come back as `channel` items whose path is the bare name
-//! `channels` takes; the account's DMs come back as `conversation`
-//! items whose path is the Slack id `dm_conversations` takes, titled
-//! the way the sync titles them.
+//! Read-only workspace probe. Asked for the account, one `auth.test`:
+//! "do these credentials reach Slack, and as whom?" Asked for a list,
+//! the listing calls a download starts with and nothing else — no
+//! history is fetched. Channels come back as `channel` items whose path
+//! is the bare name `channels` takes; the account's DMs come back as
+//! `conversation` items whose path is the Slack id `dm_conversations`
+//! takes, titled the way the sync titles them.
 
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl_slack_config::SlackConfig;
-use datalib_probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
+use datalib_probe::{
+    OnProgress, ProbeAccount, ProbeAsk, ProbeItem, ProbeItemKind, ProbeList, ProbeProgress,
+    ProbeReport,
+};
 
 use crate::ingest::api::call_slack;
 use crate::ingest::shapes::{M_AUTH_TEST, M_CHANNELS, M_USERS};
 use crate::ingest::{conversation_types, next_cursor, schema_raw};
 
-pub async fn probe(config: &SlackConfig) -> Result<ProbeReport> {
+pub async fn probe(
+    config: &SlackConfig,
+    ask: ProbeAsk,
+    progress: OnProgress<'_>,
+) -> Result<ProbeReport> {
     config.validate()?;
     if config.api.is_none() {
         return Err(anyhow!(
@@ -33,26 +39,31 @@ pub async fn probe(config: &SlackConfig) -> Result<ProbeReport> {
     let me = call(M_AUTH_TEST, BTreeMap::new(), latchkey).await?;
     let self_user_id = me.get("user_id").and_then(Value::as_str);
 
-    let users = list_pages(M_USERS, BTreeMap::new(), "members", latchkey).await?;
-    let labels: BTreeMap<String, String> = users
-        .iter()
-        .filter_map(|u| {
-            let id = u.get("id")?.as_str()?;
-            let name = u.get("name").and_then(Value::as_str);
-            Some((id.to_string(), crate::user_label(real_name(u), name, id)))
-        })
-        .collect();
-
-    // Every kind at once, DMs included: the probe is not the place to
-    // honour `dms` — the picker for `dm_conversations` only appears
-    // once it is on, and by then the answer has to already be here.
-    let mut params = BTreeMap::new();
-    params.insert("exclude_archived".to_string(), "true".to_string());
-    params.insert("types".to_string(), conversation_types(true).to_string());
-    let conversations = list_pages(M_CHANNELS, params, "channels", latchkey).await?;
-
-    let mut items = channel_items(&conversations);
-    items.extend(dm_items(&conversations, &labels, self_user_id));
+    let items = match ask {
+        ProbeAsk::Account => Vec::new(),
+        ProbeAsk::List(ProbeList::Channels) => {
+            let conversations =
+                list_conversations(conversation_types(false), 0, latchkey, progress).await?;
+            channel_items(&conversations)
+        }
+        ProbeAsk::List(ProbeList::Conversations) => {
+            // The directory first: a DM is titled after who is on the
+            // far end, and the listing names them only by id.
+            let users =
+                list_pages(M_USERS, BTreeMap::new(), "members", 0, latchkey, progress).await?;
+            let labels: BTreeMap<String, String> = users
+                .iter()
+                .filter_map(|u| {
+                    let id = u.get("id")?.as_str()?;
+                    let name = u.get("name").and_then(Value::as_str);
+                    Some((id.to_string(), crate::user_label(real_name(u), name, id)))
+                })
+                .collect();
+            let dms = list_conversations("im,mpim", users.len() as u64, latchkey, progress).await?;
+            dm_items(&dms, &labels, self_user_id)
+        }
+        ProbeAsk::List(other) => bail!("a Slack source has no `{}` list", other.as_str()),
+    };
 
     Ok(ProbeReport {
         mode: "api".to_string(),
@@ -67,6 +78,18 @@ pub async fn probe(config: &SlackConfig) -> Result<ProbeReport> {
     })
 }
 
+async fn list_conversations(
+    types: &str,
+    already: u64,
+    latchkey: &LatchkeySettings,
+    progress: OnProgress<'_>,
+) -> Result<Vec<Value>> {
+    let mut params = BTreeMap::new();
+    params.insert("exclude_archived".to_string(), "true".to_string());
+    params.insert("types".to_string(), types.to_string());
+    list_pages(M_CHANNELS, params, "channels", already, latchkey, progress).await
+}
+
 async fn call(
     method: &str,
     params: BTreeMap<String, String>,
@@ -78,14 +101,17 @@ async fn call(
         .response)
 }
 
-/// Every page of a cursor-paginated list method, concatenated. The
-/// page size matches the downloader's so a playback fixture serves
-/// both.
+/// Every page of a cursor-paginated list method, concatenated, with
+/// the running count reported after each page — on top of `already`,
+/// so a list built from two listings counts as one. The page size
+/// matches the downloader's so a playback fixture serves both.
 async fn list_pages(
     method: &str,
     mut params: BTreeMap<String, String>,
     field: &str,
+    already: u64,
     latchkey: &LatchkeySettings,
+    progress: OnProgress<'_>,
 ) -> Result<Vec<Value>> {
     params.insert("limit".to_string(), "200".to_string());
     let mut out = Vec::new();
@@ -99,6 +125,10 @@ async fn list_pages(
         if let Some(arr) = resp.get(field).and_then(Value::as_array) {
             out.extend(arr.iter().cloned());
         }
+        progress(ProbeProgress {
+            done: already + out.len() as u64,
+            total: None,
+        });
         cursor = next_cursor(&resp);
         if cursor.is_none() {
             return Ok(out);
@@ -302,7 +332,7 @@ mod tests {
         let err = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(probe(&SlackConfig::default()))
+            .block_on(probe(&SlackConfig::default(), ProbeAsk::Account, &|_| {}))
             .expect_err("nothing to test")
             .to_string();
         assert!(err.contains("no connection"), "{err}");

@@ -7,13 +7,13 @@
 // grouped column, with the grouping's sort and a way to drop it.
 
 import { test, expect, type Page } from "@playwright/test";
-import { SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { GRID, SEARCH_ROWS, type GridApi } from "./grid-helpers";
 
 /// Our placeholder, in the grid's own drop zone.
 const placeholder = (page: Page) => page.locator(".grid-box .slick-draggable-dropzone-placeholder");
 
 async function openGrid(page: Page) {
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
 }
 

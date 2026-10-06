@@ -1,10 +1,10 @@
 //! What a group's row on the Manage screen says about the steps and
 //! applets filed under it: the order they run in, the status the row
 //! shows, the instants it calls "last synced" and "last success", and
-//! the steps a sync of the group starts at. The rules are the
-//! aggregation table in docs/dev/config_model.md. Nothing here does
-//! arithmetic across children: a group's bytes come from its own
-//! measured series.
+//! the steps a sync of the group starts at. docs/dev/config_model.md
+//! § "What the Manage screen and the wizard make of it" states the
+//! rules in prose. Nothing here does arithmetic across children: a
+//! group's bytes come from its own measured series.
 
 use super::status::{compare_stamps, StatusView};
 
@@ -67,15 +67,15 @@ pub struct ChildStatus {
     pub status: StatusView,
 }
 
-/// The status a group row shows, and which child it is read from.
-/// Running if any child is running; paused if any child is; queued if
-/// any child is; failed if any child failed; stopped if any child was;
-/// otherwise the last step in pipeline order
-/// — the one whose state says how far the group's data got. A group
-/// with only applets reads its last applet. `children` must already be
-/// in pipeline order.
+/// The status a group row shows, and which child it is read from: the
+/// liveliest child's. Running if any child is running; queued if any
+/// child is; off if any child is; failed if any child failed; stopped
+/// if any child was; otherwise the last step in pipeline order — the
+/// one whose state says how far the group's data got. A group with only
+/// applets reads its last applet. `children` must already be in
+/// pipeline order.
 pub fn group_status(children: &[ChildStatus]) -> Option<(StatusView, String)> {
-    for key in ["running", "paused", "queued", "failed", "stopped"] {
+    for key in ["running", "queued", "off", "failed", "stopped"] {
         if let Some(child) = children.iter().find(|c| c.status.key == key) {
             return Some(read(child));
         }
@@ -222,19 +222,19 @@ mod tests {
     fn pipeline_order_keeps_config_order_between_steps_that_do_not_read_each_other() {
         let out = pipeline_order(&[
             step("u/grid_index", &["a/render_markdown"]),
-            step("u/qmd_index", &["a/render_markdown"]),
+            step("u/qmd_aggregator", &["a/render_markdown"]),
         ]);
-        assert_eq!(ids(&out), ["u/grid_index", "u/qmd_index"]);
+        assert_eq!(ids(&out), ["u/grid_index", "u/qmd_aggregator"]);
     }
 
     #[test]
     fn pipeline_order_trails_the_applets_which_are_never_scheduled() {
         let out = pipeline_order(&[
             applet("u"),
-            step("u/qmd_index", &[]),
+            step("u/qmd_aggregator", &[]),
             step("u/grid_index", &[]),
         ]);
-        assert_eq!(ids(&out), ["u/qmd_index", "u/grid_index", "u"]);
+        assert_eq!(ids(&out), ["u/qmd_aggregator", "u/grid_index", "u"]);
     }
 
     #[test]
@@ -310,15 +310,28 @@ mod tests {
         assert_eq!(got.1, "s/ingest");
     }
 
+    /// A source with its embed step turned off read "Off" while its
+    /// download sat in the queue, hiding that anything was about to run.
+    #[test]
+    fn group_status_is_queued_over_a_child_that_is_turned_off() {
+        let got = group_status(&[
+            child("s/ingest", "queued", Step, None),
+            child("s/embed", "off", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(got.0.key, "queued");
+        assert_eq!(got.1, "s/ingest");
+    }
+
     #[test]
     fn group_status_reads_the_last_step_not_a_trailing_applet() {
         let got = group_status(&[
             child("u/grid_index", "succeeded", Step, None),
-            child("u/qmd_index", "skipped_up_to_date", Step, None),
+            child("u/qmd_aggregator", "skipped_up_to_date", Step, None),
             child("u", "succeeded", Applet, None),
         ])
         .unwrap();
-        assert_eq!(got.1, "u/qmd_index");
+        assert_eq!(got.1, "u/qmd_aggregator");
     }
 
     #[test]

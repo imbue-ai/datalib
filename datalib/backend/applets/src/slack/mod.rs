@@ -29,6 +29,7 @@ struct ComponentMeta {
     description: String,
     component_hash: String,
     component_args: Vec<String>,
+    icon: &'static str,
 }
 
 pub fn write_frontend(dir: &Path, params: &serde_json::Value) -> Result<()> {
@@ -47,11 +48,8 @@ pub fn write_frontend(dir: &Path, params: &serde_json::Value) -> Result<()> {
     let hash = sha256_hex(COMPONENT_JS.as_bytes());
     let js = dir.join(format!("{hash}.js"));
     if !js.exists() {
-        // Write-then-rename so a reader never sees a half-written file
-        // under a name that promises complete content.
-        let tmp = dir.join(format!(".{hash}.tmp"));
-        std::fs::write(&tmp, COMPONENT_JS).with_context(|| format!("write {}", tmp.display()))?;
-        std::fs::rename(&tmp, &js).with_context(|| format!("rename into {}", js.display()))?;
+        datalib_runtime::atomic::write(&js, COMPONENT_JS.as_bytes())
+            .with_context(|| format!("write {}", js.display()))?;
     }
 
     let label = str_param(params, "workspace").unwrap_or_else(|| namespace.clone());
@@ -64,6 +62,7 @@ pub fn write_frontend(dir: &Path, params: &serde_json::Value) -> Result<()> {
         // prefix to call, and it is per-instance — which is why the
         // namespace had to be discoverable at all.
         component_args: vec![namespace],
+        icon: "slack",
     };
     let meta_path = dir.join(format!("{COMPONENT_NAME}.json"));
     std::fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)
@@ -157,11 +156,10 @@ fn scan(tree: &Path) -> (Channels, Vec<String>) {
     let mut by_channel: Channels = BTreeMap::new();
     let mut warnings: Vec<String> = Vec::new();
 
-    // One query, where this used to walk the whole rendered tree,
-    // read every `*.grid_rows.json`, and parse each one as untyped
-    // JSON. The renderer writes its rows into the source's
-    // `indexed_markdown.doltlite_db` now, so the six columns this card
-    // needs are a `SELECT`.
+    // One query: the renderer writes its rows into the source's
+    // `indexed_markdown.doltlite_db`, so the six columns this card needs
+    // are a `SELECT`. A message's `preview` is already one line and
+    // capped, which is what a thread's label wants.
     let store_path = datalib_etl_render::indexed_markdown::path_for(tree);
     if !store_path.is_file() {
         // No store: either nothing has rendered yet (the card shows its
@@ -229,8 +227,8 @@ fn read_rows(
         let pool = reader.pool();
         let rows = sqlx::query(
             "SELECT channel, markdown_uuid, message_index, \
-                        IFNULL(created_at, ''), IFNULL(author, ''), text \
-                 FROM pinned_grid_rows \
+                        IFNULL(created_at, ''), IFNULL(author, ''), preview \
+                 FROM grid_rows \
                  WHERE channel IS NOT NULL AND markdown_uuid IS NOT NULL",
         )
         .fetch_all(pool)
@@ -251,21 +249,6 @@ fn read_rows(
         reader.close().await;
         Ok(out)
     })
-}
-
-/// One line for a row label, trimmed so a long paste does not fill the
-/// card.
-fn preview(text: &str) -> String {
-    let line = text
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim();
-    let mut out: String = line.chars().take(200).collect();
-    if line.chars().count() > 200 {
-        out.push('…');
-    }
-    out
 }
 
 fn channels_response(tree: &Path, workspace: &str) -> ChannelsResponse {
@@ -295,7 +278,7 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
                     markdown_uuid: md.clone(),
                     author: t.author.clone(),
                     created_at: t.when_raw.clone(),
-                    text: preview(&t.text),
+                    text: t.text.clone(),
                     // Everything after the opening message.
                     replies: t.messages.saturating_sub(1),
                 })
@@ -337,14 +320,14 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
         .context("read the bound address")?
         .port();
     let gate = crate::gate::Gate::from_env(bound)?;
-    eprintln!("datalib-applet slack: listening on 127.0.0.1:{bound}, tree {tree}");
+    tracing::info!(port = bound, tree = %tree, "listening");
     // Written and bound, in that order — now the gateway may look.
     crate::announce_port(bound);
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         if let Err(e) = handle(stream, &tree_path, &workspace, &gate) {
-            eprintln!("datalib-applet slack: request failed: {e:#}");
+            tracing::error!(error = %format!("{e:#}"), "a request failed");
         }
     }
     Ok(())
@@ -437,7 +420,7 @@ fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 
 fn warn(warnings: &[String]) {
     for w in warnings {
-        eprintln!("datalib-applet slack: unreadable: {w}");
+        tracing::warn!(detail = %w, "part of the Slack tree is unreadable");
     }
 }
 
@@ -485,38 +468,9 @@ mod tests {
     use super::*;
     use datalib_schema::providers::Provider;
 
-    fn write_thread(dir: &Path, md: &str, channel: &str, when: &str, msgs: &[(&str, &str)]) {
+    fn put_thread(dir: &Path, md: &str, rows: Vec<datalib_schema::grid_rows::GridRow>) {
         use datalib_etl_render::grid_index::RenderedMarkdown;
         use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-        use datalib_schema::grid_rows::GridRow;
-
-        let row = |uuid: &str, index: Option<i64>, author: &str, text: &str| {
-            GridRow::builder()
-                .uuid(uuid)
-                .provider(Provider::Slack)
-                .kind(if index.is_some() {
-                    "Slack Message"
-                } else {
-                    "Slack Thread"
-                })
-                .source_label("Slack")
-                .is_document(index.is_none())
-                .channel(Some(channel.to_string()))
-                .created_at(Some(when.to_string()))
-                .author((!author.is_empty()).then(|| author.to_string()))
-                .message_index(index)
-                .conversation_uuid(md)
-                .entire_chat(format!("/chat/{md}"))
-                .text(text)
-                .markdown_uuid(Some(md.to_string()))
-                .build()
-                .unwrap()
-        };
-
-        let mut rows = vec![row(md, None, "", msgs.first().map(|m| m.1).unwrap_or(""))];
-        for (i, (author, text)) in msgs.iter().enumerate() {
-            rows.push(row(&format!("{md}-m{i}"), Some(i as i64), author, text));
-        }
 
         let store = IndexedMarkdownStore::open(dir).unwrap();
         store
@@ -532,6 +486,7 @@ mod tests {
                     rows,
                     sections: Vec::new(),
                     edges: Vec::new(),
+                    contacts: Vec::new(),
                     problems: Vec::new(),
                 },
             )
@@ -541,13 +496,46 @@ mod tests {
         store.close();
     }
 
+    fn write_thread(dir: &Path, md: &str, channel: &str, when: &str, msgs: &[(&str, &str)]) {
+        use datalib_schema::grid_rows::GridRow;
+
+        let row = |uuid: &str, index: Option<i64>, author: &str, text: &str| {
+            GridRow::builder()
+                .uuid(uuid)
+                .provider(Provider::Slack)
+                .kind(if index.is_some() {
+                    "Slack Message"
+                } else {
+                    "Slack Thread"
+                })
+                .source_label("Slack")
+                .is_document(index.is_none())
+                .item_count(Some(1))
+                .channel(Some(channel.to_string()))
+                .created_at(Some(when.to_string()))
+                .author((!author.is_empty()).then(|| author.to_string()))
+                .message_index(index)
+                .conversation_uuid(md)
+                .entire_chat(format!("/chat/{md}"))
+                .body(text)
+                .markdown_uuid(Some(md.to_string()))
+                .build()
+                .unwrap()
+        };
+
+        let mut rows = vec![row(md, None, "", msgs.first().map(|m| m.1).unwrap_or(""))];
+        for (i, (author, text)) in msgs.iter().enumerate() {
+            rows.push(row(&format!("{md}-m{i}"), Some(i as i64), author, text));
+        }
+
+        put_thread(dir, md, rows);
+    }
+
     /// Like [`write_thread`], but the caller supplies each message's
     /// index explicitly — so a test can insert them out of order. The
     /// thread row the store requires is written first, stamped with the
     /// first message's time.
     fn write_thread_rows(dir: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
-        use datalib_etl_render::grid_index::RenderedMarkdown;
-        use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
         use datalib_schema::grid_rows::GridRow;
 
         let thread = GridRow::builder()
@@ -556,11 +544,12 @@ mod tests {
             .kind("Slack Thread")
             .source_label("Slack")
             .is_document(true)
+            .item_count(Some(msgs.len() as i64))
             .channel(Some(channel.to_string()))
             .created_at(msgs.first().map(|m| m.3.to_string()))
             .conversation_uuid(md)
             .entire_chat(format!("/chat/{md}"))
-            .text("")
+            .body("")
             .markdown_uuid(Some(md.to_string()))
             .build()
             .unwrap();
@@ -577,34 +566,14 @@ mod tests {
                     .message_index(Some(*index))
                     .conversation_uuid(md)
                     .entire_chat(format!("/chat/{md}"))
-                    .text(*text)
+                    .body(*text)
                     .markdown_uuid(Some(md.to_string()))
                     .build()
                     .unwrap()
             }))
             .collect();
 
-        let store = IndexedMarkdownStore::open(dir).unwrap();
-        store
-            .put_document(
-                dir,
-                &RenderedMarkdown {
-                    markdown_uuid: md.to_string(),
-                    source_id: "slack".into(),
-                    upstream_cursor: None,
-                    bucket_key: None,
-                    md_path: dir.join(format!("{md}.md")),
-                    render_version: 1,
-                    rows,
-                    sections: Vec::new(),
-                    edges: Vec::new(),
-                    problems: Vec::new(),
-                },
-            )
-            .unwrap();
-        // The applet reads at HEAD, as the render step leaves it.
-        store.commit("test").unwrap();
-        store.close();
+        put_thread(dir, md, rows);
     }
 
     /// The namespace is read off the directory, and it lands in
@@ -620,6 +589,7 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(dir.join("channels.json")).unwrap())
                 .unwrap();
         assert_eq!(meta["component_args"], serde_json::json!(["slack_work"]));
+        assert_eq!(meta["icon"], "slack");
         let hash = meta["component_hash"].as_str().unwrap();
         let body = std::fs::read(dir.join(format!("{hash}.js"))).unwrap();
         assert_eq!(sha256_hex(&body), hash);
@@ -817,14 +787,5 @@ mod tests {
         let resp = channels_response(tmp.path(), "ws");
         assert!(resp.channels.is_empty());
         assert_eq!(resp.warnings.len(), 1, "{:?}", resp.warnings);
-    }
-
-    #[test]
-    fn long_previews_are_trimmed_to_one_line() {
-        assert_eq!(preview("first\nsecond"), "first");
-        assert_eq!(preview("   \n  real  \n"), "real");
-        let long = "x".repeat(400);
-        let out = preview(&long);
-        assert!(out.chars().count() <= 201 && out.ends_with('…'), "{out}");
     }
 }

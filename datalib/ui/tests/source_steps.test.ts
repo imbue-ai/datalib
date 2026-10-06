@@ -7,7 +7,9 @@
 // `replaceSteps`).
 import { describe, expect, it } from "vitest";
 import {
-  appendSource,
+  insertEntries,
+  fieldsFor,
+  buildDiffSource,
   buildGroup,
   buildSource,
   buildStep,
@@ -24,11 +26,14 @@ import {
   seedFieldValues,
   sourceStepsOf,
   stepIdFor,
-  fanInNames,
+  readersOf,
+  removedWith,
+  setQmdSteps,
+  qmdIndexingOf,
   unwireFromFanIns,
   wireIntoFanIns,
 } from "../src/config/sourceSteps";
-import { catalogFor } from "../src/config/catalog";
+import { CATALOG, catalogFor } from "../src/config/catalog";
 
 const SLACK = catalogFor("slack")!;
 const CLAUDE = catalogFor("claude")!;
@@ -50,8 +55,8 @@ inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["slack/render_markdown"]
+function = "qmd_aggregator"
+inputs = []
 
 # ── slack ─────────────────────────────────────────────────────────────
 [[groups]]
@@ -75,7 +80,7 @@ describe("listSteps", () => {
   it("gives every step its own row, in file order, under its composed id", () => {
     expect(listSteps(PAIR).map((s) => s.id)).toEqual([
       "unified_index/grid_index",
-      "unified_index/qmd_index",
+      "unified_index/qmd_aggregator",
       "slack/ingest",
       "slack/render_markdown",
     ]);
@@ -89,13 +94,19 @@ describe("listSteps", () => {
     expect(by.get("slack/ingest")).toBe("ingest");
     expect(by.get("slack/render_markdown")).toBe("render");
     expect(by.get("unified_index/grid_index")).toBe("index");
-    expect(by.get("unified_index/qmd_index")).toBe("index");
+    expect(by.get("unified_index/qmd_aggregator")).toBe("index");
+    const qmd = new Map(
+      listSteps(setQmdSteps(PAIR, "slack", "keyword_and_embed")).map((s) => [s.id, s]),
+    );
+    expect(qmd.get("slack/keyword_index")!.phase).toBe("index");
+    expect(qmd.get("slack/embed")!.phase).toBe("index");
+    expect(qmd.get("slack/embed")!.name).toBe("Work Slack (embeddings)");
     // A custom function under a group, and a step outside any group,
     // are steps and nothing more — whatever their ids look like.
     const custom = listSteps(`[[steps]]
 group = "slack"
-function = "embed"
-command = "my-embedder"
+function = "summarize"
+command = "my-summarizer"
 
 [[steps]]
 id = "exports/render_markdown"
@@ -484,7 +495,7 @@ describe("the Slack pickers", () => {
     expect(dms.kind === "string_list" && dms.probe).toBe("conversations");
   });
 
-  /// What "Test connection" authenticates with is what Save writes —
+  /// What "Check account" authenticates with is what Save writes —
   /// the `api` table that selects the live method, defaults included.
   it("probe with the ingest params the form would write", () => {
     expect(paramsObject(SLACK, seedFieldValues(SLACK), "download")).toEqual({
@@ -558,7 +569,7 @@ describe("removeSteps / replaceSteps", () => {
     expect(after).not.toContain("slack");
     expect(listSteps(after).map((s) => s.id)).toEqual([
       "unified_index/grid_index",
-      "unified_index/qmd_index",
+      "unified_index/qmd_aggregator",
     ]);
     expect(listGroups(after).map((g) => g.id)).toEqual(["unified_index"]);
   });
@@ -584,7 +595,7 @@ describe("removeSteps / replaceSteps", () => {
       "slack/ingest",
       "slack/render_markdown",
       "unified_index/grid_index",
-      "unified_index/qmd_index",
+      "unified_index/qmd_aggregator",
     ]);
   });
 
@@ -615,7 +626,7 @@ describe("removeSteps / replaceSteps", () => {
       "slack/ingest",
       "slack/render_markdown",
       "unified_index/grid_index",
-      "unified_index/qmd_index",
+      "unified_index/qmd_aggregator",
     ]);
   });
 
@@ -644,18 +655,18 @@ describe("removeSteps / replaceSteps", () => {
       "slack/ingest",
       "slack/render_markdown",
       "unified_index/grid_index",
-      "unified_index/qmd_index",
+      "unified_index/qmd_aggregator",
     ]);
   });
 
-  it("appends where a new source can safely go", () => {
+  it("adds a new source where it can safely go", () => {
     const body = `${buildGroup({ id: "extra", name: "", type: "slack" })}\n\n${buildStep({
       entry: SLACK,
       group: "extra",
       phase: "download",
       values: {},
     })}`;
-    const after = appendSource(PAIR, body);
+    const after = insertEntries(PAIR, body);
     expect(listSteps(after).map((s) => s.id)).toContain("extra/ingest");
     expect(listGroups(after).map((g) => g.id)).toContain("extra");
   });
@@ -727,9 +738,9 @@ describe("fan-in wiring", () => {
   // Adding a render step without naming it in the index steps renders
   // happily and is never indexed — invisible in search, with nothing on
   // screen to say why.
-  it("adds an id once, to every index step", () => {
+  it("adds a render step once, to the grid index alone", () => {
     const wired = wireIntoFanIns(PAIR, "email/render_markdown");
-    expect(wired.match(/"email\/render_markdown"/g)).toHaveLength(2);
+    expect(wired.match(/"email\/render_markdown"/g)).toHaveLength(1);
     expect(wireIntoFanIns(wired, "email/render_markdown")).toBe(wired);
     expect(wired).toContain('data_root = "~/datalib"');
     expect(wired).toContain("── slack");
@@ -750,20 +761,18 @@ describe("fan-in wiring", () => {
   /// wiring has to reach one fan-in without touching its neighbour —
   /// the grid index is not a choice.
   it("wires and unwires one fan-in without touching the other", () => {
-    const qmdOnly = wireIntoFanIns(PAIR, "email/render_markdown", "qmd_index");
-    const steps = (text: string, id: string) => listSteps(text).find((s) => s.id === id)!.inputs;
-    expect(steps(qmdOnly, "unified_index/qmd_index")).toContain("email/render_markdown");
-    expect(steps(qmdOnly, "unified_index/grid_index")).not.toContain("email/render_markdown");
-
-    // What the wizard writes for a rendered source that is not to be
-    // embedded: in every fan-in, then back out of qmd's alone.
-    const gridOnly = unwireFromFanIns(
+    const both = wireIntoFanIns(
       wireIntoFanIns(PAIR, "email/render_markdown"),
-      "email/render_markdown",
-      "qmd_index",
+      "email/keyword_index",
+      "qmd_aggregator",
     );
+    const steps = (text: string, id: string) => listSteps(text).find((s) => s.id === id)!.inputs;
+    expect(steps(both, "unified_index/qmd_aggregator")).toEqual(["email/keyword_index"]);
+    expect(steps(both, "unified_index/grid_index")).not.toContain("email/keyword_index");
+
+    const gridOnly = unwireFromFanIns(both, "email/keyword_index", "qmd_aggregator");
     expect(steps(gridOnly, "unified_index/grid_index")).toContain("email/render_markdown");
-    expect(steps(gridOnly, "unified_index/qmd_index")).toEqual(["slack/render_markdown"]);
+    expect(steps(gridOnly, "unified_index/qmd_aggregator")).toEqual([]);
   });
 
   /// Which fan-in a step is comes off its `function`, not off the order
@@ -771,24 +780,13 @@ describe("fan-in wiring", () => {
   it("finds a fan-in whose keys are in an unusual order", () => {
     const odd = `[[steps]]
 inputs = []
-function = "qmd_index"
+function = "qmd_aggregator"
 group = "unified_index"
 `;
-    const wired = wireIntoFanIns(odd, "pdfs/render_markdown", "qmd_index");
-    expect(listSteps(wired).find((s) => s.id === "unified_index/qmd_index")!.inputs).toEqual([
-      "pdfs/render_markdown",
+    const wired = wireIntoFanIns(odd, "pdfs/keyword_index", "qmd_aggregator");
+    expect(listSteps(wired).find((s) => s.id === "unified_index/qmd_aggregator")!.inputs).toEqual([
+      "pdfs/keyword_index",
     ]);
-  });
-
-  /// What the wizard's tickbox is seeded from when a source is reopened
-  /// for editing: what the config says today, not what it would write.
-  it("reads whether a fan-in already names a render step", () => {
-    const steps = listSteps(PAIR);
-    expect(fanInNames(steps, "qmd_index", "slack/render_markdown")).toBe(true);
-    expect(fanInNames(steps, "qmd_index", "email/render_markdown")).toBe(false);
-    const bare = listSteps(unwireFromFanIns(PAIR, "slack/render_markdown", "qmd_index"));
-    expect(fanInNames(bare, "qmd_index", "slack/render_markdown")).toBe(false);
-    expect(fanInNames(bare, "grid_index", "slack/render_markdown")).toBe(true);
   });
 
   /// The scaffold's index steps start with `inputs = []`, and the applet
@@ -812,9 +810,133 @@ command = "datalib-applet unified_index"
     expect(wired).toContain('inputs = ["pdfs/render_markdown"]');
     expect(listSteps(wired).find((s) => s.kind === "applet")!.inputs).toEqual([]);
   });
+
+  const gridIndex = (inputs: string) => `[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = ${inputs}
+
+[[steps]]
+group = "unified_index"
+function = "qmd_aggregator"
+inputs = ["bridge/keyword_index"]
+`;
+
+  /// #897: wiring rewrote a hand-written one-id-per-line array onto one
+  /// line, so adding a comparison reflowed every fan-in in the file.
+  it("keeps a one-id-per-line array one id per line", () => {
+    const before = gridIndex(`[
+    "bridge/render_markdown",
+    "sickbay/render_markdown",
+]`);
+    const wired = wireIntoFanIns(before, "holodeck/render_markdown");
+    expect(wired).toBe(
+      gridIndex(`[
+    "bridge/render_markdown",
+    "sickbay/render_markdown",
+    "holodeck/render_markdown",
+]`),
+    );
+    expect(unwireFromFanIns(wired, "holodeck/render_markdown")).toBe(before);
+    expect(unwireFromFanIns(before, "bridge/render_markdown", "grid_index")).toBe(
+      gridIndex(`[
+    "sickbay/render_markdown",
+]`),
+    );
+  });
+
+  it("keeps an array without a trailing comma without one", () => {
+    const before = gridIndex(`[
+  "bridge/render_markdown",
+  "sickbay/render_markdown"
+]`);
+    const wired = wireIntoFanIns(before, "holodeck/render_markdown");
+    expect(wired).toBe(
+      gridIndex(`[
+  "bridge/render_markdown",
+  "sickbay/render_markdown",
+  "holodeck/render_markdown"
+]`),
+    );
+    expect(unwireFromFanIns(wired, "holodeck/render_markdown")).toBe(before);
+  });
+
+  /// The old comma split read a comment as part of the id after it, and
+  /// a `]` inside one ended the array early.
+  it("keeps the comments and blank lines inside an array", () => {
+    const before = gridIndex(`[ # every render step
+  # the crew's own records
+  "bridge/render_markdown", # logs [stardate order]
+
+  "sickbay/render_markdown",
+  # "holodeck/render_markdown",
+]`);
+    const wired = wireIntoFanIns(before, "cargo_bay/render_markdown");
+    expect(wired).toBe(
+      gridIndex(`[ # every render step
+  # the crew's own records
+  "bridge/render_markdown", # logs [stardate order]
+
+  "sickbay/render_markdown",
+  # "holodeck/render_markdown",
+  "cargo_bay/render_markdown",
+]`),
+    );
+    expect(unwireFromFanIns(wired, "cargo_bay/render_markdown")).toBe(before);
+    expect(unwireFromFanIns(before, "bridge/render_markdown")).toBe(
+      gridIndex(`[ # every render step
+  # the crew's own records
+
+  "sickbay/render_markdown",
+  # "holodeck/render_markdown",
+]`),
+    );
+    expect(
+      listSteps(unwireFromFanIns(before, "sickbay/render_markdown")).find(
+        (s) => s.id === "unified_index/grid_index",
+      )!.inputs,
+    ).toEqual(["bridge/render_markdown"]);
+  });
+
+  it("keeps a one-line array on one line", () => {
+    const before = gridIndex(`["bridge/render_markdown", "sickbay/render_markdown"]`);
+    expect(wireIntoFanIns(before, "holodeck/render_markdown")).toBe(
+      gridIndex(
+        `["bridge/render_markdown", "sickbay/render_markdown", "holodeck/render_markdown"]`,
+      ),
+    );
+    expect(unwireFromFanIns(before, "bridge/render_markdown", "grid_index")).toBe(
+      gridIndex(`["sickbay/render_markdown"]`),
+    );
+  });
+
+  /// An id is matched by the string it spells, not by how it is quoted.
+  it("unwires an id written as a literal string", () => {
+    const before = gridIndex(`['bridge/render_markdown', "sickbay/render_markdown"]`);
+    expect(unwireFromFanIns(before, "bridge/render_markdown", "grid_index")).toBe(
+      gridIndex(`["sickbay/render_markdown"]`),
+    );
+    expect(wireIntoFanIns(before, "bridge/render_markdown")).toBe(before);
+  });
+
+  /// An array the edit cannot lay out is refused rather than written.
+  it("refuses to edit an array holding something other than strings", () => {
+    const nested = gridIndex(`["bridge/render_markdown", ["sickbay/render_markdown"]]`);
+    expect(() => wireIntoFanIns(nested, "holodeck/render_markdown")).toThrow(
+      /in an array of strings/,
+    );
+  });
+
+  /// A multi-line array with nothing in it yet takes the indentation of
+  /// its `]`, one step in.
+  it("wires into an empty multi-line array", () => {
+    expect(wireIntoFanIns(gridIndex(`[\n]`), "bridge/render_markdown")).toBe(
+      gridIndex(`[\n  "bridge/render_markdown",\n]`),
+    );
+  });
 });
 
-describe("what Test connection is sent", () => {
+describe("what Check account is sent", () => {
   /// The form's `<input type=number>` hands back a string, and the
   /// backend's `Option<i64>` will not take `"30"`.
   it("sends numbers as numbers", () => {
@@ -827,7 +949,7 @@ describe("what Test connection is sent", () => {
   });
 });
 
-describe("what Test connection authenticates as", () => {
+describe("what Check account authenticates as", () => {
   /// The probe runs as `latchkey --account <acct> curl`, so an account
   /// left out of its params tests a different identity from the one
   /// picked — and comes back looking perfectly healthy while describing
@@ -896,5 +1018,328 @@ describe("the ChatGPT descriptor", () => {
     });
     const [ingest] = listSteps(stepsBody);
     expect(paramsAreRepresentable(ingest, CHATGPT)).toEqual({ ok: true });
+  });
+});
+
+describe("a source's qmd steps", () => {
+  const MAPPED = `${PAIR}
+[[steps]]
+group = "unified_index"
+function = "embedding_map"
+inputs = ["unified_index/qmd_aggregator"]
+`;
+  const inputsOf = (text: string, id: string) => listSteps(text).find((s) => s.id === id)?.inputs;
+
+  /// The keyword index reads the source's render, the embed reads the
+  /// keyword index, and the aggregator reads both. Nothing of the
+  /// source's reads the aggregator: a step downstream of a fan-in that
+  /// waits on every source would finish only when the slowest does.
+  it("adds the two steps, each reading what it follows, and wires both into the aggregator", () => {
+    const next = setQmdSteps(MAPPED, "slack", "keyword_and_embed");
+    expect(inputsOf(next, "slack/keyword_index")).toEqual(["slack/render_markdown"]);
+    expect(inputsOf(next, "slack/embed")).toEqual(["slack/keyword_index"]);
+    expect(inputsOf(next, "unified_index/qmd_aggregator")).toEqual([
+      "slack/keyword_index",
+      "slack/embed",
+    ]);
+    expect(inputsOf(next, "unified_index/embedding_map")).toEqual(["unified_index/qmd_aggregator"]);
+    expect(setQmdSteps(next, "slack", "keyword_and_embed")).toBe(next);
+    expect(qmdIndexingOf(listSteps(next), "slack")).toBe("keyword_and_embed");
+  });
+
+  /// Keyword search without the slow embeddings: the embed step and the
+  /// aggregator's edge to it go, the keyword index and its edge stay.
+  /// Ticking embeddings back on restores both.
+  it("keeps the keyword index when only the embeddings go", () => {
+    const both = setQmdSteps(MAPPED, "slack", "keyword_and_embed");
+    const keyword = setQmdSteps(both, "slack", "keyword");
+    expect(inputsOf(keyword, "slack/keyword_index")).toEqual(["slack/render_markdown"]);
+    expect(inputsOf(keyword, "slack/embed")).toBeUndefined();
+    expect(inputsOf(keyword, "unified_index/qmd_aggregator")).toEqual(["slack/keyword_index"]);
+    expect(qmdIndexingOf(listSteps(keyword), "slack")).toBe("keyword");
+    expect(setQmdSteps(keyword, "slack", "keyword")).toBe(keyword);
+    const back = setQmdSteps(keyword, "slack", "keyword_and_embed");
+    expect(inputsOf(back, "slack/embed")).toEqual(["slack/keyword_index"]);
+    expect(inputsOf(back, "unified_index/qmd_aggregator")).toEqual([
+      "slack/keyword_index",
+      "slack/embed",
+    ]);
+  });
+
+  /// A step reading the embeddings would name an input that no longer
+  /// exists, which the loader drops it for, so it goes with them.
+  it("takes a step that reads the embeddings with them", () => {
+    const reader = `${setQmdSteps(MAPPED, "slack", "keyword_and_embed")}
+[[steps]]
+group = "slack"
+function = "cluster"
+command = "my-clusterer"
+inputs = ["slack/embed"]
+`;
+    const keyword = setQmdSteps(reader, "slack", "keyword");
+    expect(inputsOf(keyword, "slack/cluster")).toBeUndefined();
+    expect(inputsOf(keyword, "slack/keyword_index")).toBeDefined();
+  });
+
+  /// Turning search off for a source takes its steps and the
+  /// aggregator's edges to them; the grid keeps the source.
+  it("takes both steps and every edge to them back out", () => {
+    const off = setQmdSteps(setQmdSteps(MAPPED, "slack", "keyword_and_embed"), "slack", "none");
+    expect(inputsOf(off, "slack/keyword_index")).toBeUndefined();
+    expect(inputsOf(off, "slack/embed")).toBeUndefined();
+    expect(inputsOf(off, "unified_index/qmd_aggregator")).toEqual([]);
+    expect(inputsOf(off, "unified_index/embedding_map")).toEqual(["unified_index/qmd_aggregator"]);
+    expect(inputsOf(off, "unified_index/grid_index")).toEqual(["slack/render_markdown"]);
+    expect(qmdIndexingOf(listSteps(off), "slack")).toBe("none");
+  });
+
+  /// Without the aggregator search is off, and nothing would retire what
+  /// the steps index, so none are written.
+  it("writes nothing where the config has no aggregator", () => {
+    const noQmd = removeSteps(
+      PAIR,
+      listSteps(PAIR).filter((s) => s.id === "unified_index/qmd_aggregator"),
+    );
+    expect(
+      inputsOf(setQmdSteps(noQmd, "slack", "keyword_and_embed"), "slack/keyword_index"),
+    ).toBeUndefined();
+  });
+
+  /// A render is wired into the grid index and never into the aggregator
+  /// or the map.
+  it("wires a render into the grid index only", () => {
+    const wired = wireIntoFanIns(MAPPED, "email/render_markdown");
+    expect(inputsOf(wired, "unified_index/grid_index")).toContain("email/render_markdown");
+    expect(inputsOf(wired, "unified_index/qmd_aggregator")).toEqual([]);
+    expect(inputsOf(wired, "unified_index/embedding_map")).toEqual([
+      "unified_index/qmd_aggregator",
+    ]);
+  });
+
+  /// Removing a source's ingest takes everything that reads it, however
+  /// far down. A fan-in only loses the edge.
+  it("finds every step reading a removed one, but no fan-in", () => {
+    const all = listSteps(setQmdSteps(MAPPED, "slack", "keyword_and_embed"));
+    expect(readersOf(["slack/ingest"], all).map((s) => s.id)).toEqual([
+      "slack/render_markdown",
+      "slack/keyword_index",
+      "slack/embed",
+    ]);
+  });
+
+  /// Removing the aggregator turns search off, so every source's qmd
+  /// steps go with it — though none of them reads it.
+  it("takes every source's qmd steps with the aggregator", () => {
+    const all = listSteps(setQmdSteps(MAPPED, "slack", "keyword_and_embed"));
+    expect(readersOf(["unified_index/qmd_aggregator"], all)).toEqual([]);
+    expect(removedWith(["unified_index/qmd_aggregator"], all).map((s) => s.id)).toEqual([
+      "slack/keyword_index",
+      "slack/embed",
+    ]);
+    expect(removedWith(["unified_index/grid_index"], all)).toEqual([]);
+  });
+});
+
+describe("where the wizard writes", () => {
+  /// Sources first, each with its steps, then the index they all feed:
+  /// every step below the steps it reads.
+  const FLOWING = `data_root = "~/datalib"
+
+# ── slack ─────────────────────────────────────────────────────────────
+[[groups]]
+id = "slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+[steps.params.api]
+channels = ["general"]
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+inputs = ["slack/ingest"]
+
+# ── notes ─────────────────────────────────────────────────────────────
+[[groups]]
+id = "notes"
+type = "slack"
+
+[[steps]]
+group = "notes"
+function = "ingest"
+[steps.params.api]
+channels = ["notes"]
+
+[[steps]]
+group = "notes"
+function = "render_markdown"
+inputs = ["notes/ingest"]
+
+# ── the unified index ─────────────────────────────────────────────────
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = ["slack/render_markdown", "notes/render_markdown"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_aggregator"
+inputs = []
+
+[[applets]]
+group = "unified_index"
+id = "unified_index"
+command = "datalib-applet unified_index"
+`;
+
+  /// Every input a step names that is in the file comes above it.
+  function flowsDown(text: string): string[] {
+    const ids = listSteps(text).map((s) => s.id);
+    return listSteps(text).flatMap((s) =>
+      s.inputs
+        .filter((i) => ids.includes(i) && ids.indexOf(i) > ids.indexOf(s.id))
+        .map((i) => `${s.id} reads ${i}, below it`),
+    );
+  }
+
+  /// What the Sources card does on "+ Data Source".
+  function addSource(text: string, group: string): string {
+    const built = buildSource({ entry: SLACK, group, name: "", values: {}, withGroup: true });
+    let next = insertEntries(text, `${built.groupBody}\n\n${built.stepsBody}`);
+    next = wireIntoFanIns(next, built.renderId!);
+    return setQmdSteps(next, group, "keyword_and_embed");
+  }
+
+  it("adds a source after the last one, above the index, with its steps together", () => {
+    const next = addSource(FLOWING, "extra");
+    expect(listGroups(next).map((g) => g.id)).toEqual(["slack", "notes", "extra", "unified_index"]);
+    expect(listSteps(next).map((s) => s.id)).toEqual([
+      "slack/ingest",
+      "slack/render_markdown",
+      "notes/ingest",
+      "notes/render_markdown",
+      "extra/ingest",
+      "extra/render_markdown",
+      "extra/keyword_index",
+      "extra/embed",
+      "unified_index/grid_index",
+      "unified_index/qmd_aggregator",
+      "unified_index",
+    ]);
+    expect(flowsDown(next)).toEqual([]);
+    expect(next.startsWith('data_root = "~/datalib"\n')).toBe(true);
+    // Its divider stays above its group, and the index's above the index.
+    expect(next.indexOf("── extra")).toBeLessThan(next.indexOf('id = "extra"'));
+    expect(next.indexOf('function = "embed"')).toBeLessThan(next.indexOf("── the unified index"));
+  });
+
+  /// The scaffold a new root starts from is the index alone; the first
+  /// source goes above it, not after it.
+  it("puts the first source above the index a new root starts with", () => {
+    const scaffold = FLOWING.slice(FLOWING.indexOf("# ── the unified index")).replace(
+      'inputs = ["slack/render_markdown", "notes/render_markdown"]',
+      "inputs = []",
+    );
+    const next = addSource(scaffold, "extra");
+    expect(listGroups(next).map((g) => g.id)).toEqual(["extra", "unified_index"]);
+    expect(flowsDown(next)).toEqual([]);
+    expect(next.startsWith("# ── extra")).toBe(true);
+  });
+
+  /// Search turned on for a source that is not the last: its steps go
+  /// beside its own, not after whichever source was added last.
+  it("puts a source's qmd steps right after its render", () => {
+    const next = setQmdSteps(FLOWING, "slack", "keyword");
+    expect(
+      listSteps(next)
+        .map((s) => s.id)
+        .slice(0, 4),
+    ).toEqual(["slack/ingest", "slack/render_markdown", "slack/keyword_index", "notes/ingest"]);
+    const both = setQmdSteps(next, "slack", "keyword_and_embed");
+    expect(
+      listSteps(both)
+        .map((s) => s.id)
+        .slice(2, 5),
+    ).toEqual(["slack/keyword_index", "slack/embed", "notes/ingest"]);
+    expect(flowsDown(both)).toEqual([]);
+  });
+
+  /// An edit rewrites a source where it stands: the table does not
+  /// reshuffle because someone changed a channel list.
+  it("rewrites an edited source in place", () => {
+    const { ingest, render } = sourceStepsOf("slack", listSteps(FLOWING));
+    const out = buildSource({
+      entry: SLACK,
+      group: "slack",
+      name: "",
+      values: { "api.channels": ["random"] },
+      withGroup: false,
+    });
+    const after = replaceSteps(FLOWING, [ingest!, render!], out.stepsBody);
+    expect(listSteps(after).map((s) => s.id)).toEqual(listSteps(FLOWING).map((s) => s.id));
+    expect(after).toContain('channels = ["random"]');
+    expect(after).not.toContain('channels = ["general"]');
+    expect(after.indexOf('channels = ["random"]')).toBeLessThan(after.indexOf("── notes"));
+  });
+
+  /// A comparison reads its source's download, so it goes below that, and
+  /// above the index that reads it.
+  it("puts a comparison after the sources, above the index", () => {
+    const built = buildDiffSource({
+      id: "slack-diff",
+      name: "",
+      source: "slack",
+      from: "aaa",
+      to: "bbb",
+      maxDocuments: 50,
+    });
+    const next = insertEntries(FLOWING, `${built.groupBody}\n\n${built.stepsBody}`);
+    expect(listGroups(next).map((g) => g.id)).toEqual([
+      "slack",
+      "notes",
+      "slack-diff",
+      "unified_index",
+    ]);
+    expect(flowsDown(wireIntoFanIns(next, built.renderId))).toEqual([]);
+  });
+
+  /// A file written with the index first has no place above every reader
+  /// and below the source's own steps; its qmd steps go at the end, as
+  /// they always did, and the file still loads.
+  it("falls back to the end of a file already out of order", () => {
+    const next = setQmdSteps(PAIR, "slack", "keyword");
+    expect(
+      listSteps(next)
+        .map((s) => s.id)
+        .at(-1),
+    ).toBe("slack/keyword_index");
+  });
+});
+
+describe("the latchkey account field", () => {
+  /// Picking a stored login, or naming a new one, is the same for every
+  /// service — Slack had none at all, and Claude's was hidden.
+  it("is there, once, on every source that signs in through latchkey", () => {
+    for (const entry of CATALOG.filter((e) => e.credentialService)) {
+      const accounts = fieldsFor(entry, "download").filter((f) => f.kind === "text" && f.latchkey);
+      expect(
+        accounts.map((f) => f.target),
+        entry.label,
+      ).toEqual(["latchkey_settings.account"]);
+    }
+  });
+
+  it("is worded for the source when it declares none", () => {
+    const [account] = fieldsFor(SLACK, "download");
+    expect(account).toMatchObject({ label: "Slack account", target: "latchkey_settings.account" });
+  });
+
+  it("never reaches a render step", () => {
+    expect(fieldsFor(SLACK, "render").some((f) => f.kind === "text" && f.latchkey)).toBe(false);
   });
 });

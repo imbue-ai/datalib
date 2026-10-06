@@ -26,9 +26,9 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/contacts_config:datalib_etl_contacts_config",
+        "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:base64",
         "@datalib_crates//:quick-xml",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
@@ -58,6 +58,7 @@ rust_test(
     deps = [
         ":datalib_etl_contacts",
         "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

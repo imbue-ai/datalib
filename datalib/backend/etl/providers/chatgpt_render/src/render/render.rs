@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context as _, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms};
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
@@ -14,7 +15,9 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::md_code_block;
 
 use super::ids;
 use super::parse::{
@@ -38,7 +41,9 @@ use datalib_schema::providers::Provider;
 ///     `user-…` id.
 /// v9: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
-pub const RENDER_VERSION: u32 = 9;
+/// v11: the private-use characters around a cited span are dropped
+///     instead of showing as boxes.
+pub const RENDER_VERSION: u32 = 11;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -52,6 +57,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "ChatGPT Reaction".to_string(),
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -168,13 +174,14 @@ fn build_chat(
         let msg_id = ids::message(source_id, &m.message_id, ms);
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
-            author_id: m.role.clone().unwrap_or_else(|| "unknown".into()),
+            author_handle: None,
             author_display,
             date_ms: ms,
             text: body,
             kind,
             attachments,
             reactions: Vec::new(),
+            labels: Vec::new(),
             system_note: None,
             source_url: None,
             kind_label: Some(kind_label.to_string()),
@@ -184,6 +191,7 @@ fn build_chat(
             )),
             is_aside: is_tool_role(m.role.as_deref()),
             unread: false,
+            recipients: Vec::new(),
             problems,
         });
     }
@@ -195,6 +203,7 @@ fn build_chat(
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(source_id, &conv_id).uuid;
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: Vec::new(),
         path_prefix: None,
         id: chat_uuid.clone(),
@@ -269,11 +278,8 @@ fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
         let t = p.text.as_deref().unwrap_or("").trim_end();
         match p.kind.as_str() {
             "text" => blocks.push(t.to_string()),
-            "code" => blocks.push(format!(
-                "```{}\n{t}\n```",
-                p.language.as_deref().unwrap_or("")
-            )),
-            "execution_output" => blocks.push(format!("```\n{t}\n```")),
+            "code" => blocks.push(md_code_block(p.language.as_deref().unwrap_or(""), t)),
+            "execution_output" => blocks.push(md_code_block("", t)),
             "thoughts" | "reasoning_recap" => blocks.push(format!("> {}", t.replace('\n', "\n> "))),
             _ => blocks.push(t.to_string()),
         }
@@ -319,54 +325,36 @@ fn kind_for_role_and_type(role: Option<&str>, content_type: Option<&str>) -> &'s
     }
 }
 
-fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => {
-            let mut out: String = c.to_uppercase().collect();
-            for rest in chars {
-                out.extend(rest.to_lowercase());
-            }
-            out
-        }
-    }
-}
-
-/// Parse an ISO-8601 timestamp to unix millis. Accepts `…Z` and explicit
-/// offsets; returns `None` on anything unparseable — the caller records
-/// that through `own_stamp_ms` before falling back to the bumped
-/// previous time.
-fn iso_to_ms(s: &str) -> Option<i64> {
-    // Through `datalib-time`, not `chrono` directly: timestamps are a
-    // cross-source concept and exactly one crate decides how a string
-    // becomes an instant (rule P3 in
-    // `docs/dev/data_architecture_parse_and_render.md`). The export
-    // stamps an explicit offset, so `parse_strict` is the right member.
-    datalib_time::parse_strict(s)
-        .ok()
-        .map(|t| t.to_unix_millis())
-}
-
 #[cfg(test)]
-mod timestamp_tests {
+mod tests {
     use super::*;
 
-    /// The parse helper must answer `None` for anything it cannot read,
-    /// so the caller falls through to inheriting the previous item's
-    /// stamp and — when there is none — to a null `created_at`.
-    #[test]
-    fn iso_to_ms_refuses_to_invent_a_timestamp() {
-        assert_eq!(
-            iso_to_ms("2026-04-14T09:15:00-07:00"),
-            Some(1_776_183_300_000)
-        );
-        for bad in ["", "not a date", "2026-04-14", "2026-04-14T09:15:00"] {
-            assert_eq!(
-                iso_to_ms(bad),
-                None,
-                "iso_to_ms({bad:?}) fabricated a stamp"
-            );
+    fn part(kind: &str, language: Option<&str>, text: &str) -> OAContentPartRow {
+        OAContentPartRow {
+            message_id: "m1".to_string(),
+            part_index: 0,
+            kind: kind.to_string(),
+            language: language.map(str::to_string),
+            text: Some(text.to_string()),
+            raw_json: serde_json::Value::Null,
         }
+    }
+
+    /// Code and its output are shown as they are, whatever they contain:
+    /// a fence inside cannot close ours and let the rest out as markup.
+    #[test]
+    fn code_and_its_output_stay_inside_their_fences() {
+        let code = part(
+            "code",
+            Some("python\n<b>"),
+            "print('```')\n<script>x</script>",
+        );
+        let output = part("execution_output", None, "```\n<script>x</script> & co");
+        let body = render_message_body(&[&code, &output]).unwrap();
+        assert_eq!(
+            body,
+            "````python\nprint('```')\n<script>x</script>\n````\n\n\
+             ````\n```\n<script>x</script> & co\n````"
+        );
     }
 }

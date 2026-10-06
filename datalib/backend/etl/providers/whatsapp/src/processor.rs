@@ -39,7 +39,7 @@ pub fn plan_ingest(
 }
 
 /// Owns its raw doltlite store end to end: open, register the interrupt
-/// hook, fetch, commit + close via `session.finish`.
+/// hook, fetch, commit + close via `run_store`.
 struct WhatsappIngest {
     id: String,
     raw_path: PathBuf,
@@ -56,31 +56,29 @@ impl DataProcessor for WhatsappIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let db_path = datalib_etl::doltlite_raw::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&db_path).await?;
-        // Open the session (snapshot + interrupt hook) BEFORE fetch borrows
-        // `&db`: it captures the write pool the commit + report run against.
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), db_path)
-            .await;
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |_| async {
+            let env_var = self
+                .sync
+                .key_env_var
+                .clone()
+                .unwrap_or_else(|| "WHATSAPP_BACKUP_DECRYPTION_KEY".to_string());
+            let key_hex = std::env::var(&env_var)
+                .with_context(|| format!("read WhatsApp root key from env var `{env_var}`"));
+            let root_key = key_hex.and_then(|h| datalib_whatsapp_backup::decode_hex_key(&h))?;
 
-        let env_var = self
-            .sync
-            .key_env_var
-            .clone()
-            .unwrap_or_else(|| "WHATSAPP_BACKUP_DECRYPTION_KEY".to_string());
-        let key_hex = std::env::var(&env_var)
-            .with_context(|| format!("read WhatsApp root key from env var `{env_var}`"));
-        let root_key = key_hex.and_then(|h| datalib_whatsapp_backup::decode_hex_key(&h))?;
-
-        let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
-        let summary = ingest::fetch(
-            &self.sync.path(),
-            &root_key,
-            &db,
-            &cache,
-            &self.knobs,
-            ctx.progress,
-        )
-        .await?;
-        session.finish(ctx, summary.summary()).await
+            let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
+            let summary = ingest::fetch(
+                &self.sync.path(),
+                &root_key,
+                &db,
+                &cache,
+                &self.knobs,
+                ctx.progress,
+            )
+            .await?;
+            Ok(summary.summary())
+        })
+        .await
     }
 }

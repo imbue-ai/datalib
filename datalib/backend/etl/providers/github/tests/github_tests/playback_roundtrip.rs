@@ -75,19 +75,20 @@ async fn github_synth_playback_extract_roundtrip() {
     write_event(&api, ENTITY_PR_REVIEW_COMMENT, k, rc_raw.clone());
 
     let report = GithubSynth::new(&api).synthesize(&playback).unwrap();
-    // 1 user + 3 scope searches + 1 PR detail + 3 list endpoints = 8
-    assert_eq!(report.fixtures_written, 8);
+    // 1 user + 3 scope searches + 3 resumed ones + 1 PR detail + 3 list
+    // endpoints = 11
+    assert_eq!(report.fixtures_written, 11);
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
     // The test owns the store: one connection for the download and the
-    // assertions both, because two is what breaks a doltlite file.
+    // assertions both, because the file takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let summary = fetch(FetchOptions {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), crate::tng_now())
     })
     .await;
     db.commit_all("test").await.unwrap();

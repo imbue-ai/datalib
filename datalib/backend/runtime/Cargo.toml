@@ -9,8 +9,6 @@ license.workspace = true
 name = "datalib_runtime"
 path = "src/lib.rs"
 
-# No dependencies, deliberately — see src/lib.rs.
+# No first-party dependencies, so any crate can link it.
 [dependencies]
-
-[dev-dependencies]
 tempfile = "3"

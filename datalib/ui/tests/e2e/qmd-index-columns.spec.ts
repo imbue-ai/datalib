@@ -1,5 +1,5 @@
-import { type GridApi } from "./grid-helpers";
-import { test, expect } from "@playwright/test";
+import { GRID, actOnRowByUuid, EVERY_ROW, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { test, expect, type Page } from "@playwright/test";
 
 // The grid's `Indexed` / `Embedded` columns, end to end against the
 // fixture's real qmd index.
@@ -47,7 +47,7 @@ test("the applet reports the fixture's documents indexed and embedded", async ({
 });
 
 test("the columns are off by default and render check marks once shown", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   // Off by default. This is the assertion that fails if someone drops
@@ -97,4 +97,122 @@ test("the columns are off by default and render check marks once shown", async (
       `${colId}: every rendered cell should be a check mark, got ${JSON.stringify(texts)}`,
     ).toBe(true);
   }
+});
+
+// The columns ask only about the rows on screen and a margin around them.
+// Rows far below the first screen get their answers once the grid is
+// scrolled to them; a version that asked once on load would leave them
+// as the unknown em dash for good.
+test("rows scrolled to later get their check marks too", async ({ page }) => {
+  await page.goto(GRID);
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
+  await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.showColumns([
+      "qmd_indexed",
+      "qmd_embedded",
+    ]),
+  );
+  await expect(page.locator('.grid-box .slick-row [col-id="qmd_indexed"]').first()).toHaveText(
+    CHECK,
+    { timeout: 15_000 },
+  );
+
+  // Whichever end of the rows held the grid did not open on: the first
+  // request covered the rows around the opening view, not these. By
+  // uuid, since rows loading at that end renumber the ones there.
+  const openedAtTop = (await page.locator('.grid-box .slick-row[data-row="0"]').count()) > 0;
+  const target = await page.evaluate((top) => {
+    const a = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
+    return a.uuidAt(top ? a.rows().length - 1 : 0)!;
+  }, openedAtTop);
+  await actOnRowByUuid(
+    page,
+    target,
+    (row) => expect(row.locator('[col-id="qmd_indexed"]')).toHaveText(CHECK, { timeout: 3_000 }),
+    "qmd_indexed",
+  );
+});
+
+// The line under the grid in each of the three states a root's qmd index
+// can be in. The fixture ships the third; the other two are its real
+// answers with the index state rewritten.
+test.describe("the search coverage line", () => {
+  async function rewriteQmdState(
+    page: Page,
+    rewrite: (state: {
+      index_present: boolean;
+      summary: { documents: number; embedded: number };
+    }) => void,
+  ) {
+    await page.route("**/applet/unified_index/qmd_state", async (route) => {
+      const response = await route.fetch();
+      const state = await response.json();
+      rewrite(state);
+      await route.fulfill({ response, json: state });
+    });
+  }
+
+  // A rewrite still waiting on its `route.fetch()` when the page closes
+  // throws outside any test and takes the worker down with it.
+  test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }));
+
+  test("with no index, says to sync, and free text says so without an error", async ({ page }) => {
+    await rewriteQmdState(page, (state) => {
+      state.index_present = false;
+      state.summary = { documents: 0, embedded: 0 };
+    });
+    // Free text is answered as the applet does with no index, from the
+    // unfiltered search's answer: asking the fixture's real qmd would
+    // make this wait on a ranking it throws away.
+    await page.route("**/applet/unified_index/search?**", async (route) => {
+      const url = new URL(route.request().url());
+      const q = url.searchParams.get("q") ?? "";
+      if (q === "") return route.fallback();
+      url.searchParams.delete("q");
+      const response = await route.fetch({ url: url.toString() });
+      const body = await response.json();
+      body.rows = [];
+      body.total = 0;
+      body.next_offset = null;
+      body.query_echo.free_text = q;
+      body.query_echo.qmd_index_missing = true;
+      await route.fulfill({ response, json: body });
+    });
+    // Every row: this test's free text is anything in the search bar.
+    await page.goto(EVERY_ROW);
+    await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 10_000 });
+    await expect(page.locator(".qmd-summary")).toHaveText(
+      "· search index not built yet — sync to build it",
+    );
+
+    await page.getByTestId("search-input").fill("enterprise");
+    await expect(page.locator(".qmd-unbuilt")).toHaveText(
+      "Free-text search starts working once the first sync builds the search index.",
+    );
+    await expect(page.locator(".qmd-error")).toHaveCount(0);
+    await expect(page.getByText("no matches.")).toHaveCount(0);
+  });
+
+  test("with keyword search only, counts each index apart", async ({ page }) => {
+    let documents = 0;
+    await rewriteQmdState(page, (state) => {
+      documents = state.summary.documents;
+      state.summary.embedded = 0;
+    });
+    await page.goto(GRID);
+    await expect(page.locator(".qmd-summary")).toHaveText(
+      /^\s*· [\d,]+ documents searchable · 0 with semantic search$/,
+    );
+    expect(documents, "the fixture's keyword index holds documents").toBeGreaterThan(0);
+    await expect(page.locator(".qmd-summary")).toHaveText(
+      `· ${documents.toLocaleString("en-US")} documents searchable · 0 with semantic search`,
+    );
+  });
+
+  test("with both, counts every document in each", async ({ page }) => {
+    await page.goto(GRID);
+    await expect(page.locator(".qmd-summary")).toHaveText(
+      /^\s*· ([\d,]+) documents searchable · \1 with semantic search$/,
+    );
+  });
 });

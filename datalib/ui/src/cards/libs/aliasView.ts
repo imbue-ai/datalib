@@ -13,12 +13,13 @@ export function aliasView(): CardRender {
     ctx.setTitle("Component library");
     const style = document.createElement("style");
     style.textContent = `
-      .av { font: 13px/1.5 ui-monospace, Menlo, monospace; color: var(--datalib-fg, inherit); }
-      .av-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border, #8884); }
-      .av-row { display: flex; align-items: baseline; gap: .6rem; padding: 6px 12px; cursor: pointer; border-bottom: 1px solid var(--datalib-border, #8882); }
-      .av-row:hover { background: var(--datalib-hover, rgba(127,127,127,.12)); }
+      :host { display: block; height: 100%; position: relative; }
+      .av { position: absolute; inset: 0; overflow-y: auto; font: var(--datalib-font-size)/1.5 var(--datalib-mono); color: var(--datalib-fg, inherit); }
+      .av-head { padding: 8px 12px; opacity: .6; border-bottom: 1px solid var(--datalib-border-soft); }
+      .av-row { display: flex; align-items: baseline; gap: .6rem; padding: 6px 12px; cursor: pointer; border-bottom: 1px solid var(--datalib-border-soft); }
+      .av-row:hover { background: var(--datalib-hover); }
       .av-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-      .av-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: system-ui, sans-serif; opacity: .65; }
+      .av-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--datalib-font); color: var(--datalib-muted); }
       .av-hash { flex: 0 0 auto; opacity: .45; margin-left: auto; }
       .av-empty { padding: 16px 12px; opacity: .5; }
     `;

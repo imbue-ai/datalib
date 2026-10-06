@@ -78,6 +78,13 @@ pub struct ScanOptions {
     pub ignore: Vec<String>,
     /// Skip files larger than this rather than hashing them.
     pub max_bytes: Option<u64>,
+    /// How deep to walk. `Some(1)` is the root's own files, and no
+    /// folder beneath it is opened.
+    pub max_depth: Option<usize>,
+    /// Where to say which file is being hashed and how much is left.
+    /// Only ever a message, never a bar: a step has one bar, and the
+    /// caller's rows are not bytes (`dag/README.md` § "One bar per step").
+    pub progress: crate::progress::Progress,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -110,7 +117,17 @@ pub struct Scan {
     /// configured, or a deliberate symlink indirection silently becomes its
     /// current target.
     pub root_as_given: PathBuf,
+    /// The root as given, resolved: the file itself when the caller gave
+    /// one file. What a caller keying rows by path under its configured
+    /// input strips from [`ScannedFile::path`], which is resolved too —
+    /// stripping the unresolved spelling fails whenever a symlink is on
+    /// the way.
+    pub given_resolved: PathBuf,
     pub files: Vec<ScannedFile>,
+    /// Root-relative paths the walk found and did not read: refused by the
+    /// caller's admit hook, or over [`ScanOptions::max_bytes`]. They are
+    /// there, so a caller keyed by path keeps their rows.
+    pub present_unread: Vec<String>,
     pub errors: Vec<WalkError>,
     pub stats: ScanStats,
 }
@@ -137,6 +154,21 @@ pub struct Changes {
     pub moved: Vec<Moved>,
     /// Same path, same digest.
     pub unchanged: usize,
+    /// Entries the walk could not read. A directory that failed to list
+    /// looks exactly like one whose files were all deleted, so while this
+    /// is non-zero `removed` is not evidence that anything went.
+    pub walk_errors: usize,
+}
+
+/// Whether root-relative `rel` is inside root-relative directory `rel_dir`,
+/// which may be several segments deep. Case-insensitive, because export
+/// trees come from other people's tools.
+pub fn is_under(rel: &str, rel_dir: &str) -> bool {
+    let prefix = format!("{}/", rel_dir.trim_end_matches('/'));
+    rel.len() > prefix.len()
+        && rel
+            .get(..prefix.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(&prefix))
 }
 
 impl Changes {
@@ -150,22 +182,14 @@ impl Changes {
             || !self.moved.is_empty()
     }
 
-    /// [`Self::needs_reading`], narrowed to one directory of the scanned root:
-    /// an export root holds several feeds' files side by side.
-    ///
-    /// `rel_dir` is root-relative and may be several segments deep. Matching is
-    /// case-insensitive, because export trees come from other people's tools.
+    /// [`Self::needs_reading`], narrowed to one directory of the scanned root
+    /// ([`is_under`]): an export root holds several feeds' files side by side.
     pub fn needs_reading_under<'a>(
         &'a self,
         rel_dir: &'a str,
     ) -> impl Iterator<Item = &'a ScannedFile> + 'a {
-        let prefix = format!("{}/", rel_dir.trim_end_matches('/'));
-        self.needs_reading().filter(move |f| {
-            f.rel.len() > prefix.len()
-                && f.rel
-                    .get(..prefix.len())
-                    .is_some_and(|p| p.eq_ignore_ascii_case(&prefix))
-        })
+        self.needs_reading()
+            .filter(move |f| is_under(&f.rel, rel_dir))
     }
 
     /// Files whose **content** the caller must read: the added and the
@@ -173,12 +197,57 @@ impl Changes {
     pub fn needs_reading(&self) -> impl Iterator<Item = &ScannedFile> {
         self.added.iter().chain(self.modified.iter())
     }
+
+    /// [`Self::needs_reading`] for a store that keys its rows by path, where
+    /// a move is new rows at one path and none at the other: the moved
+    /// files are read again at their new path.
+    pub fn needs_reading_by_path(&self) -> impl Iterator<Item = &ScannedFile> {
+        self.needs_reading()
+            .chain(self.moved.iter().map(|m| &m.now))
+    }
+
+    /// The paths whose rows a store keyed by path should delete: every
+    /// removed path, and a moved file's old path once `read` holds its new
+    /// one. Nothing at all when the walk reported errors, so a folder that
+    /// failed to read cannot shrink the store.
+    pub fn gone_by_path(&self, read: &BTreeSet<&str>) -> Vec<&str> {
+        if self.walk_errors > 0 {
+            return Vec::new();
+        }
+        let moved = self
+            .moved
+            .iter()
+            .filter(|m| read.contains(m.now.rel.as_str()))
+            .map(|m| m.was.as_str());
+        self.gone().into_iter().chain(moved).collect()
+    }
+
+    /// For a store keyed by content, whose files are snapshots that can
+    /// overlap: whether a record may have left the input — a file gone or
+    /// rewritten, after a clean walk. Only a read of every file says which,
+    /// so a caller reads them all. An added or moved file only adds.
+    pub fn may_have_dropped_records(&self) -> bool {
+        self.walk_errors == 0 && (!self.removed.is_empty() || !self.modified.is_empty())
+    }
+
+    /// The removed paths a caller may act on: all of them after a clean
+    /// walk, none after one that reported errors. For a store keyed by
+    /// content, where a move changes nothing, this is the whole question.
+    pub fn gone(&self) -> Vec<&str> {
+        if self.walk_errors > 0 {
+            return Vec::new();
+        }
+        self.removed.iter().map(|(rel, _)| rel.as_str()).collect()
+    }
 }
 
 impl Scan {
     /// What this source has not dealt with, relative to what it had.
     pub fn changes_since(&self, prev: &FileScanCursor) -> Changes {
-        let mut changes = Changes::default();
+        let mut changes = Changes {
+            walk_errors: self.errors.len(),
+            ..Changes::default()
+        };
         let now: BTreeSet<&str> = self.files.iter().map(|f| f.rel.as_str()).collect();
 
         // Paths the caller knew that are gone. Held first, because a
@@ -217,7 +286,6 @@ impl Scan {
         changes
     }
 
-    /// The view to persist, once the caller has dealt with everything.
     /// The scanned file at this root-relative path, if the scan saw
     /// one. The single-file feeds' whole question: "is my file there,
     /// and what is in it?"
@@ -225,6 +293,99 @@ impl Scan {
         self.files.iter().find(|f| f.rel == rel)
     }
 
+    /// Whether `rel` is a path this scan did not find and may only have
+    /// failed to see: it lies under, or is, an entry the walk could not
+    /// read. A row about such a path was not tried again this run.
+    pub fn could_not_see(&self, rel: &str) -> bool {
+        self.file(rel).is_none()
+            && self
+                .errors
+                .iter()
+                .any(|e| match e.path.strip_prefix(&self.root) {
+                    Ok(dir) => {
+                        let dir = dir.to_string_lossy();
+                        dir.is_empty() || dir == rel || is_under(rel, &dir)
+                    }
+                    Err(_) => true,
+                })
+    }
+
+    /// [`Self::could_not_see`] as a value that outlives the scan, for
+    /// [`RunProblems::records_tried_all_but`](crate::run_problems::RunProblems::records_tried_all_but):
+    /// the paths this walk has no verdict on.
+    pub fn unseen(&self) -> impl Fn(&str) -> bool + Send + Sync + 'static {
+        let blind: Vec<Option<String>> = self
+            .errors
+            .iter()
+            .map(|e| {
+                e.path
+                    .strip_prefix(&self.root)
+                    .ok()
+                    .map(|dir| dir.to_string_lossy().into_owned())
+            })
+            .collect();
+        // Only a walk with errors has anything it could not see, so only
+        // then is the list of what it did see worth holding.
+        let seen: std::collections::HashSet<String> = if blind.is_empty() {
+            Default::default()
+        } else {
+            self.files.iter().map(|f| f.rel.clone()).collect()
+        };
+        move |rel: &str| {
+            !seen.contains(rel)
+                && blind.iter().any(|dir| match dir {
+                    Some(dir) => dir.is_empty() || dir == rel || is_under(rel, dir),
+                    None => true,
+                })
+        }
+    }
+
+    /// The run problem a walk with errors leaves, for
+    /// [`crate::download_problems::report_run`]: the files it reports gone
+    /// keep their records until a walk completes. Empty for a clean walk,
+    /// so reporting it also clears the last run's row.
+    pub fn walk_problems(&self) -> Vec<crate::download_problems::RunProblem> {
+        self.walk_problems_as("files")
+    }
+
+    /// [`Self::walk_problems`] under a name of the caller's, for a source
+    /// that scans more than one tree: `report_run` keeps one row per name.
+    pub fn walk_problems_as(&self, name: &str) -> Vec<crate::download_problems::RunProblem> {
+        let Some(first) = self.errors.first() else {
+            return Vec::new();
+        };
+        vec![crate::download_problems::RunProblem::listing(
+            name,
+            // The path first, and short: the sample is cut at 80 characters.
+            format!(
+                "{}: {} ({} unreadable under {}; nothing was deleted this run)",
+                match first.path.strip_prefix(&self.root) {
+                    Ok(rel) if rel.as_os_str().is_empty() => Path::new("."),
+                    Ok(rel) => rel,
+                    Err(_) => &first.path,
+                }
+                .display(),
+                first.error,
+                self.errors.len(),
+                self.root_as_given.display(),
+            ),
+        )]
+    }
+
+    /// The run problem of a store keyed by content that read every file to
+    /// learn what the input still holds, and could not read `unread` of
+    /// them: nothing was deleted this run.
+    pub fn deletions_held_back(unread: usize) -> crate::download_problems::RunProblem {
+        crate::download_problems::RunProblem::listing(
+            "removed_records",
+            format!(
+                "files were removed or rewritten, but {unread} of the files could not be \
+                 read, so no record was deleted this run"
+            ),
+        )
+    }
+
+    /// The view to persist, once the caller has dealt with everything.
     pub fn cursor(&self) -> FileScanCursor {
         self.files
             .iter()
@@ -281,17 +442,17 @@ where
 
     // A single file is a legitimate root. Every provider that takes
     // "a file or a directory" from its config used to special-case
-    // this itself; the utility owns it now. Walking the parent and
-    // accepting only that one name keeps the rest of the function —
-    // and the cache keys — identical for both shapes.
-    let (root, only) = if resolved.is_file() {
+    // this itself; the utility owns it now. Walking the parent's own
+    // entries and accepting only that one name keeps the rest of the
+    // function — and the cache keys — identical for both shapes.
+    let (root, only, max_depth) = if resolved.is_file() {
         let name = resolved.file_name().map(|n| n.to_os_string());
         match (resolved.parent().map(Path::to_path_buf), name) {
-            (Some(parent), Some(name)) => (parent, Some(name)),
-            _ => (resolved.clone(), None),
+            (Some(parent), Some(name)) => (parent, Some(name), Some(1)),
+            _ => (resolved.clone(), None, opts.max_depth),
         }
     } else {
-        (resolved, None)
+        (resolved.clone(), None, opts.max_depth)
     };
 
     let cached = cache.load_under(&root).await?;
@@ -300,57 +461,96 @@ where
         ..ScanStats::default()
     };
 
-    let (walked, errors) = fswalk::walk_files(&root, &opts.ignore, |p| {
+    let (walked, mut errors) = fswalk::walk_files(&root, &opts.ignore, max_depth, |p| {
         only.as_ref()
             .is_none_or(|name| p.file_name() == Some(name.as_os_str()))
             && accept(p)
     })
     .with_context(|| format!("walk {}", root.display()))?;
 
-    let mut files = Vec::with_capacity(walked.len());
-    let mut fresh_prints = Vec::with_capacity(walked.len());
+    struct Candidate {
+        entry: fswalk::WalkedFile,
+        fresh: fswalk::FreshStat,
+        reusable: Option<Blake3>,
+    }
+    let mut candidates = Vec::with_capacity(walked.len());
+    let mut present_unread = Vec::new();
     for entry in walked {
         if !admit(&entry.path, &entry.meta) {
+            present_unread.push(entry.rel);
             continue;
         }
         let fresh = fswalk::fresh_stat(&entry.meta);
         if let Some(max) = opts.max_bytes {
             if fresh.size as u64 > max {
                 stats.too_large += 1;
+                present_unread.push(entry.rel);
                 continue;
             }
         }
-
         let decision = fswalk::decide(cached.cursor(&entry.rel), &fresh);
         // A cursor that matches is only useful with the digest that
         // went with it; without one there is nothing to reuse.
         let reusable = matches!(decision, StampDecision::ReuseHash)
             .then(|| cached.blake3(&entry.rel))
             .flatten();
+        candidates.push(Candidate {
+            entry,
+            fresh,
+            reusable,
+        });
+    }
 
+    let mut hashing = HashProgress::new(
+        &opts.progress,
+        candidates.iter().filter(|c| c.reusable.is_none()).count(),
+        candidates
+            .iter()
+            .filter(|c| c.reusable.is_none())
+            .map(|c| c.fresh.size as u64)
+            .sum(),
+    );
+
+    let mut files = Vec::with_capacity(candidates.len());
+    let mut fresh_prints = Vec::with_capacity(candidates.len());
+    // Hashed but not yet in the cache. Flushed every `FLUSH_BYTES` so a
+    // scan that is stopped halfway resumes instead of starting over.
+    let mut unflushed: Vec<Fingerprint> = Vec::new();
+    let mut unflushed_bytes = 0u64;
+    for Candidate {
+        entry,
+        fresh,
+        reusable,
+    } in candidates
+    {
+        let is_new = reusable.is_none();
         let blake3 = match reusable {
             Some(hash) => {
                 stats.reused += 1;
                 stats.bytes_reused += fresh.size as u64;
                 hash
             }
-            None => match fswalk::hash_file(&entry.path, fresh.size as u64) {
+            None => match hashing.file(&entry.path, fresh.size as u64) {
                 Ok(hash) => {
                     stats.hashed += 1;
                     stats.bytes_hashed += fresh.size as u64;
                     hash
                 }
                 Err(e) => {
-                    // Unreadable now; surfaced like any other walk
-                    // error rather than failing the whole scan.
-                    stats.too_large += 0;
+                    // Unreadable now; surfaced like any other walk error
+                    // rather than failing the whole scan. Dropping it
+                    // silently would report the file as deleted.
                     tracing::warn!(path = %entry.path.display(), error = %e, "fsscan_hash_failed");
+                    errors.push(WalkError {
+                        path: entry.path,
+                        error: format!("{e:#}"),
+                    });
                     continue;
                 }
             },
         };
 
-        fresh_prints.push(Fingerprint {
+        let print = Fingerprint {
             abs_path: abs_key(&root, &entry.rel),
             kind: EntryKind::File,
             blake3,
@@ -361,7 +561,17 @@ where
                 inode: fresh.inode,
                 dev: fresh.dev,
             },
-        });
+        };
+        if is_new {
+            unflushed.push(print.clone());
+            unflushed_bytes += fresh.size as u64;
+            if unflushed_bytes >= FLUSH_BYTES {
+                cache.store(&unflushed).await?;
+                unflushed.clear();
+                unflushed_bytes = 0;
+            }
+        }
+        fresh_prints.push(print);
         files.push(ScannedFile {
             path: entry.path,
             rel: entry.rel,
@@ -369,6 +579,7 @@ where
             blake3,
         });
     }
+    hashing.finish();
 
     stats.cache_written = fresh_prints.len() as u64;
     cache.store(&fresh_prints).await?;
@@ -376,10 +587,108 @@ where
     Ok(Scan {
         root,
         root_as_given: given.to_path_buf(),
+        given_resolved: resolved,
         files,
+        present_unread,
         errors,
         stats,
     })
+}
+
+/// Hashed bytes between writes of the fingerprint cache.
+const FLUSH_BYTES: u64 = 512 * 1024 * 1024;
+/// A file this big gets a line in the log when its hash starts and ends.
+const LOUD_BYTES: u64 = 64 * 1024 * 1024;
+const MESSAGE_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Says, through `Progress::set_message` and the log, what the hashing
+/// pass is on. Silent when there is nothing to hash.
+struct HashProgress<'a> {
+    progress: &'a crate::progress::Progress,
+    files_total: usize,
+    bytes_total: u64,
+    files_done: usize,
+    bytes_done: u64,
+    last_message: std::time::Instant,
+}
+
+impl<'a> HashProgress<'a> {
+    fn new(progress: &'a crate::progress::Progress, files_total: usize, bytes_total: u64) -> Self {
+        if files_total > 0 {
+            tracing::info!(
+                files = files_total,
+                bytes = bytes_total,
+                "fsscan_hashing: {files_total} files, {} to read",
+                human_bytes(bytes_total)
+            );
+        }
+        Self {
+            progress,
+            files_total,
+            bytes_total,
+            files_done: 0,
+            bytes_done: 0,
+            last_message: std::time::Instant::now() - MESSAGE_EVERY,
+        }
+    }
+
+    fn file(&mut self, path: &Path, size: u64) -> Result<Blake3> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let started = std::time::Instant::now();
+        if size >= LOUD_BYTES {
+            tracing::info!(path = %path.display(), "fsscan_hashing_file: {name}, {}", human_bytes(size));
+        }
+        let (before, total, files) = (self.bytes_done, self.bytes_total, self.files_done + 1);
+        let of = self.files_total;
+        let hash = fswalk::hash_file_reporting(path, size, |in_file| {
+            if self.last_message.elapsed() >= MESSAGE_EVERY {
+                self.last_message = std::time::Instant::now();
+                self.progress.set_message(&format!(
+                    "hashing {name} (file {files} of {of}): {} of {}",
+                    human_bytes(before + in_file),
+                    human_bytes(total)
+                ));
+            }
+        })?;
+        self.files_done += 1;
+        self.bytes_done += size;
+        if size >= LOUD_BYTES {
+            tracing::info!(
+                path = %path.display(),
+                "fsscan_hashed_file: {name} in {:.1}s",
+                started.elapsed().as_secs_f64()
+            );
+        }
+        Ok(hash)
+    }
+
+    fn finish(&self) {
+        if self.files_total > 0 {
+            tracing::info!(
+                "fsscan_hashed: {} files, {}",
+                self.files_done,
+                human_bytes(self.bytes_done)
+            );
+        }
+    }
+}
+
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1000.0 && u < UNITS.len() - 1 {
+        v /= 1000.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[u])
+    }
 }
 
 #[cfg(test)]
@@ -408,6 +717,23 @@ mod tests {
             .unwrap()
     }
 
+    /// A file past the parallel threshold must hash to exactly what
+    /// `blake3::hash` says, and report a rising byte count on the way.
+    #[test]
+    fn a_big_file_hashes_in_chunks_to_the_same_digest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let body: Vec<u8> = (0..20_000_000u32).map(|i| (i % 251) as u8).collect();
+        let path = tmp.path().join("big.bin");
+        std::fs::write(&path, &body).unwrap();
+
+        let mut seen = Vec::new();
+        let got = fswalk::hash_file_reporting(&path, body.len() as u64, |n| seen.push(n)).unwrap();
+
+        assert_eq!(got, *blake3::hash(&body).as_bytes());
+        assert!(seen.len() > 1 && seen.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(seen.last(), Some(&(body.len() as u64)));
+    }
+
     #[tokio::test]
     async fn a_cold_scan_hashes_everything_and_a_warm_one_hashes_nothing() {
         let tmp = tempfile::tempdir().unwrap();
@@ -426,6 +752,40 @@ mod tests {
         assert_eq!(warm.stats.hashed, 0);
         assert_eq!(warm.stats.reused, 2);
         assert_eq!(warm.stats.bytes_reused, 7);
+    }
+
+    /// A file as the root is that file: not a same-named file in a
+    /// folder beside it, and no walk of the folders beside it at all. A
+    /// catalog next to its `Previews.lrdata`, or a download in
+    /// `~/Downloads`, used to cost a walk of everything under the parent.
+    #[tokio::test]
+    async fn a_file_root_is_that_file_and_nothing_under_its_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "Catalog.lrcat", b"the catalog");
+        write(&root, "Catalog Previews.lrdata/Catalog.lrcat", b"not it");
+        let cache = fresh_cache(tmp.path()).await;
+
+        let scan = scan_all(&cache, &root.join("Catalog.lrcat")).await;
+        let rels: Vec<&str> = scan.files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(rels, ["Catalog.lrcat"]);
+    }
+
+    /// `max_depth: Some(1)` is the root's own files and none beneath it.
+    #[tokio::test]
+    async fn max_depth_one_stays_in_the_root_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "top.txt", b"top");
+        write(&root, "sub/deep.txt", b"deep");
+        let cache = fresh_cache(tmp.path()).await;
+        let opts = ScanOptions {
+            max_depth: Some(1),
+            ..ScanOptions::default()
+        };
+        let scan = scan(&cache, &root, &opts, all).await.unwrap();
+        let rels: Vec<&str> = scan.files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(rels, ["top.txt"]);
     }
 
     /// The payoff of a shared cache: a second consumer with a narrower
@@ -476,6 +836,7 @@ mod tests {
         assert_eq!(s.files.len(), 1);
         assert_eq!(s.stats.too_large, 1);
         assert_eq!(s.stats.hashed, 1);
+        assert_eq!(s.present_unread, vec!["big.bin".to_string()]);
     }
 
     // ── the question the whole thing exists for ──────────────────────
@@ -536,6 +897,59 @@ mod tests {
         assert_eq!(changes.removed.len(), 1);
         assert_eq!(changes.removed[0].0, "goes.txt");
         assert!(changes.added.is_empty());
+    }
+
+    /// A path-keyed store drops a deleted file's rows, and a moved file's
+    /// old rows only once its new path was read, so a failed re-read never
+    /// leaves the content keyed nowhere.
+    #[tokio::test]
+    async fn a_path_keyed_store_drops_deleted_and_moved_away_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "stays.vcf", b"a");
+        write(&root, "goes.vcf", b"b");
+        write(&root, "old.vcf", b"moved bytes");
+        let cache = fresh_cache(tmp.path()).await;
+        let mark = scan_all(&cache, &root).await.cursor();
+
+        std::fs::remove_file(root.join("goes.vcf")).unwrap();
+        std::fs::rename(root.join("old.vcf"), root.join("new.vcf")).unwrap();
+        let changes = scan_all(&cache, &root).await.changes_since(&mark);
+
+        let to_read: Vec<&str> = changes
+            .needs_reading_by_path()
+            .map(|f| f.rel.as_str())
+            .collect();
+        assert_eq!(to_read, vec!["new.vcf"]);
+
+        let read = BTreeSet::from(["new.vcf"]);
+        assert_eq!(changes.gone_by_path(&read), vec!["goes.vcf", "old.vcf"]);
+        assert_eq!(
+            changes.gone_by_path(&BTreeSet::new()),
+            vec!["goes.vcf"],
+            "a move whose new path failed to read keeps its old rows",
+        );
+    }
+
+    /// A walk that hit an error cannot tell a deleted file from one it
+    /// failed to see, so nothing it reports gone is deleted.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_walk_error_deletes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "stays.vcf", b"a");
+        write(&root, "goes.vcf", b"b");
+        let cache = fresh_cache(tmp.path()).await;
+        let mark = scan_all(&cache, &root).await.cursor();
+
+        std::fs::remove_file(root.join("goes.vcf")).unwrap();
+        std::os::unix::fs::symlink(root.join("nowhere"), root.join("dangling.vcf")).unwrap();
+        let changes = scan_all(&cache, &root).await.changes_since(&mark);
+
+        assert_eq!(changes.walk_errors, 1, "{changes:?}");
+        assert_eq!(changes.removed.len(), 1, "the removal is still reported");
+        assert!(changes.gone_by_path(&BTreeSet::new()).is_empty());
     }
 
     /// A rename must not read a byte: the content is already known, so

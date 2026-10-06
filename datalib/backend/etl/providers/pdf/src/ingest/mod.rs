@@ -15,6 +15,8 @@ use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
 
 pub use db::{db_path_for, RawDb, RenderTarget};
 use schema_raw::{PdfDocumentRow, PdfKind, PdfPathRow, PdfScanMetaRow};
@@ -62,6 +64,13 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let pool = opts.db.pool().clone();
+    // The scan has no stop to honour, so it always covers the whole tree.
+    let never_stops = StopFlag::new();
+    run_problems::collecting(&pool, &never_stops, |found| scan_tree(opts, found)).await
+}
+
+async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
 
     // Load the cache BEFORE truncating the path table, exactly as
@@ -69,7 +78,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // the in-memory cache is what preserves the fast-rescan path across
     // it.
     let prev = opts.db.load_prev().await.context("load rescan cache")?;
-    opts.db.reset_paths().await.context("reset pdf_paths")?;
 
     // Written before the walk, so an interrupted scan still leaves the
     // render step able to find the tree.
@@ -95,13 +103,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         &fsscan::ScanOptions {
             ignore: opts.ignore.clone(),
             max_bytes: opts.max_bytes,
+            ..Default::default()
         },
         is_pdf,
     )
     .await?;
     summary.errors += scan.errors.len();
-    for e in &scan.errors {
-        tracing::warn!(path = %e.path.display(), error = %e.error, "pdf_walk_error");
+    found.extend(scan.walk_problems());
+    // A walk that could not read part of the tree may only have failed to
+    // see a path, so the table is not truncated and nothing falls out:
+    // what the walk did see is upserted over what was there.
+    if scan.errors.is_empty() {
+        opts.db.reset_paths().await.context("reset pdf_paths")?;
     }
     summary.pdfs_seen = scan.files.len();
     summary.too_large = scan.stats.too_large;
@@ -134,9 +147,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         ..row
                     });
                 }
+                // Retried every scan: a document that never identified
+                // is not in `pdf_documents`.
                 Err(e) => {
                     summary.errors += 1;
-                    tracing::warn!(path = %f.rel, error = %e, "pdf_identify_failed");
+                    found.record_failed("pdf_paths", &f.rel, format!("{e:#}"));
                     continue;
                 }
             }
@@ -157,6 +172,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if !doc_batch.is_empty() || !path_batch.is_empty() {
         opts.db.write_batch(&doc_batch, &path_batch, &now).await?;
     }
+    // Every scan retries every document it could not identify, so a row
+    // stands only on a path under an entry the walk could not read.
+    found.records_tried_all_but("pdf_paths", scan.unseen());
     Ok(summary)
 }
 
@@ -174,9 +192,9 @@ fn identify(path: &Path, size: i64) -> Result<PdfDocumentRow> {
     // against a different cache key.
     let det =
         pdf_inspector::process_pdf_with_options(path, pdf_inspector::PdfOptions::detect_only())
-            .map_err(|e| anyhow::anyhow!("classify {}: {e}", path.display()))?;
+            .map_err(|e| anyhow::anyhow!("classify: {e}"))?;
 
-    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let bytes = std::fs::read(path).context("read")?;
     // One parse feeds both: the metadata fields and the content hash
     // want the same `lopdf::Document`, and building it is the expensive
     // half of each.

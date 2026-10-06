@@ -1,8 +1,9 @@
-// Slack: the Connection block fills the channel picker and, once DMs
-// are on, the DM picker — through the same probe and the same grid the
+// Slack: the channel picker and, once DMs are on, the DM picker each
+// load their own list — through the same probe and the same grid the
 // email and Claude forms use.
 import { test, expect, type Page } from "@playwright/test";
-import { MANAGE_WITH_CONFIG } from "./grid-helpers";
+import { MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
+import { probeAsk, probeDone, reportFor, type ProbeAsk } from "./probe-stub";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 const field = (page: Page, caption: string) =>
@@ -12,6 +13,9 @@ const toggle = (page: Page, caption: string) =>
 const picker = (page: Page, caption: string) =>
   wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .pick-grid`);
 const rows = (page: Page, caption: string) => picker(page, caption).locator(".slick-row");
+/// The button that loads one field's picker from the workspace.
+const load = (page: Page, caption: string) =>
+  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-load-btn`).click();
 const tick = (page: Page, caption: string, id: string) =>
   picker(page, caption)
     .locator(`.slick-row[data-key="${id}"] .slick-cell-checkboxsel label`)
@@ -86,13 +90,15 @@ const SLACK_PROBE = {
   notes: [],
 };
 
-let lastProbeRequest: { type?: string; params?: Record<string, unknown> } = {};
+let lastProbeRequest: ProbeAsk = {};
+
+const SLACK_LISTS = { channels: ["channel"], conversations: ["conversation"] };
 
 async function stubBackend(page: Page) {
   await page.route("**/api/latchkey/slack", (route) => route.fulfill({ json: SLACK_SERVICE }));
   await page.route("**/api/probe", (route) => {
-    lastProbeRequest = route.request().postDataJSON();
-    return route.fulfill({ json: SLACK_PROBE });
+    lastProbeRequest = probeAsk(route);
+    return route.fulfill(probeDone(reportFor(SLACK_PROBE, lastProbeRequest, SLACK_LISTS)));
   });
 }
 
@@ -102,8 +108,8 @@ async function openManager(page: Page) {
 }
 
 async function pickSlack(page: Page) {
-  await page.getByRole("button", { name: "+ Data Source" }).click();
-  await page.getByRole("searchbox").fill("slack");
+  await page.getByRole("button", { name: "Add source" }).click();
+  await page.locator(".wiz-filter").fill("slack");
   await wizard(page)
     .locator(".wiz-tile", { hasText: "Mirror channels and DMs from one Slack workspace." })
     .click();
@@ -111,11 +117,11 @@ async function pickSlack(page: Page) {
 
 let original = "";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
   lastProbeRequest = {};
   await stubBackend(page);
   await openManager(page);
-  original = await page.locator(".m2-editor").inputValue();
+  original = await savedConfig(request);
 });
 
 test.afterEach(async ({ page }) => {
@@ -126,21 +132,23 @@ test.afterEach(async ({ page }) => {
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });
 
-test("a probe fills the channel picker, and ticking rows writes `channels`", async ({ page }) => {
+test("Load fills the channel picker, and ticking rows writes `channels`", async ({ page }) => {
   await pickSlack(page);
 
   // Nothing to pick from until the workspace has been asked.
   await expect(picker(page, "Channels")).toHaveCount(0);
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  await load(page, "Channels");
 
   // A Slack account has no address, so the line names the handle and
-  // the workspace, and counts both kinds of thing that came back.
-  await expect(wizard(page).locator(".wiz-probe-note")).toContainText(
-    "Reached picard in Enterprise — 3 channels, 2 conversations.",
+  // the workspace, and counts what came back in the field's own noun.
+  await expect(wizard(page).locator(".wiz-load-done")).toContainText(
+    "3 channels from picard in Enterprise.",
   );
-  // The probe authenticates with what Save would write: the `api`
-  // table that selects the live method, with the form's defaults.
+  // The probe asks for the channels alone, and authenticates with what
+  // Save would write: the `api` table that selects the live method,
+  // with the form's defaults.
   expect(lastProbeRequest.type).toBe("slack");
+  expect(lastProbeRequest.list).toBe("channels");
   expect(lastProbeRequest.params).toMatchObject({ api: { media: true, dms: false } });
 
   // Channels read with their `#`, and a tag says why one might not be
@@ -163,14 +171,17 @@ test("a probe fills the channel picker, and ticking rows writes `channels`", asy
   await expect(toml).toContainText('channels = ["engineering", "bridge"]');
 });
 
-test("turning DMs on reveals a DM picker filled from the same probe", async ({ page }) => {
+test("turning DMs on reveals a DM picker with a load of its own", async ({ page }) => {
   await pickSlack(page);
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
-  await expect(wizard(page).locator(".wiz-probe-note")).toContainText("Reached");
+  await load(page, "Channels");
+  await expect(wizard(page).locator(".wiz-load-done")).toContainText("3 channels");
 
-  // One probe, both pickers: no second "Test connection" after the
-  // toggle.
+  // The channels' list holds no DMs: the DM picker asks for its own,
+  // so a workspace's directory is read only by someone who wants DMs.
   await toggle(page, "Download direct messages").check();
+  await expect(picker(page, "Only these DMs")).toHaveCount(0);
+  await load(page, "Only these DMs");
+  expect(lastProbeRequest.list).toBe("conversations");
   // Titled after who is on the far end, a group DM tagged and counted.
   await expect(rows(page, "Only these DMs")).toHaveText([
     /@William Riker/,
@@ -195,7 +206,8 @@ test("a typed name is checked the way the downloader reads it", async ({ page })
   // The link `Copy link` hands out resolves to its id; a person's
   // handle is not a conversation and would mirror nothing.
   await field(page, "Only these DMs").fill("https://enterprise.slack.com/archives/D_RIKER, @riker");
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  await load(page, "Channels");
+  await load(page, "Only these DMs");
 
   await expect(wizard(page).getByText(/Not on this account: bridg\./)).toBeVisible();
   await expect(wizard(page).getByText(/Not on this account: @riker\./)).toBeVisible();

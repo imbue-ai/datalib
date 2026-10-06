@@ -279,6 +279,13 @@ calendars_bookkeeping
     last_error
     volatile_payload
     tz_offset
+dav_unconfirmed
+    collection
+    href
+dav_unstored
+    collection
+    href
+    detail
 google_events
     id
     payload
@@ -347,11 +354,17 @@ addressbooks_bookkeeping
     last_error
     volatile_payload
     tz_offset
-contact_photos
+contact_categories
     id
-    owner_id
-    source_url
-    blake3
+    contact_id
+    addressbook_id
+    category
+contact_group_members
+    id
+    group_id
+    addressbook_id
+    member
+    member_id
 contacts
     id
     payload
@@ -369,6 +382,13 @@ contacts_bookkeeping
     last_error
     volatile_payload
     tz_offset
+dav_unconfirmed
+    collection
+    href
+dav_unstored
+    collection
+    href
+    detail
 ingested_files
     scope
     rel_path
@@ -439,10 +459,11 @@ emails_bookkeeping
     last_error
     volatile_payload
     tz_offset
-gmail_messages
-    gmail_id
+fetched_messages
+    id
     email_id
-    thread_id
+    fetched_for
+    unstorable_by
 ingested_files
     scope
     rel_path
@@ -450,6 +471,19 @@ ingested_files
     size_bytes
     last_finished_at_utc
     tz_offset
+listed_messages
+    id
+    stamp
+listed_messages_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+listed_whole
+    scope
 mailboxes
     id
     payload
@@ -458,8 +492,6 @@ mailboxes
     parent_id
     role
     sort_order
-    total_emails
-    unread_emails
 mailboxes_bookkeeping
     id
     fetched_at_utc
@@ -1249,6 +1281,10 @@ channels_bookkeeping
     last_error
     volatile_payload
     tz_offset
+coverage
+    scope
+    lo
+    hi
 messages
     id
     payload
@@ -1476,8 +1512,25 @@ yolink_readings_bookkeeping
     last_error
     volatile_payload
     tz_offset
+yolink_windows
+    id
+    device_name
+    start_ms
+    end_ms
+yolink_windows_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
 
 == garmin/raw ==
+coverage
+    scope
+    lo
+    hi
 garmin_account
     id
     payload
@@ -1496,6 +1549,7 @@ garmin_activities
     start_time_gmt
     activity_type
     name
+    listing_hash
 garmin_activities_bookkeeping
     id
     fetched_at_utc
@@ -1507,6 +1561,7 @@ garmin_activities_bookkeeping
 garmin_activity_details
     id
     payload
+    listing_hash
 garmin_activity_details_bookkeeping
     id
     fetched_at_utc
@@ -1520,6 +1575,7 @@ garmin_activity_files
     activity_id
     file_kind
     blake3
+    listing_hash
 garmin_activity_files_bookkeeping
     id
     fetched_at_utc
@@ -1533,6 +1589,7 @@ garmin_daily
     payload
     metric
     calendar_date
+    fetched_on
 garmin_daily_bookkeeping
     id
     fetched_at_utc
@@ -1586,6 +1643,7 @@ garmin_wellness_files
     calendar_date
     file_kind
     blake3
+    fetched_on
 garmin_wellness_files_bookkeeping
     id
     fetched_at_utc
@@ -1629,6 +1687,9 @@ grid_rows
     modified_at
     modified_at_utc
     modified_offset
+    touched_at
+    touched_at_utc
+    touched_offset
     is_document
     author
     account
@@ -1640,8 +1701,10 @@ grid_rows
     conversation_uuid
     message_index
     entire_chat
-    text
+    preview
+    content_hash
     qmd_path
+    source_id
     source_url
     git_sha
     upstream_id
@@ -1662,6 +1725,7 @@ markdowns
     title
     created_at
     modified_at
+    item_count
     md_path
     upstream_cursor
     renderer_version

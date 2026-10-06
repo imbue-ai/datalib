@@ -15,6 +15,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/providers/apple_messages_config:datalib_etl_apple_messages_config",
@@ -45,10 +46,13 @@ rust_test(
     size = "small",
     srcs = ["tests/messages_roundtrip.rs"],
     crate_name = "messages_roundtrip",
-    data = ["//datalib/backend/etl/providers/apple_messages:tng_chat_db"],
+    data = [
+        "//datalib/backend/etl/providers/apple_messages:tng_chat_db/chat.db",
+        "//datalib/backend/etl/providers/apple_messages:tng_chat_db/chat.db-wal",
+    ],
     edition = "2021",
     env = {
-        "APPLE_MESSAGES_TNG_DB": "$(rootpath //datalib/backend/etl/providers/apple_messages:tng_chat_db)",
+        "APPLE_MESSAGES_TNG_DB": "$(rootpath //datalib/backend/etl/providers/apple_messages:tng_chat_db/chat.db)",
     },
     deps = [
         ":datalib_etl_apple_messages_render",

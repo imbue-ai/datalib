@@ -21,14 +21,14 @@ export type Field =
   | ({ kind: "text" } & FieldBase & {
         required?: boolean;
         /// Renders as the latchkey-account control rather than a bare
-        /// text box: a dropdown of the accounts latchkey has stored for
-        /// the entry's `credentialService`, a "Latchkey auth" button,
-        /// and — still — somewhere to type.
+        /// text box: a box that lists the accounts latchkey has stored
+        /// for the entry's `credentialService` and still takes typing,
+        /// with the sign-in tabs under it.
         ///
         /// Typing matters. latchkey may hold an account this server
         /// can't enumerate (no keyring access, latchkey not installed),
-        /// and a dropdown that came back empty must not be the only way
-        /// in. The value written is the account string either way.
+        /// and a list that came back empty must not be the only way in.
+        /// The value written is the account string either way.
         latchkey?: boolean;
       })
   /// A path on the machine running the backend.
@@ -50,6 +50,11 @@ export type Field =
         /// typed input stays the escape hatch for anything the filter
         /// wrongly excludes.
         extensions?: string[];
+        /// The folder the thing is almost always in, where the app that
+        /// owns it keeps it (`~/Library/Messages`). The picker opens
+        /// there while the field is empty, and the help text, which must
+        /// name it, shows it with a copy button beside it.
+        startIn?: string;
       })
   /// A closed set of values — one Rust enum, one dropdown. Prefer this
   /// over `text` whenever the backend parses the string against a fixed
@@ -74,18 +79,20 @@ export type Field =
   /// count zeros. The label should therefore not say "(bytes)".
   | ({ kind: "bytes" } & FieldBase & { default?: number })
   | ({ kind: "string_list" } & FieldBase & {
-        /// Offer a picker built from `POST /api/probe`, alongside the
-        /// comma-separated box. Names *which* of the probe's items this
-        /// field takes: every label, only the ones a render filter can
-        /// match, an account's conversations (a Claude chat, a Slack
-        /// DM), or a workspace's channels.
+        /// Offer a picker, alongside the comma-separated box, that a
+        /// "Load" button fills from `POST /api/probe` with this list:
+        /// every label, only the ones a render filter can match, an
+        /// account's conversations (a Claude chat, a Slack DM), or a
+        /// workspace's channels.
         probe?: ProbeNoun;
       });
 
-/// What a `probe:` field is a picker *of*: which of the probe's items
-/// it takes. The wizard says `labels` and `mailboxes` in the source's
-/// own word for them (`CatalogEntry.mailboxNoun`), the rest as written.
-export type ProbeNoun = "labels" | "mailboxes" | "conversations" | "channels" | "calendars";
+/// What a `probe:` field is a picker *of*: the list its "Load" asks the
+/// provider for. Mirrors `ProbeList` in datalib/backend/probe/src/lib.rs.
+/// The wizard says `labels` and `mailboxes` in the source's own word for
+/// them (`CatalogEntry.mailboxNoun`), the rest as written.
+export type ProbeNoun =
+  "labels" | "mailboxes" | "conversations" | "channels" | "calendars" | "addressbooks";
 
 export type CatalogEntry = {
   /// The group's `type`: the thing mirrored (`slack`, `email`, …).
@@ -146,6 +153,15 @@ export type CatalogEntry = {
   /// Shown beside the Connect button, when connecting this way costs
   /// something the person should decide about before clicking.
   credentialConnectWarning?: string;
+  /// The "Paste a key" tab. `help` says where the credential
+  /// comes from; `headers` replaces the shape latchkey's own example
+  /// gives, for a service whose example is wrong — `{secret}` marks
+  /// where the pasted value goes (see `credentialShape.ts`).
+  /// `accountSuffix` follows the username in the name the credential is
+  /// offered under, for entries that share one service but want
+  /// different credentials: Fastmail Contacts and Calendar both use
+  /// `fastmail-dav`, and a read-only app password covers only one.
+  credentialPaste?: { help?: string; headers?: string[]; accountSuffix?: string };
   /// Dotted params path whose presence identifies this entry among the
   /// several that share one `type`. Undefined on a type with only one
   /// entry, which is nearly all of them.
@@ -153,11 +169,15 @@ export type CatalogEntry = {
   /// Order matters: [`catalogForStep`] takes the first entry whose key
   /// is present, so a more specific key must come first in `CATALOG`.
   variantKey?: string;
+  /// Field targets of which at least one must be filled in, for a type
+  /// whose methods combine (lightroom's catalog and backups folder), so
+  /// no one of them is `required` alone.
+  requiresOneOf?: string[];
   /// Params this entry always writes, with no field to edit them.
   preset?: Preset[];
-  /// Offer "Test connection", and populate any `probe:` field from
-  /// what comes back. Requires a `datalib-step probe <type>` on the
-  /// backend side; see `datalib/backend/datalib_step/src/probe.rs`.
+  /// Offer "Check connection", and a "Load" on every `probe:` field.
+  /// Requires a `datalib-step probe <type>` on the backend side; see
+  /// `datalib/backend/datalib_step/src/probe.rs`.
   canProbe?: boolean;
   fields?: Field[];
 };
@@ -268,7 +288,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Edit-catcher window (days)",
         help:
           "Re-query the trailing N days of channels that already have history, to pick up " +
-          "edits and reactions. NOT a range bound — it only adds work. Leave empty for none.",
+          "edits, reactions and deletions. NOT a range bound — it only adds work. Leave empty " +
+          "for 30; 0 turns it off.",
       },
     ],
   },
@@ -297,6 +318,14 @@ export const CATALOG: CatalogEntry[] = [
     // cost, not the history of how we found out (2026-08-31, the
     // captured cookie and the everyday browser evicting each other).
     credentialConnectWarning: "Signing in again may log out your other claude.ai session.",
+    // latchkey offers a service it did not ship the generic Bearer
+    // example; claude.ai's credential is the cookie.
+    credentialPaste: {
+      headers: ["Cookie: sessionKey={secret}"],
+      help:
+        "The sessionKey cookie from a signed-in claude.ai tab: DevTools → Application → " +
+        "Cookies → https://claude.ai → sessionKey → Value.",
+    },
     canProbe: true,
     fields: [
       {
@@ -523,6 +552,14 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     canProbe: true,
     credentialService: "fastmail",
+    // Fastmail has no read-only OAuth scope, so the browser login can
+    // read, change and send mail; a hand-made token is the way to less.
+    credentialPaste: {
+      help:
+        "For read-only access, make an API token at app.fastmail.com → Settings → Privacy & " +
+        "Security → Integrations → API tokens, with Read-only access ticked, and paste it " +
+        "here. Web login signs in with full read and write access instead.",
+    },
     preset: [
       // The JMAP server. A preset rather than a field because this
       // entry *is* Fastmail — a different host is a different service
@@ -664,6 +701,13 @@ export const CATALOG: CatalogEntry[] = [
     // CalDAV takes an app password, which is its own latchkey service,
     // not the OAuth login the `fastmail` mail entry uses.
     credentialService: "fastmail-dav",
+    credentialPaste: {
+      help:
+        "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
+        "Privacy & Security → Integrations → App passwords: Access “Calendars (CalDAV)”, " +
+        "with Read-only access ticked. An API token won’t do: CalDAV refuses them.",
+      accountSuffix: "calendar",
+    },
     canProbe: true,
     fields: [
       {
@@ -671,7 +715,9 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Fastmail account",
-        help: "Which stored Fastmail app password to use. Leave it empty if latchkey holds only one.",
+        help:
+          "The name the app password is stored under in latchkey — “you@fastmail.com calendar”, " +
+          "say. Leave it empty if latchkey holds only one.",
       },
       {
         kind: "string_list",
@@ -785,16 +831,131 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
+  // ── the `contacts` variants ───────────────────────────────────────
+  //
+  // Like `calendar`: one type, an entry per way in, keyed on its method
+  // table, and a form for each, so no catch-all.
   {
     type: "contacts",
-    label: "Contacts",
-    blurb: "Mirror contacts from a CardDAV server or .vcf files.",
-    keywords: ["contacts", "carddav", "vcard", "address book"],
+    variantKey: "fastmail",
+    method: "fastmail",
+    label: "Fastmail Contacts",
+    blurb: "Mirror a Fastmail account's address books over CardDAV.",
+    keywords: ["fastmail", "contacts", "carddav", "vcard", "address book"],
+    kind: "api",
+    icon: "fastmail",
+    defaultName: "fastmail_contacts",
+    nameHint: "Personal contacts",
+    wizard: true,
+    // The app password Fastmail Calendar uses too: DAV refuses the OAuth
+    // login the `fastmail` mail entry holds.
+    credentialService: "fastmail-dav",
+    credentialPaste: {
+      help:
+        "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
+        "Privacy & Security → Integrations → App passwords: Access “Contacts (CardDAV)”, " +
+        "with Read-only access ticked. An API token won’t do: CardDAV refuses them.",
+      accountSuffix: "contacts",
+    },
+    canProbe: true,
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Fastmail account",
+        help:
+          "The name the app password is stored under in latchkey — “you@fastmail.com contacts”, " +
+          "say. Leave it empty if latchkey holds only one.",
+      },
+      {
+        kind: "string_list",
+        probe: "addressbooks",
+        target: "fastmail.addressbooks",
+        label: "Only these address books",
+        help:
+          "Address book names exactly as Fastmail shows them, comma-separated. Empty mirrors " +
+          "every address book on the account.",
+      },
+    ],
+  },
+  {
+    type: "contacts",
+    variantKey: "carddav",
+    label: "CardDAV contacts",
+    blurb: "Mirror the address books on any CardDAV server: iCloud, Nextcloud, Radicale, ….",
+    keywords: ["contacts", "carddav", "icloud", "nextcloud", "vcard", "address book"],
     kind: "api",
     icon: "contacts",
     defaultName: "contacts",
     nameHint: "Phone contacts",
-    wizard: false,
+    wizard: true,
+    // No `credentialService`, for the reason CalDAV has none: latchkey
+    // keys the login by the server's host, and registering one takes an
+    // app password, which the Connect flow cannot do.
+    canProbe: true,
+    fields: [
+      {
+        kind: "text",
+        required: true,
+        target: "carddav.server_url",
+        label: "Server URL",
+        help:
+          "Where the server's CardDAV starts, e.g. https://contacts.icloud.com/. The host " +
+          "alone is usually enough: discovery tries /.well-known/carddav when it does not " +
+          "answer. The login is latchkey's: `latchkey services register` a service for this " +
+          'host, then `latchkey auth set <service> -u "you@example.com:<app password>"`.',
+      },
+      {
+        kind: "text",
+        target: "latchkey_settings.account",
+        label: "Latchkey account",
+        help: "Which stored login to use, when latchkey holds more than one for this host.",
+      },
+      {
+        kind: "string_list",
+        probe: "addressbooks",
+        target: "carddav.addressbooks",
+        label: "Only these address books",
+        help:
+          "Address book names exactly as the server shows them, comma-separated. Empty " +
+          "mirrors every address book on the account.",
+      },
+    ],
+  },
+  {
+    type: "contacts",
+    variantKey: "vcf",
+    label: "Contact files (.vcf)",
+    blurb: "A folder of .vcf exports, from Google Contacts, iCloud or a phone.",
+    keywords: ["contacts", "vcf", "vcard", "export", "address book"],
+    kind: "export",
+    icon: "contacts",
+    defaultName: "vcf-contacts",
+    nameHint: "Old address book",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the folder of .vcf files",
+        required: true,
+        target: "vcf.path",
+        label: "Folder",
+        help:
+          "A folder of .vcf files, read recursively — ~/Downloads/contacts say. A file may " +
+          "hold one contact or a whole address book.",
+      },
+      {
+        kind: "bool",
+        target: "common.always_clear_before_ingest",
+        label: "Treat the folder as the whole address book",
+        default: true,
+        help:
+          "Each sync rewrites the mirror from the files in the folder now, so a contact " +
+          "whose file is gone drops out (the store's history keeps it).",
+      },
+    ],
   },
   {
     type: "garmin",
@@ -817,6 +978,15 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "garmin",
     nameHint: "My Garmin",
     wizard: true,
+    // From latchkey's Garmin plugin, which datalib ships and installs
+    // on the first sign-in (datalib/backend/http/src/plugins.rs).
+    credentialService: "garmin",
+    credentialPaste: {
+      help:
+        "A folder holding oauth1_token.json, as garth or python-garminconnect write it. " +
+        "latchkey keeps a copy; the folder is not read again.",
+    },
+    canProbe: true,
     fields: [
       {
         kind: "date",
@@ -841,15 +1011,6 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "All-day heart rate, stress, steps, body battery and sleep at sensor resolution, " +
           "one zip per day. The per-day metrics already carry the same series at chart resolution.",
-      },
-      {
-        kind: "text",
-        required: false,
-        target: "api.token_dir",
-        label: "Token folder",
-        help:
-          "Where `datalib-step login garmin` (or garth) put oauth1_token.json. " +
-          "Leave empty for ~/.garth.",
       },
     ],
   },
@@ -960,7 +1121,96 @@ export const CATALOG: CatalogEntry[] = [
     icon: "google_takeout",
     defaultName: "google-takeout",
     nameHint: "My Google Takeout",
-    wizard: false,
+    wizard: true,
+    // Every feed defaults off, here as in the provider: an export holds
+    // whatever was asked of Google, so each feed is ticked on purpose
+    // (providers/google_takeout/INGEST.md).
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your unzipped Google Takeout folder",
+        required: true,
+        target: "export.path",
+        label: "Takeout folder",
+        help:
+          "The unzipped export — the Takeout folder holding Google Chat/, Voice/, " +
+          "YouTube and YouTube Music/ and the rest, ~/Downloads/Takeout say. Gmail is not " +
+          "read here: its .mbox is an email source of its own.",
+      },
+      {
+        kind: "bool",
+        target: "export.google_chat",
+        label: "Google Chat",
+        default: false,
+        help: "Direct messages and spaces, with their attachments. Rendered as conversations.",
+      },
+      {
+        kind: "bool",
+        target: "export.google_voice",
+        label: "Google Voice",
+        default: false,
+        help: "Texts, voicemails, calls and bills. Rendered as conversations.",
+      },
+      {
+        kind: "bool",
+        target: "export.google_voice_include_spam",
+        requires: "export.google_voice",
+        label: "Include Voice spam",
+        default: false,
+        help: "Also read Voice/Spam/. Bulky, and rarely worth searching.",
+      },
+      {
+        kind: "bool",
+        target: "export.youtube_watch_history",
+        label: "YouTube watch history",
+        default: false,
+        help:
+          "Kept in this source's own store; not rendered into pages yet. The same is true " +
+          "of every feed below.",
+      },
+      {
+        kind: "bool",
+        target: "export.youtube_subscriptions",
+        label: "YouTube subscriptions",
+        default: false,
+      },
+      {
+        kind: "bool",
+        target: "export.maps_reviews",
+        label: "Maps reviews",
+        default: false,
+      },
+      {
+        kind: "bool",
+        target: "export.maps_saved_places",
+        label: "Maps saved places",
+        default: false,
+      },
+      {
+        kind: "bool",
+        target: "export.maps_photos",
+        label: "Maps photos and videos",
+        default: false,
+      },
+      {
+        kind: "bool",
+        target: "export.gemini_apps",
+        label: "Gemini activity",
+        default: false,
+      },
+      {
+        kind: "bool",
+        target: "common.always_clear_before_ingest",
+        label: "Empty the mirror before each sync",
+        default: false,
+        help:
+          "Not needed: every feed already drops what a newer export no longer holds " +
+          "(the store's history keeps it). Turned on, each sync empties the mirror and " +
+          "rewrites it from the export, so an export requested without some product " +
+          "loses that product's records.",
+      },
+    ],
   },
   {
     type: "facebook",
@@ -997,7 +1247,41 @@ export const CATALOG: CatalogEntry[] = [
     icon: "linkedin",
     defaultName: "linkedin",
     nameHint: "My LinkedIn",
-    wizard: false,
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your unzipped LinkedIn export folder",
+        required: true,
+        target: "export.path",
+        label: "Export folder",
+        help:
+          'The unzipped "Get a copy of your data" export — the folder of CSVs, ' +
+          "~/Downloads/LinkedInDataExport say. Every CSV in it is read.",
+      },
+      {
+        kind: "bool",
+        target: "export.fetch_photos",
+        label: "Fetch connections' profile photos",
+        default: false,
+        help:
+          "The export has no photos. On, each connection's public profile photo is fetched " +
+          "from linkedin.com, once per connection — the one part of this source that goes " +
+          "online. No login is needed.",
+      },
+      {
+        kind: "bool",
+        target: "common.always_clear_before_ingest",
+        label: "Treat each export as complete",
+        default: true,
+        help:
+          "Each sync rewrites the mirror from the export as it is now, so a message or " +
+          "connection a newer export no longer holds drops out (the store's history keeps " +
+          "it). Off, a CSV LinkedIn stops including keeps its rows from the last export " +
+          "that had it.",
+      },
+    ],
   },
   {
     type: "signal",
@@ -1087,7 +1371,31 @@ export const CATALOG: CatalogEntry[] = [
     icon: "sms",
     defaultName: "sms",
     nameHint: "Texts and calls",
-    wizard: false,
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your SMS Backup & Restore folder",
+        required: true,
+        target: "backup.path",
+        label: "Backup folder",
+        help:
+          "The folder the Android app SMS Backup & Restore writes its sms-*.xml and " +
+          "calls-*.xml files to, copied off the phone — ~/Documents/SMSBackupRestore say. " +
+          "A single .xml file typed in here works too.",
+      },
+      {
+        kind: "bool",
+        target: "common.always_clear_before_ingest",
+        label: "Treat the folder as the whole archive",
+        default: true,
+        help:
+          "Each sync rewrites the mirror from the backups in the folder now, so a message " +
+          "no longer in any of them drops out (the store's history keeps it). Leave it off " +
+          "if old backups get pruned from the folder.",
+      },
+    ],
   },
   {
     type: "beeper",
@@ -1249,7 +1557,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "lightroom",
     label: "Lightroom",
     blurb: "Mirror a Lightroom Classic catalog, with full history.",
-    keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite", "images"],
+    keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite", "images", "backup", "zip"],
     kind: "local",
     icon: "lightroom",
     defaultName: "lightroom",
@@ -1258,19 +1566,36 @@ export const CATALOG: CatalogEntry[] = [
     // Download-only: a photo catalog isn't chat-shaped, so nothing is
     // rendered and no render step is declared.
     renderStep: false,
+    requiresOneOf: ["catalog.path", "backups.path"],
     fields: [
       {
         kind: "path",
         picks: "file",
         pickTitle: "Choose your Lightroom catalog",
-        extensions: ["lrcat"],
-        required: true,
+        extensions: ["lrcat", "zip"],
+        startIn: "~/Pictures/Lightroom",
         target: "catalog.path",
         label: "Catalog file",
         help:
           "A .lrcat, which is an ordinary SQLite database — Lightroom keeps it under " +
-          "~/Pictures/Lightroom. Every table is mirrored, and " +
-          "doltlite stores only what changed between runs — so prior states stay queryable.",
+          "~/Pictures/Lightroom — or one of Lightroom's backup .zip files. Every table is " +
+          "mirrored, and doltlite stores only what changed between runs — so prior states " +
+          "stay queryable.",
+      },
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose your Lightroom backups folder",
+        startIn: "~/Pictures/Lightroom",
+        target: "backups.path",
+        label: "Backups folder",
+        help:
+          "Optional, beside or instead of the catalog: the folder Lightroom writes its " +
+          "backups into, by default a Backups folder beside the catalog in " +
+          "~/Pictures/Lightroom. Each backup (a " +
+          "folder named for when it was taken, holding a .zip) becomes one commit, oldest " +
+          "first and dated when it was taken, so the history reaches back before your first " +
+          "sync. Each sync adds the backups taken since, then mirrors the catalog on top.",
       },
       {
         kind: "bool",
@@ -1308,29 +1633,29 @@ export const CATALOG: CatalogEntry[] = [
     keywords: ["apple", "messages", "imessage", "sms", "texts", "chat.db", "iphone"],
     kind: "local",
     icon: "apple_messages",
-    defaultName: "messages",
+    defaultName: "apple-messages",
     nameHint: "Messages on this Mac",
     wizard: true,
     fields: [
       {
         kind: "path",
-        // Choosing the file here is what grants the app access to it on
+        // Choosing the folder here is what grants the app access to it on
         // macOS (docs/dev/wizard_file_pickers.md) — the same wall Photos
-        // sits behind.
-        picks: "file",
-        pickTitle: "Choose your Messages database",
-        extensions: ["db"],
+        // sits behind. Not the file: picking chat.db grants that one file,
+        // and the snapshot also reads chat.db-wal beside it.
+        picks: "dir",
+        pickTitle: "Choose your Messages folder",
+        startIn: "~/Library/Messages",
         required: true,
-        target: "database.path",
-        label: "Messages database",
+        target: "messages.path",
+        label: "Messages folder",
         help:
-          "The chat.db the Messages app keeps at ~/Library/Messages; press Cmd-Shift-G in the " +
-          "picker and paste that path to reach it. Choose it with the picker rather than " +
-          "typing the path: macOS protects the folder, and picking the file is what lets Datalib " +
-          'read it. If a sync still fails with "Operation not permitted", grant Datalib ' +
-          "Full Disk Access in System Settings. Attachments (photos, videos, files) are " +
-          "listed by name and path only — their bytes are not copied, since picking " +
-          "chat.db grants access to that one file.",
+          "The folder the Messages app keeps its database in, ~/Library/Messages. Choose it " +
+          "with the picker rather than typing the path: macOS protects the folder, and picking it is " +
+          'what lets Datalib read it. If a sync still fails with "Operation not permitted", ' +
+          "grant Datalib Full Disk Access in System Settings. A copied chat.db file works too, " +
+          "typed in here. Attachments (photos, videos, files) are listed by name and path " +
+          "only — their bytes are not copied.",
       },
       {
         kind: "bool",
@@ -1382,11 +1707,12 @@ export const CATALOG: CatalogEntry[] = [
         picks: "file",
         pickTitle: "Choose your Photos library",
         extensions: ["photoslibrary"],
+        startIn: "~/Pictures",
         required: true,
         target: "library.path",
         label: "Photos library",
         help:
-          "The library bundle, usually ~/Pictures/Photos Library.photoslibrary; its " +
+          "The library bundle, usually Photos Library.photoslibrary in ~/Pictures; its " +
           "database/Photos.sqlite is what gets mirrored. Choose it " +
           "with the picker rather than typing the path: macOS protects the library, and " +
           "picking it is what lets Datalib read it. If a sync still fails with " +

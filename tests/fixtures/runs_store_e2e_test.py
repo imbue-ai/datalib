@@ -37,7 +37,7 @@ echo '{"event":"progress_length","step":"me","total":4}'
 echo '{"event":"progress_message","step":"me","msg":"conversations.list"}'
 echo '{"event":"progress_inc","step":"me","delta":1}'
 echo '{"event":"progress_inc","step":"me","delta":3}'
-echo '{"event":"metric","step":"me","name":"rows_upserted","labels":{"table":"t"},"value":12}'
+echo '{"event":"metric","step":"me","name":"rows_upserted_total","labels":{"table":"t"},"value":12}'
 echo 'a plain line on stderr' >&2
 echo 'a plain line on stdout'
 echo '{"timestamp":"2369-04-15T00:00:01Z","level":"WARN","target":"fake::fetch","threadName":"main","fields":{"message":"slow","attempts":3}}' >&2
@@ -150,9 +150,9 @@ class RunStoreEndToEnd(unittest.TestCase):
                 # 1 + 3, accumulated by the runner: the wire carries
                 # increments, the store carries a position — and what
                 # the total leaves.
-                self.assertEqual(metrics[(step, "done", "")], 4)
+                self.assertEqual(metrics[(step, "done_total", "")], 4)
                 self.assertEqual(metrics[(step, "queued", "")], 0)
-                self.assertEqual(metrics[(step, "rows_upserted", "table=t")], 12)
+                self.assertEqual(metrics[(step, "rows_upserted_total", "table=t")], 12)
                 lines = {
                     (msg, stream, level, thread, fields)
                     for (s, _, stream, level, thread, _, msg, fields, _) in log

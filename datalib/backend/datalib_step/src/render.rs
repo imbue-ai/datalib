@@ -1,20 +1,20 @@
 //! The render step driver: one source's render wave, written to the tree
 //! the step id names and read from the raw store its input names.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor};
-use datalib_schema::problems::{ProblemRow, Severity, Stage, METRIC};
+use datalib_schema::problems::{ProblemRow, ScopeKind, Severity, Stage, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
-use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
+use datalib_etl_render::indexed_markdown::{blocking, Holdings, IndexedMarkdownStore};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -34,6 +34,7 @@ pub async fn run(
     emitter.declare_streams_output(true);
     let PlannedSource {
         name,
+        source_type,
         processors,
         raw_path,
         ..
@@ -51,6 +52,9 @@ pub async fn run(
     let measured = crate::introspect::scan(data_root, raw_rel)
         .await
         .with_context(|| format!("measure {}", name))?;
+    let item_table = source_type
+        .item_table()
+        .map(|t| (t, crate::introspect::table_rows(&measured, t)));
     // Every source gets a storage report, including the ones that
     // render no documents of their own — for `fsindex` and `media` it
     // is the only thing they put in the grid.
@@ -81,11 +85,26 @@ pub async fn run(
         removed = report.removed,
         "docs (re)rendered"
     );
-    progress.metric("documents_removed", &[], report.removed as i64);
+    progress.metric("documents_removed_total", &[], report.removed as i64);
     // The last word on what the source holds, after the sweep: a run
     // that deleted more than it wrote leaves the checkpoints' last
     // number too high, and this is the one that stands between runs.
-    progress.metric(datalib_metrics::DOCUMENTS, &[], report.documents);
+    match item_table {
+        None => report_holdings(&progress, report.holdings),
+        Some((_, Some(rows))) => report_holdings(
+            &progress,
+            Holdings {
+                items: rows,
+                ..report.holdings
+            },
+        ),
+        // Before its first download, or a mirrored library with no such
+        // table: nothing counted, so no count is reported.
+        Some((table, None)) => {
+            tracing::info!(table, "no {table} table to count items in");
+            progress.metric(datalib_metrics::DOCUMENTS, &[], report.holdings.documents);
+        }
+    }
     if report.removed > 0 {
         progress.set_message(&format!(
             "{} document(s) dropped — their source is gone upstream",
@@ -125,19 +144,32 @@ pub async fn run(
     // backups (`restic --exclude-caches` etc.) may skip it. No-op until
     // the first render materializes the dir.
     datalib_core::layout::mark_derived_cache(&rendered_root);
-    // The store's HEAD is the tree's content version: doltlite advances
-    // it only when a commit changed something, so a run that rewrote
-    // nothing reports the same string. Without doltlite there is nothing
-    // content-derived to vouch for, and the runner hashes the tree.
-    Ok(report
+    Ok(claims(&env.step, &report))
+}
+
+/// The Manage screen's Documents and Items, as one pair so they never
+/// disagree about which moment they describe.
+pub(crate) fn report_holdings(progress: &Progress, h: Holdings) {
+    progress.metric(datalib_metrics::DOCUMENTS, &[], h.documents);
+    progress.metric(datalib_metrics::ITEMS, &[], h.items);
+}
+
+/// What a render reports: its store's HEAD, the tree's content version.
+/// Doltlite advances it only when a commit changed something, so a run
+/// that rewrote nothing reports the same string, and it is spelled as each
+/// seal spells its commit, so finishing on the commit last sealed moves
+/// nothing downstream. Without doltlite there is nothing content-derived
+/// to vouch for, and every success reads as new.
+pub fn claims(step: &str, report: &RenderReport) -> Vec<OutputClaim> {
+    report
         .head
+        .iter()
         .map(|h| OutputClaim {
-            path: env.step.clone(),
-            version: format!("store:{h}"),
+            path: step.to_string(),
+            version: h.clone(),
             rows: Some(report.unsealed),
         })
-        .into_iter()
-        .collect())
+        .collect()
 }
 
 /// One source's render, as the core takes it: everything the step shell
@@ -165,9 +197,9 @@ pub struct RenderReport {
     /// Documents written.
     pub docs: usize,
     pub removed: usize,
-    /// Documents the store holds afterwards, storage report excluded —
-    /// what the source has, not what this run did.
-    pub documents: i64,
+    /// What the store holds afterwards, storage report excluded — what
+    /// the source has, not what this run did.
+    pub holdings: Holdings,
     /// Whole-store problem counts by severity.
     pub problems: HashMap<Severity, i64>,
     /// The store's HEAD after the final commit. `None` without doltlite.
@@ -260,7 +292,7 @@ pub fn render_source(
             .with_context(|| format!("store document {}", md.markdown_uuid))?;
         emitted.insert(md.markdown_uuid);
         docs += 1;
-        progress.metric("documents_rendered", &[], docs as i64);
+        progress.metric("documents_rendered_total", &[], docs as i64);
         // What a consumer reading a checkpoint may see is a document
         // this run is about to sweep. That is stale, not torn: the
         // sweep's deletions reach the consumer through the same diff
@@ -283,11 +315,7 @@ pub fn render_source(
             // reading a torn batch. This is what keeps the Manage
             // screen's Documents column moving while a render runs;
             // between seals it stands still, which is honest.
-            progress.metric(
-                datalib_metrics::DOCUMENTS,
-                &[],
-                store.document_count(storage_uuid.as_deref())?,
-            );
+            report_holdings(&progress, store.holdings(storage_uuid.as_deref())?);
             store.begin_batch()?;
         }
         Ok(())
@@ -354,13 +382,11 @@ pub fn render_source(
     // What the download could not do, carried into this store so it
     // travels on with the documents: the raw store's `problems` at the
     // commit this run rendered from, re-minted under this source's id.
-    if let Some(raw_db) = raw_db.as_deref() {
-        let rows = fetch_problems_of(raw_db, raw_commit.as_deref(), &name)
-            .with_context(|| format!("read the download's problems for {name}"))?;
-        store
-            .replace_stage_problems(Stage::Fetch, &rows)
-            .with_context(|| format!("carry the download's problems into {name}'s store"))?;
-    }
+    let fetch_problems = raw_db
+        .as_deref()
+        .map(|raw_db| fetch_problems_of(raw_db, raw_commit.as_deref(), &name))
+        .transpose()
+        .with_context(|| format!("read the download's problems for {name}"))?;
 
     // A full render in which every processor read its store walked
     // everything, so whatever it did not produce is gone. A processor
@@ -409,6 +435,12 @@ pub fn render_source(
         },
     )?;
     removed += sealed.removed;
+    // After the sweep, so an item a problem names is a row the store
+    // still holds.
+    if let Some(rows) = fetch_problems {
+        carry_fetch_problems(&store, processors, &name, rows)
+            .with_context(|| format!("carry the download's problems into {name}'s store"))?;
+    }
     if !buckets.is_empty() {
         tracing::info!(
             source = %name,
@@ -439,14 +471,14 @@ pub fn render_source(
     // consumes it.
     let versions = store.render_versions()?;
     let problems = store.problem_counts()?;
-    let documents = store.document_count(storage_uuid.as_deref())?;
+    let holdings = store.holdings(storage_uuid.as_deref())?;
     let head = store.head()?;
     store.close();
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {
         docs,
         removed,
-        documents,
+        holdings,
         problems,
         head,
         // What the final commit sealed beyond the last checkpoint.
@@ -612,6 +644,100 @@ fn reverse_lookup(
     result
 }
 
+/// Replace the store's fetch problems with `rows`, each naming the grid
+/// row its raw entity is where the store holds one.
+fn carry_fetch_problems(
+    store: &IndexedMarkdownStore,
+    processors: &[Box<dyn RenderProcessor>],
+    source_id: &str,
+    rows: Vec<ProblemRow>,
+) -> Result<()> {
+    let mut items = items_of_entities(processors, source_id, &rows);
+    let upstream = upstream_of_entities(processors, &rows, &items);
+    let keys: Vec<(&str, String)> = upstream.iter().flatten().cloned().collect();
+    let found = store.grid_rows_by_upstream(&keys)?;
+    for (item, key) in items.iter_mut().zip(upstream) {
+        if let Some((kind, id)) = key {
+            *item = found.get(&(kind.to_string(), id)).cloned();
+        }
+    }
+    let wanted: Vec<String> = items.iter().flatten().cloned().collect();
+    let held = store.grid_rows_among(&wanted)?;
+    store.replace_stage_problems(Stage::Fetch, &with_items(rows, items, &held))
+}
+
+/// The grid row each problem is about, by the first processor that
+/// knows its raw entity. The download knows only the raw key: the uuid
+/// is minted under the source's id, which it never sees.
+fn items_of_entities(
+    processors: &[Box<dyn RenderProcessor>],
+    source_id: &str,
+    rows: &[ProblemRow],
+) -> Vec<Option<String>> {
+    rows.iter()
+        .map(|row| {
+            if row.item_uuid.is_some() {
+                return row.item_uuid.clone();
+            }
+            if row.scope_kind != ScopeKind::Entity {
+                return None;
+            }
+            let (table, id) = raw_entity(&row.scope_key)?;
+            processors
+                .iter()
+                .find_map(|p| p.item_of_entity(source_id, table, id))
+        })
+        .collect()
+}
+
+/// For each problem no processor could mint a uuid for, the upstream
+/// key of its row, by the first processor that knows one.
+fn upstream_of_entities(
+    processors: &[Box<dyn RenderProcessor>],
+    rows: &[ProblemRow],
+    items: &[Option<String>],
+) -> Vec<Option<(&'static str, String)>> {
+    rows.iter()
+        .zip(items)
+        .map(|(row, item)| {
+            if item.is_some() || row.scope_kind != ScopeKind::Entity {
+                return None;
+            }
+            let (table, id) = raw_entity(&row.scope_key)?;
+            processors
+                .iter()
+                .find_map(|p| p.upstream_of_entity(table, id))
+        })
+        .collect()
+}
+
+/// The raw `(table, id)` an entity-scoped fetch problem names:
+/// `table:id` from a fetch attempt, `record:table:id` from a record the
+/// download could not reach at all.
+fn raw_entity(scope_key: &str) -> Option<(&str, &str)> {
+    scope_key
+        .strip_prefix(datalib_etl::download_problems::RECORD_PREFIX)
+        .unwrap_or(scope_key)
+        .split_once(':')
+}
+
+/// Each row with its item, where the store holds that row: a filled
+/// `item_uuid` always opens something. The problem's id was minted
+/// before this lookup, so it does not move with whether the row exists.
+fn with_items(
+    rows: Vec<ProblemRow>,
+    items: Vec<Option<String>>,
+    held: &HashSet<String>,
+) -> Vec<ProblemRow> {
+    rows.into_iter()
+        .zip(items)
+        .map(|(row, item)| ProblemRow {
+            item_uuid: item.filter(|uuid| held.contains(uuid)),
+            ..row
+        })
+        .collect()
+}
+
 /// The raw store's `problems` at `commit` (HEAD when the run consumed
 /// none), each minted again under `source_id` — the download did not
 /// know it — with the stamps the download gave them. Empty when there
@@ -632,13 +758,13 @@ fn fetch_problems_of(
     };
     let pool = reader.pool().clone();
     let result = blocking(async {
-        let rows = match sqlx::query("SELECT * FROM pinned_problems WHERE stage = ?")
+        let rows = match sqlx::query("SELECT * FROM problems WHERE stage = ?")
             .bind(Stage::Fetch.as_str())
             .fetch_all(&pool)
             .await
         {
             Ok(rows) => rows,
-            Err(e) if datalib_etl::pin::is_missing_table(&e, "pinned_problems") => Vec::new(),
+            Err(e) if datalib_etl::pin::is_missing_table(&e, "problems") => Vec::new(),
             Err(e) => return Err(e).context("read the raw store's problems"),
         };
         rows.iter()
@@ -712,18 +838,30 @@ impl RenderPlan {
 /// processor id, which is a group's function name.
 const STORE_SCHEMA_PARAM: &str = "_store_schema";
 
+/// The key `datalib_handle::RULES_VERSION` sits under. Every source
+/// carries it, not only the ones that mint handles today: a provider
+/// that starts writing them cannot forget to declare it, and a rules
+/// change is rare enough that re-rendering the rest costs little.
+const HANDLE_RULES_PARAM: &str = "_handle_rules";
+
 /// Every processor's params under its id, plus the render store's DDL
-/// hash, so one source's cursor carries all of them and a change to any
-/// one — a processor's knob, or the shape of the store — re-renders the
-/// source.
+/// hash and the handle rules, so one source's cursor carries all of them
+/// and a change to any one — a processor's knob, the shape of the store,
+/// what a handle normalizes to — re-renders the source.
 pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
     processors
         .iter()
         .map(|p| (p.id().to_string(), p.render_params()))
-        .chain(std::iter::once((
-            STORE_SCHEMA_PARAM.to_string(),
-            serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash()),
-        )))
+        .chain([
+            (
+                STORE_SCHEMA_PARAM.to_string(),
+                serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash()),
+            ),
+            (
+                HANDLE_RULES_PARAM.to_string(),
+                serde_json::Value::from(datalib_handle::RULES_VERSION),
+            ),
+        ])
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into()
 }
@@ -889,9 +1027,10 @@ mod plan_tests {
             .source_label("Test")
             .conversation_uuid(uuid)
             .entire_chat(format!("/chat/{uuid}"))
-            .text("body")
+            .body("body")
             .markdown_uuid(Some(uuid.to_string()))
             .is_document(true)
+            .item_count(Some(1))
             .build()
             .unwrap();
         store
@@ -907,12 +1046,108 @@ mod plan_tests {
                     rows: vec![row],
                     sections: Vec::new(),
                     edges: Vec::new(),
+                    contacts: Vec::new(),
                     problems: Vec::new(),
                 },
             )
             .unwrap();
         store.commit("fixture").unwrap();
         store.close();
+    }
+
+    /// Knows the rows of one raw table, each keyed by its raw id.
+    struct Resolves(&'static str);
+
+    #[async_trait::async_trait]
+    impl RenderProcessor for Resolves {
+        fn id(&self) -> &str {
+            "resolves"
+        }
+        async fn run(&self, _ctx: &RenderCtx<'_>) -> Result<String> {
+            Ok(String::new())
+        }
+        fn item_of_entity(&self, _source_id: &str, table: &str, id: &str) -> Option<String> {
+            (table == self.0).then(|| id.to_string())
+        }
+    }
+
+    fn fetch_problem(scope_key: &str) -> ProblemRow {
+        use datalib_schema::problems::{Outcome, Problem, Reason, Scope};
+        ProblemRow::new(
+            "src",
+            Stage::Fetch,
+            Scope::Entity(scope_key),
+            None,
+            Outcome::Ok,
+            Problem::record(Reason::FetchFailed, "curl: (22) 403"),
+            None,
+        )
+    }
+
+    /// A fetch problem names its grid row only when the store holds
+    /// that row after the sweep: a filled `item_uuid` always opens
+    /// something. Its id does not move with the lookup.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fetch_problem_names_its_row_only_when_the_store_holds_it() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("src/render_markdown");
+        write_doc(&root, "kept");
+        write_doc(&root, "swept");
+
+        let store = IndexedMarkdownStore::open(&root).unwrap();
+        let keep: BTreeSet<String> = ["kept".to_string()].into_iter().collect();
+        seal_run(
+            &store,
+            td.path(),
+            RunEnd {
+                sweep: true,
+                keep: &keep,
+                declared: &BTreeSet::new(),
+                storage: None,
+                cursor: None,
+            },
+        )
+        .unwrap();
+        let rows = vec![
+            fetch_problem("things:kept"),
+            fetch_problem("record:things:kept"),
+            fetch_problem("things:swept"),
+            fetch_problem("things:never-rendered"),
+            fetch_problem("others:kept"),
+            fetch_problem("listing:things"),
+        ];
+        let ids: Vec<String> = rows.iter().map(|r| r.problem_uuid.clone()).collect();
+        let processors: Vec<Box<dyn RenderProcessor>> =
+            vec![Box::new(Resolves("users")), Box::new(Resolves("things"))];
+        carry_fetch_problems(&store, &processors, "src", rows).unwrap();
+        store.commit("carry").unwrap();
+        store.close();
+
+        let reader = IndexedMarkdownStore::open_for_reading(&root, None)
+            .unwrap()
+            .expect("the store has a commit");
+        let stored = reader.problems_at_pin().unwrap();
+        let item_of = |id: &str| {
+            stored
+                .iter()
+                .find(|r| r.problem_uuid == id)
+                .unwrap_or_else(|| panic!("problem {id} was not carried"))
+                .item_uuid
+                .clone()
+        };
+        let items: Vec<Option<String>> = ids.iter().map(|id| item_of(id)).collect();
+        assert_eq!(
+            items,
+            [
+                Some("kept".into()),
+                Some("kept".into()),
+                None,
+                None,
+                None,
+                None
+            ]
+        );
+        reader.close();
     }
 
     /// A full render sweeps what the walk did not produce and records
@@ -1007,7 +1242,8 @@ mod stale_tree_tests {
 
     use super::{
         declared_render_params, declared_render_versions, every_stored_version_must_be_declared,
-        tree_is_from_an_older_renderer, STORE_SCHEMA_PARAM,
+        tree_is_from_an_older_renderer, RenderCursorRow, RenderPlan, HANDLE_RULES_PARAM,
+        STORE_SCHEMA_PARAM,
     };
     use datalib_schema::providers::Provider;
 
@@ -1020,9 +1256,10 @@ mod stale_tree_tests {
             .source_label("Test")
             .conversation_uuid(chat_uuid)
             .entire_chat(format!("/chat/{chat_uuid}"))
-            .text("body")
+            .body("body")
             .markdown_uuid(Some(chat_uuid.to_string()))
             .is_document(true)
+            .item_count(Some(1))
             .build()
             .unwrap();
         store
@@ -1038,6 +1275,7 @@ mod stale_tree_tests {
                     rows: vec![row],
                     sections: Vec::new(),
                     edges: Vec::new(),
+                    contacts: Vec::new(),
                     problems: Vec::new(),
                 },
             )
@@ -1220,6 +1458,29 @@ mod stale_tree_tests {
         assert_eq!(declared_render_versions(&[]), None);
     }
 
+    /// The loop re-runs a built-in step when the shape of the store it
+    /// writes moves, by its table in the dag config. A table that lags the
+    /// DDL is the bug it exists to prevent: the step stays up to date, its
+    /// store keeps the old shape, and the grid index cannot read it.
+    #[test]
+    fn builtin_store_shapes_are_the_ddl_the_step_writes() {
+        use datalib_dag::config::builtin_store_shape;
+        for (function, actual) in [
+            (
+                "render_markdown",
+                datalib_etl_render::indexed_markdown::schema_hash(),
+            ),
+            ("grid_index", datalib_etl_render::grid_index::schema_hash()),
+        ] {
+            assert_eq!(
+                builtin_store_shape(function),
+                Some(actual.as_str()),
+                "the store `{function}` writes changed shape: set its entry in \
+                 datalib_dag::config::BUILTIN_STORE_SHAPES to {actual:?}"
+            );
+        }
+    }
+
     /// The render store's own DDL hash rides in the params under a key
     /// no processor can claim, so a column added to `grid_rows` is a
     /// param change — every source re-renders, and nobody has to bump
@@ -1233,6 +1494,32 @@ mod stale_tree_tests {
             serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash())
         );
         assert!(params["stub"].is_object() || params["stub"].is_null());
-        assert_eq!(params.as_object().unwrap().len(), 2);
+        assert_eq!(params.as_object().unwrap().len(), 3);
+    }
+
+    /// A stored handle is only as current as the rules that minted it
+    /// (#980 had to bump six renderers by hand). The rules version rides
+    /// in every source's params, so moving it renders every source again.
+    #[test]
+    fn a_handle_rules_change_renders_everything() {
+        let procs: Vec<Box<dyn RenderProcessor>> = vec![Box::new(Stub(Some(1)))];
+        let params = declared_render_params(&procs);
+        assert_eq!(
+            params[HANDLE_RULES_PARAM],
+            serde_json::Value::from(datalib_handle::RULES_VERSION)
+        );
+        let mut older = params.clone();
+        older[HANDLE_RULES_PARAM] = serde_json::Value::from(datalib_handle::RULES_VERSION - 1);
+        let stored = RenderCursorRow {
+            source_id: "src".into(),
+            raw_commit: "commit-a".into(),
+            params: older.to_string(),
+            rendered_at_utc: "2026-01-01T00:00:00.000000Z".into(),
+            tz_offset: Some("+00:00".into()),
+        };
+        assert_eq!(
+            RenderPlan::decide(Some(&stored), &params, false),
+            RenderPlan::Everything("render params changed")
+        );
     }
 }

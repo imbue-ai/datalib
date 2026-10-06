@@ -10,8 +10,8 @@ records, and JSON is the one a program can trust.
 The ingest crate is `datalib_etl_facebook` (this directory); the render
 crate is `datalib_etl_facebook_render`; the config schema is
 `datalib_etl_facebook_config`. The shapes below were read off a real
-export requested on 2026-06-19, and the TNG fixture under
-`tests/fixtures/facebook_tng/` reproduces them file for file.
+export; the TNG fixture under `tests/fixtures/facebook_tng/` reproduces
+every file render reads, in the same shapes and at the same paths.
 
 ## What the export looks like
 
@@ -93,21 +93,39 @@ The whole run is one snapshot in one transaction: every row is upserted,
 then every row of each table the export no longer holds is deleted. A
 commit landing at any point therefore sees last run's table or this
 run's, never an emptied one — the rule in `docs/dev/plans/one_mode.md`.
-There is no cursor for a reset to clear.
+There is no cursor for a reset to clear. What holds the deletions back
+is under "When part of a run fails" below.
 
 After the rows are committed, every `uri` in every record is read off
-disk once and stored in the sibling `blobs.doltlite_db`, with one
+disk once and stored in the sibling `blobs.sqlite`, with one
 `media_blobs` edge per `(record, uri)` — a photo an album and a post both
 reference is stored once and reached twice. Bytes already in the CAS are
 found through the edge table's `blake3` and not re-read; a `uri` no file
 answers to (the export left it out, as it does for some videos) is a
-warning and a `media_missing` count, never a failed run. The bytes are
-held in memory only up to 32 MB between flushes, since a real export's
-media runs to gigabytes.
+`not_found` warning on its edge, `media_blobs:<record>#<uri>`, and a
+`media_missing` count, never a failed run. A file that is there and
+will not read is an error on its edge instead. Either clears the run
+the file reads. The bytes are held in memory only up to 32 MB between
+flushes, since a real export's media runs to gigabytes.
 
 Files nothing renders — ad preferences, login history, search history,
 notification settings — are mirrored all the same. They are the record
 of what Facebook holds about the account, and a table is cheap.
+
+## When part of a run fails
+
+Every run reads the whole export, so each of these is a `problems` row
+that the next run which reads the thing clears:
+
+- **A file that will not read or parse** is a `listing:file <path>` row.
+  Its table is upserted but not pruned this run: chunks of one table
+  (`album/0.json`, `album/1.json`) share it, and the rows of the chunk
+  that failed are missing from this run's set without having gone.
+- **A directory the walk could not list** (or an entry it could not
+  stat) is a `listing:files` row, and no table is pruned that run.
+- **An export path with nothing at it** fails the run: there is nothing
+  to mirror, and an empty walk would read as an export that holds
+  nothing.
 
 ## What render does
 

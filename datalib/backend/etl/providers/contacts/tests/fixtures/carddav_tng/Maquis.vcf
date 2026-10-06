@@ -1,0 +1,17 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:tng-ro
+N:Ro;Laren;;Ensign;
+FN:Ro Laren
+EMAIL;TYPE=WORK:ro.laren@maquis.badlands
+TITLE:Maquis cell leader
+NOTE:Resigned her commission. Last seen in the Badlands.
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+UID:tng-kalita
+N:Kalita;;;;
+FN:Kalita
+TEL;TYPE=WORK:+1-555-BADLANDS
+TITLE:Maquis pilot
+END:VCARD

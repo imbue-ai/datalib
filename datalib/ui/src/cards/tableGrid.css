@@ -21,9 +21,7 @@
 .tg-none { color: var(--datalib-muted); opacity: 0.55; }
 
 .tg-identity { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
-/* The label is what the eye lands on: the id beside it gives way first. */
-.tg-identity > span:first-of-type { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 4ch; }
-.tg-identity > .tg-id { flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tg-identity > .tg-label { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 4ch; }
 /* The tree cell: indent, chevron, then the column's own drawing, which
    gives way before the chevron does. One flex row, so the cell's own
    ellipsis never swallows the lot — an overflowing inline-block is
@@ -39,7 +37,20 @@
   color: var(--datalib-muted);
   flex: 0 0 auto;
 }
-.tg-id { color: var(--datalib-muted); font-size: 12px; }
+/* Counts after a name: a red and a yellow bubble, the number alone. */
+.tg-badges { display: inline-flex; gap: 3px; flex: 0 0 auto; cursor: default; }
+.tg-badge {
+  min-width: 18px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+}
 
 /* The status vocabulary. Anything unstyled falls through to the default
    colour, which is right for a status this sheet hasn't met. */
@@ -59,6 +70,8 @@
 .tg-status-succeeded,
 .tg-status-skipped-up-to-date { color: var(--datalib-log-ok); }
 .tg-status-never-run { opacity: 0.55; }
+/* When it got there, in the text colour: the glyph carries the word. */
+.tg-status-at { color: var(--datalib-fg); white-space: nowrap; }
 
 .tg-spinner {
   width: 14px;
@@ -71,48 +84,8 @@
 @keyframes tg-spin {
   to { transform: rotate(360deg); }
 }
-.tg-segs {
-  flex: 1 1 auto;
-  min-width: 20px;
-  display: flex;
-  gap: 1px;
-  height: 6px;
-}
-.tg-seg {
-  flex: 1;
-  background: color-mix(in srgb, var(--datalib-fg) 14%, transparent);
-}
-.tg-seg:first-child { border-radius: 3px 0 0 3px; }
-.tg-seg:last-child { border-radius: 0 3px 3px 0; }
-.tg-seg-succeeded,
-.tg-seg-skipped-up-to-date { background: var(--datalib-log-ok); }
-.tg-seg-failed { background: var(--datalib-log-error); }
-.tg-seg-interrupted,
-.tg-seg-stopped { background: var(--datalib-log-warn); }
-.tg-seg-blocked { background: var(--datalib-muted); }
-.tg-seg-running {
-  background: var(--datalib-accent);
-  animation: tg-seg-pulse 1s ease-in-out infinite;
-}
-@keyframes tg-seg-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
 @media (prefers-reduced-motion: reduce) {
-  .tg-spinner, .tg-seg-running { animation: none; }
-}
-.tg-progress {
-  flex: 1 1 auto;
-  min-width: 20px;
-  height: 4px;
-  border-radius: 2px;
-  background: color-mix(in srgb, currentColor 18%, transparent);
-  overflow: hidden;
-}
-.tg-progress > span {
-  display: block;
-  height: 100%;
-  background: currentColor;
+  .tg-spinner { animation: none; }
 }
 
 .tg-chips {
@@ -131,11 +104,12 @@
   background: color-mix(in srgb, currentColor 10%, transparent);
   color: var(--datalib-muted);
 }
-.tg-chip-info { color: var(--datalib-log-warn); }
-.tg-chip-idle { color: var(--datalib-log-ok); }
 .tg-chip-warning { color: var(--datalib-log-warn); }
 .tg-chip-error { color: var(--datalib-log-error); }
-.tg-chip-ok { color: var(--datalib-log-ok); }
+
+.tg-quantity { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tg-quantity-note { color: var(--datalib-muted); font-style: italic; }
+.tg-quantity-stalled { color: var(--datalib-log-warn); font-style: normal; }
 
 .tg-series {
   display: flex;
@@ -157,15 +131,25 @@
   width: 100%;
   height: 100%;
 }
+/* The present value and its change over the window, over the line. The
+   same in a Manage cell and in the status bar's data-root total. */
 .tg-plot-label {
   position: relative;
-  display: block;
-  text-align: center;
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
   line-height: 18px;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--datalib-fg);
   text-shadow: 0 0 3px var(--datalib-bg);
+}
+/* In the colour of the line that shows it. Not green: growth is not
+   good news and shrinkage is not bad — the sign is the whole message. */
+.tg-plot-delta {
+  color: var(--datalib-accent);
 }
 /* `vector-effect: non-scaling-stroke` is load-bearing: the svg is
    stretched from its 120-unit box to the column's width. */
@@ -211,6 +195,38 @@
   color: var(--datalib-log-error);
   border-color: var(--datalib-log-error);
 }
+/* An on/off switch: the knob sits right, on the accent, when on. */
+.tg-switch {
+  position: relative;
+  width: 26px;
+  height: 14px;
+  margin: 0 3px;
+  padding: 0;
+  border: 1px solid var(--datalib-border);
+  border-radius: 7px;
+  background: var(--datalib-hover);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.tg-switch-knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--datalib-muted);
+  transition: left 0.12s;
+}
+.tg-switch[aria-checked="true"] {
+  background: var(--datalib-accent);
+  border-color: var(--datalib-accent);
+}
+.tg-switch[aria-checked="true"] .tg-switch-knob {
+  left: 13px;
+  background: var(--datalib-card-bg);
+}
+.tg-switch:disabled { opacity: 0.35; cursor: not-allowed; }
 .tg-btn {
   padding: 2px 9px;
   border: 1px solid var(--datalib-border);
@@ -290,6 +306,12 @@
 /* Rows are what get selected here; the cell the click landed in is
    not a thing to outline. */
 .slick-cell.active { box-shadow: none; border-color: transparent; }
+/* Both halves of a row that pinned columns split (grid/rowHover.ts);
+   the theme's :hover lights only the half under the pointer. */
+.slickgrid-container .slick-row.datalib-row-hover,
+.slickgrid-container .slick-row.odd.datalib-row-hover {
+  background-color: var(--slick-row-mouse-hover-color, #eff5fc);
+}
 .slick-cell.tg-right { text-align: right; }
 /* A group row spans the grid in one cell that borrows the first
    column's class; a number column first would push the title off the
@@ -318,11 +340,21 @@
 }
 
 /* ── the right-click menu's own entries (see grid/menu.ts) ─────── */
+/* Closer to a native menu than the theme's roomy one: a row a little
+   taller than the text, in the grid's own size. */
+.slick-context-menu {
+  --slick-menu-padding: 4px 0;
+  --slick-menu-item-height: 22px;
+  --slick-menu-line-height: 20px;
+  --slick-menu-item-padding: 0 12px;
+  --slick-menu-item-font-size: 13px;
+  --slick-menu-item-border-radius: 3px;
+}
 /* The line is the separator element's own: the slot is a disabled
    item, and the theme forces a disabled item's border transparent. */
 .slick-menu-item:has(.menu-slot-separator) {
   padding: 0;
-  margin: 4px 0;
+  margin: 3px 0;
   min-height: 0;
   height: 0;
   overflow: visible;

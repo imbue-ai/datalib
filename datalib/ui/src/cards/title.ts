@@ -1,4 +1,4 @@
-// Human-readable card titles. When dev mode is off (see devMode.ts)
+// Human-readable card titles. When edit mode is off (see editMode.ts)
 // the layouts show a card's title in the chrome bar instead of its
 // source. A card sets (and updates) its title via ctx.setTitle — see
 // CardCtx in types.ts; a card that never does gets a best-effort name

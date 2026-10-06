@@ -46,22 +46,23 @@ impl DataProcessor for PdfIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = raw_layout::entities_db(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            source_id: ctx.name.to_string(),
-            root: self.root.clone(),
-            ignore: self.ignore.clone(),
-            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
-            max_bytes: self.max_bytes,
-            now: ctx.now.to_string(),
-            progress: ctx.progress.clone(),
+        ctx.run_store(db.pool().clone(), None, |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                source_id: ctx.name.to_string(),
+                root: self.root.clone(),
+                ignore: self.ignore.clone(),
+                cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
+                max_bytes: self.max_bytes,
+                now: ctx.now.to_string(),
+                progress: ctx.progress.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "pdfs={} docs={} hashed={} reused={} needs_ocr={} too_large={} errors={}",
+                s.pdfs_seen, s.documents, s.hashed, s.reused, s.needs_ocr, s.too_large, s.errors,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "pdfs={} docs={} hashed={} reused={} needs_ocr={} too_large={} errors={}",
-            s.pdfs_seen, s.documents, s.hashed, s.reused, s.needs_ocr, s.too_large, s.errors,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

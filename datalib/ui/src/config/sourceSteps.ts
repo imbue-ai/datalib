@@ -28,6 +28,7 @@ import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
 import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
+import { editStringArray, quote } from "./tomlText";
 
 /// Which wave a step belongs to, for display and for picking the right
 /// half of a catalog entry's fields. Read off the step's `function`.
@@ -81,10 +82,17 @@ export type ConfiguredGroup = {
 };
 
 /// The label for a grouped step that wrote no `name` of its own.
-function groupedName(group: ConfiguredGroup, id: string, phase: StepPhase): string {
+function groupedName(
+  group: ConfiguredGroup,
+  id: string,
+  fn: string | null,
+  phase: StepPhase,
+): string {
   if (!group.name) return defaultName(id);
   if (phase === "ingest") return group.name;
   if (phase === "render") return `${group.name} (render markdown)`;
+  if (fn === "keyword_index") return `${group.name} (keyword index)`;
+  if (fn === "embed") return `${group.name} (embeddings)`;
   return defaultName(id);
 }
 
@@ -95,7 +103,10 @@ const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   ingest: "ingest",
   render_markdown: "render",
   grid_index: "index",
-  qmd_index: "index",
+  qmd_aggregator: "index",
+  keyword_index: "index",
+  embed: "index",
+  embedding_map: "index",
 };
 
 /// A step's phase, from its function. A step outside any group has no
@@ -109,7 +120,8 @@ function phaseOfFunction(fn: string | null): StepPhase {
 /// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
   "unified_index/grid_index": "Unified Index (table)",
-  "unified_index/qmd_index": "Unified Index (QMD)",
+  "unified_index/qmd_aggregator": "Unified Index (QMD)",
+  "unified_index/embedding_map": "Unified Index (map)",
   unified_index: "Unified Index (Applet)",
 };
 
@@ -232,7 +244,7 @@ export function listSteps(text: string): ConfiguredStep[] {
         name:
           name ??
           (groupEntry
-            ? groupedName(groupEntry, id, phase)
+            ? groupedName(groupEntry, id, fn, phase)
             : id
               ? defaultName(id)
               : `step ${i + 1}`),
@@ -400,8 +412,29 @@ export function fieldPhaseOf(step: ConfiguredStep): FieldPhase {
 /// and defaults to `download`, which is where all but one sit — only
 /// `signal` declares a render knob today, so a render step's form is
 /// usually a name and nothing else.
+///
+/// Every source that signs in through latchkey gets an account field,
+/// whether or not its descriptor declares one: picking a stored login,
+/// or naming a new one, is the same for every service. A descriptor
+/// declares its own only to word it (Gmail's is "Google account").
 export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
-  return (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
+  const fields = (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
+  const declaresAccount = fields.some((f) => f.kind === "text" && f.latchkey);
+  if (phase !== "download" || !entry.credentialService || declaresAccount) return fields;
+  return [accountFieldFor(entry), ...fields];
+}
+
+/// The account field a latchkey source gets when it declares none.
+export function accountFieldFor(entry: CatalogEntry): Field {
+  return {
+    kind: "text",
+    latchkey: true,
+    target: "latchkey_settings.account",
+    label: `${entry.label} account`,
+    help:
+      `Which stored ${entry.label} login to use, or a name for a new one. Leave it empty ` +
+      "if latchkey holds only one.",
+  };
 }
 
 export type FieldValues = Record<string, unknown>;
@@ -612,23 +645,6 @@ function tomlValue(field: Field | undefined, value: unknown): string {
   }
 }
 
-/// TOML basic string. Dates are quoted too: a bare `2026-01-01` parses
-/// as a TOML date, and the providers validate a *string*.
-function quote(s: string): string {
-  const escaped = s
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t")
-    // Everything else TOML calls a control char, as \uXXXX.
-    .replace(
-      /[\u0000-\u001f\u007f]/g,
-      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
-    );
-  return `"${escaped}"`;
-}
-
 /// The function a step of this phase performs within its group, which
 /// is also the directory it writes under the group's.
 export function functionOf(phase: FieldPhase): string {
@@ -829,10 +845,14 @@ function setGroupLine(text: string, groupId: string, key: string, line: string |
   return text.slice(0, group.start) + edited + text.slice(group.end);
 }
 
-/// The fan-in steps that consume rendered markdown, by function: the
-/// SQL index the grid reads, and the qmd collections semantic search
-/// reads. A source can be in one and not the other.
-export type FanInFunction = "grid_index" | "qmd_index";
+/// The fan-in steps, by function: the SQL index the grid reads, which
+/// consumes rendered markdown; the qmd aggregator, which runs after each
+/// source's own qmd steps; and the map, which reads the aggregator. A
+/// source can be in one and not another.
+export type FanInFunction = "grid_index" | "qmd_aggregator" | "embedding_map";
+
+/// The fan-ins a render step feeds.
+const RENDER_FAN_INS: FanInFunction[] = ["grid_index"];
 
 /// One `[[steps]]` table and its body: up to the next line opening a
 /// table — its own `[steps.params…]` sub-table, or the next entry.
@@ -841,104 +861,231 @@ export type FanInFunction = "grid_index" | "qmd_index";
 /// in any order, so the body is *tested* rather than pattern-matched.
 const STEP_TABLE = /(\[\[steps\]\])([\s\S]*?)(?=\n[ \t]*\[|$)/g;
 
-const INPUTS_ARRAY = /(inputs\s*=\s*\[)([^\]]*)(\])/;
+const INPUTS_OPEN = /^[ \t]*inputs[ \t]*=[ \t]*\[/m;
 
 /// Is this step body a fan-in — filed under the `unified_index` group,
 /// or, for a custom step, writing an `unified_index/…` id — and, when
-/// `only` names one, that particular one?
-function isFanIn(body: string, only?: FanInFunction): boolean {
+/// `only` names some, one of those?
+function isFanIn(body: string, only?: FanInFunction[]): boolean {
   const verbatim = /id\s*=\s*"unified_index\/([^"]*)"/.exec(body);
   if (!verbatim && !/group\s*=\s*"unified_index"/.test(body)) return false;
   if (!only) return true;
   const fn = /function\s*=\s*"([^"]*)"/.exec(body)?.[1] ?? verbatim?.[1];
-  return fn === only;
+  return only.includes(fn as FanInFunction);
 }
 
 /// Rewrite the `inputs` of the fan-ins `only` selects — all of them
 /// when it is absent — leaving every other table, and every other key
-/// in theirs, exactly as written.
+/// in theirs, exactly as written, and the array laid out as it was.
 function editFanInInputs(
   text: string,
-  only: FanInFunction | undefined,
+  only: FanInFunction[] | undefined,
   edit: (ids: string[]) => string[],
 ): string {
+  // A function replacer: an id is user text, and as a replacement
+  // *string* `$1`, `$&` and `$$` in it would be expanded.
   return text.replace(STEP_TABLE, (whole, head: string, body: string) => {
     if (!isFanIn(body, only)) return whole;
-    // Function replacers throughout: an id is user text, and as a
-    // replacement *string* `$1`, `$&` and `$$` in it would be expanded.
-    const next = body.replace(INPUTS_ARRAY, (_m, open: string, list: string, close: string) => {
-      const ids = list
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
-      return `${open}${edit(ids).join(", ")}${close}`;
-    });
-    return `${head}${next}`;
+    const found = INPUTS_OPEN.exec(body);
+    if (!found) return whole;
+    return `${head}${editStringArray(body, found.index + found[0].length - 1, edit)}`;
   });
 }
 
-/// Wire a render step into the fan-ins that consume rendered markdown —
-/// every one, or just the one `only` names.
+/// Wire a step into fan-ins: a render step into the two that consume
+/// rendered markdown, or into just the one `only` names — which is how
+/// an embed step reaches the map.
 ///
 /// The fan-ins name their inputs by id, so a source added without this renders
 /// happily and is never indexed — invisible in search, with nothing on screen
 /// to say why.
-export function wireIntoFanIns(text: string, renderStepId: string, only?: FanInFunction): string {
-  return editFanInInputs(text, only, (ids) =>
-    ids.includes(quote(renderStepId)) ? ids : [...ids, quote(renderStepId)],
+export function wireIntoFanIns(text: string, stepId: string, only?: FanInFunction): string {
+  return editFanInInputs(text, only ? [only] : RENDER_FAN_INS, (ids) =>
+    ids.includes(stepId) ? ids : [...ids, stepId],
   );
 }
 
-/// Drop a render step from the fan-ins' inputs. The mirror of
-/// [`wireIntoFanIns`]: an input naming a step that no longer exists is
-/// a config the runner refuses outright, so deleting a source has to
-/// take its edges with it.
-export function unwireFromFanIns(text: string, renderStepId: string, only?: FanInFunction): string {
-  return editFanInInputs(text, only, (ids) => ids.filter((t) => t !== quote(renderStepId)));
-}
-
-/// Does the fan-in `fn` name this render step — that is, does this
-/// source reach that index? A config with no such step answers false,
-/// which is what it is: nothing indexes this source that way.
-export function fanInNames(
-  steps: ConfiguredStep[],
-  fn: FanInFunction,
-  renderStepId: string,
-): boolean {
-  return steps.some(
-    (s) => s.kind === "step" && fanInFunctionOf(s) === fn && s.inputs.includes(renderStepId),
-  );
+/// Drop a step from the fan-ins' inputs — every fan-in's, or the one
+/// `only` names. The mirror of [`wireIntoFanIns`]: an input naming a
+/// step that no longer exists costs the step that names it, so deleting
+/// a source has to take its edges with it.
+export function unwireFromFanIns(text: string, stepId: string, only?: FanInFunction): string {
+  return editFanInInputs(text, only ? [only] : undefined, (ids) => ids.filter((t) => t !== stepId));
 }
 
 /// Which fan-in a step is, or null for a step that is not one. A
 /// grouped step says so with `group` + `function`; a custom step filed
 /// outside any group says it in the id it writes.
-function fanInFunctionOf(step: ConfiguredStep): string | null {
+export function fanInFunctionOf(step: ConfiguredStep): string | null {
   if (step.group === "unified_index") return step.function;
   const [group, fn] = step.id.split("/");
   return step.group === null && group === "unified_index" ? (fn ?? null) : null;
 }
 
-/// Append entries to the config text. Always at the end: the DAG
-/// derives execution order from declared inputs rather than file order,
-/// and in TOML the end is the only safe insertion point — every key
-/// after a `[[…]]` header belongs to that table, so a mid-file splice
-/// would reparent whatever followed.
-export function appendSource(text: string, body: string): string {
-  return `${text.replace(/\s*$/, "")}\n\n${body}\n`;
+/// A source's own qmd steps, as `[[steps]]` blocks: its keyword index,
+/// which reads its render, and its embeddings, which read the keyword
+/// index.
+export function buildQmdSteps(group: string): { id: string; body: string }[] {
+  const keywordId = `${group}/keyword_index`;
+  const block = (fn: string, inputs: string[]) => ({
+    id: `${group}/${fn}`,
+    body: `[[steps]]\ngroup = ${quote(group)}\nfunction = ${quote(fn)}\ninputs = [${inputs.map(quote).join(", ")}]`,
+  });
+  return [block("keyword_index", [stepIdFor(group, "render")]), block("embed", [keywordId])];
+}
+
+/// How far into qmd a source's markdown goes: not at all, a keyword
+/// index, or a keyword index and the embeddings that read it. There is
+/// no embeddings-only: the embed step reads the keyword index.
+export type QmdIndexing = "none" | "keyword" | "keyword_and_embed";
+
+/// Which of a source's qmd steps the config has, as a `QmdIndexing`.
+export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexing {
+  const has = (fn: string) => steps.some((s) => s.id === `${group}/${fn}`);
+  if (!has("keyword_index")) return "none";
+  return has("embed") ? "keyword_and_embed" : "keyword";
+}
+
+/// Give a source the qmd steps `indexing` asks for — those it lacks — and
+/// a place in the aggregator's inputs, and take away the ones it does not
+/// ask for, with every step that reads them. Only where the config has the
+/// aggregator: search is off without one, and the aggregator is what
+/// retires a source's collection once it goes.
+export function setQmdSteps(text: string, group: string, indexing: QmdIndexing): string {
+  const [keyword, embed] = buildQmdSteps(group);
+  const all = listSteps(text);
+  const aggregated = all.some((s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator");
+  const wanted =
+    !aggregated || indexing === "none" ? [] : indexing === "keyword" ? [keyword] : [keyword, embed];
+  const unwanted = [keyword, embed].filter((b) => !wanted.includes(b)).map((b) => b.id);
+  const gone = [...all.filter((s) => unwanted.includes(s.id)), ...readersOf(unwanted, all)];
+  let next = gone.length ? removeSteps(text, gone) : text;
+  const missing = wanted.filter((b) => !all.some((s) => s.id === b.id));
+  if (missing.length) next = insertEntries(next, missing.map((b) => b.body).join("\n\n"));
+  for (const b of [keyword, embed]) {
+    next = wanted.includes(b)
+      ? wireIntoFanIns(next, b.id, "qmd_aggregator")
+      : unwireFromFanIns(next, b.id, "qmd_aggregator");
+  }
+  return next;
+}
+
+/// What has to leave the config with `ids`: every step that reads one of
+/// them ([`readersOf`]), and, when the qmd aggregator is among them, every
+/// source's own qmd steps — search is off without it, and nothing would
+/// retire what they index.
+export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
+  const aggregatorGoes = all.some(
+    (s) => ids.includes(s.id) && s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator",
+  );
+  const qmdSteps = aggregatorGoes
+    ? all.filter(
+        (s) =>
+          s.kind === "step" &&
+          !ids.includes(s.id) &&
+          (s.function === "keyword_index" || s.function === "embed"),
+      )
+    : [];
+  const readers = readersOf([...ids, ...qmdSteps.map((s) => s.id)], all);
+  return [...qmdSteps, ...readers];
+}
+
+/// Every step that reads one of `ids`, directly or through another, other
+/// than a fan-in: a fan-in loses the input instead (`unwireFromFanIns`).
+/// Removing a step without these leaves each naming an input that is
+/// gone, which the loader drops it for.
+export function readersOf(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
+  const gone = new Set(ids);
+  const out: ConfiguredStep[] = [];
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const s of all) {
+      if (s.kind !== "step" || gone.has(s.id) || fanInFunctionOf(s) !== null) continue;
+      if (s.inputs.some((i) => gone.has(i))) {
+        gone.add(s.id);
+        out.push(s);
+        grew = true;
+      }
+    }
+  }
+  return out;
+}
+
+/// The group every source feeds.
+const INDEX_GROUP = "unified_index";
+
+/// Add entries — a source, a comparison, a source's qmd steps — where the
+/// file keeps reading in the order data flows: each step below the steps
+/// it reads, a source's entries together. That is beside its own group's
+/// entries when the group is already in the file, and otherwise after the
+/// last source, just above the index every source feeds. A file already
+/// out of that order may have no such place; then the entries go at the
+/// end, which loads the same — the runner follows `inputs`, not the file.
+export function insertEntries(text: string, body: string): string {
+  const at = placeFor(text, body);
+  return at === null ? `${text.replace(/\s*$/, "")}\n\n${body}\n` : splice(text, at, at, body);
+}
+
+/// Where [`insertEntries`] puts `body`, or null for the end. Always
+/// between two entries, so what follows starts with a `[[…]]` header: a
+/// splice anywhere else would reparent the keys after it to the table
+/// spliced in.
+function placeFor(text: string, body: string): number | null {
+  const steps = listSteps(text).filter((s) => s.end > 0);
+  const groups = listGroups(text).filter((g) => g.end > 0);
+  const added = listSteps(body);
+  const addedIds = new Set(added.map((s) => s.id));
+  const reads = new Set(added.flatMap((s) => s.inputs).filter((id) => !addedIds.has(id)));
+  const earliest = Math.max(0, ...steps.filter((s) => reads.has(s.id)).map((s) => s.end));
+  const readers = [
+    ...steps.filter((s) => s.group === INDEX_GROUP || fanInFunctionOf(s) !== null),
+    ...steps.filter((s) => s.inputs.some((id) => addedIds.has(id))),
+    ...groups.filter((g) => g.id === INDEX_GROUP),
+  ];
+  const latest = Math.min(text.length, ...readers.map((r) => extendOverComments(text, r.start)));
+  const own = new Set(added.map((s) => s.group).filter((g) => g !== null));
+  const beside = listGroups(body).length
+    ? []
+    : [
+        ...steps.filter((s) => s.group !== null && own.has(s.group)),
+        ...groups.filter((g) => own.has(g.id)),
+      ];
+  const at = beside.length ? Math.max(...beside.map((e) => e.end)) : latest;
+  return earliest <= at && at <= latest ? at : null;
+}
+
+/// `text` with [start, end) replaced by `body`, a blank line either side.
+function splice(text: string, start: number, end: number, body: string): string {
+  const before = text.slice(0, start).replace(/\s*$/, "");
+  const after = text.slice(end).replace(/^\s*/, "");
+  return `${[before, body, after].filter(Boolean).join("\n\n").replace(/\s*$/, "")}\n`;
+}
+
+/// Each entry's span, its banner included (`extendOverComments`).
+function spans(text: string, steps: Pick<ConfiguredStep, "start" | "end">[]): [number, number][] {
+  return steps
+    .filter((s) => s.end > 0)
+    .map((s) => [extendOverComments(text, s.start), s.end] as [number, number])
+    .sort((a, b) => a[0] - b[0]);
+}
+
+/// `text` without the spans. The last is cut first, so each cut's
+/// offsets still hold when its turn comes.
+function cut(text: string, ranges: [number, number][]): string {
+  let out = text;
+  for (const [start, end] of [...ranges].reverse()) {
+    out = out.slice(0, start) + out.slice(end);
+  }
+  return out;
+}
+
+function tidy(text: string): string {
+  return text.replace(/\n{3,}/g, "\n\n").replace(/^\s+/, "");
 }
 
 /// Remove entries — steps, applets or groups — from the config text.
 export function removeSteps(text: string, steps: Pick<ConfiguredStep, "start" | "end">[]): string {
-  const cuts = steps
-    .filter((s) => s.end > 0)
-    .map((s) => [extendOverComments(text, s.start), s.end] as const)
-    .sort((a, b) => b[0] - a[0]);
-  let out = text;
-  for (const [start, end] of cuts) {
-    out = out.slice(0, start) + out.slice(end);
-  }
-  return out.replace(/\n{3,}/g, "\n\n").replace(/^\s+/, "");
+  return tidy(cut(text, spans(text, steps)));
 }
 
 /// Walk back from a step's start over blank lines and `#` comments, so
@@ -957,13 +1104,14 @@ function extendOverComments(text: string, start: number): number {
   return at;
 }
 
-/// Replace a source's steps with freshly generated ones. All the cuts
-/// happen against the text as parsed, then one append: cutting and
-/// appending one step at a time would leave the second step's offsets
-/// pointing into text the first cut had already shifted. Only safe
-/// when `paramsAreRepresentable` said so — see this module's header.
+/// Replace a source's steps with freshly generated ones, where the first
+/// of them was, so an edit moves nothing. Every cut is made against the
+/// text as parsed, the last first. Only safe when
+/// `paramsAreRepresentable` said so — see this module's header.
 export function replaceSteps(text: string, steps: ConfiguredStep[], body: string): string {
-  return appendSource(removeSteps(text, steps), body);
+  const [first, ...rest] = spans(text, steps);
+  if (!first) return insertEntries(text, body);
+  return tidy(splice(cut(text, rest), first[0], first[1], body));
 }
 
 /// A human name reduced to something that can be a directory: NFKD

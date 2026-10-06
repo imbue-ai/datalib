@@ -1,7 +1,14 @@
 // The relative-time formatter behind the "Last synced" column.
 
 import { describe, expect, it } from "vitest";
-import { compareStamps, formatDateTime, formatRelative, formatStamp } from "./timeFormat";
+import {
+  compareStamps,
+  formatDateTime,
+  formatDuration,
+  formatRelative,
+  formatShortStamp,
+  formatStamp,
+} from "./timeFormat";
 
 /// A fixed "now" so the tests don't race the clock. Every case below
 /// is expressed as an offset from it.
@@ -97,6 +104,22 @@ describe("the exact stamp behind the hover", () => {
   });
 });
 
+describe("the short stamp beside a picker entry", () => {
+  it("tells apart two runs the relative form calls the same", () => {
+    const a = formatShortStamp("2026-09-25T08:59:00Z");
+    const b = formatShortStamp("2026-09-25T10:14:00Z");
+    expect(a).not.toBe(b);
+    // Locale-dependent: assert the minute on a 24-hour clock, no seconds.
+    expect(a).toMatch(/ @ \d{2}:\d{2}$/);
+    expect(a.toLowerCase()).not.toMatch(/\b[ap]\.?m\.?\b/);
+  });
+
+  it("passes an unreadable stamp through", () => {
+    expect(formatShortStamp("not a date")).toBe("not a date");
+    expect(formatShortStamp(null)).toBe("—");
+  });
+});
+
 // Sorting the column. The rendered text is "5 minutes ago", and sorting
 // on *that* would order the column alphabetically — "10 minutes ago"
 // before "2 hours ago" before "seconds ago". The grid sorts the row value
@@ -164,5 +187,13 @@ describe("formatDateTime", () => {
   it("passes an unreadable stamp through, and says nothing for none", () => {
     expect(formatDateTime("not a date")).toBe("not a date");
     expect(formatDateTime(null)).toBe("");
+  });
+});
+
+describe("an estimate's span", () => {
+  it("names the largest unit that keeps the figure small", () => {
+    expect(formatDuration(52)).toBe("52 sec");
+    expect(formatDuration(25 * 60 + 10)).toBe("25 min");
+    expect(formatDuration(5040)).toBe("1.4 h");
   });
 });

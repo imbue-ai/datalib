@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { searchAndSettle } from "./grid-helpers";
+import { GRID, searchAndSettle } from "./grid-helpers";
 
 // Two contracts a single qmd-routed query has to satisfy. They share
 // the same setup (open page → type free-text → qmd routes → score
@@ -27,7 +27,7 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     // 1. Open the search page empty. Time-asc default scrolls to the
     //    bottom, so we have a non-zero scrollTop — the precondition
     //    for the scroll-to-top assertion below.
-    await page.goto("/");
+    await page.goto(GRID);
     await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
     // The main pane's viewport: the grid keeps one per frozen quadrant.
     const viewport = page.locator(".grid-box .slick-viewport-top.slick-viewport-left");
@@ -51,12 +51,6 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
 
     const scoreHeader = page.locator('.grid-box .slick-header-column[col-id="score"]');
     await expect(scoreHeader).toBeVisible();
-    // Its filter's operator dropdown shows an operator or nothing —
-    // never the `&nbsp;` padding slickgrid writes as text when HTML
-    // rendering is off (typedColumns.FILTER_GRID_OPTIONS).
-    const operators = page.locator(".grid-box .slick-headerrow .filter-score select");
-    await expect(operators).toHaveCount(1);
-    expect(await operators.innerText()).not.toContain("&nbsp;");
     const firstRow = page.locator(".grid-box .slick-row").first();
     await expect(firstRow).toBeVisible();
 

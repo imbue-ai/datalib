@@ -2,7 +2,7 @@
 """What a doltlite write costs on disk, by key shape, transaction shape and
 commit cadence — the same rows in every variant. The dated results are in
 `hack/doltlite_commit_cost/README.md`; the write-up is
-`datalib/backend/etl/README.md` § "What a write costs".
+`docs/dev/doltlite.md` § "What a write costs".
 
     bazelisk build //third-party/doltlite:doltlite
     python3 scripts/doltlite_commit_cost.py [scratch_dir]

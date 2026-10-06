@@ -2,12 +2,16 @@
 //! for chat-style providers (Signal, WhatsApp, Beeper, …).
 
 pub mod account;
+pub mod changed;
+pub mod normalize;
+pub mod people;
 pub mod render;
 pub mod samples;
 pub mod types;
 
 pub use account::account_label;
-pub use render::{render_all, RenderProfile, RenderSummary, LAYOUT_VERSION};
+pub use changed::{changed_chats, render_changed, ChangedChats, RenderOutcome, RenderTarget};
+pub use render::{render_all, RenderProfile, RenderSummary, TextFormat, LAYOUT_VERSION};
 // Re-exported so a provider can name its `created_at` precision without
 // taking a dependency on `datalib-time` just for the enum.
 pub use datalib_time::RecordStampPrecision;
