@@ -707,6 +707,8 @@ struct ChannelTotals {
     /// Messages and replies Slack has stopped serving inside a range we
     /// read whole.
     pruned: usize,
+    /// Threads left owed because `replies` is off.
+    threads_owed: usize,
     media: BTreeMap<String, usize>,
 }
 
@@ -717,6 +719,7 @@ struct Mirror<'a> {
     since: String,
     refresh_from: Option<String>,
     media: bool,
+    replies: bool,
     blob_size_limit_bytes: Option<u64>,
     bar: &'a RunBar,
     latchkey: &'a LatchkeySettings,
@@ -778,18 +781,21 @@ impl Fetcher<Thread> for Threads<'_> {
 }
 
 impl Mirror<'_> {
-    /// A history walk that fails still leaves the channel's owed threads
-    /// and files to fetch: they are in the store whatever the walk did.
-    async fn channel(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
-        let walked = self.walk_history(channel_id, totals).await;
-        if walked.as_ref().is_err_and(interrupted) {
-            return walked;
+    /// What the channel's stored messages owe: its threads, then its
+    /// files. Both are read off the store, so a channel whose history
+    /// walk failed still has what an earlier walk stored fetched here.
+    /// With `replies` off the threads are counted and left owed.
+    async fn fetch_owed(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
+        if self.replies {
+            self.fetch_owed_threads(channel_id, totals).await?;
+        } else {
+            let listed = self.db.threads_listed(channel_id).await?;
+            totals.threads_owed = owed::owed(self.db.pool(), THREADS, listed).await?.len();
         }
-        self.fetch_owed_threads(channel_id, totals).await?;
         if self.media {
             self.fetch_owed_files(channel_id, totals).await?;
         }
-        walked
+        Ok(())
     }
 
     async fn walk_history(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
@@ -1090,6 +1096,9 @@ pub struct FetchOptions {
     pub refresh_window_days: i64,
     pub members_only: bool,
     pub media: bool,
+    /// Fetch each thread's replies. Off leaves every thread owed — see
+    /// `SlackApiSync::replies`.
+    pub replies: bool,
     /// Mirror direct messages (1:1 and group). Off by default — see
     /// `SlackApiSync::dms`.
     pub dms: bool,
@@ -1119,6 +1128,7 @@ impl FetchOptions {
             refresh_window_days: DEFAULT_REFRESH_WINDOW_DAYS,
             members_only: true,
             media: true,
+            replies: true,
             dms: false,
             dm_conversations: None,
             blob_size_limit_bytes: None,
@@ -1139,8 +1149,16 @@ pub struct FetchSummary {
     pub replies: usize,
     /// Messages Slack no longer serves inside a range this run re-walked.
     pub pruned: usize,
+    /// Threads with replies this run did not fetch because `replies` is
+    /// off. They are owed, so a run with it on fetches them.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub threads_owed: usize,
     pub media: BTreeMap<String, usize>,
     pub account: AccountTotals,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 #[instrument(skip_all)]
@@ -1171,6 +1189,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "refresh_window_days": opts.refresh_window_days,
         "members_only": opts.members_only,
         "media": opts.media,
+        "replies": opts.replies,
         "dms": opts.dms,
         "dm_conversations": opts.dm_conversations,
         "blob_size_limit_bytes": opts.blob_size_limit_bytes,
@@ -1184,6 +1203,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         messages: 0,
         replies: 0,
         pruned: 0,
+        threads_owed: 0,
         media: BTreeMap::new(),
         account: AccountTotals::default(),
     };
@@ -1267,6 +1287,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             dms = opts.dms,
             dm_targets = plan.dm_targets,
             media = opts.media,
+            replies = opts.replies,
             "planned the export"
         );
         let targets = plan.targets;
@@ -1308,6 +1329,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             since,
             refresh_from,
             media: opts.media,
+            replies: opts.replies,
             blob_size_limit_bytes: opts.blob_size_limit_bytes,
             bar: &bar,
             latchkey: &opts.latchkey,
@@ -1316,6 +1338,17 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             sealer: opts.sealer.as_ref(),
             blake3_by_file: &blake3_by_file,
         };
+        // Every channel's history before any channel's threads and
+        // files. Top-level messages are a few requests a channel and
+        // threads are one request each, so walking history first puts
+        // the whole workspace in the store early and leaves the long
+        // tail for after. Nothing is carried between the passes: the
+        // second asks the store what its messages owe.
+        //
+        // `walked[i]` is the top-level messages channel `i`'s walk stored,
+        // for its thread pass's progress line. A channel the first pass
+        // never reached is not in it, and the second pass stops there too.
+        let mut walked: Vec<usize> = Vec::with_capacity(targets.len());
         for (cid, name) in &targets {
             // Asked to stop: end here rather than start a channel whose
             // first request the transport would refuse.
@@ -1326,25 +1359,53 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             bar.doing(&format!("{name}: listing"));
             let span = info_span!("channel", channel_name = %name, channel_id = %cid);
             let mut totals = ChannelTotals::default();
-            let result = mirror.channel(cid, &mut totals).instrument(span).await;
+            let result = mirror.walk_history(cid, &mut totals).instrument(span).await;
+            info!(
+                event = "slack_history_done",
+                channel = %name,
+                messages = totals.messages,
+                "walked one channel's history",
+            );
+            // A channel that failed costs only itself: what it did not
+            // cover is still owed, by the store's own account.
+            if let Err(e) = result {
+                found.push(listing_problem(&format!("{M_HISTORY} {name}"), &e));
+            }
+            grand.messages += totals.messages;
+            grand.pruned += totals.pruned;
+            walked.push(totals.messages);
+            if let Some(sealer) = opts.sealer.as_ref() {
+                sealer.wrote((totals.messages + totals.pruned) as u64).await;
+            }
+        }
+        for ((cid, name), messages) in targets.iter().zip(walked) {
+            if opts.control.stop.requested() {
+                info!(event = "slack_interrupted", next_channel = %name, "told to stop; leaving the rest for the next run");
+                break;
+            }
+            let span = info_span!("channel", channel_name = %name, channel_id = %cid);
+            let mut totals = ChannelTotals {
+                messages,
+                ..Default::default()
+            };
+            let result = mirror.fetch_owed(cid, &mut totals).instrument(span).await;
             info!(
                 event = "slack_channel_done",
                 channel = %name,
                 messages = totals.messages,
                 replies = totals.replies,
+                threads_owed = totals.threads_owed,
                 media = totals.media.get("downloaded").copied().unwrap_or(0),
                 "finished one channel",
             );
             bar.did(1);
-            // A channel that failed costs only itself: what it did not
-            // cover or fetch is still owed, by the store's own account.
             if let Err(e) = result {
-                found.push(listing_problem(&format!("{M_HISTORY} {name}"), &e));
+                found.push(listing_problem(&format!("{M_REPLIES} {name}"), &e));
             }
-            let written = (totals.messages + totals.replies + totals.pruned) as u64;
-            grand.messages += totals.messages;
+            let written = (totals.replies + totals.pruned) as u64;
             grand.replies += totals.replies;
             grand.pruned += totals.pruned;
+            grand.threads_owed += totals.threads_owed;
             for (k, v) in totals.media {
                 *grand.media.entry(k).or_insert(0) += v;
             }

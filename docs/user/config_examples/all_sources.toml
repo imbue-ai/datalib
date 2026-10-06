@@ -306,6 +306,11 @@ since = "2025-01-01"     # oldest message to mirror (YYYY-MM-DD or RFC 3339;
                          # to seven days ago. Moving it earlier backfills on
                          # the next run; moving it later is a no-op.
 media = true             # pull file attachments into blobs
+# replies = false        # top-level messages only. A thread is one request
+                         # each, which on a big workspace is most of a
+                         # first sync; the threads stay owed, and a run
+                         # with this back on (the default) reads them
+                         # without walking a channel again.
 all_channels = false
 channels = ["project-data-liberation", "general"]
 dms = true               # also mirror direct messages, 1:1 and group.

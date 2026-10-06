@@ -16,6 +16,7 @@ mod playback_roundtrip;
 mod probe;
 mod progress_countdown;
 mod run_problems;
+mod shallow_then_deep;
 mod slack_render;
 mod slack_translate;
 mod support;

@@ -50,7 +50,8 @@ impl DataProcessor for SlackIngest {
         &self.id
     }
 
-    /// Seals at the end of each channel.
+    /// Seals at the end of each channel's history, and again at the end
+    /// of its threads and files.
     fn streams_output(&self) -> bool {
         true
     }
@@ -93,6 +94,7 @@ impl DataProcessor for SlackIngest {
                     .unwrap_or(ingest::DEFAULT_REFRESH_WINDOW_DAYS),
                 members_only: !self.sync.all_channels && self.sync.channels.is_none(),
                 media: self.sync.media,
+                replies: self.sync.replies,
                 dms: self.sync.dms,
                 dm_conversations: self.sync.dm_conversations.clone(),
                 blob_size_limit_bytes: self.blob_size_limit_bytes,
@@ -108,8 +110,13 @@ impl DataProcessor for SlackIngest {
                 .map(|(k, v)| format!("{k}={v}"))
                 .collect::<Vec<_>>()
                 .join(" ");
+            let owed = if s.threads_owed > 0 {
+                format!(" threads_owed={}", s.threads_owed)
+            } else {
+                String::new()
+            };
             Ok(format!(
-                "msgs={} replies={} pruned={} media[{}]",
+                "msgs={} replies={} pruned={} media[{}]{owed}",
                 s.messages, s.replies, s.pruned, media
             ))
         })

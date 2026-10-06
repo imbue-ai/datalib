@@ -66,6 +66,14 @@ pub struct SlackApiSync {
     /// Download file attachments into blobs. Off = JSON metadata only.
     #[serde(default = "default_true")]
     pub media: bool,
+    /// Fetch each thread's replies. Off mirrors top-level messages only
+    /// and leaves every thread owed: its root is stored with the reply
+    /// count and newest-reply stamp Slack listed, so turning this back on
+    /// fetches the replies without walking a channel again. A thread is
+    /// one request each, which on a large workspace is most of a first
+    /// sync.
+    #[serde(default = "default_true")]
+    pub replies: bool,
     /// Mirror direct messages — both 1:1 DMs and group DMs — alongside
     /// channels. **Off unless set**, and deliberately so: DMs are the
     /// most sensitive thing in a workspace, and an upgrade must not
@@ -89,6 +97,7 @@ impl Default for SlackApiSync {
             since: None,
             all_channels: false,
             media: true,
+            replies: true,
             dms: false,
             dm_conversations: None,
         }
@@ -166,6 +175,17 @@ mod tests {
     #[test]
     fn dm_conversations_with_dms_is_accepted() {
         sync(true, Some(vec!["D0123ABCD"])).validate().unwrap();
+    }
+
+    /// A config that does not name `replies` fetches them, as every
+    /// config written before the field existed expects.
+    #[test]
+    fn replies_default_on_and_can_be_turned_off() {
+        assert!(SlackApiSync::default().replies);
+        let on: SlackConfig = toml::from_str("[api]\nsince = \"2024-01-01\"\n").unwrap();
+        assert!(on.api.unwrap().replies);
+        let off: SlackConfig = toml::from_str("[api]\nreplies = false\n").unwrap();
+        assert!(!off.api.unwrap().replies);
     }
 
     /// An empty list is the same as none — it asks for nothing, so it

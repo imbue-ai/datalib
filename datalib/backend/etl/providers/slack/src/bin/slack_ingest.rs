@@ -48,6 +48,11 @@ struct Args {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     media: bool,
 
+    /// Fetch each thread's replies. Off = top-level messages only; the
+    /// threads stay owed and a later run with this on fetches them.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    replies: bool,
+
     /// Also mirror direct messages — 1:1 DMs and group DMs. Off unless
     /// asked for: DMs are the most sensitive thing in a workspace.
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
@@ -94,6 +99,7 @@ async fn main() -> Result<()> {
         refresh_window_days: args.refresh_window_days,
         members_only: args.members_only,
         media: args.media,
+        replies: args.replies,
         dms: args.dms,
         dm_conversations: (!args.dm_conversations.is_empty())
             .then(|| args.dm_conversations.clone()),
@@ -107,6 +113,7 @@ async fn main() -> Result<()> {
         out = %args.out.display(),
         channels = opts.channels.as_deref().map(|c| c.join(",")),
         media = opts.media,
+        replies = opts.replies,
         dms = opts.dms,
     );
     let summary = slack::fetch(opts).instrument(span).await;
