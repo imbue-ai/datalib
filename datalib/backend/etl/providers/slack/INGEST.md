@@ -316,6 +316,19 @@ its summary and on the step's line) and a later run with `replies` on
 reads them. A root whose replies were never read renders as the root
 alone.
 
+`replies_channels` narrows the thread read to the channels it names,
+the way `dm_conversations` narrows `dms`: threads elsewhere are counted
+and left owed, and the list without `replies` on is a config error.
+Adding a channel makes its stored roots owed; removing one deletes
+nothing.
+
+## Archived channels
+
+A listing leaves archived channels out unless `channels` names any (a
+named channel is mirrored archived or not) or `archived` is set, which
+asks `conversations.list` with `exclude_archived=false` and walks what
+it returns like any other channel. The two listings are cached apart.
+
 ## Attachments
 
 Each file a stored message carries that Slack serves (not a tombstone,

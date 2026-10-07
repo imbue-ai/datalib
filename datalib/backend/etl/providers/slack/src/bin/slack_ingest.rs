@@ -53,6 +53,15 @@ struct Args {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     replies: bool,
 
+    /// Restrict `--replies` to these channels, by name. Repeat the flag.
+    #[arg(long = "replies-channel", value_name = "NAME")]
+    replies_channels: Vec<String>,
+
+    /// Also mirror archived channels. A `--channel` is mirrored archived
+    /// or not.
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    archived: bool,
+
     /// Also mirror direct messages — 1:1 DMs and group DMs. Off unless
     /// asked for: DMs are the most sensitive thing in a workspace.
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
@@ -100,6 +109,9 @@ async fn main() -> Result<()> {
         members_only: args.members_only,
         media: args.media,
         replies: args.replies,
+        replies_channels: (!args.replies_channels.is_empty())
+            .then(|| args.replies_channels.clone()),
+        archived: args.archived,
         dms: args.dms,
         dm_conversations: (!args.dm_conversations.is_empty())
             .then(|| args.dm_conversations.clone()),

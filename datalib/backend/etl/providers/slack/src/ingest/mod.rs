@@ -719,7 +719,6 @@ struct Mirror<'a> {
     since: String,
     refresh_from: Option<String>,
     media: bool,
-    replies: bool,
     blob_size_limit_bytes: Option<u64>,
     bar: &'a RunBar,
     latchkey: &'a LatchkeySettings,
@@ -785,8 +784,13 @@ impl Mirror<'_> {
     /// files. Both are read off the store, so a channel whose history
     /// walk failed still has what an earlier walk stored fetched here.
     /// With `replies` off the threads are counted and left owed.
-    async fn fetch_owed(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
-        if self.replies {
+    async fn fetch_owed(
+        &self,
+        channel_id: &str,
+        replies: bool,
+        totals: &mut ChannelTotals,
+    ) -> Result<()> {
+        if replies {
             self.fetch_owed_threads(channel_id, totals).await?;
         } else {
             let listed = self.db.threads_listed(channel_id).await?;
@@ -1099,6 +1103,12 @@ pub struct FetchOptions {
     /// Fetch each thread's replies. Off leaves every thread owed — see
     /// `SlackApiSync::replies`.
     pub replies: bool,
+    /// Restrict the thread read to these channels, by name. Only
+    /// consulted when `replies` is on.
+    pub replies_channels: Option<Vec<String>>,
+    /// Mirror archived channels too. A channel named in `channels` is
+    /// mirrored either way.
+    pub archived: bool,
     /// Mirror direct messages (1:1 and group). Off by default — see
     /// `SlackApiSync::dms`.
     pub dms: bool,
@@ -1129,6 +1139,8 @@ impl FetchOptions {
             members_only: true,
             media: true,
             replies: true,
+            replies_channels: None,
+            archived: false,
             dms: false,
             dm_conversations: None,
             blob_size_limit_bytes: None,
@@ -1190,6 +1202,8 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "members_only": opts.members_only,
         "media": opts.media,
         "replies": opts.replies,
+        "replies_channels": opts.replies_channels,
+        "archived": opts.archived,
         "dms": opts.dms,
         "dm_conversations": opts.dm_conversations,
         "blob_size_limit_bytes": opts.blob_size_limit_bytes,
@@ -1221,10 +1235,12 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         if let Err(e) = fetch_users(&db, &now, &setup, &opts.latchkey).await {
             found.push(listing_problem(M_USERS, &e));
         }
+        // Named channels are looked for among the archived ones too.
+        let include_archived = opts.archived || opts.channels.is_some();
         let listed = match fetch_channels(
             &db,
             opts.members_only,
-            opts.channels.is_some(),
+            include_archived,
             opts.dms,
             &now,
             &setup,
@@ -1237,7 +1253,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             // walking; with none stored there is nothing to do at all.
             Err(e) => {
                 let stored = db
-                    .channels_for_fetch(opts.members_only, opts.channels.is_some(), opts.dms)
+                    .channels_for_fetch(opts.members_only, include_archived, opts.dms)
                     .await?;
                 if stored.is_empty() {
                     return Err(e.context("no channels are stored from an earlier listing"));
@@ -1279,6 +1295,22 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 "no direct message with that id among the ones this account can see, so it is \
                  not mirrored",
             ));
+        }
+        // Which channels' threads this run reads: none, all, or the named.
+        let replies_in: Option<HashSet<String>> = opts.replies_channels.as_ref().map(|specs| {
+            specs
+                .iter()
+                .map(|s| s.trim().trim_start_matches('#').to_string())
+                .collect()
+        });
+        for name in replies_in.iter().flatten() {
+            if !plan.targets.iter().any(|(_, n)| n == name) {
+                grand.problems.push(DownloadProblem::not_found(
+                    "replies_channels",
+                    name,
+                    "no mirrored channel by that name, so no thread is read for it",
+                ));
+            }
         }
         found.config(grand.problems.clone());
         info!(
@@ -1329,7 +1361,6 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             since,
             refresh_from,
             media: opts.media,
-            replies: opts.replies,
             blob_size_limit_bytes: opts.blob_size_limit_bytes,
             bar: &bar,
             latchkey: &opts.latchkey,
@@ -1388,7 +1419,12 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 messages,
                 ..Default::default()
             };
-            let result = mirror.fetch_owed(cid, &mut totals).instrument(span).await;
+            let replies =
+                opts.replies && replies_in.as_ref().is_none_or(|names| names.contains(name));
+            let result = mirror
+                .fetch_owed(cid, replies, &mut totals)
+                .instrument(span)
+                .await;
             info!(
                 event = "slack_channel_done",
                 channel = %name,

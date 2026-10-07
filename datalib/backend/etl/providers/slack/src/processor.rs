@@ -95,6 +95,8 @@ impl DataProcessor for SlackIngest {
                 members_only: !self.sync.all_channels && self.sync.channels.is_none(),
                 media: self.sync.media,
                 replies: self.sync.replies,
+                replies_channels: self.sync.replies_channels.clone(),
+                archived: self.sync.archived,
                 dms: self.sync.dms,
                 dm_conversations: self.sync.dm_conversations.clone(),
                 blob_size_limit_bytes: self.blob_size_limit_bytes,

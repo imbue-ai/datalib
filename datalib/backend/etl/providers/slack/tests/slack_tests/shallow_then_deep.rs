@@ -1,17 +1,21 @@
 //! The two things that decide how soon a first sync is worth reading:
 //! `replies = false` mirrors top-level messages and leaves every thread
-//! owed, for a later run to fetch without walking a channel again; and
-//! a run walks every channel's history before any channel's threads.
+//! owed, for a later run to fetch without walking a channel again
+//! (`replies_channels` does that for all but the channels it names); a
+//! run walks every channel's history before any channel's threads; and
+//! `archived` brings in the channels a default listing leaves out.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
-use datalib_etl_slack::recorded::{record_call, record_workspace, History};
+use datalib_etl_slack::recorded::{
+    record_auth, record_call, record_users, record_workspace, History, CHANNEL_TYPES,
+};
 use serde_json::{json, Value};
 
-use crate::support::{fetch_into, stored_ts, Tree};
+use crate::support::{channels_with_messages, fetch_into, msg, stored_ts, Tree};
 
 const CHANNELS: [&str; 2] = ["C1", "C2"];
 
@@ -100,6 +104,64 @@ async fn replies_off_leaves_threads_owed_and_a_later_run_fetches_them() {
     // Every request either run made was on the tape: a history walk
     // repeated from `since` would have missed it and left a problem row.
     assert_eq!(unread(&t.out).await, Vec::<String>::new());
+}
+
+/// `replies_channels` reads the named channel's threads and leaves the
+/// rest owed, counted like the threads of a run with replies off.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replies_channels_reads_only_the_named_channels_threads() {
+    let t = Tree::new();
+    record_two_threads(&t.api);
+    t.serve();
+
+    let summary = fetch_into(&t.out, |o| FetchOptions {
+        replies_channels: Some(vec!["c2".into()]),
+        ..o
+    })
+    .await
+    .unwrap();
+    assert_eq!((summary.replies, summary.threads_owed), (1, 1));
+    assert_eq!(
+        stored_ts(&t.out),
+        vec![root_ts(0), root_ts(1), reply_ts(1)],
+        "C2's reply and not C1's"
+    );
+}
+
+/// `archived` asks Slack for archived channels as well, and walks them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn archived_mirrors_an_archived_channel() {
+    let t = Tree::new();
+    record_auth(&t.api).unwrap();
+    record_users(&t.api, json!([{"id": "U1", "name": "picard"}])).unwrap();
+    record_call(
+        &t.api,
+        "conversations.list",
+        json!({"exclude_archived": "false", "limit": "200", "types": CHANNEL_TYPES}),
+        json!({"ok": true, "has_more": false, "channels": [
+            {"id": "C1", "name": "c1", "is_member": true, "is_archived": false},
+            {"id": "C9", "name": "old-project", "is_member": false, "is_archived": true},
+        ]}),
+    )
+    .unwrap();
+    for (i, channel) in ["C1", "C9"].iter().enumerate() {
+        History::cold(channel)
+            .record(&t.api, json!([msg(&root_ts(i), "hello")]))
+            .unwrap();
+    }
+    t.serve();
+
+    let summary = fetch_into(&t.out, |o| FetchOptions {
+        archived: true,
+        ..o
+    })
+    .await
+    .unwrap();
+    assert_eq!(summary.messages, 2);
+    assert_eq!(
+        channels_with_messages(&t.out),
+        ["C1", "C9"].map(String::from).into_iter().collect()
+    );
 }
 
 /// What the run said it was doing, in order.

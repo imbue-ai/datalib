@@ -74,6 +74,17 @@ pub struct SlackApiSync {
     /// sync.
     #[serde(default = "default_true")]
     pub replies: bool,
+    /// Restrict the thread read to these channels, by name without the
+    /// `#`. Unset (with `replies` on) means every mirrored channel. The
+    /// same shape as `dms` with `dm_conversations`: the switch says
+    /// whether, the list says where.
+    #[serde(default)]
+    pub replies_channels: Option<Vec<String>>,
+    /// With `all_channels`, or with neither it nor `channels`, also
+    /// mirror archived channels. A channel named in `channels` is
+    /// mirrored archived or not, whatever this says.
+    #[serde(default)]
+    pub archived: bool,
     /// Mirror direct messages — both 1:1 DMs and group DMs — alongside
     /// channels. **Off unless set**, and deliberately so: DMs are the
     /// most sensitive thing in a workspace, and an upgrade must not
@@ -98,6 +109,8 @@ impl Default for SlackApiSync {
             all_channels: false,
             media: true,
             replies: true,
+            replies_channels: None,
+            archived: false,
             dms: false,
             dm_conversations: None,
         }
@@ -113,6 +126,21 @@ impl SlackApiSync {
     /// discoverable from the outcome, so this fails at config-load
     /// time with the fix in the message.
     pub fn validate(&self) -> anyhow::Result<()> {
+        // As `dm_conversations` without `dms` below: a list of where to
+        // read threads, on a source told not to read any, has no reading
+        // that is discoverable from the outcome.
+        if !self.replies
+            && self
+                .replies_channels
+                .as_ref()
+                .is_some_and(|c| !c.is_empty())
+        {
+            anyhow::bail!(
+                "`replies_channels` names channels but `replies` is false, so no thread \
+                 would be read at all. Set `replies = true` to read the threads of those \
+                 channels, or drop `replies_channels`."
+            );
+        }
         if !self.dms {
             if let Some(convs) = &self.dm_conversations {
                 if !convs.is_empty() {
@@ -186,6 +214,21 @@ mod tests {
         assert!(on.api.unwrap().replies);
         let off: SlackConfig = toml::from_str("[api]\nreplies = false\n").unwrap();
         assert!(!off.api.unwrap().replies);
+    }
+
+    #[test]
+    fn replies_channels_without_replies_is_rejected() {
+        let named = |replies| SlackApiSync {
+            replies,
+            replies_channels: Some(vec!["general".into()]),
+            ..Default::default()
+        };
+        let msg = named(false)
+            .validate()
+            .expect_err("should reject")
+            .to_string();
+        assert!(msg.contains("replies = true"), "{msg}");
+        named(true).validate().unwrap();
     }
 
     /// An empty list is the same as none — it asks for nothing, so it
