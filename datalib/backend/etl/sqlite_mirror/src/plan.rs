@@ -103,9 +103,30 @@ impl TableSpec {
     }
 
     pub fn copy_sql(&self, from_schema: &str) -> String {
+        self.insert_select("INSERT", from_schema)
+    }
+
+    /// [`Self::copy_sql`] replacing any row the table holds under the
+    /// same key: the append-only copy of a keyed table.
+    pub fn upsert_sql(&self, from_schema: &str) -> String {
+        self.insert_select("INSERT OR REPLACE", from_schema)
+    }
+
+    /// [`Self::copy_sql`] for the rows the table does not already hold
+    /// whole: the append-only copy of a table with no key to upsert by.
+    pub fn copy_new_sql(&self, from_schema: &str) -> String {
+        format!(
+            "{} EXCEPT SELECT {} FROM main.{}",
+            self.copy_sql(from_schema),
+            self.column_list(),
+            quote_ident(&self.name),
+        )
+    }
+
+    fn insert_select(&self, verb: &str, from_schema: &str) -> String {
         let list = self.column_list();
         format!(
-            "INSERT INTO main.{t} ({list}) SELECT {list} FROM {s}.{t}",
+            "{verb} INTO main.{t} ({list}) SELECT {list} FROM {s}.{t}",
             t = quote_ident(&self.name),
             s = quote_ident(from_schema),
         )

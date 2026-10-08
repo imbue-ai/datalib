@@ -75,7 +75,7 @@ database per source, at
   - `edges` — its outgoing links.
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
-    `DatalibContact`, `contact_schema/`), and the handles that reach
+    `NormalizedContact`, `contact_schema/`), and the handles that reach
     them. chat-common adds one per author handle with no provider code;
     contact-common adds a card's own. Like edges they belong to the
     document, and the index answers "who is this handle" from them

@@ -353,6 +353,10 @@ The common-use subset:
 | `dolt_diff` | vtab | which tables each commit on the branch changed. |
 | `dolt_diff_summary` | vtab | which tables differ, data vs schema. Filter with `from_ref` / `to_ref`. |
 | `dolt_diff_<table>` | vtab | row-level diff for one table. Pass two refs, or leave them off for every adjacent pair on the branch. |
+| `dolt_merge(branch)` | scalar fn | merge a branch into the active one; returns the commit, or `Already up to date`. `'--squash'` first makes it one commit with one parent. See [Merging a branch](#merging-a-branch). |
+| `dolt_merge_base(a, b)` | scalar fn | the commit two branches split at. |
+| `dolt_conflicts_resolve('--ours' \| '--theirs', table)` | scalar fn | settles a merge's conflicts in one table, inside the merge's transaction. |
+| `dolt_revert(hash)` | scalar fn | a new commit undoing one; see [Reverting a commit](#reverting-a-commit). |
 | `dolt_at_<table>(ref)` | table-valued fn | one table as it was at a commit. |
 | `dolt_history_<table>` | vtab | every committed version of every row in one table; a primary-key equality seeks per commit. |
 | `dolt_blame_<table>` | vtab | per-row `git blame`: the last commit that changed each row. |
@@ -567,6 +571,53 @@ name itself and then switches branches in SQL, so `doltlite -readonly
 - **A diff reads only the main database.** A commit hash from an
   `ATTACH`ed store is `ref not found`; `datalib/backend/dirtree_diff/README.md`
   has the fetch-into-scratch way to compare two files.
+
+### Merging a branch
+
+How a draft works: edits go to a branch of their own, uncommitted, and
+saving merges that branch into the one readers see.
+
+- **A branch's uncommitted rows outlive the connection that wrote
+  them**, and `dolt_reset('--hard')` / `dolt_clean()` on another branch
+  leave them alone. `dolt_diff_<table>('<commit>', 'WORKING')` on that
+  branch reads them as a diff.
+- **A merge takes a branch's commits, not its uncommitted rows**: a
+  branch that only has those merges as `Already up to date`. A merge
+  *into* a branch with uncommitted rows is refused (`uncommitted
+  changes`).
+- **Merges are cell by cell.** Two branches that change different
+  columns of one row merge cleanly, into a commit with two parents.
+- **A conflict outside a transaction changes nothing** (`conflicts
+  detected`, rolled back). Inside `BEGIN`, `dolt_merge` still returns
+  an error (`Merge has 1 conflict(s)`), but the transaction stays open:
+  `dolt_conflicts_<table>` holds each row's `base_`, `our_` and
+  `their_` columns, `dolt_conflicts_resolve('--theirs', '<table>')`
+  takes the merged branch's side, and `dolt_commit` commits the merge
+  and ends the transaction.
+- **`dolt_merge('--squash', b)` commits at once**, one commit whose one
+  parent is the old head; the branch's own commits never reach the log.
+- **A merge commit and a squash both revert** with `dolt_revert`.
+- **`dolt_branch('-d', b)` refuses a branch with unmerged commits**
+  (`branch is not fully merged`) and drops one whose only change is
+  uncommitted; `-D` drops either, uncommitted rows included, so a
+  branch made again under the same name starts clean.
+
+### Reverting a commit
+
+- **`dolt_revert('<hash>')` makes a new commit that undoes the named
+  one, on the active branch, and returns its hash.** The commit need
+  not be HEAD; the ones after it stay. The message is
+  `Revert "<original message>"`, and the working set is clean after it.
+- **It is a merge, and is refused with `conflicts detected` when a
+  later commit changed a row the commit touched.** Nothing is
+  committed or changed then. A row still exactly as the commit left it
+  reverts cleanly, so a revert of a commit that deleted a row puts it
+  back even after later commits elsewhere.
+- **Reverting the same commit twice is `nothing to commit`**; reverting
+  the revert restores what the original did.
+- **An uncommitted change refuses it** (`Your local changes would be
+  overwritten by revert`), through the library we link; a probe through
+  the shell went ahead and left the change uncommitted.
 
 ### Query plans and indexes
 

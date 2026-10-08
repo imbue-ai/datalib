@@ -7,22 +7,22 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use datalib_etl::dav;
-use datalib_etl::http::{HttpMethod, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::write_fixture;
 use datalib_etl_contacts::ingest::{self, api, db_path_for, RawDb};
+use datalib_etl_web::dav;
+use datalib_etl_web::http::{HttpMethod, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::write_fixture;
 
-const HOST: &str = "https://carddav.enterprise.test";
-const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";
-const HOME: &str = "/dav/addressbooks/user/picard@enterprise.test/";
-const BOOK: &str = "/dav/addressbooks/user/picard@enterprise.test/Default/";
+pub(crate) const HOST: &str = "https://carddav.enterprise.test";
+pub(crate) const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";
+pub(crate) const HOME: &str = "/dav/addressbooks/user/picard@enterprise.test/";
+pub(crate) const BOOK: &str = "/dav/addressbooks/user/picard@enterprise.test/Default/";
 
-const BRIDGE_V1: &str = include_str!("../fixtures/carddav_tng/Bridge.vcf");
-const BRIDGE_V2: &str = include_str!("../fixtures/carddav_tng_v2/Bridge.vcf");
+pub(crate) const BRIDGE_V1: &str = include_str!("../fixtures/carddav_tng/Bridge.vcf");
+pub(crate) const BRIDGE_V2: &str = include_str!("../fixtures/carddav_tng_v2/Bridge.vcf");
 
 /// `(UID, the card as served)` for each card of a `.vcf`.
-fn cards(vcf: &str) -> Vec<(String, String)> {
+pub(crate) fn cards(vcf: &str) -> Vec<(String, String)> {
     vcf.split_inclusive("END:VCARD\r\n")
         .map(|card| {
             let uid = api::vcard_uid(card).expect("every Bridge card has a UID");
@@ -31,11 +31,11 @@ fn cards(vcf: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn card<'a>(cards: &'a [(String, String)], uid: &str) -> &'a str {
+pub(crate) fn card<'a>(cards: &'a [(String, String)], uid: &str) -> &'a str {
     &cards.iter().find(|(u, _)| u == uid).expect(uid).1
 }
 
-fn xml(status: u16, body: &str) -> HttpResponse {
+pub(crate) fn xml(status: u16, body: &str) -> HttpResponse {
     let mut headers = BTreeMap::new();
     headers.insert(
         "content-type".into(),
@@ -49,7 +49,7 @@ fn xml(status: u16, body: &str) -> HttpResponse {
     }
 }
 
-fn fixture(
+pub(crate) fn fixture(
     root: &Path,
     method: HttpMethod,
     url: &str,
@@ -68,7 +68,7 @@ fn fixture(
     write_fixture(root, &req, &resp).expect("write fixture");
 }
 
-fn resource(uid: &str, etag: &str, vcard: &str) -> String {
+pub(crate) fn resource(uid: &str, etag: &str, vcard: &str) -> String {
     format!(
         "<response><href>{BOOK}{uid}.vcf</href><propstat><prop><getetag>{etag}</getetag>\
          <card:address-data><![CDATA[{vcard}]]></card:address-data></prop>\
@@ -76,14 +76,19 @@ fn resource(uid: &str, etag: &str, vcard: &str) -> String {
     )
 }
 
-fn multistatus(inner: &str) -> String {
+pub(crate) fn multistatus(inner: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?><multistatus xmlns="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav" xmlns:cs="http://calendarserver.org/ns/">{inner}</multistatus>"#
     )
 }
 
 /// Discovery and the addressbook listing, shared by both runs.
-fn account_fixtures(root: &Path) {
+pub(crate) fn account_fixtures(root: &Path) {
+    account_fixtures_listing(root, true);
+}
+
+/// The same with the home listing holding no address book at all.
+fn account_fixtures_listing(root: &Path, with_bridge: bool) {
     let find_principal = dav::BODY_CURRENT_USER_PRINCIPAL;
     fixture(
         root,
@@ -127,14 +132,17 @@ fn account_fixtures(root: &Path) {
             )),
         ),
     );
+    let bridge = format!(
+        "<response><href>{BOOK}</href>\
+         <propstat><prop><resourcetype><collection/><card:addressbook/></resourcetype><displayname><![CDATA[Bridge]]></displayname><cs:getctag>2370-1</cs:getctag></prop><status>HTTP/1.1 200 OK</status></propstat>\
+         <propstat><prop><card:addressbook-description/></prop><status>HTTP/1.1 404 Not Found</status></propstat></response>"
+    );
     fixture(root, HttpMethod::Propfind, &format!("{HOST}{HOME}"), "1", api::BODY_LIST_ADDRESSBOOKS,
         xml(207, &multistatus(&format!(
             "<response><href>{HOME}</href>\
              <propstat><prop><resourcetype><collection/></resourcetype><displayname><![CDATA[#addressbooks]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat>\
-             <propstat><prop><card:addressbook-description/><cs:getctag/></prop><status>HTTP/1.1 404 Not Found</status></propstat></response>\
-             <response><href>{BOOK}</href>\
-             <propstat><prop><resourcetype><collection/><card:addressbook/></resourcetype><displayname><![CDATA[Bridge]]></displayname><cs:getctag>2370-1</cs:getctag></prop><status>HTTP/1.1 200 OK</status></propstat>\
-             <propstat><prop><card:addressbook-description/></prop><status>HTTP/1.1 404 Not Found</status></propstat></response>"
+             <propstat><prop><card:addressbook-description/><cs:getctag/></prop><status>HTTP/1.1 404 Not Found</status></propstat></response>{}",
+            if with_bridge { bridge.as_str() } else { "" }
         ))));
 }
 
@@ -175,6 +183,7 @@ async fn run_named(
         addressbooks: addressbooks.iter().map(|s| s.to_string()).collect(),
         progress: Default::default(),
         control,
+        sealer: None,
     })
     .await;
     if summary.is_ok() {
@@ -416,9 +425,11 @@ async fn an_expired_token_lists_the_book_whole_again() {
 
 /// A card with no UID cannot be stored, and an address book whose sync
 /// fails is not synced; each was only a `warn!`, so nothing reached the
-/// Manage row. Each is a `problems` row now. The card's row stays through
-/// a failed run and a clean incremental one that does not mention it —
-/// it is still not stored — and goes once the card is listed with a UID.
+/// Manage row. Each is a `problems` row now: the card is held at its
+/// etag with a warning on its listing row. The warning stays through a
+/// failed run and a clean incremental one that does not mention it — it
+/// is still not stored — and goes once the card is listed at a new etag
+/// with a UID, which the mirror then holds for that href.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn what_a_sync_could_not_store_is_a_problem_row_until_it_is_stored() {
     let d = tempfile::tempdir().expect("tempdir");
@@ -477,7 +488,13 @@ async fn what_a_sync_could_not_store_is_a_problem_row_until_it_is_stored() {
         ),
     );
 
-    let unstored = format!("record:contacts:{BOOK}tng-data.vcf");
+    let unstored = format!(
+        "dav_resources:{}",
+        datalib_etl_web::dav::state::resource_id(
+            &datalib_etl_contacts::ingest::db::addressbook_pk("carddav.enterprise.test", BOOK),
+            &format!("{BOOK}tng-data.vcf")
+        )
+    );
     let first = run(&one, &store).await;
     assert_eq!((first.contacts_new, first.errors), (1, 1), "{first:?}");
     assert_eq!(problem_keys(&store).await, vec![unstored.clone()]);
@@ -485,7 +502,7 @@ async fn what_a_sync_could_not_store_is_a_problem_row_until_it_is_stored() {
     assert_eq!(second.errors, 1, "{second:?}");
     assert_eq!(
         problem_keys(&store).await,
-        vec!["listing:addressbook Bridge".to_string(), unstored.clone()]
+        vec![unstored.clone(), "listing:addressbook Bridge".to_string()]
     );
     // A run that stopped before the address book has not synced it again.
     let before = problem_keys(&store).await;
@@ -568,4 +585,146 @@ async fn a_configured_name_no_address_book_has_is_a_problem_row() {
 
     run(&two, &store).await;
     assert_eq!(problem_keys(&store).await, Vec::<String>::new());
+}
+
+/// A card the listing named without its data and the `multiget` did not
+/// return was noted as "could not store" while the token advanced, so in
+/// token mode no later run asked for it: the listing never named it
+/// again. It is owed until it is held at the etag it was listed at, so
+/// the next run asks for it although its listing says nothing changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_card_the_multiget_did_not_return_is_asked_for_again_next_run() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let book = format!("{HOST}{BOOK}");
+    for root in [&one, &two] {
+        account_fixtures(root);
+    }
+    let v1 = cards(BRIDGE_V1);
+    let data_href = format!("{BOOK}tng-data.vcf");
+    let listed_without_data = format!(
+        "<response><href>{data_href}</href><propstat><prop><getetag>\"d1\"</getetag></prop>\
+         <status>HTTP/1.1 200 OK</status></propstat></response>"
+    );
+    let multiget = api::KIND.body_multiget(std::slice::from_ref(&data_href));
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &api::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}{listed_without_data}<sync-token>data:,1</sync-token>",
+                resource("tng-picard", "\"p1\"", card(&v1, "tng-picard")),
+            )),
+        ),
+    );
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &multiget,
+        xml(207, &multistatus("")),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &api::body_sync_collection("data:,1"),
+        xml(207, &multistatus("<sync-token>data:,2</sync-token>")),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &book,
+        "0",
+        &multiget,
+        xml(
+            207,
+            &multistatus(&resource("tng-data", "\"d1\"", card(&v1, "tng-data"))),
+        ),
+    );
+
+    let first = run(&one, &store).await;
+    assert_eq!(
+        (first.contacts_new, first.errors, first.requests),
+        (1, 1, 6),
+        "{first:?}"
+    );
+    assert_eq!(stored_uids(&store).await.as_deref(), Some("tng-picard"));
+    assert_eq!(
+        problem_keys(&store).await.len(),
+        1,
+        "the card that did not come is a row"
+    );
+
+    let second = run(&two, &store).await;
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-data,tng-picard"),
+        "the card the listing no longer names is asked for again: {second:?}"
+    );
+    assert_eq!((second.contacts_new, second.errors), (1, 0), "{second:?}");
+    assert_eq!(problem_keys(&store).await, Vec::<String>::new());
+}
+
+/// An address book the home listing no longer names goes with its
+/// cards and everything it listed: the listing is one PROPFIND, whole
+/// by nature, so absence from it is deletion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_address_book_the_server_no_longer_lists_goes_with_its_cards() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    account_fixtures(&one);
+    let v1 = cards(BRIDGE_V1);
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &format!("{HOST}{BOOK}"),
+        "0",
+        &api::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}<sync-token>data:,1</sync-token>",
+                resource("tng-picard", "\"p1\"", card(&v1, "tng-picard")),
+            )),
+        ),
+    );
+    account_fixtures_listing(&two, false);
+
+    let first = run_named(&one, &store, Default::default(), &[])
+        .await
+        .expect("first run");
+    assert_eq!(first.contacts_new, 1, "{first:?}");
+    let second = run_named(&two, &store, Default::default(), &[])
+        .await
+        .expect("second run");
+    assert_eq!(
+        (second.addressbooks, second.contacts_deleted),
+        (0, 1),
+        "{second:?}"
+    );
+    assert_eq!(stored_uids(&store).await, None);
+    for sql in [
+        "SELECT CAST(count(*) AS TEXT) FROM addressbooks",
+        "SELECT CAST(count(*) AS TEXT) FROM dav_resources",
+        "SELECT CAST(count(*) AS TEXT) FROM dav_resources_bookkeeping",
+    ] {
+        assert_eq!(scalar(&store, sql).await.as_deref(), Some("0"), "{sql}");
+    }
 }

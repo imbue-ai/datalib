@@ -249,7 +249,7 @@ async fn load_voice_blobs(
     }
     BlobBundle::load_many(
         db.pool(),
-        db.cas().pool(),
+        Some(db.cas().pool()),
         VOICE_BLOB_PROJECTION,
         refs_by_chat,
     )
@@ -331,6 +331,7 @@ fn build_chats(
                     kind_label: None,
                     source_ref: Some(UpstreamRef::new(msg_id.entity_kind, msg_id.natural_key)),
                     is_aside: false,
+                    branch: Vec::new(),
                     unread: false,
                     recipients: Vec::new(),
                     problems,
@@ -593,6 +594,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
+                branch: Vec::new(),
                 unread: false,
                 recipients: Vec::new(),
                 problems: problems.clone(),
@@ -627,6 +629,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
+                branch: Vec::new(),
                 unread: false,
                 recipients: Vec::new(),
                 problems: problems.clone(),
@@ -656,6 +659,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
+                branch: Vec::new(),
                 unread: false,
                 recipients: Vec::new(),
                 problems: problems.clone(),

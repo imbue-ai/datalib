@@ -126,12 +126,14 @@ pub fn source_type(r#type: &str, params: &serde_json::Value) -> Identity {
             label: c.label.to_string(),
             icon: c.icon.map(str::to_string),
             detail: None,
+            entity: None,
         },
         None => Identity {
             id: r#type.to_string(),
             label: r#type.to_string(),
             icon: None,
             detail: None,
+            entity: None,
         },
     }
 }

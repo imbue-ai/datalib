@@ -32,16 +32,6 @@ impl SourceRender for YolinkRender {
         crate::render::RENDER_VERSION
     }
 
-    /// A history window that would not fetch is its device's.
-    fn item_of_entity(&self, source_id: &str, table: &str, id: &str) -> Option<String> {
-        use datalib_etl_yolink::ingest::schema_raw::{device_of_window_id, YOLINK_WINDOWS_TABLE};
-        if table != YOLINK_WINDOWS_TABLE {
-            return None;
-        }
-        let device = device_of_window_id(id)?;
-        Some(crate::render::render::device_uuid(source_id, device))
-    }
-
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::parse::{inputs, parse};
         use crate::render::render::{document_uuid, render_all};
@@ -63,24 +53,5 @@ impl SourceRender for YolinkRender {
             "devices={} series={} points={} plots={}",
             s.devices, s.series, s.points, s.plots,
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use datalib_etl_yolink::ingest::schema_raw::window_id_recipe;
-
-    /// A failed window's `problems` row reaches the device it belongs to.
-    #[test]
-    fn a_window_is_its_devices_row() {
-        let item = |table, id| YolinkRender.item_of_entity("src", table, id);
-        let window = window_id_recipe("cargo-bay-2", 1, 2);
-        assert_eq!(
-            item("yolink_windows", &window),
-            Some(crate::render::render::device_uuid("src", "cargo-bay-2"))
-        );
-        assert_eq!(item("yolink_readings", &window), None);
-        assert_eq!(item("yolink_windows", "no-separator"), None);
     }
 }

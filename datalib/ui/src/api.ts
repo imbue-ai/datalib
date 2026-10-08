@@ -61,6 +61,11 @@ export type SearchRow = {
   source_id: string;
   kind: string;
   author: string;
+  // The author's handle where the source has one, and the Author cell
+  // the applet resolves from it: the handle as a URI for its id, the
+  // author as shown for its label (docs/dev/plans/chips.md).
+  author_handle: string | null;
+  author_ref: Identity | null;
   channel: string;
   // Public URL for the row's source artifact (Slack permalink, LinkedIn
   // post, …); empty when none.
@@ -140,6 +145,9 @@ export type RowsResponse<Row> = RowsSpec & {
   // surface a 500. `api.ts` raises each as a toast so the user sees
   // them; the field is omitted when empty (serde `skip_serializing_if`).
   errors?: string[];
+  // Why the query cannot be read as typed (the search's alone). Not an
+  // error: mid-keystroke it is usually a filter not finished yet.
+  refused?: string[];
 };
 
 export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho };
@@ -180,6 +188,7 @@ export type ProblemReason =
   | "deliberate_loss"
   | "render_failed"
   | "fetch_failed"
+  | "blob_missing"
   | "over_size_limit"
   | "not_found"
   | "forbidden"
@@ -554,6 +563,7 @@ export type GroupsResponse<Row = SearchRow> = {
   qmd_error?: string | null;
   qmd_index_missing?: boolean;
   errors: string[];
+  refused?: string[];
 };
 
 /// The groups the rows of `url` (the search's, by default) fall into by
@@ -954,6 +964,9 @@ export type Identity = {
   label: string;
   icon?: string | null;
   detail?: string | null;
+  /// The group or step this names, as a chip's URI (`datalib:group/slack`),
+  /// when the viewer should draw it as a chip it can resolve and open.
+  entity?: string | null;
 };
 
 export type Sample = { at: string; value: number };

@@ -7,7 +7,7 @@ import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from
 import type { GroupsResponse, SearchResponse, SearchRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import type { CardCtx, Teardown } from "./types";
-import { subscribeLive } from "@/live";
+import { oneAtATime, subscribeLive } from "@/live";
 import { iconUrl } from "@/config/icons";
 import { formatRelative } from "@/config/timeFormat";
 import { documentView } from "./libs/documentView";
@@ -74,9 +74,11 @@ async function run(keepPick = false) {
     nextOffset.value = page.next_offset;
     sources.value = groups.groups;
     const echo = page.query_echo;
-    notice.value = echo?.qmd_index_missing
-      ? "Nothing has been indexed for search yet, so there is nothing to match your words against. Sync a source first."
-      : (echo?.qmd_error ?? null);
+    notice.value =
+      page.refused?.[0] ??
+      (echo?.qmd_index_missing
+        ? "Nothing has been indexed for search yet, so there is nothing to match your words against. Sync a source first."
+        : (echo?.qmd_error ?? null));
     if (!keepPick || !results.value.some((r) => r.uuid === picked.value?.uuid)) {
       picked.value = results.value[0] ?? null;
     }
@@ -166,15 +168,20 @@ function when(iso: string | null): string {
 
 const allCount = computed(() => sources.value.reduce((n, g) => n + g.count, 0));
 
+const cardEl = useTemplateRef<HTMLDivElement>("cardEl");
+const refresh = oneAtATime(() => run(true));
 let stop: (() => void) | null = null;
 onMounted(() => {
   void run();
-  stop = subscribeLive({
-    root: (e) => {
-      if (e.kind === "index_changed") void run(true);
+  stop = subscribeLive(
+    {
+      root: (e) => {
+        if (e.kind === "index_changed") refresh();
+      },
+      resync: refresh,
     },
-    resync: () => void run(true),
-  });
+    { onScreen: cardEl.value ?? undefined },
+  );
 });
 onBeforeUnmount(() => {
   stop?.();
@@ -184,7 +191,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="sc">
+  <div ref="cardEl" class="sc">
     <form class="sc-bar" role="search" @submit.prevent="submit">
       <div class="sc-field">
         <svg class="sc-glyph" viewBox="0 0 24 24" aria-hidden="true">

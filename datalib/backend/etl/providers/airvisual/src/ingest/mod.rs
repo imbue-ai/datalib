@@ -19,11 +19,11 @@ use tracing::info;
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::file_checkpoint;
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan::{self, ScannedFile};
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan::{self, ScannedFile};
 
 use datalib_etl_airvisual_config::AirvisualDevice;
 use datalib_problems::{Outcome, Problem, Reason};

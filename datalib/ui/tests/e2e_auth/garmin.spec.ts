@@ -2,7 +2,8 @@
 // sign-in also installs it. These run the real plugin: its bearer
 // exchange and its profile request both reach the fake Garmin.
 import { TNG } from "./fake_sites.mjs";
-import { expect, pickTile, subcommand, test, TILE, wizard, wizField } from "./world";
+import { expect, pickTile, subcommand, test, TILE, wizard } from "./world";
+import { reviewToml } from "../e2e/wizard-helpers";
 
 const garthFolder = (world: { writeFile: (rel: string, text: string) => string }) => {
   const file = world.writeFile(
@@ -52,7 +53,7 @@ test("importing a garth folder installs the plugin, then Check connection reache
   // Once latchkey knows the service the note is gone, and the account
   // is one it holds.
   await expect(wizard(page).locator(".wiz-plugin-note")).toHaveCount(0);
-  await expect(wizField(page, "Garmin account").locator("input")).toHaveValue("picard");
+  await expect(await reviewToml(page)).toContainText('account = "picard"');
 });
 
 /// Guards a person's own copy of the plugin: a sign-in from the wizard

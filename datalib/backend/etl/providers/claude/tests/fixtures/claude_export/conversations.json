@@ -361,5 +361,936 @@
         "files": []
       }
     ]
+  },
+  {
+    "uuid": "c0000007-1701-4d00-8000-00000000c007",
+    "name": "Warp Field Recalibration",
+    "summary": "How hard the warp field can be pushed, and a script to check the coils.",
+    "model": "claude-opus-4-7",
+    "created_at": "2369-04-18T09:00:00.000000+00:00",
+    "updated_at": "2369-04-18T09:03:00.000000+00:00",
+    "settings": {
+      "enabled_web_search": true
+    },
+    "is_starred": false,
+    "is_temporary": false,
+    "platform": "CLAUDE_AI",
+    "current_leaf_message_uuid": "7a000006-1701-4d00-8000-00000007a006",
+    "account": {
+      "uuid": "00000001-1701-4d00-8000-000000000001"
+    },
+    "_source": {
+      "via": "claude.ai/api",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise"
+    },
+    "chat_messages": [
+      {
+        "uuid": "7a000001-1701-4d00-8000-00000007a001",
+        "text": "Geordi, how far can we push the warp field before the nacelles complain?",
+        "sender": "human",
+        "index": 0,
+        "created_at": "2369-04-18T09:00:00.000000+00:00",
+        "updated_at": "2369-04-18T09:00:00.000000+00:00",
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:00:00.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:00:00.000000+00:00",
+            "type": "text",
+            "text": "Geordi, how far can we push the warp field before the nacelles complain?",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "7a000002-1701-4d00-8000-00000007a002",
+        "text": "Sustained warp 9.2 is the rated ceiling; the nacelles tolerate 9.6 for about twelve hours before the coils need a full recalibration.",
+        "sender": "assistant",
+        "index": 1,
+        "created_at": "2369-04-18T09:00:20.000000+00:00",
+        "updated_at": "2369-04-18T09:00:20.000000+00:00",
+        "parent_message_uuid": "7a000001-1701-4d00-8000-00000007a001",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:00:05.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:00:05.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_warp_search",
+            "name": "web_search",
+            "message": "Searching the web",
+            "input": {
+              "query": "Galaxy class maximum sustainable warp"
+            }
+          },
+          {
+            "start_timestamp": "2369-04-18T09:00:08.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:00:08.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_warp_search",
+            "name": "web_search",
+            "is_error": false,
+            "content": [
+              {
+                "type": "knowledge",
+                "title": "Warp factor",
+                "url": "https://memory-alpha.test/wiki/Warp_factor",
+                "is_missing": false,
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_domain": "memory-alpha.test",
+                  "site_name": "Memory Alpha"
+                }
+              },
+              {
+                "type": "knowledge",
+                "title": "Galaxy class propulsion",
+                "url": "https://tech-manual.test/ncc-1701-d/propulsion",
+                "is_missing": false,
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_domain": "tech-manual.test",
+                  "site_name": "Starfleet Technical Manual"
+                }
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-04-18T09:00:20.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:00:20.000000+00:00",
+            "type": "text",
+            "text": "Sustained warp 9.2 is the rated ceiling; the nacelles tolerate 9.6 for about twelve hours before the coils need a full recalibration.",
+            "citations": [
+              {
+                "uuid": "cite-0",
+                "start_index": 0,
+                "end_index": 40,
+                "title": "Warp factor",
+                "url": "https://memory-alpha.test/wiki/Warp_factor",
+                "origin_tool_name": "web_search",
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_domain": "memory-alpha.test",
+                  "site_name": "Memory Alpha"
+                },
+                "sources": [
+                  {
+                    "uuid": "src-0-0",
+                    "source": "Memory Alpha",
+                    "title": "Warp factor",
+                    "url": "https://memory-alpha.test/wiki/Warp_factor",
+                    "icon_url": "https://memory-alpha.test/icon.png"
+                  }
+                ]
+              },
+              {
+                "uuid": "cite-41",
+                "start_index": 41,
+                "end_index": 120,
+                "title": "Galaxy class propulsion",
+                "url": "https://tech-manual.test/ncc-1701-d/propulsion",
+                "origin_tool_name": "web_search",
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_domain": "tech-manual.test",
+                  "site_name": "Starfleet Technical Manual"
+                },
+                "sources": [
+                  {
+                    "uuid": "src-41-0",
+                    "source": "Starfleet Technical Manual",
+                    "title": "Galaxy class propulsion",
+                    "url": "https://tech-manual.test/ncc-1701-d/propulsion",
+                    "icon_url": "https://tech-manual.test/icon.png"
+                  },
+                  {
+                    "uuid": "src-41-1",
+                    "source": "Memory Alpha",
+                    "title": "Warp coil",
+                    "url": "https://memory-alpha.test/wiki/Warp_coil",
+                    "icon_url": "https://memory-alpha.test/icon.png"
+                  },
+                  {
+                    "uuid": "src-41-2",
+                    "source": "Memory Alpha",
+                    "title": "Warp factor",
+                    "url": "https://memory-alpha.test/wiki/Warp_factor",
+                    "icon_url": "https://memory-alpha.test/icon.png"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "7a000003-1701-4d00-8000-00000007a003",
+        "text": "Give me the coil efficiencies as a table.",
+        "sender": "human",
+        "index": 2,
+        "created_at": "2369-04-18T09:01:00.000000+00:00",
+        "updated_at": "2369-04-18T09:01:00.000000+00:00",
+        "parent_message_uuid": "7a000002-1701-4d00-8000-00000007a002",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:01:00.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:01:00.000000+00:00",
+            "type": "text",
+            "text": "Give me the coil efficiencies as a table.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "7a000004-1701-4d00-8000-00000007a004",
+        "text": "This answer was left behind when the question was edited.",
+        "sender": "assistant",
+        "index": 3,
+        "created_at": "2369-04-18T09:01:10.000000+00:00",
+        "updated_at": "2369-04-18T09:01:10.000000+00:00",
+        "parent_message_uuid": "7a000003-1701-4d00-8000-00000007a003",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:01:10.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:01:10.000000+00:00",
+            "type": "text",
+            "text": "This answer was left behind when the question was edited.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "7a000005-1701-4d00-8000-00000007a005",
+        "text": "Write me a script that checks these coil readings.",
+        "sender": "human",
+        "index": 4,
+        "created_at": "2369-04-18T09:02:00.000000+00:00",
+        "updated_at": "2369-04-18T09:02:00.000000+00:00",
+        "parent_message_uuid": "7a000002-1701-4d00-8000-00000007a002",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:02:00.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:00.000000+00:00",
+            "type": "text",
+            "text": "Write me a script that checks these coil readings.",
+            "citations": []
+          }
+        ],
+        "attachments": [
+          {
+            "id": "paste-7a005",
+            "file_name": "",
+            "file_type": "txt",
+            "file_size": 30,
+            "extracted_content": "Coil 1: 98.2%\nCoil 2: 97.1%",
+            "created_at": "2369-04-18T09:02:00.000000+00:00"
+          }
+        ],
+        "files": []
+      },
+      {
+        "uuid": "7a000006-1701-4d00-8000-00000007a006",
+        "text": "Coil 2 is under threshold; schedule it for recalibration.",
+        "sender": "assistant",
+        "index": 5,
+        "created_at": "2369-04-18T09:02:30.000000+00:00",
+        "updated_at": "2369-04-18T09:02:30.000000+00:00",
+        "parent_message_uuid": "7a000005-1701-4d00-8000-00000007a005",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-18T09:02:05.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:05.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_warp_artifact",
+            "name": "artifacts",
+            "message": "Creating the coil check",
+            "input": {
+              "id": "coil_check",
+              "command": "create",
+              "title": "Coil check",
+              "type": "application/vnd.ant.code",
+              "language": "python",
+              "content": "\"\"\"Coil check for the Enterprise-D.\"\"\"\nREPORT = \"\"\"\n```\nwarp 9.6 for 12h\n```\n\"\"\"\n\ndef ok(efficiency):\n    return efficiency >= 97.5\n",
+              "version_uuid": "v-7a006-1"
+            }
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:06.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:06.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_warp_artifact",
+            "name": "artifacts",
+            "is_error": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "OK"
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:10.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:10.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_warp_update",
+            "name": "artifacts",
+            "message": "Raising the threshold",
+            "input": {
+              "id": "coil_check",
+              "command": "update",
+              "old_str": "97.5",
+              "new_str": "98.0",
+              "version_uuid": "v-7a006-2"
+            }
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:15.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:15.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_warp_file",
+            "name": "create_file",
+            "message": "Writing the report",
+            "input": {
+              "path": "/mnt/user-data/outputs/coil_report.md",
+              "description": "Coil report for the chief engineer",
+              "file_text": "# Coil report\n\nCoil 2 is below threshold.\n"
+            }
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:20.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:20.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_warp_bash",
+            "name": "bash_tool",
+            "message": "Running the check",
+            "input": {
+              "command": "python3 coil_check.py --coil 2",
+              "description": "Check coil 2 against the threshold"
+            }
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:25.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:25.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_warp_bash",
+            "name": "bash_tool",
+            "is_error": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "coil 2: 97.1% (below 98.0%)"
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-04-18T09:02:30.000000+00:00",
+            "stop_timestamp": "2369-04-18T09:02:30.000000+00:00",
+            "type": "text",
+            "text": "Coil 2 is under threshold; schedule it for recalibration.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      }
+    ]
+  },
+  {
+    "model": "claude-opus-4-7",
+    "settings": {
+      "enabled_web_search": true
+    },
+    "is_starred": false,
+    "is_temporary": false,
+    "platform": "CLAUDE_AI",
+    "account": {
+      "uuid": "00000001-1701-4d00-8000-000000000001"
+    },
+    "_source": {
+      "via": "claude.ai/api",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "org_name": "USS Enterprise"
+    },
+    "uuid": "c0000008-1701-4d00-8000-00000000c008",
+    "name": "Holodeck Malfunction Report",
+    "summary": "",
+    "created_at": "2369-05-02T10:00:00.000000+00:00",
+    "updated_at": "2369-05-02T10:06:00.000000+00:00",
+    "current_leaf_message_uuid": "8a000009-1701-4d00-8000-00000008a009",
+    "chat_messages": [
+      {
+        "uuid": "8a000001-1701-4d00-8000-00000008a001",
+        "text": "Look up the three most recent holodeck malfunctions aboard the Enterprise and cite your sources.",
+        "sender": "human",
+        "index": 0,
+        "created_at": "2369-05-02T10:00:00.000000+00:00",
+        "updated_at": "2369-05-02T10:00:00.000000+00:00",
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000",
+        "truncated": false,
+        "attachments": [],
+        "files": [],
+        "content": [
+          {
+            "start_timestamp": "2369-05-02T10:00:00.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:00:00.000000+00:00",
+            "type": "text",
+            "text": "Look up the three most recent holodeck malfunctions aboard the Enterprise and cite your sources.",
+            "citations": []
+          }
+        ]
+      },
+      {
+        "uuid": "8a000002-1701-4d00-8000-00000008a002",
+        "text": "The three most recent were the Moriarty incident, the Fistful of Datas program and the Robin Hood program.",
+        "sender": "assistant",
+        "index": 1,
+        "created_at": "2369-05-02T10:00:30.000000+00:00",
+        "updated_at": "2369-05-02T10:00:30.000000+00:00",
+        "parent_message_uuid": "8a000001-1701-4d00-8000-00000008a001",
+        "truncated": false,
+        "attachments": [],
+        "files": [],
+        "content": [
+          {
+            "start_timestamp": "2369-05-02T10:00:10.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:00:10.000000+00:00",
+            "type": "thinking",
+            "thinking": "Search the incident logs.",
+            "summaries": [
+              {
+                "summary": "Searching incident logs"
+              }
+            ],
+            "cut_off": false
+          },
+          {
+            "start_timestamp": "2369-05-02T10:00:12.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:00:12.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_holo_s1",
+            "name": "web_search",
+            "message": "Searching the web",
+            "input": {
+              "query": "Enterprise holodeck malfunctions"
+            }
+          },
+          {
+            "start_timestamp": "2369-05-02T10:00:12.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:00:12.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_holo_s1",
+            "name": "web_search",
+            "is_error": false,
+            "content": [
+              {
+                "type": "knowledge",
+                "title": "Holodeck",
+                "url": "https://memory-alpha.example/Holodeck",
+                "is_missing": false,
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_name": "Memory Alpha",
+                  "site_domain": "memory-alpha.example"
+                }
+              },
+              {
+                "type": "knowledge",
+                "title": "Holodeck malfunctions",
+                "url": "https://starfleet.example/incidents/holodeck",
+                "is_missing": false,
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_name": "Starfleet",
+                  "site_domain": "starfleet.example"
+                }
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-05-02T10:00:30.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:00:30.000000+00:00",
+            "type": "text",
+            "text": "The three most recent were the Moriarty incident, the Fistful of Datas program and the Robin Hood program.",
+            "citations": [
+              {
+                "start_index": 0,
+                "end_index": 40,
+                "title": "Holodeck malfunctions",
+                "url": "https://starfleet.example/incidents/holodeck",
+                "origin_tool_name": "web_search",
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_name": "Starfleet",
+                  "site_domain": "starfleet.example"
+                },
+                "sources": [
+                  {
+                    "source": "Starfleet",
+                    "title": "Holodeck malfunctions",
+                    "url": "https://starfleet.example/incidents/holodeck"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "uuid": "8a000003-1701-4d00-8000-00000008a003",
+        "text": "Look up the four most recent holodeck malfunctions aboard the Enterprise and cite your sources.",
+        "sender": "human",
+        "index": 0,
+        "created_at": "2369-05-02T10:02:00.000000+00:00",
+        "updated_at": "2369-05-02T10:02:00.000000+00:00",
+        "parent_message_uuid": "00000000-0000-4000-8000-000000000000",
+        "truncated": false,
+        "attachments": [],
+        "files": [],
+        "content": [
+          {
+            "start_timestamp": "2369-05-02T10:02:00.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:02:00.000000+00:00",
+            "type": "text",
+            "text": "Look up the four most recent holodeck malfunctions aboard the Enterprise and cite your sources.",
+            "citations": []
+          }
+        ]
+      },
+      {
+        "uuid": "8a000004-1701-4d00-8000-00000008a004",
+        "text": "Four are on record; the most recent was the Moriarty incident.",
+        "sender": "assistant",
+        "index": 1,
+        "created_at": "2369-05-02T10:02:40.000000+00:00",
+        "updated_at": "2369-05-02T10:02:40.000000+00:00",
+        "parent_message_uuid": "8a000003-1701-4d00-8000-00000008a003",
+        "truncated": false,
+        "attachments": [],
+        "files": [],
+        "content": [
+          {
+            "start_timestamp": "2369-05-02T10:02:10.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:02:10.000000+00:00",
+            "type": "thinking",
+            "thinking": "Search again for four.",
+            "summaries": [
+              {
+                "summary": "Searching again"
+              }
+            ],
+            "cut_off": false
+          },
+          {
+            "start_timestamp": "2369-05-02T10:02:12.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:02:12.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_holo_s2",
+            "name": "web_search",
+            "message": "Searching the web",
+            "input": {
+              "query": "Enterprise holodeck malfunctions four"
+            }
+          },
+          {
+            "start_timestamp": "2369-05-02T10:02:12.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:02:12.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_holo_s2",
+            "name": "web_search",
+            "is_error": false,
+            "content": [
+              {
+                "type": "knowledge",
+                "title": "Holodeck",
+                "url": "https://memory-alpha.example/Holodeck",
+                "is_missing": false,
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_name": "Memory Alpha",
+                  "site_domain": "memory-alpha.example"
+                }
+              },
+              {
+                "type": "knowledge",
+                "title": "Holodeck malfunctions",
+                "url": "https://starfleet.example/incidents/holodeck",
+                "is_missing": false,
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_name": "Starfleet",
+                  "site_domain": "starfleet.example"
+                }
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-05-02T10:02:40.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:02:40.000000+00:00",
+            "type": "text",
+            "text": "Four are on record; the most recent was the Moriarty incident.",
+            "citations": [
+              {
+                "start_index": 0,
+                "end_index": 30,
+                "title": "Holodeck",
+                "url": "https://memory-alpha.example/Holodeck",
+                "origin_tool_name": "web_search",
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_name": "Memory Alpha",
+                  "site_domain": "memory-alpha.example"
+                },
+                "sources": [
+                  {
+                    "source": "Memory Alpha",
+                    "title": "Holodeck",
+                    "url": "https://memory-alpha.example/Holodeck"
+                  }
+                ]
+              },
+              {
+                "start_index": 31,
+                "end_index": 60,
+                "title": "Holodeck malfunctions",
+                "url": "https://starfleet.example/incidents/holodeck",
+                "origin_tool_name": "web_search",
+                "metadata": {
+                  "type": "webpage_metadata",
+                  "site_name": "Starfleet",
+                  "site_domain": "starfleet.example"
+                },
+                "sources": [
+                  {
+                    "source": "Starfleet",
+                    "title": "Holodeck malfunctions",
+                    "url": "https://starfleet.example/incidents/holodeck"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "uuid": "8a000005-1701-4d00-8000-00000008a005",
+        "text": "Plot how long each malfunction lasted and send me the chart.",
+        "sender": "human",
+        "index": 2,
+        "created_at": "2369-05-02T10:03:00.000000+00:00",
+        "updated_at": "2369-05-02T10:03:00.000000+00:00",
+        "parent_message_uuid": "8a000004-1701-4d00-8000-00000008a004",
+        "truncated": false,
+        "attachments": [],
+        "files": [],
+        "content": [
+          {
+            "start_timestamp": "2369-05-02T10:03:00.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:03:00.000000+00:00",
+            "type": "text",
+            "text": "Plot how long each malfunction lasted and send me the chart.",
+            "citations": []
+          }
+        ]
+      },
+      {
+        "uuid": "8a000006-1701-4d00-8000-00000008a006",
+        "text": "Here is the chart, and the script that drew it.",
+        "sender": "assistant",
+        "index": 3,
+        "created_at": "2369-05-02T10:03:50.000000+00:00",
+        "updated_at": "2369-05-02T10:03:50.000000+00:00",
+        "parent_message_uuid": "8a000005-1701-4d00-8000-00000008a005",
+        "truncated": false,
+        "attachments": [],
+        "files": [
+          {
+            "success": true,
+            "file_kind": "blob",
+            "file_uuid": "f8000004-1701-4d00-8000-0000000f8004",
+            "uuid": "f8000004-1701-4d00-8000-0000000f8004",
+            "file_name": "holodeck_chart.py",
+            "path": "/mnt/user-data/uploads/holodeck_chart.py",
+            "download_source": "files-api",
+            "size_bytes": 148,
+            "created_at": "2369-05-02T10:03:45.000000+00:00"
+          }
+        ],
+        "content": [
+          {
+            "start_timestamp": "2369-05-02T10:03:05.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:03:05.000000+00:00",
+            "type": "thinking",
+            "thinking": "Write a script, run it, send the chart.",
+            "summaries": [
+              {
+                "summary": "Plotting"
+              }
+            ],
+            "cut_off": false
+          },
+          {
+            "start_timestamp": "2369-05-02T10:03:10.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:03:10.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_holo_w",
+            "name": "Write",
+            "message": "Created a file",
+            "input": {
+              "file_path": "holodeck_chart.py",
+              "content": "import matplotlib.pyplot as plt\nplt.bar(['Moriarty', 'Datas', 'Robin Hood', 'Fair Haven'], [3, 1, 1, 2])\nplt.savefig('holodeck_chart.png')\n"
+            }
+          },
+          {
+            "start_timestamp": "2369-05-02T10:03:11.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:03:11.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_holo_w",
+            "name": "Write",
+            "is_error": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "File created successfully at: holodeck_chart.py"
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-05-02T10:03:20.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:03:20.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_holo_b",
+            "name": "Bash",
+            "message": "Ran a command",
+            "input": {
+              "command": "python3 holodeck_chart.py",
+              "description": "Render the chart"
+            }
+          },
+          {
+            "start_timestamp": "2369-05-02T10:03:30.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:03:30.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_holo_b",
+            "name": "Bash",
+            "is_error": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "(no output)"
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-05-02T10:03:40.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:03:40.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_holo_f",
+            "name": "SendUserFile",
+            "message": "Shared files",
+            "input": {
+              "files": [
+                "/home/claude/holodeck_chart.png"
+              ],
+              "caption": "Malfunction durations",
+              "status": "normal"
+            }
+          },
+          {
+            "start_timestamp": "2369-05-02T10:03:41.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:03:41.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_holo_f",
+            "name": "SendUserFile",
+            "is_error": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "Sent 1 file."
+              }
+            ],
+            "file_deliveries": [
+              {
+                "file_uuid": "f8000004-1701-4d00-8000-0000000f8004",
+                "path": "/home/claude/holodeck_chart.png"
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-05-02T10:03:50.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:03:50.000000+00:00",
+            "type": "text",
+            "text": "Here is the chart, and the script that drew it.",
+            "citations": []
+          }
+        ]
+      },
+      {
+        "uuid": "8a000007-1701-4d00-8000-00000008a007",
+        "text": "Here is the away team report and two photos from the holodeck. What do they show?",
+        "sender": "human",
+        "index": 4,
+        "created_at": "2369-05-02T10:05:00.000000+00:00",
+        "updated_at": "2369-05-02T10:05:00.000000+00:00",
+        "parent_message_uuid": "8a000006-1701-4d00-8000-00000008a006",
+        "truncated": false,
+        "attachments": [],
+        "files": [
+          {
+            "success": true,
+            "file_kind": "image",
+            "file_uuid": "f8000001-1701-4d00-8000-0000000f8001",
+            "uuid": "f8000001-1701-4d00-8000-0000000f8001",
+            "file_name": "arch.png",
+            "size_bytes": 77,
+            "created_at": "2369-05-02T10:04:55.000000+00:00",
+            "preview_url": "/api/fake/files/f8000001-1701-4d00-8000-0000000f8001/preview",
+            "thumbnail_url": "/api/fake/files/f8000001-1701-4d00-8000-0000000f8001/thumbnail"
+          },
+          {
+            "success": true,
+            "file_kind": "image",
+            "file_uuid": "f8000002-1701-4d00-8000-0000000f8002",
+            "uuid": "f8000002-1701-4d00-8000-0000000f8002",
+            "file_name": "sherwood.png",
+            "size_bytes": 77,
+            "created_at": "2369-05-02T10:04:56.000000+00:00",
+            "preview_url": "/api/fake/files/f8000002-1701-4d00-8000-0000000f8002/preview",
+            "thumbnail_url": "/api/fake/files/f8000002-1701-4d00-8000-0000000f8002/thumbnail"
+          },
+          {
+            "success": true,
+            "file_kind": "document",
+            "file_uuid": "f8000003-1701-4d00-8000-0000000f8003",
+            "uuid": "f8000003-1701-4d00-8000-0000000f8003",
+            "file_name": "Away Team Report.pdf",
+            "size_bytes": 400,
+            "created_at": "2369-05-02T10:04:57.000000+00:00",
+            "document_asset": {
+              "file_variant": "original",
+              "page_count": 1,
+              "url": "/api/fake/files/f8000003-1701-4d00-8000-0000000f8003/document_pdf"
+            },
+            "thumbnail_asset": {
+              "file_variant": "thumbnail",
+              "url": "/api/fake/files/f8000003-1701-4d00-8000-0000000f8003/thumbnail"
+            }
+          }
+        ],
+        "content": [
+          {
+            "start_timestamp": "2369-05-02T10:05:00.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:05:00.000000+00:00",
+            "type": "image",
+            "file_uuid": "f8000001-1701-4d00-8000-0000000f8001"
+          },
+          {
+            "start_timestamp": "2369-05-02T10:05:00.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:05:00.000000+00:00",
+            "type": "image",
+            "file_uuid": "f8000002-1701-4d00-8000-0000000f8002"
+          },
+          {
+            "start_timestamp": "2369-05-02T10:05:00.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:05:00.000000+00:00",
+            "type": "text",
+            "text": "Here is the away team report and two photos from the holodeck. What do they show?",
+            "citations": []
+          }
+        ]
+      },
+      {
+        "uuid": "8a000008-1701-4d00-8000-00000008a008",
+        "text": "The report says all crew are accounted for; the photos show the holodeck arch and Sherwood Forest.",
+        "sender": "assistant",
+        "index": 5,
+        "created_at": "2369-05-02T10:05:30.000000+00:00",
+        "updated_at": "2369-05-02T10:05:30.000000+00:00",
+        "parent_message_uuid": "8a000007-1701-4d00-8000-00000008a007",
+        "truncated": false,
+        "attachments": [],
+        "files": [],
+        "content": [
+          {
+            "start_timestamp": "2369-05-02T10:05:05.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:05:05.000000+00:00",
+            "type": "thinking",
+            "thinking": "Read the report first.",
+            "summaries": [
+              {
+                "summary": "Reading"
+              }
+            ],
+            "cut_off": false
+          },
+          {
+            "start_timestamp": "2369-05-02T10:05:10.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:05:10.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_holo_r",
+            "name": "Read",
+            "message": "Read a file",
+            "input": {
+              "file_path": "/mnt/user-data/uploads/Away Team Report.pdf"
+            }
+          },
+          {
+            "start_timestamp": "2369-05-02T10:05:11.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:05:11.000000+00:00",
+            "type": "tool_result",
+            "tool_use_id": "toolu_holo_r",
+            "name": "Read",
+            "is_error": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "All crew accounted for."
+              }
+            ]
+          },
+          {
+            "start_timestamp": "2369-05-02T10:05:30.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:05:30.000000+00:00",
+            "type": "text",
+            "text": "The report says all crew are accounted for; the photos show the holodeck arch and Sherwood Forest.",
+            "citations": []
+          }
+        ]
+      },
+      {
+        "uuid": "8a000009-1701-4d00-8000-00000008a009",
+        "text": "A second look: the arch is the holodeck's exit, and the forest is the Robin Hood program.",
+        "sender": "assistant",
+        "index": 5,
+        "created_at": "2369-05-02T10:06:00.000000+00:00",
+        "updated_at": "2369-05-02T10:06:00.000000+00:00",
+        "parent_message_uuid": "8a000007-1701-4d00-8000-00000008a007",
+        "truncated": false,
+        "attachments": [],
+        "files": [],
+        "content": [
+          {
+            "start_timestamp": "2369-05-02T10:06:00.000000+00:00",
+            "stop_timestamp": "2369-05-02T10:06:00.000000+00:00",
+            "type": "text",
+            "text": "A second look: the arch is the holodeck's exit, and the forest is the Robin Hood program.",
+            "citations": []
+          }
+        ]
+      }
+    ]
   }
 ]

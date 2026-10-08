@@ -355,6 +355,6 @@ statement.
 
   - **Hand-rolled `BulkUpsertable` impls.** The `RawTable` derive
     covers payload-less tables ([`etl/macros/README.md`](../../datalib/backend/etl/macros/README.md)),
-    but 22 provider tables still hand-roll the impl (fsindex's, media's,
-    yolink's devices, slack's `RepliesPagesRow`, …). Moving each to the
+    but about 20 provider tables still hand-roll the impl (fsindex's,
+    media's, yolink's devices, …). Moving each to the
     derive collapses it to the struct definition.

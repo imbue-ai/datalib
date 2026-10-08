@@ -18,6 +18,7 @@
 
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 
@@ -67,6 +68,7 @@ const css = [
     "utf8",
   ),
   readFileSync(join(uiRoot, "src/cards/documentBody.css"), "utf8"),
+  readFileSync(join(uiRoot, "src/cards/chip.css"), "utf8"),
   vueStyles("src/cards/DocCard.ce.vue"),
   vueStyles("src/cards/ChatBody.ce.vue"),
   // Preview-only chrome. The real pane is a resizable Miller column;
@@ -141,6 +143,11 @@ document.getElementById("expand").addEventListener("click", () => {
 });
 `;
 
+// The app's own chip plugin, so a `[Name](mailto:…)` the renderers write
+// is an `a.chip` here as in the app. Nothing resolves it in the preview,
+// so it draws in the unresolved look.
+const { chipLinks } = await import(pathToFileURL(join(uiRoot, "src/cards/chipLinks.js")));
+
 const md = new MarkdownIt({
   html: true,
   linkify: true,
@@ -159,6 +166,7 @@ const md = new MarkdownIt({
       .replace(/>/g, "&gt;");
   },
 });
+md.use(chipLinks);
 
 /** Drop the YAML frontmatter the backend strips before serving. */
 function stripFrontmatter(text) {

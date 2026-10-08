@@ -4,13 +4,13 @@
 //! `Channel Id` verbatim. Not event-shaped; `when_ts` stays NULL.
 
 use datalib_etl::download_problems::SkippedRecord;
-use datalib_etl::fsscan;
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::fsscan;
 use datalib_problems::{Problem, Reason};
 
 use anyhow::Result;
-use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
+use datalib_etl_files::file_checkpoint::{self, SnapshotCounts};
 use serde_json::json;
 
 use super::db::RawDb;

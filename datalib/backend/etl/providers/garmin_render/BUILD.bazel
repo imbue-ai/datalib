@@ -49,6 +49,7 @@ rust_test(
     deps = [
         ":datalib_etl_garmin_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/garmin:datalib_etl_garmin",
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "//datalib/backend/etl/render:datalib_etl_render",

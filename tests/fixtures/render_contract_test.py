@@ -191,7 +191,6 @@ _SKIP_TABLES = (
     "_datalib_meta",
     "sync_runs",
     "sync_scope_state",
-    "sync_scope_config",
     "ingested_files",
 )
 _SKIP_SUFFIXES = ("_bookkeeping",)
@@ -214,7 +213,7 @@ KNOWN_GAPS: dict[str, str] = {
 # Columns of the render store whose value is a stamp of *when* rather
 # than *what*: identical content renders them differently on every run.
 _VOLATILE = {
-    "problems": ("first_seen_at_utc", "last_seen_at_utc", "tz_offset"),
+    "problems": ("first_seen_at_utc", "changed_at_utc", "tz_offset"),
     "render_cursor": ("rendered_at_utc", "tz_offset", "raw_commit"),
 }
 

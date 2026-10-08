@@ -69,5 +69,6 @@ rust_test(
         "//datalib/backend/table:datalib_table",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:tempfile",
+        "@datalib_crates//:tower",
     ],
 )

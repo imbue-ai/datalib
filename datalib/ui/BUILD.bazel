@@ -321,7 +321,7 @@ copy_to_bin(
         "package.json",
         "playwright.auth.config.ts",
         "tsconfig.json",
-    ] + glob(["tests/e2e_auth/**/*"], allow_empty = False),
+    ] + glob(["tests/e2e_auth/**/*"], allow_empty = False) + ["tests/e2e/wizard-helpers.ts"],
 )
 
 _E2E_AUTH_DATA = [
@@ -550,6 +550,8 @@ copy_to_bin(
         "src/cards/ChatBody.ce.vue",
         "src/cards/DocCard.ce.vue",
         "src/cards/chatSections.js",
+        "src/cards/chip.css",
+        "src/cards/chipLinks.js",
         "src/cards/documentBody.css",
     ],
 )

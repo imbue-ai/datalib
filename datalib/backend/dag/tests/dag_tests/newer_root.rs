@@ -31,9 +31,14 @@ async fn store_written_by(path: &Path, version: &str) {
         .connect_with(opts)
         .await
         .unwrap();
-    datalib_store_meta::write(&pool, datalib_store_meta::StoreKind::Raw, "h", 0)
-        .await
-        .unwrap();
+    datalib_store_meta::write(
+        &pool,
+        datalib_store_meta::StoreKind::Raw,
+        "h",
+        datalib_store_meta::Versions::default(),
+    )
+    .await
+    .unwrap();
     sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = 'datalib_version'")
         .bind(version)
         .execute(&pool)

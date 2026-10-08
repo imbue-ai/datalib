@@ -309,6 +309,7 @@ async fn load(
                 removal: tapback >= 3000,
                 reaction: NormalizedReaction {
                     reaction_uuid: uuid(source_id, KIND_REACTION, &guid, date_ms),
+                    reactor_handle: author_handle,
                     reactor_display: author_display,
                     emoji: tapback_emoji(tapback % 1000, r.get("associated_message_emoji")),
                     date_ms,
@@ -344,6 +345,7 @@ async fn load(
             kind_label: None,
             source_ref: Some(UpstreamRef::new(KIND_MESSAGE, guid)),
             is_aside: false,
+            branch: Vec::new(),
             unread,
             recipients: Vec::new(),
             problems: Vec::new(),

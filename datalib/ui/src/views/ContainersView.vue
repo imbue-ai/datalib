@@ -279,7 +279,7 @@ function ctxFor(card: CardNode): CardCtx {
     const host: HostCommands = {
       openCards: (...sources) => {
         const nodes = sources.map((s) => makeCard(newCardId(), s));
-        update(openFrom(root.value, cardId, nodes, newCardId()));
+        update(openFrom(root.value, cardId, nodes));
         return nodes.map((n) => n.id);
       },
       hrefFor: (...sources) => chainHref(sources),
@@ -347,8 +347,8 @@ function toggleSolidified(box: BoxNode) {
   update(setSolidified(root.value, box.id, !box.solidified));
 }
 
-function addCard(boxId: string) {
-  update(addChild(root.value, boxId, makeCard(newCardId(), "galleryView()")));
+function addCard(boxId: string, source = "galleryView()") {
+  update(addChild(root.value, boxId, makeCard(newCardId(), source)));
 }
 
 function addBox(boxId: string, layout: Layout) {
@@ -360,16 +360,11 @@ function addBox(boxId: string, layout: Layout) {
 function newTab() {
   addCard(root.value.id);
 }
-// A card opened from the chrome gets a tab holding a Columns container,
-// as a link does (routeNode), so what it opens lands beside it.
+// A card opened from the chrome gets a tab of its own.
 function showCard(source: string) {
   const have = allCards.value.find((c) => c.source === source);
-  if (have) {
-    select(have.id);
-    return;
-  }
-  const tab = makeBox(newCardId(), "columns", [makeCard(newCardId(), source)]);
-  update(addChild(root.value, root.value.id, tab));
+  if (have) select(have.id);
+  else addCard(root.value.id, source);
 }
 defineExpose({ addCard: newTab, showCard });
 

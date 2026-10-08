@@ -181,6 +181,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/probe/{id}", get(probe::probe_status))
         .route("/api/dag", get(get_dag))
         .route("/api/manage/rows", get(manage::get_manage_rows))
+        .route("/api/entities", post(manage::post_entities))
         // Prometheus's own path, so a scrape config needs nothing but the
         // address and the token.
         .route("/metrics", get(prometheus::get_metrics))

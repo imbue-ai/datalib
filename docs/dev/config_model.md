@@ -177,7 +177,7 @@ test in `methods.rs` fails when it drifts, and
   "Ingest" (`http/src/manage/mod.rs::child_label`); the browser
   replaces that with "Download" for an origin method or "Import" for a
   local one (`cards/SourcesCard.ce.vue`), off the step's written params.
-- **The wizard's Connection section.** A descriptor with a
+- **The wizard's account row.** A descriptor with a
   `credentialService` shows its latchkey controls only while the
   params the form would write reach an origin: an import has nothing
   to log in to (`SourceWizard.vue`).
@@ -207,7 +207,11 @@ file runs.
 Warnings: a group with nothing filed under it; a `name` on a grouped
 step (the label comes from the group and the function); an applet
 filed under an undeclared group; a `keyword_index` that `qmd_aggregator`
-does not read, in a config that has one.
+does not read, in a config that has one; a built-in step's
+`common.always_clear_before_ingest`, which no longer does anything
+(`datalib-step` drops it before parsing). The Manage screen's System
+row counts the config's warnings and names them on hover; a
+double-click opens the config.
 
 ## What the runner forwards and what `datalib-step` refuses
 
@@ -295,8 +299,8 @@ off just its `embed` step keeps keyword search.
 
 The wizard maintains all of it (`ui/src/config/sourceSteps.ts`):
 `wireIntoFanIns` on create, `unwireFromFanIns` on delete and when a
-render step is removed, and `setQmdSteps` for the Rendering section's
-two qmd tickboxes. "Keyword-index the markdown" adds or removes the
+render step is removed, and `setQmdSteps` for the two qmd tickboxes
+under Rendering in Advanced options. "Keyword-index the markdown" adds or removes the
 source's `keyword_index` and its edge into `qmd_aggregator`; "Embed it
 for search by meaning", which needs the first, does the same for its
 `embed`. Removing any step takes every step that reads it (a fan-in loses
@@ -320,8 +324,10 @@ the UI splits an id.
 
 The wizard (`SourceWizard.vue`, writers in `sourceSteps.ts`) edits a
 source as one thing: the group plus its `ingest` and `render_markdown`
-steps from one form, render fields under a "Rendering" heading, one
-name box for the group. Editing renames the group in place and
+steps from one form, one name box for the group. The form is the
+catalog entry's `sections`, with the render fields and everything else
+no section names under Advanced options
+([`wizard_design.md`](wizard_design.md)). Editing renames the group in place and
 rewrites both steps where the first of them stood. A source missing one of its
 two steps gets it back on save; a render step under a provider that
 renders nothing (`renderStep: false` in `ui/src/config/catalog.ts`) is

@@ -1,13 +1,14 @@
 // A field whose backend type is a closed enum is a dropdown, not a text
 // box — `kind: "select"` in `ui/src/config/catalog.ts`.
 import { test, expect, type Page } from "@playwright/test";
+import { openAdvanced, reviewToml } from "./wizard-helpers";
 import { expandGroup, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 // Structural, matching data-sources-name.spec.ts: each field's <label>
 // wraps its help paragraph, so the accessible name is caption + prose.
 const field = (page: Page, caption: string) =>
-  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) > .wiz-input`);
+  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-input`);
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
@@ -33,13 +34,14 @@ test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   await page.getByRole("button", { name: "Add source" }).click();
   await page.locator(".wiz-filter").fill("signal");
   await wizard(page)
-    .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })
+    .locator(".wiz-tile", { hasText: "Decrypt and copy an Android Signal backup" })
     .click();
   await field(page, "Name").fill("Phone Signal");
   await wizard(page).locator("input.wiz-path").fill("/Users/x/backups/SignalBackups");
 
-  // Signal's render step has the option; it sits under the Rendering
-  // heading of the same form.
+  // Signal's render step has the option; it sits in Advanced options
+  // of the same form.
+  await openAdvanced(page);
   const span = field(page, "Document span");
   // A <select>, not an <input>: the whole point is that there is no
   // free text to get wrong.
@@ -55,7 +57,7 @@ test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   await expect(span).toHaveValue("month");
 
   await span.selectOption("year");
-  await wizard(page).getByText("Review the TOML this writes").click();
+  await reviewToml(page);
   await expect(wizard(page).locator(".wiz-review pre")).toContainText('period = "year"');
 
   const submit = wizard(page).getByRole("button", { name: "Add source" });

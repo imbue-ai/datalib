@@ -12,7 +12,7 @@ pub mod parse;
 #[allow(clippy::module_inception)]
 pub mod render;
 
-use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact, Photo};
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Photo};
 use datalib_handle::Handle;
 use serde_json::Value;
 
@@ -49,9 +49,9 @@ impl User {
     /// The person as Slack's profile describes them: every name it
     /// shows, their Slack user and, where the scope served it, their
     /// email — the one place Slack ties a person to anything else.
-    pub fn contact(&self, source_id: &str) -> Option<DatalibContact> {
+    pub fn contact(&self, source_id: &str) -> Option<NormalizedContact> {
         let handle = Handle::slack(&self.team_id, &self.user_id)?;
-        let mut c = DatalibContact::new(source_id, handle.as_str(), ContactKind::Person);
+        let mut c = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
         for name in [
             Some(self.label()),
             self.real_name.clone(),

@@ -12,11 +12,11 @@ use datalib_problems::{Outcome, Problem, Reason};
 use serde::Serialize;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
-use datalib_etl::file_checkpoint;
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan::{self, ScannedFile};
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan::{self, ScannedFile};
 
 /// The two tables every agent-session raw store keeps: `transcripts`,
 /// one row per session file, and `records`, one per line it keeps from

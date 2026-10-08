@@ -6,6 +6,7 @@
 import GridCard from "../GridCard.ce.vue";
 import { DEFAULT_QUERY } from "../searchDefaults";
 import tableGridCss from "../tableGrid.css?inline";
+import chipCss from "../chip.css?inline";
 // The grid's theme has to be in the same root as the grid; head
 // styles stop at the shadow boundary.
 import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css?inline";
@@ -28,6 +29,6 @@ export function gridView(opts?: {
       url: opts?.url,
       placeholder: opts?.placeholder,
     },
-    { styleSources: [slickCss, tableGridCss] },
+    { styleSources: [slickCss, tableGridCss, chipCss] },
   );
 }

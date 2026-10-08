@@ -9,9 +9,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_github_config::{GithubApiSync, GithubConfig};
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
 
@@ -53,7 +53,7 @@ impl DataProcessor for GithubIngest {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
         let pool = db.pool().clone();
-        ctx.run_store(pool, None, |_| async {
+        ctx.run_store(pool, None, |sealer| async {
             let targets = self
                 .sync
                 .pull_requests
@@ -63,11 +63,6 @@ impl DataProcessor for GithubIngest {
                 .context("parse github pull_requests refs")?;
             let s = ingest::fetch(ingest::FetchOptions {
                 latchkey: self.latchkey.clone(),
-                // Same fix as gitlab: don't force full_sync, so discovery narrows
-                // via saved `sync_scope_state`. Unlike gitlab, github's per-PR
-                // loop has no skip optimization yet, so every discovered PR still
-                // gets four API calls — but narrowing keeps the discovered set
-                // small to begin with.
                 refresh_window_days: self
                     .sync
                     .refresh_window_days
@@ -78,13 +73,19 @@ impl DataProcessor for GithubIngest {
                 sleep_between: Duration::ZERO,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
+                sealer: Some(sealer),
                 ..ingest::FetchOptions::new(db, now)
             })
             .await?;
             Ok(format!(
-                "prs(new={}) issue_comments(new={}) reviews(new={}) review_comments(new={}) \
-             pruned={}",
-                s.new_prs, s.new_issue_comments, s.new_reviews, s.new_review_comments, s.pruned,
+                "prs(new={} unchanged={}) issue_comments(new={}) reviews(new={}) \
+                 review_comments(new={}) pruned={}",
+                s.new_prs,
+                s.unchanged_prs,
+                s.new_issue_comments,
+                s.new_reviews,
+                s.new_review_comments,
+                s.pruned,
             ))
         })
         .await

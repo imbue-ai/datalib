@@ -4,9 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
 use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_google_takeout::ingest::{self, FetchOptions, RawDb, SyncFlags};
 
 fn fixture_root() -> PathBuf {
@@ -1120,4 +1120,159 @@ async fn a_file_that_lists_nothing_empties_its_table() {
         assert_eq!(e.count(table).await, 0, "{rel}");
         assert_eq!(e.phase_problems().await, Vec::<String>::new(), "{rel}");
     }
+}
+
+// ── A unit read whole is replaced in one transaction ────────────────
+
+impl Export {
+    async fn exec(&self, sql: &'static str) {
+        let db = RawDb::open(&self.db_path).await.unwrap();
+        sqlx::query(sql).execute(db.pool()).await.unwrap();
+        db.commit_all("test").await.unwrap();
+        db.close().await;
+    }
+}
+
+const VOICE_TEXT: &str = "Voice/Calls/Jean-Luc Picard - Text - 2364-03-01T09_00_00Z.html";
+
+/// Voice stamped the files it read in one transaction and pruned what
+/// they no longer held in a later one. A run that failed between the two
+/// left the rewritten file stamped, so no later run read every file again
+/// and the call the rewrite replaced stayed for good.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_voice_run_that_fails_before_its_prune_prunes_on_the_next() {
+    let e = Export::new();
+    e.sync().await;
+    let before = e.count("voice_messages").await;
+
+    e.rewrite(VOICE_MISSED, |html| {
+        html.replace(
+            "2364-03-03T11:00:00.000-08:00",
+            "2364-03-03T12:00:00.000-08:00",
+        )
+    });
+    e.exec(
+        "CREATE TRIGGER refuse_prune BEFORE DELETE ON voice_messages \
+         BEGIN SELECT RAISE(ABORT, 'crash at the prune'); END",
+    )
+    .await;
+    let failed = e.sync().await;
+    assert_eq!(failed.feeds_failed, 1, "{failed:?}");
+    e.exec("DROP TRIGGER refuse_prune").await;
+
+    e.sync().await;
+    assert_eq!(
+        e.count("voice_messages").await,
+        before,
+        "the call the rewrite replaced goes"
+    );
+}
+
+/// The same window in Chat: a re-read `messages.json` was stamped before
+/// the messages it dropped were deleted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_chat_run_that_fails_before_its_prune_prunes_on_the_next() {
+    let e = Export::new();
+    e.sync().await;
+
+    let path = e.root.join(MESSAGES);
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    doc["messages"].as_array_mut().unwrap().pop();
+    std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+    e.exec(
+        "CREATE TRIGGER refuse_prune BEFORE DELETE ON chat_messages \
+         BEGIN SELECT RAISE(ABORT, 'crash at the prune'); END",
+    )
+    .await;
+    let failed = e.sync().await;
+    assert_eq!(failed.feeds_failed, 1, "{failed:?}");
+    e.exec("DROP TRIGGER refuse_prune").await;
+
+    e.sync().await;
+    assert_eq!(
+        e.count("chat_messages").await,
+        1,
+        "the message the file dropped goes"
+    );
+}
+
+/// A `messages.json` whose entries none carry a `message_id` read as a
+/// group with no messages, and every message of the group was deleted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_messages_file_none_of_whose_entries_has_an_id_deletes_nothing() {
+    let e = Export::new();
+    e.sync().await;
+
+    std::fs::write(
+        e.root.join(MESSAGES),
+        br#"{"messages": [{"text": "Engage."}, {"text": "Make it so."}]}"#,
+    )
+    .unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.removed, 0, "{s:?}");
+    assert_eq!(e.count("chat_messages").await, 2);
+    assert_eq!(e.skipped_parts().await, ["skipped:google_chat"]);
+
+    std::fs::write(e.root.join(MESSAGES), br#"{"messages": []}"#).unwrap();
+    let s = e.sync().await;
+    assert_eq!(s.removed, 2, "a list of no messages empties the group");
+    assert_eq!(e.count("chat_messages").await, 0);
+}
+
+/// A Voice file rewritten to nothing (a text thread with no message, a
+/// call record with no time, a bills page with no table) read as a file
+/// holding nothing, and the prune deleted what it had held.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_voice_file_that_is_recognizably_nothing_deletes_nothing() {
+    let e = Export::new();
+    e.sync().await;
+    let messages = e.count("voice_messages").await;
+    let bills = e.count("voice_bills").await;
+
+    for rel in [VOICE_TEXT, VOICE_MISSED, "Voice/Bills.html"] {
+        let good = std::fs::read(e.root.join(rel)).unwrap();
+        std::fs::write(e.root.join(rel), b"").unwrap();
+        let s = e.sync().await;
+        assert_eq!(s.removed, 0, "{rel} emptied: {s:?}");
+        assert_eq!(e.count("voice_messages").await, messages, "{rel}");
+        assert_eq!(e.count("voice_bills").await, bills, "{rel}");
+        assert!(
+            e.skipped_parts()
+                .await
+                .contains(&"skipped:google_voice".to_string()),
+            "{rel} is a problem"
+        );
+        std::fs::write(e.root.join(rel), good).unwrap();
+    }
+}
+
+/// Reading an unchanged export again must leave the store as it was: a
+/// re-stamped sidecar is a commit, and a bigger store, on every sync. The
+/// Chat attachment the fixture leaves out stays out: a problem recorded
+/// again unchanged changes nothing either.
+#[tokio::test(flavor = "multi_thread")]
+async fn reading_an_unchanged_export_again_commits_nothing() {
+    let e = Export::new();
+    let mut commits = Vec::new();
+    for _ in 0..2 {
+        let db = RawDb::open(&e.db_path).await.unwrap();
+        ingest::fetch(FetchOptions {
+            input_path: e.root.clone(),
+            ..opts(e.work.path(), &db, SyncFlags::all()).await
+        })
+        .await
+        .unwrap();
+        commits.push(
+            datalib_etl::doltlite_raw::commit_run(db.pool(), "test")
+                .await
+                .unwrap(),
+        );
+        db.close().await;
+    }
+    assert!(commits[0].is_some());
+    assert_eq!(
+        commits[1], None,
+        "reading an unchanged export again changes nothing in the store"
+    );
 }

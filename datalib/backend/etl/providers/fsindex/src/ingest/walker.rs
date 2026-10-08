@@ -10,11 +10,11 @@ use anyhow::{Context, Result};
 use super::hash::{hash_file, hash_symlink_target, hash_tree, Blake3, TreeChild};
 use super::metrics::WalkerCounters;
 use super::options::{self, EffectiveOptions, FsindexYaml, OptionsCascade, BREADCRUMB_FILENAME};
-use datalib_etl::fingerprint_cache::{CachedTree, EntryKind, Fingerprint};
-use datalib_etl::fswalk::{self, StampCursor, StampKind};
+use datalib_etl_files::fingerprint_cache::{CachedTree, EntryKind, Fingerprint};
+use datalib_etl_files::fswalk::{self, StampCursor, StampKind};
 
 use super::schema_raw::{DirRow, FileKind, FileRow};
-use datalib_etl::fswalk::{FreshStat, StampDecision};
+use datalib_etl_files::fswalk::{FreshStat, StampDecision};
 
 /// Soft upper bound on the size of one streamed batch. The walker
 /// flushes the batch via the callback when it reaches this many rows.
@@ -34,6 +34,9 @@ pub struct ScanResult {
     pub row: ScanRow,
     /// The observation, bound for the host-local cache.
     pub fingerprint: Fingerprint,
+    /// The row is what the walk saw of a directory it could not list, so
+    /// only the fingerprint is written: the row the last scan wrote stays.
+    pub held: bool,
 }
 
 impl ScanResult {
@@ -52,6 +55,9 @@ pub struct WalkerError {
     pub table: &'static str,
     pub id: String,
     pub message: String,
+    /// The entry is there and could not be read, so its row and every
+    /// row beneath it keep what the last scan wrote.
+    pub holds: bool,
 }
 
 /// A directory's children as `(name, root-relative id)`.
@@ -65,7 +71,7 @@ pub struct WalkerSummary {
 pub struct Walker<'a> {
     root: &'a Path,
     /// What this host recorded for these paths last time. Host-local
-    /// and unversioned — see [`datalib_etl::fingerprint_cache`].
+    /// and unversioned — see [`datalib_etl_files::fingerprint_cache`].
     prev: &'a CachedTree,
     default_stamp_kind: StampKind,
 }
@@ -168,8 +174,12 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         Ok(())
     }
 
-    fn push_row(&mut self, row: ScanRow, fingerprint: Fingerprint) -> Result<()> {
-        self.buf.push(ScanResult { row, fingerprint });
+    fn push_row(&mut self, row: ScanRow, fingerprint: Fingerprint, held: bool) -> Result<()> {
+        self.buf.push(ScanResult {
+            row,
+            fingerprint,
+            held,
+        });
         self.counters.rows_emitted.fetch_add(1, Ordering::Relaxed);
         if self.buf.len() >= BATCH_SIZE {
             self.counters
@@ -208,6 +218,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         // then asks the next run for a real readdir, which is the only
         // way that run can find the child again (or fail again, and say so).
         let mut rescan = false;
+        let mut listed = true;
 
         // Enumerate children: from the in-memory cache when this is
         // demonstrably the same directory, unmodified; otherwise via a
@@ -249,8 +260,10 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                         table: "dirs",
                         id: dir_rel.to_string(),
                         message: format!("readdir: {e}"),
+                        holds: true,
                     });
                     rescan = true;
+                    listed = false;
                     Vec::new()
                 }
             }
@@ -265,16 +278,17 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             let meta = match std::fs::symlink_metadata(&child_path) {
                 Ok(m) => m,
                 Err(e) => {
-                    // A cached child that has vanished (or any stat
-                    // failure): with a truncate-and-rebuild, simply not
-                    // emitting its row is the deletion. NotFound on the
-                    // skip path is benign; anything else is a real error.
+                    // A cached child that has vanished: not emitting its
+                    // row is the deletion, made by the prune after the
+                    // walk. NotFound on the skip path is benign; anything
+                    // else is a real error, and holds the child's rows.
                     if e.kind() != std::io::ErrorKind::NotFound {
                         self.counters.stat_errors.fetch_add(1, Ordering::Relaxed);
                         self.errors.push(WalkerError {
                             table: "files",
                             id: child_rel.clone(),
                             message: format!("stat: {e}"),
+                            holds: true,
                         });
                         rescan = true;
                     }
@@ -347,6 +361,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                                     table: "files",
                                     id: child_rel.clone(),
                                     message: format!("hash: {e:#}"),
+                                    holds: true,
                                 });
                                 rescan = true;
                                 continue;
@@ -366,6 +381,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                                 table: "files",
                                 id: child_rel.clone(),
                                 message: format!("read_link: {e}"),
+                                holds: true,
                             });
                             rescan = true;
                             continue;
@@ -420,7 +436,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                     blake3,
                     cursor: fp_cursor(stamp_kind, size, &fresh),
                 };
-                self.push_row(ScanRow::File(file_row), fingerprint)?;
+                self.push_row(ScanRow::File(file_row), fingerprint, false)?;
             }
         }
 
@@ -457,7 +473,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             // deliberately does not compare it.
             cursor: fp_cursor(stamp_kind, dir_size, &dir_fresh),
         };
-        self.push_row(ScanRow::Dir(dir_row), fingerprint)?;
+        self.push_row(ScanRow::Dir(dir_row), fingerprint, !listed)?;
 
         Ok((dir_hash, dir_size, dir_entries))
     }
@@ -490,6 +506,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                     table: "files",
                     id: rel_of(&name_os.to_string_lossy()),
                     message: "the name is not UTF-8, so it cannot be indexed".to_string(),
+                    holds: false,
                 });
                 continue;
             };
@@ -529,6 +546,7 @@ fn cascade_for_dir(
                         message: format!(
                             "{BREADCRUMB_FILENAME} did not parse, so it was not applied: {err:#}"
                         ),
+                        holds: false,
                     });
                     None
                 }
@@ -553,7 +571,7 @@ fn rel_id(root: &Path, path: &Path) -> String {
 }
 
 fn fp_abs(root: &Path, rel: &str) -> String {
-    datalib_etl::fingerprint_cache::abs_key(root, rel)
+    datalib_etl_files::fingerprint_cache::abs_key(root, rel)
 }
 
 fn fp_cursor(stamp_kind: StampKind, size: i64, fresh: &FreshStat) -> StampCursor {

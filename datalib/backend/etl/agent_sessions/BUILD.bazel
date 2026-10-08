@@ -12,6 +12,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/problems:datalib_problems",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",

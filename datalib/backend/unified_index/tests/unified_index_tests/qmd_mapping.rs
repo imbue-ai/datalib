@@ -20,6 +20,7 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         touched_at: None,
         is_document: false,
         author: None,
+        author_handle: None,
         account: None,
         project: None,
         org_uuid: None,

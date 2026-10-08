@@ -11,12 +11,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
-use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
+use datalib_etl_files::fswalk;
 
 pub use db::{db_path_for, RawDb, RenderTarget};
 use schema_raw::{PdfDocumentRow, PdfKind, PdfPathRow, PdfScanMetaRow};
@@ -35,7 +35,7 @@ pub struct FetchOptions {
     pub ignore: Vec<String>,
     pub max_bytes: Option<u64>,
     /// This host's shared fingerprint cache. Host state, so it lives
-    /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
+    /// outside the scan store — see [`datalib_etl_files::fingerprint_cache`].
     pub cache: FingerprintCache,
     /// Run-pinned "now", per AGENTS.md — steps prefer `DATALIB_DAG_NOW`
     /// over sampling their own clock so one run's outputs agree. Every
@@ -60,6 +60,8 @@ pub struct FetchSummary {
     pub needs_ocr: usize,
     /// Paths skipped for exceeding `max_bytes`.
     pub too_large: usize,
+    /// Documents no path names any more.
+    pub documents_removed: usize,
     pub errors: usize,
 }
 
@@ -116,6 +118,18 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     if scan.errors.is_empty() {
         opts.db.reset_paths().await.context("reset pdf_paths")?;
     }
+    // A file the scan found and did not read (over `max_bytes`) is still
+    // there, so it keeps the path row the last scan wrote.
+    let mut path_batch: Vec<PdfPathRow> = scan
+        .present_unread
+        .iter()
+        .filter_map(|rel| {
+            Some(PdfPathRow {
+                id: rel.clone(),
+                blake3: prev.paths.get(rel)?.clone(),
+            })
+        })
+        .collect();
     summary.pdfs_seen = scan.files.len();
     summary.too_large = scan.stats.too_large;
     summary.hashed = scan.stats.hashed;
@@ -123,7 +137,6 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     opts.progress.set_length(Some(scan.files.len() as u64));
 
     let mut doc_batch: Vec<PdfDocumentRow> = Vec::new();
-    let mut path_batch: Vec<PdfPathRow> = Vec::new();
     // Documents identified during *this* scan, so N copies of one file
     // are classified once rather than N times.
     let mut seen_docs: HashMap<String, bool> = HashMap::new();
@@ -171,6 +184,12 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
 
     if !doc_batch.is_empty() || !path_batch.is_empty() {
         opts.db.write_batch(&doc_batch, &path_batch, &now).await?;
+    }
+    // A document is reached only through a path, so after a clean walk one
+    // no path names is gone from the tree. A file moved within it is named
+    // at its new path by now, and keeps its document.
+    if scan.errors.is_empty() {
+        summary.documents_removed = opts.db.prune_unnamed().await? as usize;
     }
     // Every scan retries every document it could not identify, so a row
     // stands only on a path under an entry the walk could not read.

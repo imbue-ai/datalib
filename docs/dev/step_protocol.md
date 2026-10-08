@@ -177,7 +177,9 @@ whole store, not this run — and fills the Manage screen's Items column
 and its sparkline; **`documents`** is how many documents those items
 sit in, for that cell's hover; **`problems`**, with
 a `severity=error` or `severity=warning` label, fills the red and
-yellow counts after a row's name. Report each one every run, zero
+yellow counts after a row's name — count the problems your step
+found, not ones it copied from an input, since the group's count is
+the sum of its steps'. Report each one every run, zero
 included: the screen shows the newest value a step reported, so a
 count left out keeps last run's. A step that counts neither leaves no
 series, and draws a blank Items cell and no counts. They are

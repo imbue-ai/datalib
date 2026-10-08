@@ -195,6 +195,8 @@ rust_test(
     ],
     deps = [
         ":datalib_dag",
+        "//datalib/backend/contacts:datalib_contacts",
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:insta",

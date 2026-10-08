@@ -1,4 +1,4 @@
-// The Connection block on a latchkey service that has no browser login.
+// The account row on a latchkey service that has no browser login.
 //
 // A browser login belongs to the *service* and is fixed when it is
 // registered; latchkey refuses to re-register a name it already holds.
@@ -9,7 +9,8 @@
 // Read-only: nothing here saves, so it runs against the shared fixture
 // root rather than a sandbox of its own.
 import { test, expect, type Page } from "@playwright/test";
-import { probeFailed } from "./probe-stub";
+import { reviewToml } from "./wizard-helpers";
+import { probeDone, probeFailed } from "./probe-stub";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 
@@ -42,9 +43,7 @@ async function openClaude(page: Page, service: object) {
   await page.goto("/data_sources");
   await page.getByRole("button", { name: "Add source" }).click();
   // By blurb: "Claude" alone also matches the Claude export tile.
-  await wizard(page)
-    .locator(".wiz-tile", { hasText: "Mirror your claude.ai conversations" })
-    .click();
+  await wizard(page).locator(".wiz-tile", { hasText: "Copy your claude.ai conversations" }).click();
 }
 
 test("the auth button is offered even when the service can't do it yet", async ({ page }) => {
@@ -113,7 +112,7 @@ test("the login runs as the account named in the box", async ({ page }) => {
 /// addressed by naming no account at all.
 test("an empty account box writes no account at all", async ({ page }) => {
   await openClaude(page, WITH_BROWSER);
-  await wizard(page).getByText("Review the TOML this writes").click();
+  await reviewToml(page);
   await expect(wizard(page).locator(".wiz-review pre")).not.toContainText("latchkey_settings");
 });
 
@@ -147,8 +146,22 @@ test("a failed Check connection points back at the login button", async ({ page 
   await page.route("**/api/latchkey/connect/a1/status", (route) =>
     route.fulfill({ json: { id: "a1", status: "ok", account: null, output: "" } }),
   );
+  // A login is checked at once, with the credential it just stored.
+  await page.unroute("**/api/probe");
+  await page.route("**/api/probe", (route) =>
+    route.fulfill(
+      probeDone({
+        mode: "api",
+        account: { id: "u1", address: STORED_ACCOUNT, display_name: null, message_estimate: null },
+        items: [],
+        notes: [],
+      }),
+    ),
+  );
   await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
-  await expect(wizard(page)).toContainText("Connected.");
+  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText(
+    `Connected as ${STORED_ACCOUNT}`,
+  );
   await expect(failed).toHaveCount(0);
 });
 

@@ -153,8 +153,9 @@ fn wellness(day: &str) -> String {
 const WELLNESS_EDGES_SQL: &str =
     "SELECT calendar_date, blake3 FROM garmin_wellness_files ORDER BY calendar_date";
 
-const WELLNESS_DAYS_HELD_SQL: &str = "SELECT COUNT(*) FROM garmin_wellness_files \
-     WHERE blake3 IS NULL AND fetched_on = '2369-04-15'";
+const WELLNESS_DAYS_HELD_SQL: &str = "SELECT COUNT(*) FROM garmin_wellness_files f \
+     JOIN garmin_wellness_files_bookkeeping b ON b.id = f.id \
+     WHERE f.blake3 IS NULL AND b.held_version IS NOT NULL";
 
 /// A day whose bundle failed before the refresh window is fetched
 /// again, and a day Garmin had no bundle for is a row saying so, which
@@ -179,17 +180,17 @@ async fn a_failed_wellness_day_is_fetched_again_and_a_day_with_no_bundle_is_held
         ["garmin_wellness_files:2369-04-03#wellness_zip"]
     );
     assert_eq!(
-        a.pairs(WELLNESS_EDGES_SQL).await[1..4],
+        a.pairs(WELLNESS_EDGES_SQL).await[1..3],
         [
             ("2369-04-02".to_string(), hash("bundle of 2369-04-02")),
-            ("2369-04-03".to_string(), None),
             ("2369-04-04".to_string(), hash("bundle of 2369-04-04")),
-        ]
+        ],
+        "a day whose request failed has no row: nothing was answered for it"
     );
     assert_eq!(
         a.count(WELLNESS_DAYS_HELD_SQL).await,
         12,
-        "each day with no bundle is a row; the day that failed is not held"
+        "each day with no bundle is a row, held; the day that failed is not"
     );
 
     a.answer_bytes(&wellness("2369-04-03"), bytes(b"bundle of 2369-04-03"));
@@ -294,16 +295,26 @@ async fn an_activity_with_no_file_is_asked_once() {
 
 /// A download that is not a zip comes back the same every time, so it is
 /// not asked for again run after run; an edit to the activity is the
-/// one thing that could change it.
+/// one thing that could change it. The fetch landed, so the loss is a
+/// warning on the record, not a failure of the run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreadable_fit_is_fetched_again_only_when_its_activity_changes() {
     let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     a.answer_bytes(FIT_13, bytes(b"not a zip, captain"));
     let s1 = a.run().await;
-    assert_eq!(s1.errors, 1, "{}", s1.line());
+    assert_eq!((s1.errors, s1.activity_files), (0, 1), "{}", s1.line());
     let key = "garmin_activity_files:17010413001#fit";
     assert_eq!(a.problems().await.keys().collect::<Vec<_>>(), [key]);
+    assert_eq!(
+        a.count(
+            "SELECT COUNT(*) FROM problems \
+             WHERE scope_key = 'garmin_activity_files:17010413001#fit' AND severity = 'warning'"
+        )
+        .await,
+        1,
+        "held with something lost is a warning"
+    );
 
     let s2 = a.run().await;
     assert_eq!(
@@ -331,7 +342,11 @@ async fn an_unreadable_fit_whose_activity_changed_in_a_stopped_run_is_fetched_by
     let mut a = Account::tng();
     a.answer_bytes(FIT_13, bytes(b"not a zip, captain"));
     let s1 = a.run().await;
-    assert_eq!(s1.errors, 1, "{}", s1.line());
+    assert_eq!((s1.errors, s1.activity_files), (0, 1), "{}", s1.line());
+    assert_eq!(
+        a.problems().await.keys().collect::<Vec<_>>(),
+        ["garmin_activity_files:17010413001#fit"]
+    );
 
     a.spec["activities"][0]["listing"]["activityName"] = "Holodeck run: Dixon Hill, again".into();
     a.resynthesize();

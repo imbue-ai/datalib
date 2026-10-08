@@ -1,9 +1,15 @@
 //! Raw-store schema for the `garmin` provider. Every table keys on the
 //! id Garmin itself uses, except the two whose rows Garmin never
 //! numbers: a per-day metric is `<metric>#<date>`, and the account
-//! singletons are named for the endpoint they came from.
+//! singletons are named for the endpoint they came from. What a row is
+//! held *for* — the date a day is final from, the listing version a
+//! detail or a file was answered for — is `held_version` in the table's
+//! `_bookkeeping` sidecar (`datalib_etl_web::owed`), never a column here.
 
-use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
+use anyhow::Result;
+use sqlx::SqliteConnection;
+
+use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl_macros::{RawTable, WirePayloadRow};
 
 pub const DATA_TABLES: &[&str] = &[
@@ -44,9 +50,7 @@ pub struct DeviceRow {
 /// metric's endpoint returned for that day, verbatim. A day the
 /// endpoint had nothing for (204, 404, or an empty body) is stored as
 /// JSON `null`, so "asked and empty" is distinguishable from "never
-/// asked" and a re-walk rewrites nothing. `fetched_on` is the run's date
-/// when the row was fetched: a day fetched before it had settled is
-/// fetched again (`ingest::settles_on`).
+/// asked" and a re-walk rewrites nothing.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "garmin_daily",
@@ -56,12 +60,16 @@ pub struct DailyRow {
     pub id_and_payload: WirePayload,
     pub metric: String,
     pub calendar_date: String,
-    pub fetched_on: Option<String>,
 }
 
 impl DailyRow {
     pub fn id_for(metric: &str, calendar_date: &str) -> String {
         format!("{metric}#{calendar_date}")
+    }
+
+    /// The calendar date of an id [`Self::id_for`] built.
+    pub fn date_of(id: &str) -> &str {
+        id.rsplit('#').next().unwrap_or(id)
     }
 }
 
@@ -98,22 +106,16 @@ pub const ACTIVITIES_BY_START_INDEX_DDL: &str =
 
 /// `garmin_activity_details` — `/activity-service/activity/<id>`, the
 /// fuller record (device, sensors, gear, summary), keyed like the list.
-/// `listing_hash` is the `garmin_activities.listing_hash` the detail was
-/// fetched for; a detail whose activity now lists differently is owed.
 /// An activity Garmin has no detail for holds JSON `null`.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "garmin_activity_details")]
 pub struct ActivityDetailRow {
     pub id_and_payload: WirePayload,
-    pub listing_hash: Option<String>,
 }
 
 /// `garmin_activity_files` — an activity's original FIT file in the CAS;
-/// `file_kind` is `fit`. `listing_hash` is the listing version the
-/// download was answered for, whatever the answer: the file (`blake3`
-/// set), no file at all, or one that could not be read (both `blake3`
-/// NULL). It is NULL when the request itself failed, which leaves the
-/// file owed.
+/// `file_kind` is `fit`. `blake3` is NULL when Garmin answered with no
+/// file, or with one that could not be read.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "garmin_activity_files",
@@ -125,14 +127,11 @@ pub struct ActivityFileRow {
     pub activity_id: String,
     pub file_kind: String,
     pub blake3: Option<String>,
-    pub listing_hash: Option<String>,
 }
 
 /// `garmin_wellness_files` — one row per calendar day the wellness
 /// bundle was asked for: the zip in the CAS (`blake3` set), or no bundle
-/// that day (`blake3` NULL). `fetched_on` is the run's date when Garmin
-/// answered, read as `garmin_daily.fetched_on` is; NULL when the request
-/// failed.
+/// that day (`blake3` NULL).
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "garmin_wellness_files",
@@ -144,11 +143,21 @@ pub struct WellnessFileRow {
     pub calendar_date: String,
     pub file_kind: String,
     pub blake3: Option<String>,
-    pub fetched_on: Option<String>,
 }
 
 pub const FILE_KIND_FIT: &str = "fit";
 pub const FILE_KIND_WELLNESS_ZIP: &str = "wellness_zip";
+
+/// The CAS bundle keys its blobs by ref id, so each record's file needs
+/// a ref of its own; the edge row's id is that ref.
+pub fn file_ref(owner: &str, file_kind: &str) -> String {
+    format!("{owner}#{file_kind}")
+}
+
+/// The owner of a ref [`file_ref`] built: the activity id, or the day.
+pub fn file_owner(file_ref: &str) -> &str {
+    file_ref.split('#').next().unwrap_or(file_ref)
+}
 
 /// `garmin_items` — the small whole-account listings that have no date
 /// axis and are re-read complete every run: personal records, gear,
@@ -168,6 +177,68 @@ impl ItemRow {
     }
 }
 
+/// The raw store's migration ladder (etl/README.md §"The migration
+/// ladder").
+pub const LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "what a row is held for moves to its bookkeeping sidecar",
+    apply: |conn| Box::pin(held_versions_to_the_sidecar(conn)),
+}];
+
+/// The columns an earlier build kept the held version in, by table.
+const HELD_COLUMNS: &[(&str, &str)] = &[
+    ("garmin_daily", "fetched_on"),
+    ("garmin_wellness_files", "fetched_on"),
+    ("garmin_activity_details", "listing_hash"),
+    ("garmin_activity_files", "listing_hash"),
+];
+
+/// Each held column's values go to its table's sidecar as they are,
+/// and the column goes. A day's `fetched_on` is not the date the day
+/// settled, which is what the sidecar holds from now on; a day fetched
+/// on the day it settled matches and is not fetched again, one fetched
+/// later is fetched once more. The rung cannot do better: the settle
+/// date depends on `refresh_days`, which is in the config, not the
+/// store. A store from before the columns has nothing to carry.
+async fn held_versions_to_the_sidecar(conn: &mut SqliteConnection) -> Result<()> {
+    for (table, column) in HELD_COLUMNS {
+        if !has_column(conn, table, column).await? {
+            continue;
+        }
+        let sidecar = format!("{table}_bookkeeping");
+        if !has_column(conn, &sidecar, "held_version").await? {
+            // Audited: `sidecar` is built from a literal of HELD_COLUMNS.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "ALTER TABLE {sidecar} ADD COLUMN held_version TEXT NULL"
+            )))
+            .execute(&mut *conn)
+            .await?;
+        }
+        // Audited: every name is a literal of HELD_COLUMNS.
+        for sql in [
+            format!(
+                "UPDATE {sidecar} SET held_version = \
+                 (SELECT {column} FROM {table} t WHERE t.id = {sidecar}.id)"
+            ),
+            format!("ALTER TABLE {table} DROP COLUMN {column}"),
+        ] {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&mut *conn)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn has_column(conn: &mut SqliteConnection, table: &str, column: &str) -> Result<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")
+        .bind(table)
+        .bind(column)
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(n > 0)
+}
+
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         AccountRow::ddl(),
@@ -177,7 +248,7 @@ pub fn full_ddl() -> Vec<String> {
         ActivityRow::ddl(),
         ACTIVITIES_BY_START_INDEX_DDL.to_string(),
         ActivityDetailRow::ddl(),
-        datalib_etl::coverage::DDL.to_string(),
+        datalib_etl_web::coverage::DDL.to_string(),
     ];
     out.extend(DailyRow::all_ddl());
     out.extend(ItemRow::all_ddl());

@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl::export_files::ExportFiles;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::export_files::ExportFiles;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sqlx::sqlite::SqlitePool;
@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use tracing::warn;
 use uuid::Uuid;
 
-use schema_raw::{canonical_table, known_file, linkedin_ns, ARTICLES_TABLE};
+use schema_raw::{canonical_table, known_file, linkedin_ns, ARTICLES_TABLE, CONNECTIONS_TABLE};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -69,12 +69,7 @@ impl RawDb {
         let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, commit).await? else {
             return Ok(None);
         };
-        let cas_path = cas_path_for(db_path);
-        let cas = if cas_path.is_file() {
-            Some(BlobCas::open_reader(&cas_path).await?)
-        } else {
-            None
-        };
+        let cas = BlobCas::open_for_render(db_path).await?;
         Ok(Some(Self {
             pool: reader.pool().clone(),
             cas,
@@ -143,6 +138,8 @@ pub struct FetchSummary {
     pub files: usize,
     pub rows: usize,
     pub parse_errors: usize,
+    /// Photo edges of connections the export no longer lists.
+    pub photos_removed: usize,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -158,6 +155,8 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     found.extend(export.walk_problems());
     let mut tx = db.pool().begin().await.context("begin linkedin tx")?;
 
+    // Each CSV read whole replaces its table. A table whose CSV this
+    // export left out is not touched: the export form offers a subset.
     for path in export.with_extension("csv") {
         let table = table_name(&opts.input_path, path);
         if known_file(&table).is_none() {
@@ -183,6 +182,11 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         };
         let keep: HashSet<String> = rows.iter().map(|(id, _)| id.clone()).collect();
         write_table(&mut tx, &table, &rows, Some(&keep)).await?;
+        // Only a clean read says who is connected: a Connections.csv left
+        // out or unreadable never reaches here.
+        if table == CONNECTIONS_TABLE {
+            summary.photos_removed += photos::prune_to_connections_in_tx(&mut tx, &keep).await?;
+        }
         summary.files += 1;
         summary.rows += rows.len();
         opts.progress.set_message(&format!(
@@ -272,6 +276,11 @@ pub(crate) fn csv_reader(body: &str) -> csv::Reader<&[u8]> {
 fn parse_rows(table: &str, body: &str) -> Result<Vec<(String, String)>> {
     let mut rdr = csv_reader(body);
     let headers = dedup_headers(rdr.headers().context("read CSV header")?);
+    // A CSV with a header and no rows empties its table; one with no
+    // header is not that, but a file cut short or never written.
+    if headers.is_empty() {
+        anyhow::bail!("no header row: the file is empty, or holds only its Notes preamble");
+    }
     let id_cols = known_file(table)
         .map(|f| f.id_cols)
         .filter(|c| !c.is_empty());

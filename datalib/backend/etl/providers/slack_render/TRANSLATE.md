@@ -29,8 +29,14 @@ is `{channel_id}#{thread_ts}` and its link is the thread's permalink.
 - `*bold*` → `**bold**` and `~strike~` → `~~strike~~`, with Slack's
   word-boundary rules; a `>` quote is ended with a blank line. `_italic_`
   and backticks are already CommonMark;
-- `<@U…>`, `<#C…|name>`, `<!subteam^…>`, `<!here>` / `<!channel>` /
+- `<@U…>` is a chip link to the user, `[@Name](slack://user?team=T&id=U
+  "@Name (slack:T/U)")`, through `chip_link`, so datalib draws who that
+  is; inside code it is plain `@Name`, which code shows literally, and a
+  thread's title, plain text, keeps `@Name` too;
+- `<#C…|name>`, `<!subteam^…>`, `<!here>` / `<!channel>` /
   `<!everyone>`, resolved against the workspace's users and channels;
+- a `!` typed straight before any of these, or before a labelled link,
+  is escaped, so markdown does not read the link after it as an image;
 - `<https://…|label>` → `[label](url)`;
 - `:shortcode:` → unicode, through the `emojis` crate;
 - the three entities Slack escapes (`&amp;`, `&lt;`, `&gt;`) stay

@@ -1,4 +1,8 @@
-//! Doltlite-backed raw store for the Claude provider.
+//! Doltlite-backed raw store for the Claude provider: what the store
+//! lists for the attachment loop, the sweep markers that say when a
+//! listing is due, and how a fetched record is written in the
+//! transaction the loop hands over. The loop (`datalib_etl_web::owed`)
+//! records what is held; nothing here stamps a record done on its own.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -6,19 +10,54 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
-use sqlx::Row;
+use sqlx::{Row, Sqlite, Transaction};
 
-use datalib_etl::doltlite_raw::{self as dr};
+use datalib_etl::blob_cas::CasEdgeRow as _;
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
+use datalib_etl::doltlite_raw::{self as dr, WirePayload};
+use datalib_etl_web::owed::{self, Listed};
 use datalib_time::IsoOffsetTimestamp;
 
-use super::schema_raw::full_ddl;
+use super::schema_raw::{
+    full_ddl, ConversationAttachmentRow, ConversationRow, ProjectDocRow, ProjectRow, ATTACHMENTS,
+    LADDER, PROJECTS,
+};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
+
+/// One conversation as the detail endpoint answered it, ready to store:
+/// the payload canonicalized, and the file objects its messages name.
+#[derive(Debug, Clone)]
+pub struct Conversation {
+    pub uuid: String,
+    pub org_uuid: String,
+    pub org_name: String,
+    pub name: Option<String>,
+    pub updated_at: Option<String>,
+    pub payload: String,
+    /// `chat_messages[].files[]`, each `file_uuid` once.
+    pub files: Vec<Value>,
+}
+
+/// One project as the listing names it, ready to store.
+#[derive(Debug, Clone)]
+pub struct ProjectUpsert {
+    pub uuid: String,
+    pub org_uuid: String,
+    pub org_name: String,
+    pub name: Option<String>,
+    pub updated_at: Option<String>,
+    pub payload: String,
+}
+
+fn sweep_scope(key: &str) -> String {
+    format!("claude:sweep:{key}")
+}
 
 impl RawDb {
-    // ── users ──────────────────────────────────────────────────────
+    // ── users and orgs ───────────────────────────────────────────────
 
     pub async fn has_any_user(&self) -> Result<bool> {
         let row = sqlx::query("SELECT 1 FROM users LIMIT 1")
@@ -36,9 +75,8 @@ impl RawDb {
         key: &str,
         now: &IsoOffsetTimestamp,
     ) -> Result<Option<chrono::Duration>> {
-        let scope = format!("claude:sweep:{key}");
         let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
-            .bind(&scope)
+            .bind(sweep_scope(key))
             .fetch_optional(self.pool())
             .await
             .context("select claude sweep marker")?;
@@ -46,28 +84,51 @@ impl RawDb {
         let s: String = row
             .try_get("last_seen_at_utc")
             .context("read claude sweep timestamp")?;
-        let dt = datalib_time::parse_strict(&s)
-            .with_context(|| format!("parse claude sweep timestamp {s:?}"))?
-            .inner();
-        Ok(Some(now.inner() - dt))
+        Ok(Some(sweep_age_of(&s, now)?))
     }
 
-    /// Make the sweep `key` due, whatever its age.
-    pub async fn forget_sweep(&self, key: &str) -> Result<()> {
-        sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
-            .bind(format!("claude:sweep:{key}"))
-            .execute(self.pool())
-            .await
-            .context("forget claude sweep marker")?;
-        Ok(())
+    /// How long before `now` each project's docs were last listed, by
+    /// project, for every project with a marker.
+    pub async fn project_docs_sweep_ages(
+        &self,
+        now: &IsoOffsetTimestamp,
+    ) -> Result<HashMap<String, chrono::Duration>> {
+        let prefix = sweep_scope("project_docs:");
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope LIKE ? || '%'",
+        )
+        .bind(&prefix)
+        .fetch_all(self.pool())
+        .await
+        .context("select the project docs sweep markers")?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for (scope, stamp) in rows {
+            out.insert(
+                scope[prefix.len()..].to_string(),
+                sweep_age_of(&stamp, now)?,
+            );
+        }
+        Ok(out)
     }
 
     pub async fn record_sweep(&self, key: &str, now: &IsoOffsetTimestamp) -> Result<()> {
-        let scope = format!("claude:sweep:{key}");
-        dr::upsert_scope_state(self.pool(), &scope, &now.to_rfc3339())
-            .await
-            .context("record claude sweep marker")?;
-        Ok(())
+        let mut tx = self.pool().begin().await.context("begin sweep tx")?;
+        record_sweep_in_tx(&mut tx, key, now).await?;
+        tx.commit().await.context("commit sweep tx")
+    }
+
+    /// The orgs listed, and the marker that says when to list them
+    /// again, in one transaction: a marker never stands over a listing
+    /// that did not land.
+    pub async fn store_orgs(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[super::schema_raw::OrgRow],
+        now: &IsoOffsetTimestamp,
+        run_now: &IsoOffsetTimestamp,
+    ) -> Result<()> {
+        bulk_upsert_in_tx(tx, rows, now).await?;
+        record_sweep_in_tx(tx, super::ORGS_SWEEP_KEY, run_now).await
     }
 
     /// The `orgs` rows we already have, as raw payloads — what a warm
@@ -84,64 +145,76 @@ impl RawDb {
         first_user_uuid_from(self.pool()).await
     }
 
-    // ── conversations: listing skip-check ──────────────────────────
-
-    /// Bulk-read `(id → updated_at)` for the listed ids. Returns one
-    /// entry per *existing* row (with a non-null `updated_at`). Missing
-    /// ids are absent from the map — caller treats them as "we don't
-    /// have this conversation yet, fetch it." Used by the listing pass
-    /// to decide which conversations need a detail fetch. Rows only
-    /// exist post-detail-fetch, so "id in map" ↔ "payload present."
-    pub async fn existing_updated_at(&self, ids: &[&str]) -> Result<HashMap<String, String>> {
-        self.existing_updated_at_in("conversations", ids).await
-    }
-
     // ── projects ───────────────────────────────────────────────────
 
-    /// Bulk-read `(project id → updated_at)` for the listed ids, same
-    /// shape and same purpose as [`Self::existing_updated_at`]: the
-    /// caller compares against the live listing to decide which
-    /// projects changed. Missing ids are absent from the map.
-    pub async fn existing_project_updated_at(
+    /// Each project's metadata, held at its `updated_at`. A project held
+    /// at the version listed is not written: the listing is the content.
+    pub async fn store_projects(
         &self,
-        ids: &[&str],
-    ) -> Result<HashMap<String, String>> {
-        self.existing_updated_at_in("projects", ids).await
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[ProjectUpsert],
+    ) -> Result<()> {
+        let built: Vec<ProjectRow> = rows
+            .iter()
+            .map(|p| ProjectRow {
+                id_and_payload: WirePayload {
+                    id: p.uuid.clone(),
+                    payload: p.payload.clone(),
+                },
+                org_uuid: Some(p.org_uuid.clone()),
+                org_name: Some(p.org_name.clone()),
+                name: p.name.clone(),
+                updated_at: p.updated_at.clone(),
+            })
+            .collect();
+        bulk_upsert_entity_in_tx(tx, &built).await?;
+        for p in rows {
+            owed::hold(tx, PROJECTS, &p.uuid, p.updated_at.as_deref()).await?;
+        }
+        Ok(())
     }
 
-    async fn existing_updated_at_in(
+    /// One project's knowledge docs, listed whole: the docs, the
+    /// project's `project_docs_listings` row, and the marker that says
+    /// when to list them again. A doc the listing no longer names keeps
+    /// its row: project deletions are not mirrored.
+    pub async fn store_project_docs(
         &self,
-        table: &str,
-        ids: &[&str],
-    ) -> Result<HashMap<String, String>> {
-        if ids.is_empty() {
-            return Ok(HashMap::new());
+        tx: &mut Transaction<'_, Sqlite>,
+        project_uuid: &str,
+        docs: &[Value],
+        now: &IsoOffsetTimestamp,
+        run_now: &IsoOffsetTimestamp,
+    ) -> Result<usize> {
+        let mut rows: Vec<ProjectDocRow> = Vec::with_capacity(docs.len());
+        for doc in docs {
+            let Some(id) = doc.get("uuid").and_then(Value::as_str) else {
+                continue;
+            };
+            rows.push(ProjectDocRow {
+                id_and_payload: WirePayload {
+                    id: id.to_string(),
+                    payload: serde_json::to_string(doc).context("serialize project doc")?,
+                },
+                project_uuid: Some(project_uuid.to_string()),
+                file_name: doc
+                    .get("file_name")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                created_at: doc
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+            });
         }
-        let placeholders = std::iter::repeat_n("?", ids.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT id, updated_at FROM {table} \
-              WHERE id IN ({placeholders}) AND updated_at IS NOT NULL"
-        );
-        // Audited: `table` is a literal at every callsite; `placeholders` is a
-        // `?,?,?` run sized from `ids.len()` and each id is bound.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-        for id in ids {
-            q = q.bind(*id);
-        }
-        let rows = q
-            .fetch_all(self.pool())
+        bulk_upsert_in_tx(tx, &rows, now).await?;
+        sqlx::query("INSERT OR IGNORE INTO project_docs_listings (id) VALUES (?)")
+            .bind(project_uuid)
+            .execute(&mut **tx)
             .await
-            .with_context(|| format!("existing_updated_at {table}"))?;
-        let mut out = HashMap::with_capacity(rows.len());
-        for r in &rows {
-            let id: String = r.try_get("id").unwrap_or_default();
-            if let Ok(ut) = r.try_get::<String, _>("updated_at") {
-                out.insert(id, ut);
-            }
-        }
-        Ok(out)
+            .with_context(|| format!("list the docs of {project_uuid}"))?;
+        record_sweep_in_tx(tx, &super::project_docs_sweep_key(project_uuid), run_now).await?;
+        Ok(rows.len())
     }
 
     pub async fn load_projects(&self) -> Result<Vec<LoadedProject>> {
@@ -150,6 +223,132 @@ impl RawDb {
 
     pub async fn load_project_docs(&self) -> Result<Vec<LoadedProjectDoc>> {
         load_project_docs_from(self.pool()).await
+    }
+
+    // ── conversations ──────────────────────────────────────────────
+
+    /// A conversation, and the attachment edges for the files it names:
+    /// an edge is listed by the conversation, and its bytes are what the
+    /// attachment loop owes. The conversation was fetched whole, so its
+    /// edges are the files it names and no other.
+    pub async fn store_conversation(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        c: &Conversation,
+    ) -> Result<()> {
+        let row = ConversationRow {
+            id_and_payload: WirePayload {
+                id: c.uuid.clone(),
+                payload: c.payload.clone(),
+            },
+            org_uuid: Some(c.org_uuid.clone()),
+            org_name: Some(c.org_name.clone()),
+            name: c.name.clone(),
+            updated_at: c.updated_at.clone(),
+        };
+        bulk_upsert_entity_in_tx(tx, &[row]).await?;
+        let mut keep: HashSet<String> = HashSet::new();
+        for file_uuid in c.files.iter().filter_map(file_uuid_of) {
+            let id = ConversationAttachmentRow::pk_recipe(&c.uuid, file_uuid);
+            sqlx::query(
+                "INSERT INTO claude_attachments (id, conversation_uuid, file_uuid, blake3) \
+                 VALUES (?, ?, ?, NULL) ON CONFLICT(id) DO NOTHING",
+            )
+            .bind(&id)
+            .bind(&c.uuid)
+            .bind(file_uuid)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("list attachment {id}"))?;
+            sqlx::query(
+                "INSERT INTO claude_attachments_bookkeeping (id, attempt_count) VALUES (?, 0) \
+                 ON CONFLICT(id) DO NOTHING",
+            )
+            .bind(&id)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("list attachment {id} in its sidecar"))?;
+            keep.insert(id);
+        }
+        datalib_etl::prune::prune_scope_in_tx(
+            tx,
+            ATTACHMENTS,
+            &[("conversation_uuid", &c.uuid)],
+            &keep,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// claude.ai no longer has the conversation: its row and its edges
+    /// go. The loop takes the sidecar and the problem rows.
+    pub async fn forget_conversation(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        uuid: &str,
+    ) -> Result<()> {
+        datalib_etl::prune::delete_owned_in_tx(
+            tx,
+            ATTACHMENTS,
+            "conversation_uuid",
+            &[uuid.to_string()],
+        )
+        .await?;
+        sqlx::query("DELETE FROM conversations WHERE id = ?")
+            .bind(uuid)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("forget conversation {uuid}"))?;
+        Ok(())
+    }
+
+    /// Every attachment a stored conversation names, at the version its
+    /// conversation is held at: the bytes are owed once per fetch of the
+    /// conversation, and a file claude.ai no longer serves is asked for
+    /// again only when the conversation changes.
+    pub async fn attachments_listed(&self) -> Result<Vec<Listed>> {
+        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT a.id, b.held_version FROM claude_attachments a \
+             LEFT JOIN conversations_bookkeeping b ON b.id = a.conversation_uuid \
+             ORDER BY a.conversation_uuid, a.file_uuid",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("list the attachments")?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, version)| Listed::new(id, version))
+            .collect())
+    }
+
+    /// The bytes the CAS holds for a file under any conversation, by
+    /// their hash: a file's bytes never change, so one landed under one
+    /// conversation is not fetched for another.
+    pub async fn blake3_of_file(&self, file_uuid: &str) -> Result<Option<String>> {
+        sqlx::query_scalar(
+            "SELECT blake3 FROM claude_attachments \
+             WHERE file_uuid = ? AND blake3 IS NOT NULL LIMIT 1",
+        )
+        .bind(file_uuid)
+        .fetch_optional(self.pool())
+        .await
+        .context("look a file up in the attachment edges")
+    }
+
+    /// An edge's bytes landed in the CAS under `blake3`.
+    pub async fn store_blob(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        edge_id: &str,
+        blake3: &str,
+    ) -> Result<()> {
+        sqlx::query("UPDATE claude_attachments SET blake3 = ? WHERE id = ?")
+            .bind(blake3)
+            .bind(edge_id)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("record the bytes of {edge_id}"))?;
+        Ok(())
     }
 
     /// Delete this org's conversations that a **complete** listing of that
@@ -223,13 +422,8 @@ impl RawDb {
         let mut tx = self.pool().begin().await.context("begin prune tx")?;
         let gone =
             datalib_etl::prune::prune_scope_in_tx(&mut tx, "conversations", scope, keep).await?;
-        datalib_etl::prune::delete_owned_in_tx(
-            &mut tx,
-            "claude_attachments",
-            "conversation_uuid",
-            &gone,
-        )
-        .await?;
+        datalib_etl::prune::delete_owned_in_tx(&mut tx, ATTACHMENTS, "conversation_uuid", &gone)
+            .await?;
         tx.commit().await.context("commit prune tx")?;
         Ok(gone.len())
     }
@@ -248,52 +442,66 @@ impl RawDb {
             .transpose()
     }
 
-    /// Every conversation with an attachment whose last attempt failed.
-    /// One that was not there to fetch is a skip, not a failure, and waits
-    /// for its conversation to change.
-    pub async fn conversations_with_unfetched_attachments(&self) -> Result<Vec<String>> {
-        sqlx::query_scalar(
-            "SELECT DISTINCT a.conversation_uuid FROM claude_attachments a \
-             JOIN problems p ON p.scope_kind = ? \
-                AND p.scope_key = 'claude_attachments:' || a.id \
-             WHERE p.reason = ? ORDER BY a.conversation_uuid",
-        )
-        .bind(datalib_problems::ScopeKind::Entity.as_str())
-        .bind(datalib_problems::Reason::FetchFailed.as_str())
-        .fetch_all(self.pool())
-        .await
-        .context("select conversations with unfetched attachments")
-    }
-
-    pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {
-        let mut tx = self
-            .pool()
-            .begin()
-            .await
-            .context("begin record_conversation_error tx")?;
-        dr::record_object_error(&mut tx, "conversations", id, err).await?;
-        tx.commit()
-            .await
-            .context("commit record_conversation_error tx")?;
-        Ok(())
-    }
-
-    pub async fn failed_conversation_ids(&self) -> Result<Vec<String>> {
-        dr::failed_ids(self.pool(), "conversations").await
-    }
-
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
         load_conversations_from(self.pool()).await
     }
+}
 
-    /// Snapshot `(file_uuid → blake3)` for every attachment whose
-    /// bytes have ever landed in the CAS. Loaded once at the start of
-    /// a fetch run; updated in-place as new downloads land. Replaces
-    /// the per-file SQL `attachment_has_bytes` lookup.
-    pub async fn load_attachment_blake3s(&self) -> Result<HashMap<String, String>> {
-        datalib_etl::blob_cas::load_blake3_index(self.pool(), "claude_attachments", "file_uuid")
-            .await
+/// The marker's stamp is the run's pinned now, kept as UTC with the
+/// offset beside it, as `doltlite_raw::upsert_scope_state` keeps one.
+pub(crate) async fn record_sweep_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    key: &str,
+    now: &IsoOffsetTimestamp,
+) -> Result<()> {
+    let stamp = datalib_time::split_stamp(&now.to_rfc3339());
+    sqlx::query(
+        "INSERT INTO sync_scope_state (scope, last_seen_at_utc, tz_offset) VALUES (?, ?, ?)
+         ON CONFLICT(scope) DO UPDATE SET last_seen_at_utc = excluded.last_seen_at_utc,
+            tz_offset = excluded.tz_offset",
+    )
+    .bind(sweep_scope(key))
+    .bind(&stamp.utc)
+    .bind(&stamp.tz_offset)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("record claude sweep marker {key}"))?;
+    Ok(())
+}
+
+fn sweep_age_of(stamp: &str, now: &IsoOffsetTimestamp) -> Result<chrono::Duration> {
+    let dt = datalib_time::parse_strict(stamp)
+        .with_context(|| format!("parse claude sweep timestamp {stamp:?}"))?
+        .inner();
+    Ok(now.inner() - dt)
+}
+
+/// The `file_uuid` of one `chat_messages[].files[]` object.
+pub fn file_uuid_of(file: &Value) -> Option<&str> {
+    file.get("file_uuid").and_then(Value::as_str)
+}
+
+/// Every `chat_messages[].files[]` object the conversation names, each
+/// `file_uuid` once.
+pub fn files_of(conv: &Value) -> Vec<Value> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<Value> = Vec::new();
+    let Some(messages) = conv.get("chat_messages").and_then(Value::as_array) else {
+        return out;
+    };
+    for msg in messages {
+        let Some(files) = msg.get("files").and_then(Value::as_array) else {
+            continue;
+        };
+        for f in files {
+            if let Some(id) = file_uuid_of(f) {
+                if seen.insert(id.to_string()) {
+                    out.push(f.clone());
+                }
+            }
+        }
     }
+    out
 }
 
 /// One project as it sits between download and render.
@@ -521,12 +729,11 @@ mod tests {
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
         {
             let mut tx = db.pool().begin().await.unwrap();
-            bulk_upsert_in_tx(&mut tx, &[make_org("org-a", "A Org")], &now())
+            db.store_orgs(&mut tx, &[make_org("org-a", "A Org")], &now(), &now())
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
         }
-        db.record_sweep("orgs", &now()).await.unwrap();
 
         let age = db
             .sweep_age("orgs", &later(5))
@@ -565,12 +772,14 @@ mod tests {
 
     /// The marker is namespaced per provider and per key, so it can share
     /// `sync_scope_state` with slack's markers and with the real resume
-    /// cursors without collisions.
+    /// cursors without collisions; the per-project markers are read as a
+    /// set by project.
     #[tokio::test]
     async fn sweep_keys_are_namespaced() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
         db.record_sweep("orgs", &now()).await.unwrap();
+        db.record_sweep("project_docs:p-1", &now()).await.unwrap();
         assert!(db.sweep_age("orgs", &now()).await.unwrap().is_some());
         assert!(
             db.sweep_age("something-else", &now())
@@ -578,6 +787,11 @@ mod tests {
                 .unwrap()
                 .is_none(),
             "an unrelated key must not see the orgs marker"
+        );
+        let ages = db.project_docs_sweep_ages(&later(5)).await.unwrap();
+        assert_eq!(
+            ages.into_iter().collect::<Vec<_>>(),
+            [("p-1".to_string(), chrono::Duration::minutes(5))]
         );
     }
 
@@ -600,9 +814,13 @@ mod tests {
     async fn an_unlisted_stub_goes_with_its_problem() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
         for id in ["stub-gone", "stub-listed"] {
-            db.record_conversation_error(id, "HTTP 500").await.unwrap();
+            dr::record_object_error(&mut tx, "conversations", id, "HTTP 500")
+                .await
+                .unwrap();
         }
+        tx.commit().await.unwrap();
         sqlx::query("INSERT INTO conversations (id, payload) VALUES ('exported', jsonb('{}'))")
             .execute(db.pool())
             .await
@@ -620,5 +838,66 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(problems, ["conversations:stub-listed"]);
+    }
+
+    fn conversation(uuid: &str, files: &[&str]) -> Conversation {
+        Conversation {
+            uuid: uuid.into(),
+            org_uuid: "org-a".into(),
+            org_name: "A".into(),
+            name: Some(uuid.into()),
+            updated_at: Some("2026-01-01T00:00:00Z".into()),
+            payload: json!({"uuid": uuid}).to_string(),
+            files: files
+                .iter()
+                .map(|f| json!({"file_uuid": f, "preview_url": format!("/api/files/{f}/preview")}))
+                .collect(),
+        }
+    }
+
+    /// A conversation's edges are the files it names: a refetch that
+    /// drops one drops its edge, an edge whose bytes landed keeps them,
+    /// and every edge is listed at the conversation's held version.
+    #[tokio::test]
+    async fn a_conversations_edges_follow_the_files_it_names() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_conversation(&mut tx, &conversation("c1", &["f1", "f2"]))
+            .await
+            .unwrap();
+        owed::hold(&mut tx, "conversations", "c1", Some("v1"))
+            .await
+            .unwrap();
+        db.store_blob(&mut tx, "c1#f1", &"ab".repeat(32))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(
+            db.attachments_listed().await.unwrap(),
+            [
+                Listed::new("c1#f1", Some("v1")),
+                Listed::new("c1#f2", Some("v1"))
+            ]
+        );
+
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_conversation(&mut tx, &conversation("c1", &["f1", "f3"]))
+            .await
+            .unwrap();
+        owed::hold(&mut tx, "conversations", "c1", Some("v2"))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(
+            db.attachments_listed().await.unwrap(),
+            [
+                Listed::new("c1#f1", Some("v2")),
+                Listed::new("c1#f3", Some("v2"))
+            ],
+            "the dropped file's edge went; the kept one is owed again at the new version"
+        );
+        assert!(db.blake3_of_file("f1").await.unwrap().is_some());
+        db.close().await;
     }
 }

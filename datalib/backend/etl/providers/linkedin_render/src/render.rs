@@ -34,7 +34,10 @@ use datalib_schema::providers::Provider;
 ///     Email — rather than the export's column names.
 /// v7: a post of several lines loses the quotes the export puts around
 ///     each line.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: a connection's photo reaches the index as the URL the app serves
+///     it at.
+/// v9: a photo no browser draws (the SVG ghost avatar) has no URL.
+pub const RENDER_VERSION: u32 = 9;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -209,6 +212,7 @@ fn build_chats(
                     kind_label: None,
                     source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                     is_aside: false,
+                    branch: Vec::new(),
                     unread: false,
                     recipients: Vec::new(),
                     problems,

@@ -1,119 +1,19 @@
 //! Part of a sync that fails is a `problems` row, not a failed step or a
 //! log line: the rest of the run goes on, and the row goes once the same
-//! thing fetches — which means a later run has to try it again, though
-//! upstream has not moved it.
+//! thing fetches — which the next run does on its own, because what is
+//! not held at its listed stamp is owed.
 
 use std::path::Path;
 
-use datalib_etl::http::{fixture_key, HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture};
-use datalib_etl_notion::ingest::official::{BASE, PAGE_SIZE};
-use datalib_etl_notion::ingest::{fetch, FetchOptions, FetchSummary, RawDb};
-use serde_json::{json, Value};
+use datalib_etl_notion::ingest::official::BASE;
+use datalib_etl_notion::ingest::RawDb;
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::owed;
+use datalib_etl_web::synthesize::write_fixture;
+use serde_json::json;
 use tempfile::tempdir;
 
-const BRIDGE: &str = "1701d000-0000-4000-8000-000000000001";
-const SICKBAY: &str = "1701d000-0000-4000-8000-000000000002";
-const HOLODECK: &str = "1701d000-0000-4000-8000-000000000003";
-const TEN_FORWARD: &str = "1701d000-0000-4000-8000-000000000004";
-const EDITED: &str = "2026-09-01T00:00:00.000Z";
-
-fn get(url: &str) -> HttpRequest {
-    HttpRequest::get(HttpService::Notion, url).header("Accept", "application/json")
-}
-
-fn serve(tape: &Path, url: &str, body: Value) {
-    write_fixture(tape, &get(url), &json_response(&body)).unwrap();
-}
-
-fn page(id: &str, edited: &str) -> Value {
-    json!({
-        "object": "page",
-        "id": id,
-        "last_edited_time": edited,
-        "parent": {"type": "workspace", "workspace": true},
-    })
-}
-
-fn serve_object(tape: &Path, id: &str, edited: &str) {
-    serve(tape, &format!("{BASE}/pages/{id}"), page(id, edited));
-}
-
-fn serve_body(tape: &Path, id: &str, markdown: &str, truncated: bool) {
-    serve(
-        tape,
-        &format!("{BASE}/pages/{id}/markdown"),
-        json!({"object": "page_markdown", "id": id, "markdown": markdown, "truncated": truncated}),
-    );
-}
-
-fn serve_comments(tape: &Path, id: &str) {
-    serve(
-        tape,
-        &format!("{BASE}/comments?block_id={id}&page_size={PAGE_SIZE}"),
-        json!({"object": "list", "results": [], "has_more": false, "next_cursor": null}),
-    );
-}
-
-fn serve_page(tape: &Path, id: &str, edited: &str, markdown: &str) {
-    serve_object(tape, id, edited);
-    serve_body(tape, id, markdown, false);
-    serve_comments(tape, id);
-}
-
-fn serve_search(tape: &Path, cursor: Option<&str>, results: Value, next: Option<&str>) {
-    let mut body = json!({
-        "page_size": PAGE_SIZE,
-        "sort": { "timestamp": "last_edited_time", "direction": "descending" },
-    });
-    if let Some(c) = cursor {
-        body["start_cursor"] = json!(c);
-    }
-    let req = HttpRequest::post_json(
-        HttpService::Notion,
-        format!("{BASE}/search"),
-        body.to_string().into_bytes(),
-    )
-    .header("Accept", "application/json");
-    let resp = json!({
-        "object": "list",
-        "results": results,
-        "has_more": next.is_some(),
-        "next_cursor": next,
-    });
-    write_fixture(tape, &req, &json_response(&resp)).unwrap();
-}
-
-async fn run(tape: &Path, store: &Path, roots: &[&str]) -> anyhow::Result<FetchSummary> {
-    std::env::set_var(PLAYBACK_ENV, tape);
-    let db = RawDb::open(store).await.unwrap();
-    let summary = fetch(FetchOptions {
-        subtree_pages: roots.iter().map(|r| r.to_string()).collect(),
-        ..FetchOptions::new(db.clone())
-    })
-    .await;
-    // As the step does: only a run that returns Ok is committed.
-    if summary.is_ok() {
-        db.commit_all("test").await.unwrap();
-    }
-    db.close().await;
-    summary
-}
-
-async fn problems(store: &Path) -> Vec<(String, String)> {
-    let db = RawDb::open(store).await.unwrap();
-    let rows = sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
-        .fetch_all(db.pool())
-        .await
-        .unwrap();
-    db.close().await;
-    rows
-}
-
-fn row(key: &str, severity: &str) -> (String, String) {
-    (key.to_string(), severity.to_string())
-}
+use crate::support::*;
 
 /// A body that would not fetch used to be a log line, and the page was
 /// stored with its new `last_edited_time`, so no later run asked again.
@@ -143,8 +43,8 @@ async fn a_body_that_did_not_fetch_is_a_problem_until_it_does() {
 }
 
 /// An attachment whose bytes did not come back was stamped as fetched.
-/// Its signed URL lives only in the response that named it, so the page
-/// has to be fetched again for the retry, though it has not moved.
+/// Its signed URL lives only in the response that named it, so the
+/// body is read again for the retry, though the page has not moved.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_attachment_that_did_not_fetch_is_retried_through_its_page() {
     let d = tempdir().unwrap();
@@ -184,7 +84,7 @@ async fn an_attachment_that_did_not_fetch_is_retried_through_its_page() {
 
 /// A comments listing that failed was swallowed as "no comments".
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn comments_that_did_not_list_are_a_warning_on_the_page_until_they_do() {
+async fn comments_that_did_not_list_are_a_problem_on_their_own_row_until_they_do() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     serve_object(&tape, BRIDGE, EDITED);
@@ -193,7 +93,8 @@ async fn comments_that_did_not_list_are_a_warning_on_the_page_until_they_do() {
     run(&tape, &store, &[BRIDGE]).await.unwrap();
     assert_eq!(
         problems(&store).await,
-        vec![row(&format!("pages:{BRIDGE}"), "warning")]
+        vec![row(&format!("page_comments:{BRIDGE}"), "error")],
+        "the listing's own row, not the page's"
     );
 
     serve_comments(&tape, BRIDGE);
@@ -202,7 +103,8 @@ async fn comments_that_did_not_list_are_a_warning_on_the_page_until_they_do() {
 }
 
 /// A truncated subtree whose follow-up failed left the body incomplete
-/// for good, with nothing but a log line to say so.
+/// for good, with nothing but a log line to say so. The body is owed
+/// until it comes whole.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_subtree_that_did_not_fetch_is_a_problem_until_it_does() {
     let d = tempdir().unwrap();
@@ -219,8 +121,14 @@ async fn a_subtree_that_did_not_fetch_is_a_problem_until_it_does() {
     run(&tape, &store, &[HOLODECK]).await.unwrap();
     assert_eq!(
         problems(&store).await,
-        vec![row(&format!("page_markdown:{HOLODECK}"), "warning")]
+        vec![row(&format!("page_markdown:{HOLODECK}"), "error")]
     );
+    let db = RawDb::open(&store).await.unwrap();
+    assert!(
+        db.load_page_markdown().await.unwrap().is_empty(),
+        "an incomplete body is owed, not stored"
+    );
+    db.close().await;
 
     serve_body(&tape, hole, "Dixon Hill\n", false);
     run(&tape, &store, &[HOLODECK]).await.unwrap();
@@ -279,40 +187,33 @@ async fn a_root_notion_does_not_have_is_a_config_problem() {
     assert!(problems(&store).await.is_empty());
 }
 
-fn serve_status(tape: &Path, url: &str, status: u16) {
-    let resp = HttpResponse {
-        status,
-        body: format!(r#"{{"object":"error","status":{status}}}"#).into_bytes(),
-        ..json_response(&json!({}))
-    };
-    write_fixture(tape, &get(url), &resp).unwrap();
-}
-
-fn unserve(tape: &Path, url: &str) {
-    std::fs::remove_file(tape.join("notion").join(fixture_key(&get(url)))).unwrap();
-}
-
-async fn pages_to_refetch(store: &Path) -> Vec<String> {
+/// The bodies the store owes: listed pages not held at their stamp.
+async fn owed_bodies(store: &Path) -> Vec<String> {
     let db = RawDb::open(store).await.unwrap();
-    let mut ids: Vec<String> = db
-        .pages_to_refetch(true)
+    let listed = db.pages_listed().await.unwrap();
+    let mut ids: Vec<String> = owed::owed(db.pool(), "page_markdown", listed)
         .await
         .unwrap()
         .into_iter()
+        .map(|l| l.key)
         .collect();
     db.close().await;
     ids.sort();
     ids
 }
 
-/// A page that failed and was then deleted upstream answered 404 to every
-/// later run's retry, and kept its `pages:` row for good.
+/// A listed page whose body never comes — Notion answers 404 for it,
+/// because the page was deleted or unshared while its body was owed —
+/// was fetched again every run. A 404 body is held at the page's stamp,
+/// so it is asked for again only once the page is edited; search never
+/// reports the deletion (§5), so the page stays as it was.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_failed_page_gone_upstream_is_retired_not_retried() {
+async fn a_body_that_will_not_come_is_held_in_search_mode() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     let earlier = "2026-08-01T00:00:00.000Z";
     serve_page(&tape, BRIDGE, EDITED, "");
+    serve_comments(&tape, SICKBAY);
     serve_search(
         &tape,
         None,
@@ -322,27 +223,32 @@ async fn a_failed_page_gone_upstream_is_retired_not_retried() {
     run(&tape, &store, &[]).await.unwrap();
     assert_eq!(
         problems(&store).await,
-        vec![row(&format!("pages:{SICKBAY}"), "error")]
+        vec![row(&format!("page_markdown:{SICKBAY}"), "error")]
     );
+    assert_eq!(owed_bodies(&store).await, vec![SICKBAY.to_string()]);
 
-    let sickbay = format!("{BASE}/pages/{SICKBAY}");
-    serve_status(&tape, &sickbay, 404);
+    let body = format!("{BASE}/pages/{SICKBAY}/markdown");
+    serve_status(&tape, &body, 404);
     serve_search(&tape, None, json!([page(BRIDGE, EDITED)]), None);
     run(&tape, &store, &[]).await.unwrap();
     assert!(problems(&store).await.is_empty());
-    assert!(pages_to_refetch(&store).await.is_empty());
+    assert!(owed_bodies(&store).await.is_empty());
 
     // Not asked for again: a request now would miss the tape and fail.
-    unserve(&tape, &sickbay);
-    run(&tape, &store, &[]).await.unwrap();
-    assert!(problems(&store).await.is_empty());
+    unserve(&tape, &body);
+    let third = run(&tape, &store, &[]).await.unwrap();
+    assert_eq!(third.official_requests, 1, "the search alone");
+    assert_eq!(
+        stored_pages(&store).await,
+        vec![BRIDGE.to_string(), SICKBAY.to_string()],
+        "the ingest deletes nothing"
+    );
 }
 
-/// A stored page whose body never comes — Notion answers 404 for the
-/// body, or the page is deleted while its body is behind — was fetched
-/// again every run, its body forever older than its object.
+/// The same in roots mode: the page's object answers 404 too, which is
+/// a `config:` row and not a failure, and its stored row stays.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_body_that_will_not_come_is_not_fetched_every_run() {
+async fn a_body_that_will_not_come_is_held_in_roots_mode() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     serve_object(&tape, BRIDGE, EDITED);
@@ -357,68 +263,62 @@ async fn a_body_that_will_not_come_is_not_fetched_every_run() {
         vec![row(&format!("page_markdown:{SICKBAY}"), "error")],
         "a body that answers 404 is not a failure; one that did not answer is"
     );
-    assert_eq!(pages_to_refetch(&store).await, vec![SICKBAY.to_string()]);
+    assert_eq!(owed_bodies(&store).await, vec![SICKBAY.to_string()]);
 
     serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 404);
+    let body = format!("{BASE}/pages/{SICKBAY}/markdown");
+    serve_status(&tape, &body, 404);
     run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
     assert_eq!(
         problems(&store).await,
         vec![row(&format!("config:roots:{SICKBAY}"), "warning")]
     );
-    assert!(pages_to_refetch(&store).await.is_empty());
-    let db = RawDb::open(&store).await.unwrap();
+    assert!(owed_bodies(&store).await.is_empty());
+
+    unserve(&tape, &body);
+    let third = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
+    assert_eq!(third.official_requests, 2, "the two page objects");
     assert_eq!(
-        db.load_pages().await.unwrap().len(),
-        2,
+        stored_pages(&store).await,
+        vec![BRIDGE.to_string(), SICKBAY.to_string()],
         "the ingest deletes nothing"
     );
-    db.close().await;
 }
 
-async fn stored_pages(store: &Path) -> Vec<String> {
+async fn coverage(store: &Path) -> Vec<(String, String)> {
     let db = RawDb::open(store).await.unwrap();
-    let mut ids: Vec<String> = db
-        .load_pages()
-        .await
-        .unwrap()
-        .iter()
-        .map(|p| p["id"].as_str().unwrap().to_string())
-        .collect();
-    db.close().await;
-    ids.sort();
-    ids
-}
-
-async fn resume_cursor(store: &Path) -> std::collections::HashMap<String, String> {
-    let db = RawDb::open(store).await.unwrap();
-    let cursor = datalib_etl::doltlite_raw::load_scope_state(db.pool())
+    let spans = sqlx::query_as("SELECT lo, hi FROM coverage WHERE scope = 'search' ORDER BY lo")
+        .fetch_all(db.pool())
         .await
         .unwrap();
     db.close().await;
-    cursor
+    spans
 }
 
 /// When the retry guard gave up, the run failed, and a failed run is not
-/// committed: every page it had already fetched was thrown away.
+/// committed: every page it had already fetched was thrown away. Now
+/// the listing is durable whatever the bodies did: the pages are
+/// stored, the search is covered, and the bodies that did not come are
+/// owed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_retry_guard_that_gives_up_keeps_what_it_fetched() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     let earlier = "2026-08-01T00:00:00.000Z";
     serve_page(&tape, BRIDGE, EDITED, "");
-    serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}"), 503);
+    serve_status(&tape, &format!("{BASE}/pages/{SICKBAY}/markdown"), 503);
     serve_search(
         &tape,
         None,
         json!([
             page(BRIDGE, EDITED),
-            page(SICKBAY, earlier),
-            page(HOLODECK, earlier)
+            page(HOLODECK, earlier),
+            page(SICKBAY, earlier)
         ]),
         None,
     );
     let tick = std::time::Duration::from_millis(1);
-    let guard = datalib_etl::retry::RetryGuard::new(
+    let guard = datalib_etl_web::retry::RetryGuard::new(
         std::time::Duration::from_secs(3600),
         1,
         tick,
@@ -426,29 +326,37 @@ async fn a_retry_guard_that_gives_up_keeps_what_it_fetched() {
         datalib_etl::stop::StopFlag::default(),
     );
 
-    datalib_etl::retry::scope(guard, run(&tape, &store, &[]))
+    datalib_etl_web::retry::scope(guard, run(&tape, &store, &[]))
         .await
         .unwrap();
-    assert_eq!(stored_pages(&store).await, vec![BRIDGE.to_string()]);
-    assert_eq!(
-        problems(&store).await,
-        vec![row("phase:rate_limit", "error")]
-    );
-    assert!(resume_cursor(&store).await.is_empty(), "the cursor moved");
-
-    serve_page(&tape, SICKBAY, earlier, "");
-    serve_page(&tape, HOLODECK, earlier, "");
-    run(&tape, &store, &[]).await.unwrap();
     assert_eq!(
         stored_pages(&store).await,
         vec![
             BRIDGE.to_string(),
             SICKBAY.to_string(),
             HOLODECK.to_string()
-        ]
+        ],
+        "a search result is the page object"
     );
+    assert_eq!(
+        problems(&store).await,
+        vec![row("phase:rate_limit", "error")]
+    );
+    assert_eq!(
+        owed_bodies(&store).await,
+        vec![SICKBAY.to_string(), HOLODECK.to_string()]
+    );
+    assert_eq!(
+        coverage(&store).await,
+        vec![(String::new(), EDITED.to_string())],
+        "the listing reached the end, so the search is covered"
+    );
+
+    serve_page(&tape, SICKBAY, earlier, "");
+    serve_page(&tape, HOLODECK, earlier, "");
+    run(&tape, &store, &[]).await.unwrap();
     assert!(problems(&store).await.is_empty());
-    assert!(!resume_cursor(&store).await.is_empty());
+    assert!(owed_bodies(&store).await.is_empty());
 }
 
 /// A credential refused on the first request leaves nothing to keep, and
@@ -483,7 +391,8 @@ async fn a_credential_refused_part_way_keeps_what_it_fetched() {
 }
 
 /// A credential that may not read comments (403) made every page a failure,
-/// so every run fetched every page again.
+/// so every run fetched every page again. It is one row, and it costs
+/// one request a run: nothing is held for a listing that was refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn comments_the_credential_may_not_read_are_one_row() {
     let d = tempdir().unwrap();
@@ -491,11 +400,7 @@ async fn comments_the_credential_may_not_read_are_one_row() {
     for id in [BRIDGE, SICKBAY] {
         serve_object(&tape, id, EDITED);
         serve_body(&tape, id, "Captain's log.\n", false);
-        serve_status(
-            &tape,
-            &format!("{BASE}/comments?block_id={id}&page_size={PAGE_SIZE}"),
-            403,
-        );
+        serve_status(&tape, &comments_url(id), 403);
     }
 
     let first = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
@@ -509,7 +414,10 @@ async fn comments_the_credential_may_not_read_are_one_row() {
 
     let second = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
     assert_eq!(second.skipped_pages, 2);
-    assert_eq!(second.official_requests, 2, "only the two page objects");
+    assert_eq!(
+        second.official_requests, 3,
+        "the two page objects, and comments asked once"
+    );
     assert_eq!(
         problems(&store).await,
         vec![row("listing:comments", "warning")]
@@ -517,9 +425,10 @@ async fn comments_the_credential_may_not_read_are_one_row() {
 }
 
 /// A search that failed past its first page failed the whole step, and
-/// would have moved the resume cursor past what it never read.
+/// would have moved the resume cursor past what it never read. Now it
+/// covers only what it read, and the next run walks the rest.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_search_cut_short_keeps_its_pages_and_holds_the_cursor() {
+async fn a_search_cut_short_keeps_its_pages_and_covers_only_what_it_read() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     serve_page(&tape, BRIDGE, EDITED, "");
@@ -528,26 +437,30 @@ async fn a_search_cut_short_keeps_its_pages_and_holds_the_cursor() {
     let summary = run(&tape, &store, &[]).await.unwrap();
     assert_eq!(summary.new_pages, 1);
     assert_eq!(problems(&store).await, vec![row("listing:search", "error")]);
-    let db = RawDb::open(&store).await.unwrap();
-    let cursor = datalib_etl::doltlite_raw::load_scope_state(db.pool())
-        .await
-        .unwrap();
-    db.close().await;
-    assert!(cursor.is_empty(), "the cursor moved: {cursor:?}");
+    assert_eq!(
+        coverage(&store).await,
+        vec![(EDITED.to_string(), EDITED.to_string())],
+        "what was read, and nothing below it"
+    );
 
     serve_search(&tape, Some("page-2"), json!([]), None);
     run(&tape, &store, &[]).await.unwrap();
     assert!(problems(&store).await.is_empty());
+    assert_eq!(
+        coverage(&store).await,
+        vec![(String::new(), EDITED.to_string())]
+    );
 }
 
-/// Search names only what moved since the resume cursor, so a page that
-/// failed and has not moved since was never asked for again.
+/// Search names only what moved since the last walk, so a page whose
+/// body failed and has not moved since was never asked for again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_mode_retries_a_page_that_failed() {
+async fn search_mode_owes_a_body_that_failed() {
     let d = tempdir().unwrap();
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     let earlier = "2026-08-01T00:00:00.000Z";
     serve_page(&tape, BRIDGE, EDITED, "");
+    serve_comments(&tape, SICKBAY);
     serve_search(
         &tape,
         None,
@@ -557,10 +470,10 @@ async fn search_mode_retries_a_page_that_failed() {
     run(&tape, &store, &[]).await.unwrap();
     assert_eq!(
         problems(&store).await,
-        vec![row(&format!("pages:{SICKBAY}"), "error")]
+        vec![row(&format!("page_markdown:{SICKBAY}"), "error")]
     );
 
-    // Upstream: one newer edit, then only what the cursor already covers.
+    // Upstream: one newer edit, then only what the search already covers.
     let later = "2026-09-02T00:00:00.000Z";
     serve_page(&tape, TEN_FORWARD, later, "");
     serve_search(
@@ -570,6 +483,7 @@ async fn search_mode_retries_a_page_that_failed() {
         None,
     );
     serve_page(&tape, SICKBAY, earlier, "");
-    run(&tape, &store, &[]).await.unwrap();
+    let second = run(&tape, &store, &[]).await.unwrap();
+    assert_eq!(second.listed, 1, "the search stopped at what it had");
     assert!(problems(&store).await.is_empty());
 }

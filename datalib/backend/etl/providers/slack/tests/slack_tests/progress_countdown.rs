@@ -14,10 +14,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl_slack::ingest::FetchOptions;
 use datalib_etl_slack::recorded::record_workspace;
+use datalib_etl_web::http::PLAYBACK_ENV;
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, Tree};

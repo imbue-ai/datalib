@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use datalib_contacts::{ContactKind, Store};
 use datalib_dag::RunState;
+use datalib_handle::Handle;
 use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::Value;
 use walkdir::WalkDir;
@@ -148,7 +150,9 @@ const VOLATILE_KEYS: &[&str] = &[
 
     // CAS blob "first stored" wall-clock stamp. Identical bytes land at the
     // same PK, but the timestamp is whenever this run first wrote them.
+    // A problem's two stamps are wall-clock too.
     "first_seen_at_utc",
+    "changed_at_utc",
     // Resume-cursor / bookkeeping wall-clock stamps: `sync_scope_state`'s
     // `last_finished_at_utc` + `after` (real now when the scope ran, not the
     // `--now` arg), and `last_seen_at_utc` (when a row was last fetched). The
@@ -245,7 +249,6 @@ fn is_storage_row(map: &serde_json::Map<String, Value>) -> bool {
 /// table. Applied in [`dump_store`], which knows the table name for
 /// certain — no shape-sniffing required.
 const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
-    ("sync_scope_config", &["updated_at_utc"]),
     // The store's record of which build wrote it: the stamp is the wall
     // clock, and the `git_hash` row (redacted below, by key) is a new
     // commit on every bake. The versions and the schema hash stay.
@@ -615,7 +618,49 @@ fn manual_e2e_live_sync_golden() {
         assert_json_snapshot!("qmd_collections", qmd_collections_report(&data_root, &cfg_out));
     });
 
+    // ── The contacts app: links a person made, which nothing rebuilds ──
+    //
+    // Made once run 1 has put the handles in the index, and checked after
+    // run 3's reset: no step may write `datalib_curated/`, so the store
+    // must come through runs 2 and 3 row for row, and each handle it links
+    // must still be in the re-downloaded data.
+    let contact_specs = read_contact_specs(&src_config.with_file_name("contacts.toml"));
+    assert_handles_indexed(&data_root, &contact_specs, "run 1");
+    let contacts = make_contacts(&data_root, &contact_specs);
+    let contacts_store = datalib_contacts::store_path(&data_root);
+    let contacts_before = dump_store(&contacts_store);
+    insta::with_settings!({
+        snapshot_path => snap_base().join(datalib_contacts::CURATED_DIR).display().to_string(),
+        prepend_module_to_snapshot => false,
+        description => "datalib_curated/datalib_contacts/contacts.doltlite_db",
+    }, {
+        assert_json_snapshot!(
+            datalib_contacts::APP_DIR,
+            contacts_for_snapshot(contacts_before.clone(), &contacts)
+        );
+    });
+
     // ── Second run: incrementality check ──────────────────────────────
+    let ingest_steps: Vec<String> = stanzas
+        .iter()
+        .filter(|s| data_root.join(s).join("ingest").is_dir())
+        .map(|s| format!("{s}/ingest"))
+        .collect();
+    assert!(
+        !ingest_steps.is_empty(),
+        "no <group>/ingest under {}",
+        data_root.display()
+    );
+    let ingest_stores_at = |data_root: &Path| -> Vec<StoreAtCommit> {
+        ingest_steps
+            .iter()
+            .map(|step| data_root.join(step).join("entities.doltlite_db"))
+            .filter(|p| p.is_file())
+            .map(|p| StoreAtCommit::head(data_root, &p))
+            .collect()
+    };
+    let stores_before_run2 = ingest_stores_at(&data_root);
+
     let now2 = "2026-05-21T18:05:00Z";
     let run2 = run_pipeline(&bin, &cfg_path, &run_root, now2, &[]);
     assert!(
@@ -627,6 +672,21 @@ fn manual_e2e_live_sync_golden() {
     let summary2 = run2.run_summary().expect("run 2 run_summary");
     assert_step_statuses_ok(&summary2);
     assert_qmd_steps_follow_their_render(&summary2);
+
+    // Run 1's problems are all still standing minutes later, and a problem
+    // recorded again unchanged keeps its row, stamps and all, so run 2
+    // must leave every store's `problems` table as it found it. A row
+    // here is either a stamp moving on every sync again or an upstream
+    // that changed what the problem says; the scope key says which one.
+    let problems_moved: Vec<String> = stores_before_run2
+        .iter()
+        .filter_map(StoreAtCommit::problems_moved_to_head)
+        .collect();
+    assert!(
+        problems_moved.is_empty(),
+        "run 2 changed problems that were standing since run 1:\n{}",
+        problems_moved.join("\n")
+    );
 
     // The incrementality signal comes from each stanza's own `sync_runs`
     // table, not the runner's summary. `strip_volatile_for_incrementality`
@@ -654,22 +714,7 @@ fn manual_e2e_live_sync_golden() {
     // every content table. Re-fetching an unchanged upstream object
     // must land identical bytes at the same key, so a row that differs
     // is per-fetch bookkeeping leaking into a content payload.
-    let ingest_steps: Vec<String> = stanzas
-        .iter()
-        .filter(|s| data_root.join(s).join("ingest").is_dir())
-        .map(|s| format!("{s}/ingest"))
-        .collect();
-    assert!(
-        !ingest_steps.is_empty(),
-        "no <group>/ingest under {}",
-        data_root.display()
-    );
-    let stores_before: Vec<StoreAtCommit> = ingest_steps
-        .iter()
-        .map(|step| data_root.join(step).join("entities.doltlite_db"))
-        .filter(|p| p.is_file())
-        .map(|p| StoreAtCommit::head(&data_root, &p))
-        .collect();
+    let stores_before = ingest_stores_at(&data_root);
 
     let now3 = "2026-05-21T18:10:00Z";
     let reset_all = ingest_steps.join(",");
@@ -689,6 +734,15 @@ fn manual_e2e_live_sync_golden() {
     );
     assert_step_statuses_ok(&run3.run_summary().expect("run 3 run_summary"));
 
+    assert!(
+        dump_store(&contacts_store) == contacts_before,
+        "the contacts store changed across run 2 and run 3's reset; no step may \
+         write {}",
+        contacts_store.display()
+    );
+    assert_handles_indexed(&data_root, &contact_specs, "run 3's re-download");
+    assert_contacts_resolve(&contacts_store, &contacts);
+
     let drifts: Vec<String> = stores_before
         .iter()
         .flat_map(StoreAtCommit::content_drift_to_head)
@@ -706,9 +760,9 @@ fn manual_e2e_live_sync_golden() {
     );
 }
 
-/// One raw store and the commit it was at before run 3's reset; what
-/// the store's own diff says moved between then and `HEAD` is the
-/// content-stability finding.
+/// One raw store and the commit it was at before a run; what the store's
+/// own diff says moved between then and `HEAD` is the finding — its
+/// problems across run 2, its content across run 3's reset.
 struct StoreAtCommit {
     name: String,
     path: PathBuf,
@@ -746,6 +800,49 @@ impl StoreAtCommit {
             commit,
             tables,
         }
+    }
+
+    /// The `problems` rows that changed between this commit and `HEAD`,
+    /// by scope key; `None` when none did.
+    fn problems_moved_to_head(&self) -> Option<String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime for store diff");
+        rt.block_on(async {
+            use sqlx::Row;
+
+            let pool = open_readonly(&self.path).await;
+            let has_problems: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='problems'",
+            )
+            .fetch_optional(&pool)
+            .await
+            .expect("read sqlite_master");
+            if has_problems.is_none() {
+                pool.close().await;
+                return None;
+            }
+            let rows = sqlx::query(
+                "SELECT diff_type, COALESCE(to_scope_key, from_scope_key) AS scope_key \
+                   FROM dolt_diff_problems WHERE from_ref = ? AND to_ref = 'HEAD' \
+                  ORDER BY scope_key",
+            )
+            .bind(&self.commit)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("{}#problems: dolt_diff_problems: {e}", self.name));
+            pool.close().await;
+            let moved: Vec<String> = rows
+                .iter()
+                .map(|r| {
+                    let kind: String = r.get("diff_type");
+                    let key: Option<String> = r.get("scope_key");
+                    format!("{kind} {}", key.unwrap_or_default())
+                })
+                .collect();
+            (!moved.is_empty()).then(|| format!("{}#problems: {}", self.name, moved.join(", ")))
+        })
     }
 
     fn content_drift_to_head(&self) -> Vec<String> {
@@ -1304,6 +1401,197 @@ fn index_problems(data_root: &Path) -> Value {
     rows
 }
 
+/// One contact the bake makes, as `contacts.toml` beside the config
+/// writes it. The handles are real, which is why they live in the
+/// private data repo and not here.
+struct ContactSpec {
+    name: String,
+    handles: Vec<Handle>,
+    stopped_working: Vec<(Handle, String)>,
+}
+
+/// A contact the bake made, under the id the store gave it.
+struct MadeContact {
+    name: String,
+    contact_id: String,
+    handles: Vec<Handle>,
+}
+
+fn read_contact_specs(path: &Path) -> Vec<ContactSpec> {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!(
+            "read {}: {e}. The bake links handles in the contacts app from this \
+             file; add it beside the config.",
+            path.display()
+        )
+    });
+    let doc: toml::Table = toml::from_str(&text).expect("contacts.toml parses");
+    let handle = |v: &toml::Value| {
+        let s = v.as_str().expect("a handle is a string");
+        Handle::parse(s).unwrap_or_else(|| panic!("{s:?} is not a handle as datalib spells one"))
+    };
+    let specs: Vec<ContactSpec> = doc
+        .get("contacts")
+        .and_then(toml::Value::as_array)
+        .expect("contacts.toml has [[contacts]]")
+        .iter()
+        .map(|c| ContactSpec {
+            name: c["name"].as_str().expect("a contact's name").to_string(),
+            handles: c["handles"]
+                .as_array()
+                .expect("a contact's handles")
+                .iter()
+                .map(handle)
+                .collect(),
+            stopped_working: c
+                .get("stopped_working")
+                .and_then(toml::Value::as_table)
+                .into_iter()
+                .flatten()
+                .map(|(h, by)| {
+                    let by = by.as_str().expect("stopped_working is a date");
+                    (handle(&toml::Value::String(h.clone())), by.to_string())
+                })
+                .collect(),
+        })
+        .collect();
+    assert!(!specs.is_empty(), "{}: no contacts", path.display());
+    specs
+}
+
+/// Every handle the specs link is an author in the index, so each link
+/// lands on documents rather than on nothing.
+fn assert_handles_indexed(data_root: &Path, specs: &[ContactSpec], after: &str) {
+    let db = data_root.join("unified_index/grid_index/db.doltlite_db");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for the index read");
+    let indexed: std::collections::BTreeSet<String> = rt.block_on(async {
+        let pool = open_readonly(&db).await;
+        let handles = sqlx::query_scalar(
+            "SELECT DISTINCT author_handle FROM grid_rows WHERE author_handle IS NOT NULL",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read the index's author handles");
+        pool.close().await;
+        handles.into_iter().collect()
+    });
+    let missing: Vec<&str> = specs
+        .iter()
+        .flat_map(|s| &s.handles)
+        .map(Handle::as_str)
+        .filter(|h| !indexed.contains(*h))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "after {after}, contacts.toml links handles no document is written by: {missing:?}. \
+         If upstream moved, pick handles that are in the data."
+    );
+}
+
+fn make_contacts(data_root: &Path, specs: &[ContactSpec]) -> Vec<MadeContact> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for the contacts store");
+    rt.block_on(async {
+        let store = Store::open(&datalib_contacts::store_path(data_root))
+            .await
+            .expect("open the contacts store");
+        let mut made = Vec::new();
+        for spec in specs {
+            let contact_id = store
+                .create(&spec.name, ContactKind::Person, &spec.handles)
+                .await
+                .unwrap_or_else(|e| panic!("make contact {:?}: {e:#}", spec.name));
+            for (handle, by) in &spec.stopped_working {
+                let marked = store
+                    .set_stopped_working(handle, Some(by))
+                    .await
+                    .unwrap_or_else(|e| panic!("mark {handle} stopped working: {e:#}"));
+                assert!(marked, "{handle} is not one of {:?}'s handles", spec.name);
+            }
+            made.push(MadeContact {
+                name: spec.name.clone(),
+                contact_id,
+                handles: spec.handles.clone(),
+            });
+        }
+        store.close().await;
+        made
+    })
+}
+
+/// The store still answers each handle with the contact it was linked to.
+fn assert_contacts_resolve(store_path: &Path, contacts: &[MadeContact]) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for the contacts store");
+    rt.block_on(async {
+        let store = Store::open(store_path)
+            .await
+            .expect("open the contacts store");
+        for c in contacts {
+            let resolved = store.resolve(&c.handles).await.expect("resolve handles");
+            for h in &c.handles {
+                assert_eq!(
+                    resolved.get(h.as_str()).map(|n| n.key.as_str()),
+                    Some(c.contact_id.as_str()),
+                    "{h} no longer resolves to {:?}",
+                    c.name
+                );
+            }
+        }
+        store.close().await;
+    });
+}
+
+/// The contacts store's dump with each contact's random id replaced by
+/// its name and the stamps the wall clock wrote redacted, so a bake diffs
+/// only when what the store holds does.
+fn contacts_for_snapshot(mut dump: Value, contacts: &[MadeContact]) -> Value {
+    const STAMPS: &[&str] = &[
+        "created_at_utc",
+        "updated_at_utc",
+        "linked_at_utc",
+        "added_at_utc",
+        "set_at_utc",
+        "tz_offset",
+    ];
+    fn walk(v: &mut Value, contacts: &[MadeContact]) {
+        match v {
+            Value::Object(map) => {
+                for (k, child) in map.iter_mut() {
+                    if STAMPS.contains(&k.as_str()) {
+                        *child = Value::String(REDACTED.into());
+                    } else {
+                        walk(child, contacts);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|i| walk(i, contacts)),
+            Value::String(s) => {
+                for c in contacts {
+                    *s = s.replace(&c.contact_id, &format!("<contact {}>", c.name));
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(&mut dump, contacts);
+    // These tables are keyed by the random id, so the store's order is
+    // random too; re-sort on the names that replaced it.
+    for table in ["contacts", "members", "photos"] {
+        if let Some(Value::Array(rows)) = dump.get_mut(table) {
+            rows.sort_by_cached_key(|r| r.to_string());
+        }
+    }
+    dump
+}
+
 /// Whole-table bookkeeping that legitimately changes across a reset, so it
 /// is excluded from the content-stability comparison: the store's record
 /// of itself, of its runs and cursors, and of the files or scans a
@@ -1312,7 +1600,6 @@ const NON_CONTENT_TABLES: &[&str] = &[
     "_datalib_meta",
     "sync_runs",
     "sync_scope_state",
-    "sync_scope_config",
     "problems",
     "ingested_files",
     "scan_meta",
@@ -1873,6 +2160,7 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         "qmd_status",
         "last_attempt_at_utc",
         "first_seen_at_utc",
+        "changed_at_utc",
         "last_finished_at_utc",
         "last_seen_at_utc",
         "local_time",

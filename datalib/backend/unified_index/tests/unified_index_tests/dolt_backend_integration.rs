@@ -533,6 +533,7 @@ async fn every_wire_field_survives_the_round_trip() {
         .created_at(Some("2026-06-02T13:00:00-07:00".to_string()))
         .modified_at(Some("2026-06-03T09:30:00-07:00".to_string()))
         .author(Some("Jean-Luc Picard".to_string()))
+        .author_handle(Some("email:picard@enterprise.org".to_string()))
         .account(Some("acct-1701".to_string()))
         .project(Some("proj-1701".to_string()))
         .org_uuid(Some("org-1701".to_string()))
@@ -570,7 +571,7 @@ async fn every_wire_field_survives_the_round_trip() {
     let wire = serde_json::to_value(&rows[0]).unwrap();
     // Filled by the applet from the config, or only by a free-text
     // search: absent from a repo's own answer by design.
-    let not_the_repos: [&str; 2] = ["source_ref", "score"];
+    let not_the_repos: [&str; 3] = ["source_ref", "author_ref", "score"];
     for key in not_the_repos {
         assert!(wire.get(key).is_none(), "{key}: {wire}");
     }

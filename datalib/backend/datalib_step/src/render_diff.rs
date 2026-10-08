@@ -402,7 +402,7 @@ pub fn render_diff_source(
         .commit(&msg)
         .with_context(|| format!("commit diff render store for {}", name))?;
     let versions = store.render_versions()?;
-    let problems = store.problem_counts()?;
+    let problems = store.own_problem_counts()?;
     // No storage report in a diff store (`RunEnd::storage` is `None`
     // above), so nothing is excluded from the count.
     let holdings = store.holdings(None)?;

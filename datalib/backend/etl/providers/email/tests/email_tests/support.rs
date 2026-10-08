@@ -10,13 +10,13 @@ use std::time::Duration;
 use datalib_etl::checkpointer::Cadence;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::download_metrics::DownloadMetrics;
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
 use datalib_etl::processor::RunCtx;
 use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_email::ingest::{db_path_for, RawDb};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::{json_response, write_fixture};
 use datalib_obs::diagnostics::Diagnostics;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -116,14 +116,15 @@ impl Mirror {
         out
     }
 
+    /// The Gmail ids held: every listed message with a held version.
     pub async fn gmail_ids(&self) -> BTreeSet<String> {
         self.read(|db| async move {
             sqlx::query_scalar::<_, String>(
-                "SELECT id FROM fetched_messages WHERE email_id IS NOT NULL",
+                "SELECT id FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL",
             )
             .fetch_all(db.pool())
             .await
-            .expect("read fetched_messages")
+            .expect("read what is held")
         })
         .await
         .into_iter()

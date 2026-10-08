@@ -7,6 +7,7 @@ use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
+use datalib_etl::run_problems;
 use datalib_etl_apple_photos_config::{photos_sqlite_path, ApplePhotosConfig};
 
 use crate::ingest::{self, MirrorOptions};
@@ -61,15 +62,15 @@ impl DataProcessor for ApplePhotosIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = raw_layout::entities_db(&self.raw_path);
         let pool = ingest::mirror::open_mirror(&entity_db).await?;
-        ctx.run_store(pool.clone(), None, |_| async {
-            let stats = ingest::fetch(ingest::FetchOptions {
-                mirror_path: self.raw_path.clone(),
-                pool: Some(pool),
-                options: self.options.clone(),
-                progress: ctx.progress.clone(),
+        let pool = &pool;
+        ctx.run_store(pool.clone(), None, |_| async move {
+            run_problems::collecting(pool, &ctx.control.stop, |found| async move {
+                let stats =
+                    ingest::mirror::run_or_report(pool, &self.options, ctx.progress, &found)
+                        .await?;
+                Ok(stats.map_or_else(|| "nothing mirrored".to_string(), |s| s.summary()))
             })
-            .await?;
-            Ok(stats.summary())
+            .await
         })
         .await
     }

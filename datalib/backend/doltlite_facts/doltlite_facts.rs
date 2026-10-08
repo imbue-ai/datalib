@@ -730,6 +730,413 @@ mod diffs {
     }
 }
 
+// ── Reverting a commit ──────────────────────────────────────────────
+
+mod revert {
+    use super::*;
+
+    /// `t` with rows `a`, `b` committed, then `c` added in a commit of its
+    /// own, then `d` in another: `(store, hash of "add c")`.
+    async fn store_with_three_commits() -> (Store, String) {
+        let (s, _) = store_with_rows().await;
+        let mut c = s.rw().await;
+        ok(&mut c, "INSERT INTO t VALUES ('c', 3)").await;
+        let add_c = commit(&mut c, "add c").await;
+        ok(&mut c, "INSERT INTO t VALUES ('d', 4)").await;
+        commit(&mut c, "add d").await;
+        c.close().await.unwrap();
+        (s, add_c)
+    }
+
+    #[tokio::test]
+    async fn a_revert_is_a_new_commit_undoing_one_that_need_not_be_head() {
+        let (s, add_c) = store_with_three_commits().await;
+        let mut c = s.rw().await;
+        let reverted = text(&mut c, &format!("SELECT dolt_revert('{add_c}')"))
+            .await
+            .expect("dolt_revert returns the new hash");
+        assert_eq!(head(&mut c).await, reverted);
+        assert_eq!(texts(&mut c, "SELECT id FROM t").await, ["a", "b", "d"]);
+        assert_eq!(
+            text(&mut c, "SELECT message FROM dolt_log() LIMIT 1").await,
+            Some("Revert \"add c\"".to_string())
+        );
+        assert_eq!(
+            texts(&mut c, "SELECT table_name FROM dolt_status").await,
+            Vec::<String>::new(),
+            "the revert leaves nothing uncommitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_revert_is_refused_when_a_later_commit_changed_the_same_row() {
+        let (s, add_c) = store_with_three_commits().await;
+        let mut c = s.rw().await;
+        ok(&mut c, "UPDATE t SET v = 30 WHERE id = 'c'").await;
+        commit(&mut c, "change c").await;
+        let before = head(&mut c).await;
+        err_contains(
+            exec(&mut c, &format!("SELECT dolt_revert('{add_c}')")).await,
+            "conflicts detected",
+        );
+        assert_eq!(
+            head(&mut c).await,
+            before,
+            "a refused revert commits nothing"
+        );
+        assert_eq!(
+            int(&mut c, "SELECT v FROM t WHERE id = 'c'").await,
+            30,
+            "and changes nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_revert_of_a_reverted_commit_is_nothing_to_commit_and_a_revert_of_the_revert_restores(
+    ) {
+        let (s, add_c) = store_with_three_commits().await;
+        let mut c = s.rw().await;
+        let undo = text(&mut c, &format!("SELECT dolt_revert('{add_c}')"))
+            .await
+            .unwrap();
+        err_contains(
+            exec(&mut c, &format!("SELECT dolt_revert('{add_c}')")).await,
+            "nothing to commit",
+        );
+        ok(&mut c, &format!("SELECT dolt_revert('{undo}')")).await;
+        assert_eq!(
+            texts(&mut c, "SELECT id FROM t").await,
+            ["a", "b", "c", "d"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_revert_is_refused_over_an_uncommitted_change() {
+        let (s, add_c) = store_with_three_commits().await;
+        let mut c = s.rw().await;
+        ok(&mut c, "INSERT INTO t VALUES ('e', 5)").await;
+        err_contains(
+            exec(&mut c, &format!("SELECT dolt_revert('{add_c}')")).await,
+            "Your local changes would be overwritten by revert",
+        );
+        assert_eq!(
+            texts(&mut c, "SELECT id FROM t").await,
+            ["a", "b", "c", "d", "e"]
+        );
+    }
+}
+
+// ── Drafting on a branch ────────────────────────────────────────────
+
+mod drafts {
+    use super::*;
+
+    /// `p(id TEXT PRIMARY KEY, name TEXT, note TEXT)` holding Riker and
+    /// Worf, committed, with a branch `draft` cut there:
+    /// `(store, hash of the cut)`.
+    async fn store_with_draft() -> (Store, String) {
+        let s = Store::new();
+        let mut c = s.rw().await;
+        ok(
+            &mut c,
+            "CREATE TABLE p (id TEXT PRIMARY KEY, name TEXT, note TEXT)",
+        )
+        .await;
+        ok(
+            &mut c,
+            "INSERT INTO p VALUES ('r', 'Riker', 'x'), ('w', 'Worf', 'y')",
+        )
+        .await;
+        let cut = commit(&mut c, "base").await;
+        ok(&mut c, "SELECT dolt_branch('draft')").await;
+        c.close().await.unwrap();
+        (s, cut)
+    }
+
+    async fn on_draft(s: &Store) -> SqliteConnection {
+        let mut c = s.rw().await;
+        ok(&mut c, "SELECT dolt_connect_branch('draft')").await;
+        c
+    }
+
+    async fn name_of(c: &mut SqliteConnection, id: &str) -> Option<String> {
+        text(c, &format!("SELECT name FROM p WHERE id = '{id}'")).await
+    }
+
+    /// The draft renames Riker and commits; `main` changes `column` of
+    /// Riker's row to `value` and commits.
+    async fn both_edit_riker(s: &Store, column: &str, value: &str) {
+        let mut d = on_draft(s).await;
+        ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
+        commit(&mut d, "rename").await;
+        d.close().await.unwrap();
+        let mut m = s.rw().await;
+        ok(
+            &mut m,
+            &format!("UPDATE p SET {column} = '{value}' WHERE id = 'r'"),
+        )
+        .await;
+        commit(&mut m, "edit on main").await;
+        m.close().await.unwrap();
+    }
+
+    async fn parents_of_head(c: &mut SqliteConnection) -> i64 {
+        int(
+            c,
+            "SELECT COUNT(*) FROM dolt_commit_ancestors
+              WHERE commit_hash = (SELECT commit_hash FROM dolt_log() LIMIT 1)",
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn an_uncommitted_write_on_a_branch_outlives_its_connection() {
+        let (s, _) = store_with_draft().await;
+        let mut d = on_draft(&s).await;
+        ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
+        d.close().await.unwrap();
+
+        let mut again = on_draft(&s).await;
+        assert_eq!(
+            name_of(&mut again, "r").await.as_deref(),
+            Some("Will Riker")
+        );
+        assert_eq!(
+            texts(&mut again, "SELECT table_name FROM dolt_status").await,
+            ["p"],
+            "still uncommitted"
+        );
+        let mut m = s.rw().await;
+        assert_eq!(name_of(&mut m, "r").await.as_deref(), Some("Riker"));
+    }
+
+    #[tokio::test]
+    async fn a_hard_reset_on_main_leaves_another_branchs_uncommitted_rows() {
+        let (s, _) = store_with_draft().await;
+        let mut d = on_draft(&s).await;
+        ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
+        d.close().await.unwrap();
+
+        let mut m = s.rw().await;
+        ok(&mut m, "INSERT INTO p VALUES ('t', 'Troi', 'z')").await;
+        ok(&mut m, "SELECT dolt_reset('--hard')").await;
+        ok(&mut m, "SELECT dolt_clean()").await;
+        m.close().await.unwrap();
+
+        let mut d = on_draft(&s).await;
+        assert_eq!(name_of(&mut d, "r").await.as_deref(), Some("Will Riker"));
+    }
+
+    #[tokio::test]
+    async fn a_diff_to_working_reads_the_uncommitted_rows() {
+        let (s, cut) = store_with_draft().await;
+        let mut d = on_draft(&s).await;
+        ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
+        let rows: Vec<(String, String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT from_name, to_name, diff_type FROM dolt_diff_p('{cut}', 'WORKING')"
+        )))
+        .fetch_all(&mut d)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            [(
+                "Riker".to_string(),
+                "Will Riker".to_string(),
+                "modified".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_base_names_the_commit_a_branch_was_cut_from() {
+        let (s, cut) = store_with_draft().await;
+        both_edit_riker(&s, "note", "first officer").await;
+        let mut m = s.rw().await;
+        assert_eq!(
+            text(&mut m, "SELECT dolt_merge_base('draft', 'main')").await,
+            Some(cut)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merge_takes_a_branchs_commits_not_its_uncommitted_rows() {
+        let (s, _) = store_with_draft().await;
+        let mut d = on_draft(&s).await;
+        ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
+        d.close().await.unwrap();
+
+        let mut m = s.rw().await;
+        assert_eq!(
+            text(&mut m, "SELECT dolt_merge('draft')").await.as_deref(),
+            Some("Already up to date")
+        );
+        assert_eq!(name_of(&mut m, "r").await.as_deref(), Some("Riker"));
+    }
+
+    #[tokio::test]
+    async fn a_merge_into_a_branch_with_uncommitted_rows_is_refused() {
+        let (s, _) = store_with_draft().await;
+        both_edit_riker(&s, "note", "first officer").await;
+        let mut d = on_draft(&s).await;
+        ok(&mut d, "UPDATE p SET note = 'dirty' WHERE id = 'w'").await;
+        err_contains(
+            exec(&mut d, "SELECT dolt_merge('main')").await,
+            "uncommitted changes",
+        );
+    }
+
+    #[tokio::test]
+    async fn edits_to_different_columns_of_one_row_merge_cleanly() {
+        let (s, _) = store_with_draft().await;
+        both_edit_riker(&s, "note", "first officer").await;
+        let mut m = s.rw().await;
+        ok(&mut m, "SELECT dolt_merge('draft')").await;
+        let row: (String, String) = sqlx::query_as("SELECT name, note FROM p WHERE id = 'r'")
+            .fetch_one(&mut m)
+            .await
+            .unwrap();
+        assert_eq!(row, ("Will Riker".into(), "first officer".into()));
+        assert_eq!(parents_of_head(&mut m).await, 2, "a merge commit");
+    }
+
+    #[tokio::test]
+    async fn a_merge_that_conflicts_outside_a_transaction_changes_nothing() {
+        let (s, _) = store_with_draft().await;
+        both_edit_riker(&s, "name", "Number One").await;
+        let mut m = s.rw().await;
+        let before = head(&mut m).await;
+        err_contains(
+            exec(&mut m, "SELECT dolt_merge('draft')").await,
+            "conflicts detected",
+        );
+        assert_eq!(head(&mut m).await, before);
+        assert_eq!(name_of(&mut m, "r").await.as_deref(), Some("Number One"));
+    }
+
+    /// The save: the draft's value wins where both sides changed a cell.
+    #[tokio::test]
+    async fn inside_a_transaction_a_conflict_resolves_as_theirs_and_commits() {
+        let (s, _) = store_with_draft().await;
+        both_edit_riker(&s, "name", "Number One").await;
+        let mut m = s.rw().await;
+        ok(&mut m, "BEGIN").await;
+        err_contains(
+            exec(&mut m, "SELECT dolt_merge('draft')").await,
+            "Merge has 1 conflict(s)",
+        );
+        let sides: (String, String, String) =
+            sqlx::query_as("SELECT base_name, our_name, their_name FROM dolt_conflicts_p")
+                .fetch_one(&mut m)
+                .await
+                .unwrap();
+        assert_eq!(
+            sides,
+            ("Riker".into(), "Number One".into(), "Will Riker".into())
+        );
+        ok(&mut m, "SELECT dolt_conflicts_resolve('--theirs', 'p')").await;
+        assert_eq!(int(&mut m, "SELECT COUNT(*) FROM dolt_conflicts").await, 0);
+        commit(&mut m, "save").await;
+        err_contains(exec(&mut m, "COMMIT").await, "no transaction is active");
+
+        assert_eq!(name_of(&mut m, "r").await.as_deref(), Some("Will Riker"));
+        assert_eq!(parents_of_head(&mut m).await, 2, "a merge commit");
+    }
+
+    #[tokio::test]
+    async fn a_squash_merge_is_one_commit_with_one_parent() {
+        let (s, _) = store_with_draft().await;
+        both_edit_riker(&s, "note", "first officer").await;
+        let mut m = s.rw().await;
+        let main_before = head(&mut m).await;
+        let squashed = text(&mut m, "SELECT dolt_merge('--squash', 'draft')")
+            .await
+            .expect("a squash returns its commit");
+        assert_eq!(head(&mut m).await, squashed, "committed, not staged");
+        assert_eq!(parents_of_head(&mut m).await, 1);
+        assert_eq!(
+            text(
+                &mut m,
+                "SELECT parent_hash FROM dolt_commit_ancestors
+                  WHERE commit_hash = (SELECT commit_hash FROM dolt_log() LIMIT 1)"
+            )
+            .await,
+            Some(main_before)
+        );
+        assert_eq!(
+            texts(&mut m, "SELECT message FROM dolt_log()").await,
+            [
+                "Initialize data repository",
+                "Merge branch 'draft' into main",
+                "base",
+                "edit on main"
+            ],
+            "the draft's own commits are not on main"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merge_commit_and_a_squash_both_revert() {
+        for how in ["'draft'", "'--squash', 'draft'"] {
+            let (s, _) = store_with_draft().await;
+            both_edit_riker(&s, "note", "first officer").await;
+            let mut m = s.rw().await;
+            ok(&mut m, &format!("SELECT dolt_merge({how})")).await;
+            let save = head(&mut m).await;
+            ok(&mut m, &format!("SELECT dolt_revert('{save}')")).await;
+            let row: (String, String) = sqlx::query_as("SELECT name, note FROM p WHERE id = 'r'")
+                .fetch_one(&mut m)
+                .await
+                .unwrap();
+            assert_eq!(row, ("Riker".into(), "first officer".into()), "{how}");
+        }
+    }
+
+    #[tokio::test]
+    async fn dash_d_refuses_unmerged_commits_and_capital_d_drops_them_with_the_working_set() {
+        let (s, _) = store_with_draft().await;
+        let mut d = on_draft(&s).await;
+        ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
+        commit(&mut d, "rename").await;
+        ok(&mut d, "UPDATE p SET note = 'dirty' WHERE id = 'r'").await;
+        d.close().await.unwrap();
+
+        let mut m = s.rw().await;
+        err_contains(
+            exec(&mut m, "SELECT dolt_branch('-d', 'draft')").await,
+            "branch is not fully merged",
+        );
+        ok(&mut m, "SELECT dolt_branch('-D', 'draft')").await;
+        assert_eq!(
+            texts(&mut m, "SELECT name FROM dolt_branches").await,
+            ["main"]
+        );
+        ok(&mut m, "SELECT dolt_branch('draft')").await;
+        m.close().await.unwrap();
+        let mut d = on_draft(&s).await;
+        assert_eq!(
+            int(&mut d, "SELECT COUNT(*) FROM dolt_status").await,
+            0,
+            "a branch made again under the old name starts clean"
+        );
+    }
+
+    #[tokio::test]
+    async fn dash_d_drops_a_branch_whose_only_change_is_uncommitted() {
+        let (s, _) = store_with_draft().await;
+        let mut d = on_draft(&s).await;
+        ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
+        d.close().await.unwrap();
+
+        let mut m = s.rw().await;
+        ok(&mut m, "SELECT dolt_branch('-d', 'draft')").await;
+        assert_eq!(
+            texts(&mut m, "SELECT name FROM dolt_branches").await,
+            ["main"]
+        );
+    }
+}
+
 // ── Query plans and indexes ─────────────────────────────────────────
 
 mod plans {

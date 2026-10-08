@@ -22,6 +22,7 @@ import { UNIFIED_INDEX } from "@/api";
 import themeCss from "@/theme.css?inline";
 import hljsCss from "highlight.js/styles/github-dark.css?inline";
 import bodyCss from "./documentBody.css?inline";
+import chipCss from "./chip.css?inline";
 
 /** The frame document's policy, on top of the app page's, which a
  *  `srcdoc` frame inherits. Never loosen `script-src`: the frame shares
@@ -48,7 +49,7 @@ body { margin: 0; padding: 0 1rem 0.75rem; }
 export const DOC_FRAME_SRCDOC =
   `<!doctype html><html class="chat-preview"><head><meta charset="utf-8">` +
   `<meta http-equiv="Content-Security-Policy" content="${docFrameCsp(location.origin)}">` +
-  `<style>${themeCss}\n${hljsCss}\n${bodyCss}\n${FRAME_CSS}</style></head>` +
+  `<style>${themeCss}\n${hljsCss}\n${bodyCss}\n${chipCss}\n${FRAME_CSS}</style></head>` +
   `<body class="chat-body markdown-body"></body></html>`;
 
 /** An event's target as an Element, whichever window made it. An

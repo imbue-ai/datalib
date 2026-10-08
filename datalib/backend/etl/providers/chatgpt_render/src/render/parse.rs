@@ -426,6 +426,52 @@ fn content_parts(message_id: &str, content: Option<&Value>) -> Vec<OAContentPart
                 raw_json: Value::Object(content.clone()),
             });
         }
+        Some("multimodal_text") => {
+            // Images and audio among the parts are attachments
+            // (`collect_attachments`); the words beside them are here.
+            if let Some(parts) = content.get("parts").and_then(Value::as_array) {
+                for (i, p) in parts.iter().enumerate() {
+                    let text = p.as_str().or_else(|| p.get("text").and_then(Value::as_str));
+                    let Some(text) = text else { continue };
+                    rows.push(OAContentPartRow {
+                        message_id: message_id.into(),
+                        part_index: i,
+                        kind: "text".into(),
+                        language: None,
+                        text: Some(clean_text(text)),
+                        raw_json: p.clone(),
+                    });
+                }
+            }
+        }
+        Some("tether_quote") => {
+            let quote = clean_text(content.get("text").and_then(Value::as_str).unwrap_or(""));
+            rows.push(OAContentPartRow {
+                message_id: message_id.into(),
+                part_index: 0,
+                kind: "tether_quote".into(),
+                language: None,
+                text: Some(quote.trim().to_string()),
+                raw_json: Value::Object(content.clone()),
+            });
+        }
+        Some("tether_browsing_display") => {
+            let text = ["summary", "result"]
+                .iter()
+                .filter_map(|k| content.get(*k).and_then(Value::as_str))
+                .map(clean_text)
+                .filter(|t| !t.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            rows.push(OAContentPartRow {
+                message_id: message_id.into(),
+                part_index: 0,
+                kind: "text".into(),
+                language: None,
+                text: Some(text),
+                raw_json: Value::Object(content.clone()),
+            });
+        }
         Some("model_editable_context") => {
             rows.push(OAContentPartRow {
                 message_id: message_id.into(),
@@ -504,16 +550,9 @@ async fn parse_doltlite_async(
     let pool = reader.pool().clone();
     let pin = reader.pin().clone();
 
-    let cas_path = blob_cas::cas_path_for(db_path);
-    let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
-        Some(
-            datalib_etl::blob_cas::open_cas_reader(&cas_path)
-                .await
-                .with_context(|| format!("open chatgpt CAS for render {}", cas_path.display()))?,
-        )
-    } else {
-        None
-    };
+    let cas_pool = blob_cas::open_cas_for_render(db_path)
+        .await
+        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
 
     // Open at one commit before anything reads this store: the diff below
     // and the rows behind it have to name that commit.
@@ -571,18 +610,20 @@ async fn parse_doltlite_async(
             );
         }
     }
-    if let Some(cas_pool) = cas_pool.as_ref() {
-        let mut blobs = BlobBundle::load_many(
-            &pool,
-            cas_pool,
-            ATTACHMENTS_PROJECTION_SQL,
-            refs_by_conv.into_iter().enumerate(),
-        )
-        .await?;
-        for (i, conv) in parsed.conversations.iter_mut().enumerate() {
-            if let Some(b) = blobs.remove(&i) {
-                conv.blobs = b;
-            }
+    let loaded = BlobBundle::load_many(
+        &pool,
+        cas_pool.as_ref(),
+        ATTACHMENTS_PROJECTION_SQL,
+        refs_by_conv.into_iter().enumerate(),
+    )
+    .await;
+    if let Some(cas) = cas_pool {
+        cas.close().await;
+    }
+    let mut blobs = loaded?;
+    for (i, conv) in parsed.conversations.iter_mut().enumerate() {
+        if let Some(b) = blobs.remove(&i) {
+            conv.blobs = b;
         }
     }
 
@@ -1028,5 +1069,65 @@ mod no_data_tests {
         let parsed = parse(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
         assert!(parsed.conversations.is_empty());
         assert!(parsed.accounts.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn texts(content: Value) -> Vec<(String, Option<String>)> {
+        content_parts("m1", Some(&content))
+            .into_iter()
+            .map(|r| (r.kind, r.text))
+            .collect()
+    }
+
+    /// The words sent beside an image were dropped with the image's
+    /// content type, leaving only the picture on the page.
+    #[test]
+    fn the_words_beside_an_image_are_kept() {
+        let got = texts(json!({
+            "content_type": "multimodal_text",
+            "parts": [
+                {"content_type": "image_asset_pointer", "asset_pointer": "sediment://file_viewscreen"},
+                "What is on the viewscreen?"
+            ]
+        }));
+        assert_eq!(
+            got,
+            [("text".into(), Some("What is on the viewscreen?".into()))]
+        );
+    }
+
+    /// A quote of an uploaded file rendered as an empty tool step.
+    #[test]
+    fn a_file_quote_keeps_its_text() {
+        let got = texts(json!({
+            "content_type": "tether_quote",
+            "title": "Captain's Log.pdf",
+            "text": "\u{e200}filecite\u{e202}turn0file0\u{e201}\n\nStardate 41153.7",
+        }));
+        assert_eq!(
+            got,
+            [("tether_quote".into(), Some("Stardate 41153.7".into()))]
+        );
+    }
+
+    #[test]
+    fn a_browsing_step_keeps_what_it_showed() {
+        let got = texts(json!({
+            "content_type": "tether_browsing_display",
+            "result": "Memory Alpha: Risa",
+            "summary": ""
+        }));
+        assert_eq!(got, [("text".into(), Some("Memory Alpha: Risa".into()))]);
+    }
+
+    #[test]
+    fn an_unknown_content_type_has_no_text() {
+        let got = texts(json!({"content_type": "holo_program", "program": 47}));
+        assert_eq!(got, [("holo_program".into(), None)]);
     }
 }

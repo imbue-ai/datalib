@@ -98,7 +98,7 @@ async fn both_captures_answer_every_request_the_pipelines_syncs_make() {
     assert_eq!(
         column(
             &out,
-            "SELECT id || ' ' || latest_reply FROM replies_pages ORDER BY id"
+            "SELECT id || ' ' || held_version FROM threads_bookkeeping ORDER BY id"
         )
         .await,
         [

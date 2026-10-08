@@ -1394,6 +1394,22 @@ fn accept_steps(
                 .with_help("name the group instead, in its `[[groups]]` entry"),
             );
         }
+        if c.entry.command.is_none() {
+            for (key, why) in INERT_COMMON_KEYS {
+                if inert_key_is_written(c.entry.params.as_ref(), key) {
+                    let d = Diagnostic::new(Severity::Warning, format!("`common.{key}` {why}"))
+                        .at_entry(c.reference.clone())
+                        .with_help("delete this line");
+                    diags.push(match (text, &c.span) {
+                        (Some(t), Some(sp)) => {
+                            let at = params_key_span(t, sp.clone(), key);
+                            d.at_span(t, at)
+                        }
+                        _ => d,
+                    });
+                }
+            }
+        }
 
         let spec = match spec_of(&c.entry, group_type, source_group) {
             Ok(spec) => spec,
@@ -1450,6 +1466,53 @@ fn retired_subcommand(command: &str) -> Option<&str> {
     words
         .next()
         .filter(|w| matches!(*w, "download" | "render" | "grid_index" | "qmd_index"))
+}
+
+/// Keys a built-in step's `common` may still carry that no longer do
+/// anything, with why. `datalib-step` drops them before it parses, so a
+/// config that writes one loads; this check is what tells the person.
+const INERT_COMMON_KEYS: &[(&str, &str)] = &[(
+    "always_clear_before_ingest",
+    "has no effect: a local source decides what its input's absence means",
+)];
+
+fn inert_key_is_written(params: Option<&toml::Value>, key: &str) -> bool {
+    params
+        .and_then(|p| p.get("common"))
+        .and_then(|c| c.get(key))
+        .is_some()
+}
+
+/// Where `key = …` sits in this entry's body, its `[steps.params…]`
+/// sub-tables included, for a key nested in `params` that
+/// [`key_span`] stops short of. The entry's header when it is not found.
+fn params_key_span(
+    text: &str,
+    header: std::ops::Range<usize>,
+    key: &str,
+) -> std::ops::Range<usize> {
+    let mut at = header.end;
+    for line in text[header.end..].split_inclusive('\n') {
+        let line_start = at;
+        at += line.len();
+        if line.trim_start().starts_with("[[") {
+            break;
+        }
+        let mut from = 0;
+        while let Some(i) = line[from..].find(key) {
+            let start = from + i;
+            let end = start + key.len();
+            let word_before = line[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            if !word_before && line[end..].trim_start().starts_with('=') {
+                return line_start + start..line_start + end;
+            }
+            from = end;
+        }
+    }
+    header
 }
 
 fn is_builtin(e: &StepEntry, function: &str) -> bool {
@@ -1526,11 +1589,11 @@ fn builtin_lock(function: Option<&str>) -> Option<&'static str> {
 pub const BUILTIN_STORE_SHAPES: &[(&str, &str)] = &[
     (
         "render_markdown",
-        "69a91964156700920e458c7b3f988a8250b73cb971111700ace62b1ed2d99cab",
+        "6358e9e9aab907119a7988d3eec15363ef481d35920c9d3dfb50f5e5fc820b2f",
     ),
     (
         "grid_index",
-        "8c71921c44794e8b6941914986fbd7edcfab36cf69b5f6ef303381b8b9ad00aa",
+        "a8a3f282159cb7cc076ed5c175f360a811456ced301d69758bf30067c0a28aef",
     ),
 ];
 
@@ -3624,6 +3687,40 @@ command = "datalib-applet unified_index"
             .unwrap();
         assert_eq!(named.severity, Severity::Warning);
         assert_eq!(named.line, Some(10), "the `name =` line");
+    }
+
+    /// `always_clear_before_ingest` went, but a file still naming it has to
+    /// load: the step is kept and the warning points at the line to delete,
+    /// in a `[steps.params.common]` table and inline alike.
+    #[test]
+    fn a_retired_clear_before_ingest_key_only_warns_at_its_line() {
+        let check = check_text(
+            "[[groups]]\nid = \"phone\"\ntype = \"sms_backup_restore\"\n\n\
+             [[steps]]\ngroup = \"phone\"\nfunction = \"ingest\"\n\
+             [steps.params.backup]\npath = \"/b\"\n\
+             [steps.params.common]\nalways_clear_before_ingest = true\n\n\
+             [[groups]]\nid = \"li\"\ntype = \"linkedin\"\n\n\
+             [[steps]]\ngroup = \"li\"\nfunction = \"ingest\"\n\
+             params = { export = { path = \"/e\" }, common = { always_clear_before_ingest = false } }\n",
+        );
+        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
+        assert_eq!(check.cfg.steps.len(), 2);
+        let warned: Vec<_> = check
+            .diagnostics
+            .iter()
+            .map(|d| (d.severity, d.id(), d.line))
+            .collect();
+        assert_eq!(
+            warned,
+            vec![
+                (Severity::Warning, Some("phone/ingest"), Some(11)),
+                (Severity::Warning, Some("li/ingest"), Some(20)),
+            ]
+        );
+        let d = &check.diagnostics[0];
+        assert!(d.message.contains("has no effect"), "{d:?}");
+        assert_eq!(d.help.as_deref(), Some("delete this line"));
+        assert_eq!(d.column, Some(1), "{d:?}");
     }
 
     /// A group whose only step was rejected is not empty — somebody filled

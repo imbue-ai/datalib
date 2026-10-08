@@ -6,13 +6,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::{GarminApi, DAILY_METRICS};
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 use sqlx::Row;
 
 fn spec_path() -> PathBuf {
@@ -172,11 +172,20 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     assert_eq!(
         count(
             &raw,
-            "SELECT COUNT(*) FROM garmin_daily WHERE fetched_on = '2369-04-15'"
+            "SELECT COUNT(*) FROM garmin_daily_bookkeeping WHERE held_version IS NOT NULL"
         )
         .await,
         (DAILY_METRICS.len() * 15) as i64,
-        "every day carries the date it was fetched on"
+        "every day is held at the date it is final from"
+    );
+    assert_eq!(
+        count(
+            &raw,
+            "SELECT COUNT(*) FROM garmin_daily_bookkeeping WHERE held_version = '2369-04-15'"
+        )
+        .await,
+        (DAILY_METRICS.len() * 8) as i64,
+        "the 8th settles today; the 9th through the 15th are held as of today, until they settle"
     );
 
     // The FIT bytes are in the CAS, unzipped.

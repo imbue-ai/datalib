@@ -2,6 +2,7 @@
 //! for chat-style providers (Signal, WhatsApp, Beeper, …).
 
 pub mod account;
+pub mod branches;
 pub mod changed;
 pub mod normalize;
 pub mod people;

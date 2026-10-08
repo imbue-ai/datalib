@@ -7,10 +7,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_calendar_config::{CalendarConfig, CalendarMethod};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
 
@@ -92,7 +92,7 @@ impl DataProcessor for CalendarIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
         let pool = db.pool().clone();
-        ctx.run_store(pool.clone(), None, |_| async {
+        ctx.run_store(pool.clone(), None, |sealer| async {
             // The run's own record in `sync_runs`: its summary, and what it
             // changed in each table.
             let run = DownloadRun::start(&pool, &self.run_config()).await?;
@@ -105,6 +105,7 @@ impl DataProcessor for CalendarIngest {
                         latchkey: self.latchkey.clone(),
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),
+                        sealer: Some(sealer),
                     })
                     .await
                 }
@@ -121,6 +122,7 @@ impl DataProcessor for CalendarIngest {
                         latchkey: self.latchkey.clone(),
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),
+                        sealer: Some(sealer),
                     })
                     .await
                 }

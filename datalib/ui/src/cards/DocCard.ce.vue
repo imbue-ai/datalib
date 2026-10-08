@@ -74,6 +74,12 @@ function onFrameLink(link: ClickedLink) {
   else void openExternal(url);
 }
 
+/// A chip asked for everything from its person: a search card on that
+/// query, beside this one.
+function onOpenSearch(q: string) {
+  props.ctx.host.openCards(`searchView(${JSON.stringify({ q })})`);
+}
+
 // Falsy anchor → "whole-doc destination", don't seed a highlight target.
 function edgeSource(edge: EdgeOut): string {
   return docSource(edge.dst_markdown_uuid, edge.dst_anchor_uuid || null);
@@ -660,6 +666,8 @@ watch(
           @remote-load="allow('url', $event)"
           @frame-link="onFrameLink"
           @frame-contextmenu="onPaneContextMenu"
+          @open-search="onOpenSearch"
+          @open-card="props.ctx.host.openCards($event)"
         />
       </div>
     </template>

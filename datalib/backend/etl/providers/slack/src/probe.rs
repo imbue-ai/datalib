@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl_slack_config::SlackConfig;
+use datalib_etl_web::http::LatchkeySettings;
 use datalib_probe::{
     OnProgress, ProbeAccount, ProbeAsk, ProbeItem, ProbeItemKind, ProbeList, ProbeProgress,
     ProbeReport,

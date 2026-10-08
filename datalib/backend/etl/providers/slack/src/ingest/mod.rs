@@ -2,27 +2,38 @@
 
 pub mod api;
 pub mod db;
+pub mod files;
 pub mod schema_raw;
 pub mod shapes;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde_json::{json, Value};
+use sqlx::{Sqlite, Transaction};
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
-use datalib_etl::coverage::{self, Span};
+use async_trait::async_trait;
+use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::download_problems::{DownloadProblem, RunProblem};
 use datalib_etl::events;
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::RunBar;
+use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::http::LatchkeySettings;
+use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Listed, Outcome};
 pub use db::{
     block_on_load_all, db_path_for, Enumerated, FetchTarget, LoadedMessage, LoadedRaw,
-    MessageInput, OwedFile, OwedThread, RawDb, ThreadRead, UserDirectoryEntry,
+    MessageInput, OwedFile, RawDb, Thread, UserDirectoryEntry,
 };
+use files::{FileFetcher, FILE_BATCH};
+use schema_raw::{SlackAttachmentRow, THREADS};
 use shapes::{
     M_AUTH_TEST, M_BOOKMARKS, M_CHANNELS, M_COUNTS, M_HISTORY, M_REPLIES, M_SAVED, M_USERS,
 };
@@ -39,9 +50,17 @@ pub const MANIFEST_TTL: chrono::Duration = chrono::Duration::hours(6);
 // Per-method drivers.
 
 fn datetime_to_slack_ts(dt: &DateTime<Utc>) -> String {
-    let secs = dt.timestamp();
-    let nanos = dt.timestamp_subsec_micros();
-    format!("{}.{:06}", secs, nanos)
+    // Slack answers a negative `oldest` with an empty page, and a
+    // negative `ts` does not sort as a `coverage` bound. No message is
+    // older than the epoch, so an earlier instant asks for the same.
+    let dt = (*dt).max(DateTime::UNIX_EPOCH);
+    format!("{}.{:06}", dt.timestamp(), dt.timestamp_subsec_micros())
+}
+
+fn days_before(now: DateTime<Utc>, days: i64) -> DateTime<Utc> {
+    ChronoDuration::try_days(days)
+        .and_then(|window| now.checked_sub_signed(window))
+        .unwrap_or(DateTime::<Utc>::MIN_UTC)
 }
 
 fn empty_params() -> BTreeMap<String, String> {
@@ -684,17 +703,6 @@ fn settled(stretch: &Span, top: Option<&str>, page: &[String], last: bool) -> Op
     (lo <= hi).then(|| Span::new(lo, hi))
 }
 
-fn newer(latest: &mut Option<String>, ts: Option<&str>) {
-    if let Some(ts) = ts {
-        if latest
-            .as_deref()
-            .is_none_or(|have| ts_key(ts) > ts_key(have))
-        {
-            *latest = Some(ts.to_string());
-        }
-    }
-}
-
 /// `has_more` with no cursor to ask with: not a listing of anything.
 fn cut_short(method: &str) -> anyhow::Error {
     anyhow::anyhow!("{method}: has_more with no cursor; the rest was not read")
@@ -720,25 +728,74 @@ struct Mirror<'a> {
     blob_size_limit_bytes: Option<u64>,
     bar: &'a RunBar,
     latchkey: &'a LatchkeySettings,
+    stop: &'a StopFlag,
+    found: &'a RunProblems,
+    sealer: Option<&'a Sealer>,
+    blake3_by_file: &'a Mutex<HashMap<String, String>>,
+}
+
+/// One channel's owed threads, for [`owed::drain`]: a thread is one
+/// record whose fetch is paged.
+struct Threads<'a> {
+    mirror: &'a Mirror<'a>,
+    channel_id: &'a str,
+    /// Top-level messages the channel's walk stored, for the progress line.
+    messages: usize,
+    replies: AtomicUsize,
+    pruned: AtomicUsize,
+}
+
+#[async_trait]
+impl Fetcher<Thread> for Threads<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<Fetched<Thread>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let fetched = self
+                .mirror
+                .fetch_thread(self.channel_id, &listed.key, &self.replies)
+                .await;
+            let outcome = match fetched {
+                Ok(thread) => Outcome::Got(thread),
+                // The loop reads a stop off its flag; every other error
+                // is this thread's.
+                Err(e) if interrupted(&e) => return Err(BatchError::Batch(e)),
+                Err(e) => Outcome::Failed(format!("{e:#}")),
+            };
+            out.push(Fetched { listed, outcome });
+            self.mirror.bar.doing(&format!(
+                "msgs={} replies={}",
+                self.messages,
+                self.replies.load(Ordering::Relaxed)
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<Thread>],
+    ) -> Result<()> {
+        let gone = self.mirror.db.store_threads(tx, batch).await?;
+        self.pruned.fetch_add(gone, Ordering::Relaxed);
+        Ok(())
+    }
 }
 
 impl Mirror<'_> {
     /// A history walk that fails still leaves the channel's owed threads
     /// and files to fetch: they are in the store whatever the walk did.
-    async fn channel(
-        &self,
-        channel_id: &str,
-        blake3_by_file: &mut HashMap<String, String>,
-        totals: &mut ChannelTotals,
-    ) -> Result<()> {
+    async fn channel(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
         let walked = self.walk_history(channel_id, totals).await;
         if walked.as_ref().is_err_and(interrupted) {
             return walked;
         }
         self.fetch_owed_threads(channel_id, totals).await?;
         if self.media {
-            self.fetch_owed_files(channel_id, blake3_by_file, totals)
-                .await?;
+            self.fetch_owed_files(channel_id, totals).await?;
         }
         walked
     }
@@ -846,54 +903,54 @@ impl Mirror<'_> {
         }
     }
 
+    /// The threads of the channel owed by the store's own account, one
+    /// `conversations.replies` walk each. A thread that fails costs that
+    /// thread: an attempt on its own row, which is owed still.
     async fn fetch_owed_threads(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
-        let owed = self.db.threads_owed(channel_id).await?;
-        self.bar.expect(owed.iter().map(|t| t.reply_count).sum());
-        for thread in &owed {
-            let before = totals.replies;
-            match self.fetch_replies(channel_id, thread, totals).await {
-                Ok(()) => {}
-                Err(e) if interrupted(&e) => return Err(e),
-                // One thread costs that thread, and its stamp did not
-                // move, so it is owed still.
-                Err(e) => {
-                    self.db
-                        .record_replies_failure(
-                            self.team_id,
-                            channel_id,
-                            &thread.ts,
-                            &format!("{e:#}"),
-                        )
-                        .await?
-                }
-            }
-            self.bar.did(totals.replies.saturating_sub(before) as u64);
-            self.bar.doing(&format!(
-                "msgs={} replies={}",
-                totals.messages, totals.replies
-            ));
-        }
+        let listed = self.db.threads_listed(channel_id).await?;
+        let owed = owed::owed(self.db.pool(), THREADS, listed).await?;
+        let l = owed::Loop {
+            pool: self.db.pool(),
+            table: THREADS,
+            phase: M_REPLIES,
+            stop: self.stop,
+            found: self.found,
+            sealer: self.sealer,
+            batch: 1,
+            concurrency: 1,
+            flush: 1,
+            flush_bytes: 0,
+            failures_in_a_row: 0,
+        };
+        let threads = Threads {
+            mirror: self,
+            channel_id,
+            messages: totals.messages,
+            replies: AtomicUsize::new(0),
+            pruned: AtomicUsize::new(0),
+        };
+        owed::drain(&l, owed, &threads).await?;
+        totals.replies += threads.replies.into_inner();
+        totals.pruned += threads.pruned.into_inner();
         Ok(())
     }
 
-    /// `conversations.replies` returns a thread whole, across pages, so
-    /// the last page's transaction stamps what the thread now holds and
-    /// deletes the stored replies the walk did not return.
-    async fn fetch_replies(
+    /// Every page of `conversations.replies` for the thread rooted at
+    /// `key`: the thread whole, root copy included, or an error.
+    async fn fetch_thread(
         &self,
         channel_id: &str,
-        thread: &OwedThread,
-        totals: &mut ChannelTotals,
-    ) -> Result<()> {
+        key: &str,
+        replies: &AtomicUsize,
+    ) -> Result<Thread> {
+        let (_, _, thread_ts) =
+            schema_raw::split_key(key).ok_or_else(|| anyhow::anyhow!("{key}: not a thread key"))?;
         let mut base = BTreeMap::new();
         base.insert("channel".to_string(), channel_id.to_string());
-        base.insert("ts".to_string(), thread.ts.clone());
+        base.insert("ts".to_string(), thread_ts.to_string());
         base.insert("limit".to_string(), "200".to_string());
 
-        let mut returned: HashSet<String> = HashSet::new();
-        // As its root listed it, as the root's copy here lists it, and
-        // as far as the replies themselves reach.
-        let mut latest_reply = thread.latest_reply.clone();
+        let mut rows: Vec<MessageInput> = Vec::new();
         let mut cursor: Option<String> = None;
         loop {
             let mut p = base.clone();
@@ -906,74 +963,74 @@ impl Mirror<'_> {
                 .and_then(|v| v.as_array())
                 .map(|a| a.to_vec())
                 .unwrap_or_default();
-            let rows: Vec<MessageInput> = msgs
+            let page: Vec<MessageInput> = msgs
                 .iter()
-                .filter_map(|m| reply_message_input(self.team_id, channel_id, &thread.ts, m))
+                .filter_map(|m| reply_message_input(self.team_id, channel_id, thread_ts, m))
                 .collect();
-            for m in &rows {
-                returned.insert(schema_raw::slack_message_key(
-                    self.team_id,
-                    channel_id,
-                    &m.ts,
-                ));
-                if m.is_thread_root {
-                    let listed = m.payload.get("latest_reply").and_then(Value::as_str);
-                    newer(&mut latest_reply, listed);
-                } else {
-                    newer(&mut latest_reply, Some(&m.ts));
-                    totals.replies += 1;
-                }
-            }
+            // Announced before it is counted, as a history page is.
+            let on_page = page.iter().filter(|m| !m.is_thread_root).count();
+            self.bar.expect(on_page as u64);
+            self.bar.did(on_page as u64);
+            replies.fetch_add(on_page, Ordering::Relaxed);
+            rows.extend(page);
 
             let has_more = resp.get("has_more").and_then(|v| v.as_bool());
             cursor = next_cursor(&resp);
-            let last = cursor.is_none() || has_more == Some(false);
-            let short = cursor.is_none() && has_more == Some(true);
-            let read = (last && !short).then_some(ThreadRead {
-                team_id: self.team_id,
-                channel_id,
-                thread_ts: &thread.ts,
-                latest_reply: latest_reply.as_deref(),
-                returned: &returned,
-            });
-            totals.pruned += self.db.store_replies_page(&rows, read.as_ref()).await?;
-            if short {
+            if cursor.is_none() && has_more == Some(true) {
                 return Err(cut_short(M_REPLIES));
             }
-            if last {
-                return Ok(());
+            if cursor.is_none() || has_more == Some(false) {
+                return Ok(Thread { rows });
             }
         }
     }
 
-    async fn fetch_owed_files(
-        &self,
-        channel_id: &str,
-        blake3_by_file: &mut HashMap<String, String>,
-        totals: &mut ChannelTotals,
-    ) -> Result<()> {
-        let owed = self.db.files_owed(self.team_id, channel_id).await?;
+    /// The channel's edges without bytes, [`FILE_BATCH`] to a request.
+    /// Every one is owed, whatever its sidecar says: only a landed file
+    /// is held, and it lands with its hash. A store an older build wrote
+    /// stamps some failed fetches as fetched.
+    async fn fetch_owed_files(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
+        let owed = self.db.files_listed(self.team_id, channel_id).await?;
         self.bar.expect(owed.len() as u64);
-        for batch in owed.chunks(api::FILE_BATCH) {
-            let fetched = api::fetch_files(
-                self.db,
-                batch,
-                blake3_by_file,
-                self.blob_size_limit_bytes,
-                self.latchkey,
-            )
-            .await;
-            self.bar.did(batch.len() as u64);
-            for (outcome, n) in fetched? {
-                *totals.media.entry(outcome).or_insert(0) += n;
+        let l = owed::Loop {
+            pool: self.db.pool(),
+            table: SlackAttachmentRow::TABLE,
+            phase: "files",
+            stop: self.stop,
+            found: self.found,
+            sealer: self.sealer,
+            batch: FILE_BATCH,
+            concurrency: 1,
+            flush: FILE_BATCH,
+            flush_bytes: 0,
+            failures_in_a_row: 0,
+        };
+        let files = FileFetcher {
+            db: self.db,
+            latchkey: self.latchkey,
+            blob_size_limit_bytes: self.blob_size_limit_bytes,
+            blake3_by_file: self.blake3_by_file,
+            bar: self.bar,
+            downloaded: AtomicUsize::new(0),
+        };
+        let drained = owed::drain(&l, owed, &files).await?;
+        let downloaded = files.downloaded.into_inner();
+        for (outcome, n) in [
+            ("downloaded", downloaded),
+            ("skipped", drained.got.saturating_sub(downloaded)),
+            ("too_large", drained.skipped),
+            ("error", drained.failed),
+        ] {
+            if n > 0 {
+                *totals.media.entry(outcome.to_string()).or_insert(0) += n;
             }
-            self.bar.doing(&format!(
-                "msgs={} replies={} media={}",
-                totals.messages,
-                totals.replies,
-                totals.media.get("downloaded").copied().unwrap_or(0)
-            ));
         }
+        self.bar.doing(&format!(
+            "msgs={} replies={} media={}",
+            totals.messages,
+            totals.replies,
+            totals.media.get("downloaded").copied().unwrap_or(0)
+        ));
         Ok(())
     }
 }
@@ -1105,7 +1162,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_router();
+    let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
     let since_dt =
@@ -1113,9 +1170,10 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     let since = ts_key(&datetime_to_slack_ts(&since_dt));
     let now = opts.now;
     let refresh_from = (opts.refresh_window_days > 0).then(|| {
-        ts_key(&datetime_to_slack_ts(
-            &(now - ChronoDuration::days(opts.refresh_window_days)),
-        ))
+        ts_key(&datetime_to_slack_ts(&days_before(
+            now,
+            opts.refresh_window_days,
+        )))
     });
 
     let run_config = json!({
@@ -1130,9 +1188,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     });
     let run = datalib_etl::download_run::DownloadRun::start(db.pool(), &run_config).await?;
 
-    // A cache, loaded once: a file's bytes never change, so a file
-    // already hashed under one message is not fetched for another.
-    let mut blake3_by_file = db.load_attachment_blake3s().await?;
+    let blake3_by_file = Mutex::new(db.load_attachment_blake3s().await?);
 
     let mut grand = FetchSummary {
         problems: Vec::new(),
@@ -1266,6 +1322,10 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             blob_size_limit_bytes: opts.blob_size_limit_bytes,
             bar: &bar,
             latchkey: &opts.latchkey,
+            stop: &opts.control.stop,
+            found: &found,
+            sealer: opts.sealer.as_ref(),
+            blake3_by_file: &blake3_by_file,
         };
         for (cid, name) in &targets {
             // Asked to stop: end here rather than start a channel whose
@@ -1277,10 +1337,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             bar.doing(&format!("{name}: listing"));
             let span = info_span!("channel", channel_name = %name, channel_id = %cid);
             let mut totals = ChannelTotals::default();
-            let result = mirror
-                .channel(cid, &mut blake3_by_file, &mut totals)
-                .instrument(span)
-                .await;
+            let result = mirror.channel(cid, &mut totals).instrument(span).await;
             info!(
                 event = "slack_channel_done",
                 channel = %name,
@@ -1361,6 +1418,38 @@ mod tests {
         assert!(ts_key("12604000800.000800").as_str() < END_OF_TIME);
         assert_eq!(key_ts(&ts_key(SINCE)), SINCE);
         assert_eq!(key_ts(&ts_key("0.000001")), "0.000001");
+    }
+
+    /// #1048: `since = "0001-01-01"` went out as
+    /// `oldest=-62135596800.000000`, which Slack answers with an empty
+    /// page, so the mirror held no messages.
+    #[test]
+    fn a_since_before_the_epoch_asks_from_the_epoch() {
+        for since in ["0001-01-01", "1969-12-31T23:59:59.5Z"] {
+            let ts = datetime_to_slack_ts(&parse_iso_or_utc_date(since).unwrap());
+            assert_eq!(ts, "0.000000", "{since}");
+            assert_eq!(key_ts(&ts_key(&ts)), "0.000000", "{since}");
+        }
+        let later = parse_iso_or_utc_date("1970-01-02").unwrap();
+        assert_eq!(datetime_to_slack_ts(&later), "86400.000000");
+    }
+
+    /// A refresh window longer than the calendar reaches panicked in
+    /// the subtraction; it is the whole history.
+    #[test]
+    fn a_refresh_window_past_the_start_of_time_reaches_the_epoch() {
+        let now = parse_iso_or_utc_date("2369-04-01").unwrap();
+        for days in [36_500_000, 1_000_000_000, i64::MAX] {
+            assert_eq!(
+                datetime_to_slack_ts(&days_before(now, days)),
+                "0.000000",
+                "{days}"
+            );
+        }
+        assert_eq!(
+            days_before(now, 30),
+            parse_iso_or_utc_date("2369-03-02").unwrap()
+        );
     }
 
     #[test]

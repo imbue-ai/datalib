@@ -73,9 +73,9 @@ export async function pickTile(page: Page, blurb: string) {
 }
 
 export const TILE = {
-  slack: "Mirror channels and DMs from one Slack workspace.",
-  claude: "Mirror your claude.ai conversations",
-  chatgpt: "Mirror your ChatGPT conversations.",
+  slack: "Copy channels and DMs from one Slack workspace.",
+  claude: "Copy your claude.ai conversations",
+  chatgpt: "Copy your ChatGPT conversations.",
   garmin: "Weight, sleep, heart rate, activities and FIT files from Garmin Connect.",
 };
 

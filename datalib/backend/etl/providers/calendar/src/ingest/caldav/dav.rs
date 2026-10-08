@@ -1,13 +1,13 @@
 //! What CalDAV asks a WebDAV server and reads out of its replies; the
-//! requests and the `multistatus` walk are [`datalib_etl::dav`]'s.
+//! requests and the `multistatus` walk are [`datalib_etl_web::dav`]'s.
 
 use quick_xml::events::BytesStart;
 
-use datalib_etl::dav::sync::{CollectionKind, ObjectProps};
-use datalib_etl::dav::{self as webdav, DavProps};
-use datalib_etl::http::{HttpMethod, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::dav::sync::{CollectionKind, ObjectProps};
+use datalib_etl_web::dav::{self as webdav, DavProps};
+use datalib_etl_web::http::{HttpMethod, HttpRequest, HttpService, LatchkeySettings};
 
-pub use datalib_etl::dav::{absolutize, origin, DavError, BODY_CURRENT_USER_PRINCIPAL};
+pub use datalib_etl_web::dav::{absolutize, origin, DavError, BODY_CURRENT_USER_PRINCIPAL};
 
 pub const HTTP_SERVICE: HttpService = HttpService::Caldav;
 
@@ -75,6 +75,9 @@ impl DavProps for CalendarProps {
 }
 
 impl ObjectProps for CalendarProps {
+    fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
+    }
     fn data(&self) -> Option<&str> {
         self.calendar_data.as_deref()
     }

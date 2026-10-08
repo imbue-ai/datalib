@@ -59,6 +59,26 @@ export function tokenValue(query: string, key: string): string | null {
   return word == null ? null : word.slice(prefix.length);
 }
 
+/// A query's words: a quoted phrase is one, and so is a `key:"…"` filter.
+const WORD = /-?[A-Za-z_][\w.]*:"(?:[^"\\]|\\.)*"?|"(?:[^"\\]|\\.)*"?|\S+/g;
+const FILTER = /^-?[A-Za-z_][\w.]*:/;
+
+/// The words of `query` that are not `key:value` filters, in order: what
+/// a search ranks as free text. The grammar itself is the backend's; this
+/// only times a search, never decides one.
+export function plainWords(query: string): string {
+  return (query.match(WORD) ?? []).filter((w) => !FILTER.test(w)).join(" ");
+}
+
+/// How long to wait after a keystroke before searching. A change to the
+/// free text is a qmd search when `ranked`: seconds long, one at a time,
+/// and finished by the server even once the page has moved on. So it
+/// waits for a real pause; a filter is a quick read and keeps up.
+export function searchDelay(before: string, after: string, ranked: boolean): number {
+  const words = plainWords(after);
+  return ranked && words !== "" && words !== plainWords(before) ? 600 : 150;
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

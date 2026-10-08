@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use datalib_etl::blob_cas::blake3_hex;
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService};
-use datalib_etl::synthesize::write_fixture;
 use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
 use datalib_etl_slack::recorded::{record_call, History};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::synthesize::write_fixture;
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, record_general, Tree};
@@ -215,6 +215,32 @@ async fn a_failed_file_over_todays_limit_is_reclassified_as_a_skip() {
     assert_eq!(after.blake3, None);
     assert_eq!(
         after.problem,
+        Some(("warning".to_string(), "over_size_limit".to_string()))
+    );
+}
+
+/// An older build stamped a failed file fetch as fetched, so its edge
+/// read as held and was never asked for again: its `fetch_failed` row
+/// stayed for good. An edge with no bytes is owed whatever its sidecar
+/// says.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_stamped_fetched_without_bytes_is_still_owed() {
+    let t = first_world(500);
+    run(&t.out, None).await;
+    let db = RawDb::open(&db_path_for(&t.out)).await.unwrap();
+    sqlx::query("UPDATE slack_attachments_bookkeeping SET fetched_at_utc = last_attempt_at_utc")
+        .execute(db.pool())
+        .await
+        .unwrap();
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "an older build's stamp")
+        .await
+        .unwrap();
+    db.close().await;
+
+    let _second = second_world();
+    run(&t.out, Some(4)).await;
+    assert_eq!(
+        attachment(&t.out).await.problem,
         Some(("warning".to_string(), "over_size_limit".to_string()))
     );
 }

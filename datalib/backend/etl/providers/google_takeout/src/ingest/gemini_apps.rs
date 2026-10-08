@@ -1,15 +1,15 @@
 //! `My Activity/Gemini Apps/MyActivity.html` walker.
 
-use datalib_etl::fsscan;
 use datalib_etl::prune;
+use datalib_etl_files::fsscan;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
+use datalib_etl_files::file_checkpoint;
 use datalib_problems::Reason;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;

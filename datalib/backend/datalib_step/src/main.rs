@@ -437,7 +437,7 @@ async fn run_function(
         Function::Ingest => {
             if let Some(pb) = playback_root {
                 let pb = pb.canonicalize().context("playback root")?;
-                std::env::set_var(datalib_etl::http::PLAYBACK_ENV, pb);
+                std::env::set_var(datalib_etl_web::http::PLAYBACK_ENV, pb);
             }
             let planned = dispatch::plan(
                 env.source_type()?,

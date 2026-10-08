@@ -1,15 +1,15 @@
 //! What CardDAV asks a WebDAV server and reads out of its replies (the
-//! requests and the `multistatus` walk are [`datalib_etl::dav`]'s), and
+//! requests and the `multistatus` walk are [`datalib_etl_web::dav`]'s), and
 //! the vCard helpers the ingest and render sides share.
 
 use quick_xml::events::BytesStart;
 
 use datalib_etl::content_line;
-use datalib_etl::dav::sync::{CollectionKind, ObjectProps};
-use datalib_etl::dav::{self as webdav, DavProps};
-use datalib_etl::http::{HttpService, LatchkeySettings};
+use datalib_etl_web::dav::sync::{CollectionKind, ObjectProps};
+use datalib_etl_web::dav::{self as webdav, DavProps};
+use datalib_etl_web::http::{HttpService, LatchkeySettings};
 
-pub use datalib_etl::dav::DavError;
+pub use datalib_etl_web::dav::DavError;
 
 /// The latchkey service every CardDAV request runs under. The trailing
 /// host-specific keying happens inside latchkey based on the URL
@@ -73,6 +73,9 @@ impl DavProps for ContactProps {
 }
 
 impl ObjectProps for ContactProps {
+    fn etag(&self) -> Option<&str> {
+        self.etag.as_deref()
+    }
     fn data(&self) -> Option<&str> {
         self.vcard.as_deref()
     }

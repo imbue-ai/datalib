@@ -25,6 +25,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/media_config:datalib_etl_media_config",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -58,6 +59,7 @@ rust_test(
     deps = [
         ":datalib_etl_media",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",

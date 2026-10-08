@@ -7,6 +7,7 @@ import SyncDashboardCard from "../SyncDashboardCard.ce.vue";
 import TimeChart from "../TimeChart.ce.vue";
 import RunLogPanel from "@/components/RunLogPanel.ce.vue";
 import tableGridCss from "../tableGrid.css?inline";
+import chipCss from "../chip.css?inline";
 // uPlot's own layout rules (the canvas, the cursor and the overlay),
 // which have to be inside the card's shadow root to reach them.
 import uplotCss from "uplot/dist/uPlot.min.css?inline";
@@ -14,21 +15,14 @@ import uplotCss from "uplot/dist/uPlot.min.css?inline";
 import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css?inline";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
+import type { SyncDashboardOpts } from "../cardSources";
 
-export type SyncDashboardOpts = {
-  group: string;
-  step?: string;
-};
+export { syncDashboardSource, type SyncDashboardOpts } from "../cardSources";
 
 export function syncDashboardView(opts: SyncDashboardOpts): CardRender {
   return vueCard(
     SyncDashboardCard,
     { opts },
-    { styleSources: [slickCss, tableGridCss, uplotCss, TimeChart, RunLogPanel] },
+    { styleSources: [slickCss, tableGridCss, chipCss, uplotCss, TimeChart, RunLogPanel] },
   );
-}
-
-/// The source of a dashboard card, for whoever opens one.
-export function syncDashboardSource(opts: SyncDashboardOpts): string {
-  return `syncDashboardView(${JSON.stringify(opts)})`;
 }

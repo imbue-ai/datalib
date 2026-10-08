@@ -1,16 +1,17 @@
-//! `DatalibContact`: a person as one source describes them — a Slack
+//! `NormalizedContact`: a person as one source describes them — a Slack
 //! user, a vCard, a LinkedIn connection, a contact someone made in the
 //! contacts app. Many describe the same person; `source_id` tells them
 //! apart. This crate is only the shape, so anything can take it: the
 //! render crates fill it from raw rows, contact-common renders it, the
-//! contacts app answers in it. `docs/dev/plans/contacts.md` has the design.
+//! contacts app answers in it. `docs/dev/contacts.md` says who produces
+//! one and who reads it.
 
 use datalib_handle::{Handle, HandleKind};
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DatalibContact {
+pub struct NormalizedContact {
     /// Who describes the person: a source's group id, or the contacts app.
     pub source_id: String,
     /// That source's own id for them: a vCard UID, a Slack user id, a
@@ -21,6 +22,13 @@ pub struct DatalibContact {
     pub names: Vec<String>,
     pub handles: Vec<ContactHandle>,
     pub photo: Option<Photo>,
+    /// Where the app serves the photo from, as a path on its own origin
+    /// (`/applet/…`): a source's photo beside its rendered document, or
+    /// the contacts app's for a contact a person gave one. Never another
+    /// host's URL, which the app does not fetch unasked. `None` draws the
+    /// person's initial instead.
+    #[serde(default)]
+    pub photo_url: Option<String>,
     pub org: Option<String>,
     pub title: Option<String>,
     pub note: Option<String>,
@@ -47,7 +55,7 @@ pub struct Seen {
     pub last_at: Option<String>,
 }
 
-impl DatalibContact {
+impl NormalizedContact {
     pub fn new(source_id: impl Into<String>, key: impl Into<String>, kind: ContactKind) -> Self {
         Self {
             source_id: source_id.into(),
@@ -56,6 +64,7 @@ impl DatalibContact {
             names: Vec::new(),
             handles: Vec::new(),
             photo: None,
+            photo_url: None,
             org: None,
             title: None,
             note: None,
@@ -186,7 +195,7 @@ impl Medium {
         match kind {
             HandleKind::Email => Medium::Email,
             HandleKind::Tel => Medium::Phone,
-            HandleKind::Slack => Medium::Other,
+            HandleKind::Slack | HandleKind::SignalAci => Medium::Other,
         }
     }
 }
@@ -206,6 +215,28 @@ impl Detail {
     }
 }
 
+/// The image types a browser draws in an `<img>`: what a `photo_url`
+/// may serve. Anything else is kept as the source gave it and has no
+/// URL, so the chip draws an initial.
+pub const DRAWABLE_PHOTO_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// Whether `content_type` (parameters and case ignored, `image/jpg`
+/// read as `image/jpeg`) is one of [`DRAWABLE_PHOTO_TYPES`].
+pub fn is_drawable_photo(content_type: &str) -> bool {
+    let ct = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let ct = if ct == "image/jpg" {
+        "image/jpeg".to_string()
+    } else {
+        ct
+    };
+    DRAWABLE_PHOTO_TYPES.contains(&ct.as_str())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Photo {
     /// The image itself, from the source's own record.
@@ -222,6 +253,28 @@ pub enum Photo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_image_a_browser_draws_is_drawable() {
+        for ok in [
+            "image/png",
+            "IMAGE/JPEG",
+            "image/jpg",
+            "image/webp; q=1",
+            "image/gif",
+        ] {
+            assert!(is_drawable_photo(ok), "{ok}");
+        }
+        for no in [
+            "application/octet-stream",
+            "image/svg+xml",
+            "image/heic",
+            "",
+            "text/html",
+        ] {
+            assert!(!is_drawable_photo(no), "{no}");
+        }
+    }
 
     #[test]
     fn a_number_without_its_country_code_is_kept_without_a_handle() {

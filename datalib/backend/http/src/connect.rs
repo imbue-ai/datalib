@@ -33,7 +33,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// `auth browser` and `curl` are forwarded to the gateway, and every
 /// command that manages local state — `ensure-browser`, `services
 /// register`, `auth set`, `auth clear` — is refused outright. The same
-/// rule `datalib_etl::latchkey` applies, restated here because this
+/// rule `datalib_etl_web::latchkey` applies, restated here because this
 /// crate links no ETL code.
 const GATEWAY_ENV_VAR: &str = "LATCHKEY_GATEWAY";
 
@@ -121,7 +121,7 @@ pub enum AccountNaming {
     Service,
     /// `--account` decides, a new name included: a service registered
     /// with `latchkey services register`, which has no identity to
-    /// report.
+    /// report, and one with no browser login, which only a paste reaches.
     Chosen,
 }
 
@@ -133,12 +133,15 @@ impl AccountNaming {
     pub fn parse(s: &str) -> Option<Self> {
         s.parse().ok()
     }
-    /// From the `type` `latchkey services info` reports, which stands in
-    /// for the rule until latchkey reports it (imbue-ai/latchkey#169). A
-    /// plugin reports `built-in`.
-    fn of_service_type(service_type: Option<&str>) -> Self {
+    /// From what `latchkey services info` reports: its `type` stands in
+    /// for the rule until latchkey reports it (imbue-ai/latchkey#169), and
+    /// a plugin reports `built-in`. A service with no browser login is
+    /// named by whoever pastes its credential.
+    fn of_service(service_type: Option<&str>, auth_options: &[String]) -> Self {
+        let has_browser_login = auth_options.iter().any(|o| o == "browser");
         match service_type {
             Some("user-registered") => AccountNaming::Chosen,
+            _ if !has_browser_login => AccountNaming::Chosen,
             _ => AccountNaming::Service,
         }
     }
@@ -256,7 +259,7 @@ async fn install_plugin_for(service: &str) -> Result<(), String> {
 }
 
 fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
-    let auth_options = v
+    let auth_options: Vec<String> = v
         .get("authOptions")
         .and_then(Value::as_array)
         .map(|a| {
@@ -287,6 +290,8 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
         .unwrap_or_default();
     // A map has no order; the picker should not shuffle between loads.
     accounts.sort_by(|a, b| a.account.cmp(&b.account));
+    let account_naming =
+        AccountNaming::of_service(v.get("type").and_then(Value::as_str), &auth_options);
     ServiceInfo {
         service: service.to_string(),
         auth_options,
@@ -301,7 +306,7 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
         error: None,
         issue: None,
         installs_plugin: None,
-        account_naming: AccountNaming::of_service_type(v.get("type").and_then(Value::as_str)),
+        account_naming,
     }
 }
 
@@ -567,7 +572,7 @@ pub async fn start_connect(
         .insert(id.clone(), slot.clone());
 
     // `--account` is a latchkey *global* option and must precede the
-    // subcommand — the same rule `datalib_etl::latchkey` writes down
+    // subcommand — the same rule `datalib_etl_web::latchkey` writes down
     // for `curl`. Built here rather than reused from there because
     // this crate deliberately links no ETL code.
     let mut args: Vec<String> = Vec::new();
@@ -780,7 +785,7 @@ async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
 }
 
 async fn latchkey_output_env(args: &[String], env: &[(&str, &str)]) -> anyhow::Result<String> {
-    // The same resolution `datalib_etl::latchkey` uses, reached through
+    // The same resolution `datalib_etl_web::latchkey` uses, reached through
     // `datalib_core` so the pin is not spelled twice.
     let mut cmd: Command = datalib_core::node_runtime::latchkey_command()?.into();
     cmd.args(args)
@@ -1154,6 +1159,19 @@ mod tests {
         let v = json!({ "type": "user-registered", "authOptions": ["browser", "set"] });
         assert_eq!(
             parse_service_info("claude-ai", &v).account_naming,
+            AccountNaming::Chosen
+        );
+    }
+
+    /// `fastmail-dav`, `notion` and `gitlab` are built in but have no
+    /// browser login, so a pasted credential is the only way in and the
+    /// person names it. Reading them as `Service` told the wizard to say
+    /// the service names the account.
+    #[test]
+    fn a_built_in_service_without_a_browser_login_lets_the_person_name_it() {
+        let v = json!({ "type": "built-in", "authOptions": ["set"] });
+        assert_eq!(
+            parse_service_info("fastmail-dav", &v).account_naming,
             AccountNaming::Chosen
         );
     }

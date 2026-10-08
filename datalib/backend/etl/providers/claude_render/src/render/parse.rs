@@ -259,16 +259,9 @@ async fn parse_doltlite_async(
     let pool = reader.pool().clone();
     let pin = reader.pin().clone();
 
-    let cas_path = blob_cas::cas_path_for(db_path);
-    let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
-        Some(
-            datalib_etl::blob_cas::open_cas_reader(&cas_path)
-                .await
-                .with_context(|| format!("open claude CAS for render {}", cas_path.display()))?,
-        )
-    } else {
-        None
-    };
+    let cas_pool = blob_cas::open_cas_for_render(db_path)
+        .await
+        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
 
     // Open at one commit before anything reads this store: the diff below
     // and the rows behind it have to name that commit.
@@ -346,18 +339,20 @@ async fn parse_doltlite_async(
             );
         }
     }
-    if let Some(cas_pool) = cas_pool.as_ref() {
-        let mut blobs = BlobBundle::load_many(
-            &pool,
-            cas_pool,
-            ATTACHMENTS_PROJECTION_SQL,
-            refs_by_conv.into_iter().enumerate(),
-        )
-        .await?;
-        for (i, conv) in parsed.conversations.iter_mut().enumerate() {
-            if let Some(b) = blobs.remove(&i) {
-                conv.blobs = b;
-            }
+    let loaded = BlobBundle::load_many(
+        &pool,
+        cas_pool.as_ref(),
+        ATTACHMENTS_PROJECTION_SQL,
+        refs_by_conv.into_iter().enumerate(),
+    )
+    .await;
+    if let Some(cas) = cas_pool {
+        cas.close().await;
+    }
+    let mut blobs = loaded?;
+    for (i, conv) in parsed.conversations.iter_mut().enumerate() {
+        if let Some(b) = blobs.remove(&i) {
+            conv.blobs = b;
         }
     }
 

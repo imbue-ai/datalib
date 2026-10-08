@@ -4,12 +4,12 @@
 
 use std::path::Path;
 
-use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_slack::probe::probe;
 use datalib_etl_slack::recorded::record_call;
 use datalib_etl_slack::synthesize::SlackSynth;
 use datalib_etl_slack_config::SlackConfig;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 use datalib_probe::{ProbeAsk, ProbeList, ProbeProgress, ProbeReport};
 use serde_json::{json, Value};
 use std::sync::Mutex;

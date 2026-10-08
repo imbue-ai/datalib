@@ -98,23 +98,83 @@ where
         q.execute(&mut **tx)
             .await
             .with_context(|| format!("bulk_upsert_bookkeeping {bk_table}"))?;
-        // A record that fetched has no fetch problem any more.
-        let mut clear = String::from(
-            "DELETE FROM problems WHERE scope_kind = ? AND stage = ? AND scope_key IN (",
+        clear_fetch_problems(tx, table, chunk).await?;
+    }
+    Ok(())
+}
+
+/// A record that fetched has no fetch problem any more.
+async fn clear_fetch_problems(
+    tx: &mut Transaction<'_, Sqlite>,
+    table: &str,
+    ids: &[&str],
+) -> Result<()> {
+    let mut clear =
+        String::from("DELETE FROM problems WHERE scope_kind = ? AND stage = ? AND scope_key IN (");
+    clear.push_str(&vec!["?"; ids.len()].join(","));
+    clear.push(')');
+    // Audited: a `?,?,?` run sized from `ids.len()`; every value bound.
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(clear))
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(datalib_problems::Stage::Fetch.as_str());
+    for id in ids {
+        q = q.bind(format!("{table}:{id}"));
+    }
+    q.execute(&mut **tx)
+        .await
+        .with_context(|| format!("clear fetch problems for {table}"))?;
+    Ok(())
+}
+
+/// [`bulk_upsert_bookkeeping`] for a source that reads its whole input
+/// every run: a row's sidecar is written the first time a read finds it
+/// and left alone after, so reading an unchanged input again commits
+/// nothing. A sidecar that so far records only a failed attempt is
+/// stamped as an ordinary one would be.
+pub async fn bulk_stamp_first_seen<'a, I>(
+    tx: &mut Transaction<'_, Sqlite>,
+    table: &str,
+    ids: I,
+    now: &IsoOffsetTimestamp,
+) -> Result<()>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let ids: Vec<&str> = ids.into_iter().collect();
+    let (now, tz_offset) = now.to_utc_and_offset();
+    let bk_table = format!("{table}_bookkeeping");
+    for chunk in ids.chunks(SQL_CHUNK) {
+        let mut sql = format!(
+            "INSERT INTO {bk_table} \
+                (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, tz_offset) VALUES "
         );
-        clear.push_str(&vec!["?"; chunk.len()].join(","));
-        clear.push(')');
-        // Audited: a `?,?,?` run sized from `chunk.len()`; every value
-        // bound.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(clear))
-            .bind(datalib_problems::ScopeKind::Entity.as_str())
-            .bind(datalib_problems::Stage::Fetch.as_str());
+        push_placeholders(&mut sql, chunk.len(), 6);
+        sql.push_str(&format!(
+            " ON CONFLICT(id) DO UPDATE SET
+                fetched_at_utc = excluded.fetched_at_utc,
+                attempt_count = {bk_table}.attempt_count + 1,
+                last_attempt_at_utc = excluded.last_attempt_at_utc,
+                last_error = NULL,
+                tz_offset = excluded.tz_offset
+              WHERE {bk_table}.fetched_at_utc IS NULL OR {bk_table}.last_error IS NOT NULL"
+        ));
+        // Audited: only `bk_table` (= `{table}_bookkeeping`) is
+        // interpolated, and the VALUES run is `push_placeholders` over
+        // `chunk.len()`. All bound.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for id in chunk {
-            q = q.bind(format!("{table}:{id}"));
+            q = q
+                .bind(*id)
+                .bind(&now)
+                .bind(1_i64)
+                .bind(&now)
+                .bind::<Option<&str>>(None)
+                .bind(&tz_offset);
         }
         q.execute(&mut **tx)
             .await
-            .with_context(|| format!("clear fetch problems for {table}"))?;
+            .with_context(|| format!("bulk_stamp_first_seen {bk_table}"))?;
+        clear_fetch_problems(tx, table, chunk).await?;
     }
     Ok(())
 }
@@ -155,6 +215,17 @@ pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
         return Ok(());
     }
     bulk_upsert_bookkeeping(tx, T::TABLE, rows.iter().map(|r| r.id()), now).await
+}
+
+/// [`bulk_upsert_in_tx`] for a source that reads its whole input every
+/// run: see [`bulk_stamp_first_seen`].
+pub async fn bulk_upsert_first_seen_in_tx<T: BulkUpsertable>(
+    tx: &mut Transaction<'_, Sqlite>,
+    rows: &[T],
+    now: &IsoOffsetTimestamp,
+) -> Result<()> {
+    bulk_upsert_entity_in_tx(tx, rows).await?;
+    bulk_stamp_first_seen(tx, T::TABLE, rows.iter().map(|r| r.id()), now).await
 }
 
 /// [`bulk_upsert_in_tx`] in a transaction of its own, stamped now.

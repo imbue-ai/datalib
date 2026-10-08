@@ -4,5 +4,8 @@
 //! `RUST_TEST_THREADS=1`: the playback root is a process-global
 //! environment variable each test points at its own tree.
 
+mod caldav_interrupt;
 mod caldav_playback;
+mod google_interrupt;
 mod google_playback;
+mod upgrade;

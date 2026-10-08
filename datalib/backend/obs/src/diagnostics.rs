@@ -18,7 +18,7 @@ use tracing_subscriber::Layer;
 pub struct DiagnosticEntry {
     /// `"WARN"` or `"ERROR"`.
     pub level: String,
-    /// The emitting module path, e.g. `datalib_etl::http`.
+    /// The emitting module path, e.g. `datalib_etl_web::http`.
     pub target: String,
     /// The event's `message` plus any structured fields, rendered as
     /// `message  key=value …`.

@@ -10,7 +10,7 @@ use sqlx::{Row, Sqlite, Transaction};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{full_ddl, EmailKeywordRow, EmailMailboxRow, LADDER};
+use super::schema_raw::{full_ddl, EmailKeywordRow, EmailMailboxRow, EmlBlobRow, LADDER};
 pub use super::schema_raw::{EmailRow, BLOB_KIND_EML};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -315,6 +315,34 @@ pub async fn delete_emails_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String
                 .await
                 .with_context(|| format!("delete email {id}"))?;
         }
+    }
+    Ok(())
+}
+
+/// Write `.eml` edges. One that holds bytes is upserted; one without (a
+/// body skipped or failed) is added only where no row holds bytes for
+/// it already, since a failed read is not news that the bytes changed.
+pub async fn write_eml_edges_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    rows: &[EmlBlobRow],
+) -> Result<()> {
+    let holding: Vec<EmlBlobRow> = rows
+        .iter()
+        .filter(|r| r.blake3.is_some())
+        .cloned()
+        .collect();
+    bulk_upsert_entity_in_tx(tx, &holding).await?;
+    for row in rows.iter().filter(|r| r.blake3.is_none()) {
+        sqlx::query(
+            "INSERT INTO email_blobs (id, email_id, blob_id, blake3) VALUES (?, ?, ?, NULL)
+             ON CONFLICT(id) DO NOTHING",
+        )
+        .bind(&row.id)
+        .bind(&row.email_id)
+        .bind(&row.blob_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("write the empty .eml edge {}", row.id))?;
     }
     Ok(())
 }

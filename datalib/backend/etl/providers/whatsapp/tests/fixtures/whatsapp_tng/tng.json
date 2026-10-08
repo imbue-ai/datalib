@@ -12,7 +12,8 @@
     { "id": 6, "raw_string": "bridge-crew@g.us",            "user": "bridge-crew",  "server": "g.us" },
     { "id": 7, "raw_string": "100000000000103@lid",         "user": "100000000000103", "server": "lid" },
     { "id": 8, "raw_string": "100000000000108@lid",         "user": "100000000000108", "server": "lid" },
-    { "id": 9, "raw_string": "100000000000105@lid",         "user": "100000000000105", "server": "lid" }
+    { "id": 9, "raw_string": "100000000000105@lid",         "user": "100000000000105", "server": "lid" },
+    { "id": 10, "raw_string": "17015550106@s.whatsapp.net", "user": "17015550106", "server": "s.whatsapp.net" }
   ],
   "jid_map": [
     { "lid_row_id": 7, "jid_row_id": 3 },
@@ -51,7 +52,10 @@
   "reactions": [
     { "parent_message_id": 8, "from_me": 0, "sender_jid_row_id": 2, "reaction": "🫡", "timestamp": 12442118880000, "key_id": "REACT001" },
     { "parent_message_id": 8, "from_me": 0, "sender_jid_row_id": 3, "reaction": "👍", "timestamp": 12442118890000, "key_id": "REACT002" },
-    { "parent_message_id": 8, "from_me": 0, "sender_jid_row_id": 4, "reaction": "🛸", "timestamp": 12442118900000, "key_id": "REACT003" }
+    { "parent_message_id": 8, "from_me": 0, "sender_jid_row_id": 4, "reaction": "🛸", "timestamp": 12442118900000, "key_id": "REACT003" },
+    { "parent_message_id": 7, "from_me": 0, "sender_jid_row_id": 10, "reaction": "💐", "timestamp": 12442118910000, "key_id": "REACT004" },
+    { "parent_message_id": 10, "from_me": 0, "reaction": "🖖", "timestamp": 12442118950000, "key_id": "REACT005" },
+    { "parent_message_id": 9, "from_me": 1, "reaction": "👍", "timestamp": 12442118960000, "key_id": "REACT006" }
   ],
   "media_files": [
     { "relative_path": "WhatsApp Images/bridge-viewscreen.jpg", "size_bytes": 384 },
@@ -61,8 +65,9 @@
   "wa_contacts": [
     { "jid": "17015550102@s.whatsapp.net", "display_name": "William Riker", "given_name": "William", "family_name": "Riker", "wa_name": "Number One" },
     { "jid": "17015550102@s.whatsapp.net", "display_name": "Will Riker (Starfleet)" },
-    { "jid": "17015550103@s.whatsapp.net", "display_name": "Data" },
+    { "jid": "17015550103@s.whatsapp.net", "display_name": "Data", "company": "Starfleet", "title": "Second Officer" },
     { "jid": "17015550104@s.whatsapp.net", "wa_name": "Geordi La Forge" },
-    { "jid": "17015550105@s.whatsapp.net", "display_name": "Worf" }
+    { "jid": "17015550105@s.whatsapp.net", "display_name": "Worf" },
+    { "jid": "17015550106@s.whatsapp.net", "given_name": "Deanna", "family_name": "Troi", "company": "Starfleet", "title": "Counselor" }
   ]
 }

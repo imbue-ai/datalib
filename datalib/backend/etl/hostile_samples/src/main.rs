@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use datalib_contact_schema::{ContactKind, DatalibContact, Detail};
+use datalib_contact_schema::{ContactKind, Detail, NormalizedContact};
 use datalib_etl::progress::Progress;
 use datalib_etl_calendar_common::types::{
     Attendee, EventLink, EventShape, NormalizedEvent, OccurrenceRef, Person,
@@ -225,12 +225,14 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         kind_label: None,
         source_ref: None,
         is_aside: false,
+        branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
         problems: Vec::new(),
     };
     let reaction = |uuid: &str, emoji: String, who: String| NormalizedReaction {
         reaction_uuid: uuid.to_string(),
+        reactor_handle: None,
         reactor_display: who,
         emoji,
         date_ms: Some(12_602_794_200_000),
@@ -437,7 +439,8 @@ fn calendar(scratch: &Path) -> Result<Vec<Document>> {
 
 fn contacts(scratch: &Path) -> Result<Vec<Document>> {
     let mut f = Fields::default();
-    let mut contact = DatalibContact::new("hostile", f.hostile("contact key"), ContactKind::Person);
+    let mut contact =
+        NormalizedContact::new("hostile", f.hostile("contact key"), ContactKind::Person);
     contact.names = vec![f.hostile("contact name")];
     contact.org = Some(f.hostile("contact org"));
     contact.title = Some(f.hostile("contact title"));
@@ -603,9 +606,12 @@ fn slack() -> Vec<Document> {
     let users = BTreeMap::from([("U1".to_string(), hostile(&user))]);
     let channels = BTreeMap::from([("C1".to_string(), hostile(&channel))]);
     let inputs = Inputs::default();
+    // A workspace id, so each mention is a chip link: the hostile name
+    // then rides in a link's text and its title too.
     let labels = Labels {
         users: inputs.lookup("users", &users),
         channels: inputs.lookup("channels", &channels),
+        team_id: "T1",
     };
     let text = format!(
         "{}\nby <@U1> and <@U2|{}> in <#C1>, see <https://x.test/a|{}>",

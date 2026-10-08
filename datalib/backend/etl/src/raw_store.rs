@@ -10,6 +10,19 @@ use sqlx::sqlite::SqlitePool;
 use crate::processor::RunCtx;
 use crate::store_handle::RawStoreHandle;
 
+static SEALED_A_CHECKPOINT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Called each time a checkpoint commit lands. Only the HTTP playback
+/// hold that waits for a seal reads it (`DATALIB_HTTP_PLAYBACK_HOLD_SEALED`).
+pub fn record_seal() {
+    SEALED_A_CHECKPOINT.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn has_sealed_a_checkpoint() -> bool {
+    SEALED_A_CHECKPOINT.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// A doltlite raw-store session owned by a single download processor. Seals
 /// on the [`Checkpointer`](crate::checkpointer::Checkpointer)'s cadence and
 /// commits at [`finish`](RawStoreSession::finish) — both source-side. A stop
@@ -222,7 +235,7 @@ impl SealState {
         if let Some(hash) = sealed {
             self.publish_problem_counts().await;
             self.progress.checkpoint_rows(&hash, rows);
-            crate::http::record_seal();
+            record_seal();
         }
         Ok(())
     }

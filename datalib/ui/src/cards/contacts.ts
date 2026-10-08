@@ -1,21 +1,26 @@
-// Who a handle in a document is. A renderer writes the author's handle
-// on the author span (`data-handle="email:…"`); this asks the index
-// (`unified_index`'s `/people`: each source's account of the person) and
-// the contacts app (`datalib_contacts`: the contact a person made, ranked
-// first) and turns the span into a chip. The contacts app is an app of
-// its own (docs/dev/plans/contacts.md): without it chips still say what
-// the sources know, but offer nothing to link. The rules are pure and
+// Who a handle in a document is. A renderer writes a person as a chip
+// link, `[Name](mailto:…)`, which `chipLinks.js` marks as it renders
+// (`a.chip[data-handle]`); this asks the index (`unified_index`'s
+// `/people`: each source's record of the person) and the contacts app
+// (`datalib_contacts`: the contact a person made, ranked first) and
+// draws the link as a chip. The contacts app is an app of its own
+// (docs/dev/contacts.md): without it chips still say what the
+// sources know, but offer nothing to link. The rules are pure and
 // unit-tested; only `decorateHandles` touches a DOM.
 
 import { iconUrl } from "@/config/icons";
+import { STEP_GLYPHS, glyphSvg } from "@/config/glyphs";
+import { filterToken } from "@/grid/query";
+import { uriFromHandle } from "./chipLinks";
+import { Resolver } from "./resolver";
 import { pushToast } from "@/toasts";
 import { UNIFIED_INDEX } from "@/api";
 
 export const CONTACTS_APPLET = "/applet/datalib_contacts";
 
-/** `datalib_contact_schema::DatalibContact`, hand-kept: a person as one
+/** `datalib_contact_schema::NormalizedContact`, hand-kept: a person as one
  *  source describes them. */
-export type DatalibContact = {
+export type NormalizedContact = {
   source_id: string;
   key: string;
   kind: "person" | "group";
@@ -30,28 +35,38 @@ export type DatalibContact = {
   org: string | null;
   title: string | null;
   seen: { items: number; last_at: string | null } | null;
+  /** A photo the app serves, app-relative, where the source has one and
+   *  the server can serve it; absent or null otherwise. The chip's lead. */
+  photo_url?: string | null;
 };
 
 export type ContactSummary = { contact_id: string; name: string; kind: string };
 
 /** For one handle: the contact a person made, if any, and every source's
- *  account of whoever holds it, ranked. */
-export type Who = { mine: DatalibContact | null; accounts: DatalibContact[] };
+ *  record of whoever holds it, ranked. */
+export type Who = { mine: NormalizedContact | null; sourceContacts: NormalizedContact[] };
 
 // ── Pure rules ─────────────────────────────────────────────────────────
 
-export type HandleKind = "email" | "tel" | "slack";
+export type HandleKind = "email" | "tel" | "slack" | "signal_aci";
 
 export function handleKind(handle: string): HandleKind | null {
   const kind = handle.slice(0, handle.indexOf(":"));
-  return kind === "email" || kind === "tel" || kind === "slack" ? kind : null;
+  return kind === "email" || kind === "tel" || kind === "slack" || kind === "signal_aci"
+    ? kind
+    : null;
 }
 
 export function handleValue(handle: string): string {
   return handle.slice(handle.indexOf(":") + 1);
 }
 
-const KIND_ICON: Record<HandleKind, string> = { email: "email", tel: "sms", slack: "slack" };
+const KIND_ICON: Record<HandleKind, string> = {
+  email: "email",
+  tel: "sms",
+  slack: "slack",
+  signal_aci: "signal",
+};
 
 export function handleIcon(handle: string): string | null {
   const kind = handleKind(handle);
@@ -81,12 +96,12 @@ export function sourceLabel(shownAs: string, handle: string): string {
   return suggestedName(shownAs, handle) || shownAs.trim() || handleValue(handle);
 }
 
-export function nameOf(c: DatalibContact): string {
+export function nameOf(c: NormalizedContact): string {
   return c.names[0] ?? c.key;
 }
 
 /** A partial date by which `handle` had stopped working, as `c` records it. */
-export function stoppedBy(c: DatalibContact | null, handle: string): string | null {
+export function stoppedBy(c: NormalizedContact | null, handle: string): string | null {
   return c?.handles.find((h) => h.handle === handle)?.stopped_working_by ?? null;
 }
 
@@ -98,19 +113,31 @@ export type ChipLook = {
    *  unresolved handle, which shows its kind's mark instead. */
   initial: string | null;
   icon: string | null;
+  /** The person's photo, which leads in place of the initial or the
+   *  mark: your contact's, else the best a source gave. */
+  photo: string | null;
+  /** The tooltip: who, the identifier, and what each source knows. */
+  title: string;
 };
+
+/** The photo to lead with: your contact's, else the first source's. */
+function photoOf(who: Who): string | null {
+  return who.mine?.photo_url ?? who.sourceContacts.find((a) => a.photo_url)?.photo_url ?? null;
+}
 
 /** `canLink` is whether a contacts app is there to link the handle with. */
 export function chipLook(handle: string, shownAs: string, who: Who, canLink: boolean): ChipLook {
-  const { mine, accounts } = who;
+  const { mine, sourceContacts } = who;
   if (!mine) {
-    const text = accounts[0] ? nameOf(accounts[0]) : sourceLabel(shownAs, handle);
+    const text = sourceContacts[0] ? nameOf(sourceContacts[0]) : sourceLabel(shownAs, handle);
     return {
       text,
       ariaLabel: `${text}, ${handleValue(handle)}, not linked to a contact`,
       classes: ["handle-chip", "handle-unresolved", ...(canLink ? ["handle-linkable"] : [])],
       initial: null,
       icon: handleIcon(handle),
+      photo: photoOf(who),
+      title: chipTooltip(handle, shownAs, who, canLink),
     };
   }
   const name = nameOf(mine);
@@ -124,38 +151,74 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
     ],
     initial: [...name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
+    photo: photoOf(who),
+    title: chipTooltip(handle, shownAs, who, canLink),
   };
 }
 
-export type HoverCard = {
-  name: string;
-  /** The handle as a person reads it, beside its kind's mark. */
-  value: string;
-  icon: string | null;
-  lines: string[];
-};
+/** What a right-click on a chip offers. An entry is an *id* the surface
+ *  binds a handler to — the document view and a grid cell draw the same
+ *  menu and act on it their own way (docs/dev/plans/chips.md § Clicks). */
+export type ChipMenuId = "copy-name" | "copy-id" | "copy-both" | "search" | "edit";
+export type ChipMenuEntry = { id: ChipMenuId; label: string; separator?: boolean };
 
-const MAX_ACCOUNTS = 4;
+/** The menu for one chip: copy its name, its identifier, or both; find
+ *  everything from this person; and, with a contacts app, link or edit
+ *  the link. `canLink` is whether a contacts app is there to link with. */
+export function chipMenu(
+  handle: string,
+  shownAs: string,
+  who: Who,
+  canLink: boolean,
+): ChipMenuEntry[] {
+  const { text: name } = chipLook(handle, shownAs, who, canLink);
+  const value = handleValue(handle);
+  const named = name !== value;
+  const out: ChipMenuEntry[] = [];
+  if (named) out.push({ id: "copy-name", label: `Copy “${name}”` });
+  out.push({ id: "copy-id", label: `Copy ${value}` });
+  if (named) out.push({ id: "copy-both", label: `Copy “${copyText(handle, name)}”` });
+  out.push({ id: "search", label: `Everything from ${name}`, separator: true });
+  if (canLink) {
+    out.push({
+      id: "edit",
+      label: who.mine ? "Edit contact link…" : "Link to a contact…",
+      separator: true,
+    });
+  }
+  return out;
+}
+
+/** The search that finds everything from this person. The grid's Author
+ *  column is the author as shown, so the term is the name the chip shows;
+ *  once `grid_rows` carries `author_handle` (chips.md, step 4) this
+ *  becomes a term on the handle itself. */
+export function searchQueryFor(handle: string, shownAs: string, who: Who): string {
+  return filterToken("author", chipLook(handle, shownAs, who, false).text, false);
+}
+
+const MAX_SOURCE_CONTACTS = 4;
 const MAX_OTHER_HANDLES = 4;
 
-export function hoverCard(handle: string, shownAs: string, who: Who, canLink: boolean): HoverCard {
-  const { mine, accounts } = who;
+export function chipTooltip(handle: string, shownAs: string, who: Who, canLink: boolean): string {
+  const { mine, sourceContacts } = who;
   const name = mine
     ? nameOf(mine)
-    : accounts[0]
-      ? nameOf(accounts[0])
+    : sourceContacts[0]
+      ? nameOf(sourceContacts[0])
       : sourceLabel(shownAs, handle);
-  const lines: string[] = [];
+  const value = handleValue(handle);
+  const lines: string[] = value === name ? [name] : [name, value];
   const stopped = stoppedBy(mine, handle);
   if (stopped) lines.push(`Stopped working by ${stopped}`);
   if (shownAs.trim() && shownAs.trim() !== name) lines.push(`Shown here as “${shownAs.trim()}”`);
-  for (const a of accounts.slice(0, MAX_ACCOUNTS)) {
+  for (const a of sourceContacts.slice(0, MAX_SOURCE_CONTACTS)) {
     const items = a.seen ? ` · ${a.seen.items} ${a.seen.items === 1 ? "item" : "items"}` : "";
     lines.push(`${nameOf(a)} in ${a.source_id}${items}`);
   }
   const others = [
     ...new Set(
-      [mine, ...accounts]
+      [mine, ...sourceContacts]
         .flatMap((c) => c?.handles ?? [])
         .filter((h) => h.handle !== handle)
         // An address or a number reads as itself; a Slack user's
@@ -166,7 +229,7 @@ export function hoverCard(handle: string, shownAs: string, who: Who, canLink: bo
   if (others.length) lines.push(`Also ${others.slice(0, MAX_OTHER_HANDLES).join(", ")}`);
   if (mine) lines.push("Click to edit");
   else if (canLink) lines.push("Not linked to a contact. Click to link it.");
-  return { name, value: handleValue(handle), icon: handleIcon(handle), lines };
+  return lines.join("\n");
 }
 
 /** A chip as copied text: the name it shows and the identifier behind
@@ -184,41 +247,46 @@ export function copyText(handle: string, label: string): string {
   }
 }
 
-/** Replace every chip in a copied fragment with its copy text, keeping
- *  `data-handle` on a plain span so a paste into the app can chip it
- *  again. Mutates `fragment`; returns whether it held any chip. */
+/** Replace every chip in a copied fragment with the link it was written
+ *  as — `Name <identifier>` as text, the handle's URI as href, the
+ *  description as title — so a paste keeps a working link and a paste
+ *  back into the app chips it again. Mutates `fragment`; returns whether
+ *  it held any chip. */
 export function rewriteChipsForCopy(fragment: DocumentFragment | Element): boolean {
+  // A group or step chip copies as its name and its URI, the link it was.
+  const named = Array.from(fragment.querySelectorAll<HTMLElement>("a.chip[data-entity]"));
+  for (const chip of named) {
+    const uri = chip.dataset.entity ?? "";
+    const text = `${chip.dataset.label ?? chip.textContent ?? ""} (${uri})`;
+    const a = chip.ownerDocument.createElement("a");
+    a.href = uri;
+    a.dataset.entity = uri;
+    a.title = text;
+    a.textContent = text;
+    chip.replaceWith(a);
+  }
   const chips = Array.from(fragment.querySelectorAll<HTMLElement>(".handle-chip[data-handle]"));
   for (const chip of chips) {
     const handle = chip.dataset.handle ?? "";
-    const span = chip.ownerDocument.createElement("span");
-    span.dataset.handle = handle;
-    span.textContent = copyText(handle, chip.dataset.label ?? "");
-    chip.replaceWith(span);
+    const text = copyText(handle, chip.dataset.label ?? "");
+    const a = chip.ownerDocument.createElement("a");
+    a.dataset.handle = handle;
+    const uri = uriFromHandle(handle);
+    if (uri) a.href = uri;
+    a.title = text;
+    a.textContent = text;
+    chip.replaceWith(a);
   }
-  return chips.length > 0;
+  return chips.length + named.length > 0;
 }
 
-/** The handle spans a renderer wrote, and none a message body did.
- *  DOMPurify keeps every `data-*`, and a body is HTML a stranger wrote,
- *  so a `data-handle` counts only in a top-level `.msg`'s first `h2` —
- *  its header — on the `.msg-author`, and on the `.msg-recipient`s of a
- *  `.msg-recipients` line that is the header's very next element. The
- *  renderer writes both before the body, which cannot precede them. */
-export function trustedHandleSpans(root: Element): HTMLElement[] {
-  const out: HTMLElement[] = [];
-  for (const msg of root.querySelectorAll<HTMLElement>(".msg[data-section-uuid]")) {
-    if (msg.parentElement?.closest(".msg")) continue;
-    const header = Array.from(msg.children).find((c) => c.tagName === "H2");
-    if (!header) continue;
-    const author = header.querySelector<HTMLElement>(":scope > span.msg-author[data-handle]");
-    if (author) out.push(author);
-    const next = header.nextElementSibling;
-    if (next?.matches("div.msg-recipients")) {
-      out.push(...next.querySelectorAll<HTMLElement>(":scope > span.msg-recipient[data-handle]"));
-    }
-  }
-  return out;
+/** Every chip link under `root`: the links `chipLinks.js` marked because
+ *  their href names a handle. Anywhere in the body counts, a mention as
+ *  much as the header: a chip shows who the handle resolves to, never
+ *  the link text, so a link a sender wrote can only point at a real
+ *  person under their real name (docs/dev/plans/chips.md § Trust). */
+export function chipAnchors(root: Element): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>("a.chip[data-handle]"));
 }
 
 // ── The applet ────────────────────────────────────────────────────────
@@ -258,7 +326,7 @@ const post = <T>(path: string, body: unknown) =>
 /** `null` when no contacts app is configured. */
 export async function resolveHandles(
   handles: string[],
-): Promise<Record<string, DatalibContact> | null> {
+): Promise<Record<string, NormalizedContact> | null> {
   const r = await fetch(`${CONTACTS_APPLET}/resolve`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -267,19 +335,19 @@ export async function resolveHandles(
   const text = await r.text();
   if (isAbsent(r.status, text)) return null;
   if (!r.ok) throw new Error(`resolve → ${r.status}: ${text}`);
-  return (JSON.parse(text) as { resolved: Record<string, DatalibContact> }).resolved;
+  return (JSON.parse(text) as { resolved: Record<string, NormalizedContact> }).resolved;
 }
 
-/** Every source's account of whoever holds each handle, ranked; a handle
+/** Every source's record of whoever holds each handle, ranked; a handle
  *  no source mentions is absent. */
-export async function peopleFor(handles: string[]): Promise<Record<string, DatalibContact[]>> {
+export async function peopleFor(handles: string[]): Promise<Record<string, NormalizedContact[]>> {
   const r = await fetch(`${UNIFIED_INDEX}/people`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ handles }),
   });
   if (!r.ok) throw new Error(`people → ${r.status}: ${await r.text()}`);
-  return ((await r.json()) as { people: Record<string, DatalibContact[]> }).people;
+  return ((await r.json()) as { people: Record<string, NormalizedContact[]> }).people;
 }
 
 export async function searchContacts(q: string): Promise<ContactSummary[]> {
@@ -287,76 +355,156 @@ export async function searchContacts(q: string): Promise<ContactSummary[]> {
   return r.contacts;
 }
 
+// Every edit forgets the handles it touched, so every document and grid
+// showing them draws them again from the next answer.
+
 export async function createContact(name: string, handles: string[]): Promise<string> {
-  return (await post<{ contact_id: string }>("/contacts", { name, handles })).contact_id;
+  const id = (await post<{ contact_id: string }>("/contacts", { name, handles })).contact_id;
+  people.forget(handles);
+  return id;
 }
 
 export async function linkHandle(handle: string, contactId: string): Promise<void> {
   await post("/link", { handle, contact_id: contactId });
+  people.forget([handle]);
 }
 
 export async function unlinkHandle(handle: string): Promise<void> {
   await post("/unlink", { handle });
+  people.forget([handle]);
 }
 
 export async function setStoppedWorking(handle: string, by: string | null): Promise<void> {
   await post("/stopped_working", { handle, by });
+  people.forget([handle]);
+}
+
+// ── Who a handle is, for the whole app ────────────────────────────────
+
+export const NOBODY: Who = { mine: null, sourceContacts: [] };
+
+let contactsApp = false;
+
+/** Who each handle is: the contact a person made, if any, and every
+ *  source's record of them. One resolver for every document and grid
+ *  (`resolver.ts`). */
+export const people = new Resolver<Who>(
+  async (handles) => {
+    const [mine, sourceContacts] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
+    contactsApp = mine !== null;
+    return new Map(
+      handles.map((h) => [h, { mine: mine?.[h] ?? null, sourceContacts: sourceContacts[h] ?? [] }]),
+    );
+  },
+  // The toast dedupes itself, so a page of chips failing says so once.
+  (e) => pushToast(`Contacts: ${e.message}`),
+);
+
+/** Whether a contacts app answered the last question, so a chip can offer
+ *  to link a handle. */
+export function canLinkHandles(): boolean {
+  return contactsApp;
 }
 
 // ── The DOM ───────────────────────────────────────────────────────────
 
-let warnedOnce = false;
-
-export type Decorated = { who: Record<string, Who>; canLink: boolean };
-
-/** Ask who every trusted handle span under `root` is and draw it as a
- *  chip; `null` when there is nothing to draw. Safe to call again after
- *  an edit: each span keeps what the source showed in `data-shown-as`. */
-export async function decorateHandles(root: HTMLElement): Promise<Decorated | null> {
-  const spans = trustedHandleSpans(root);
-  if (spans.length === 0) return null;
+/** Ask who every chip link under `root` is and draw it as a chip, from
+ *  `people`. Safe to call again — after an edit, or when `people` says an
+ *  answer changed: each link keeps what the source showed in
+ *  `data-shown-as`. A handle whose question failed is drawn unresolved. */
+export async function decorateHandles(root: HTMLElement): Promise<void> {
+  const spans = chipAnchors(root);
+  if (spans.length === 0) return;
   for (const s of spans) {
     if (s.dataset.shownAs === undefined) s.dataset.shownAs = s.textContent ?? "";
   }
-  const handles = [...new Set(spans.map((s) => s.dataset.handle ?? ""))];
-  let mine: Record<string, DatalibContact> | null;
-  let people: Record<string, DatalibContact[]>;
-  try {
-    [mine, people] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
-  } catch (e) {
-    if (!warnedOnce) pushToast(`Contacts: ${(e as Error).message}`);
-    warnedOnce = true;
-    return null;
-  }
-  const canLink = mine !== null;
-  const who: Record<string, Who> = Object.fromEntries(
-    handles.map((h) => [h, { mine: mine?.[h] ?? null, accounts: people[h] ?? [] }]),
-  );
+  await people.ask(new Set(spans.map((s) => s.dataset.handle ?? "")));
+  const canLink = canLinkHandles();
   for (const s of spans) {
     if (!s.isConnected) continue;
     const handle = s.dataset.handle ?? "";
-    const look = chipLook(handle, s.dataset.shownAs ?? "", who[handle], canLink);
-    // The span's own class — an author's or a recipient's — stays; a
-    // redraw replaces only what the chip added.
-    s.dataset.baseClass ??= s.className;
-    s.className = [s.dataset.baseClass, ...look.classes].join(" ");
-    s.removeAttribute("title");
-    s.setAttribute("aria-label", look.ariaLabel);
-    s.dataset.label = look.text;
-    const lead = s.ownerDocument.createElement(look.initial ? "span" : "img");
-    lead.setAttribute("aria-hidden", "true");
-    if (look.initial) {
-      lead.className = "handle-initial";
-      lead.textContent = look.initial;
-    } else {
-      const url = iconUrl(look.icon);
-      if (url) (lead as HTMLImageElement).src = url;
-      (lead as HTMLImageElement).alt = "";
-      lead.className = "handle-mark";
-    }
-    s.replaceChildren(lead, s.ownerDocument.createTextNode(look.text));
+    drawChip(s, chipLook(handle, s.dataset.shownAs ?? "", people.get(handle) ?? NOBODY, canLink));
   }
-  return { who, canLink };
+}
+
+/** Draw `look` onto a chip link: the lead (an initial in a disc, or the
+ *  kind's mark), then the name, and the tooltip. The link's own class
+ *  stays; a redraw replaces only what the chip added. */
+export function drawChip(el: HTMLElement, look: ChipLook): void {
+  el.dataset.baseClass ??= el.className;
+  el.className = [el.dataset.baseClass, ...look.classes].join(" ");
+  el.title = look.title;
+  el.setAttribute("aria-label", look.ariaLabel);
+  el.dataset.label = look.text;
+  const lead = chipLead(el.ownerDocument, look);
+  if (look.photo && lead) {
+    // A photo the browser cannot draw (a type it does not decode, a blob
+    // gone since the render) gives way to what the chip draws without one.
+    lead.addEventListener("error", () => drawChip(el, { ...look, photo: null }), { once: true });
+  }
+  const text = el.ownerDocument.createTextNode(look.text);
+  if (lead) el.replaceChildren(lead, text);
+  else el.replaceChildren(text);
+}
+
+/// The chip's lead: the photo, else the initial in a disc, else the
+/// mark its icon token names — a bundled picture, or a pipeline glyph
+/// for a step. Decoration: `aria-hidden`, and not copied.
+function chipLead(doc: Document, look: ChipLook): Element | null {
+  if (look.photo) {
+    const img = doc.createElement("img");
+    img.src = look.photo;
+    img.alt = "";
+    img.className = "handle-photo";
+    img.setAttribute("aria-hidden", "true");
+    return img;
+  }
+  if (look.initial) {
+    const disc = doc.createElement("span");
+    disc.className = "handle-initial";
+    disc.textContent = look.initial;
+    disc.setAttribute("aria-hidden", "true");
+    return disc;
+  }
+  const url = iconUrl(look.icon);
+  if (url) {
+    const img = doc.createElement("img");
+    img.src = url;
+    img.alt = "";
+    img.className = "handle-mark";
+    img.setAttribute("aria-hidden", "true");
+    return img;
+  }
+  const glyph =
+    look.icon === "applet"
+      ? STEP_GLYPHS.applet
+      : look.icon?.startsWith("step:")
+        ? STEP_GLYPHS[look.icon.slice(5) as keyof typeof STEP_GLYPHS]
+        : undefined;
+  if (!glyph) return null;
+  const mark = doc.createElement("span");
+  mark.className = "handle-mark handle-glyph";
+  mark.setAttribute("aria-hidden", "true");
+  mark.append(doc.importNode(glyphSvg(glyph, "", 12), true));
+  return mark;
+}
+
+/** A chip for a grid cell: the same link a renderer writes, drawn at
+ *  once from what is known. `who` is undefined until the grid has asked. */
+export function chipCell(
+  handle: string,
+  shownAs: string,
+  who: Who | undefined,
+  canLink: boolean,
+): HTMLAnchorElement {
+  const a = document.createElement("a");
+  a.className = "chip";
+  const uri = uriFromHandle(handle);
+  if (uri) a.href = uri;
+  a.dataset.handle = handle;
+  a.dataset.shownAs = shownAs;
+  drawChip(a, chipLook(handle, shownAs, who ?? { mine: null, sourceContacts: [] }, canLink));
+  return a;
 }
 
 /** The selection, as a range inside `root`, or null when it is elsewhere.
@@ -370,8 +518,8 @@ function selectionWithin(root: HTMLElement): Range | null {
 }
 
 /** A copy from the document: chips become `Name <identifier>` in the
- *  plain text and keep their `data-handle` in the HTML. A selection with
- *  no chip in it is left to the browser. */
+ *  plain text and a link with the handle's URI in the HTML. A selection
+ *  with no chip in it is left to the browser. */
 export function copyWithHandles(ev: ClipboardEvent, root: HTMLElement): void {
   const range = selectionWithin(root);
   if (!range || !ev.clipboardData) return;

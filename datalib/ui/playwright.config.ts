@@ -1,6 +1,7 @@
 import { defineConfig } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
+  appendFileSync,
   closeSync,
   copyFileSync,
   mkdirSync,
@@ -158,9 +159,25 @@ command = "'${APPLET_BIN}' unified_index"
   );
   return root;
 }
+// The fixture root with the contacts app beside the search applet, for
+// the spec that links handles to contacts. Its own root, because a link
+// is a write: on the shared root every other spec's chips would resolve.
+function contactsRoot(prefix: string): string {
+  const root = materializeRoot(prefix);
+  appendFileSync(
+    path.join(root, "config.toml"),
+    `
+[[applets]]
+id = "datalib_contacts"
+command = "'${APPLET_BIN}' datalib_contacts"
+`,
+  );
+  return root;
+}
 const ROOT_OF: Record<string, (prefix: string) => string> = {
   "data-sources-streaming": bareRoot,
   "data-sources-control": bareRoot,
+  contacts: contactsRoot,
 };
 
 // What a sandbox's backend gets in its environment beyond the common

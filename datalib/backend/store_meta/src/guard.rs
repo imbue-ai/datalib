@@ -239,9 +239,14 @@ mod tests {
                 .await
                 .unwrap();
             if *p != bare {
-                crate::write(&pool, crate::StoreKind::Raw, "h", 0)
-                    .await
-                    .unwrap();
+                crate::write(
+                    &pool,
+                    crate::StoreKind::Raw,
+                    "h",
+                    crate::Versions::default(),
+                )
+                .await
+                .unwrap();
             }
             if *p == newer {
                 sqlx::query(

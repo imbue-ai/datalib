@@ -177,7 +177,7 @@ pub fn full_ddl() -> Vec<String> {
         GeminiActivityRow::ddl(),
         // Shared file-cursor table; we own one or more
         // `google_takeout/<feed>` scopes inside it.
-        datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
+        datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
     out.extend(ChatAttachmentRow::all_ddl());
     out.extend(GeminiAttachmentRow::all_ddl());

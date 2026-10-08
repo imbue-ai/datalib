@@ -254,7 +254,9 @@ async fn a_changed_activity_whose_detail_refetch_fails_is_fetched_again() {
     assert_eq!(
         a.count(
             "SELECT COUNT(*) FROM garmin_activity_details d \
-             JOIN garmin_activities a ON a.id = d.id AND a.listing_hash = d.listing_hash \
+             JOIN garmin_activities a ON a.id = d.id \
+             JOIN garmin_activity_details_bookkeeping b \
+               ON b.id = d.id AND b.held_version = a.listing_hash \
              WHERE d.id = '17010413001' \
                AND json_extract(json(d.payload), '$.activityName') = 'Holodeck run: Dixon Hill, again'"
         )

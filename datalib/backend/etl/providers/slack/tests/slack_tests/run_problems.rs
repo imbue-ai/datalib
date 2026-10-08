@@ -120,7 +120,7 @@ async fn a_channel_that_fails_is_a_problem_until_it_walks() {
 }
 
 /// A thread whose replies will not come is a row on the thread's own
-/// stamp, keyed like its root message so the render can name it, and the
+/// record, keyed like its root message so the render can name it, and the
 /// channel is mirrored all the same. A later run asks for the thread
 /// again though no walk lists its root, and the row goes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -156,7 +156,7 @@ async fn a_thread_that_fails_is_a_problem_on_the_thread_until_it_fetches() {
     assert_eq!(stored_ts(&out), [A, B]);
     assert_eq!(
         problems(&out).await,
-        [row(&format!("replies_pages:T1#C1#{A}"), "error")],
+        [row(&format!("threads:T1#C1#{A}"), "error")],
         "its replies have never been read, so they are missing, not stale"
     );
 

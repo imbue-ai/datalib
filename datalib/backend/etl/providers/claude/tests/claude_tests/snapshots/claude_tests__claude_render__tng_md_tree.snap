@@ -2,6 +2,364 @@
 source: datalib/backend/etl/providers/claude/tests/claude_tests/claude_render.rs
 expression: bundle
 ---
+=== claude_export/render_markdown/00000000-0000-8305-8a74-7d4a860e0d82/all.md ===
+---
+title: "Holodeck Malfunction Report"
+provider: claude
+source_label: "Claude"
+chat_uuid: 00000000-0000-8305-8a74-7d4a860e0d82
+markdown_uuid: 00000000-0000-8305-8a74-7d4a860e0d82
+period: all
+display: "Holodeck Malfunction Report"
+account: "jlpicard@enterprise.starfleet.test"
+external_id: "c0000008-1701-4d00-8000-00000000c008"
+item_count: 13
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8305-8a74-7d4a860e0d82">Holodeck Malfunction Report <a class="source-link" href="https://claude.ai/chat/c0000008-1701-4d00-8000-00000000c008" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<details class="branch">
+<summary>✎ Another version · 5 messages</summary>
+
+<div id="m-0b7611f3-3d00-8fe7-8b3d-6f240ae07699" data-section-uuid="0b7611f3-3d00-8fe7-8b3d-6f240ae07699" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:00:00+00:00" title="2369-05-02 10:00:00 UTC">Fri May 2nd, 2369 at 10:00</time>
+
+Look up the three most recent holodeck malfunctions aboard the Enterprise and cite your sources.
+
+</div>
+
+<div id="m-0b7611f3-6410-866e-83cc-8d75f0ccdbab" data-section-uuid="0b7611f3-6410-866e-83cc-8d75f0ccdbab" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:10+00:00" title="2369-05-02 10:00:10 UTC">Fri May 2nd, 2369 at 10:00</time>
+
+<details><summary>Thinking</summary>
+
+> Search the incident logs.
+
+</details>
+
+</div>
+
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+
+<div id="m-0b7611f3-6be0-8e1a-b30d-a620370913f0" data-section-uuid="0b7611f3-6be0-8e1a-b30d-a620370913f0" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:12+00:00" title="2369-05-02 10:00:12 UTC">Fri May 2nd, 2369 at 10:00</time>
+
+<details><summary>Tool use: web_search — Searching the web</summary>
+
+```json
+{
+  "query": "Enterprise holodeck malfunctions"
+}
+```
+</details>
+
+</div>
+
+<div id="m-0b7611f3-6be0-8333-8e70-8a1c139fd11b" data-section-uuid="0b7611f3-6be0-8333-8e70-8a1c139fd11b" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:12+00:00" title="2369-05-02 10:00:12 UTC">Fri May 2nd, 2369 at 10:00</time>
+
+<details><summary>Tool result: web_search</summary>
+
+- [Holodeck](https://memory-alpha.example/Holodeck) — Memory Alpha
+- [Holodeck malfunctions](https://starfleet.example/incidents/holodeck) — Starfleet
+
+</details>
+
+</div>
+
+</details>
+
+<div id="m-0b7611f3-b230-8c74-a33b-1a4c569adc8f" data-section-uuid="0b7611f3-b230-8c74-a33b-1a4c569adc8f" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:00:30+00:00" title="2369-05-02 10:00:30 UTC">Fri May 2nd, 2369 at 10:00</time>
+
+The three most recent were the Moriarty incident, the Fistful of Datas program and the Robin Hood program.
+
+**Sources**
+
+1. [Holodeck malfunctions](https://starfleet.example/incidents/holodeck) — Starfleet
+
+</div>
+
+</details>
+
+<div id="m-0b7611f5-11c0-8c84-a4da-152e1778bb09" data-section-uuid="0b7611f5-11c0-8c84-a4da-152e1778bb09" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:02:00+00:00" title="2369-05-02 10:02:00 UTC">Fri May 2nd, 2369 at 10:02</time>
+
+Look up the four most recent holodeck malfunctions aboard the Enterprise and cite your sources.
+
+</div>
+
+<div id="m-0b7611f5-38d0-84fd-873a-05cd97691792" data-section-uuid="0b7611f5-38d0-84fd-873a-05cd97691792" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:10+00:00" title="2369-05-02 10:02:10 UTC">Fri May 2nd, 2369 at 10:02</time>
+
+<details><summary>Thinking</summary>
+
+> Search again for four.
+
+</details>
+
+</div>
+
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+
+<div id="m-0b7611f5-40a0-8602-a165-d0bc9f222227" data-section-uuid="0b7611f5-40a0-8602-a165-d0bc9f222227" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:12+00:00" title="2369-05-02 10:02:12 UTC">Fri May 2nd, 2369 at 10:02</time>
+
+<details><summary>Tool use: web_search — Searching the web</summary>
+
+```json
+{
+  "query": "Enterprise holodeck malfunctions four"
+}
+```
+</details>
+
+</div>
+
+<div id="m-0b7611f5-40a0-8ce8-a1c7-e277dde57e1b" data-section-uuid="0b7611f5-40a0-8ce8-a1c7-e277dde57e1b" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:12+00:00" title="2369-05-02 10:02:12 UTC">Fri May 2nd, 2369 at 10:02</time>
+
+<details><summary>Tool result: web_search</summary>
+
+- [Holodeck](https://memory-alpha.example/Holodeck) — Memory Alpha
+- [Holodeck malfunctions](https://starfleet.example/incidents/holodeck) — Starfleet
+
+</details>
+
+</div>
+
+</details>
+
+<div id="m-0b7611f5-ae00-8f22-a627-360db3feeb13" data-section-uuid="0b7611f5-ae00-8f22-a627-360db3feeb13" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:02:40+00:00" title="2369-05-02 10:02:40 UTC">Fri May 2nd, 2369 at 10:02</time>
+
+Four are on record; the most recent was the Moriarty incident.
+
+**Sources**
+
+1. [Holodeck](https://memory-alpha.example/Holodeck) — Memory Alpha
+2. [Holodeck malfunctions](https://starfleet.example/incidents/holodeck) — Starfleet
+
+</div>
+
+<div id="m-0b7611f5-fc20-826f-9831-9692292ea4a8" data-section-uuid="0b7611f5-fc20-826f-9831-9692292ea4a8" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:03:00+00:00" title="2369-05-02 10:03:00 UTC">Fri May 2nd, 2369 at 10:03</time>
+
+Plot how long each malfunction lasted and send me the chart.
+
+</div>
+
+<div id="m-0b7611f6-0fa8-8bbc-b8d5-7c60548511de" data-section-uuid="0b7611f6-0fa8-8bbc-b8d5-7c60548511de" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:05+00:00" title="2369-05-02 10:03:05 UTC">Fri May 2nd, 2369 at 10:03</time>
+
+<details><summary>Thinking</summary>
+
+> Write a script, run it, send the chart.
+
+</details>
+
+</div>
+
+<details class="tool-group">
+<summary>🛠 6 tool steps</summary>
+
+<div id="m-0b7611f6-2330-871f-b3bb-ce23a4ced182" data-section-uuid="0b7611f6-2330-871f-b3bb-ce23a4ced182" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:10+00:00" title="2369-05-02 10:03:10 UTC">Fri May 2nd, 2369 at 10:03</time>
+
+<details><summary>Tool use: Write — Created a file</summary>
+
+Create `holodeck_chart.py`
+
+```python
+import matplotlib.pyplot as plt
+plt.bar(['Moriarty', 'Datas', 'Robin Hood', 'Fair Haven'], [3, 1, 1, 2])
+plt.savefig('holodeck_chart.png')
+```
+</details>
+
+</div>
+
+<div id="m-0b7611f6-2718-895a-a994-85e04d238114" data-section-uuid="0b7611f6-2718-895a-a994-85e04d238114" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:11+00:00" title="2369-05-02 10:03:11 UTC">Fri May 2nd, 2369 at 10:03</time>
+
+<details><summary>Tool result: Write</summary>
+
+```
+File created successfully at: holodeck_chart.py
+```
+
+</details>
+
+</div>
+
+<div id="m-0b7611f6-4a40-8a5c-8b3d-397c846c0938" data-section-uuid="0b7611f6-4a40-8a5c-8b3d-397c846c0938" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:20+00:00" title="2369-05-02 10:03:20 UTC">Fri May 2nd, 2369 at 10:03</time>
+
+<details><summary>Tool use: Bash — Ran a command</summary>
+
+Render the chart
+
+```bash
+python3 holodeck_chart.py
+```
+</details>
+
+</div>
+
+<div id="m-0b7611f6-7150-87e2-91ff-af02b55e4f1b" data-section-uuid="0b7611f6-7150-87e2-91ff-af02b55e4f1b" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:30+00:00" title="2369-05-02 10:03:30 UTC">Fri May 2nd, 2369 at 10:03</time>
+
+<details><summary>Tool result: Bash</summary>
+
+```
+(no output)
+```
+
+</details>
+
+</div>
+
+<div id="m-0b7611f6-9860-8116-b04b-d80152806c08" data-section-uuid="0b7611f6-9860-8116-b04b-d80152806c08" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:40+00:00" title="2369-05-02 10:03:40 UTC">Fri May 2nd, 2369 at 10:03</time>
+
+<details><summary>Tool use: SendUserFile — Shared files</summary>
+
+```json
+{
+  "caption": "Malfunction durations",
+  "files": [
+    "/home/claude/holodeck_chart.png"
+  ],
+  "status": "normal"
+}
+```
+</details>
+
+</div>
+
+<div id="m-0b7611f6-9c48-8ba8-b723-964537117866" data-section-uuid="0b7611f6-9c48-8ba8-b723-964537117866" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:41+00:00" title="2369-05-02 10:03:41 UTC">Fri May 2nd, 2369 at 10:03</time>
+
+<details><summary>Tool result: SendUserFile</summary>
+
+```
+Sent 1 file.
+```
+
+</details>
+
+</div>
+
+</details>
+
+<div id="m-0b7611f6-bf70-817b-b650-a050ac6355c0" data-section-uuid="0b7611f6-bf70-817b-b650-a050ac6355c0" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:03:50+00:00" title="2369-05-02 10:03:50 UTC">Fri May 2nd, 2369 at 10:03</time>
+
+Here is the chart, and the script that drew it.
+
+📎 *[holodeck_chart.py (not yet fetched)]*
+
+</div>
+
+<div id="m-0b7611f7-d0e0-8b65-96d6-14d670429405" data-section-uuid="0b7611f7-d0e0-8b65-96d6-14d670429405" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:05:00+00:00" title="2369-05-02 10:05:00 UTC">Fri May 2nd, 2369 at 10:05</time>
+
+Here is the away team report and two photos from the holodeck. What do they show?
+
+🖼 *[arch.png (not yet fetched)]*
+
+🖼 *[sherwood.png (not yet fetched)]*
+
+📎 *[Away Team Report.pdf (not yet fetched)]*
+
+</div>
+
+<details class="branch">
+<summary>✎ Another version · 4 messages</summary>
+
+<div id="m-0b7611f7-e468-8c50-ba92-cb796e2cd8ef" data-section-uuid="0b7611f7-e468-8c50-ba92-cb796e2cd8ef" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:05+00:00" title="2369-05-02 10:05:05 UTC">Fri May 2nd, 2369 at 10:05</time>
+
+<details><summary>Thinking</summary>
+
+> Read the report first.
+
+</details>
+
+</div>
+
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+
+<div id="m-0b7611f7-f7f0-804c-9a96-bf9a1da24b4f" data-section-uuid="0b7611f7-f7f0-804c-9a96-bf9a1da24b4f" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:10+00:00" title="2369-05-02 10:05:10 UTC">Fri May 2nd, 2369 at 10:05</time>
+
+<details><summary>Tool use: Read — Read a file</summary>
+
+Read `/mnt/user-data/uploads/Away Team Report.pdf`
+</details>
+
+</div>
+
+<div id="m-0b7611f7-fbd8-8790-bbe0-d6e5653ebe87" data-section-uuid="0b7611f7-fbd8-8790-bbe0-d6e5653ebe87" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:11+00:00" title="2369-05-02 10:05:11 UTC">Fri May 2nd, 2369 at 10:05</time>
+
+<details><summary>Tool result: Read</summary>
+
+```
+All crew accounted for.
+```
+
+</details>
+
+</div>
+
+</details>
+
+<div id="m-0b7611f8-4610-84f9-91e4-10a3ca360578" data-section-uuid="0b7611f8-4610-84f9-91e4-10a3ca360578" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:05:30+00:00" title="2369-05-02 10:05:30 UTC">Fri May 2nd, 2369 at 10:05</time>
+
+The report says all crew are accounted for; the photos show the holodeck arch and Sherwood Forest.
+
+</div>
+
+</details>
+
+<div id="m-0b7611f8-bb40-8113-886b-a60954adcabe" data-section-uuid="0b7611f8-bb40-8113-886b-a60954adcabe" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-05-02T10:06:00+00:00" title="2369-05-02 10:06:00 UTC">Fri May 2nd, 2369 at 10:06</time>
+
+A second look: the arch is the holodeck's exit, and the forest is the Robin Hood program.
+
+</div>
+
+
 === claude_export/render_markdown/00000000-0000-83ab-b990-357eea87eda5/all.md ===
 ---
 title: "Claude Project · Stellar Cartography"
@@ -181,6 +539,231 @@ For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH
 ## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-14T10:02:00+00:00" title="2369-04-14 10:02:00 UTC">Mon Apr 14th, 2369 at 10:02</time>
 
 Perfect. Make it so.
+
+</div>
+
+
+=== claude_export/render_markdown/00000000-0000-8731-b6c5-2d66a2c4265c/all.md ===
+---
+title: "Warp Field Recalibration"
+provider: claude
+source_label: "Claude"
+chat_uuid: 00000000-0000-8731-b6c5-2d66a2c4265c
+markdown_uuid: 00000000-0000-8731-b6c5-2d66a2c4265c
+period: all
+display: "Warp Field Recalibration"
+account: "jlpicard@enterprise.starfleet.test"
+external_id: "c0000007-1701-4d00-8000-00000000c007"
+item_count: 6
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8731-b6c5-2d66a2c4265c">Warp Field Recalibration <a class="source-link" href="https://claude.ai/chat/c0000007-1701-4d00-8000-00000000c007" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-0b75c9a3-4680-8f18-9b74-f1de68268d1d" data-section-uuid="0b75c9a3-4680-8f18-9b74-f1de68268d1d" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:00:00+00:00" title="2369-04-18 09:00:00 UTC">Fri Apr 18th, 2369 at 09:00</time>
+
+Geordi, how far can we push the warp field before the nacelles complain?
+
+</div>
+
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+
+<div id="m-0b75c9a3-5a08-8fec-97d8-d163ce521717" data-section-uuid="0b75c9a3-5a08-8fec-97d8-d163ce521717" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:05+00:00" title="2369-04-18 09:00:05 UTC">Fri Apr 18th, 2369 at 09:00</time>
+
+<details><summary>Tool use: web_search — Searching the web</summary>
+
+```json
+{
+  "query": "Galaxy class maximum sustainable warp"
+}
+```
+</details>
+
+</div>
+
+<div id="m-0b75c9a3-65c0-88ab-a3e5-89b60c21f729" data-section-uuid="0b75c9a3-65c0-88ab-a3e5-89b60c21f729" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:08+00:00" title="2369-04-18 09:00:08 UTC">Fri Apr 18th, 2369 at 09:00</time>
+
+<details><summary>Tool result: web_search</summary>
+
+- [Warp factor](https://memory-alpha.test/wiki/Warp_factor) — Memory Alpha
+- [Galaxy class propulsion](https://tech-manual.test/ncc-1701-d/propulsion) — Starfleet Technical Manual
+
+</details>
+
+</div>
+
+</details>
+
+<div id="m-0b75c9a3-94a0-89c6-b27b-e588f8d0b997" data-section-uuid="0b75c9a3-94a0-89c6-b27b-e588f8d0b997" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:00:20+00:00" title="2369-04-18 09:00:20 UTC">Fri Apr 18th, 2369 at 09:00</time>
+
+Sustained warp 9.2 is the rated ceiling; the nacelles tolerate 9.6 for about twelve hours before the coils need a full recalibration.
+
+**Sources**
+
+1. [Warp factor](https://memory-alpha.test/wiki/Warp_factor) — Memory Alpha
+2. [Galaxy class propulsion](https://tech-manual.test/ncc-1701-d/propulsion) — Starfleet Technical Manual
+3. [Warp coil](https://memory-alpha.test/wiki/Warp_coil) — Memory Alpha
+
+</div>
+
+<details class="branch">
+<summary>✎ Another version · 2 messages</summary>
+
+<div id="m-0b75c9a4-30e0-8bd1-a2ad-d47516561b38" data-section-uuid="0b75c9a4-30e0-8bd1-a2ad-d47516561b38" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:01:00+00:00" title="2369-04-18 09:01:00 UTC">Fri Apr 18th, 2369 at 09:01</time>
+
+Give me the coil efficiencies as a table.
+
+</div>
+
+<div id="m-0b75c9a4-57f0-882c-9555-81a83be27d89" data-section-uuid="0b75c9a4-57f0-882c-9555-81a83be27d89" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:01:10+00:00" title="2369-04-18 09:01:10 UTC">Fri Apr 18th, 2369 at 09:01</time>
+
+This answer was left behind when the question was edited.
+
+</div>
+
+</details>
+
+<div id="m-0b75c9a5-1b40-8e11-8da0-3daa248fd980" data-section-uuid="0b75c9a5-1b40-8e11-8da0-3daa248fd980" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-18T09:02:00+00:00" title="2369-04-18 09:02:00 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+Write me a script that checks these coil readings.
+
+**[attachment: Pasted text]**
+> Coil 1: 98.2%
+> Coil 2: 97.1%
+
+
+</div>
+
+<details class="tool-group">
+<summary>🛠 6 tool steps</summary>
+
+<div id="m-0b75c9a5-2ec8-8b5f-a673-dfcdde1f92c4" data-section-uuid="0b75c9a5-2ec8-8b5f-a673-dfcdde1f92c4" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:05+00:00" title="2369-04-18 09:02:05 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool use: artifacts — Creating the coil check</summary>
+
+Create artifact: **Coil check** (`application/vnd.ant.code`)
+
+````python
+"""Coil check for the Enterprise-D."""
+REPORT = """
+```
+warp 9.6 for 12h
+```
+"""
+
+def ok(efficiency):
+    return efficiency >= 97.5
+````
+</details>
+
+</div>
+
+<div id="m-0b75c9a5-32b0-807a-8fb8-7d339dddae0f" data-section-uuid="0b75c9a5-32b0-807a-8fb8-7d339dddae0f" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:06+00:00" title="2369-04-18 09:02:06 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool result: artifacts</summary>
+
+```
+OK
+```
+
+</details>
+
+</div>
+
+<div id="m-0b75c9a5-4250-8473-95f1-58b02b56f728" data-section-uuid="0b75c9a5-4250-8473-95f1-58b02b56f728" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:10+00:00" title="2369-04-18 09:02:10 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool use: artifacts — Raising the threshold</summary>
+
+Update artifact: **coil_check**
+
+Replace:
+
+```
+97.5
+```
+
+with:
+
+```
+98.0
+```
+</details>
+
+</div>
+
+<div id="m-0b75c9a5-55d8-894e-b80c-32b4e60f024c" data-section-uuid="0b75c9a5-55d8-894e-b80c-32b4e60f024c" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:15+00:00" title="2369-04-18 09:02:15 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool use: create_file — Writing the report</summary>
+
+Create `/mnt/user-data/outputs/coil_report.md` — Coil report for the chief engineer
+
+```markdown
+# Coil report
+
+Coil 2 is below threshold.
+```
+</details>
+
+</div>
+
+<div id="m-0b75c9a5-6960-848b-9646-55c304cdc6b6" data-section-uuid="0b75c9a5-6960-848b-9646-55c304cdc6b6" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:20+00:00" title="2369-04-18 09:02:20 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool use: bash_tool — Running the check</summary>
+
+Check coil 2 against the threshold
+
+```bash
+python3 coil_check.py --coil 2
+```
+</details>
+
+</div>
+
+<div id="m-0b75c9a5-7ce8-84c5-85b2-0f9acb783056" data-section-uuid="0b75c9a5-7ce8-84c5-85b2-0f9acb783056" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:25+00:00" title="2369-04-18 09:02:25 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+<details><summary>Tool result: bash_tool</summary>
+
+```
+coil 2: 97.1% (below 98.0%)
+```
+
+</details>
+
+</div>
+
+</details>
+
+<div id="m-0b75c9a5-9070-8696-9347-ca9d80ad72ef" data-section-uuid="0b75c9a5-9070-8696-9347-ca9d80ad72ef" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-18T09:02:30+00:00" title="2369-04-18 09:02:30 UTC">Fri Apr 18th, 2369 at 09:02</time>
+
+Coil 2 is under threshold; schedule it for recalibration.
 
 </div>
 

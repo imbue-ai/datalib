@@ -17,8 +17,8 @@ pub mod youtube_watch_history;
 pub use db::{db_path_for, RawDb};
 
 use datalib_etl::download_problems::RunProblemKind;
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
 use std::path::PathBuf;
 
 use anyhow::Result;

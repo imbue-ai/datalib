@@ -142,6 +142,11 @@ export function sanitizeRenderedHtml(html: string, options: SanitizeOptions = {}
   context = options.context ?? NO_CONTEXT;
   found = [];
   const clean = DOMPurify.sanitize(html, {
+    // DOMPurify's own list plus the two schemes a chip link can carry:
+    // Slack's deep link for a user, and `datalib:` for our own entities
+    // (docs/dev/plans/chips.md). An href in any other scheme is dropped.
+    ALLOWED_URI_REGEXP:
+      /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|slack|datalib):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
     // Not in DOMPurify's default set; the plot pages are iframes.
     ADD_TAGS: ["iframe"],
     // `target` is what makes an outlink open outside the app.

@@ -4,6 +4,7 @@
 // the second sync picks it up.
 
 import { test, expect, type Page } from "@playwright/test";
+import { reviewToml } from "./wizard-helpers";
 import { copyFileSync } from "node:fs";
 import {
   cardOf,
@@ -175,7 +176,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // What the two steps will be, named from the catalog's default id,
     // shown before anything is written.
-    await wizard.getByText("Review the TOML this writes").click();
+    await reviewToml(page);
     const toml = wizard.locator("pre");
     await expect(toml).toContainText('id = "pdfs"');
     await expect(toml).toContainText('type = "pdf"');
@@ -326,7 +327,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await page.getByRole("button", { name: "Add source" }).click();
     await wizard.getByRole("searchbox").fill("signal");
     await wizard
-      .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })
+      .locator(".wiz-tile", { hasText: "Decrypt and copy an Android Signal backup" })
       .click();
     await wizard.locator("input.wiz-path").fill(SIGNAL_BACKUP_DIR!);
 

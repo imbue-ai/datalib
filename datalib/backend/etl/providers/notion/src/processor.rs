@@ -6,15 +6,14 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use datalib_etl::http::HttpResponse;
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_notion_config::{NotionConfig, NotionSync};
+use datalib_etl_web::http::HttpResponse;
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
 
@@ -54,13 +53,16 @@ impl DataProcessor for NotionIngest {
         &self.id
     }
 
+    /// Seals as pages, bodies and comments land.
+    fn streams_output(&self) -> bool {
+        true
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let now = datalib_time::parse_strict(ctx.now)
-            .with_context(|| format!("notion: run stamp {:?}", ctx.now))?;
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
-        ctx.run_store(pool, Some(cas_pool), |_| async {
+        ctx.run_store(pool, Some(cas_pool), |sealer| async {
             // `roots` narrows the mirror; empty means the whole workspace.
             // In playback mode the fixture tree is the workspace, so seeds
             // are derived from every synthesized page response.
@@ -79,16 +81,15 @@ impl DataProcessor for NotionIngest {
                 refresh_window_days: self.sync.refresh_window_days.unwrap_or(0),
                 comments: self.sync.comments,
                 attachments: self.sync.attachments,
-                sleep_between: Duration::ZERO,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
-                now,
+                sealer: Some(sealer),
                 ..ingest::FetchOptions::new(db)
             })
             .await?;
             Ok(format!(
-                "pages(new={}/upd={}) comments(new={}/upd={}) requests={}",
-                s.new_pages, s.upd_pages, s.new_comments, s.upd_comments, s.official_requests,
+                "pages(listed={}/new={}/upd={}) bodies={} comments={} requests={}",
+                s.listed, s.new_pages, s.upd_pages, s.bodies, s.comments, s.official_requests,
             ))
         })
         .await

@@ -34,6 +34,27 @@ import type {
   SlickEventData,
 } from "@slickgrid-universal/common";
 import { copyText, typedColumns, groupTitle } from "./typedColumns";
+import type { Identity } from "@/api";
+import { entityFromUri, handleFromUri } from "./chipLinks";
+import {
+  browseQuery,
+  entities,
+  entityCardSource,
+  entityCopyText,
+  entityMenu,
+  type EntityMenuEntry,
+} from "./entities";
+import {
+  NOBODY,
+  canLinkHandles,
+  chipCell,
+  chipLook,
+  chipMenu,
+  copyText as copyHandleText,
+  handleValue,
+  people,
+  type ChipMenuEntry,
+} from "./contacts";
 import {
   SEARCH,
   type AccountsMap,
@@ -50,11 +71,17 @@ import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import { filePathFromUrl, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { openExternal } from "@/externalLinks";
-import { subscribeLive } from "@/live";
+import { oneAtATime, subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { followFrame, isDarkTheme } from "@/grid/gridFrame";
-import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
+import {
+  filterToken,
+  keepExcludeEntries,
+  searchDelay,
+  withToken,
+  type FilterEntry,
+} from "@/grid/query";
 import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
@@ -149,8 +176,14 @@ const error = ref<SearchFailure | null>(null);
 // A failed search leaves the previous query's rows painted; say so, or
 // the count above them reads as the answer to what is typed.
 const showingStale = computed(
-  () => error.value !== null && rows.value.length > 0 && shownQuery.value !== query.value,
+  () =>
+    (error.value !== null || unfinished.value !== null) &&
+    rows.value.length > 0 &&
+    shownQuery.value !== query.value,
 );
+// Why the search cannot read what is typed — often a filter not
+// finished yet (`is:do`). The rows of the last query it could read stay.
+const unfinished = ref<string | null>(null);
 // A free-text search failed in qmd, and came back with no rows.
 const qmdError = ref<string | null>(null);
 // Free text asked of a root no sync has built a qmd index for yet.
@@ -196,6 +229,24 @@ function refreshQmdState() {
   refreshIndexCells();
   if (qmdColumnsVisible()) askAboutVisibleRows();
   else void askQmdState([]);
+}
+
+// Who the Author chips are comes from `people`, the one resolver every
+// document and grid asks (docs/dev/plans/chips.md § "One resolver"): a
+// cell that draws a handle asks as it draws, and when an answer changes —
+// it lands, or a link made anywhere forgets it — the cells are drawn again.
+// The Source cells are group chips, answered by `entities` the same way.
+const AUTHOR_COLUMN = "author_ref";
+const SOURCE_COLUMN = "source_ref";
+const stopPeople = people.subscribe(() => refreshCells(AUTHOR_COLUMN));
+const stopEntities = entities.subscribe(() => refreshCells(SOURCE_COLUMN));
+
+function refreshCells(columnId: string) {
+  const grid = vueGrid?.slickGrid;
+  const column = grid?.getColumnIndex(columnId);
+  if (!grid || column == null || column < 0) return;
+  const { top, bottom } = grid.getRenderedRange();
+  for (let row = top; row <= bottom; row++) grid.updateCell(row, column);
 }
 
 function askAboutVisibleRows() {
@@ -549,6 +600,12 @@ function copyCell(column: Column<Row>, row: Row): string {
   if (column.id === "qmd_indexed") return indexFlag(qmdDocState(row)?.indexed);
   if (column.id === "qmd_embedded") return indexFlag(qmdDocState(row)?.embedded);
   const spec = columns.value.find((c) => c.field === column.id);
+  if (spec?.type === "identity") {
+    const v = row[spec.field] as Identity | null | undefined;
+    if (v?.entity) return entityCopyText(v.entity, v.label);
+    const handle = v ? handleFromUri(v.id) : null;
+    if (handle && v) return copyHandleText(handle, v.label);
+  }
   return spec ? copyText(spec.type, row[spec.field]) : "";
 }
 
@@ -575,7 +632,7 @@ function buildFilterCtx(colId: string, data: Row): FilterCtx | null {
   // account's from the accounts map, a conversation's from its own cell.
   const shown = row[colId];
   const label =
-    colId === "author" || colId === "account"
+    colId === "author_ref" || colId === "account"
       ? (accounts.value[value]?.label ?? "")
       : spec.search.field !== colId && typeof shown === "string"
         ? shown
@@ -667,6 +724,8 @@ async function runSearch(q: string, refresh = false) {
   try {
     // The card shows a failure itself, beside the rows it concerns.
     const r = await fetchRows<Row>(url, q, limit, ctrl.signal, { toast: false }, { sort, through });
+    unfinished.value = r.refused?.[0] ?? null;
+    if (unfinished.value !== null) return;
     rowsSpec = { row_key: r.row_key, document: r.document, free_text: r.free_text };
     if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
       columns.value = r.columns;
@@ -775,6 +834,8 @@ async function runGrouped(q: string, refresh: boolean) {
   qmdIndexMissing.value = false;
   try {
     const r = await fetchGroups<Row>(q, by.join(","), ctrl.signal, url);
+    unfinished.value = r.refused?.[0] ?? null;
+    if (unfinished.value !== null) return;
     const windows = new Map(r.groups.map((g) => [groupKey(g.values), unread(g, r.at)]));
     if (again) {
       await Promise.all(
@@ -899,13 +960,13 @@ function redrawGroupRows() {
   grid.render();
 }
 
-watch(query, (q) => {
+watch(query, (q, before) => {
   if (debounceTimer) clearTimeout(debounceTimer);
   seekingSelection = false;
-  // Show the spinner immediately on input change — otherwise the 150ms
+  // Show the spinner immediately on input change — otherwise the
   // debounce leaves the user staring at the old rows with no feedback.
   loading.value = true;
-  debounceTimer = setTimeout(() => runSearch(q), 150);
+  debounceTimer = setTimeout(() => runSearch(q), searchDelay(before, q, qmd()));
   saveState();
 });
 
@@ -948,7 +1009,7 @@ const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
   kind: "kind",
   channel: "channel",
   touched_at: "touched_at",
-  author: "author",
+  author_ref: "author",
   account: "account",
 };
 
@@ -1106,12 +1167,13 @@ onMounted(nameSourcesInPlaceholder);
 // download is still going.
 const cardEl = ref<HTMLElement | null>(null);
 let unsubscribeLive: (() => void) | null = null;
+const refreshRows = oneAtATime(() => runSearch(query.value, true));
 onMounted(() => {
   unsubscribeLive = subscribeLive(
     {
       root: (e) => {
         if (e.kind !== "index_changed") return;
-        void runSearch(query.value, true);
+        refreshRows();
         if (!namesASource()) void nameSourcesInPlaceholder();
       },
     },
@@ -1119,6 +1181,8 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => unsubscribeLive?.());
+onBeforeUnmount(stopPeople);
+onBeforeUnmount(stopEntities);
 
 function docSource(md: string, anchor: string | null): string {
   const args = [md, anchor].map((a) => JSON.stringify(a)).join(", ");
@@ -1138,6 +1202,18 @@ function openRow(row: Row) {
 /// uuid.
 const accountFormatter: Formatter<Row> = (_r, _c, value) => {
   const v = typeof value === "string" ? value : "";
+  const label = accountLabel(v);
+  return { text: label, toolTip: v && label !== v ? v : "" };
+};
+
+/// The Author cell: a chip where the author has a handle, drawn from
+/// what `people` has answered so far; otherwise the name as shown, with
+/// an account's uuid read as the account's name.
+const authorFormatter: Formatter<Row> = (_r, _c, _v, _col, row) => {
+  const ref = row.author_ref;
+  const handle = ref ? handleFromUri(ref.id) : null;
+  if (handle && ref) return chipCell(handle, ref.label, people.lookup(handle), canLinkHandles());
+  const v = row.author ?? "";
   const label = accountLabel(v);
   return { text: label, toolTip: v && label !== v ? v : "" };
 };
@@ -1165,9 +1241,9 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
       return div;
     },
   },
-  author: {
+  author_ref: {
     width: 130,
-    formatter: accountFormatter,
+    formatter: authorFormatter,
     grouping: {
       getter: (row: Row) => accountLabel(row.author ?? ""),
       formatter: groupTitle("Author"),
@@ -1275,6 +1351,11 @@ watch(
     const typed = typedColumns<Row>(specs, {
       overrides: columnOverrides,
       groupable: true,
+      chips: {
+        who: (h) => people.lookup(h),
+        canLink: canLinkHandles,
+        entity: (uri) => entities.lookup(uri),
+      },
     });
     const at = typed.findIndex((c) => c.id === "project") + 1;
     const own = qmd() ? extraColumns : [];
@@ -1340,6 +1421,11 @@ type MenuScope = {
   filter: FilterEntry[];
   notion: FilterEntry[];
   links: { web: Row[]; local: string[] };
+  /// The chip in the cell under the click, when the cell is an Author
+  /// with a handle: the same entries a document's chip offers.
+  chip: { handle: string; name: string; entries: ChipMenuEntry[] } | null;
+  /// The group or step chip in the cell under the click: its entries.
+  entity: { uri: string; name: string; entries: EntityMenuEntry[] } | null;
 };
 
 const linkOf = (r: Row): string => r.source_url || "";
@@ -1382,11 +1468,36 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   // browser blocks it silently. Split on the URL SCHEME rather than on
   // provider, so any future local-file source inherits this.
   const linked = targets.filter((r) => linkOf(r));
+  const chipEl = el?.querySelector<HTMLElement>("a.chip[data-handle]") ?? null;
+  const chip = chipEl
+    ? (() => {
+        const handle = chipEl.dataset.handle ?? "";
+        const shownAs = chipEl.dataset.shownAs ?? "";
+        const w = people.get(handle) ?? NOBODY;
+        // No popover in a grid cell yet, so the link entry is not offered
+        // here; the document view has it.
+        return {
+          handle,
+          name: chipLook(handle, shownAs, w, false).text,
+          entries: chipMenu(handle, shownAs, w, false),
+        };
+      })()
+    : null;
+  const entityEl = el?.querySelector<HTMLElement>("a.chip[data-entity]") ?? null;
+  const entity = entityEl
+    ? (() => {
+        const uri = entityEl.dataset.entity ?? "";
+        const name = entityEl.dataset.label ?? entityEl.dataset.shownAs ?? uri;
+        return { uri, name, entries: entityMenu(uri, name) };
+      })()
+    : null;
   return {
     anchor,
     cell,
     copy,
     targets,
+    chip,
+    entity,
     filter: filterCtx ? keepExcludeEntries(filterCtx) : [],
     notion: notionCtx ? keepExcludeEntries(notionCtx) : [],
     links: {
@@ -1433,7 +1544,41 @@ function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
 // The right-click menu, ahead of the grid's own entries (the grouping
 // commands). Each entry decides for itself whether the
 // cell under the click gives it anything to do.
+const entityEntry = (id: EntityMenuEntry["id"], run: (m: MenuScope) => void) =>
+  entry(`entity-${id}`, (m) => m.entity?.entries.find((e) => e.id === id)?.label ?? null, run);
+
+/// A group's dashboard or a step's log, beside this card.
+function openEntity(uri: string) {
+  const source = entityCardSource(uri);
+  if (source) props.ctx.host.openCards(source);
+}
+
+const chipEntry = (id: ChipMenuEntry["id"], run: (m: MenuScope) => void) =>
+  entry(`chip-${id}`, (m) => m.chip?.entries.find((e) => e.id === id)?.label ?? null, run);
+
 const menuItems: (MenuCommandItem | "divider")[] = [
+  chipEntry("copy-name", (m) => void copyToClipboard(m.chip!.name)),
+  chipEntry("copy-id", (m) => void copyToClipboard(handleValue(m.chip!.handle))),
+  chipEntry("copy-both", (m) => void copyToClipboard(copyHandleText(m.chip!.handle, m.chip!.name))),
+  chipEntry("search", (m) =>
+    appendFilterToQuery(filterToken("author_handle", m.chip!.handle, false)),
+  ),
+  dividerAfter((m) => m.chip !== null),
+  entityEntry("copy-name", (m) => void copyToClipboard(m.entity!.name)),
+  entityEntry(
+    "copy-id",
+    (m) => void copyToClipboard(entityFromUri(m.entity!.uri)?.id ?? m.entity!.uri),
+  ),
+  entityEntry(
+    "copy-both",
+    (m) => void copyToClipboard(entityCopyText(m.entity!.uri, m.entity!.name)),
+  ),
+  entityEntry("open", (m) => openEntity(m.entity!.uri)),
+  entityEntry("browse", (m) => {
+    const q = browseQuery(m.entity!.uri);
+    if (q) query.value = q;
+  }),
+  dividerAfter((m) => m.entity !== null),
   entry(
     "keep",
     (m) => m.filter[0]?.label ?? null,
@@ -1788,7 +1933,16 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   if (doc) props.ctx.host.openCards(docSource(doc.md, doc.anchor));
 }
 
-function onClick(_e: SlickEventData, args: OnClickEventArgs) {
+/// The chip under a pointer event in a cell, if any.
+function chipAt(e: SlickEventData): HTMLElement | null {
+  const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
+  return target?.closest?.<HTMLElement>("a.chip[data-handle], a.chip[data-entity]") ?? null;
+}
+
+function onClick(e: SlickEventData, args: OnClickEventArgs) {
+  // A chip is a link; a click on it selects the row and nothing more —
+  // the mail client its href would open is not what a click here asks.
+  if (chipAt(e)) e.getNativeEvent<MouseEvent>()?.preventDefault();
   // A data row that is already the one selected selects again as far
   // as the reader is concerned, though the selection model sees no
   // change: keep the persisted selection on it.
@@ -1801,7 +1955,20 @@ function onClick(_e: SlickEventData, args: OnClickEventArgs) {
   }
 }
 
-function onDblClick(_e: SlickEventData, args: OnDblClickEventArgs) {
+function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
+  // Double-click on a chip is everything from that person: the grid,
+  // narrowed to their handle (docs/dev/plans/chips.md § Clicks).
+  // On a group or step chip, it opens that group's dashboard or that
+  // step's log.
+  const chip = chipAt(e);
+  if (chip?.dataset.entity) {
+    openEntity(chip.dataset.entity);
+    return;
+  }
+  if (chip) {
+    appendFilterToQuery(filterToken("author_handle", chip.dataset.handle ?? "", false));
+    return;
+  }
   const data = rowData(args.row);
   if (data) openRow(data);
 }
@@ -1877,6 +2044,10 @@ onBeforeUnmount(() => {
     </div>
 
     <p v-if="qmdError" class="qmd-error" role="alert">Free-text search failed: {{ qmdError }}</p>
+    <p v-if="unfinished" class="query-unread" role="status">
+      {{ unfinished }}
+      <template v-if="showingStale">The rows below are from the previous search.</template>
+    </p>
     <p v-if="qmdIndexMissing" class="qmd-unbuilt" role="status">
       Free-text search starts working once the first sync builds the search index.
     </p>
@@ -1994,6 +2165,7 @@ onBeforeUnmount(() => {
 .error-retry:hover {
   background: var(--datalib-border);
 }
+.query-unread,
 .qmd-unbuilt {
   padding: 0.4rem 0.6rem;
   border: 1px solid var(--datalib-border);

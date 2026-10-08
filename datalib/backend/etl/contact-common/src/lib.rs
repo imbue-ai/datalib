@@ -1,4 +1,4 @@
-//! `datalib-etl-contact-common` — the one place a `DatalibContact` becomes
+//! `datalib-etl-contact-common` — the one place a `NormalizedContact` becomes
 //! a document: its markdown page and grid row, for every source about
 //! people (vCards, LinkedIn connections, Facebook friends).
 

@@ -16,9 +16,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use datalib_etl::http::HttpResponse;
-use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
+use datalib_etl_web::http::HttpResponse;
+use datalib_etl_web::retry::{self, RetryGuard};
 use serde_json::json;
 
 use crate::support::{
@@ -67,7 +67,15 @@ async fn a_message_that_will_not_fetch_is_owed_and_does_not_hold_the_cursor() {
     assert_eq!(third.emails_upserted, 1, "{third:?}");
     assert_eq!(m.gmail_ids().await, ids(&[GOOD, BAD]));
     assert!(problems(&m).await.is_empty(), "{:?}", problems(&m).await);
-    assert_eq!(attempts(&m, BAD).await, 0, "the attempts go with the fetch");
+    assert_eq!(
+        attempts(&m, BAD).await,
+        3,
+        "the sidecar counts every attempt, the fetch that worked included"
+    );
+    assert!(
+        last_error(&m, BAD).await.is_none(),
+        "the failure goes with the fetch"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -152,7 +160,7 @@ async fn problems(m: &Mirror) -> Vec<String> {
     .await
 }
 
-/// How many fetches of `id` have failed since it last fetched.
+/// How many times `id` has been asked for.
 async fn attempts(m: &Mirror, id: &'static str) -> i64 {
     m.read(|db| async move {
         sqlx::query_scalar(
@@ -162,6 +170,18 @@ async fn attempts(m: &Mirror, id: &'static str) -> i64 {
         .fetch_one(db.pool())
         .await
         .expect("read the attempts")
+    })
+    .await
+}
+
+/// What the last attempt on `id` failed with, if it failed.
+async fn last_error(m: &Mirror, id: &'static str) -> Option<String> {
+    m.read(|db| async move {
+        sqlx::query_scalar("SELECT last_error FROM listed_messages_bookkeeping WHERE id = ?")
+            .bind(id)
+            .fetch_one(db.pool())
+            .await
+            .expect("read the last error")
     })
     .await
 }

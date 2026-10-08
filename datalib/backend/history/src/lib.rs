@@ -60,8 +60,9 @@ pub struct TableState {
 
 /// The tables every raw store has that are datalib's, not the source's:
 /// `datalib_etl::doltlite_raw::SHARED_TABLES` and the file-scan cursor
-/// `ingested_files`. Listed here because this crate cannot link the
-/// ingest framework; a test there keeps the two in step.
+/// `ingested_files`, plus `sync_scope_config`, which no build writes but
+/// older commits still hold. Listed here because this crate cannot link
+/// the ingest framework; a test there keeps the two in step.
 const DATALIB_TABLES: &[&str] = &[
     "_datalib_meta",
     "sync_runs",

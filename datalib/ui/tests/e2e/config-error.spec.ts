@@ -10,7 +10,7 @@
 // no reload. `watch.rs` reports the write as `config_changed`; `App.vue`
 // re-checks on it.
 import { test, expect, type Page } from "@playwright/test";
-import { MENU_DISABLED, rowMenuEntry } from "./grid-helpers";
+import { MENU_DISABLED, cardOf, nameCell, rowMenuEntry } from "./grid-helpers";
 import { readFileSync, writeFileSync } from "node:fs";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -93,6 +93,25 @@ test("a broken entry costs that entry, and nothing else", async ({ page, request
   // And the banner above the table says how many, so a dropped row
   // cannot be scrolled past unnoticed.
   await expect(page.getByText("entry isn’t in the pipeline")).toBeVisible();
+});
+
+test("a config warning drops nothing, and the System row counts it", async ({ page }) => {
+  // A group with nothing under it loads, with a warning. No entry's row
+  // is dropped, so before the System row carried the count the app
+  // never showed it.
+  writeConfig(`${original}\n[[groups]]\nid = "lonely"\n`);
+
+  await page.goto("/data_sources");
+  await expect(gate(page)).toHaveCount(0);
+  const warning = nameCell(page, "system").locator(".tg-chip-warning");
+  await expect(warning).toHaveText("1");
+  await expect(warning).toHaveAttribute("title", /"lonely" has no steps/);
+  await expect(page.getByText("entry isn’t in the pipeline")).toHaveCount(0);
+
+  // Its words are in the config, so that is what a double-click opens.
+  await expect(cardOf(page, "configView(")).toHaveCount(0);
+  await warning.dblclick();
+  await expect(cardOf(page, "configView(")).toHaveCount(1);
 });
 
 test("a step naming a group the config lacks says so on its Edit button", async ({ page }) => {

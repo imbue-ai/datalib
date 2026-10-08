@@ -128,16 +128,9 @@ async fn parse_async(
     let pool = reader.pool().clone();
     let pin = reader.pin().clone();
 
-    let cas_path = blob_cas::cas_path_for(db_path);
-    let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
-        Some(
-            datalib_etl::blob_cas::open_cas_reader(&cas_path)
-                .await
-                .with_context(|| format!("open CAS for render at {}", cas_path.display()))?,
-        )
-    } else {
-        None
-    };
+    let cas_pool = blob_cas::open_cas_for_render(db_path)
+        .await
+        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
 
     let mut unparsed: Vec<Unparsed> = Vec::new();
     let accounts = load_accounts(&pool, &mut unparsed).await?;
@@ -174,17 +167,19 @@ async fn parse_async(
     // synthesized content-hash ref id and populating
     // `bucket.joins.attachments[email_id]` so render's existing
     // `bucket.blobs.get(&att.blob_id)` lookup resolves uniformly.
-    if let Some(cas_pool) = cas_pool.as_ref() {
-        let refs = docs
-            .iter()
-            .enumerate()
-            .map(|(i, bucket)| (i, bucket.emails.iter().map(|em| em.blob_id.as_str())));
-        let mut blobs = BlobBundle::load_many(&pool, cas_pool, EML_PROJECTION_SQL, refs).await?;
-        for (i, bucket) in docs.iter_mut().enumerate() {
-            if let Some(b) = blobs.remove(&i) {
-                bucket.blobs = b;
-                extract_attachments_from_emls(bucket);
-            }
+    let refs = docs
+        .iter()
+        .enumerate()
+        .map(|(i, bucket)| (i, bucket.emails.iter().map(|em| em.blob_id.as_str())));
+    let loaded = BlobBundle::load_many(&pool, cas_pool.as_ref(), EML_PROJECTION_SQL, refs).await;
+    if let Some(cas) = cas_pool {
+        cas.close().await;
+    }
+    let mut blobs = loaded?;
+    for (i, bucket) in docs.iter_mut().enumerate() {
+        if let Some(b) = blobs.remove(&i) {
+            bucket.blobs = b;
+            extract_attachments_from_emls(bucket);
         }
     }
 

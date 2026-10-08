@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_garmin_config::{GarminApi, GarminConfig};
 
-use datalib_etl::http::LatchkeySettings;
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
 

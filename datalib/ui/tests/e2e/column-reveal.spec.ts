@@ -27,8 +27,8 @@ test("opening a document scrolls the new column into view", async ({ page }) => 
   await expect(page.locator(".chat-preview")).toBeVisible();
 
   // Before the reveal lands the column overhangs the row by hundreds of
-  // px; the reveal is a smooth scroll, so poll for where it settles.
-  // ±1 for sub-pixel layout.
+  // px; the reveal runs once the column is mounted, so poll for where
+  // it settles. ±1 for sub-pixel layout.
   await expect
     .poll(
       async () => {

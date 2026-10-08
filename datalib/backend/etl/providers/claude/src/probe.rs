@@ -32,16 +32,14 @@ pub async fn probe(
         ));
     }
 
-    let mut client = ClaudeClient::with_latchkey(config.latchkey_settings.clone());
+    let client = ClaudeClient::with_latchkey(config.latchkey_settings.clone());
     let account = client
         .current_account()
         .await
         .map_err(crate::ingest::credential_hint)?;
     let (items, notes) = match ask {
         ProbeAsk::Account => (Vec::new(), Vec::new()),
-        ProbeAsk::List(ProbeList::Conversations) => {
-            list_conversations(&mut client, progress).await?
-        }
+        ProbeAsk::List(ProbeList::Conversations) => list_conversations(&client, progress).await?,
         ProbeAsk::List(other) => bail!("a Claude source has no `{}` list", other.as_str()),
     };
     Ok(ProbeReport {
@@ -72,7 +70,7 @@ pub async fn probe(
 /// Every conversation in every org the account belongs to, newest
 /// first, with a note for an org that would not list.
 async fn list_conversations(
-    client: &mut ClaudeClient,
+    client: &ClaudeClient,
     progress: OnProgress<'_>,
 ) -> Result<(Vec<ProbeItem>, Vec<String>)> {
     let orgs = client

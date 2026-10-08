@@ -16,10 +16,13 @@ use datalib_etl::bulk::BulkUpsertable as _;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr};
 use datalib_etl::download_problems::RunProblem;
-use datalib_etl::export_files::ExportFiles;
 use datalib_etl::progress::Progress;
+use datalib_etl::prune;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_files::export_files::ExportFiles;
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fsscan::ScannedFile;
 use datalib_etl_macros::RawStoreHandle;
 use datalib_problems::Reason;
 use serde::Serialize;
@@ -27,7 +30,7 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use uuid::Uuid;
 
-use schema_raw::{canonical_table, facebook_ns, media_ddl, MediaBlobRow};
+use schema_raw::{canonical_table, facebook_ns, store_ddl, MediaBlobRow};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -56,9 +59,9 @@ pub struct RawDb {
 
 impl RawDb {
     /// Open the store to write it. The record tables are created as the
-    /// walk meets their files, so only the media edge table is DDL here.
+    /// walk meets their files, so only the fixed tables are DDL here.
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let ddl = media_ddl();
+        let ddl = store_ddl();
         let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &ddl).await?;
         let cas = BlobCas::open(&cas_path_for(db_path)).await?;
@@ -78,12 +81,7 @@ impl RawDb {
         let Some(reader) = dr::open_reader(db_path, commit).await? else {
             return Ok(None);
         };
-        let cas_path = cas_path_for(db_path);
-        let cas = if cas_path.is_file() {
-            Some(BlobCas::open_reader(&cas_path).await?)
-        } else {
-            None
-        };
+        let cas = BlobCas::open_for_render(db_path).await?;
         Ok(Some(Self {
             pool: reader.pool().clone(),
             cas,
@@ -135,6 +133,10 @@ pub struct FetchSummary {
     pub files: usize,
     pub rows: usize,
     pub parse_errors: usize,
+    /// Records the export no longer holds, deleted.
+    pub removed: usize,
+    /// Media edges of deleted records, or to a `uri` a record stopped naming.
+    pub media_edges_removed: usize,
     /// Media files whose bytes this run put into the CAS.
     pub media_stored: usize,
     /// Media files already in the CAS from an earlier run.
@@ -162,13 +164,19 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     // chunk that would not read leaves the whole table unpruned: its rows
     // are not in this run's set, and absence from it means nothing.
     let mut unread_tables: HashSet<String> = HashSet::new();
+    // Every chunk file this run read, by table, to stamp as what the table
+    // was last read from.
+    let mut chunks: BTreeMap<String, Vec<ScannedFile>> = BTreeMap::new();
+    let mut present: HashSet<String> = HashSet::new();
 
     for path in export.with_extension("json") {
         let rel = relative(&opts.input_path, path);
         let table = canonical_table(&rel);
-        match read_records(path) {
-            Ok(records) => {
+        present.insert(rel.clone());
+        match read_records(path, &rel) {
+            Ok((records, file)) => {
                 summary.files += 1;
+                chunks.entry(table.clone()).or_default().push(file);
                 let rows = by_table.entry(table.clone()).or_default();
                 for record in records {
                     let id = row_id(&table, &record);
@@ -191,12 +199,50 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         }
     }
 
-    let mut tx = db.pool().begin().await.context("begin facebook tx")?;
-    for (table, rows) in &by_table {
-        let prune = export.errors.is_empty() && !unread_tables.contains(table);
-        upsert_and_prune(&mut tx, table, rows, prune).await?;
-        summary.rows += rows.len();
+    // A table is split into chunks (`album/0.json`, `album/1.json`), and an
+    // export unpacked only in part can hold some of them: absence from this
+    // run's set then means nothing. A table prunes only when every chunk it
+    // was last read from is here.
+    let mut short_tables: HashSet<String> = HashSet::new();
+    for table in by_table.keys() {
+        let scope = chunk_scope(table);
+        for rel in file_checkpoint::load_cursor(db.pool(), &scope)
+            .await?
+            .keys()
+        {
+            if !present.contains(rel) {
+                problems.push(RunProblem::listing(
+                    &format!("file {rel}"),
+                    "a part of a table the export holds the rest of is missing, so \
+                     nothing of the table was deleted; reset the source if the export \
+                     really has fewer parts now"
+                        .to_string(),
+                ));
+                short_tables.insert(table.clone());
+            }
+        }
     }
+
+    let mut tx = db.pool().begin().await.context("begin facebook tx")?;
+    let mut pruned: HashSet<String> = HashSet::new();
+    let mut read_in_pruned: HashSet<&str> = HashSet::new();
+    for (table, rows) in &by_table {
+        let prune = export.errors.is_empty()
+            && !unread_tables.contains(table)
+            && !short_tables.contains(table);
+        let gone = upsert_and_prune(&mut tx, table, rows, prune).await?;
+        if prune {
+            pruned.extend(gone);
+            read_in_pruned.extend(rows.keys().map(String::as_str));
+        }
+        summary.rows += rows.len();
+        for file in chunks.get(table).into_iter().flatten() {
+            file_checkpoint::record_file(&mut tx, &chunk_scope(table), file).await?;
+        }
+    }
+    summary.removed = pruned.len();
+    summary.media_edges_removed =
+        prune_media_edges(&mut tx, &by_table, &pruned, &read_in_pruned).await?;
     tx.commit().await.context("commit facebook tx")?;
 
     // Media after the records are committed: an edge is additive, and a
@@ -217,16 +263,57 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     Ok(summary)
 }
 
+/// Delete the media edges that are no longer true, in the transaction that
+/// prunes the records: a deleted record's, and those of a record read this
+/// run, in a table that pruned, to a `uri` it no longer names. A record in
+/// a table held back keeps its edges, as it keeps its row. Returns how many
+/// went.
+async fn prune_media_edges(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    by_table: &Tables,
+    pruned: &HashSet<String>,
+    read_in_pruned: &HashSet<&str>,
+) -> Result<usize> {
+    let mut read: HashSet<&str> = HashSet::new();
+    let mut named: HashSet<String> = HashSet::new();
+    for rows in by_table.values() {
+        for (id, record) in rows {
+            read.insert(id);
+            let mut uris = Vec::new();
+            collect_uris(record, &mut uris);
+            named.extend(uris.iter().map(|uri| MediaBlobRow::pk_recipe(id, uri)));
+        }
+    }
+    let stored: Vec<(String, String)> = sqlx::query_as("SELECT id, owner_id FROM media_blobs")
+        .fetch_all(&mut **tx)
+        .await
+        .context("list media_blobs")?;
+    let held = stored.len();
+    let keep: HashSet<String> = stored
+        .into_iter()
+        .filter(|(id, owner)| {
+            let owner = owner.as_str();
+            let owner_gone = pruned.contains(owner) && !read.contains(owner);
+            let unnamed = read_in_pruned.contains(owner) && !named.contains(id);
+            !(owner_gone || unnamed)
+        })
+        .map(|(id, _)| id)
+        .collect();
+    let gone = prune::prune_scope_in_tx(tx, MediaBlobRow::TABLE, &[], &keep).await?;
+    prune::record(MediaBlobRow::TABLE, held, gone.len());
+    Ok(gone.len())
+}
+
 /// Upsert this run's rows and, when `prune`, delete the ones the export
 /// no longer holds, in the caller's transaction, so a commit landing at
 /// any point sees either last run's table or this run's — never an
-/// emptied one.
+/// emptied one. Returns the ids deleted.
 async fn upsert_and_prune(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     rows: &BTreeMap<String, Value>,
     prune: bool,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let ddl = dr::wire_payload_table_ddl(table, &[]);
     // Audited: `table` is `canonical_table`'s output — ASCII alphanumerics
     // and `_` only — so it is safe as an identifier; rows are bound.
@@ -278,7 +365,12 @@ async fn upsert_and_prune(
             .await
             .with_context(|| format!("insert into {table}"))?;
     }
-    Ok(())
+    Ok(gone.into_iter().cloned().collect())
+}
+
+/// The `ingested_files` scope naming the chunk files a table was read from.
+fn chunk_scope(table: &str) -> String {
+    format!("facebook/{table}")
 }
 
 /// Every `uri` in every record, read off disk into the CAS once. A `uri`
@@ -404,13 +496,20 @@ fn looks_like_export_path(s: &str) -> bool {
 /// Parse one export file into its records: an array is one record per
 /// element, an object wrapping a single array (`{"comments_v2": […]}`)
 /// likewise, and anything else — an album, the profile — is one record.
-/// Every string is passed through [`mojibake::fix`] on the way in.
-fn read_records(path: &Path) -> Result<Vec<Value>> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+/// Every string is passed through [`mojibake::fix`] on the way in. The
+/// file comes back as what to stamp once its rows are stored.
+fn read_records(path: &Path, rel: &str) -> Result<(Vec<Value>, ScannedFile)> {
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let mut v: Value =
-        serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
     mojibake::fix(&mut v);
-    Ok(split_records(v))
+    let file = ScannedFile {
+        path: path.to_path_buf(),
+        rel: rel.to_string(),
+        size: bytes.len() as i64,
+        blake3: *blake3::hash(&bytes).as_bytes(),
+    };
+    Ok((split_records(v), file))
 }
 
 fn split_records(v: Value) -> Vec<Value> {

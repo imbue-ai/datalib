@@ -45,7 +45,10 @@ use datalib_schema::providers::Provider;
 ///     again.
 /// v9: the author span carries the author's handle as `data-handle`.
 /// v10: each thread carries its authors' Slack profiles (title, email).
-pub const RENDER_VERSION: u32 = 10;
+/// v11: a `<@U…>` mention in a body is a chip link to the user.
+/// v12: a mention in code is `@12ame`, not a link's markdown, and a `!`
+///     typed before a mention or link no longer makes it an image.
+pub const RENDER_VERSION: u32 = 12;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -158,6 +161,7 @@ fn build_chats(
         let labels = Labels {
             users: bucket.inputs.lookup("users", user_labels),
             channels: bucket.inputs.lookup("channels", channel_labels),
+            team_id: bucket.messages.first().map_or("", |m| m.team_id.as_str()),
         };
         let channels = bucket.inputs.lookup("channels", &parsed.channels);
         let root: &Message = bucket
@@ -299,6 +303,7 @@ fn build_item(
             msg_id.natural_key.clone(),
         )),
         is_aside: false,
+        branch: Vec::new(),
         unread,
         recipients: Vec::new(),
         problems,
@@ -413,6 +418,7 @@ fn build_reactions(
             let id = ids::reaction(source_id, &m.team_id, &m.channel_id, &m.ts, name, "");
             out.push(NormalizedReaction {
                 reaction_uuid: id.uuid.clone(),
+                reactor_handle: None,
                 reactor_display: format!("{count}"),
                 emoji,
                 date_ms,
@@ -423,6 +429,7 @@ fn build_reactions(
                 let id = ids::reaction(source_id, &m.team_id, &m.channel_id, &m.ts, name, u);
                 out.push(NormalizedReaction {
                     reaction_uuid: id.uuid.clone(),
+                    reactor_handle: Handle::slack(&m.team_id, u),
                     reactor_display: user_labels.get(u).cloned().unwrap_or_else(|| u.to_string()),
                     emoji: emoji.clone(),
                     date_ms,

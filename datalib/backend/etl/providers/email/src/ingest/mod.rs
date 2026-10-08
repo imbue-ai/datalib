@@ -13,27 +13,30 @@ pub mod schema_raw;
 pub mod session;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use async_trait::async_trait;
+use datalib_etl::blob_cas::{blake3_hex, CasEdgeRow as _, CasInsert};
+use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable as _};
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::http::LatchkeySettings;
+use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Listed, Outcome};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
-use tokio::task::JoinSet;
+use sqlx::{Sqlite, Transaction};
 use tracing::{debug, info, warn};
 
 pub use db::{block_on_load_all, db_path_for, LoadedRaw, RawDb};
 
 use api::call;
 use datalib_etl::doltlite_raw as dr;
-use db::refresh_email_joins;
-use listed::{Held, Named, WHOLE_ACCOUNT};
+use db::{refresh_email_joins, write_eml_edges_in_tx};
+use listed::{Named, WHOLE_ACCOUNT};
 use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, MAILBOX_VOLATILE_PATHS};
 
 async fn upsert_account(
@@ -178,8 +181,6 @@ const BLOB_TIMEOUT: Duration = Duration::from_secs(180);
 /// against the download endpoint. Override per-source in the `sync:`
 /// block; set `1` to restore strictly-serial fetching.
 const DEFAULT_BLOB_CONCURRENCY: usize = 8;
-/// Downloaded `.eml` bytes the blob phase holds before it writes them.
-const DEFAULT_BLOB_FLUSH_BYTES: usize = 32 * 1024 * 1024;
 
 /// Envelope-only `Email/get` properties. Body parts (`bodyValues`,
 /// `textBody`, `htmlBody`, `preview`) are deliberately omitted: the
@@ -234,8 +235,11 @@ pub struct FetchOptions {
     /// How many `.eml` downloads to keep in flight at once during the
     /// blob phase. `None` → [`DEFAULT_BLOB_CONCURRENCY`]; clamped to ≥ 1.
     pub blob_download_concurrency: Option<usize>,
-    /// How many bytes of downloaded `.eml` may wait in memory before the
-    /// blob phase writes them. `None` → [`DEFAULT_BLOB_FLUSH_BYTES`].
+    /// How many `.eml` outcomes the blob phase writes in one
+    /// transaction. `None` → [`BLOB_FLUSH_COUNT`].
+    pub blob_flush_count: Option<usize>,
+    /// How many bytes of `.eml` bodies the blob phase holds before it
+    /// writes them, whatever the count. `None` → [`BLOB_FLUSH_BYTES`].
     pub blob_flush_bytes: Option<usize>,
     pub progress: Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
@@ -256,6 +260,7 @@ impl FetchOptions {
             only_mailbox_labels: Vec::new(),
             blob_size_limit_bytes: None,
             blob_download_concurrency: None,
+            blob_flush_count: None,
             blob_flush_bytes: None,
             progress: Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
@@ -301,9 +306,11 @@ const GET_FAILURE_BUDGET: usize = 3;
 /// `.eml` downloads in a row that may fail before the phase stops: past
 /// this many, something is wrong with every download, not with one.
 const BLOB_FAILURE_BUDGET: usize = 20;
-/// `.eml` outcomes the blob phase holds before it writes them, however
-/// small the bodies are.
+/// `.eml` outcomes the blob phase writes in one transaction, and the
+/// bytes of bodies that force a write sooner: the bodies wait in memory
+/// until their flush.
 const BLOB_FLUSH_COUNT: usize = 256;
+const BLOB_FLUSH_BYTES: usize = 32 * 1024 * 1024;
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
@@ -689,7 +696,8 @@ impl EmailListing<'_> {
 
             let mut tx = self.db.pool().begin().await.context("begin changes tx")?;
             listed::list_in_tx(&mut tx, &named, Some(&new_state), Named::Changed).await?;
-            summary.emails_destroyed += listed::forget_in_tx(&mut tx, self.now, &destroyed).await?;
+            summary.emails_destroyed +=
+                listed::forget_in_tx(&mut tx, self.now, &destroyed, listed::same_id).await?;
             listed::save_token_in_tx(&mut tx, &self.token_scope(), &new_state).await?;
             tx.commit().await.context("commit changes tx")?;
             if let Some(sealer) = &self.opts.sealer {
@@ -818,17 +826,16 @@ impl EmailListing<'_> {
             self.now,
             &scopes,
             whole_account.then_some(&named),
+            listed::same_id,
         )
         .await?;
         Ok(())
     }
 
     /// Fetch, with `Email/get`, every listed email the store does not
-    /// hold at its listed stamp. Each batch is one transaction: the
-    /// email rows, their thread rows and the stamp they satisfy. An email
-    /// the server no longer has, or that a label filter keeps out, loses
-    /// its listing and whatever was held for it. A batch that fails
-    /// leaves its emails owed.
+    /// hold at its listed stamp: `owed::drain`, fifty to a batch. An
+    /// email the server no longer has, or that a label filter keeps out,
+    /// is gone: its listing, its row and whatever was held for it go.
     async fn fetch_owed(
         &self,
         mailbox_filter: Option<&BTreeSet<String>>,
@@ -836,84 +843,126 @@ impl EmailListing<'_> {
         found: &RunProblems,
         summary: &mut FetchSummary,
     ) -> Result<()> {
-        let owed = listed::owed(self.db.pool()).await?;
+        let pool = self.db.pool();
+        let owed = owed::owed(pool, listed::LISTED, listed::listing(pool, false).await?).await?;
         if owed.is_empty() {
             return Ok(());
         }
         bar.expect(owed.len() as u64);
         bar.doing("fetching emails");
-        let mut failures_in_a_row = 0;
-        for batch in owed.chunks(EMAIL_GET_BATCH) {
-            if self.stopping() {
-                return Ok(());
-            }
-            let ids: Vec<String> = batch.iter().map(|o| o.id.clone()).collect();
-            let resp = match email_get(self.session, self.account_id, &ids).await {
-                Ok(resp) => resp,
-                Err(_) if self.stopping() => return Ok(()),
-                Err(e) if !api::is_upstream(&e) => return Err(e),
-                Err(e) => {
-                    let said = format!("{e:#}");
-                    listed::record_failures(self.db.pool(), &ids, &said).await?;
-                    failures_in_a_row += 1;
-                    if api::is_terminal(&e) || failures_in_a_row >= GET_FAILURE_BUDGET {
-                        found.phase(M_EMAIL_GET, said);
-                        found.cut_short();
-                        return Ok(());
-                    }
-                    bar.did(batch.len() as u64);
-                    continue;
-                }
-            };
-            failures_in_a_row = 0;
-
-            let stamps: HashMap<&str, &Option<String>> =
-                batch.iter().map(|o| (o.id.as_str(), &o.stamp)).collect();
-            let mut held: Vec<Held> = Vec::new();
-            let mut gone = string_array(&resp, "notFound");
-            for envelope in jmap_list(&resp) {
-                let Some(row) = EmailRow::from_jmap_envelope(self.account_id, &envelope) else {
-                    continue;
-                };
-                let Some(stamp) = stamps.get(row.id()) else {
-                    continue;
-                };
-                let admitted =
-                    mailbox_filter.is_none_or(|f| row.mailbox_ids().iter().any(|m| f.contains(m)));
-                if admitted {
-                    held.push(Held {
-                        id: row.id().to_string(),
-                        stamp: (*stamp).clone(),
-                        row,
-                    });
-                } else {
-                    gone.push(row.id().to_string());
-                }
-            }
-            let unanswered: Vec<String> = ids
-                .iter()
-                .filter(|id| !gone.contains(id) && !held.iter().any(|h| &h.id == *id))
-                .cloned()
-                .collect();
-            summary.emails_upserted += held.len();
-
-            let mut tx = self.db.pool().begin().await.context("begin emails tx")?;
-            listed::hold_in_tx(&mut tx, self.now, held).await?;
-            summary.emails_destroyed += listed::forget_in_tx(&mut tx, self.now, &gone).await?;
-            tx.commit().await.context("commit emails tx")?;
-            listed::record_failures(
-                self.db.pool(),
-                &unanswered,
-                "Email/get returned neither the email nor notFound for it",
-            )
-            .await?;
-            bar.did(batch.len() as u64);
-            if let Some(sealer) = &self.opts.sealer {
-                sealer.wrote(batch.len() as u64).await;
-            }
-        }
+        let f = EmailGet {
+            session: self.session,
+            account_id: self.account_id,
+            mailbox_filter,
+            now: self.now,
+            bar,
+            destroyed: AtomicUsize::new(0),
+        };
+        let l = owed::Loop {
+            pool,
+            table: listed::LISTED,
+            phase: M_EMAIL_GET,
+            stop: &self.opts.control.stop,
+            found,
+            sealer: self.opts.sealer.as_ref(),
+            batch: EMAIL_GET_BATCH,
+            concurrency: 1,
+            flush: EMAIL_GET_BATCH,
+            flush_bytes: 0,
+            failures_in_a_row: GET_FAILURE_BUDGET,
+        };
+        let drained = owed::drain(&l, owed, &f).await?;
+        summary.emails_upserted += drained.got;
+        summary.emails_destroyed += f.destroyed.load(Ordering::Relaxed);
         Ok(())
     }
+}
+
+/// The emails phase's fetcher: one `Email/get` per batch of listed ids.
+struct EmailGet<'a> {
+    session: &'a Session,
+    account_id: &'a str,
+    mailbox_filter: Option<&'a BTreeSet<String>>,
+    now: &'a IsoOffsetTimestamp,
+    bar: &'a RunBar,
+    destroyed: AtomicUsize,
+}
+
+#[async_trait]
+impl Fetcher<EmailRow> for EmailGet<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<Fetched<EmailRow>>, BatchError> {
+        let ids: Vec<String> = batch.iter().map(|l| l.key.clone()).collect();
+        let resp = email_get(self.session, self.account_id, &ids).await;
+        self.bar.did(ids.len() as u64);
+        match resp {
+            Ok(resp) => Ok(answered(self.account_id, self.mailbox_filter, batch, &resp)),
+            Err(e) if api::is_terminal(&e) => Err(BatchError::Terminal(e)),
+            Err(e) => Err(BatchError::Batch(e)),
+        }
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<EmailRow>],
+    ) -> Result<()> {
+        let (got, gone) = got_and_gone(batch);
+        let n = listed::write_batch_in_tx(tx, self.now, got, &gone, listed::same_id).await?;
+        self.destroyed.fetch_add(n, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+/// What one `Email/get` says about each email `asked` for: an envelope
+/// filed under an admitted mailbox is the email, one filed elsewhere or
+/// named in `notFound` is gone, and the rest is left unanswered.
+fn answered(
+    account_id: &str,
+    mailbox_filter: Option<&BTreeSet<String>>,
+    asked: Vec<Listed>,
+    resp: &Value,
+) -> Vec<Fetched<EmailRow>> {
+    let not_found = string_array(resp, "notFound");
+    let mut rows: BTreeMap<String, EmailRow> = jmap_list(resp)
+        .iter()
+        .filter_map(|envelope| EmailRow::from_jmap_envelope(account_id, envelope))
+        .map(|row| (row.id().to_string(), row))
+        .collect();
+    asked
+        .into_iter()
+        .filter_map(|listed| {
+            let outcome = match rows.remove(&listed.key) {
+                Some(row)
+                    if mailbox_filter
+                        .is_none_or(|f| row.mailbox_ids().iter().any(|m| f.contains(m))) =>
+                {
+                    Outcome::Got(row)
+                }
+                Some(_) => Outcome::Gone,
+                None if not_found.contains(&listed.key) => Outcome::Gone,
+                None => return None,
+            };
+            Some(Fetched { listed, outcome })
+        })
+        .collect()
+}
+
+/// A batch's answers split for [`listed::write_batch_in_tx`]: the rows
+/// that came, and the ids of the messages that are gone.
+fn got_and_gone(fetched: &[Fetched<EmailRow>]) -> (Vec<EmailRow>, Vec<String>) {
+    let mut got = Vec::new();
+    let mut gone = Vec::new();
+    for f in fetched {
+        match &f.outcome {
+            Outcome::Got(row) | Outcome::Unusable(row, ..) => got.push(row.clone()),
+            Outcome::Gone => gone.push(f.listed.key.clone()),
+            Outcome::Failed(_) | Outcome::Skipped(..) => {}
+        }
+    }
+    (got, gone)
 }
 
 async fn email_get(session: &Session, account_id: &str, ids: &[String]) -> Result<Value> {
@@ -935,15 +984,12 @@ async fn email_get(session: &Session, account_id: &str, ids: &[String]) -> Resul
 
 // Blobs
 
-/// Download the `.eml` for every email that doesn't have its
-/// blake3 set yet. After the eml-as-canonical port we no longer
-/// fetch attachments separately — the `.eml` is the complete
-/// backup, render mail-parses parts on demand.
-///
-/// A download failure that would repeat for every `.eml` left stops the
-/// phase with one `phase:` row and `Ok`. The email rows the worklist is
-/// read from are already stored, so there is always something to keep,
-/// and the next run downloads whatever has no bytes.
+/// Download the `.eml` of every email that has no stored bytes:
+/// `owed::drain` over the edges, `blob_download_concurrency` at once,
+/// each body into the CAS as it lands and its edge row written a flush
+/// at a time. The email rows are already stored, so a download the
+/// phase could not do leaves something to keep, and the next run
+/// downloads whatever still has no bytes.
 async fn sync_blobs(
     db: &RawDb,
     session: &Session,
@@ -957,263 +1003,190 @@ async fn sync_blobs(
         return Ok(());
     }
     let have_bytes = db.loaded_blob_ids().await?;
-
-    // Build the to-fetch worklist: per-email `.eml` source only.
-    // BTreeMap by blob_id dedupes (multiple emails can share the
-    // same blob_id in theory) and gives stable dispatch order.
-    let mut wanted: BTreeMap<String, EmlJob> = BTreeMap::new();
+    summary.blobs_skipped = have_bytes.len();
+    let mut jobs: HashMap<String, EmlJob> = HashMap::new();
+    let mut listing = Vec::new();
     for em in db.load_emails().await? {
         if em.blob_id.is_empty() || have_bytes.contains_key(&em.blob_id) {
             continue;
         }
-        wanted.insert(
-            em.blob_id.clone(),
+        let key = EmlBlobRow::pk_recipe(&em.id, &em.blob_id);
+        listing.push(Listed::new(key.clone(), None::<String>));
+        jobs.insert(
+            key,
             EmlJob {
-                owning_id: em.id.clone(),
+                email_id: em.id,
+                blob_id: em.blob_id,
                 advertised_size: em.size,
             },
         );
     }
-
-    summary.blobs_skipped = have_bytes.len();
-    if wanted.is_empty() {
+    if listing.is_empty() {
         debug!(
             event = "jmap_blobs_up_to_date",
             "every blob is already stored"
         );
         return Ok(());
     }
-    info!(
-        event = "jmap_blobs_pending",
-        count = wanted.len(),
-        "blobs still to fetch"
-    );
-
-    // Each fetched `.eml` carries its bytes and yields an `email_blobs`
-    // edge whose `blake3` the accumulator resolves off those bytes.
-    // Failures get an edge with NULL `blake3` and an error stamp on
-    // `email_blobs_bookkeeping`.
-    let mut batch = EmlBatch::new(opts);
-
-    // Split the worklist: oversize `.eml`s are recorded as failures up
-    // front (no GET), the rest become owned download jobs. The oversize
-    // check is cheap and serial; only the network GETs fan out.
-    let mut jobs: Vec<(String, String)> = Vec::new();
-    for (blob_id, job) in wanted {
-        if let Some(limit) = opts.blob_size_limit_bytes {
-            if let Some(sz) = job.advertised_size {
-                if sz as u64 > limit {
-                    summary.blobs_oversize += 1;
-                    batch.outcomes += 1;
-                    batch.acc.add_skipped(
-                        &job.owning_id,
-                        &blob_id,
-                        datalib_problems::Reason::OverSizeLimit,
-                        format!("the .eml is {sz} bytes, over blob_size_limit_bytes ({limit})"),
-                    );
-                    continue;
-                }
-            }
-        }
-        jobs.push((blob_id, job.owning_id));
-    }
-
-    // Bounded fan-out. JMAP exposes no bulk-blob method, so each `.eml`
-    // is its own GET; the win on a large backfill is having up to
-    // `concurrency` of them in flight at once. The downloads run on the
-    // runtime while this single task drains completions and feeds the
-    // accumulator — so its mutation stays serial and lock-free even
-    // though the network I/O is concurrent.
     let concurrency = opts
         .blob_download_concurrency
         .unwrap_or(DEFAULT_BLOB_CONCURRENCY)
         .max(1);
     info!(
         event = "jmap_blobs_fetch",
-        pending = jobs.len(),
+        pending = listing.len(),
         concurrency,
         "fetching the pending blobs"
     );
-
-    // The worklist is fully materialized, so this phase knows its exact
-    // size and can add it to the run's total instead of ticking once.
-    let asked = jobs.len();
-    bar.expect(asked as u64);
+    bar.expect(listing.len() as u64);
     bar.doing("fetching .eml");
 
-    // Build a download task from an owned (blob_id, owning_id). The
-    // `downloadUrl` is substituted here (borrowing `session`) so the
-    // spawned future owns only `String`s and is `Send + 'static` — which
-    // is also why the latchkey settings are cloned per task rather than
-    // borrowed from `opts`.
-    let spawn_one = |set: &mut JoinSet<EmlFetchOutcome>, blob_id: String, owning_id: String| {
-        let url = session.download_url_for(account_id, &blob_id, "message.eml", "message/rfc822");
-        let latchkey = opts.latchkey.clone();
-        set.spawn(async move {
-            let result = api::download_bytes(&url, BLOB_TIMEOUT, &latchkey).await;
-            (blob_id, owning_id, result)
-        });
+    let f = EmlDownload {
+        db,
+        session,
+        account_id,
+        latchkey: &opts.latchkey,
+        stop: &opts.control.stop,
+        cap: opts.blob_size_limit_bytes,
+        bar,
+        jobs,
     };
-
-    let mut pending = jobs.into_iter();
-    let mut set: JoinSet<EmlFetchOutcome> = JoinSet::new();
-    for _ in 0..concurrency {
-        match pending.next() {
-            Some((blob_id, owning_id)) => spawn_one(&mut set, blob_id, owning_id),
-            None => break,
-        }
-    }
-
-    // What ends the phase early: a refused credential, a retry loop
-    // that gave up, or too many failures in a row. Walking on would
-    // fail every remaining `.eml` the same way, one row each.
-    let mut tripped: Option<(String, anyhow::Error)> = None;
-    let mut failures_in_a_row = 0usize;
-    while let Some(joined) = set.join_next().await {
-        let (blob_id, owning_id, result) = match joined {
-            Ok(outcome) => outcome,
-            Err(e) if e.is_cancelled() => continue,
-            Err(e) => return Err(anyhow!(e).context("blob download task panicked")),
-        };
-        let ending = tripped.is_some() || opts.control.stop.requested();
-        match result {
-            Ok((bytes, content_type)) => {
-                failures_in_a_row = 0;
-                batch.outcomes += 1;
-                batch.bytes += bytes.len();
-                batch.acc.add_fetched(
-                    &owning_id,
-                    &blob_id,
-                    bytes,
-                    Some(content_type.unwrap_or_else(|| "message/rfc822".to_string())),
-                    None,
-                );
-                summary.blobs_downloaded += 1;
-            }
-            // The run is ending, and a request the stop refused is no
-            // failure of this blob's.
-            Err(_) if ending => {}
-            Err(e) if api::is_terminal(&e) => {
-                summary.blobs_errored += 1;
-                tripped = Some((why_terminal(&e), e));
-                set.abort_all();
-            }
-            Err(e) => {
-                summary.blobs_errored += 1;
-                failures_in_a_row += 1;
-                batch.outcomes += 1;
-                batch.acc.add_failed(&owning_id, &blob_id, format!("{e:#}"));
-                if failures_in_a_row >= BLOB_FAILURE_BUDGET {
-                    let why = format!("{failures_in_a_row} .eml downloads failed in a row");
-                    tripped = Some((why, e));
-                    set.abort_all();
-                }
-            }
-        }
-        bar.did(1);
-        if batch.is_full() {
-            batch.flush(db, opts.sealer.as_ref()).await?;
-        }
-        // Backfill the freed slot so `concurrency` GETs stay in flight.
-        if tripped.is_none() && !opts.control.stop.requested() {
-            if let Some((blob_id, owning_id)) = pending.next() {
-                spawn_one(&mut set, blob_id, owning_id);
-            }
-        }
-    }
-
-    batch.flush(db, opts.sealer.as_ref()).await?;
-    if let Some((why, e)) = tripped {
-        let (downloaded, left) = (summary.blobs_downloaded, asked - summary.blobs_downloaded);
-        warn!(
-            event = "jmap_blobs_stopped",
-            downloaded,
-            left,
-            error = %format!("{e:#}"),
-            "{why}; the next run downloads the .eml files that are left"
-        );
-        // A `problems` sample shows eighty characters: the cause and the
-        // counts lead, the error follows.
-        found.phase(
-            M_EML_DOWNLOAD,
-            format!("{why}; {downloaded} downloaded, {left} left: {e:#}"),
-        );
-        found.cut_short();
-    }
+    let l = owed::Loop {
+        pool: db.pool(),
+        table: EmlBlobRow::TABLE,
+        phase: M_EML_DOWNLOAD,
+        stop: &opts.control.stop,
+        found,
+        sealer: opts.sealer.as_ref(),
+        batch: 1,
+        concurrency,
+        flush: opts.blob_flush_count.unwrap_or(BLOB_FLUSH_COUNT),
+        flush_bytes: opts.blob_flush_bytes.unwrap_or(BLOB_FLUSH_BYTES),
+        failures_in_a_row: BLOB_FAILURE_BUDGET,
+    };
+    let drained = owed::drain(&l, listing, &f).await?;
+    summary.blobs_downloaded += drained.got;
+    summary.blobs_oversize += drained.skipped;
+    summary.blobs_errored += drained.failed;
     Ok(())
 }
 
-/// The `.eml` outcomes waiting for one write: the bodies' bytes go to
-/// the CAS, then the edges that name them to the store. An email row
-/// exists for every edge, so the store is consistent after each write
-/// and the run may seal there.
-struct EmlBatch {
-    acc: CasEdgeAccumulator,
-    outcomes: usize,
-    bytes: usize,
-    flush_bytes: usize,
-}
-
-impl EmlBatch {
-    fn new(opts: &FetchOptions) -> Self {
-        Self {
-            acc: CasEdgeAccumulator::new(),
-            outcomes: 0,
-            bytes: 0,
-            flush_bytes: opts.blob_flush_bytes.unwrap_or(DEFAULT_BLOB_FLUSH_BYTES),
-        }
-    }
-
-    fn is_full(&self) -> bool {
-        self.bytes >= self.flush_bytes || self.outcomes >= BLOB_FLUSH_COUNT
-    }
-
-    async fn flush(
-        &mut self,
-        db: &RawDb,
-        sealer: Option<&datalib_etl::raw_store::Sealer>,
-    ) -> Result<()> {
-        if self.outcomes == 0 {
-            return Ok(());
-        }
-        self.acc
-            .flush(db.pool(), db.cas(), |email_id, blob_id, blake3| {
-                EmlBlobRow {
-                    id: EmlBlobRow::pk_recipe(email_id, blob_id),
-                    email_id: email_id.to_string(),
-                    blob_id: blob_id.to_string(),
-                    blake3: blake3.map(str::to_string),
-                }
-            })
-            .await?;
-        if let Some(sealer) = sealer {
-            sealer.wrote(self.outcomes as u64).await;
-        }
-        self.acc = CasEdgeAccumulator::new();
-        self.outcomes = 0;
-        self.bytes = 0;
-        Ok(())
-    }
-}
-
-fn why_terminal(e: &anyhow::Error) -> String {
-    match e.downcast_ref::<api::JmapError>() {
-        Some(api::JmapError::Status { status, .. }) => {
-            format!("the server refused the credential (HTTP {status})")
-        }
-        _ => "the retry loop gave up".to_string(),
-    }
+/// The blob phase's fetcher: one `.eml` per request, keyed by its edge
+/// (`email_id#blob_id`); a flush's bytes go to the CAS in one write,
+/// then the edge rows with their hashes.
+struct EmlDownload<'a> {
+    db: &'a RawDb,
+    session: &'a Session,
+    account_id: &'a str,
+    latchkey: &'a LatchkeySettings,
+    stop: &'a datalib_etl::stop::StopFlag,
+    cap: Option<u64>,
+    bar: &'a RunBar,
+    jobs: HashMap<String, EmlJob>,
 }
 
 struct EmlJob {
-    owning_id: String,
+    email_id: String,
+    blob_id: String,
     advertised_size: Option<i64>,
 }
 
-/// One blob download task's result: `(blob_id, owning_id, bytes-or-err)`.
-/// The ids ride along so the draining loop can route the outcome to the
-/// accumulator without tracking which task was which.
-type EmlFetchOutcome = (String, String, Result<(Vec<u8>, Option<String>)>);
+/// A downloaded `.eml`: its bytes and the content type the server said.
+struct Eml {
+    bytes: Vec<u8>,
+    content_type: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<Eml> for EmlDownload<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<Fetched<Eml>>, BatchError> {
+        let mut answers = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let Some(job) = self.jobs.get(&listed.key) else {
+                continue;
+            };
+            let over_the_cap = self
+                .cap
+                .zip(job.advertised_size)
+                .filter(|(cap, size)| *size as u64 > *cap);
+            let outcome = if let Some((cap, size)) = over_the_cap {
+                Outcome::Skipped(
+                    datalib_problems::Reason::OverSizeLimit,
+                    format!("the .eml is {size} bytes, over blob_size_limit_bytes ({cap})"),
+                )
+            } else {
+                let url = self.session.download_url_for(
+                    self.account_id,
+                    &job.blob_id,
+                    "message.eml",
+                    "message/rfc822",
+                );
+                match api::download_bytes(&url, BLOB_TIMEOUT, self.latchkey).await {
+                    Ok((bytes, content_type)) => Outcome::Got(Eml {
+                        bytes,
+                        content_type,
+                    }),
+                    Err(e) if self.stop.requested() => return Err(BatchError::Batch(e)),
+                    Err(e) if api::is_terminal(&e) => return Err(BatchError::Terminal(e)),
+                    Err(e) => Outcome::Failed(format!("{e:#}")),
+                }
+            };
+            self.bar.did(1);
+            answers.push(Fetched { listed, outcome });
+        }
+        Ok(answers)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<Eml>],
+    ) -> Result<()> {
+        let bodies: Vec<(&Eml, String)> = batch
+            .iter()
+            .filter_map(|f| match &f.outcome {
+                Outcome::Got(eml) | Outcome::Unusable(eml, ..) => {
+                    Some((eml, blake3_hex(&eml.bytes)))
+                }
+                Outcome::Gone | Outcome::Failed(_) | Outcome::Skipped(..) => None,
+            })
+            .collect();
+        let inserts: Vec<CasInsert<'_>> = bodies
+            .iter()
+            .map(|(eml, blake3)| CasInsert {
+                blake3,
+                bytes: &eml.bytes,
+                content_type: Some(eml.content_type.as_deref().unwrap_or("message/rfc822")),
+            })
+            .collect();
+        self.db.cas().put_many(&inserts).await?;
+        let mut hashes = bodies.iter().map(|(_, blake3)| blake3.clone());
+        let rows: Vec<EmlBlobRow> = batch
+            .iter()
+            .filter_map(|f| {
+                let job = self.jobs.get(&f.listed.key)?;
+                let blake3 = match &f.outcome {
+                    Outcome::Got(_) | Outcome::Unusable(..) => hashes.next(),
+                    Outcome::Gone | Outcome::Failed(_) | Outcome::Skipped(..) => None,
+                };
+                Some(EmlBlobRow {
+                    id: f.listed.key.clone(),
+                    email_id: job.email_id.clone(),
+                    blob_id: job.blob_id.clone(),
+                    blake3,
+                })
+            })
+            .collect();
+        write_eml_edges_in_tx(tx, &rows).await
+    }
+
+    fn weight(&self, eml: &Eml) -> usize {
+        eml.bytes.len()
+    }
+}
 
 // Helpers
 

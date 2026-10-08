@@ -54,28 +54,33 @@ Six phases, in this order. Every date walk is bounded below by
 `until` fixes the window, so a mirror of a finished stretch stops
 growing.
 
-**No walk keeps a cursor.** What a run fetches is what the window wants
+**No walk keeps a cursor.** What a run fetches is what the window lists
 less what the store already holds, worked out from the store each run
-([`sync_state.md`](/docs/dev/plans/sync_state.md)):
+([`sync_state.md`](/docs/dev/plans/sync_state.md)). The shared form is
+`datalib_etl_web::owed`: a listing is a key and a version per record; what
+a row is held at is `held_version` in its table's `_bookkeeping`
+sidecar, written in the transaction that stores the row; a record is
+owed while the two differ, or while no fetch has landed. Each kind
+below is one `owed::drain` over a fetcher of its own, one request per
+record; days are written 31 to a transaction, details, files and
+bundles 20, and a stop writes what was answered before it.
 
-| what | wanted | held when | so a run fetches |
-| --- | --- | --- | --- |
-| a day of a metric | every date of the window, per metric in `api.metrics` | `garmin_daily` has the row, an empty answer included, and its `fetched_on` is no earlier than the day plus `api.refresh_days` (default 7; never less than one day) | days with no row, and days fetched before they had settled |
-| a wellness day | every date of the window | `garmin_wellness_files` has the row, with a bundle or without, by the same rule | the same |
-| weigh-ins | the window | — | the whole window, every run |
-| the activity listing | the window's start dates | a `coverage` span of scope `activities` covers them | from the lowest date not covered, or from `refresh_days` before the window's end if that is earlier |
-| an activity's detail | each stored activity, at its `listing_hash` | `garmin_activity_details.listing_hash` equals it | details of activities that are new or whose listing entry changed |
-| an activity's file | each stored activity, when `activity_files` is on | its `garmin_activity_files` row has bytes; or has none and its `listing_hash` equals the activity's | files never answered for, and files with no bytes whose activity has changed since |
+| what | listed | at version | held when | so a run fetches |
+| --- | --- | --- | --- | --- |
+| a day of a metric | every date of the window, per metric in `api.metrics` | the date the day settles — the day plus `api.refresh_days` (default 7; never less than one day) — or today while it has not | `garmin_daily` holds the row, an empty answer included, at that date | every day not yet settled, and settled days not held at their settle date |
+| a wellness day | every date of the window | the same | `garmin_wellness_files` holds the row, with a bundle or without, at that date | the same |
+| weigh-ins | the window | — | — | the whole window, every run |
+| the activity listing | the window's start dates | — | a `coverage` span of scope `activities` covers them | from the lowest date not covered, or from `refresh_days` before the window's end if that is earlier |
+| an activity's detail | each stored activity | its `listing_hash` | `garmin_activity_details` holds the row at it | details of activities that are new or whose listing entry changed |
+| an activity's file | each stored activity whose file row has no bytes, when `activity_files` is on | its `listing_hash` | `garmin_activity_files` holds the row at it | files never answered for, and answers with no bytes whose activity has changed since |
 
-`fetched_on` is the run's own date (the step's pinned now), written in
-the transaction that stores the row; a `listing_hash` on a detail or a
-file is written with it likewise. A request that fails writes neither,
-so the item is simply still owed: its attempt count and last error are
-in the `_bookkeeping` sidecar for the Manage screen, and nothing reads
-them back to decide what to fetch. Because the owed set is computed,
-a change of config needs no record: an earlier `since` leaves days with
-no row and start dates with no span, and turning `activity_files` on
-leaves every stored activity without a file row.
+A request that fails writes nothing but an attempt and the error in
+the sidecar (for the Manage screen; nothing reads them back to decide
+what to fetch), so the record is simply still owed. Because the owed
+set is computed, a change of config needs no record: an earlier
+`since` leaves days with no row and start dates with no span, and
+turning `activity_files` on leaves every stored activity without a
+file row.
 
 Every prune below has the same gate, stated once here: **a walk deletes
 what its listing did not name only when the listing was an
@@ -98,9 +103,10 @@ recorded as covered, and the run records a `problems` row keyed
    `<metric>#<date>`. A day the endpoint had nothing for (204, 404,
    `{}` or `[]`) is stored as JSON `null`, so "asked, empty" is
    distinguishable from "never asked". Days are written a month (31
-   days) at a time, so a run that dies re-fetches at most a month. A
-   day that failed has no row, so the next run asks again however old
-   it is; once it lies outside the window its `problems` row goes
+   days) at a time, so a run that dies re-fetches at most a month; a
+   run that is stopped keeps the days answered before the stop. A day
+   that failed has no row, so the next run asks again however old it
+   is; once it lies outside the window its `problems` row goes
    instead.
 3. **Weigh-ins.** `/weight-service/weight/range/<start>/<end>?includeAll=true`
    over the whole window in 90-day chunks, flattened one
@@ -123,17 +129,19 @@ recorded as covered, and the run records a `problems` row keyed
    next run lists the stretch again.
 
    Then every stored activity — listed this run or not — gets what it
-   is owed. Its detail (`/activity-service/activity/<id>`) is stored
-   with the `listing_hash` it was fetched for; an activity Garmin has
-   no detail for holds JSON `null` for that hash. Its file
+   is owed: every detail, then every file. Its detail
+   (`/activity-service/activity/<id>`) is held at the `listing_hash`
+   it was fetched for; an activity Garmin has no detail for holds JSON
+   `null` for that hash. Its file
    (`/download-service/files/activity/<id>`, `activity_files = false`
    turns it off) is the one `.fit` inside the zip, in the CAS. A
    download that answers 404 (an activity entered by hand) or holds no
-   readable FIT is recorded on the file row with the `listing_hash` it
-   was answered for and no bytes, so it is asked for again only once
-   the activity's listing entry changes; the unreadable one is also a
-   `problems` row until then. A request that failed records no hash,
-   and is asked again next run.
+   readable FIT is a file row with no bytes, held at the `listing_hash`
+   it was answered for, so it is asked for again only once the
+   activity's listing entry changes; the unreadable one is also a
+   warning in `problems` until then (the fetch landed; what it held
+   was lost). A request that failed holds nothing, and is asked again
+   next run.
 5. **Wellness FIT bundles** (`wellness_files = true`, default off).
    `/download-service/files/wellness/<date>` per owed day, the zip
    stored as-is: all-day heart rate, stress, steps, body battery and
@@ -166,7 +174,7 @@ carries downstream and the Manage screen counts:
 | what | key | when it clears |
 | --- | --- | --- |
 | a day's metric that could not be fetched | `garmin_daily:<metric>#<date>` | a later run fetches the day, or the window no longer includes it |
-| an activity detail, FIT file or wellness bundle that could not be fetched, or a FIT that could not be read | `garmin_activity_details:<id>`, `garmin_activity_files:<id>#fit`, `garmin_wellness_files:<date>#wellness_zip` | a later run fetches it (or a file answers 404), or the activity is pruned |
+| an activity detail, FIT file or wellness bundle that could not be fetched, or (a warning) a FIT that could not be read | `garmin_activity_details:<id>`, `garmin_activity_files:<id>#fit`, `garmin_wellness_files:<date>#wellness_zip` | a later run fetches it (or a file answers 404), or the activity is pruned |
 | a listing that was not an enumeration, or could not be asked for | `listing:<user_settings\|devices\|weight\|activities\|personal_records\|gear\|badges\|workouts\|goals>` | the next run in which it lists |
 | a phase that failed wholesale | `phase:<devices\|daily\|weight\|activities\|wellness\|items>` | the next run in which it runs |
 
@@ -181,15 +189,18 @@ Each file edge carries its own record's hash. An earlier build keyed
 every file of a batch under one ref, so each edge of a batch got the
 last file's hash and a failure was stamped on all of them. Once per
 table, on the first run with that table's walk turned on, an edge whose
-hash another record's edge shares loses the hash and the stamp of what
-it was fetched for, so the walks above fetch it again; `sync_scope_state` records that it ran
+hash another record's edge shares loses the hash and holds nothing, so
+the walks above fetch it again; `sync_scope_state` records that it ran
 (`garmin:shared_hash_repair:<table>`). Once only, because two
 activities may share a file for real, and fetching those every run
 would get the same bytes back.
 
 Inside the per-day walk, a metric that fails ten days in a row is
-abandoned for the run rather than paid for once per day of history.
-The days it did not reach have no row, so the next run asks for them.
+abandoned for the run rather than paid for once per day of history: a
+`phase:daily` row says so, the other metrics still run, and the run
+counts as cut short (its `listing:` and `phase:` rows add to the last
+run's rather than replacing them). The days it did not reach have no
+row, so the next run asks for them.
 
 A refused bearer ends the run, and so does a request latchkey will not
 send at all (no credential, or the plugin's hourly token exchange
@@ -215,9 +226,9 @@ changes nothing already stored.
 `tests/garmin_tests/interrupt.rs` cuts a replayed run off at one
 request after another, two ways (the process dies; the step is told to
 stop), commits whatever the store holds, runs again, and requires the
-store an uninterrupted run leaves — once from an empty store and once
-from a store an earlier run filled, against an upstream that has
-changed since.
+store an uninterrupted run leaves, the held versions included — once
+from an empty store and once from a store an earlier run filled,
+against an upstream that has changed since.
 
 ### What makes a record look changed
 
@@ -262,10 +273,17 @@ churns has not been measured on an account with a watch.
   from a start date only, so an earlier `since` re-lists everything
   from the new start, not only the stretch that was added. It costs
   listing pages, not details or files.
-- **A store from before `fetched_on` and `listing_hash`** opens as it
-  is (each is an added column), and holds nothing by the rules above:
-  the next run fetches every day of the window and every detail again,
-  once.
+- **A store from an earlier build** opens on the migration ladder
+  (`schema_raw::LADDER`). One that kept the held version in a column of
+  the row (`fetched_on`, `listing_hash`) has it carried into the
+  sidecar as it was: a detail or file at its listing version is not
+  fetched again; a day fetched on the day it settled is not either,
+  and one fetched later is fetched once more, since the rung cannot
+  know `refresh_days`. A FIT the earlier build found unreadable is
+  fetched once more too: that build stamped no fetch on it, and held
+  now means a fetch landed. One from before those columns holds
+  nothing, and the next run fetches every day of the window and every
+  detail again, once.
 - **Verified against one live account, but a thin one.**
   Every endpoint answered with the shape the reference code predicts,
   and the weigh-in columns were checked against real manual entries
@@ -292,8 +310,8 @@ $dl -readonly $db "SELECT metric, COUNT(*), SUM(json(payload) <> 'null') FROM ga
 $dl -readonly $db "SELECT calendar_date, weight_g/1000.0 AS kg, source_type FROM garmin_weigh_ins ORDER BY timestamp_gmt DESC LIMIT 10;"
 $dl -readonly $db "SELECT activity_type, COUNT(*) FROM garmin_activities GROUP BY 1;"
 $dl -readonly $db "SELECT scope, lo, hi FROM coverage;"
-$dl -readonly $db "SELECT metric, MIN(calendar_date), MAX(calendar_date), MAX(fetched_on) FROM garmin_daily GROUP BY metric;"
-$dl -readonly $db "SELECT a.id FROM garmin_activities a LEFT JOIN garmin_activity_details d ON d.id = a.id WHERE d.listing_hash IS NOT a.listing_hash;"
+$dl -readonly $db "SELECT d.metric, MIN(d.calendar_date), MAX(d.calendar_date), MAX(b.held_version) FROM garmin_daily d JOIN garmin_daily_bookkeeping b ON b.id = d.id GROUP BY d.metric;"
+$dl -readonly $db "SELECT a.id FROM garmin_activities a LEFT JOIN garmin_activity_details_bookkeeping d ON d.id = a.id WHERE d.held_version IS NOT a.listing_hash;"
 $dl -readonly $db "SELECT json_extract(json(payload), '$.sleepScores.overall.value') FROM garmin_daily WHERE metric = 'sleep' AND calendar_date = '2026-09-13';"
 ```
 

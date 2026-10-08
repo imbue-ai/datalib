@@ -18,7 +18,7 @@ export const PAGE_HEADER = "X-Datalib-Page";
 /// cannot misspell one; the server takes any word and files it as
 /// `ui.<name>`, so an older server never refuses a newer page.
 export type PageEventName =
-  "page_load" | "page_hide" | "navigate" | "card_open" | "card_rename" | "error";
+  "page_load" | "page_hide" | "navigate" | "card_open" | "card_rename" | "error" | "toast";
 
 export type PageEventLevel = "info" | "warn" | "error";
 

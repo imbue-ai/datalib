@@ -1,12 +1,10 @@
 //! Program A `DataProcessor`s for the email source.
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
-
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_web::http::LatchkeySettings;
 
 use datalib_etl_email_config::{EmailConfig, EmailGmailApi, EmailLiveMode, EmailSync, MboxSync};
 use std::path::PathBuf;
@@ -115,6 +113,7 @@ impl DataProcessor for EmailIngest {
                         only_mailbox_labels: self.only_extract_labels.clone(),
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
                         blob_download_concurrency: sync.blob_download_concurrency,
+                        blob_flush_count: None,
                         blob_flush_bytes: None,
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),
@@ -170,11 +169,8 @@ impl DataProcessor for EmailIngest {
                         ));
                     }
                     let s = ingest::mbox::fetch(ingest::mbox::FetchOptions {
-                        cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
-                            .await?,
                         db,
                         input_path: input_path.clone(),
-                        account_id_override: account_config.account_id.clone(),
                         account_config: ingest::mbox::MboxAccountConfig {
                             account_id: account_config.account_id.clone(),
                             display_name: account_config.display_name.clone(),
@@ -182,21 +178,18 @@ impl DataProcessor for EmailIngest {
                             is_personal: account_config.is_personal,
                         },
                         only_labels: self.only_extract_labels.clone(),
-                        blob_size_limit_bytes: self.blob_size_limit_bytes,
                         progress: ctx.progress.clone(),
                         control: ctx.control.clone(),
                     })
                     .await?;
                     format!(
-                        "mailboxes={} threads={} emails={} removed={} files_removed={} blobs(stored={} skipped={} oversize={}) parse_errors={}",
+                        "mailboxes={} threads={} emails={} removed={} blobs(stored={} skipped={}) parse_errors={}",
                         s.mailboxes_upserted,
                         s.threads_upserted,
                         s.emails_upserted,
                         s.emails_removed,
-                        s.files_removed,
                         s.blobs_stored,
                         s.blobs_skipped,
-                        s.blobs_oversize,
                         s.parse_errors,
                     )
                 }

@@ -191,6 +191,46 @@ pub struct Identity {
     /// What the icon stands for, for its hover.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The entity this names, as the URI a chip link would carry
+    /// (`datalib:group/slack`), when the viewer should draw it as a chip
+    /// it can resolve, open and copy (docs/dev/plans/chips.md). Beside
+    /// `id` rather than in it: other code keys on the bare id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity: Option<String>,
+}
+
+/// Something datalib itself names that a chip can resolve: a group of
+/// the config, or one of its steps. `ui/src/cards/chipLinks.js` reads
+/// and writes the same URIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Entity<'a> {
+    /// A group id: the directory under the data root.
+    Group(&'a str),
+    /// A step id, `<group>/<function>`.
+    Step(&'a str),
+}
+
+impl<'a> Entity<'a> {
+    pub fn uri(self) -> String {
+        match self {
+            Entity::Group(id) => format!("datalib:group/{id}"),
+            Entity::Step(id) => format!("datalib:step/{id}"),
+        }
+    }
+
+    /// `None` for a URI that names neither, or names one with an empty id.
+    pub fn parse(uri: &'a str) -> Option<Self> {
+        let rest = uri.strip_prefix("datalib:")?;
+        let (kind, id) = rest.split_once('/')?;
+        if id.is_empty() {
+            return None;
+        }
+        match kind {
+            "group" => Some(Entity::Group(id)),
+            "step" => Some(Entity::Step(id)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -332,5 +372,23 @@ mod tests {
         assert_eq!(json["default_visible"], false);
         assert_eq!(json["editable"], false);
         assert!(json.get("description").is_none());
+    }
+
+    /// The URIs a chip link carries for a group and a step; the TS
+    /// mirror in `chipLinks.js` is tested over the same cases.
+    #[test]
+    fn an_entity_round_trips_through_its_uri() {
+        for e in [Entity::Group("slack"), Entity::Step("slack/ingest")] {
+            let uri = e.uri();
+            assert_eq!(Entity::parse(&uri), Some(e));
+        }
+        assert_eq!(Entity::Group("slack").uri(), "datalib:group/slack");
+        assert_eq!(
+            Entity::Step("slack/ingest").uri(),
+            "datalib:step/slack/ingest"
+        );
+        assert_eq!(Entity::parse("datalib:group/"), None);
+        assert_eq!(Entity::parse("datalib:handle/tel/+15550123456"), None);
+        assert_eq!(Entity::parse("mailto:riker@enterprise.org"), None);
     }
 }

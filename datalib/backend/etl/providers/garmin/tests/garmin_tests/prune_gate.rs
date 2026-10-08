@@ -9,15 +9,15 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::{HttpResponse, PLAYBACK_ENV};
 use datalib_etl::progress::Progress;
-use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{write_fixture, Synthesizer};
 use datalib_etl_garmin::ingest::api::{base_url, req_get, req_get_bytes};
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::GarminApi;
+use datalib_etl_web::http::{HttpResponse, PLAYBACK_ENV};
+use datalib_etl_web::retry::{self, RetryGuard};
+use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
 use serde_json::{json, Value};
 
 /// The day every run but a `run_on` believes it is.

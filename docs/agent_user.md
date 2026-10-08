@@ -307,7 +307,7 @@ Pick the surface that fits the question:
   (`org_name:`, `byte_size:`, `created_at:`, …); `before:`/`after:`;
   `is:document` for the one row per rendered document and
   `-is:document` for the rows inside them. A key the search does not
-  have is refused by name, in `errors`, rather than ignored. It answers a page: `limit=` rows from `offset=`, with `total`
+  have is refused by name, in `refused`, rather than ignored. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
   columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists

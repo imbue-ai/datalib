@@ -54,8 +54,16 @@ impl DataProcessor for FacebookIngest {
             })
             .await?;
             Ok(format!(
-                "files={} rows={} parse_errors={} media_stored={} media_known={} media_missing={}",
-                s.files, s.rows, s.parse_errors, s.media_stored, s.media_known, s.media_missing,
+                "files={} rows={} removed={} parse_errors={} media_stored={} media_known={} \
+                 media_missing={} media_edges_removed={}",
+                s.files,
+                s.rows,
+                s.removed,
+                s.parse_errors,
+                s.media_stored,
+                s.media_known,
+                s.media_missing,
+                s.media_edges_removed,
             ))
         })
         .await

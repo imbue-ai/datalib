@@ -2,7 +2,7 @@
 //! shared [`datalib_etl_contact_common`] renderer.
 
 use anyhow::Result;
-use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact, Detail, Photo};
+use datalib_contact_schema::{ContactHandle, ContactKind, Detail, NormalizedContact, Photo};
 use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{render_all as cc_render_all, ContactDoc, ContactRenderProfile};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -128,7 +128,7 @@ fn to_contact(source_id: &str, p: &Value) -> ContactDoc {
     };
     let nonempty = |col: &str| Some(field(p, col).to_string()).filter(|v| !v.is_empty());
 
-    let mut person = DatalibContact::new(source_id, id.natural_key.clone(), ContactKind::Person);
+    let mut person = NormalizedContact::new(source_id, id.natural_key.clone(), ContactKind::Person);
     person.names = (!name.is_empty()).then_some(name).into_iter().collect();
     person.org = nonempty("Company");
     person.title = nonempty("Position");

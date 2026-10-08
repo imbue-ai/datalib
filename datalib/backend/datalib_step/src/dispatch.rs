@@ -31,9 +31,6 @@ pub struct PlannedSource {
     pub reach: Option<Reach>,
     /// Resolved rate-limit give-up bounds for the ingest wave.
     pub download_params: DownloadParams,
-    /// `common.always_clear_before_ingest`, resolved. Ingest wave only —
-    /// render rewrites its own tree already.
-    pub always_clear_before_ingest: bool,
     pub processors: Wave,
 }
 
@@ -74,7 +71,7 @@ pub fn plan(
     phase: Phase,
     name: &str,
     raw_dir: PathBuf,
-    source: serde_json::Value,
+    mut source: serde_json::Value,
 ) -> Result<PlannedSource> {
     // Declared before `arm!`: a `macro_rules!` body only sees bindings
     // that exist at its definition site.
@@ -92,6 +89,9 @@ pub fn plan(
         }
     })?;
     crate::methods::refuse_retired_params(source_type, &source)?;
+    for key in crate::methods::drop_inert_params(&mut source) {
+        tracing::warn!(source = %name, "`common.{key}` has no effect; delete it from the config");
+    }
     // Read before `source` is handed to serde: which of the provider's
     // declared methods these params hold. Judged after `validate`, so a
     // misspelled table is reported as the unknown field it is.
@@ -125,14 +125,12 @@ pub fn plan(
                     let raw_path = cfg.common.raw_path().to_path_buf();
                     let reach = crate::methods::reach_or_refuse(source_type, &held)?;
                     let download_params = cfg.common.download_params.clone();
-                    let always_clear_before_ingest = cfg.common.always_clear_before_ingest;
                     PlannedSource {
                         name: name.to_string(),
                         source_type,
                         raw_path,
                         reach: Some(reach),
                         download_params,
-                        always_clear_before_ingest,
                         processors: Wave::Ingest($dlp::processor::plan_ingest(ctx, cfg)?),
                     }
                 }
@@ -153,7 +151,6 @@ pub fn plan(
                         reach: None,
                         // Rate-limit bounds are download-only machinery.
                         download_params: Default::default(),
-                        always_clear_before_ingest: false,
                         processors: Wave::Render($rnp::processor::plan_render(ctx, cfg)?),
                     }
                 }
@@ -185,7 +182,6 @@ pub fn plan(
                         raw_path: cfg.common.raw_path().to_path_buf(),
                         reach: Some(crate::methods::reach_or_refuse(source_type, &held)?),
                         download_params: cfg.common.download_params.clone(),
-                        always_clear_before_ingest: cfg.common.always_clear_before_ingest,
                         processors: Wave::Ingest($dlp::processor::plan_ingest(ctx, cfg)?),
                     }
                 }
@@ -200,7 +196,6 @@ pub fn plan(
                         raw_path: cfg.common.raw_path().to_path_buf(),
                         reach: None,
                         download_params: Default::default(),
-                        always_clear_before_ingest: false,
                         processors: Wave::Render(Vec::new()),
                     }
                 }
@@ -390,38 +385,38 @@ mod tests {
         datalib_etl::layout::ingest_root(root, name)
     }
 
-    /// `common.always_clear_before_ingest` has to survive the trip from the
-    /// step's params to the planned source, because the download driver
-    /// is the only thing that reads it. A flag that parses and then goes
-    /// nowhere reads exactly like one that works: the sync succeeds, and
-    /// the deletions the user asked us to notice stay invisible.
+    /// `common.always_clear_before_ingest` went, and a config written with
+    /// it still has to sync: the key is dropped before the strict parse
+    /// rather than refused as an unknown field.
     #[test]
-    fn always_clear_before_ingest_reaches_the_planned_source() {
+    fn a_retired_clear_before_ingest_key_still_plans() {
         let td = tempfile::tempdir().unwrap();
-        let planned = plan(
+        for value in [true, false] {
+            plan(
+                "sms_backup_restore",
+                Phase::Ingest,
+                "sms",
+                raw_dir(td.path(), "sms", Phase::Ingest),
+                serde_json::json!({
+                    "backup": {"path": "/tmp/sms"},
+                    "common": {"always_clear_before_ingest": value}
+                }),
+            )
+            .unwrap();
+        }
+        // Only that key: a misspelled one beside it is still refused.
+        let err = plan(
             "sms_backup_restore",
             Phase::Ingest,
             "sms",
             raw_dir(td.path(), "sms", Phase::Ingest),
             serde_json::json!({
                 "backup": {"path": "/tmp/sms"},
-                "common": {"always_clear_before_ingest": true}
+                "common": {"always_clear_before_ingest": true, "blob_size_limit": 1}
             }),
         )
-        .unwrap();
-        assert!(planned.always_clear_before_ingest);
-
-        // Absent means off: every source that has never heard of the knob
-        // must keep appending rather than start wiping itself.
-        let default = plan(
-            "sms_backup_restore",
-            Phase::Ingest,
-            "sms",
-            raw_dir(td.path(), "sms", Phase::Ingest),
-            serde_json::json!({ "backup": {"path": "/tmp/sms"} }),
-        )
-        .unwrap();
-        assert!(!default.always_clear_before_ingest);
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("unknown field"), "{err:#}");
     }
 
     #[test]

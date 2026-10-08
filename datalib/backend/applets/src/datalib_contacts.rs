@@ -1,6 +1,7 @@
 //! `datalib-applet datalib_contacts` — the contacts app: the one writer of
 //! `datalib_curated/datalib_contacts/`, serving what a chip needs to resolve a
-//! handle and what its popover needs to create or link a contact.
+//! handle, what its popover needs to create or link a contact, and the
+//! photo a person put on one.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -8,8 +9,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
+    body::Bytes,
+    extract::{DefaultBodyLimit, Path, Query, State},
+    http::{header, HeaderMap, StatusCode},
     middleware,
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -22,6 +24,11 @@ use serde_json::json;
 
 const DATA_ROOT_ENV: &str = "DATALIB_DAG_DATA_ROOT";
 const SEARCH_LIMIT: u32 = 20;
+/// What the photo route reads of a body: the gateway's own cap. axum's
+/// default (2 MB) sits under `PHOTO_MAX_BYTES`, so without this a photo
+/// between the two is refused by the framework in plain text before the
+/// store can say why in its own words.
+const PHOTO_BODY_LIMIT: usize = 8 * 1024 * 1024;
 
 pub fn serve(port: u16) -> Result<()> {
     let root = std::env::var_os(DATA_ROOT_ENV)
@@ -48,25 +55,37 @@ pub fn serve(port: u16) -> Result<()> {
             .with_context(|| format!("bind {addr}"))?;
         let bound = listener.local_addr().context("read the bound address")?;
         let gate = Arc::new(crate::gate::Gate::from_env(bound.port())?);
-        let app = Router::new()
-            .route("/resolve", post(resolve))
-            .route("/search", get(search))
-            .route("/contacts", post(create))
-            .route("/contact/{contact_id}", get(contact))
-            .route("/link", post(link))
-            .route("/unlink", post(unlink))
-            .route("/stopped_working", post(stopped_working))
-            .route("/rename", post(rename))
-            .route("/health", get(|| async { Json(json!({"ok": true})) }))
-            .with_state(store)
-            .layer(middleware::from_fn_with_state(
-                gate,
-                crate::unified_index::require_gateway,
-            ));
+        let app = routes(store).layer(middleware::from_fn_with_state(
+            gate,
+            crate::unified_index::require_gateway,
+        ));
         tracing::info!(address = %bound, "listening");
         crate::announce_port(bound.port());
         axum::serve(listener, app).await.context("serve")
     })
+}
+
+/// Every route, over an open store; `serve` puts the gateway's check in
+/// front of them.
+fn routes(store: Arc<Store>) -> Router {
+    Router::new()
+        .route("/resolve", post(resolve))
+        .route("/search", get(search))
+        .route("/contacts", post(create))
+        .route("/contact/{contact_id}", get(contact))
+        .route("/link", post(link))
+        .route("/unlink", post(unlink))
+        .route("/stopped_working", post(stopped_working))
+        .route("/rename", post(rename))
+        .route(
+            "/photo/{contact_id}",
+            get(photo)
+                .put(put_photo)
+                .delete(delete_photo)
+                .layer(DefaultBodyLimit::max(PHOTO_BODY_LIMIT)),
+        )
+        .route("/health", get(|| async { Json(json!({"ok": true})) }))
+        .with_state(store)
 }
 
 type AppState = State<Arc<Store>>;
@@ -89,6 +108,8 @@ fn refused(e: anyhow::Error) -> ApiError {
         "needs a name",
         "is not a date",
         "no contact",
+        "is not a photo",
+        "the photo is",
     ]
     .iter()
     .any(|m| msg.contains(m));
@@ -239,6 +260,53 @@ async fn stopped_working(
     Ok(Json(json!({ "found": found })))
 }
 
+/// The photo itself, with its type, for an `<img>`.
+async fn photo(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+) -> Result<Response, ApiError> {
+    match store.photo(&contact_id).await.map_err(refused)? {
+        Some((content_type, bytes)) => Ok((
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, content_type)],
+            bytes,
+        )
+            .into_response()),
+        None => Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("no photo for {contact_id}"),
+        )),
+    }
+}
+
+/// The body is the image; its `Content-Type` says what kind.
+async fn put_photo(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    store
+        .set_photo(&contact_id, content_type, &body)
+        .await
+        .map_err(refused)?;
+    Ok(Json(
+        json!({ "photo_url": datalib_contacts::photo_url(&contact_id) }),
+    ))
+}
+
+async fn delete_photo(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let had = store.clear_photo(&contact_id).await.map_err(refused)?;
+    Ok(Json(json!({ "had_photo": had })))
+}
+
 #[derive(Deserialize)]
 struct RenameBody {
     contact_id: String,
@@ -254,4 +322,60 @@ async fn rename(
         .await
         .map_err(refused)?;
     Ok(Json(json!({ "found": found })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    async fn put(app: &Router, contact_id: &str, len: usize) -> (StatusCode, String) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::put(format!("/photo/{contact_id}"))
+                    .header(header::CONTENT_TYPE, "image/png")
+                    .body(Body::from(vec![0u8; len]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    /// A photo up to the store's limit is taken, and one over it is
+    /// refused in the store's words. axum's own 2 MB default once
+    /// answered both a plain-text 413 before the store saw them.
+    #[tokio::test]
+    async fn a_photo_is_judged_by_the_stores_limit_not_the_frameworks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&datalib_contacts::store_path(dir.path()))
+            .await
+            .unwrap();
+        let id = store
+            .create("Will Riker", ContactKind::Person, &[])
+            .await
+            .unwrap();
+        let store = Arc::new(store);
+        let app = routes(store.clone());
+
+        let (status, body) = put(&app, &id, 3 * 1024 * 1024).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = put(&app, &id, 5 * 1024 * 1024).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert!(body.contains("the most a contact's photo can be"), "{body}");
+
+        drop(app);
+        Arc::try_unwrap(store)
+            .ok()
+            .expect("the router is gone")
+            .close()
+            .await;
+    }
 }

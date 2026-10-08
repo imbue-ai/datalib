@@ -151,16 +151,9 @@ async fn parse_doltlite_async(
     let pool = reader.pool().clone();
     let pin = reader.pin().clone();
 
-    let cas_path = blob_cas::cas_path_for(db_path);
-    let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
-        Some(
-            datalib_etl::blob_cas::open_cas_reader(&cas_path)
-                .await
-                .with_context(|| format!("open slack CAS for render {}", cas_path.display()))?,
-        )
-    } else {
-        None
-    };
+    let cas_pool = blob_cas::open_cas_for_render(db_path)
+        .await
+        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
 
     // Open at one commit before anything reads this store: the diff below
     // and the rows behind it have to name that commit.
@@ -239,17 +232,19 @@ async fn parse_doltlite_async(
 
     // Per-thread BlobBundle: walk each thread's messages for `files[]`
     // and bulk-load the bytes from `slack_attachments` + `cas_objects`.
-    if let Some(cas_pool) = cas_pool.as_ref() {
-        let refs = threads
-            .iter()
-            .enumerate()
-            .map(|(i, bucket)| (i, collect_attachment_ref_ids(&bucket.messages)));
-        let mut blobs =
-            BlobBundle::load_many(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, refs).await?;
-        for (i, bucket) in threads.iter_mut().enumerate() {
-            if let Some(b) = blobs.remove(&i) {
-                bucket.blobs = b;
-            }
+    let refs = threads
+        .iter()
+        .enumerate()
+        .map(|(i, bucket)| (i, collect_attachment_ref_ids(&bucket.messages)));
+    let loaded =
+        BlobBundle::load_many(&pool, cas_pool.as_ref(), ATTACHMENTS_PROJECTION_SQL, refs).await;
+    if let Some(cas) = cas_pool {
+        cas.close().await;
+    }
+    let mut blobs = loaded?;
+    for (i, bucket) in threads.iter_mut().enumerate() {
+        if let Some(b) = blobs.remove(&i) {
+            bucket.blobs = b;
         }
     }
 

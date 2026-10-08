@@ -77,7 +77,11 @@ or stamped with its problem. Each kind is a `problems` row:
   `group_info.json` or `messages.json`, a Maps photo sidecar, a Voice
   record, `Bills.html` or a greeting — is a `skipped:<feed>:<hash>` row
   and is left unstamped, so the next run reads it again. The rest of the
-  feed lands.
+  feed lands. So is a file that reads as nothing: a `messages.json`
+  listing entries none of which has a `message_id`, a Voice thread with
+  no message, a call record with no time, a `Bills.html` with no table
+  header. It deletes nothing, where a `messages.json` whose list is
+  empty, or a bills table with no rows, empties what it holds.
 - **A Chat or Gemini attachment** that is not in the export is a
   `not_found` warning on its edge (`chat_attachments:<message>#<name>`,
   `gemini_attachments:<activity>#<name>`), and one that is there but
@@ -98,7 +102,10 @@ or stamped with its problem. Each kind is a `problems` row:
   deletes what the rewrite dropped.
 
 Attachments are flushed before the files naming them are stamped, so a
-flush that fails leaves the files to be read again. A run that was
+flush that fails leaves the files to be read again. Chat and Voice
+delete what a re-read or gone file no longer holds in the transaction
+that stamps the files, so a run that fails before its deletions leaves
+the files to be read again too. A run that was
 stopped writes a `phase:` or `listing:` row only for what failed before
 the stop, and clears none.
 

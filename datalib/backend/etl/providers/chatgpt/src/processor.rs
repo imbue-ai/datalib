@@ -7,9 +7,9 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_chatgpt_config::{ChatgptApiSync, ChatgptConfig};
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
 
@@ -45,8 +45,8 @@ impl DataProcessor for ChatgptIngest {
         &self.id
     }
 
-    /// Upserts conversations one at a time and prunes to the enumeration it
-    /// just walked. Between checkpoints the store is therefore the previous
+    /// Upserts conversations a flush at a time and prunes to the
+    /// enumeration it just walked. Between checkpoints the store is therefore the previous
     /// snapshot plus whatever this run has fetched — a superset, never a
     /// gap — so a consumer reading one sees stale rows at worst, and the
     /// prune's deletions reach it through the same diff on the next pass.

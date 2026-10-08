@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use datalib_etl::event_store::load_latest_by_key;
-use datalib_etl::http::{HttpRequest, HttpService};
-use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
+use datalib_etl_web::http::{HttpRequest, HttpService};
+use datalib_etl_web::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
 use crate::ingest::official::{BASE, PAGE_SIZE};
@@ -164,7 +164,7 @@ impl Synthesizer for NotionSynth {
 mod tests {
     use super::*;
     use datalib_etl::event_store::{diff_and_save, make_record};
-    use datalib_etl::http::{fixture_key, HttpResponse};
+    use datalib_etl_web::http::{fixture_key, HttpResponse};
     use serde_json::Map;
     use std::collections::HashMap;
     use std::fs;

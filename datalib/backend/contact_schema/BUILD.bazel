@@ -1,6 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# `DatalibContact`: a person as one source describes them. Only the
+# `NormalizedContact`: a person as one source describes them. Only the
 # shape, so render crates, the contacts app and the applets can all take
 # it; contact-common is the one place it is rendered. Bazel-only.
 rust_library(

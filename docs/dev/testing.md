@@ -394,7 +394,7 @@ bazelisk run //datalib/ui:e2e -- --project chromium-data-sources-streaming
 Three pieces make that possible, and each is small:
 
 * `DATALIB_HTTP_PLAYBACK_DELAY_MS` beside `DATALIB_HTTP_PLAYBACK`
-  ([`http.rs`](/datalib/backend/etl/src/http.rs)): a replayed request
+  ([`http.rs`](/datalib/backend/etl/web/src/http.rs)): a replayed request
   waits that long before it answers. Playback only; a fixture that
   answers instantly hides everything that depends on a download taking
   time. Its sibling `DATALIB_HTTP_PLAYBACK_HOLD` names a file: while it
@@ -503,17 +503,25 @@ misplaced knob fails here rather than during the live run.
 The test makes three pipeline runs, each asserting something different:
 
 1. **Cold** — snapshots the produced data tree, one `.snap` per file, plus a
-   manifest and the layout invariants.
+   manifest and the layout invariants. Then it makes the contacts listed in
+   `contacts.toml` (beside the config) in the contacts app, asserts every
+   handle they link is an author in the index, and snapshots the contacts
+   store with each minted `contact_id` replaced by the contact's name.
 2. **Incremental** — re-runs against the now-populated `data_root` and
    snapshots each source's `sync_runs.summary`, whose `deltas` prove the run
    didn't re-fetch the world. A broken-incrementality regression shows up as
    `deltas.<table>.added` back at first-run scale. Only the API-backed
    providers stamp `sync_runs`; file-backed sources record an explicit
    "no rows" marker, since there is no upstream to be incremental about.
+   It also asserts that no store's `problems` table changed: run 1's
+   problems are still standing, and a problem recorded again unchanged
+   keeps its row.
 3. **`--reset`, then sync** — empties the store and re-downloads it, then
    asserts the content tables come back byte-identical. This is what catches a
    per-fetch field leaking into a content payload (it belongs in the
-   `volatile_payload` sidecar instead).
+   `volatile_payload` sidecar instead). It also asserts that the contacts
+   store came through unchanged, that every linked handle is still in the
+   re-downloaded index, and that each one still resolves to its contact.
 
 The bake leaves its data root behind under `$TMPDIR/datalib-e2e-runs/run-<millis>/data`
 (the newest three runs are kept; the test prints the path as `[test]

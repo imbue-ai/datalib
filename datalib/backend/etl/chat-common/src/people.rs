@@ -1,27 +1,40 @@
 //! The people a chat document shows, as chat-common alone can describe
 //! them: each author handle, the names the provider showed it under, and
-//! how much it wrote. Every chat provider gets this with no code of its
-//! own; a provider that knows more says so in its own `DatalibContact`s.
+//! how much it wrote; whom a message went to and who reacted, having
+//! written nothing. Every chat provider gets this with no code of its
+//! own; a provider that knows more says so in its own `NormalizedContact`s.
 
 use std::collections::BTreeMap;
 
-use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact, Seen};
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
 use datalib_time::IsoOffsetTimestamp;
 
-use crate::types::NormalizedChatItem;
+use crate::types::{NormalizedChatItem, OrphanReactions};
 
-pub fn baseline_contacts(source_id: &str, items: &[NormalizedChatItem]) -> Vec<DatalibContact> {
+pub fn baseline_contacts(
+    source_id: &str,
+    items: &[NormalizedChatItem],
+    orphans: &[OrphanReactions],
+) -> Vec<NormalizedContact> {
     struct Tally {
         names: Vec<(String, u64)>,
         items: u64,
         last_ms: Option<i64>,
     }
     let mut by_handle: BTreeMap<&str, (&datalib_handle::Handle, Tally)> = BTreeMap::new();
-    // Whom an item was addressed to: in the document, but writing nothing.
-    for r in items.iter().flat_map(|i| &i.recipients) {
-        let Some(handle) = &r.handle else {
-            continue;
-        };
+    // Whom an item was addressed to, and who reacted to it or to a
+    // message not in the mirror: in the document, but writing nothing.
+    let recipients = items
+        .iter()
+        .flat_map(|i| &i.recipients)
+        .filter_map(|r| Some((r.handle.as_ref()?, &r.display)));
+    let reactors = items
+        .iter()
+        .flat_map(|i| &i.reactions)
+        .chain(orphans.iter().flat_map(|o| &o.reactions))
+        .filter_map(|r| Some((r.reactor_handle.as_ref()?, &r.reactor_display)));
+    let named_only = recipients.chain(reactors);
+    for (handle, display) in named_only {
         let (_, tally) = by_handle.entry(handle.as_str()).or_insert((
             handle,
             Tally {
@@ -30,7 +43,7 @@ pub fn baseline_contacts(source_id: &str, items: &[NormalizedChatItem]) -> Vec<D
                 last_ms: None,
             },
         ));
-        let name = name_without_handle(&r.display, handle);
+        let name = name_without_handle(display, handle);
         if !name.is_empty() && !name.eq_ignore_ascii_case(handle.value()) {
             match tally.names.iter_mut().find(|(n, _)| n == name) {
                 Some((_, count)) => *count += 1,
@@ -67,7 +80,7 @@ pub fn baseline_contacts(source_id: &str, items: &[NormalizedChatItem]) -> Vec<D
             tally
                 .names
                 .sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-            let mut c = DatalibContact::new(source_id, handle.as_str(), ContactKind::Person);
+            let mut c = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
             c.names = tally.names.into_iter().map(|(n, _)| n).collect();
             c.handles = vec![ContactHandle::of(handle.clone())];
             c.seen = Some(Seen {
@@ -83,17 +96,18 @@ pub fn baseline_contacts(source_id: &str, items: &[NormalizedChatItem]) -> Vec<D
 }
 
 /// The people a document carries: chat-common's baseline for each author
-/// handle, and where the provider gave its own account of the person
-/// behind one, that account instead — keeping what the baseline counted
-/// and every name it saw. One provider account reached through two
+/// handle, and where the provider gave its own source contact for the person
+/// behind one, that instead — keeping what the baseline counted
+/// and every name it saw. One provider source contact reached through two
 /// handles is one person.
 pub fn document_contacts(
     source_id: &str,
     items: &[NormalizedChatItem],
-    provider: &[DatalibContact],
-) -> Vec<DatalibContact> {
-    let mut out: BTreeMap<String, DatalibContact> = BTreeMap::new();
-    for seen in baseline_contacts(source_id, items) {
+    orphans: &[OrphanReactions],
+    provider: &[NormalizedContact],
+) -> Vec<NormalizedContact> {
+    let mut out: BTreeMap<String, NormalizedContact> = BTreeMap::new();
+    for seen in baseline_contacts(source_id, items, orphans) {
         let theirs = provider.iter().find(|p| {
             p.handles
                 .iter()
@@ -164,6 +178,7 @@ mod tests {
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
             problems: Vec::new(),
@@ -181,8 +196,8 @@ mod tests {
             by(Some(&riker), "Number One", 4_000),
             by(None, "Me", 5_000),
         ];
-        let got = baseline_contacts("mail", &items);
-        assert_eq!(got.len(), 2, "the account's own items have no handle");
+        let got = baseline_contacts("mail", &items, &[]);
+        assert_eq!(got.len(), 2, "the owner's own items have no handle");
         let r = &got[0];
         assert_eq!(r.key, "email:riker@enterprise.org");
         assert_eq!(r.source_id, "mail");
@@ -204,7 +219,7 @@ mod tests {
             by(Some(&riker), "\"Riker, Will\" <riker@enterprise.org>", 2),
             by(Some(&riker), "<riker@enterprise.org>", 3),
         ];
-        let got = baseline_contacts("mail", &items);
+        let got = baseline_contacts("mail", &items, &[]);
         assert_eq!(got[0].names, ["Will Riker", "Riker, Will"]);
     }
 
@@ -215,7 +230,8 @@ mod tests {
     fn a_providers_account_replaces_the_baseline_and_keeps_its_count() {
         let picard = Handle::slack("T1", "U_PICARD").unwrap();
         let riker = Handle::slack("T1", "U_RIKER").unwrap();
-        let mut profile = DatalibContact::new("ignored", "slack:T1/U_PICARD", ContactKind::Person);
+        let mut profile =
+            NormalizedContact::new("ignored", "slack:T1/U_PICARD", ContactKind::Person);
         profile.names = vec!["Jean-Luc Picard".into()];
         profile.title = Some("Captain".into());
         profile.handles = vec![
@@ -227,7 +243,7 @@ mod tests {
             by(Some(&picard), "Picard", 2),
             by(Some(&riker), "Riker", 3),
         ];
-        let got = document_contacts("slack", &items, &[profile]);
+        let got = document_contacts("slack", &items, &[], &[profile]);
         assert_eq!(got.len(), 2);
         let p = got.iter().find(|c| c.key == "slack:T1/U_PICARD").unwrap();
         assert_eq!(p.source_id, "slack");
@@ -237,6 +253,64 @@ mod tests {
         assert_eq!(p.seen.as_ref().unwrap().items, 2);
         let r = got.iter().find(|c| c.key == "slack:T1/U_RIKER").unwrap();
         assert_eq!(r.names, ["Riker"], "no profile: the baseline as it was");
+    }
+
+    /// Someone who only reacted is in the document too, under the name
+    /// the provider showed for them, having written nothing.
+    #[test]
+    fn reactors_are_in_the_document_with_nothing_written() {
+        use crate::types::NormalizedReaction;
+        let picard = Handle::email("picard@enterprise.org").unwrap();
+        let worf = Handle::tel("+15550104040").unwrap();
+        let mut item = by(Some(&picard), "Jean-Luc Picard", 1);
+        let react = |handle: Option<&Handle>, who: &str| NormalizedReaction {
+            reaction_uuid: format!("r-{who}"),
+            reactor_handle: handle.cloned(),
+            reactor_display: who.to_string(),
+            emoji: "🫡".to_string(),
+            date_ms: Some(2),
+            source_ref: None,
+        };
+        item.reactions = vec![
+            react(Some(&worf), "Worf"),
+            react(Some(&picard), "Jean-Luc Picard"),
+            react(None, "Me"),
+        ];
+        let got = baseline_contacts("chat", &[item], &[]);
+        assert_eq!(got.len(), 2, "a reaction with no handle names nobody");
+        let w = got.iter().find(|c| c.key == worf.as_str()).unwrap();
+        assert_eq!(w.names, ["Worf"]);
+        assert_eq!(w.seen.as_ref().unwrap().items, 0);
+        let p = got.iter().find(|c| c.key == picard.as_str()).unwrap();
+        assert_eq!(
+            p.seen.as_ref().unwrap().items,
+            1,
+            "a reaction is not an item written"
+        );
+    }
+
+    /// A reaction to a message not in the mirror names its reactor too:
+    /// the orphan list draws them as chips, so the index has to know them.
+    #[test]
+    fn a_reactor_to_a_missing_message_is_in_the_document() {
+        use crate::types::{NormalizedReaction, OrphanReactions};
+        let worf = Handle::tel("+15550104040").unwrap();
+        let orphans = vec![OrphanReactions {
+            target_native_id: "gone".to_string(),
+            reactions: vec![NormalizedReaction {
+                reaction_uuid: "r-worf".to_string(),
+                reactor_handle: Some(worf.clone()),
+                reactor_display: "Worf".to_string(),
+                emoji: "🫡".to_string(),
+                date_ms: Some(2),
+                source_ref: None,
+            }],
+        }];
+        let got = baseline_contacts("chat", &[], &orphans);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].key, worf.as_str());
+        assert_eq!(got[0].names, ["Worf"]);
+        assert_eq!(got[0].seen.as_ref().unwrap().items, 0);
     }
 
     /// Whom a message went to is in the document too, having written
@@ -259,7 +333,7 @@ mod tests {
                 handle: Some(picard.clone()),
             },
         ];
-        let got = baseline_contacts("mail", &[item]);
+        let got = baseline_contacts("mail", &[item], &[]);
         let t = got.iter().find(|c| c.key == troi.as_str()).unwrap();
         assert_eq!(t.names, ["Deanna Troi"]);
         assert_eq!(t.seen.as_ref().unwrap().items, 0);

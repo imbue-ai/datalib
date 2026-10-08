@@ -88,10 +88,9 @@ async fn a_refused_download_stops_the_phase_and_keeps_what_downloaded() {
     assert_eq!(blobs(&m).await, [("M1".to_string(), true)]);
     assert_eq!(problems(&m).await, [row("phase:eml_download", "error")]);
     let said = sample(&m, "phase:eml_download").await;
-    assert!(
-        said.starts_with("the server refused the credential (HTTP 401); 1 downloaded, 2 left"),
-        "{said}"
-    );
+    // The cause leads, since the sample is eighty characters; the URL
+    // in it takes them all, so the status is past the cut.
+    assert!(said.starts_with("JMAP download "), "{said}");
 
     tape.serve(&Account::new(&[("MB1", "Inbox")], &mail));
     let second = run(&m, |_| {}).await.expect("second run");
@@ -135,8 +134,8 @@ async fn a_run_of_failed_downloads_stops_the_phase_and_keeps_what_downloaded() {
     assert_eq!(found.len(), 21, "one row per failed .eml, and the phase's");
     let said = sample(&m, "phase:eml_download").await;
     assert!(
-        said.starts_with("20 .eml downloads failed in a row; 3 downloaded, 22 left"),
-        "{said}"
+        said.starts_with("JMAP download "),
+        "the last failure leads: {said}"
     );
 
     tape.serve(&Account::new(&[("MB1", "Inbox")], &mail));
@@ -164,7 +163,7 @@ async fn bodies_are_written_and_sealed_as_they_land() {
         opts.full_resync = true;
         opts.sealer = Some(sealer);
         opts.blob_download_concurrency = Some(1);
-        opts.blob_flush_bytes = Some(1);
+        opts.blob_flush_count = Some(1);
         datalib_etl_email::ingest::fetch(opts)
     })
     .await

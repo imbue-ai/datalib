@@ -82,9 +82,9 @@ pub async fn run(
     ] {
         progress.metric(name, &[], n as i64);
     }
-    // The index's whole-store counts, the way every render step reports
-    // its own: what the Manage row for the index shows.
-    let counts = datalib_etl_render::grid_index::problem_counts(&pool).await?;
+    // The problems the index recorded itself, the way every step reports
+    // what it found: what the Manage row for the index shows.
+    let counts = datalib_etl_render::grid_index::own_problem_counts(&pool).await?;
     for severity in [Severity::Error, Severity::Warning] {
         progress.metric(
             METRIC,

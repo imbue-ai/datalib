@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl_pdf_config::PdfConfig;
 
 use crate::ingest;
@@ -59,8 +59,15 @@ impl DataProcessor for PdfIngest {
             })
             .await?;
             Ok(format!(
-                "pdfs={} docs={} hashed={} reused={} needs_ocr={} too_large={} errors={}",
-                s.pdfs_seen, s.documents, s.hashed, s.reused, s.needs_ocr, s.too_large, s.errors,
+                "pdfs={} docs={} hashed={} reused={} needs_ocr={} too_large={} docs_removed={} errors={}",
+                s.pdfs_seen,
+                s.documents,
+                s.hashed,
+                s.reused,
+                s.needs_ocr,
+                s.too_large,
+                s.documents_removed,
+                s.errors,
             ))
         })
         .await

@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokio::time::Instant;
 use tracing::{debug, warn};
 
-use datalib_etl::http::{
+use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, parse_retry_after, percent_encode, HttpError,
     HttpRequest, HttpResponse, HttpService, LatchkeySettings, Retryability,
 };

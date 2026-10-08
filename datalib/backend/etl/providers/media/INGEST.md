@@ -12,12 +12,12 @@ the contracts every provider honors are in
 ## Relationship to `fsindex` and `pdf`
 
 All three scan a local tree. `media` and `pdf` walk it through
-[`datalib_etl::fsscan`](/datalib/backend/etl/src/fsscan.rs), which
+[`datalib_etl_files::fsscan`](/datalib/backend/etl/files/src/fsscan.rs), which
 hashes only what the host-wide fingerprint cache cannot vouch for
-(`etl/README.md` §"Answering "did it change?" for a file-backed
+(`etl/files/README.md` §"Answering "did it change?" for a file-backed
 source"); `fsindex` has its own walker over the same blake3 and
 Unison-cursor primitives in
-[`datalib_etl::fswalk`](/datalib/backend/etl/src/fswalk.rs).
+[`datalib_etl_files::fswalk`](/datalib/backend/etl/files/src/fswalk.rs).
 
 They are separate **sources** because they answer different questions:
 
@@ -398,7 +398,10 @@ The scan goes on, and what it could not do is a `problems` row:
 Both sets are replaced whole each scan, which is right because each
 scan walks the whole tree and retries everything it could not read —
 except a file it did not try: one under an entry its walk could not
-read, or declined as a cloud placeholder, keeps its row.
+read, or declined as a cloud placeholder, keeps its row. A row's
+`_bookkeeping` sidecar is stamped the first time a scan writes the row
+and left alone after, so scanning an unchanged tree again commits
+nothing (`a_second_scan_of_an_unchanged_tree_commits_nothing`).
 
 Reconciliation is a **set difference, not a timestamp sweep**. The
 simpler `DELETE … WHERE last_seen_at <> <this run>` looks equivalent and
@@ -416,26 +419,26 @@ the working set, which lives in the file and persists without a
 the commit at the end of the step is a history marker, not what makes
 the work durable. The expensive per-item work — container
 parse, payload hash, metadata read — is keyed on content and lives in
-`media_items`, which is never deleted, so an interrupted run's parses
-survive too.
+`media_items`, which only a scan that reached its end prunes, so an
+interrupted run's parses survive too.
 
-## Orphaned items
+## Items no path names
 
 `media_files`, `media_playlists` and `media_playlist_entries` are
 reconciled every scan (see above), so a deleted file disappears on its
-own. `media_items`, `media_audio` and `media_visual` are **not** — they
-are keyed on content, which has no notion of "no longer present", and
-dropping them would lose when the item was first seen
-(`media_items_bookkeeping.fetched_at_utc`) and force a re-parse of every
-item whose path merely moved.
+own. `media_items`, `media_audio` and `media_visual` are keyed on
+content, so they are not reconciled by path: that would lose when the
+item was first seen (`media_items_bookkeeping.fetched_at_utc`) and
+force a re-parse of every item whose path merely moved.
 
-So deleting the last copy of an item leaves an unreferenced
-`media_items` row, deliberately: the row is cheap and it preserves the
-record that the item was once here. Reaping them is a
-`DELETE … WHERE blake3 NOT IN (SELECT blake3 FROM media_files)` whenever
-we want it; the rows stay in earlier commits, but HEAD stops recording
-that the item was once here. Pinned by
-`a_deleted_file_disappears_from_the_path_table_but_the_item_remains` in
+Instead, once the path tables are reconciled after a walk with no
+errors, an item no `media_files` row names goes, with its class rows
+and bookkeeping (`RawDb::delete_unnamed_items`, counted as
+`items_removed`). A file moved within the tree is named at its new path
+by then and keeps its item; one removed and later put back is parsed
+again. A file the scan found and did not read keeps its path row, so
+its item stays. The rows stay in earlier commits. Pinned by
+`an_item_no_path_names_goes_and_a_moved_one_stays` in
 `tests/media_e2e.rs`.
 
 ## Known gaps

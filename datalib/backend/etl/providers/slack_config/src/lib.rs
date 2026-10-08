@@ -56,7 +56,8 @@ pub struct SlackApiSync {
     /// Oldest message to fetch — `YYYY-MM-DD` or RFC 3339. This is the
     /// knob that decides how far back the mirror goes, so "just the last
     /// week" means setting this to seven days ago. Unset defaults to
-    /// 2024-01-01 (the provider's `DEFAULT_SINCE`).
+    /// 2024-01-01 (the provider's `DEFAULT_SINCE`). A date before 1970
+    /// asks for everything.
     #[serde(default)]
     pub since: Option<String>,
     /// Also mirror channels the account can see but isn't a member of.

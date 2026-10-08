@@ -1,13 +1,12 @@
 //! Notion synth → playback → download round-trip.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use datalib_etl::event_store::{diff_and_save, make_record};
-use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_notion::ingest::{fetch, FetchOptions, RawDb};
 use datalib_etl_notion::synthesize::NotionSynth;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 
@@ -109,7 +108,6 @@ async fn notion_synth_playback_extract_roundtrip() {
     let out = RawDb::open(&out_db).await.unwrap();
     let summary = fetch(FetchOptions {
         subtree_pages: vec![pid.to_string()],
-        sleep_between: Duration::ZERO,
         ..FetchOptions::new(out.clone())
     })
     .await

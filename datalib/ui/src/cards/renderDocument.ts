@@ -7,6 +7,7 @@
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import { assetUrl, isAbsoluteOrUrl, rewriteIframeSrcs } from "./asset_urls";
+import { chipLinks } from "./chipLinks";
 import { sanitizeRenderedHtml, type Sanitized, type SanitizeOptions } from "./sanitize";
 
 function highlight(code: string, lang: string): string {
@@ -26,6 +27,7 @@ const md = new MarkdownIt({
   breaks: false,
   highlight,
 });
+md.use(chipLinks);
 
 // Rewrite relative asset references (`blobs/foo.png`, `plots/x.html`) to
 // backend asset URLs. Absolute paths (`/...`) and full URLs

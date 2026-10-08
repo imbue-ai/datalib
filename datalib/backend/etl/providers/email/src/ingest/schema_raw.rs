@@ -18,7 +18,7 @@ use serde_json::Value;
 /// ([`datalib_etl::blob_cas::flush_cas_edges`]) stamps
 /// `email_blobs_bookkeeping` for error tracking, so the sidecar must
 /// exist. So is the listing, whose sidecar counts the attempts to fetch
-/// a listed message.
+/// a listed message and holds the version its email satisfies.
 pub const DATA_TABLES: &[&str] = &[
     "accounts",
     "mailboxes",
@@ -418,6 +418,11 @@ pub const LADDER: &[Migration] = &[
         name: "what upstream listed is stored apart from what is held",
         apply: |conn| Box::pin(super::listed::migrate_from_cursors(conn)),
     },
+    Migration {
+        version: 3,
+        name: "what is held is the listing sidecar's held_version",
+        apply: |conn| Box::pin(super::listed::migrate_held_into_the_sidecar(conn)),
+    },
 ];
 
 pub fn full_ddl() -> Vec<String> {
@@ -429,7 +434,7 @@ pub fn full_ddl() -> Vec<String> {
     out.extend(EmailMailboxRow::all_ddl());
     out.extend(EmailKeywordRow::all_ddl());
     out.extend(EmlBlobRow::all_ddl());
-    out.push(datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string());
+    out.push(datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string());
     out.extend(super::listed::DDL.iter().map(|ddl| ddl.to_string()));
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));

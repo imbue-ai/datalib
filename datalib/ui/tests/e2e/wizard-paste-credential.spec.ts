@@ -1,4 +1,4 @@
-// The Connection block's "Paste a key" form: what it sends to
+// The account row's "Paste a key" form: what it sends to
 // `POST /api/latchkey/<service>/credential`, which the server turns into
 // `latchkey auth set`. Two shapes — an app password for Fastmail's DAV,
 // a header for Fastmail's JMAP — stored under the name in the account
@@ -7,6 +7,7 @@
 // Read-only: every write is routed to a stub, so it runs against the
 // shared fixture root rather than a sandbox of its own.
 import { test, expect, type Page } from "@playwright/test";
+import { reviewToml, showSignIn } from "./wizard-helpers";
 import { probeDone } from "./probe-stub";
 
 const wizard = (page: Page) => page.getByRole("dialog");
@@ -83,7 +84,7 @@ test("an app password is pasted, stored and then tested", async ({ page }) => {
     page,
     FASTMAIL_DAV,
     "fastmail-dav",
-    "Mirror a Fastmail account's address books over CardDAV.",
+    "Copy a Fastmail account's address books over CardDAV.",
   );
 
   // fastmail-dav has no web login, so the paste form is all there is:
@@ -105,8 +106,10 @@ test("an app password is pasted, stored and then tested", async ({ page }) => {
       account: "picard@enterprise.test contacts",
       credential: { kind: "basic", username: "picard@enterprise.test", password: "tea-earl-grey" },
     });
-  await expect(form).toContainText("Stored in latchkey.");
-  await expect(form.getByLabel("App password")).toHaveValue("");
+  // Stored, then checked at once: the row says who the password reaches.
+  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText(
+    "Connected as picard@enterprise.test",
+  );
   await expect.poll(() => probes).toBe(1);
 });
 
@@ -117,9 +120,10 @@ test("a read-only token does not silently replace the browser login", async ({ p
     return route.fulfill({ json: { ok: true } });
   });
   await page.route("**/api/probe", (route) => route.fulfill(probeDone(REPORT)));
-  await openTile(page, FASTMAIL_JMAP, "fastmail", "Mirror a Fastmail mailbox over JMAP.");
+  await openTile(page, FASTMAIL_JMAP, "fastmail", "Copy a Fastmail mailbox over JMAP.");
 
   // Both ways in, the browser login first; the paste tab says how to get less.
+  await showSignIn(page);
   await expect(wizard(page).getByRole("tab", { name: "Web login" })).toHaveAttribute(
     "aria-selected",
     "true",
@@ -145,7 +149,8 @@ test("a read-only token does not silently replace the browser login", async ({ p
       credential: { kind: "headers", headers: ["Authorization: Bearer ro-token"] },
     });
   // The source names the account the token was stored under.
-  await expect(accountBox(page)).toHaveValue("picard-readonly");
+  const toml = await reviewToml(page);
+  await expect(toml).toContainText('account = "picard-readonly"');
 });
 
 test("a named paste beside the unnamed credential says what it strands", async ({ page }) => {
@@ -156,7 +161,7 @@ test("a named paste beside the unnamed credential says what it strands", async (
       accounts: [{ account: "", credential_type: "rawCurl", credential_status: "valid" }],
     },
     "fastmail-dav",
-    "Mirror a Fastmail account's address books over CardDAV.",
+    "Copy a Fastmail account's address books over CardDAV.",
   );
   const form = pasteForm(page);
   await form.getByLabel("Username").fill("picard@enterprise.test");
@@ -168,7 +173,7 @@ test("under a latchkey gateway nothing is pasted here", async ({ page }) => {
     page,
     { ...FASTMAIL_DAV, gateway: "https://gateway.enterprise.test" },
     "fastmail-dav",
-    "Mirror a Fastmail account's address books over CardDAV.",
+    "Copy a Fastmail account's address books over CardDAV.",
   );
   await expect(wizard(page)).toContainText("gateway.enterprise.test");
   await expect(wizard(page).getByRole("tab", { name: "Paste a key" })).toHaveCount(0);

@@ -1,14 +1,15 @@
 //! Garmin Connect API transport: every request goes through
-//! [`datalib_etl::http::latchkey_curl`]. latchkey's Garmin plugin holds
+//! [`datalib_etl_web::http::latchkey_curl`]. latchkey's Garmin plugin holds
 //! the credential and mints the hourly bearer from it.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -54,11 +55,11 @@ pub enum Fetched<T> {
     Nothing,
 }
 
+/// Shared by every loop of a run, so a request takes `&self`.
 pub struct GarminClient {
     latchkey: LatchkeySettings,
     base: String,
-    pub requests: u64,
-    pub network_seconds: f64,
+    requests: AtomicU64,
 }
 
 impl GarminClient {
@@ -66,8 +67,7 @@ impl GarminClient {
         Self {
             latchkey,
             base: base_url(DOMAIN),
-            requests: 0,
-            network_seconds: 0.0,
+            requests: AtomicU64::new(0),
         }
     }
 
@@ -75,14 +75,17 @@ impl GarminClient {
         format!("{}{path}", self.base)
     }
 
-    async fn send(&mut self, build: fn(&str) -> HttpRequest, path: &str) -> Result<(u16, Vec<u8>)> {
+    pub fn requests(&self) -> u64 {
+        self.requests.load(Ordering::Relaxed)
+    }
+
+    async fn send(&self, build: fn(&str) -> HttpRequest, path: &str) -> Result<(u16, Vec<u8>)> {
         let url = self.url(path);
         let req = build(&url).latchkey(self.latchkey.clone());
         let resp = latchkey_curl(&req)
             .await
             .map_err(|e| transport_error(e, path))?;
-        self.network_seconds += (resp.duration_ms as f64) / 1000.0;
-        self.requests += 1;
+        self.requests.fetch_add(1, Ordering::Relaxed);
         events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
         Ok((resp.status, resp.body))
     }
@@ -90,7 +93,7 @@ impl GarminClient {
     /// `GET` a JSON endpoint. A 204, a 404 or an empty body is
     /// [`Fetched::Nothing`] — Garmin answers all three for a day that
     /// has no data, depending on the service.
-    pub async fn get_json(&mut self, path: &str) -> Result<Fetched<Value>> {
+    pub async fn get_json(&self, path: &str) -> Result<Fetched<Value>> {
         let (status, body) = self.send(req_get, path).await?;
         match status {
             200 if body.is_empty() => Ok(Fetched::Nothing),
@@ -114,7 +117,7 @@ impl GarminClient {
 
     /// `GET` a binary endpoint. 404 is [`Fetched::Nothing`]: an activity
     /// created by hand on the website has no FIT file.
-    pub async fn get_bytes(&mut self, path: &str) -> Result<Fetched<Vec<u8>>> {
+    pub async fn get_bytes(&self, path: &str) -> Result<Fetched<Vec<u8>>> {
         let (status, body) = self.send(req_get_bytes, path).await?;
         match status {
             200 => Ok(Fetched::Some(body)),

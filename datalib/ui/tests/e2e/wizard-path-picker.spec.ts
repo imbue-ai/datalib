@@ -5,6 +5,7 @@
 // needs is one on the machine running the backend anyway.
 
 import { test, expect } from "@playwright/test";
+import { reviewToml } from "./wizard-helpers";
 
 test("a path field types in a browser and offers no dead picker button", async ({ page }) => {
   await page.goto("/data_sources");
@@ -27,7 +28,7 @@ test("a path field types in a browser and offers no dead picker button", async (
   // only way in that this host has.
   const pathInput = wizard.locator("input.wiz-path");
   await pathInput.fill("/Users/x/backups/WhatsApp");
-  await wizard.getByText("Review the TOML this writes").click();
+  await reviewToml(page);
   await expect(wizard.locator("pre")).toContainText('path = "/Users/x/backups/WhatsApp"');
 
   // Required-field gating still applies to the field the picker feeds.

@@ -10,7 +10,7 @@ TLS and HTTP/2 fingerprint: upstream
 a patched curl with a patched BoringSSL and a built-in
 `--impersonate <browser>` flag. Which services send the marker that
 asks for it is decided in one place, `HttpService::impersonates` in
-`datalib/backend/etl/src/http.rs`: Claude, ChatGPT, Slack, GitHub and
+`datalib/backend/etl/web/src/http.rs`: Claude, ChatGPT, Slack, GitHub and
 GitLab.
 
 The two binaries involved are built and released by
@@ -32,7 +32,7 @@ Only the router understands the marker header, so **point
 `LATCHKEY_CURL` at the router, never at the impersonator directly.**
 Pointing it at the impersonator gives you a plain curl that forwards
 the marker header to the third party. Leaving `LATCHKEY_CURL` unset is
-usually right: `datalib_etl::latchkey::ensure_curl_router` takes
+usually right: `datalib_etl_web::latchkey::ensure_curl_router` takes
 `DATALIB_CURL_ROUTER` if set, else finds the router in bazel's
 runfiles, next to the running binary, or on `PATH`, and points
 `LATCHKEY_CURL` at it (not in `LATCHKEY_GATEWAY` mode).
@@ -69,9 +69,9 @@ In this tree:
    selects the archive for the target platform and copies the two
    binaries out under their public names, side by side, which is how
    the router finds the impersonator. That package is what every
-   consumer names: the runfiles of `datalib_etl` (so every provider
-   test has both), `//datalib/backend:dist`, release staging, the
-   Tauri sidecar list and the Docker image.
+   consumer names: the runfiles of `datalib_etl_web` (so every web
+   source's tests have both), `//datalib/backend:dist`, release
+   staging, the Tauri sidecar list and the Docker image.
 
 Nothing here is compiled. The repo's old `curl-impersonate-v*` tags
 are ignored by `tools/workspace_status.sh` when it derives datalib's
@@ -94,7 +94,7 @@ profile, a router change:
    follow: `DATALIB_IMPERSONATE_PROFILE` is only an override.
 
 The names are the contract. If a release ever renames a binary, the
-sibling lookups in `datalib/backend/etl/src/latchkey.rs` and the copy
+sibling lookups in `datalib/backend/etl/web/src/latchkey.rs` and the copy
 rules in `third-party/latchkey-curl-shims/BUILD.bazel` have to move
 with it, and so do the staged names in `release.yml`,
 `datalib/tauri/tauri.conf.json` and `datalib/docker/Dockerfile`.

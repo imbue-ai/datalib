@@ -20,6 +20,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
 import type {
+  SlickEventData,
   Column,
   Formatter,
   GridOption,
@@ -50,6 +51,9 @@ import {
 import { EVERYTHING, scopeOf, withScope, type LogScope as Scope } from "@/grid/logScope";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
+import "@/cards/chip.css";
+import { uriFromEntity } from "@/cards/chipLinks";
+import { entities, entityCardSource, entityCell } from "@/cards/entities";
 import { type ProcessInfo, type RunInfo, type RunLogLine } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import {
@@ -100,6 +104,8 @@ const emit = defineEmits<{
   /// A line was selected — by a click, or the arrow keys moving on —
   /// for the caller to open in full.
   (e: "line-selected", seq: number): void;
+  /// A group or step chip was double-clicked: the card source to open.
+  (e: "open-card", source: string): void;
 }>();
 
 /// The picker's "every run" entry. Not a run id: the store's ids are
@@ -208,6 +214,15 @@ type Grid = SlickVanillaGridBundle<RunLogLine> & {
 /// reload leaves nothing to show: a grid created inside a hidden box
 /// measures no width and fits its columns to that.
 let bundle: Grid | null = null;
+
+// An answer about a group or step landed or changed: draw its chips again.
+const stopEntities = entities.subscribe(() => {
+  const grid = bundle?.slickGrid;
+  if (!grid) return;
+  const columns = ["group_id", "step"].map((id) => grid.getColumnIndex(id)).filter((i) => i >= 0);
+  const { top, bottom } = grid.getRenderedRange();
+  for (let row = top; row <= bottom; row++) for (const c of columns) grid.updateCell(row, c);
+});
 let unsubscribe: (() => void) | null = null;
 let inflight = false;
 /// A load asked for while another was in flight — a query typed while
@@ -609,6 +624,24 @@ const plain: Formatter<RunLogLine> = (_r, _c, value, _col, line) => ({
   addClasses: levelClass(line),
 });
 
+/// The Group and Step cells are chips (docs/dev/plans/chips.md): the name
+/// the config gives the group or step now, its mark and its status, from
+/// `entities`. The line's level class stays on the cell.
+const groupChip: Formatter<RunLogLine> = (r, c, value, col, line, grid) =>
+  typeof value === "string" && value
+    ? chipResult(uriFromEntity("group", value), value, line)
+    : plain(r, c, value, col, line, grid);
+const stepChip: Formatter<RunLogLine> = (r, c, value, col, line, grid) =>
+  typeof value === "string" && value.includes("/")
+    ? chipResult(uriFromEntity("step", value), value.slice(value.lastIndexOf("/") + 1), line)
+    : plain(r, c, value, col, line, grid);
+function chipResult(uri: string, shown: string, line: RunLogLine) {
+  return {
+    html: entityCell(uri, shown, entities.lookup(uri), null),
+    addClasses: levelClass(line),
+  };
+}
+
 /// The line's structured fields, less the two the Source column shows.
 const otherFields: Formatter<RunLogLine> = (_r, _c, value, _col, line) => {
   const text = fieldsWithoutSource(value == null ? null : String(value));
@@ -765,8 +798,8 @@ function columnSet(): Column<RunLogLine>[] {
       id: "group_id",
       name: "Group",
       field: "group_id",
-      width: 90,
-      formatter: plain,
+      width: 110,
+      formatter: groupChip,
       sortable: true,
       ...groupable("Group", "group_id"),
     },
@@ -774,8 +807,8 @@ function columnSet(): Column<RunLogLine>[] {
       id: "step",
       name: "Step",
       field: "step",
-      width: 100,
-      formatter: plain,
+      width: 140,
+      formatter: stepChip,
       sortable: true,
       ...groupable("Step", "step"),
     },
@@ -1025,6 +1058,21 @@ function createGrid(first: RunLogLine[]) {
   ) as Grid;
   bundle = b;
   b.slickGrid.onScroll.subscribe(onScroll);
+  // A chip is a link: a click on it selects the line, and its href,
+  // which names something in this app, is never followed. A double-click
+  // opens the group's dashboard or the step's log.
+  const entityAt = (e: SlickEventData) =>
+    (e.getNativeEvent<MouseEvent>()?.target as Element | null)?.closest?.<HTMLElement>(
+      "a.chip[data-entity]",
+    ) ?? null;
+  b.slickGrid.onClick.subscribe((e) => {
+    if (entityAt(e)) e.getNativeEvent<MouseEvent>()?.preventDefault();
+  });
+  b.slickGrid.onDblClick.subscribe((e) => {
+    const chip = entityAt(e);
+    const source = chip ? entityCardSource(chip.dataset.entity ?? "") : null;
+    if (source) emit("open-card", source);
+  });
   // A new line keeps the selection on its line, and the grid reports
   // that as a change of index: only a line newly picked is announced.
   const lineAt = (row: number): RunLogLine | null => {
@@ -1092,6 +1140,7 @@ onMounted(async () => {
   });
 });
 
+onUnmounted(stopEntities);
 onUnmounted(() => {
   window.removeEventListener("pointerup", onPointerUp, true);
   window.removeEventListener("pointercancel", onPointerUp, true);

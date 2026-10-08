@@ -64,10 +64,24 @@ fn expand_wrappers(s: &str) -> String {
             out.push_str("](");
             out.push_str(&md_link_dest(href));
             out.push(')');
+        } else if parts.len() == 2 && parts[0] == "entity" {
+            // `["movie","<name>","<disambiguation>"]`: the name is what
+            // the sentence reads.
+            out.push_str(&entity_name(parts[1]));
         }
         // Other sentinel kinds (filecite, cite, search, …): drop.
     }
     out
+}
+
+fn entity_name(args: &str) -> String {
+    let parsed: Option<Vec<serde_json::Value>> = serde_json::from_str(args).ok();
+    parsed
+        .as_deref()
+        .and_then(|a| a.get(1).or_else(|| a.first()))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| args.to_string())
 }
 
 #[cfg(test)]
@@ -91,6 +105,17 @@ mod tests {
     fn filecite_is_stripped() {
         let raw = "Hello.\n\n\u{e200}filecite\u{e202}turn0file0\u{e202}L1-L2\u{e201}";
         assert_eq!(clean_text(raw), "Hello.\n\n");
+    }
+
+    /// A named entity is part of the sentence; dropping it left
+    /// "mentioning ." where the model named a film.
+    #[test]
+    fn an_entity_reads_as_its_name() {
+        let raw =
+            "about \u{e200}entity\u{e202}[\"starship\",\"USS Enterprise\",\"NCC-1701-D\"]\u{e201}.";
+        assert_eq!(clean_text(raw), "about USS Enterprise.");
+        let odd = "\u{e200}entity\u{e202}not json\u{e201}";
+        assert_eq!(clean_text(odd), "not json");
     }
 
     #[test]

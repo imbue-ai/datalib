@@ -11,15 +11,15 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::{HttpResponse, PLAYBACK_ENV};
-use datalib_etl::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::gmail_api::{fetch, FetchOptions};
 use datalib_etl_email::ingest::{db_path_for, RawDb};
+use datalib_etl_web::http::{HttpResponse, PLAYBACK_ENV};
+use datalib_etl_web::interrupt::{every_cut_resumes, How, Rig};
 use serde_json::{json, Value};
 
-use crate::jmap_interrupt::{copy_store, MIRRORED};
+use crate::jmap_interrupt::{contents, copy_store};
 use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
     put_gmail_account, put_gmail_response,
@@ -65,7 +65,7 @@ impl Rig for Gmail {
 
     async fn contents(&self, dir: &Path) -> Result<String> {
         let db = self.open(dir).await?;
-        let out = dump_tables(db.pool(), MIRRORED).await;
+        let out = contents(&db).await;
         db.close().await;
         out
     }

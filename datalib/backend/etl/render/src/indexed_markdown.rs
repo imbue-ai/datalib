@@ -762,24 +762,23 @@ impl IndexedMarkdownStore {
     async fn sweep_problems(&self, markdown_uuid: &str, problems: &[ProblemRow]) -> Result<()> {
         let mut guard = self.write_lock.acquire().await?;
         let conn = guard.conn();
-        // Read the prior `first_seen_at_utc` for every uuid about to be
-        // rewritten, *before* the delete. This is the whole reason the
-        // store stamps these rather than the renderer: a renderer that
-        // set both timestamps to "now" every run would make
-        // `first_seen_at_utc` a synonym for `last_seen_at_utc`, and "this has
-        // been broken since Tuesday" would be unanswerable.
-        let seen: HashMap<String, String> = sqlx::query(
-            "SELECT problem_uuid, first_seen_at_utc FROM problems \
-             WHERE scope_kind = ? AND scope_key = ?",
-        )
-        .bind(ScopeKind::Markdown.as_str())
-        .bind(markdown_uuid)
-        .fetch_all(&mut **conn)
-        .await
-        .context("read prior first_seen_at_utc")?
-        .into_iter()
-        .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
-        .collect::<Result<_>>()?;
+        // Read the rows about to be rewritten, *before* the delete. This
+        // is the whole reason the store stamps these rather than the
+        // renderer: a renderer that set both timestamps to "now" every
+        // run would make `first_seen_at_utc` a synonym for
+        // `changed_at_utc`, and "this has been broken since Tuesday"
+        // would be unanswerable.
+        let mut seen: HashMap<String, ProblemRow> = HashMap::new();
+        for r in sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ?")
+            .bind(ScopeKind::Markdown.as_str())
+            .bind(markdown_uuid)
+            .fetch_all(&mut **conn)
+            .await
+            .context("read the document's problems")?
+        {
+            let row = ProblemRow::from_row(&r)?;
+            seen.insert(row.problem_uuid.clone(), row);
+        }
         sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
             .bind(ScopeKind::Markdown.as_str())
             .bind(markdown_uuid)
@@ -789,27 +788,21 @@ impl IndexedMarkdownStore {
         self.insert_problems(conn, problems, &seen).await
     }
 
-    /// Insert problem rows, stamping `first_seen_at_utc` / `last_seen_at_utc`.
-    /// `seen` maps a uuid to the `first_seen_at_utc` it already had, which
-    /// is carried forward; anything absent is new and gets `now` for
-    /// both.
+    /// Insert problem rows, each stamped against the row `seen` holds
+    /// under its uuid (`ProblemRow::stamped`).
     async fn insert_problems(
         &self,
         conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
         problems: &[ProblemRow],
-        seen: &HashMap<String, String>,
+        seen: &HashMap<String, ProblemRow>,
     ) -> Result<()> {
         let now = datalib_time::split_stamp(&self.now);
         for p in problems {
-            let stamped = ProblemRow {
-                first_seen_at_utc: seen
-                    .get(&p.problem_uuid)
-                    .cloned()
-                    .unwrap_or_else(|| now.utc.clone()),
-                last_seen_at_utc: now.utc.clone(),
-                tz_offset: now.tz_offset.clone(),
-                ..p.clone()
-            };
+            let stamped = p.clone().stamped(
+                seen.get(&p.problem_uuid),
+                &now.utc,
+                now.tz_offset.as_deref(),
+            );
             // Same generated write path the rows use; see
             // `PortableTable`'s `BulkUpsertable` impl.
             let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
@@ -921,7 +914,7 @@ impl IndexedMarkdownStore {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
-            let mut seen: HashMap<String, String> = HashMap::new();
+            let mut seen: HashMap<String, ProblemRow> = HashMap::new();
             // `INSTR(x, ?) = 1` rather than `LIKE 'table:%'`: a table
             // name may hold `_`, which LIKE reads as a wildcard.
             let prefixes: Vec<String> = whole_tables.iter().map(|t| format!("{t}:")).collect();
@@ -932,14 +925,14 @@ impl IndexedMarkdownStore {
                 .iter()
                 .map(|p| {
                     (
-                        "SELECT problem_uuid, first_seen_at_utc FROM problems \
+                        "SELECT * FROM problems \
                      WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
                         p.as_str(),
                     )
                 })
                 .chain(entities.iter().map(|e| {
                     (
-                        "SELECT problem_uuid, first_seen_at_utc FROM problems \
+                        "SELECT * FROM problems \
                      WHERE scope_kind = ? AND scope_key = ?",
                         *e,
                     )
@@ -951,17 +944,15 @@ impl IndexedMarkdownStore {
                 } else {
                     "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?"
                 };
-                for (uuid, first) in sqlx::query(select)
+                for r in sqlx::query(select)
                     .bind(ScopeKind::Entity.as_str())
                     .bind(key)
                     .fetch_all(&mut **conn)
                     .await
-                    .context("read prior first_seen_at_utc")?
-                    .into_iter()
-                    .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
-                    .collect::<Result<Vec<_>>>()?
+                    .context("read the entity problems about to be rewritten")?
                 {
-                    seen.insert(uuid, first);
+                    let row = ProblemRow::from_row(&r)?;
+                    seen.insert(row.problem_uuid.clone(), row);
                 }
                 sqlx::query(delete)
                     .bind(ScopeKind::Entity.as_str())
@@ -1170,16 +1161,21 @@ impl IndexedMarkdownStore {
         })
     }
 
-    /// Whole-store counts by severity: what the step reports at its
-    /// end. A severity this build cannot name is an error — the store
-    /// was written by a newer build and a silent zero would read as
-    /// clean.
-    pub fn problem_counts(&self) -> Result<HashMap<Severity, i64>> {
+    /// Counts by severity of the problems render itself found, over the
+    /// whole store: what the step reports at its end. The fetch-stage
+    /// rows are the download's, copied here so the index can link them
+    /// to a document; the download's own row counts them. A severity
+    /// this build cannot name is an error — the store was written by a
+    /// newer build and a silent zero would read as clean.
+    pub fn own_problem_counts(&self) -> Result<HashMap<Severity, i64>> {
         blocking(async {
-            let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
-                .fetch_all(&self.pool)
-                .await
-                .context("count problems")?;
+            let rows = sqlx::query(
+                "SELECT severity, COUNT(*) FROM problems WHERE stage <> ? GROUP BY severity",
+            )
+            .bind(Stage::Fetch.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .context("count problems")?;
             let mut out = HashMap::new();
             for r in rows {
                 let word: String = r.try_get(0)?;
@@ -1389,11 +1385,11 @@ mod tests {
     /// they had, and a re-render that no longer names someone drops them —
     /// rows and handles both — the way a re-render drops stale edges.
     fn source_contacts_travel_with_their_document() {
-        use datalib_contact_schema::{ContactHandle, ContactKind, DatalibContact, Seen};
+        use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
         let td = tempfile::tempdir().unwrap();
         let st = store(td.path());
         let mut riker =
-            DatalibContact::new("src", "email:riker@enterprise.org", ContactKind::Person);
+            NormalizedContact::new("src", "email:riker@enterprise.org", ContactKind::Person);
         riker.names = vec!["Will Riker".into()];
         riker.handles = vec![
             ContactHandle::email(None, "riker@enterprise.org"),
@@ -1944,14 +1940,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Warning)
+                .copied(),
             Some(2)
         );
 
         // A second run that only reprocesses md-2, and finds it clean.
         s.put_document(root, &doc(root, "md-2", "fp-2")).unwrap();
 
-        let counts = s.problem_counts().unwrap();
+        let counts = s.own_problem_counts().unwrap();
         assert_eq!(
             counts.get(&Severity::Warning).copied(),
             Some(1),
@@ -1998,7 +1997,10 @@ mod tests {
         assert!(!first.md_path.exists(), "the old file is gone");
         assert!(!empty.md_path.exists(), "and so is the one just written");
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Warning)
+                .copied(),
             Some(1),
             "the record of why every row went stays"
         );
@@ -2017,13 +2019,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Warning)
+                .copied(),
             Some(1)
         );
 
         s.put_document(root, &doc(root, "md-1", "fp-2")).unwrap();
         assert!(
-            s.problem_counts().unwrap().is_empty(),
+            s.own_problem_counts().unwrap().is_empty(),
             "reprocessed clean ⇒ no problem rows left"
         );
     }
@@ -2051,7 +2056,10 @@ mod tests {
             .unwrap();
         s.put_document_problems("md-1", &[failed]).unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Error)
+                .copied(),
             Some(1),
             "the same failure twice is one row"
         );
@@ -2062,8 +2070,45 @@ mod tests {
 
         s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
         assert!(
-            s.problem_counts().unwrap().is_empty(),
+            s.own_problem_counts().unwrap().is_empty(),
             "the run that produced the document swept its failure"
+        );
+    }
+
+    /// The download's problems, copied in so the index can link them to
+    /// a document, are not render's: its count leaves them out, or the
+    /// Manage screen shows one warning on both the Download and the
+    /// Render row.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn copied_fetch_problems_are_not_counted_as_renders() {
+        let td = tempfile::tempdir().unwrap();
+        let s = store(td.path());
+        let refused = ProblemRow::new(
+            "src",
+            Stage::Fetch,
+            Scope::Entity("listing:org:Acme"),
+            None,
+            Outcome::Dropped,
+            Problem::record(Reason::Forbidden, "this org refuses the credential")
+                .severity(Severity::Warning),
+            None,
+        );
+        s.replace_stage_problems(Stage::Fetch, &[refused]).unwrap();
+        assert!(s.own_problem_counts().unwrap().is_empty());
+
+        let unreadable = ProblemRow::new(
+            "src",
+            Stage::Parse,
+            Scope::Entity("users:u1"),
+            None,
+            Outcome::Dropped,
+            Problem::record(Reason::Undeserializable, "{"),
+            Some(7),
+        );
+        s.put_entity_problems(&["users"], &[unreadable]).unwrap();
+        assert_eq!(
+            s.own_problem_counts().unwrap(),
+            HashMap::from([(Severity::Error, 1)])
         );
     }
 
@@ -2093,14 +2138,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Error)
+                .copied(),
             Some(2)
         );
         // A narrowed run read users whole and no messages: u1 reads
         // cleanly now and goes; m1 was not looked at and stays.
         s.put_entity_problems(&["users"], &[]).unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Error)
+                .copied(),
             Some(1),
             "the table not read keeps its rows"
         );
@@ -2109,11 +2160,14 @@ mod tests {
         s.put_entity_problems(&[], &[unreadable("messages:m1"), unreadable("messages:m2")])
             .unwrap();
         assert_eq!(
-            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            s.own_problem_counts()
+                .unwrap()
+                .get(&Severity::Error)
+                .copied(),
             Some(2)
         );
         s.put_entity_problems(&["messages"], &[]).unwrap();
-        assert!(s.problem_counts().unwrap().is_empty());
+        assert!(s.own_problem_counts().unwrap().is_empty());
     }
 
     /// A bucket that declared a whole table is stale when any row of it

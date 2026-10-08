@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 use super::session::{Session, CAP_CORE, CAP_MAIL};
 

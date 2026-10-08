@@ -39,11 +39,18 @@ impl DataProcessor for YolinkIngest {
         &self.id
     }
 
+    /// Every write is an upsert of whole rows and a window's coverage
+    /// lands with its readings, so between checkpoints the store is the
+    /// previous snapshot plus whole windows this run fetched.
+    fn streams_output(&self) -> bool {
+        true
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
         let pool = db.pool().clone();
-        ctx.run_store(pool, None, |_| async {
+        ctx.run_store(pool, None, |sealer| async {
             let now_ms = datalib_time::parse_strict(ctx.now)
                 .with_context(|| format!("yolink: run stamp {:?}", ctx.now))?
                 .inner()
@@ -54,6 +61,7 @@ impl DataProcessor for YolinkIngest {
                 now_ms,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
+                sealer: Some(sealer),
             })
             .await?;
             Ok(format!(

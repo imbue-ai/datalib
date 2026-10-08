@@ -8,10 +8,10 @@
 use std::path::PathBuf;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
 use datalib_etl_codex::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_codex_render::render::render;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 

@@ -20,13 +20,13 @@ import {
   type ContactSummary,
   nameOf,
   stoppedBy as stoppedByOf,
-  type DatalibContact,
+  type NormalizedContact,
 } from "./contacts";
 
 const props = defineProps<{
   handle: string;
   shownAs: string;
-  resolved: DatalibContact | null;
+  resolved: NormalizedContact | null;
   x: number;
   y: number;
 }>();

@@ -39,9 +39,9 @@ table in `src/ingest/labels.rs` is where they are reconciled.
 
 - `src/ingest/schema_raw.rs` is one schema for every mode: `accounts`,
   `mailboxes`, `threads`, `emails`, `email_blobs`, the two join tables
-  `email_mailboxes` and `email_keywords`, and the three tables the two
-  API modes keep their progress in: `listed_messages`,
-  `fetched_messages` (upstream's own id → the row it produced) and
+  `email_mailboxes` and `email_keywords`, and the two tables the two
+  API modes keep their progress in: `listed_messages` (what upstream
+  named, with what is held for it on the table's sidecar) and
   `listed_whole`.
 - `src/mailbox_labels.rs` resolves `Parent/Child` label paths the same
   way for a JMAP `parentId` tree and a flat Gmail label list, so
@@ -144,7 +144,7 @@ converts to decimal so one conversation stays one thread.
 ### Auth is free
 
 latchkey ships a built-in `google-gmail` service and routes by URL host,
-so `datalib_etl::http::latchkey_curl` — the same path every other HTTP
+so `datalib_etl_web::http::latchkey_curl` — the same path every other HTTP
 provider uses — injects and refreshes the token. Setup is one command:
 
 ```sh
@@ -175,7 +175,7 @@ latchkey refuses the request rather than mirroring the wrong mailbox
 ([`latchkey.md`](latchkey.md#accounts-who-names-them)).
 
 The setting reaches the wire as `HttpRequest::latchkey`. It is
-deliberately **not** part of `fixture_key` (`datalib_etl::http`): which
+deliberately **not** part of `fixture_key` (`datalib_etl_web::http`): which
 identity fetched a response doesn't change the response's shape, and
 folding it in would make one user's playback fixtures unusable by
 another. It is a source-level block rather than a Gmail knob because
@@ -184,12 +184,13 @@ fails at load with the new spelling in the error.
 
 ### Sync
 
-The Gmail mode keeps the same three tables as the JMAP mode, and the
-same rule: what Gmail **listed** (`listed_messages`, a row per message
-id with the `historyId` that last named it as changed) is stored apart
-from what is **held** (`fetched_messages`: Gmail's id → the `emails` row
-it produced and the `historyId` it was fetched for), and what is
-**owed** is asked of the store each time. The provider's
+The Gmail mode keeps the same tables as the JMAP mode, and the same
+rule: what Gmail **listed** (`listed_messages`, a row per message id
+with the `historyId` that last named it as changed) is stored apart
+from what is **held** (the `historyId` each message was fetched for, in
+`held_version` on the listing's sidecar), and what is **owed** is asked
+of the store each time. The email row a Gmail id produced is keyed by
+that id, so no mapping is stored. The provider's
 [`INGEST.md`](/datalib/backend/etl/providers/email/INGEST.md)
 §"Incrementality" has the rule in full.
 
@@ -222,13 +223,15 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    already sat under a newly configured label did not, so a widened
    `only_extract_labels` is a label with no row, and is walked.
 3. **Fetches what is owed** with `messages.get?format=RAW`, newest id
-   first: a listed message not held at its listed `historyId`; one held
-   with no `.eml` stored that now fits under `blob_size_limit_bytes`;
-   one a different build could not store. Fetched messages are written
-   200 at a time, the email rows, thread rows and held rows in one
-   transaction. A message Gmail answers 404 for, or that carries none
-   of the configured labels, loses its listing and whatever was held.
-   A message that will not fetch stays owed, with a
+   first: a listed message not held at its listed `historyId`, and one
+   held with no `.eml` stored that now fits under
+   `blob_size_limit_bytes`. The loop is the shared `owed::drain`: one
+   `messages.get` per request, and a flush of 200 messages, or 32 MB of
+   their raw bytes if that comes first, written as the `.eml` bytes
+   into the CAS and then the email rows, thread rows, `.eml` edges and
+   held versions in one transaction. A message Gmail answers 404 for, or that carries none of the configured
+   labels, is gone: its listing, its row and whatever was held go. A
+   message that will not fetch or will not store stays owed, with a
    `listed_messages:<id>` row in `problems` and its attempts counted.
 
 Labels are reconciled every run, walk or not: `labels.list` is always

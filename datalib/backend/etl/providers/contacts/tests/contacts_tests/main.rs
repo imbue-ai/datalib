@@ -5,3 +5,5 @@
 //! environment variable each test points at its own tree.
 
 mod carddav_playback;
+mod interrupt;
+mod upgrade;

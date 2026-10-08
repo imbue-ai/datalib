@@ -68,6 +68,18 @@ async fn run_extract(
     beeper_data_dir: PathBuf,
     sources: Vec<&str>,
 ) -> Result<FetchSummary> {
+    Ok(extract_and_commit(db_path, beeper_data_dir, sources)
+        .await?
+        .0)
+}
+
+/// [`run_extract`], with the commit it made: `None` when the pass
+/// changed nothing in the store.
+async fn extract_and_commit(
+    db_path: PathBuf,
+    beeper_data_dir: PathBuf,
+    sources: Vec<&str>,
+) -> Result<(FetchSummary, Option<String>)> {
     // One handle for the whole pass, the way the processor's
     // `RawStoreSession` holds one: the file takes one writer
     // at a time.
@@ -84,9 +96,10 @@ async fn run_extract(
     // Commit what the fetch wrote, the way the processor does in
     // production. Render reads committed state only, so a store left
     // dirty here renders as empty — correct, and not what this test is about.
-    datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: beeper fetch").await?;
+    // The CAS beside it is plain SQLite and commits as it writes.
+    let committed = datalib_etl::doltlite_raw::commit_run(db.pool(), "test: beeper fetch").await?;
     db.close().await;
-    Ok(summary)
+    Ok((summary, committed))
 }
 
 fn run_extract_sync(
@@ -424,8 +437,33 @@ async fn a_media_file_that_will_not_read_is_a_problem_until_it_does() -> Result<
     assert_eq!(problems(&out_db).await?, vec![row(SCHEMATIC_EDGE, "error")]);
 
     std::fs::rename(&kept, &cached)?;
-    run_extract(out_db.clone(), beeper_dir, vec!["signal", "googlechat"]).await?;
+    let summary = run_extract(out_db.clone(), beeper_dir, vec!["signal", "googlechat"]).await?;
     assert!(problems(&out_db).await?.is_empty());
+    assert_eq!(
+        summary.blob_errors, 0,
+        "the edge's sidecar still holds the error"
+    );
+    Ok(())
+}
+
+/// Every run reads the whole cache again, so reading an unchanged one
+/// must leave the store as it was: a re-stamped sidecar is a commit, and
+/// a bigger store, on every sync.
+#[tokio::test(flavor = "multi_thread")]
+async fn reading_an_unchanged_cache_again_commits_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let beeper_dir = tmp.path().join("BeeperTexts");
+    materialize_fixture(&beeper_dir)?;
+    let out_db = tmp.path().join("out.doltlite_db");
+    let sources = || vec!["signal", "googlechat"];
+
+    let (_, first) = extract_and_commit(out_db.clone(), beeper_dir.clone(), sources()).await?;
+    let (_, second) = extract_and_commit(out_db, beeper_dir, sources()).await?;
+    assert!(first.is_some());
+    assert_eq!(
+        second, None,
+        "reading an unchanged cache again changes nothing in the store"
+    );
     Ok(())
 }
 
@@ -542,5 +580,34 @@ async fn attachments_that_cannot_be_copied_are_problems() -> Result<()> {
             row("phase:attachments", "error"),
         ]
     );
+    Ok(())
+}
+
+/// The desktop app evicts files from its cache. One evicted after we
+/// copied it keeps its bytes, and the failure to read it again, recorded
+/// unchanged on every run, changes nothing in the store.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_evicted_after_its_copy_keeps_its_bytes_and_commits_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let beeper_dir = tmp.path().join("BeeperTexts");
+    materialize_fixture(&beeper_dir)?;
+    let out_db = tmp.path().join("out.doltlite_db");
+    let sources = || vec!["signal", "googlechat"];
+
+    extract_and_commit(out_db.clone(), beeper_dir.clone(), sources()).await?;
+    std::fs::remove_file(beeper_dir.join("media/localhostlocal-signal/TNGART01"))?;
+    let (_, evicted) = extract_and_commit(out_db.clone(), beeper_dir.clone(), sources()).await?;
+    let (_, again) = extract_and_commit(out_db.clone(), beeper_dir, sources()).await?;
+    assert!(evicted.is_some(), "the first failed read is news");
+    assert_eq!(again, None, "the same failed read again is not");
+
+    let db = ingest::RawDb::open(&ingest::db_path_for(&out_db)).await?;
+    let held: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM beeper_media_attachments WHERE blake3 IS NOT NULL",
+    )
+    .fetch_one(db.pool())
+    .await?;
+    db.close().await;
+    assert_eq!(held, 2, "the evicted file's bytes are still held");
     Ok(())
 }

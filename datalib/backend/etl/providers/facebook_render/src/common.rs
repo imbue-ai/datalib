@@ -180,6 +180,7 @@ pub fn chat_item(
         kind_label: None,
         source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
         is_aside: false,
+        branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
         problems: Vec::new(),

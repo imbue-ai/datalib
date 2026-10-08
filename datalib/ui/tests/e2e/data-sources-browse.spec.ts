@@ -143,7 +143,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
   // no such thing, and a column of empty cells is what a preset exists
   // to prevent.
   await expect(searchHeader(page, "channel")).toBeVisible();
-  await expect(searchHeader(page, "author")).toBeVisible();
+  await expect(searchHeader(page, "author_ref")).toBeVisible();
   await expect(searchHeader(page, "project")).toHaveCount(0);
 });
 
@@ -160,7 +160,7 @@ test("a different type gets a different column set", async ({ page }) => {
   // share an author too, so the column shows once the review comments
   // are back in the grid.
   await searchAndSettle(page, "source_id:github");
-  await expect(searchHeader(page, "author")).toBeVisible();
+  await expect(searchHeader(page, "author_ref")).toBeVisible();
   await expect(searchHeader(page, "channel")).toHaveCount(0);
 });
 

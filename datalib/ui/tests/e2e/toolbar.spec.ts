@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { cardOf, cardTitle, shownCards, stubClipboard, tabLabels } from "./grid-helpers";
+import { cardOf, shownCards, shownTabName, stubClipboard, tabLabels } from "./grid-helpers";
 
 // The chrome around the cards: the toolbar's search box opens a search
 // card on what was typed, and ⌘K (Ctrl+K) reaches it from anywhere;
@@ -23,7 +23,7 @@ test.describe("toolbar", () => {
     await searchBox(page).press("Enter");
     const card = cardOf(page, 'searchView({"q":"warp"})');
     await expect(card).toBeVisible();
-    await expect(cardTitle(card)).toHaveText("Search: warp");
+    await expect(shownTabName(page)).toHaveText("Search: warp");
     await expect(tabLabels(page)).toHaveCount(2);
     // The box empties, ready for the next search.
     await expect(searchBox(page)).toHaveValue("");
@@ -41,7 +41,7 @@ test.describe("toolbar", () => {
     await page.getByRole("button", { name: "Logs" }).click();
     const col = shownCards(page).filter({ has: page.locator(".rl-panel") });
     await expect(col).toBeVisible({ timeout: 10_000 });
-    await expect(cardTitle(col)).toHaveText("Log · everything");
+    await expect(shownTabName(page)).toHaveText("Log · everything");
     await expect(cardOf(page, "logView()")).toHaveCount(1);
 
     await page.getByRole("button", { name: "Logs" }).click();
@@ -91,7 +91,16 @@ test.describe("toolbar", () => {
     const wide = (await box.boundingBox())!;
     expect(wide.width).toBe(440);
     expect(1280 - (wide.x + wide.width)).toBeLessThan(16);
-    const truncated = () => name.evaluate((el) => el.scrollWidth > el.clientWidth);
+    // Whether the name is cut short: its text's width against its box's,
+    // both fractional. Not `scrollWidth > clientWidth`: those round
+    // differently, and a name that happens to measure n.5px reads as
+    // clipped when nothing is.
+    const truncated = () =>
+      name.evaluate((el) => {
+        const text = document.createRange();
+        text.selectNodeContents(el);
+        return text.getBoundingClientRect().width > el.getBoundingClientRect().width + 0.5;
+      });
 
     // Density 0, then 0.5 (four steps more spacious).
     for (const larger of [0, 4]) {
@@ -110,7 +119,7 @@ test.describe("toolbar", () => {
         expect(b.x).toBeGreaterThanOrEqual(l.x + l.width);
         // At 700px the search box has room to give; at 420px it is at
         // its floor and the name gives way.
-        expect(await truncated()).toBe(width === 420);
+        await expect.poll(truncated).toBe(width === 420);
       }
     }
   });

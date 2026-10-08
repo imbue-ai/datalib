@@ -1,7 +1,7 @@
 //! `Google Chat/` walker.
 
-use datalib_etl::fsscan;
 use datalib_etl::prune;
+use datalib_etl_files::fsscan;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
@@ -9,12 +9,13 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::download_problems::SkippedRecord;
-use datalib_etl::file_checkpoint;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::file_checkpoint;
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
+use sqlx::{Sqlite, Transaction};
 
 use super::attachment_path;
 use super::db::RawDb;
@@ -159,22 +160,28 @@ pub async fn ingest(
                 };
                 // Only a file that names its messages says which are gone: one
                 // with no `messages` array prunes nothing.
-                let listed = parsed.get("messages").and_then(|v| v.as_array()).cloned();
-                let mut kept = listed.as_ref().map(|_| HashSet::new());
-                for msg in listed.unwrap_or_default() {
-                    if let Some(row) = build_message_row(&dir_name, &msg) {
-                        if let Some(kept) = kept.as_mut() {
-                            kept.insert(row.id_and_payload.id.clone());
-                        }
-                        for export_name in attached_export_names(&msg) {
-                            n_attachments += 1;
-                            attach(&mut acc, group_dir, &row.id_and_payload.id, export_name);
-                        }
-                        message_rows.push(row);
-                    }
+                let listed = parsed.get("messages").and_then(|v| v.as_array());
+                let rows: Vec<(ChatMessageRow, &Value)> = listed
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|msg| Some((build_message_row(&dir_name, msg)?, msg)))
+                    .collect();
+                if let Err(e) =
+                    super::require_some_read(&f.rel, listed.map_or(0, Vec::len), rows.len())
+                {
+                    unread(f, e);
+                    continue;
                 }
-                if let Some(kept) = kept {
-                    messages_by_group.insert(dir_name.clone(), kept);
+                if listed.is_some() {
+                    let kept = rows.iter().map(|(r, _)| r.id_and_payload.id.clone());
+                    messages_by_group.insert(dir_name.clone(), kept.collect());
+                }
+                for (row, msg) in rows {
+                    for export_name in attached_export_names(msg) {
+                        n_attachments += 1;
+                        attach(&mut acc, group_dir, &row.id_and_payload.id, export_name);
+                    }
+                    message_rows.push(row);
                 }
                 reread_groups.insert(dir_name);
                 messages_files.push(f);
@@ -217,11 +224,11 @@ pub async fn ingest(
     {
         file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
     }
-    tx.commit().await.context("commit google_chat tx")?;
-    found.skipped("google_chat", skipped);
-
+    // What the re-read files dropped and what the gone files held go in the
+    // transaction that stamps the files: a stamp without its prune would
+    // not be read again, and what it dropped would stay.
     for (group, kept) in &messages_by_group {
-        summary.removed += delete_group_messages(db, group, kept).await?;
+        summary.removed += delete_group_messages(&mut tx, group, kept).await?;
     }
 
     // A file that is gone takes its user, group or messages with it — unless
@@ -248,18 +255,24 @@ pub async fn ingest(
         };
         summary.removed += match &record {
             ChatFile::User(id) => {
-                prune::delete_owned(db.pool(), "chat_users", "id", std::slice::from_ref(id)).await?
-                    as usize
-            }
-            ChatFile::Group(id) => {
-                prune::delete_owned(db.pool(), "chat_groups", "id", std::slice::from_ref(id))
+                prune::delete_owned_in_tx(&mut tx, "chat_users", "id", std::slice::from_ref(id))
                     .await? as usize
             }
-            ChatFile::Messages(group) => delete_group_messages(db, group, &HashSet::new()).await?,
+            ChatFile::Group(id) => {
+                prune::delete_owned_in_tx(&mut tx, "chat_groups", "id", std::slice::from_ref(id))
+                    .await? as usize
+            }
+            ChatFile::Messages(group) => {
+                delete_group_messages(&mut tx, group, &HashSet::new()).await?
+            }
         };
     }
     summary.files_removed = gone.len();
-    file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
+    for rel in &gone {
+        file_checkpoint::forget_file(&mut tx, SCOPE, rel).await?;
+    }
+    tx.commit().await.context("commit google_chat tx")?;
+    found.skipped("google_chat", skipped);
 
     summary.groups = n_groups;
     summary.users = n_users;
@@ -353,9 +366,13 @@ async fn retry_unfetched_attachments(
 
 /// Delete the messages of `group` not in `keep`, with their attachment
 /// edges. Returns how many went.
-async fn delete_group_messages(db: &RawDb, group: &str, keep: &HashSet<String>) -> Result<usize> {
-    let gone = prune::prune_scope(db.pool(), "chat_messages", &[("group_id", group)], keep).await?;
-    prune::delete_owned(db.pool(), "chat_attachments", "message_id", &gone).await?;
+async fn delete_group_messages(
+    tx: &mut Transaction<'_, Sqlite>,
+    group: &str,
+    keep: &HashSet<String>,
+) -> Result<usize> {
+    let gone = prune::prune_scope_in_tx(tx, "chat_messages", &[("group_id", group)], keep).await?;
+    prune::delete_owned_in_tx(tx, "chat_attachments", "message_id", &gone).await?;
     Ok(gone.len())
 }
 

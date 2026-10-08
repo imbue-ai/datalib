@@ -17,4 +17,5 @@ pub mod inputs;
 pub mod message;
 pub mod processor;
 pub mod section;
+pub mod sources;
 pub mod title;

@@ -14,10 +14,10 @@ use anyhow::{Context, Result};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_agent_sessions::{read_changed, SessionCounts, SessionTree};
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 
 pub use datalib_etl_agent_sessions::FetchSummary;
 use datalib_etl_codex_config::SESSION_DIRS;

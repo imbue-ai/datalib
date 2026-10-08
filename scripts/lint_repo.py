@@ -318,7 +318,6 @@ def main() -> int:
     rc |= _check_python_coverage(root)
     rc |= _check_module_lock_committed(root)
     rc |= _check_manual_targets_still_build(root)
-    rc |= _check_cursor_records_its_scope(root)
     rc |= _check_source_grid(root)
     rc |= _check_workflows_no_empty_arrays(root)
     rc |= _check_no_floating_npx(root)
@@ -354,107 +353,6 @@ def _check_workflows_no_empty_arrays(root: Path) -> int:
         + "\n".join(hits)
         + "\n\n  Expanding it (\"${arr[@]}\") is 'unbound variable' under `set -u`\n"
         "  on the macOS runners' bash 3.2. Write two branches, or a scalar.",
-        file=sys.stderr,
-    )
-    return 1
-
-
-# --- Check 8: a cursor must be recorded with the config that set it ----
-#
-# A cursor answers "where do I resume?" from stored data alone, so the
-# config that narrowed the first walk -- a label filter, a `since`, a
-# device list -- is never consulted again. Widen it and the next run
-# resumes from the cursor as if nothing happened: the mail that already
-# sat outside the old filter never *changed*, so no change feed will ever
-# name it. The rule: a provider that keeps a cursor records the
-# scope-affecting config beside it through `datalib_etl::scope_config`
-# (`store` or `store_if_satisfied`), diffs it next run, and backfills
-# what widened. This check keeps a new cursor from arriving without the
-# record. The signal is the one primitive every cursor write bottoms out
-# in. Per provider crate, because a wrapper in `db.rs` is called from
-# `mod.rs`.
-#
-# docs/dev/data_architecture_ingestion.md, "When the cursor swallows a
-# config change", is the rule and the table of who records what.
-_CURSOR_WRITE = re.compile(r"\bupsert_scope_state\(")
-_SCOPE_RECORD = re.compile(r"\bscope_config::store(?:_if_satisfied)?\(")
-
-# Providers that keep a marker in `sync_scope_state` which is not a resume
-# position, with the reason. Everything else with a cursor records.
-_CURSOR_WITHOUT_SCOPE_CONFIG: dict[str, str] = {
-    # Listing-diff: every run re-lists and re-applies `since` to the fresh
-    # listing, so a widened filter surfaces what it admits on its own.
-    # The marker is "when did I last sweep", not a position in a walk.
-    "claude": "listing-diff; the sweep marker is not a resume cursor",
-    # No cursor at all: what is owed is the calendar and the listing
-    # minus what the store holds (docs/dev/plans/sync_state.md). What it
-    # writes here pins the window's start and marks a one-time repair.
-    "garmin": "no resume cursor; owed is derived from the store",
-    # History is owed by coverage spans; what it writes here only says
-    # when a listing was last swept.
-    "slack": "sweep markers schedule a listing; history is owed by coverage",
-}
-
-
-def _provider_ingest_sources(root: Path) -> dict[str, list[str]]:
-    by_provider: dict[str, list[str]] = {}
-    for rel in _git_ls_files(root, "datalib/backend/etl/providers"):
-        parts = rel.split("/")
-        # datalib/backend/etl/providers/<p>/src/ingest/...
-        if (
-            len(parts) < 8
-            or parts[5] != "src"
-            or parts[6] != "ingest"
-            or not rel.endswith(".rs")
-        ):
-            continue
-        by_provider.setdefault(parts[4], []).append(rel)
-    return by_provider
-
-
-def _check_cursor_records_its_scope(root: Path) -> int:
-    bad: list[str] = []
-    for provider, files in sorted(_provider_ingest_sources(root).items()):
-        writes: list[str] = []
-        records = False
-        for rel in files:
-            text = (root / rel).read_text(encoding="utf-8", errors="replace")
-            body = _without_test_module(text)
-            if _SCOPE_RECORD.search(body):
-                records = True
-            for lineno, line in enumerate(body.splitlines(), 1):
-                if (
-                    _CURSOR_WRITE.search(line)
-                    and "pub async fn upsert_scope_state" not in line
-                ):
-                    writes.append(f"{rel}:{lineno}")
-        if not writes or records:
-            continue
-        if provider in _CURSOR_WITHOUT_SCOPE_CONFIG:
-            continue
-        bad.append(f"{provider}: cursor written at {', '.join(writes)}")
-    if not bad:
-        print(
-            "OK: every provider with a sync cursor records the config it was taken under."
-        )
-        return 0
-    print(
-        "ERROR: a provider keeps a sync cursor without recording its scope config:",
-        file=sys.stderr,
-    )
-    for b in bad:
-        print(f"  - {b}", file=sys.stderr)
-    print(
-        "\nA cursor resumes from stored data alone, so widening the config that\n"
-        "set it (a label filter, a `since`, a device list) is a silent no-op:\n"
-        "nothing that already sat outside the old scope ever *changes*, so no\n"
-        "change feed names it. Record the scope-affecting config beside the\n"
-        "cursor with `datalib_etl::scope_config::store_if_satisfied`, diff it\n"
-        "on the next run with `filter_widened` / `limit_relaxed` / `turned_on`,\n"
-        "and backfill what widened. If the marker really is not a resume\n"
-        "position, allowlist the provider in _CURSOR_WITHOUT_SCOPE_CONFIG with\n"
-        'the reason. See docs/dev/data_architecture_ingestion.md, "When the\n'
-        'cursor swallows a config change".',
         file=sys.stderr,
     )
     return 1

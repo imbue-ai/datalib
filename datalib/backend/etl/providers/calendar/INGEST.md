@@ -16,9 +16,20 @@ One row per event in the upstream's own shape, keyed
 - `google_events` — a Google event resource verbatim. A changed or
   cancelled occurrence is its own row naming its series.
 
-`calendars.sync_token` is each calendar's resume position. It is per
-calendar, so widening the `calendars` filter needs no scope record: a
-calendar added to the list has no token and is listed whole.
+`calendars.sync_token` is each calendar's `sync-collection` token. It
+is per calendar, so widening the `calendars` filter needs no scope
+record: a calendar added to the list has no token and is listed whole.
+
+What a CalDAV listing named is `dav_resources`, one row per object with
+the etag it was listed at; the etag the stored object satisfies is
+`held_version` in that table's `_bookkeeping` sidecar, written in the
+transaction that stored it. What is owed is the difference, asked of
+the store each run and never stored: an object the listing named
+without its data and a `multiget` did not return stays owed after the
+token has moved on. A listing that stops short leaves what it never
+reached in `dav_unconfirmed`, and nothing is deleted by absence until a
+later run carries the listing to its end. Both tables are
+`datalib_etl_web::dav::state`.
 
 ## A window (`since` / `until`)
 
@@ -68,12 +79,16 @@ Which credential to use, and how to make it read-only, is in
   and `calendar-query` returned the same at Depth 0, 1 and none, on
   each of 6 calendars. We send what the RFCs define (0, 0 and 1).
 
-The loop is `datalib_etl::dav::sync`, which CardDAV shares, and what a
-listing owes the store across runs is `datalib_etl::dav::state`. A
-listing that stops short leaves a `listing:calendar <name>` problem and
-deletes nothing until a later run carries it to the end. A server
-without `sync-collection` fails the calendar: there is no second way
-to list one, apart from the window's `calendar-query` above.
+The loop is `datalib_etl_web::dav::sync`, which CardDAV shares: each page
+of a listing is one transaction (what it names, what came with its
+data, the deletions, the token), then what is listed and not held is
+fetched by `multiget` through `datalib_etl_web::owed`. A listing that stops
+short leaves a `listing:calendar <name>` problem and deletes nothing
+until a later run carries it to the end. An object with no `VEVENT`
+`UID` is held at its etag with a warning on its `dav_resources` row,
+and not asked for again until the listing names it at a new etag. A
+server without `sync-collection` fails the calendar: there is no second
+way to list one, apart from the window's `calendar-query` above.
 - Shape of the data across ~5,200 objects: 3,855 single events; the
   rest a series with 0 to many overrides in the same object; 5 objects
   holding only overrides (invitations to one occurrence). No `STATUS`
@@ -88,7 +103,10 @@ latchkey's `google-calendar` service holds the OAuth token
 `recurrence`, and changed and cancelled occurrences are resources with
 `recurringEventId` and `originalStartTime`. A `410 Gone` means the sync
 token expired: the calendar is listed whole again and whatever the new
-listing does not name is dropped.
+listing does not name is dropped. The listing carries whole events, so
+nothing is owed after it: each page is one transaction, and the token
+moves in the transaction that ends the listing, with its prune. A
+listing cut off before its last page kept no token and starts again.
 
 - **Every events reply carries `items`**, `[]` when there is nothing:
   a whole listing, an empty window and an incremental sync with no

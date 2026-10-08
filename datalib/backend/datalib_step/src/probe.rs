@@ -13,6 +13,8 @@ pub async fn run(
     ask: ProbeAsk,
     progress: OnProgress<'_>,
 ) -> Result<serde_json::Value> {
+    let mut params = params.clone();
+    crate::methods::drop_inert_params(&mut params);
     match source_type {
         SourceType::Email => {
             let config: datalib_etl_email_config::EmailConfig =
@@ -75,8 +77,8 @@ pub async fn run(
 /// something a person is waiting on and can press again, so the sync's
 /// patience — backing off for minutes through a 503 or a dropped
 /// network — would only hold the dialog up.
-fn one_attempt() -> std::sync::Arc<datalib_etl::retry::RetryGuard> {
-    datalib_etl::retry::RetryGuard::new(
+fn one_attempt() -> std::sync::Arc<datalib_etl_web::retry::RetryGuard> {
+    datalib_etl_web::retry::RetryGuard::new(
         std::time::Duration::from_secs(30),
         1,
         std::time::Duration::from_secs(1),
@@ -110,7 +112,8 @@ pub async fn run_cli(
         };
         let params = crate::source::read_params(params_file)?;
         let progress = |p: datalib_probe::ProbeProgress| eprintln!("{}", p.line());
-        datalib_etl::retry::scope(one_attempt(), run(source_type, &params, ask, &progress)).await
+        datalib_etl_web::retry::scope(one_attempt(), run(source_type, &params, ask, &progress))
+            .await
     }
     .await;
     match report {

@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
 use datalib_etl_email::ingest::labels::{gmail_mailbox_id, mailbox_id};
 use datalib_etl_email::ingest::{mbox, RawDb};
@@ -39,7 +38,6 @@ async fn a_takeout_label_no_message_carries_goes() {
     let m = Mirror::new();
     let dir = tempfile::tempdir().unwrap();
     import_takeout(&m, dir.path(), "Inbox,Old").await;
-    // Rewritten: a different length, so the fingerprint cache sees it.
     import_takeout(&m, dir.path(), "Inbox,Renamed Since").await;
 
     let state = State::read(&m).await;
@@ -204,14 +202,14 @@ async fn import_takeout(m: &Mirror, dir: &Path, labels: &str) {
         ),
     )
     .unwrap();
-    let cache = FingerprintCache::open(&dir.join("fp.sqlite"))
-        .await
-        .unwrap();
     m.read(|db: RawDb| async move {
         mbox::fetch(mbox::FetchOptions {
             input_path: path,
-            account_id_override: Some(ACCOUNT.to_string()),
-            ..mbox::FetchOptions::new(db, cache)
+            account_config: mbox::MboxAccountConfig {
+                account_id: Some(ACCOUNT.to_string()),
+                ..Default::default()
+            },
+            ..mbox::FetchOptions::new(db)
         })
         .await
         .expect("mbox fetch")

@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_flock::{FileLock, LockError};
+use datalib_store_meta::Ladder;
 pub use datalib_store_meta::{Migration, StoreKind};
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
@@ -37,6 +38,8 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
     // No `DEFAULT` on any column here; writers bind every value
     // explicitly. The stamps are UTC; `tz_offset` is the offset the
     // writer's clock was in when it made the latest of them.
+    // `held_version` is the version of the record this row's content
+    // satisfies, against what upstream lists (`crate::owed`).
     format!(
         "CREATE TABLE IF NOT EXISTS {table}_bookkeeping (
             id TEXT PRIMARY KEY,
@@ -45,7 +48,8 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
             last_attempt_at_utc TEXT NULL,
             last_error TEXT NULL,
             volatile_payload TEXT NULL,
-            tz_offset TEXT NULL
+            tz_offset TEXT NULL,
+            held_version TEXT NULL
         )"
     )
 }
@@ -188,20 +192,6 @@ pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_st
     tz_offset TEXT NULL
 )";
 
-/// The config subset that produced each scope's cursor, so a download can
-/// spot config changes the cursor would otherwise swallow (a widened
-/// `since`, a relaxed blob cap). Written only once a run has satisfied it;
-/// see [`crate::scope_config`] for what belongs in the blob.
-///
-/// Separate from `sync_scope_state` because the two aren't 1:1 — a provider
-/// can have config worth remembering with no cursor to hang it on.
-pub const SYNC_SCOPE_CONFIG_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_config (
-    scope TEXT PRIMARY KEY,
-    config TEXT NOT NULL,
-    updated_at_utc TEXT NOT NULL,
-    tz_offset TEXT NULL
-)";
-
 /// DDL every provider gets for free, appended inside [`open`].
 /// The raw store's `problems`: what a download could not do with one
 /// record, keyed `<table>:<id>` under the entity scope. `source_id` is
@@ -211,12 +201,43 @@ pub const SYNC_SCOPE_CONFIG_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_c
 /// render.
 pub const PROBLEMS_DDL: &str = datalib_problems::DDL[0].1;
 
-pub const SHARED_DDL: &[&str] = &[
-    SYNC_RUNS_DDL,
-    SYNC_SCOPE_STATE_DDL,
-    SYNC_SCOPE_CONFIG_DDL,
-    PROBLEMS_DDL,
-];
+pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL, PROBLEMS_DDL];
+
+/// The framework's ladder, for the tables stores share rather than own:
+/// `problems`, which every raw and render store holds. Every store this
+/// module opens climbs it, before its owner's ladder, and records where
+/// it stands in `_datalib_meta.shared_schema_version`. A rung checks the
+/// shape it changes, since a store may not hold the table.
+pub const SHARED_LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "problems.last_seen_at_utc becomes changed_at_utc",
+    apply: |conn| {
+        Box::pin(async move {
+            let old: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('problems') \
+                 WHERE name = 'last_seen_at_utc')",
+            )
+            .fetch_one(&mut *conn)
+            .await?;
+            if old {
+                sqlx::query(
+                    "ALTER TABLE problems RENAME COLUMN last_seen_at_utc TO changed_at_utc",
+                )
+                .execute(&mut *conn)
+                .await?;
+            }
+            Ok(())
+        })
+    },
+}];
+
+/// Shared tables no build declares any more. A store that still has one
+/// drops it on open, after its ladder (a rung may read it one last time),
+/// so it leaves no orphan beside the source's tables; its rows stay in
+/// the store's history. `sync_scope_config` recorded the config a
+/// cursor was taken under, before a run worked out from the store what
+/// it owes.
+const RETIRED_SHARED_TABLES: &[&str] = &["sync_scope_config"];
 
 /// The tables every raw store has that are datalib's, not the
 /// source's: what a mirror must leave alone and a content diff must
@@ -227,7 +248,6 @@ pub const SHARED_TABLES: &[&str] = &[
     datalib_store_meta::TABLE,
     "sync_runs",
     "sync_scope_state",
-    "sync_scope_config",
     "problems",
 ];
 
@@ -833,34 +853,56 @@ async fn open_inner(
     // does no schema work at all, the ladder included.
     let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
     let bare = extra_ddl.is_empty() && shared.is_empty();
-    let stored_version = datalib_store_meta::ladder::stored_version(&pool).await?;
-    let top = datalib_store_meta::ladder::top(ladder);
-    let rungs = if bare || user_tables(&pool).await?.is_empty() {
-        Vec::new()
-    } else {
-        datalib_store_meta::ladder::pending(ladder, stored_version)?
-    };
-    if stored_version > top && !bare {
-        pool.close().await;
-        return Err(
-            anyhow::Error::new(datalib_store_meta::ladder::AheadOfLadder {
-                stored: stored_version,
-                top,
-            })
-            .context(format!("open {}", db_path.display())),
-        );
+    let has_tables = !user_tables(&pool).await?.is_empty();
+    let mut tops = datalib_store_meta::Versions::default();
+    // The shared ladder first: the framework's tables are below the
+    // owner's, and an owner's rung may read them.
+    for (which, rungs_of) in [(Ladder::Shared, SHARED_LADDER), (Ladder::Own, ladder)] {
+        let stored = datalib_store_meta::ladder::stored_version(&pool, which).await?;
+        let top = datalib_store_meta::ladder::top(rungs_of);
+        match which {
+            Ladder::Shared => tops.shared = top,
+            Ladder::Own => tops.schema = top,
+        }
+        if bare {
+            continue;
+        }
+        if stored > top {
+            pool.close().await;
+            return Err(
+                anyhow::Error::new(datalib_store_meta::ladder::AheadOfLadder { stored, top })
+                    .context(format!("open {}", db_path.display())),
+            );
+        }
+        if !has_tables {
+            continue;
+        }
+        for rung in datalib_store_meta::ladder::pending(rungs_of, stored)? {
+            // The meta table has to exist for the rung to bump the
+            // version; a store from before the table is at version 0 and
+            // gets it here.
+            sqlx::query(datalib_store_meta::DDL)
+                .execute(&pool)
+                .await
+                .context("create _datalib_meta before migrating")?;
+            datalib_store_meta::ladder::apply(&pool, rung, which).await?;
+            let label = match which {
+                Ladder::Shared => "migrate shared",
+                Ladder::Own => "migrate",
+            };
+            commit_run(&pool, &format!("{label} v{}: {}", rung.version, rung.name))
+                .await
+                .with_context(|| format!("commit migration v{}", rung.version))?;
+        }
     }
-    for rung in rungs {
-        // The meta table has to exist for the rung to bump the version;
-        // a store from before the table is at version 0 and gets it here.
-        sqlx::query(datalib_store_meta::DDL)
-            .execute(&pool)
-            .await
-            .context("create _datalib_meta before migrating")?;
-        datalib_store_meta::ladder::apply(&pool, rung).await?;
-        commit_run(&pool, &format!("migrate v{}: {}", rung.version, rung.name))
-            .await
-            .with_context(|| format!("commit migration v{}", rung.version))?;
+    if include_shared {
+        for table in RETIRED_SHARED_TABLES {
+            // Audited: `table` is one of the `&'static str` names above.
+            sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
+                .execute(&pool)
+                .await
+                .with_context(|| format!("drop the retired {table}"))?;
+        }
     }
     // Tables, then indexes — see the README for why the order is
     // load-bearing. `parse_create_table_name` returns `None` for exactly
@@ -943,7 +985,7 @@ async fn open_inner(
         &pool,
         kind,
         &recorded_shape(extra_ddl.iter().chain(shared).copied()),
-        top,
+        tops,
     )
     .await
     .with_context(|| format!("write _datalib_meta for {}", db_path.display()))?;
@@ -1412,13 +1454,11 @@ async fn apply_table_plan(
 }
 
 /// The tables a resume cursor can live in, store-wide. Per-row cursors
-/// (a sidecar's `last_ts_ms`, an address book's `ctag`) go with the
-/// table that holds them; these three outlive any one table.
-const CURSOR_TABLES: &[&str] = &[
-    "sync_scope_state",
-    "sync_scope_config",
-    crate::file_checkpoint::INGESTED_FILES_TABLE,
-];
+/// (an address book's sync token) go with the table that holds them;
+/// these two outlive any one table.
+/// `ingested_files` is `datalib_etl_files`' file checkpoint, which tests
+/// that its table is named here.
+pub const CURSOR_TABLES: &[&str] = &["sync_scope_state", "ingested_files"];
 
 /// A cursor is only valid under the schema that set it. A recreated
 /// table is empty, and so is one that just appeared, and a cursor that
@@ -1443,11 +1483,20 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
             cleared.push(format!("{table}={n}"));
         }
     }
+    // A store with no cursors (every render store) lost nothing.
+    if cleared.is_empty() {
+        tracing::debug!(
+            created = %created.join(","),
+            recreated = %recreated.join(","),
+            "a table is new or empty, and the store kept no cursor past it"
+        );
+        return Ok(());
+    }
     tracing::warn!(
         created = %created.join(","),
         recreated = %recreated.join(","),
         cursors_cleared = %cleared.join(","),
-        "doltlite_raw: a table is empty that the store's cursors would skip past, \
+        "a table is empty that the store's cursors would skip past, \
          so the cursors were cleared; the next run walks from the start"
     );
     Ok(())
@@ -1864,8 +1913,31 @@ pub async fn record_object_attempt(
     id: &str,
     result: Option<&str>,
 ) -> Result<()> {
-    record_object_bookkeeping(tx, table, id, result).await?;
+    record_object_bookkeeping(tx, table, id, result, OnRepeat::Count).await?;
     record_fetch_problem(tx, table, id, result.map(NotFetched::Failed)).await
+}
+
+/// A failed or declined fetch, for a source that reads its whole input
+/// every run and so tries everything it lacks every run: the same
+/// failure recorded again leaves the sidecar and its `problems` row as
+/// they were, so a standing failure commits nothing.
+pub async fn record_not_fetched_first_seen(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    id: &str,
+    not_fetched: NotFetched<'_>,
+) -> Result<()> {
+    record_object_bookkeeping(tx, table, id, Some(not_fetched.detail()), OnRepeat::Leave).await?;
+    record_fetch_problem(tx, table, id, Some(not_fetched)).await
+}
+
+/// What a sidecar does when the same failure is recorded again.
+#[derive(Clone, Copy)]
+enum OnRepeat {
+    /// Counts the attempt and stamps it.
+    Count,
+    /// Stays as it was.
+    Leave,
 }
 
 /// The sidecar half of an attempt, without the `problems` row: the data
@@ -1877,6 +1949,7 @@ async fn record_object_bookkeeping(
     table: &str,
     id: &str,
     result: Option<&str>,
+    on_repeat: OnRepeat,
 ) -> Result<()> {
     // Keep the always-paired invariant: a failure recorded before any
     // successful fetch has no data row yet.
@@ -1907,7 +1980,13 @@ async fn record_object_bookkeeping(
                 attempt_count = {table}_bookkeeping.attempt_count + 1,
                 last_attempt_at_utc = excluded.last_attempt_at_utc,
                 last_error = excluded.last_error,
-                tz_offset = excluded.tz_offset"
+                tz_offset = excluded.tz_offset{}",
+            match on_repeat {
+                OnRepeat::Count => String::new(),
+                OnRepeat::Leave => format!(
+                    " WHERE {table}_bookkeeping.last_error IS NOT excluded.last_error"
+                ),
+            }
         ),
     };
     // Audited: both arms interpolate only `table`; the rest is bound.
@@ -1941,7 +2020,23 @@ pub async fn record_object_skipped(
     reason: datalib_problems::Reason,
     detail: &str,
 ) -> Result<()> {
-    record_object_bookkeeping(tx, table, id, Some(detail)).await?;
+    record_object_bookkeeping(tx, table, id, Some(detail), OnRepeat::Count).await?;
+    record_fetch_problem(tx, table, id, Some(NotFetched::Skipped { reason, detail })).await
+}
+
+/// A record that was fetched and stored with part of it lost — a file
+/// that will not decode, a body cut short by a rule. The bookkeeping
+/// carries what was lost in `last_error`; the `problems` row is a
+/// warning with the reason, since the mirror holds the record. The
+/// caller has already stamped the fetch.
+pub async fn record_object_unusable(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    id: &str,
+    reason: datalib_problems::Reason,
+    detail: &str,
+) -> Result<()> {
+    record_object_bookkeeping(tx, table, id, Some(detail), OnRepeat::Count).await?;
     record_fetch_problem(tx, table, id, Some(NotFetched::Skipped { reason, detail })).await
 }
 
@@ -1986,16 +2081,16 @@ async fn record_fetch_problem(
         Outcome, Problem, ProblemRow, Reason, Scope, ScopeKind, Severity, Stage,
     };
     let entity_id = format!("{table}:{id}");
-    let first_seen: Option<String> = sqlx::query_scalar(
-        "SELECT first_seen_at_utc FROM problems \
-         WHERE scope_kind = ? AND scope_key = ? AND stage = ?",
-    )
-    .bind(ScopeKind::Entity.as_str())
-    .bind(&entity_id)
-    .bind(Stage::Fetch.as_str())
-    .fetch_optional(&mut **tx)
-    .await
-    .with_context(|| format!("read the fetch problem of {entity_id}"))?;
+    let earlier =
+        sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
+            .bind(ScopeKind::Entity.as_str())
+            .bind(&entity_id)
+            .bind(Stage::Fetch.as_str())
+            .fetch_optional(&mut **tx)
+            .await
+            .with_context(|| format!("read the fetch problem of {entity_id}"))?
+            .map(|r| ProblemRow::from_row(&r))
+            .transpose()?;
     sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
         .bind(ScopeKind::Entity.as_str())
         .bind(&entity_id)
@@ -2029,20 +2124,16 @@ async fn record_fetch_problem(
         NotFetched::Failed(_) => (Outcome::Dropped, Severity::Error, Reason::FetchFailed),
     };
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    let row = ProblemRow {
-        first_seen_at_utc: first_seen.unwrap_or_else(|| now.clone()),
-        last_seen_at_utc: now,
-        tz_offset: Some(tz_offset),
-        ..ProblemRow::new(
-            "",
-            Stage::Fetch,
-            Scope::Entity(&entity_id),
-            None,
-            outcome,
-            Problem::record(reason, err).severity(severity),
-            None,
-        )
-    };
+    let row = ProblemRow::new(
+        "",
+        Stage::Fetch,
+        Scope::Entity(&entity_id),
+        None,
+        outcome,
+        Problem::record(reason, err).severity(severity),
+        None,
+    )
+    .stamped(earlier.as_ref(), &now, Some(&tz_offset));
     let sql = crate::bulk::insert_sql::<ProblemRow>();
     // Audited: `sql` is built from `ProblemRow`'s associated consts,
     // never from row data; all values bound.
@@ -2579,10 +2670,7 @@ mod tests {
     /// be counted as the source's records on the History card.
     #[test]
     fn history_counts_no_shared_table_as_records() {
-        for t in SHARED_TABLES
-            .iter()
-            .chain([&crate::file_checkpoint::INGESTED_FILES_TABLE])
-        {
+        for t in SHARED_TABLES.iter().chain(CURSOR_TABLES) {
             assert!(!datalib_history::holds_records(t), "{t}");
         }
         let sidecar = parse_create_table_name(&bookkeeping_ddl_for("widgets")).unwrap();
@@ -3311,6 +3399,68 @@ mod tests {
         pool.close().await;
     }
 
+    /// A store from before the shared ladder holds `problems` with
+    /// `last_seen_at_utc`. Without the rung a raw store would refuse to
+    /// open and a render store would rebuild the table empty; with it,
+    /// both keep their rows under `changed_at_utc` and record the rung.
+    #[tokio::test]
+    async fn the_shared_ladder_carries_problems_across_its_rename() {
+        let old_ddl = PROBLEMS_DDL.replace("changed_at_utc", "last_seen_at_utc");
+        let d = tempdir().unwrap();
+        for (name, kind) in [("raw", StoreKind::Raw), ("render", StoreKind::Render)] {
+            let p = d.path().join(format!("{name}.doltlite_db"));
+            {
+                let pool = open_curated(&p, &[old_ddl.as_str()], kind, &[])
+                    .await
+                    .unwrap();
+                sqlx::query(
+                    "INSERT INTO problems (problem_uuid, source_id, stage, severity, outcome, \
+                     reason, scope_kind, scope_key, sample, first_seen_at_utc, last_seen_at_utc) \
+                     VALUES ('p1', 'tng', 'fetch', 'warning', 'ok', 'not_found', 'entity', \
+                     'media_blobs:a#b.mp4', 'gone', '2364-04-01T00:00:00Z', \
+                     '2364-04-02T00:00:00Z')",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                // A build before the shared ladder recorded no position on it.
+                sqlx::query("DELETE FROM _datalib_meta WHERE key = 'shared_schema_version'")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                commit_run(&pool, "rows").await.unwrap();
+                pool.close().await;
+            }
+
+            let pool = match kind {
+                StoreKind::Raw => open(&p, &[]).await,
+                _ => open_derived(&p, &[PROBLEMS_DDL], kind).await,
+            }
+            .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            let changed: String =
+                sqlx::query_scalar("SELECT changed_at_utc FROM problems WHERE problem_uuid = 'p1'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            assert_eq!(changed, "2364-04-02T00:00:00Z", "{name}");
+            let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
+            assert_eq!(meta.shared_schema_version, 1, "{name}");
+            let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+            assert!(
+                messages.iter().any(|m| {
+                    m.starts_with(
+                        "migrate shared v1: problems.last_seen_at_utc becomes changed_at_utc",
+                    )
+                }),
+                "{name}: {messages:?}"
+            );
+            pool.close().await;
+        }
+    }
+
     /// A rename the reconcile would refuse goes through when the owner
     /// declares it as a rung: the rung runs against the old shape, the
     /// rows survive, the store records the version and the commit, the
@@ -3533,10 +3683,62 @@ mod tests {
         assert_eq!(rows, 1, "the table that was there keeps its row");
         assert_eq!(
             cursor_counts(&pool).await,
-            (0, 0, 0),
+            (0, 0),
             "a new, empty table is one the cursors would skip past"
         );
         pool.close().await;
+    }
+
+    /// How many WARN lines `doltlite_raw` writes while `f` runs, on this
+    /// thread (the test runtime's only one).
+    async fn warnings_during<F: std::future::Future>(f: F) -> (F::Output, usize) {
+        use tracing_subscriber::layer::SubscriberExt;
+        struct Count(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Count {
+            fn on_event(
+                &self,
+                event: &tracing::Event<'_>,
+                _: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                let m = event.metadata();
+                if *m.level() == tracing::Level::WARN && m.target() == "datalib_etl::doltlite_raw" {
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+        let n = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let _default =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(Count(n.clone())));
+        let out = f.await;
+        (out, n.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    /// Every render store in a demo root warned "the cursors were
+    /// cleared" when a build added two tables, though render stores keep
+    /// no cursors and none were cleared: a warning that cried wolf on
+    /// every source after every upgrade.
+    #[tokio::test]
+    async fn a_new_table_in_a_store_with_no_cursors_warns_of_nothing() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("no_cursors.doltlite_db");
+        open(&p, &[WIDGETS_DDL]).await.unwrap().close().await;
+
+        const GADGETS: &str = "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY)";
+        let (pool, warnings) = warnings_during(open(&p, &[WIDGETS_DDL, GADGETS])).await;
+        pool.unwrap().close().await;
+        assert_eq!(warnings, 0, "nothing was cleared, so nothing to warn of");
+    }
+
+    #[tokio::test]
+    async fn clearing_cursors_is_a_warning() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("cleared.doltlite_db");
+        store_with_cursors(&p, &[WIDGETS_DDL]).await;
+
+        const GADGETS: &str = "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY)";
+        let (pool, warnings) = warnings_during(open(&p, &[WIDGETS_DDL, GADGETS])).await;
+        pool.unwrap().close().await;
+        assert_eq!(warnings, 1);
     }
 
     /// `column_clause` hands back a column's definition as the DDL wrote
@@ -3576,7 +3778,15 @@ mod tests {
     /// cursor, the scope's config record, and a file checkpoint.
     async fn store_with_cursors(p: &Path, ddl: &[&str]) {
         let pool = open(p, ddl).await.unwrap();
-        crate::file_checkpoint::ensure_schema(&pool).await.unwrap();
+        // The file checkpoint's table, which `datalib_etl_files` creates;
+        // only its name and a row in it matter here.
+        sqlx::query(
+            "CREATE TABLE ingested_files (scope TEXT, rel_path TEXT, blake3 TEXT, \
+             size_bytes INTEGER, last_finished_at_utc TEXT, PRIMARY KEY (scope, rel_path))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO widgets (id, name) VALUES ('w1', 'gadget')")
             .execute(&pool)
             .await
@@ -3584,13 +3794,6 @@ mod tests {
         upsert_scope_state(&pool, "widgets/walk", "2026-09-18T10:00:00+00:00")
             .await
             .unwrap();
-        sqlx::query(
-            "INSERT INTO sync_scope_config (scope, config, updated_at_utc, tz_offset) \
-             VALUES ('widgets', '{}', '2026-09-18T10:00:00+00:00', '+00:00')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
         sqlx::query(
             "INSERT INTO ingested_files (scope, rel_path, blake3, size_bytes, last_finished_at_utc) \
              VALUES ('widgets/files', 'a.json', 'aa', 1, '2026-09-18T10:00:00+00:00')",
@@ -3602,7 +3805,7 @@ mod tests {
         pool.close().await;
     }
 
-    async fn cursor_counts(pool: &SqlitePool) -> (i64, i64, i64) {
+    async fn cursor_counts(pool: &SqlitePool) -> (i64, i64) {
         let n = |sql: &'static str| async move {
             sqlx::query_scalar::<_, i64>(sql)
                 .fetch_one(pool)
@@ -3611,7 +3814,6 @@ mod tests {
         };
         (
             n("SELECT COUNT(*) FROM sync_scope_state").await,
-            n("SELECT COUNT(*) FROM sync_scope_config").await,
             n("SELECT COUNT(*) FROM ingested_files").await,
         )
     }
@@ -3636,7 +3838,7 @@ mod tests {
         assert_eq!(rows, 0, "the column removal recreated the table");
         assert_eq!(
             cursor_counts(&pool).await,
-            (0, 0, 0),
+            (0, 0),
             "every cursor must go with the rows it pointed past"
         );
         pool.close().await;
@@ -3656,7 +3858,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows, 1, "ADD COLUMN keeps the row");
-        assert_eq!(cursor_counts(&pool).await, (1, 1, 1));
+        assert_eq!(cursor_counts(&pool).await, (1, 1));
+        pool.close().await;
+    }
+
+    /// A store from a build that still declared `sync_scope_config`
+    /// kept it as an orphan beside the source's tables, which a mirror
+    /// and the history view would read as the source's own.
+    #[tokio::test]
+    async fn a_retired_shared_table_is_dropped_on_open() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("retired.doltlite_db");
+        let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE sync_scope_config (scope TEXT PRIMARY KEY, config TEXT NOT NULL, \
+             updated_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO sync_scope_config VALUES ('widgets', '{}', '2026-09-18T10:00:00Z', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        commit_run(&pool, "an older build").await.unwrap();
+        pool.close().await;
+
+        let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+        let left: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(left, 0);
         pool.close().await;
     }
 
@@ -4344,7 +4581,7 @@ mod tests {
             .fetch_one(reader.pool())
             .await
             .unwrap();
-        assert_eq!(pinned, 6, "every meta row is at HEAD");
+        assert_eq!(pinned, 7, "every meta row is at HEAD");
         reader.close().await;
 
         // The shape moves: the hash moves with it, and the commit says so.

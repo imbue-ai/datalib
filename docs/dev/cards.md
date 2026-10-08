@@ -308,12 +308,12 @@ holds for everything inside it too. When a card opens cards
 (`openCards`), they land in the nearest container above the opener that
 is not solidified, and that container's layout decides where: Columns
 drop what was right of the opener's column and add the chain; a Split or
-Page insert it after the opener's child; Tabs take it as one new
-tab — a Columns container holding the chain, under the opener's tab —
-so what those cards open lands beside them. The outermost container is
-never solidified, so an open always lands somewhere. A link or the
-toolbar (Logs, Data sources, a search) opens its cards the same way, in
-a new tab holding a Columns container.
+Page insert it after the opener's child; Tabs give each card a tab of
+its own, filling it, under the tab of the card before. The outermost
+container is never solidified, so an open always lands somewhere. A
+card opened from the toolbar (Logs, Data sources, a search) is a tab of
+its own. A link opens its cards as one tab holding a Columns container,
+so what they open lands beside them.
 
 **What shows.** Outside edit mode a solidified subtree shows no card
 chrome, so a composite such as the Dashboard (a Page of its five
@@ -602,7 +602,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `datetime` | an ISO stamp that is the record's (when a message was sent) | the date and time it names; sorts on the instant |
 | `quantity` | `{value, unit, note, detail}` | one figure by its unit (`count` grouped, `seconds` as "25 min"), or `note` in its place — a word, muted — when there is none; the reasoning on hover |
 | `timeseries` | `{value, unit, samples, detail, window_secs}` | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table |
-| `identity` | `{id, label, icon, detail}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset |
+| `identity` | `{id, label, icon, detail, entity}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset. An id that is a person's handle as a URI (`mailto:…`), or an `entity` naming a group or step (`datalib:group/slack`), draws as a chip instead, see below |
 | `status` | `{key, label, at, last_success_at, detail}` | a glyph for the key (a spinner while running), when it got there, the reason on hover |
 | `chips` | `[{kind, text, title}]` | a row of chips |
 | `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
@@ -612,6 +612,23 @@ The producer resolves, the viewer presents: an `identity` arrives with
 its label already looked up, because only the producer can, and the
 viewer decides what the icon token looks like. An action is an *id*,
 never a URL — a URL arriving as data would be a capability.
+
+One layer is joined in the viewer, deliberately: a person. The search
+grid's Author cell arrives as an identity whose id is the author's
+handle as a URI and whose label is the name the source showed; the grid
+draws it as a chip and asks `people`, the one resolver every document
+and grid shares (`cards/resolver.ts`, an instance in `cards/contacts.ts`):
+a cell asks as it is drawn, the questions of one drawing pass go out as
+one request, and when an answer changes — it lands, or a link made in
+any document forgets it — every grid and document showing that handle
+draws it again. The
+producer still resolves what only it can; the contact a person linked
+is live state that moves while the row does not, so it is joined where
+it is live, the same way a document draws its chips. The reasons, and
+what a chip offers on click, are in
+[`plans/chips.md`](plans/chips.md) § "In a grid". A group's or a step's
+identity resolves the same way, from `entities` over datalib-http's
+`POST /api/entities`.
 
 `GET /api/manage/rows` and the `unified_index` applet's `/search` are
 the two producers. The applet resolves the search grid's Source

@@ -1,19 +1,20 @@
 //! Doltlite-backed raw store for the `garmin` provider.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use sqlx::Row;
 
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::coverage::{self, Span};
 use datalib_etl::doltlite_raw::{self as dr};
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::owed::{self, Listed};
 
-use super::schema_raw::{full_ddl, ActivityRow, FILE_KIND_FIT};
+use super::schema_raw::{full_ddl, ActivityRow, FILE_KIND_FIT, LADDER};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
 
 /// The `sync_scope_state` key, less the table, saying that table's file
 /// edges have been through [`RawDb::repair_shared_file_hashes`].
@@ -27,16 +28,6 @@ pub const ACTIVITIES_SCOPE: &str = "activities";
 pub struct Enumerated {
     pub covered: Span,
     pub prune_from: String,
-}
-
-/// What one stored activity is owed.
-#[derive(Debug, PartialEq, Eq)]
-pub struct ActivityWork {
-    pub id: String,
-    /// The listing version the work is for.
-    pub listing_hash: String,
-    pub detail: bool,
-    pub file: bool,
 }
 
 impl RawDb {
@@ -158,69 +149,49 @@ impl RawDb {
         Ok(gone.len())
     }
 
-    /// Every stored activity with what it is owed: a detail, when none
-    /// is held for the activity's listing version; a file, when no
-    /// download was answered for it, or the answer held no bytes and was
-    /// for another version. A row no listing by this build has named has
-    /// no version and is owed nothing until one does. Newest first.
-    pub async fn activity_work(&self) -> Result<Vec<ActivityWork>> {
-        let rows: Vec<(String, String, bool, bool)> = sqlx::query_as(
-            "SELECT a.id, a.listing_hash, \
-                    d.listing_hash IS NOT a.listing_hash, \
-                    f.id IS NULL \
-                        OR (f.blake3 IS NULL AND f.listing_hash IS NOT a.listing_hash) \
+    /// Every stored activity at its listing version, newest first: what
+    /// a detail is listed for. A row no listing by this build has named
+    /// has no version and is listed for nothing until one does.
+    pub async fn listed_activities(&self) -> Result<Vec<Listed>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, listing_hash FROM garmin_activities \
+             WHERE listing_hash IS NOT NULL ORDER BY start_time_gmt DESC, id",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select the garmin activities as listed")?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, hash)| Listed::new(id, Some(hash)))
+            .collect())
+    }
+
+    /// The FIT file edges of the stored activities that hold no bytes,
+    /// each at its activity's listing version, newest first: what a file
+    /// is listed for. An edge with bytes is never listed again, since the
+    /// original upload does not change when the activity is edited.
+    pub async fn activity_files_without_bytes(&self) -> Result<Vec<Listed>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT a.id || '#fit', a.listing_hash \
              FROM garmin_activities a \
-             LEFT JOIN garmin_activity_details d ON d.id = a.id \
              LEFT JOIN garmin_activity_files f ON f.id = a.id || '#fit' \
-             WHERE a.listing_hash IS NOT NULL \
+             WHERE a.listing_hash IS NOT NULL AND f.blake3 IS NULL \
              ORDER BY a.start_time_gmt DESC, a.id",
         )
         .fetch_all(self.pool())
         .await
-        .context("select what each garmin activity is owed")?;
+        .context("select the garmin activities without a file")?;
         Ok(rows
             .into_iter()
-            .map(|(id, listing_hash, detail, file)| ActivityWork {
-                id,
-                listing_hash,
-                detail,
-                file,
-            })
+            .map(|(id, hash)| Listed::new(id, Some(hash)))
             .collect())
-    }
-
-    /// `calendar_date → fetched_on` for the days of one metric that were
-    /// answered.
-    pub async fn daily_held(&self, metric: &str) -> Result<HashMap<String, String>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT calendar_date, fetched_on FROM garmin_daily \
-             WHERE metric = ? AND fetched_on IS NOT NULL",
-        )
-        .bind(metric)
-        .fetch_all(self.pool())
-        .await
-        .with_context(|| format!("select the garmin_daily days held of {metric}"))?;
-        Ok(rows.into_iter().collect())
-    }
-
-    /// `calendar_date → fetched_on` for the days whose wellness bundle
-    /// was answered, with a bundle or without.
-    pub async fn wellness_held(&self) -> Result<HashMap<String, String>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT calendar_date, fetched_on FROM garmin_wellness_files \
-             WHERE fetched_on IS NOT NULL",
-        )
-        .fetch_all(self.pool())
-        .await
-        .context("select the garmin_wellness_files days held")?;
-        Ok(rows.into_iter().collect())
     }
 
     /// Mend the file edges an earlier build wrote: it keyed every file of
     /// a batch under one ref, so each edge of the batch got the last
     /// file's hash, and a hash several records' edges share is the mark it
-    /// left. Those edges lose the hash and the stamp of what they were
-    /// fetched for, which is what makes the walks fetch them again.
+    /// left. Those edges lose the hash and hold nothing, which is what
+    /// makes the walks fetch them again.
     ///
     /// Once per table, recorded under [`REPAIRED_PREFIX`], and only while
     /// the walk that would refetch it is on: two activities may share a
@@ -232,19 +203,17 @@ impl RawDb {
         activity_files: bool,
         wellness_files: bool,
     ) -> Result<()> {
-        for (on, table, owner, stamp, what) in [
+        for (on, table, owner, what) in [
             (
                 activity_files,
                 "garmin_activity_files",
                 "activity_id",
-                "listing_hash",
                 "activity",
             ),
             (
                 wellness_files,
                 "garmin_wellness_files",
                 "calendar_date",
-                "fetched_on",
                 "day",
             ),
         ] {
@@ -252,7 +221,7 @@ impl RawDb {
             if !on || self.marker(&marker).await?.is_some() {
                 continue;
             }
-            // Audited: `table`, `owner` and `stamp` are literals from the list above.
+            // Audited: `table` and `owner` are literals from the list above.
             let ids: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                 "SELECT id FROM {table} WHERE blake3 IN \
                  (SELECT blake3 FROM {table} WHERE blake3 IS NOT NULL \
@@ -267,13 +236,14 @@ impl RawDb {
             );
             let mut tx = self.pool().begin().await?;
             for id in &ids {
-                // Audited: `table` and `stamp` are literals from the list above; `id` is bound.
+                // Audited: `table` is a literal from the list above; `id` is bound.
                 sqlx::query(sqlx::AssertSqlSafe(format!(
-                    "UPDATE {table} SET blake3 = NULL, {stamp} = NULL WHERE id = ?"
+                    "UPDATE {table} SET blake3 = NULL WHERE id = ?"
                 )))
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
+                owed::forget(&mut tx, table, id).await?;
                 dr::record_object_error(&mut tx, table, id, &err).await?;
             }
             tx.commit().await?;

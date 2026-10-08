@@ -27,27 +27,55 @@ Slack's "Today at 11:02": this file is written once and read for years,
 so a word meaning "the day this was rendered" would be wrong by the
 next morning.
 
-**The author span carries the author's handle** where the provider has
-one — `<span class="msg-author" data-handle="email:riker@enterprise.org">`
-— from `NormalizedChatItem::author_handle` (`datalib_handle`). The text
-stays what the source showed; the UI asks the contacts app, if one is
-configured, whom the handle belongs to and draws a chip
-(`ui/src/cards/contacts.ts`). The attribute is load-bearing, like
+**An author with a handle is a chip link**, where the provider has
+one (`NormalizedChatItem::author_handle`, `datalib_handle`):
+
+```markdown
+## [Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>") <time class="msg-ts" …>…</time>
+```
+
+The text stays what the source showed; the href is the handle as a URI
+(`Handle::to_uri`: `mailto:`, `tel:`, Slack's `slack://user?team=…&id=…`,
+and `datalib:handle/<kind>/<value>` for a kind with no scheme of its
+own, a Signal account id);
+the title is the hover any other markdown viewer shows. The UI's
+markdown-it marks a link it can resolve as a chip
+(`ui/src/cards/chipLinks.js`), asks the contacts app, if one is
+configured, and the index whom the handle belongs to, and draws a chip
+in place of the link (`ui/src/cards/contacts.ts`), whose own title
+says what every source knows of the person. The href is load-bearing, like
 `data-section-uuid`: it is how a contact linked after this file was
-written still finds the author. The UI trusts it only on the header
-line, since a message body can carry any attribute it likes.
+written still finds the author. An author with no handle is a plain
+`<span class="msg-author">`. How a handle becomes a person is
+`docs/dev/contacts.md`; the design, and why a chip may appear anywhere
+in a body, is `docs/dev/plans/chips.md`.
 
 An item with `recipients` (an email's To and Cc) gets one more line
-straight under the header — `<div class="msg-recipients">To <span
-class="msg-recipient" data-handle="…">…</span>; Cc …</div>` — and the UI
-trusts a `data-handle` there only because it is the header's very next
-element.
+straight under the header, a paragraph rather than an HTML block
+because markdown is not parsed inside a block:
+`<span class="msg-recipients">To [Will Riker](mailto:… "…"), <span
+class="msg-recipient">Deanna Troi</span>; Cc …</span>`.
 
-Each document also carries a `DatalibContact` per author handle in it
-(`src/people.rs`): the names the provider showed the handle under, less
-the handle's own `<address>`, how many items it wrote and the last one's
-stamp. A provider needs no code for this; the index sums them per source
-to say who a handle is.
+Each document also carries a `NormalizedContact` per handle in it
+(`src/people.rs`): authors with what they wrote, recipients and
+reactors with nothing, merged with any source contact the provider gives in
+`NormalizedChat::contacts`. A provider needs no code for the baseline.
+What source contacts are and who reads them is `docs/dev/contacts.md`
+§"Source contacts: `NormalizedContact`".
+
+## Branches: the versions a conversation left fold in where they forked
+
+An edited prompt or a regenerated answer makes a conversation a tree.
+The page reads the branch the account last saw, and keeps every other
+version: `branches::reading_order` takes the messages (id, parent, in
+time order) and the leaf last seen, and returns them in reading order,
+each other version just before the version shown where it forked, and
+a version left inside another nested in it. A provider sets each item's
+`branch` from it; chat-common knows nothing of trees, and wraps each run
+of items on another branch in a collapsed `<details class="branch">`
+("Another version · N messages"), nested as the branches nest. Like an
+aside, such an item keeps its anchor and its grid row, and its
+document's row leaves it out. ChatGPT and Claude use it.
 
 ## Asides: runs of tool steps fold into one `<details>`
 

@@ -4,6 +4,11 @@
 
 import type { AccountNaming } from "@/api";
 
+/// Under the account box wherever the person names the account.
+export const NAME_IT_HELP =
+  "Either pick an existing one, or type a new name here and use one of the authentication " +
+  "options below to create a new latchkey account.";
+
 /// The account a browser login is asked to store under, or "" for none.
 /// A service that names its own accounts refuses a name it does not
 /// hold yet, so a new one is left for the login to report.

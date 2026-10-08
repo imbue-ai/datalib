@@ -2,7 +2,7 @@
 //! gives a friend a name and the day the friendship was made, nothing
 //! more — no profile URL, no id.
 
-use datalib_contact_schema::{ContactKind, DatalibContact, Detail};
+use datalib_contact_schema::{ContactKind, Detail, NormalizedContact};
 use datalib_etl_contact_common::{ContactDoc, ContactRenderProfile};
 use datalib_etl_facebook::ingest::schema_raw::FRIENDS_TABLE;
 
@@ -41,7 +41,7 @@ pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<ContactD
                 .map(|t| t.to_rfc3339_secs());
             let id = ids::friend(&owner.source_id, row_id);
             let mut person =
-                DatalibContact::new(&owner.source_id, id.natural_key, ContactKind::Person);
+                NormalizedContact::new(&owner.source_id, id.natural_key, ContactKind::Person);
             person.names = str_field(v, "name")
                 .map(str::to_string)
                 .into_iter()

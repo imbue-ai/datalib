@@ -5,14 +5,15 @@
 //!
 //! Its one writer is the `datalib_contacts` applet. Nothing in the core
 //! opens it; the core knows handles, never contacts.
-//! `docs/dev/plans/contacts.md` has the design.
+//! `docs/dev/contacts.md` is the reference; what is still to build is
+//! `docs/dev/plans/contacts.md`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 pub use datalib_contact_schema::ContactKind;
-use datalib_contact_schema::{ContactHandle, DatalibContact, Medium};
+use datalib_contact_schema::{ContactHandle, Medium, NormalizedContact};
 use datalib_etl::doltlite_raw;
 use datalib_handle::{Handle, HandleKind};
 use datalib_store_meta::{Migration, StoreKind};
@@ -65,7 +66,52 @@ const DDL: &[&str] = &[
         tz_offset TEXT NOT NULL,
         PRIMARY KEY (group_id, member_id)
     )",
+    // The photo a person put on a contact: one per contact, the bytes
+    // as given. Served by the applet at `/photo/<contact_id>`.
+    "CREATE TABLE IF NOT EXISTS photos (
+        contact_id TEXT PRIMARY KEY,
+        content_type TEXT NOT NULL,
+        bytes BLOB NOT NULL,
+        set_at_utc TEXT NOT NULL,
+        tz_offset TEXT NOT NULL
+    )",
 ];
+
+/// Where the applet serves a contact's photo, relative to the app's
+/// origin; what [`Store::contact`] answers as `photo_url`.
+pub fn photo_url(contact_id: &str) -> String {
+    format!("/applet/datalib_contacts/photo/{contact_id}")
+}
+
+/// The image types a photo may be: those a browser draws in an `<img>`.
+/// Anything else is refused rather than stored.
+pub const PHOTO_CONTENT_TYPES: &[&str] = datalib_contact_schema::DRAWABLE_PHOTO_TYPES;
+/// Well under the gateway's body limit, and more than a profile photo
+/// needs.
+pub const PHOTO_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+/// Whether a photo may be stored: its type and its size.
+pub fn check_photo(content_type: &str, len: usize) -> Result<()> {
+    let ct = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !PHOTO_CONTENT_TYPES.contains(&ct.as_str()) {
+        bail!(
+            "{content_type:?} is not a photo: send one of {}",
+            PHOTO_CONTENT_TYPES.join(", ")
+        );
+    }
+    if len == 0 {
+        bail!("the photo is empty");
+    }
+    if len > PHOTO_MAX_BYTES {
+        bail!("the photo is {len} bytes; the most a contact's photo can be is {PHOTO_MAX_BYTES}");
+    }
+    Ok(())
+}
 
 /// The store's migration ladder (etl/README.md §"The migration ladder").
 /// A link is a handle a person chose, so when the handle rules move the
@@ -277,7 +323,7 @@ impl Store {
 
     /// The contact holding each of `handles`, by handle; a handle no
     /// contact holds is absent.
-    pub async fn resolve(&self, handles: &[Handle]) -> Result<HashMap<String, DatalibContact>> {
+    pub async fn resolve(&self, handles: &[Handle]) -> Result<HashMap<String, NormalizedContact>> {
         let mut out = HashMap::new();
         for h in handles {
             let holder: Option<String> =
@@ -325,7 +371,7 @@ impl Store {
             .collect())
     }
 
-    pub async fn contact(&self, contact_id: &str) -> Result<Option<DatalibContact>> {
+    pub async fn contact(&self, contact_id: &str) -> Result<Option<NormalizedContact>> {
         let Some(r) = sqlx::query(
             "SELECT contact_id, name, kind, note, created_at_utc, updated_at_utc \
                FROM contacts WHERE contact_id = ?",
@@ -338,7 +384,7 @@ impl Store {
             return Ok(None);
         };
         let kind: String = r.get("kind");
-        let mut contact = DatalibContact::new(
+        let mut contact = NormalizedContact::new(
             SOURCE_ID,
             contact_id,
             ContactKind::parse(&kind).unwrap_or(ContactKind::Person),
@@ -347,6 +393,13 @@ impl Store {
         contact.note = r.get("note");
         contact.created_at = r.get("created_at_utc");
         contact.modified_at = r.get("updated_at_utc");
+        let has_photo: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM photos WHERE contact_id = ?")
+                .bind(contact_id)
+                .fetch_optional(&self.pool)
+                .await
+                .context("read whether a contact has a photo")?;
+        contact.photo_url = has_photo.map(|_| photo_url(contact_id));
         contact.handles = sqlx::query(
             "SELECT handle, stopped_working_by FROM handles WHERE contact_id = ? \
               ORDER BY stopped_working_by IS NOT NULL, handle",
@@ -495,6 +548,68 @@ impl Store {
         Ok(true)
     }
 
+    /// The photo on a contact, as `(content_type, bytes)`; `None` where
+    /// there is none.
+    pub async fn photo(&self, contact_id: &str) -> Result<Option<(String, Vec<u8>)>> {
+        let row = sqlx::query("SELECT content_type, bytes FROM photos WHERE contact_id = ?")
+            .bind(contact_id)
+            .fetch_optional(&self.pool)
+            .await
+            .context("read a contact's photo")?;
+        Ok(row.map(|r| (r.get("content_type"), r.get("bytes"))))
+    }
+
+    /// Put a photo on a contact, replacing any it had. Refused for a
+    /// contact that does not exist, or for bytes [`check_photo`] will
+    /// not take.
+    pub async fn set_photo(
+        &self,
+        contact_id: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<()> {
+        check_photo(content_type, bytes.len())?;
+        let ct = content_type
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
+        let mut tx = self.pool.begin().await?;
+        let name = name_of_existing(&mut tx, contact_id).await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO photos (contact_id, content_type, bytes, set_at_utc, tz_offset) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(contact_id)
+        .bind(&ct)
+        .bind(bytes)
+        .bind(&now)
+        .bind(&tz)
+        .execute(&mut *tx)
+        .await
+        .context("store a contact's photo")?;
+        tx.commit().await?;
+        self.seal(&format!("contacts: photo for {name:?}")).await
+    }
+
+    /// Returns whether the contact had a photo to take off.
+    pub async fn clear_photo(&self, contact_id: &str) -> Result<bool> {
+        let name = name_of_existing(&mut *self.pool.acquire().await?, contact_id).await?;
+        let done = sqlx::query("DELETE FROM photos WHERE contact_id = ?")
+            .bind(contact_id)
+            .execute(&self.pool)
+            .await
+            .context("take a contact's photo off")?;
+        if done.rows_affected() == 0 {
+            return Ok(false);
+        }
+        self.seal(&format!("contacts: no photo for {name:?}"))
+            .await?;
+        Ok(true)
+    }
+
     async fn seal(&self, msg: &str) -> Result<()> {
         doltlite_raw::commit_run(&self.pool, msg).await?;
         Ok(())
@@ -507,6 +622,17 @@ async fn holder(tx: &mut sqlx::SqliteConnection, h: &Handle) -> Result<Option<St
         .fetch_optional(&mut *tx)
         .await
         .context("read who holds a handle")
+}
+
+/// A contact's name, or a refusal naming the id when there is no such
+/// contact.
+async fn name_of_existing(conn: &mut sqlx::SqliteConnection, contact_id: &str) -> Result<String> {
+    let name: Option<String> = sqlx::query_scalar("SELECT name FROM contacts WHERE contact_id = ?")
+        .bind(contact_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .context("read a contact's name")?;
+    name.ok_or_else(|| anyhow::anyhow!("no contact {contact_id}"))
 }
 
 async fn name_of(tx: &mut sqlx::SqliteConnection, contact_id: &str) -> Result<String> {
@@ -777,6 +903,88 @@ mod tests {
         assert!(store.unlink(&tel).await.unwrap());
         assert!(!store.unlink(&tel).await.unwrap());
         assert!(store.resolve(&[tel]).await.unwrap().is_empty());
+        store.close().await;
+    }
+
+    #[test]
+    fn a_photo_is_an_image_of_a_size_a_contact_can_carry() {
+        assert!(check_photo("image/png", 10).is_ok());
+        assert!(check_photo("Image/JPEG; charset=binary", 10).is_ok());
+        for (ct, len) in [
+            ("text/html", 10),
+            ("image/svg+xml", 10),
+            ("", 10),
+            ("image/png", 0),
+            ("image/png", PHOTO_MAX_BYTES + 1),
+        ] {
+            assert!(check_photo(ct, len).is_err(), "{ct:?} {len}");
+        }
+    }
+
+    /// A contact's photo: put on, served back as given, answered as a
+    /// URL on the contact, taken off again — each a commit.
+    #[tokio::test]
+    async fn a_photo_rides_on_the_contact_until_it_is_taken_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&store_path(dir.path())).await.unwrap();
+        let id = store
+            .create("Will Riker", ContactKind::Person, &[])
+            .await
+            .unwrap();
+        assert_eq!(store.contact(&id).await.unwrap().unwrap().photo_url, None);
+        assert!(store.photo(&id).await.unwrap().is_none());
+        let png = b"\x89PNG\r\n\x1a\n not really".to_vec();
+        store.set_photo(&id, "image/png", &png).await.unwrap();
+        assert_eq!(
+            store.photo(&id).await.unwrap(),
+            Some(("image/png".to_string(), png.clone()))
+        );
+        let c = store.contact(&id).await.unwrap().unwrap();
+        assert_eq!(c.photo_url.as_deref(), Some(photo_url(&id).as_str()));
+        let riker = email("riker@enterprise.org");
+        store.link(&riker, &id).await.unwrap();
+        let got = store.resolve(std::slice::from_ref(&riker)).await.unwrap();
+        assert_eq!(
+            got[riker.as_str()].photo_url,
+            c.photo_url,
+            "resolve answers it too"
+        );
+
+        store
+            .set_photo(&id, "image/jpeg", b"\xff\xd8 replaced")
+            .await
+            .unwrap();
+        assert_eq!(store.photo(&id).await.unwrap().unwrap().0, "image/jpeg");
+        let err = store
+            .set_photo(&id, "text/plain", b"hi")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("is not a photo"), "{err}");
+        let err = store
+            .set_photo("nobody", "image/png", &png)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no contact nobody"), "{err}");
+
+        assert!(store.clear_photo(&id).await.unwrap());
+        assert!(!store.clear_photo(&id).await.unwrap());
+        assert_eq!(store.contact(&id).await.unwrap().unwrap().photo_url, None);
+        let log: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log() LIMIT 4")
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            log,
+            [
+                "contacts: no photo for \"Will Riker\"",
+                "contacts: photo for \"Will Riker\"",
+                "contacts: link email:riker@enterprise.org to \"Will Riker\"",
+                "contacts: photo for \"Will Riker\"",
+            ],
+            "each change to a photo is a commit, and a refused one is none"
+        );
         store.close().await;
     }
 

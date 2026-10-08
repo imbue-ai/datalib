@@ -58,7 +58,8 @@ export function openEnclosingDetails(el) {
 
 /**
  * Where a section's copy button goes: the chat-common message header
- * (the `## ` line whose parts are tagged `.msg-author` / `.msg-ts`),
+ * (the `## ` line whose author is a `.msg-author` span or a chip link,
+ * then a `.msg-ts`),
  * else an explicit `.msg-meta` div, else the first `<p><em>…</em></p>`
  * some renderers emit as an italic meta line. Block sections have none
  * of the three and get the button at the top of the section.
@@ -66,7 +67,7 @@ export function openEnclosingDetails(el) {
  * @returns {HTMLElement | null}
  */
 export function metaHost(el) {
-  const header = el.querySelector(":scope > h2 > .msg-author");
+  const header = el.querySelector(":scope > h2 > .msg-author, :scope > h2 > a.chip");
   if (header?.parentElement) return header.parentElement;
   const meta = el.querySelector(":scope > .msg-meta");
   if (meta) return meta;

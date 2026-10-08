@@ -2,18 +2,21 @@
 //! `google-calendar` service). Events are listed unexpanded
 //! (`singleEvents=false`): a recurring event is one resource with its
 //! rule, and each changed or cancelled occurrence is its own resource
-//! naming the series in `recurringEventId`.
+//! naming the series in `recurringEventId`. The listing carries whole
+//! events, so nothing is owed after it: each page is one transaction,
+//! and the token moves with the prune that ends a listing.
 
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::{
+use datalib_etl::progress::Progress;
+use datalib_etl::raw_store::Sealer;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, percent_encode, HttpRequest, HttpResponse,
     HttpService, LatchkeySettings, Retryability,
 };
-use datalib_etl::progress::Progress;
-use datalib_etl::run_problems::{self, RunProblems};
 use serde_json::Value;
 use tracing::warn;
 
@@ -34,11 +37,23 @@ pub struct FetchOptions {
     pub latchkey: LatchkeySettings,
     pub progress: Progress,
     pub control: DownloadControl,
+    /// Seals as pages land, when the step driver hands one over.
+    pub sealer: Option<Sealer>,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
-    run_problems::collecting(&pool, &stop, |found| sync_account(opts, found)).await
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| {
+        sync_account(opts, found)
+    })
+    .await
+}
+
+async fn wrote(sealer: Option<&Sealer>, rows: u64) {
+    if let Some(sealer) = sealer {
+        sealer.wrote(rows).await;
+    }
 }
 
 async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
@@ -58,6 +73,8 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     .await?;
     let rows: Vec<CalendarRow> = list.iter().filter_map(calendar_row).collect();
     db.upsert_calendars(&rows).await?;
+    let listed: Vec<String> = rows.iter().map(|c| c.id.clone()).collect();
+    summary.events_deleted += db.delete_calendars_not_in("google", &listed).await?;
 
     let selected = select_calendars(
         &found,
@@ -74,7 +91,13 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         opts.progress
             .set_message(&format!("syncing calendar {label}"));
         let listing = format!("calendar {label}");
-        match sync_calendar(db, &cal.id, opts.window.as_ref(), lk, &mut summary).await {
+        let cal_opts = CalendarOptions {
+            db,
+            window: opts.window.as_ref(),
+            lk,
+            sealer: opts.sealer.as_ref(),
+        };
+        match sync_calendar(&cal_opts, &cal.id, &mut summary).await {
             Ok(None) => {}
             Ok(Some(held_back)) => found.listing(&listing, held_back),
             Err(e) => {
@@ -138,18 +161,25 @@ pub(crate) fn calendar_row(c: &Value) -> Option<CalendarRow> {
     })
 }
 
+struct CalendarOptions<'a> {
+    db: &'a RawDb,
+    window: Option<&'a Window>,
+    lk: &'a LatchkeySettings,
+    sealer: Option<&'a Sealer>,
+}
+
 /// One calendar: the changes since its sync token, or everything when
 /// it has none. A full listing is the calendar as it is, so what it
 /// does not name is dropped — unless it listed an event it could not
 /// identify, which could be any stored one; then nothing is, and the
-/// returned reason says why.
+/// returned reason says why. Each page is one transaction; the token
+/// moves with the prune, in the last.
 async fn sync_calendar(
-    db: &RawDb,
+    o: &CalendarOptions<'_>,
     calendar_id: &str,
-    window: Option<&Window>,
-    lk: &LatchkeySettings,
     summary: &mut FetchSummary,
 ) -> Result<Option<String>> {
+    let (db, window, lk) = (o.db, o.window, o.lk);
     // Google refuses a sync token beside a time bound, so a windowed
     // calendar is listed whole every run, and keeps no token for a later
     // unwindowed run to resume from.
@@ -176,8 +206,10 @@ async fn sync_calendar(
                     calendar = %calendar_id,
                     "Google expired the sync token; listing the calendar whole"
                 );
-                db.set_sync_token(calendar_id, None).await?;
-                return Box::pin(sync_calendar(db, calendar_id, window, lk, summary)).await;
+                let mut tx = db.pool().begin().await.context("begin")?;
+                RawDb::set_sync_token(&mut tx, calendar_id, None).await?;
+                tx.commit().await.context("commit")?;
+                return Box::pin(sync_calendar(o, calendar_id, summary)).await;
             }
             Err(e) => return Err(e),
         };
@@ -188,27 +220,33 @@ async fn sync_calendar(
             .and_then(Value::as_array)
             .cloned()
             .context("the events reply carried no `items` list")?;
-        apply(db, calendar_id, &items, &known, &mut seen, summary).await?;
         page = str_of(&v, "nextPageToken");
-        if page.is_none() {
-            break str_of(&v, "nextSyncToken");
+        let last = page.is_none();
+        let mut tx = db.pool().begin().await.context("begin a page")?;
+        let wrote_rows = apply(&mut tx, calendar_id, &items, &known, &mut seen, summary).await?;
+        let held_back = (full && seen.unidentified > 0).then(|| {
+            format!(
+                "the listing named {} event(s) with no id, which could be any stored event, \
+                 so nothing it did not name was deleted",
+                seen.unidentified
+            )
+        });
+        if last {
+            if full && held_back.is_none() {
+                let gone: Vec<String> = known.difference(&seen.listed).cloned().collect();
+                summary.events_deleted += gone.len();
+                RawDb::delete_google_events(&mut tx, calendar_id, &gone).await?;
+            }
+            let next_sync = str_of(&v, "nextSyncToken").filter(|_| window.is_none());
+            RawDb::set_sync_token(&mut tx, calendar_id, next_sync.as_deref()).await?;
+        }
+        tx.commit().await.context("commit a page")?;
+        wrote(o.sealer, wrote_rows).await;
+        if last {
+            break held_back;
         }
     };
-    let held_back = (full && seen.unidentified > 0).then(|| {
-        format!(
-            "the listing named {} event(s) with no id, which could be any stored event, \
-             so nothing it did not name was deleted",
-            seen.unidentified
-        )
-    });
-    if full && held_back.is_none() {
-        let gone: Vec<String> = known.difference(&seen.listed).cloned().collect();
-        summary.events_deleted += gone.len();
-        db.delete_google_events(calendar_id, &gone).await?;
-    }
-    let next_sync = next_sync.filter(|_| window.is_none());
-    db.set_sync_token(calendar_id, next_sync.as_deref()).await?;
-    Ok(held_back)
+    Ok(next_sync)
 }
 
 /// The listing of one window: every event with some part inside it —
@@ -245,20 +283,21 @@ pub fn events_url(calendar_id: &str, sync_token: Option<&str>, page: Option<&str
     url
 }
 
-/// Store a page of events. A cancelled occurrence is kept — it is how a
-/// series says one of its dates is off — but a cancelled event or
-/// series is a deletion, and takes its occurrences with it. Pages come
-/// in no particular order, so `cancelled` carries the deleted series
-/// across them: an occurrence listed after its series' deletion is not
-/// stored, and one stored before it is removed with it.
+/// Store a page of events in `tx`. A cancelled occurrence is kept — it
+/// is how a series says one of its dates is off — but a cancelled event
+/// or series is a deletion, and takes its occurrences with it. Pages
+/// come in no particular order, so `cancelled` carries the deleted
+/// series across them: an occurrence listed after its series' deletion
+/// is not stored, and one stored before it is removed with it. Returns
+/// how many rows the page wrote or removed.
 async fn apply(
-    db: &RawDb,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     calendar_id: &str,
     items: &[Value],
     known: &HashSet<String>,
     seen: &mut Seen,
     summary: &mut FetchSummary,
-) -> Result<()> {
+) -> Result<u64> {
     let mut deleted: Vec<String> = Vec::new();
     let mut kept = Vec::new();
     for item in items {
@@ -290,9 +329,10 @@ async fn apply(
             summary.events_new += 1;
         }
     }
-    db.upsert_google_events(&rows).await?;
+    RawDb::upsert_google_events_in_tx(tx, &rows).await?;
+    let mut wrote = rows.len() as u64;
     if !deleted.is_empty() {
-        let mut gone = db.google_occurrences_of(calendar_id, &deleted).await?;
+        let mut gone = RawDb::google_occurrences_of(tx, calendar_id, &deleted).await?;
         gone.extend(deleted);
         for id in &gone {
             seen.listed.remove(id);
@@ -300,9 +340,10 @@ async fn apply(
         // Only what an earlier run stored is a deletion; the rest were
         // stored and removed within this one.
         summary.events_deleted += gone.iter().filter(|id| known.contains(*id)).count();
-        db.delete_google_events(calendar_id, &gone).await?;
+        wrote += gone.len() as u64;
+        RawDb::delete_google_events(tx, calendar_id, &gone).await?;
     }
-    Ok(())
+    Ok(wrote)
 }
 
 /// What one calendar's listing has shown so far, across its pages.

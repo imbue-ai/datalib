@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use datalib_contact_schema::DatalibContact;
+use datalib_contact_schema::NormalizedContact;
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
@@ -261,14 +261,32 @@ pub struct GridIndexSummary {
     pub sources_failed: Vec<(String, String)>,
 }
 
-/// Whole-index counts by severity, for the step's report.
-pub async fn problem_counts(
+/// The scope key of the one problem the index records itself: a
+/// source's render store it could not read. Every other row in the
+/// index is a copy of a source's.
+pub const UNREADABLE_STORE_KEY: &str = "render_store";
+
+/// What a row the index recorded itself is about, in words; `None` for
+/// any other key.
+pub fn about(scope_key: &str) -> Option<String> {
+    (scope_key == UNREADABLE_STORE_KEY).then(|| "this source's render store".to_string())
+}
+
+/// Counts by severity of the problems the index recorded itself, for
+/// the step's report. The copies are counted by the steps that found
+/// them; counting them here too would show each one twice.
+pub async fn own_problem_counts(
     pool: &SqlitePool,
 ) -> Result<HashMap<datalib_schema::problems::Severity, i64>> {
-    let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
-        .fetch_all(pool)
-        .await
-        .context("count the index's problems")?;
+    let rows = sqlx::query(
+        "SELECT severity, COUNT(*) FROM problems \
+         WHERE scope_kind = ? AND scope_key = ? GROUP BY severity",
+    )
+    .bind(datalib_schema::problems::ScopeKind::Entity.as_str())
+    .bind(UNREADABLE_STORE_KEY)
+    .fetch_all(pool)
+    .await
+    .context("count the index's own problems")?;
     let mut out = HashMap::new();
     for r in rows {
         let word: String = r.try_get(0)?;
@@ -320,32 +338,37 @@ fn written_in_another_shape(e: &anyhow::Error) -> bool {
 /// wholesale, which is what clears it.
 fn unreadable_store_problem(
     source_id: &str,
-    now: &datalib_time::StoredStamp,
     why: &str,
     severity: datalib_schema::problems::Severity,
 ) -> ProblemRow {
     use datalib_schema::problems::{Outcome, Problem, Reason, Scope, Stage};
-    let mut row = ProblemRow::new(
+    ProblemRow::new(
         source_id,
         Stage::Render,
-        Scope::Entity("render_store"),
+        Scope::Entity(UNREADABLE_STORE_KEY),
         None,
         Outcome::Dropped,
         Problem::record(Reason::RenderFailed, why).severity(severity),
         None,
-    );
-    row.first_seen_at_utc = now.utc.clone();
-    row.last_seen_at_utc = now.utc.clone();
-    row.tz_offset = now.tz_offset.clone();
-    row
+    )
 }
 
 const OLDER_SHAPE: &str = "its render store is in an older shape; sync this source to re-render it";
 
 async fn record_unreadable_store(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    row: &ProblemRow,
+    row: ProblemRow,
+    now: &datalib_time::StoredStamp,
 ) -> Result<()> {
+    let earlier = sqlx::query("SELECT * FROM problems WHERE problem_uuid = ?")
+        .bind(&row.problem_uuid)
+        .fetch_optional(&mut **conn)
+        .await
+        .context("read the unreadable-store warning")?
+        .map(|r| ProblemRow::from_row(&r))
+        .transpose()?;
+    let row = row.stamped(earlier.as_ref(), &now.utc, now.tz_offset.as_deref());
+    let row = &row;
     sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
         .bind(&row.problem_uuid)
         .execute(&mut **conn)
@@ -452,7 +475,13 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
         .await
         .with_context(|| format!("open the grid index at {}", db_path.display()))?;
     init_schema(&pool).await?;
-    datalib_store_meta::write(&pool, StoreKind::GridIndex, &schema_hash(), 0)
+    // Its `problems` is built in this shape, so it starts at the shared
+    // ladder's top.
+    let versions = datalib_store_meta::Versions {
+        schema: 0,
+        shared: datalib_store_meta::ladder::top(datalib_etl::doltlite_raw::SHARED_LADDER),
+    };
+    datalib_store_meta::write(&pool, StoreKind::GridIndex, &schema_hash(), versions)
         .await
         .context("write _datalib_meta for the grid index")?;
     datalib_etl::doltlite_raw::commit_run(&pool, "schema: grid index")
@@ -581,7 +610,7 @@ pub struct RenderedMarkdown {
     pub edges: Vec<EdgeRow>,
     /// The people this document describes or mentions, as its source
     /// describes them; owned by the document like its edges.
-    pub contacts: Vec<DatalibContact>,
+    pub contacts: Vec<NormalizedContact>,
     /// What render could not do while producing this document: records
     /// dropped, fields nulled, lossy rules that fired. Travels with the
     /// document so the rows and the record of what was lost commit together.
@@ -955,16 +984,16 @@ async fn apply_source(
     let res = async {
         let (docs, removed, problems, head) = match read {
             SourceRead::Unreadable => {
-                let row = unreadable_store_problem(stanza, now, OLDER_SHAPE, Severity::Warning);
+                let row = unreadable_store_problem(stanza, OLDER_SHAPE, Severity::Warning);
                 let mut guard = write_lock.acquire().await?;
-                record_unreadable_store(guard.conn(), &row).await?;
+                record_unreadable_store(guard.conn(), row, now).await?;
                 summary.sources_unreadable.push(stanza.to_string());
                 return Ok(true);
             }
             SourceRead::Failed(why) => {
-                let row = unreadable_store_problem(stanza, now, &why, Severity::Error);
+                let row = unreadable_store_problem(stanza, &why, Severity::Error);
                 let mut guard = write_lock.acquire().await?;
-                record_unreadable_store(guard.conn(), &row).await?;
+                record_unreadable_store(guard.conn(), row, now).await?;
                 summary.sources_failed.push((stanza.to_string(), why));
                 return Ok(true);
             }
@@ -1365,7 +1394,7 @@ async fn upsert_markdown(
 async fn insert_source_contact(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     markdown_uuid: &str,
-    contact: &DatalibContact,
+    contact: &NormalizedContact,
 ) -> Result<()> {
     let json = serde_json::to_string(contact).context("serialize a source contact")?;
     let seen = contact.seen.as_ref();
@@ -1621,6 +1650,7 @@ mod insert_round_trip_tests {
             touched_at: Some("2026-06-03T09:30:00-07:00".into()),
             is_document: true,
             author: Some("Jean-Luc Picard".into()),
+            author_handle: Some("email:picard@enterprise.org".into()),
             account: Some("acct-1701".into()),
             project: Some("proj-1701".into()),
             org_uuid: Some("org-1701".into()),
@@ -1744,6 +1774,7 @@ mod write_lock_tests {
             touched_at: None,
             is_document: true,
             author: None,
+            author_handle: None,
             account: Some("acct-test".into()),
             project: None,
             org_uuid: None,
@@ -2445,6 +2476,11 @@ mod source_cursor_tests {
                 .unwrap();
         assert_eq!(severity, "warning");
         assert!(sample.contains("sync"), "{sample}");
+        assert_eq!(
+            super::own_problem_counts(&pool).await.unwrap(),
+            std::collections::HashMap::from([(datalib_schema::problems::Severity::Warning, 1)]),
+            "the index found this one itself, so its row counts it"
+        );
 
         // Its next render rebuilds the store in the current shape.
         render(root, "stale", &[doc(root, "stale", "md-s", "stale body")]);
@@ -2907,10 +2943,9 @@ mod source_cursor_tests {
             !first_seen.is_empty(),
             "the render store's stamp came through"
         );
-        let counts = super::problem_counts(&pool).await.unwrap();
-        assert_eq!(
-            counts.get(&datalib_schema::problems::Severity::Warning),
-            Some(&1)
+        assert!(
+            super::own_problem_counts(&pool).await.unwrap().is_empty(),
+            "a copy is counted by the source's step, not the index"
         );
 
         // Fixed: the same document renders clean. The index only reads

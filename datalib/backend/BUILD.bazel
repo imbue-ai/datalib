@@ -62,7 +62,7 @@ filegroup(
         # `datalib-step` resolves the router from `LATCHKEY_CURL`,
         # `DATALIB_CURL_ROUTER`, or a sibling-of-self lookup against
         # `latchkey-curl-router` — see
-        # `datalib_etl::latchkey::ensure_curl_router` — and the router
+        # `datalib_etl_web::latchkey::ensure_curl_router` — and the router
         # finds the impersonator as its `curl-impersonate` sibling. Both
         # are prebuilt (docs/dev/curl_impersonate.md) and already carry
         # their public names.
@@ -120,7 +120,7 @@ filegroup(
 #     `--binary-dir` flag or config `binary_dir` is given
 #     (`resolve_binary_dir` in dag/src/config.rs).
 #   * `datalib-step` finds the router curl as a sibling of itself
-#     (`datalib_etl::latchkey::ensure_curl_router`).
+#     (`datalib_etl_web::latchkey::ensure_curl_router`).
 #   * the router curl finds the impersonator the same way.
 #
 # Bazel names each output after its target (`datalib_step`,

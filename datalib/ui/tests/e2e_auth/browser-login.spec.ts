@@ -27,22 +27,24 @@ const LOGIN_PREP = ["services register", "ensure-browser", "auth browser"];
 /// busy it has taken ~50s on a laptop.
 const LOGIN = { timeout: 90_000 };
 
-test("Claude: a cookie-capture login, then Check connection and Load", async ({
+test("Claude: a cookie-capture login, checked at once, then a list to pick from", async ({
   page,
   world,
   internet,
 }) => {
   await pickTile(page, TILE.claude);
   await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
-  await expect(wizard(page)).toContainText("Connected.", LOGIN);
+  // A login is checked at once, so the row says who it reached.
+  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText(
+    "picard@enterprise.test",
+    LOGIN,
+  );
 
   const runs = world.latchkeyRuns().map(subcommand);
   expect(runs.filter((r) => LOGIN_PREP.includes(r))).toEqual(LOGIN_PREP);
   expect(world.browserFound(), "latchkey's ensure-browser should have found one").toBeTruthy();
   expect(internet.to("claude.ai", "/login")).not.toHaveLength(0);
 
-  await wizard(page).getByRole("button", { name: "Check connection" }).click();
-  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText("picard@enterprise.test");
   const api = internet.to("claude.ai").filter((r) => r.path.startsWith("/api/"));
   expect(api).not.toHaveLength(0);
   for (const r of api) {
@@ -50,23 +52,23 @@ test("Claude: a cookie-capture login, then Check connection and Load", async ({
     expectImpersonated(r);
   }
 
-  const conversations = wizField(page, "Only these conversations");
-  await conversations.locator(".wiz-load-btn").click();
+  await wizard(page).getByRole("radio", { name: "Only the conversations I choose" }).check();
+  const conversations = wizField(page, "Which conversations?");
   await expect(conversations.locator(".wiz-load-done")).toContainText(
     "2 conversations from picard@enterprise.test.",
   );
 });
 
-test("ChatGPT: a token-capture login, then Check connection and Load", async ({
+test("ChatGPT: a token-capture login, checked at once, then a list to pick from", async ({
   page,
   internet,
 }) => {
   await pickTile(page, TILE.chatgpt);
   await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
-  await expect(wizard(page)).toContainText("Connected.", LOGIN);
-
-  await wizard(page).getByRole("button", { name: "Check connection" }).click();
-  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText("picard@enterprise.test");
+  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText(
+    "picard@enterprise.test",
+    LOGIN,
+  );
   const api = internet.to("chatgpt.com").filter((r) => r.path.startsWith("/backend-api/"));
   expect(api).not.toHaveLength(0);
   for (const r of api) {
@@ -74,8 +76,8 @@ test("ChatGPT: a token-capture login, then Check connection and Load", async ({
     expectImpersonated(r);
   }
 
-  const conversations = wizField(page, "Only these conversations");
-  await conversations.locator(".wiz-load-btn").click();
+  await wizard(page).getByRole("radio", { name: "Only the conversations I choose" }).check();
+  const conversations = wizField(page, "Which conversations?");
   await expect(conversations.locator(".wiz-load-done")).toContainText(
     "1 conversation from picard@enterprise.test.",
   );
@@ -96,7 +98,7 @@ test.describe("with no browser on the machine", () => {
     // which does not exist yet.
     await expect(wizard(page).getByRole("button", { name: "Getting a browser…" })).toBeDisabled();
     world.releaseDownload();
-    await expect(wizard(page)).toContainText("Connected.", LOGIN);
+    await expect(wizard(page).locator(".wiz-probe-ok")).toBeVisible(LOGIN);
     const looks = world
       .latchkeyRuns()
       .filter((r) => subcommand(r) === "ensure-browser")

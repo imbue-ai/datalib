@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
     index = "grid_rows_by_channel:channel,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_conversation:conversation_uuid,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_author:author,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_author_handle:author_handle,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_account:account,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
@@ -121,6 +122,12 @@ pub struct GridRow {
     /// account for user input, the real name for Slack.
     #[col(sql = "VARCHAR(255)", search, uuid)]
     pub author: Option<String>,
+    /// The author as an identifier (`datalib_handle`: `email:…`, `tel:…`,
+    /// `slack:T/U`) where the source has one; `author` stays the name it
+    /// showed. What the grid's Author chip resolves to a contact, and
+    /// the `author_handle:` filter.
+    #[col(sql = "VARCHAR(255)", search)]
+    pub author_handle: Option<String>,
     /// Whose mirror this row came from — the login's email where the
     /// source stores one, else its name, else the provider's own id.
     /// Null for a source with no login (a PDF folder, an address book).

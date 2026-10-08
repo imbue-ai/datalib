@@ -146,6 +146,7 @@ pub struct GridRowBuilder {
     touched_at: Option<String>,
     is_document: bool,
     author: Option<String>,
+    author_handle: Option<String>,
     account: Option<String>,
     project: Option<String>,
     org_uuid: Option<String>,
@@ -216,6 +217,7 @@ impl GridRowBuilder {
     // record's last change is neither (a calendar event's edit stamp).
     opt_setter!(touched_at);
     opt_setter!(author);
+    opt_setter!(author_handle);
     opt_setter!(account);
     opt_setter!(project);
     opt_setter!(org_uuid);
@@ -360,6 +362,7 @@ impl GridRowBuilder {
             modified_at: self.modified_at,
             is_document: self.is_document,
             author: self.author,
+            author_handle: self.author_handle,
             account: self.account,
             project: self.project,
             org_uuid: self.org_uuid,

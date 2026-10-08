@@ -12,8 +12,9 @@
                                                   the map card; replaced whole by
                                                   each run, deleted by a reset
 <data_root>/datalib_curated/datalib_contacts/contacts.doltlite_db
-                                                  contacts a person made and the handles
-                                                  linked to them; written only by the
+                                                  contacts a person made, the handles
+                                                  linked to them and the photo they put
+                                                  on one; written only by the
                                                   `datalib_contacts` applet
 <data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/usage.doltlite_db              bytes-on-disk over time

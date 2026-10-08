@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
@@ -32,5 +32,15 @@ rust_library(
         "//datalib/backend/etl/providers/apple_messages_config:datalib_etl_apple_messages_config",
         "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
         "@datalib_crates//:anyhow",
+    ],
+)
+
+rust_test(
+    name = "apple_messages_unittests",
+    size = "small",
+    crate = ":datalib_etl_apple_messages",
+    edition = "2021",
+    deps = [
+        "//datalib/backend/source_common:datalib_source_common",
     ],
 )

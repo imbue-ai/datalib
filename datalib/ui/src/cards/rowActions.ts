@@ -192,17 +192,29 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
   }
 
   /// The problems behind a row's count, as a grid over the index's
-  /// `problems` table, its search bar holding the row's source. A step's
-  /// problems are its group's — the render store is where a source's
-  /// live — so a step row opens the same grid as its group. The index
-  /// group shows every source's.
+  /// `problems` table, its search bar holding what the row counts. The
+  /// index holds every step's, so a step row narrows to the stage it
+  /// counts: the download's are fetch-stage, render's the rest. The
+  /// index counts only the render stores it could not read
+  /// (`grid_index::UNREADABLE_STORE_KEY`).
   function openProblems(row: R, problemsUrl: string) {
     const sourceId = row.kind === "group" ? row.id : (row.group ?? row.id);
-    const q = sourceId === "unified_index" ? "" : `source_id:${sourceId}`;
+    const stage =
+      row.kind !== "step"
+        ? ""
+        : row.phase === "ingest"
+          ? " stage:fetch"
+          : row.phase === "render"
+            ? " -stage:fetch"
+            : "";
+    const q =
+      sourceId === "unified_index" ? "scope_key:render_store" : `source_id:${sourceId}${stage}`;
     const source =
       row.kind === "group" ? row : h.rows().find((r) => r.kind === "group" && r.id === sourceId);
     const name =
-      sourceId === "unified_index" ? "Problems" : `Problems: ${source?.name.label ?? sourceId}`;
+      sourceId === "unified_index"
+        ? "Problems: the index"
+        : `Problems: ${source?.name.label ?? sourceId}`;
     const opts = {
       url: problemsUrl,
       q,

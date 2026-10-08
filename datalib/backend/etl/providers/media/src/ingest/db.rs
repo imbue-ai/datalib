@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use sqlx::Row;
 
-use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_first_seen_in_tx};
 use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{
@@ -68,13 +68,13 @@ impl WriteBatch {
 }
 
 impl RawDb {
-    /// What this source already ingested. Must run **before**
-    /// [`Self::reset_paths`].
+    /// What this source already ingested. Must run **before** the scan
+    /// writes anything.
     ///
     /// Only the caller's half: which path held which content. The stat
     /// cursor is host state and lives in the shared
-    /// [`datalib_etl::fingerprint_cache`], which
-    /// [`datalib_etl::fsscan`] consults on our behalf.
+    /// [`datalib_etl_files::fingerprint_cache`], which
+    /// [`datalib_etl_files::fsscan`] consults on our behalf.
     pub async fn load_prev(&self) -> Result<PrevCache> {
         let mut cache = PrevCache::default();
 
@@ -119,6 +119,27 @@ impl RawDb {
         self.delete_where("media_playlist_entries", "playlist_id", ids)
             .await?;
         Ok(n)
+    }
+
+    /// Delete the items no `media_files` row names, with their class rows
+    /// and bookkeeping. Returns how many items went.
+    pub async fn delete_unnamed_items(&self) -> Result<u64> {
+        let mut tx = self.pool().begin().await.context("begin item prune tx")?;
+        let mut removed = 0;
+        for sql in [
+            "DELETE FROM media_audio WHERE blake3 NOT IN (SELECT blake3 FROM media_files)",
+            "DELETE FROM media_visual WHERE blake3 NOT IN (SELECT blake3 FROM media_files)",
+            "DELETE FROM media_items_bookkeeping WHERE id NOT IN (SELECT blake3 FROM media_files)",
+            "DELETE FROM media_items WHERE blake3 NOT IN (SELECT blake3 FROM media_files)",
+        ] {
+            removed = sqlx::query(sql)
+                .execute(&mut *tx)
+                .await
+                .context("prune unnamed items")?
+                .rows_affected();
+        }
+        tx.commit().await.context("commit item prune tx")?;
+        Ok(removed)
     }
 
     pub async fn clear_playlist_entries(&self, playlist_id: &str) -> Result<()> {
@@ -168,7 +189,7 @@ impl RawDb {
         now: &IsoOffsetTimestamp,
     ) -> Result<()> {
         let mut tx = self.pool().begin().await.context("begin scan_meta tx")?;
-        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), now)
+        bulk_upsert_first_seen_in_tx(&mut tx, std::slice::from_ref(row), now)
             .await
             .context("upsert media_scan_meta")?;
         tx.commit().await.context("commit scan_meta tx")?;
@@ -192,7 +213,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self.pool().begin().await.context("begin write tx")?;
-        bulk_upsert_in_tx(&mut tx, &b.items, now)
+        bulk_upsert_first_seen_in_tx(&mut tx, &b.items, now)
             .await
             .context("upsert media_items")?;
         bulk_upsert_entity_in_tx(&mut tx, &b.audio)
@@ -201,7 +222,7 @@ impl RawDb {
         bulk_upsert_entity_in_tx(&mut tx, &b.visual)
             .await
             .context("upsert media_visual")?;
-        bulk_upsert_in_tx(&mut tx, &b.files, now)
+        bulk_upsert_first_seen_in_tx(&mut tx, &b.files, now)
             .await
             .context("upsert media_files")?;
         tx.commit().await.context("commit write tx")?;
@@ -218,7 +239,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self.pool().begin().await.context("begin playlist tx")?;
-        bulk_upsert_in_tx(&mut tx, playlists, now)
+        bulk_upsert_first_seen_in_tx(&mut tx, playlists, now)
             .await
             .context("upsert media_playlists")?;
         bulk_upsert_entity_in_tx(&mut tx, entries)

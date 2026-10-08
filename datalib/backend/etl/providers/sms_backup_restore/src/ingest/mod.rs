@@ -3,7 +3,7 @@
 pub mod parse;
 pub mod schema_raw;
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -13,15 +13,16 @@ use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::RunProblem;
-use datalib_etl::file_checkpoint;
-use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fsscan;
 use datalib_problems::{Outcome, Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::json;
+use sqlx::{Sqlite, Transaction};
 use tracing::warn;
 
 use self::parse::{CallRecord, MmsRecord, RootKind, SmsRecord};
@@ -122,7 +123,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
             }
         };
         match parse::detect_root(&xml) {
-            Some(RootKind::Smses) => match parse::parse_smses(&xml) {
+            Ok(RootKind::Smses) => match parse::parse_smses(&xml) {
                 Ok((smses, mmses)) => {
                     for s in smses {
                         ingest_sms(&s, &mut message_rows);
@@ -140,7 +141,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
                     summary.parse_errors += 1;
                 }
             },
-            Some(RootKind::Calls) => match parse::parse_calls(&xml) {
+            Ok(RootKind::Calls) => match parse::parse_calls(&xml) {
                 Ok(calls) => {
                     for c in calls {
                         ingest_call(&c, &mut call_rows);
@@ -155,10 +156,14 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
                 }
             },
             // Stamped, so it is not read again until it changes.
-            None => {
+            Ok(RootKind::Other) => {
                 warn!(event = "sms_unknown_xml", path = %path.display(),
                       "not an <smses>/<calls> export; skipping");
                 done.push(f);
+            }
+            Err(e) => {
+                unparsed.push((f, format!("{e:#}")));
+                summary.parse_errors += 1;
             }
         }
         opts.progress.set_message(&format!(
@@ -188,6 +193,8 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     })
     .await?;
 
+    // The prune lands with the stamps: a stamp that committed without it
+    // would tell the next run the rewritten file was already dealt with.
     let now = IsoOffsetTimestamp::now_local();
     let mut tx = db
         .pool()
@@ -215,16 +222,19 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         )
         .await?;
     }
+    if deletes {
+        summary.removed = prune_unseen(&mut tx, &message_rows, &call_rows).await?;
+        let gone = changes.gone();
+        summary.files_removed = gone.len();
+        for rel in gone {
+            file_checkpoint::forget_file(&mut tx, SCOPE, rel).await?;
+        }
+    }
     tx.commit().await.context("commit sms_backup_restore tx")?;
 
     let mut problems = scan.walk_problems();
     problems.extend(unread);
-    if deletes {
-        summary.removed = prune_unseen(&db, &message_rows, &call_rows).await?;
-        let gone = changes.gone();
-        summary.files_removed = gone.len();
-        file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
-    } else if read_all && changes.walk_errors == 0 && changes.may_have_dropped_records() {
+    if !deletes && read_all && changes.walk_errors == 0 && changes.may_have_dropped_records() {
         problems.push(fsscan::Scan::deletions_held_back(summary.parse_errors));
     }
     found.extend(problems);
@@ -236,7 +246,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
 /// edges. Only right after reading every file. Returns how
 /// many records went.
 async fn prune_unseen(
-    db: &RawDb,
+    tx: &mut Transaction<'_, Sqlite>,
     messages: &[SmsMessageRow],
     calls: &[SmsCallRow],
 ) -> Result<usize> {
@@ -245,9 +255,9 @@ async fn prune_unseen(
         .map(|r| r.id_and_payload.id.clone())
         .collect();
     let keep_calls: HashSet<String> = calls.iter().map(|r| r.id_and_payload.id.clone()).collect();
-    let gone_messages = prune::prune_scope(db.pool(), "sms_messages", &[], &keep_messages).await?;
-    prune::delete_owned(db.pool(), "sms_attachments", "message_id", &gone_messages).await?;
-    let gone_calls = prune::prune_scope(db.pool(), "sms_calls", &[], &keep_calls).await?;
+    let gone_messages = prune::prune_scope_in_tx(tx, "sms_messages", &[], &keep_messages).await?;
+    prune::delete_owned_in_tx(tx, "sms_attachments", "message_id", &gone_messages).await?;
+    let gone_calls = prune::prune_scope_in_tx(tx, "sms_calls", &[], &keep_calls).await?;
     prune::record(
         "sms_messages",
         keep_messages.len() + gone_messages.len(),

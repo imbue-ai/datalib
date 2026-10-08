@@ -186,8 +186,12 @@ test.describe("the search coverage line", () => {
     );
 
     await page.getByTestId("search-input").fill("enterprise");
+    // The rewritten answer goes through the browser's request
+    // interception, which WebKit has taken close to five seconds to
+    // deliver on a loaded runner; the rows above get ten.
     await expect(page.locator(".qmd-unbuilt")).toHaveText(
       "Free-text search starts working once the first sync builds the search index.",
+      { timeout: 15_000 },
     );
     await expect(page.locator(".qmd-error")).toHaveCount(0);
     await expect(page.getByText("no matches.")).toHaveCount(0);

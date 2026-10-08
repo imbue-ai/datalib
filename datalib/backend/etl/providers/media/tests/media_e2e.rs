@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use sqlx::Row;
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_media::ingest::{self, RawDb};
 
 const NOW: &str = "2364-04-13T08:45:00-07:00";
@@ -161,35 +161,26 @@ async fn assert_metadata_only_variant(db: &RawDb, a: &str, b: &str, scheme: &str
     Ok(())
 }
 
-/// Scanning an unchanged tree again, five minutes later, changes no
-/// content row. Under one `now` this holds trivially — the same stamp
-/// is written twice — so the second scan gets a later one. A table
-/// named here carries a stamp the store mints, which every consumer
-/// that diffs the store reads as a change on every run.
+/// Scanning an unchanged tree again, five minutes later, changes
+/// nothing in the store, its sidecars included. Under one `now` a
+/// re-stamped sidecar would hide — the same stamp is written twice — so
+/// the second scan gets a later one. A commit here means a stamp moved,
+/// and the store grows on every sync.
 #[tokio::test]
-async fn a_second_scan_of_an_unchanged_tree_moves_no_content_row() -> Result<()> {
+async fn a_second_scan_of_an_unchanged_tree_commits_nothing() -> Result<()> {
     let h = Harness::new().await?;
     h.scan().await?;
-    datalib_etl::doltlite_raw::commit_run(h.db.pool(), "test: first scan").await?;
-    let first = datalib_etl::doltlite_raw::head_commit(h.db.pool())
-        .await?
-        .expect("the first scan committed");
-
+    let first = datalib_etl::doltlite_raw::commit_run(h.db.pool(), "test: first scan").await?;
     h.scan_with(|o| ingest::FetchOptions {
         now: "2364-04-13T08:50:00-07:00".to_string(),
         ..o
     })
     .await?;
-    datalib_etl::doltlite_raw::commit_run(h.db.pool(), "test: second scan").await?;
-    let second = datalib_etl::doltlite_raw::head_commit(h.db.pool())
-        .await?
-        .expect("the second scan committed");
-    let changed =
-        datalib_etl::doltlite_raw::content_tables_changed(h.db.pool(), &first, &second).await?;
+    let second = datalib_etl::doltlite_raw::commit_run(h.db.pool(), "test: second scan").await?;
+    assert!(first.is_some());
     assert_eq!(
-        changed,
-        Vec::<String>::new(),
-        "a content table moved between two scans of the same tree"
+        second, None,
+        "scanning an unchanged tree again changes nothing in the store"
     );
     Ok(())
 }
@@ -948,27 +939,39 @@ async fn a_shortened_playlist_loses_its_trailing_entries() -> Result<()> {
     Ok(())
 }
 
+/// The last copy of an item gone, its `media_items` row and its class
+/// row stayed for good. After a clean walk they go; a file moved within
+/// the tree keeps its item and is not identified again.
 #[tokio::test]
-async fn a_deleted_file_disappears_from_the_path_table_but_the_item_remains() -> Result<()> {
-    // Scan a copy of the corpus so a file can be removed.
+async fn an_item_no_path_names_goes_and_a_moved_one_stays() -> Result<()> {
     let h = Harness::on_a_copy().await?;
     let db = &h.db;
     h.scan().await?;
     let hash = files(db).await?["music/untagged_hum.mp3"].clone();
+    let audio_rows = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM media_audio WHERE blake3 = ?")
+            .bind(&hash)
+            .fetch_one(db.pool())
+            .await
+    };
+    assert_eq!(audio_rows().await?, 1);
 
     std::fs::remove_file(h.root.join("music/untagged_hum.mp3"))?;
-    h.scan().await?;
+    std::fs::rename(
+        h.root.join("photos/bridge.jpg"),
+        h.root.join("archive/bridge.jpg"),
+    )?;
+    let s = h.scan().await?;
 
+    assert!(!files(db).await?.contains_key("music/untagged_hum.mp3"));
     assert!(
-        !files(db).await?.contains_key("music/untagged_hum.mp3"),
-        "the path row should fall out with the truncate"
+        !items(db).await?.contains_key(&hash),
+        "no path names the item any more"
     );
-    // The item survives: it is keyed on content, which has no notion of
-    // "no longer present", and keeping it keeps when it was first seen.
-    assert!(
-        items(db).await?.contains_key(&hash),
-        "the item row should remain (see INGEST.md §Orphaned items)"
-    );
+    assert_eq!(audio_rows().await?, 0);
+    assert_eq!(s.items, 0, "the moved photo is not identified again");
+    let moved = files(db).await?["archive/bridge.jpg"].clone();
+    assert!(items(db).await?.contains_key(&moved));
     Ok(())
 }
 
@@ -1099,16 +1102,14 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
         "a changed sample is a different recording"
     );
 
-    // (5) Deleted: the path is gone; the item is not.
+    // (5) Deleted: the path is gone, and the item no path names with it.
     assert!(!files_after.contains_key("music/corrupt.mp3"));
-    assert!(
-        items_after.contains_key(&files_before["music/corrupt.mp3"]),
-        "content-keyed rows survive their last path (see INGEST.md)"
-    );
+    assert!(!items_after.contains_key(&files_before["music/corrupt.mp3"]));
 
-    // Items only ever grow: two added, none removed — including the
-    // now-orphaned pre-retag version of the MP3.
-    assert_eq!(items_after.len(), items_before.len() + 2);
+    // Two items added; two no path names any more go: the deleted file's
+    // and the pre-retag version of the MP3.
+    assert!(!items_after.contains_key(&files_before["music/untagged_hum.mp3"]));
+    assert_eq!(items_after.len(), items_before.len() + 2 - 2);
 
     // (6) Playlist: rewritten, not merged. The old positions are gone.
     let n: i64 = sqlx::query(

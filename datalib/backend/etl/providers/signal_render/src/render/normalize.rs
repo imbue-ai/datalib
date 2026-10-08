@@ -5,6 +5,7 @@
 //! its parse output into the normalized types instead, so one renderer
 //! serves it and the seven other chat sources alike.
 
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_handle::Handle;
 use std::collections::HashMap;
 
@@ -90,7 +91,7 @@ pub fn to_chats(
                     items,
                 }
             }],
-            contacts: Vec::new(),
+            contacts: contacts_of(recipients, &doc.items, source_id),
             inputs: inputs.declared(),
         });
         if !doc.blobs.is_empty() {
@@ -147,6 +148,7 @@ fn to_item(
         kind_label: None,
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
+        branch: Vec::new(),
         unread: item.unread,
         recipients: Vec::new(),
         problems: Vec::new(),
@@ -163,9 +165,19 @@ fn recipient_display(
         .unwrap_or_else(|| format!("recipient_{}", chat.recipient_id))
 }
 
-/// A recipient's identifier is `+<e164>` where the backup has their
-/// number; an ACI or PNI is bare hex that does not say which it is, so it
-/// is no handle yet.
+/// A recipient's handles: their number, where the backup has it, and
+/// their ACI. The number first, so one link covers every app that
+/// reaches them by it; a recipient known by PNI alone has none.
+fn handles_of(r: &ParsedRecipient) -> Vec<Handle> {
+    [
+        r.identifier.as_deref().and_then(Handle::tel),
+        r.aci.as_deref().and_then(Handle::signal_aci),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
 fn author_handle(
     recipients: Lookup<'_, HashMap<String, ParsedRecipient>>,
     item: &ParsedChatItem,
@@ -175,8 +187,33 @@ fn author_handle(
     }
     recipients
         .get(&item.author_id)
-        .and_then(|r| r.identifier.as_deref())
-        .and_then(Handle::tel)
+        .and_then(|r| handles_of(r).into_iter().next())
+}
+
+/// Signal's own account of each person who wrote in the bucket: the
+/// name the backup shows and every handle it has for them. This is
+/// where a number and an ACI are tied together, so a link made through
+/// either finds the other.
+fn contacts_of(
+    recipients: Lookup<'_, HashMap<String, ParsedRecipient>>,
+    items: &[ParsedChatItem],
+    source_id: &str,
+) -> Vec<NormalizedContact> {
+    let mut seen = std::collections::HashSet::new();
+    items
+        .iter()
+        .filter(|i| !i.outgoing)
+        .filter(|i| seen.insert(i.author_id.clone()))
+        .filter_map(|i| recipients.get(&i.author_id))
+        .filter_map(|r| {
+            let handles = handles_of(r);
+            let first = handles.first()?;
+            let mut c = NormalizedContact::new(source_id, first.as_str(), ContactKind::Person);
+            c.names = r.display_name.iter().cloned().collect();
+            c.handles = handles.into_iter().map(ContactHandle::of).collect();
+            Some(c)
+        })
+        .collect()
 }
 
 fn author_display(

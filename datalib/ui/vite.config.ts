@@ -98,5 +98,7 @@ export default defineConfig(({ command }) => ({
     // exclusion vitest grabs their specs via its default `**/*.spec.ts`
     // glob and crashes on Playwright's `test()` (different test runner).
     exclude: ["**/node_modules/**", "**/dist/**", "tests/e2e/**", "tests/e2e_auth/**"],
+    // A stylesheet imports as "" in a test unless named here.
+    css: { include: [/chip\.css/] },
   },
 }));

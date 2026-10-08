@@ -3,8 +3,9 @@
 // review the TOML that will be written. One form writes one source —
 // the `[[groups]]` entry, its `ingest` step and its `render_markdown`
 // step — and editing a source reopens the same form over all three.
-// Ingest fields sit on the main screen; a provider's render fields sit
-// under a "Rendering" heading and land on the render step.
+// The form is the entry's `sections`, a heading beside its controls,
+// then Advanced options. How a form is meant to read, and what belongs
+// in which part, is docs/dev/wizard_design.md.
 //
 // Two fields carry the identity, and only one of them is permanent.
 // **Name** is what you type and what every screen shows; it is free
@@ -14,8 +15,8 @@
 // the name once, at creation, and read-only forever after. Both land on
 // the `[[groups]]` entry; the steps written under it carry neither.
 
-// A descriptor with a `credentialService` also gets a **Connection**
-// block: which latchkey account to use, the "Web login" tab, which runs
+// A descriptor with a `credentialService` also gets an account row:
+// which latchkey account to use, the "Web login" tab, which runs
 // latchkey's browser login, the "Paste a key" tab, which stores a token
 // or app password with `latchkey auth set`, and "Check connection", which
 // asks the provider's own probe (`datalib-step probe <type>`) which account
@@ -24,20 +25,25 @@
 // live account, with progress while it pages. A label picker built from the
 // live account is the difference between a filter that works and a filter
 // that is a spelling test.
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import {
   CATALOG,
   KIND_LABELS,
   entryKey,
   filterCatalog,
+  type Answer,
   type CatalogEntry,
   type Field,
   type ProbeNoun,
 } from "@/config/catalog";
 import {
+  answerIsEmpty,
+  applyAnswer,
   buildSource,
+  chosenAnswer,
   fieldIsActive,
   fieldsFor,
+  layoutOf,
   paramsObject,
   seedFieldValues,
   slugify,
@@ -45,7 +51,9 @@ import {
   suggestId,
   type ConfiguredGroup,
   type FieldValues,
+  type Layout,
   type QmdIndexing,
+  type Row,
   type SourceSteps,
 } from "@/config/sourceSteps";
 import { FailureError } from "@/apiError";
@@ -206,26 +214,99 @@ function activeFields(phase: "download" | "render"): Field[] {
 const downloadFields = computed(() => activeFields("download"));
 const renderFields = computed(() => (renders.value ? activeFields("render") : []));
 
-/// The ingest fields the main form renders: the descriptor's, less the
-/// latchkey account. That one lands on the same params target and is
-/// written by the same code as any other field, but it is *shown* in
-/// the Connection block beside the buttons that sign in to it; rendering
-/// it twice is the bug this exists to prevent.
-const formFields = computed(() =>
-  downloadFields.value.filter((f) => !(f.kind === "text" && f.latchkey)),
+const hasRenderFields = computed(() => renderFields.value.length > 0);
+
+const layout = computed<Layout>(() =>
+  chosen.value ? layoutOf(chosen.value, renders.value) : { basic: [], advanced: [] },
 );
 
-/// The form in two parts: the ingest fields, then the render fields
-/// under their own heading, drawn by one template.
-const sections = computed(() => [
-  { key: "ingest", heading: null as string | null, fields: formFields.value },
-  { key: "render", heading: "Rendering", fields: renderFields.value },
+/// The form in its two parts, drawn by one template: the basic rows
+/// in the open, the advanced ones inside a `<details>`.
+const zones = computed(() => [
+  { key: "basic", advanced: false, rows: layout.value.basic },
+  { key: "advanced", advanced: true, rows: layout.value.advanced },
 ]);
 
+const advancedOpen = ref(false);
+function onZoneToggle(advanced: boolean, e: Event) {
+  if (advanced) advancedOpen.value = (e.target as HTMLDetailsElement).open;
+}
+
+/// Which answer each question is on, by its heading. Kept beside the
+/// values rather than read off them: "only the channels I choose" with
+/// none chosen yet holds the same values as "every channel".
+const answerAt = ref<Record<string, number>>({});
+
+function seedAnswers(entry: CatalogEntry) {
+  const all = layoutOf(entry, true);
+  answerAt.value = {};
+  for (const row of [...all.basic, ...all.advanced]) {
+    if (row.answers) answerAt.value[row.heading] = chosenAnswer(row.answers, values.value);
+  }
+}
+
+function chooseAnswer(row: Row, index: number) {
+  if (!row.answers) return;
+  answerAt.value[row.heading] = index;
+  values.value = applyAnswer(row.answers, index, values.value);
+  // A list to pick from is what the answer asked for, so fetch it.
+  for (const f of row.answers[index]?.fields ?? []) {
+    if (f.kind === "string_list" && f.probe && canProbe.value) {
+      if (listLoad(f.probe).state === "idle") void loadList(f.probe);
+    }
+  }
+}
+
 /// Kinds whose control is small enough to sit beside its label rather
-/// than under it. A tickbox and a spinner are each narrower than the
-/// words naming them, so a row apiece is mostly empty space.
-const INLINE_KINDS = new Set<Field["kind"]>(["bool", "int", "bytes"]);
+/// than under it.
+const INLINE_KINDS = new Set<Field["kind"]>(["int", "bytes", "date"]);
+
+/// Kinds a heading can stand in for, so a lone one shows no label of
+/// its own.
+const BARE_KINDS = new Set<Field["kind"]>(["path", "string_list", "text", "select"]);
+
+type Item = {
+  key: string;
+  answer?: Answer;
+  index: number;
+  checked: boolean;
+  field?: Field;
+  /// Drawn indented: under the answer, or the tickbox, that shows it.
+  nested: boolean;
+  /// Drawn without its own label: the row's heading already names it.
+  bare: boolean;
+};
+
+/// A row as the flat list the template draws: each answer, with the
+/// chosen one's fields after it, then the row's own fields.
+function itemsOf(row: Row): Item[] {
+  const out: Item[] = [];
+  const add = (fields: Field[], under: boolean) => {
+    const active = fields.filter((f) => fieldIsActive(f, values.value));
+    for (const f of active) {
+      out.push({
+        key: f.target,
+        index: -1,
+        checked: false,
+        field: f,
+        nested: under || f.requires !== undefined,
+        bare: !!row.solo || (fields.length === 1 && BARE_KINDS.has(f.kind)),
+      });
+    }
+  };
+  (row.answers ?? []).forEach(({ answer, fields }, index) => {
+    const checked = (answerAt.value[row.heading] ?? 0) === index;
+    out.push({ key: `answer-${index}`, answer, index, checked, nested: false, bare: false });
+    if (checked) add(fields, true);
+  });
+  add(row.fields, false);
+  return out;
+}
+
+/// `text` with `code` in backticks, as the parts the template draws.
+function codeParts(text: string): { text: string; code: boolean }[] {
+  return text.split("`").map((part, i) => ({ text: part, code: i % 2 === 1 }));
+}
 
 /// Steps this source is missing, which saving writes. Only while
 /// editing — a hand-edited group can have one step and not the other —
@@ -283,6 +364,7 @@ const byteUnits = ref<Record<string, ByteUnit>>({});
 
 function seed(entry: CatalogEntry, steps?: SourceSteps) {
   values.value = seedFieldValues(entry, steps);
+  seedAnswers(entry);
   byteUnits.value = {};
   for (const f of entry.fields ?? []) {
     if (f.kind !== "bytes") continue;
@@ -385,6 +467,11 @@ const missingRequired = computed(() => {
     .map((f) => f.label);
   const oneOf = fields.filter((f) => chosen.value?.requiresOneOf?.includes(f.target));
   if (oneOf.length && oneOf.every(blank)) missing.push(oneOf.map((f) => f.label).join(" or "));
+  // An answer that shows fields is not an answer until one is filled.
+  for (const row of [...layout.value.basic, ...layout.value.advanced]) {
+    const asked = row.answers?.[answerAt.value[row.heading] ?? 0]?.fields ?? [];
+    if (answerIsEmpty(asked, values.value)) missing.push(asked[0]!.label);
+  }
   return missing;
 });
 
@@ -481,14 +568,23 @@ function helpAroundStart(f: Field): { before: string; path: string; after: strin
 
 const copiedStart = ref<string | null>(null);
 
-async function copyStart(f: Field) {
-  if (f.kind !== "path" || !f.startIn) return;
-  if (await copyToClipboard(f.startIn)) {
-    copiedStart.value = f.target;
+async function copyText(key: string, text: string) {
+  if (await copyToClipboard(text)) {
+    copiedStart.value = key;
     setTimeout(() => {
-      if (copiedStart.value === f.target) copiedStart.value = null;
+      if (copiedStart.value === key) copiedStart.value = null;
     }, 1500);
   }
+}
+
+async function copyStart(f: Field) {
+  if (f.kind === "path" && f.startIn) await copyText(f.target, f.startIn);
+}
+
+/// The environment variable an `envVar` field names: what was typed,
+/// else the provider's default.
+function envVarName(f: Field & { kind: "text" }): string {
+  return String(values.value[f.target] ?? "").trim() || (f.envVar?.default ?? "");
 }
 
 /// Every field is a <label>, so a click anywhere in one activates its
@@ -514,7 +610,7 @@ const probeParams = computed<Record<string, unknown> | null>(() =>
 /// The latchkey service this source authenticates against — and only
 /// while the params the form would write reach an origin. An import
 /// (`ingestReach` says `local`) has nothing to log in to, however the
-/// descriptor is labelled, so it gets no Connection section.
+/// descriptor is labelled, so it gets no account row.
 const service = computed(() => {
   const entry = chosen.value;
   if (!entry?.credentialService) return null;
@@ -547,7 +643,7 @@ const latchkeyCli = ref("latchkey");
 /// the login button would run — so the button is not offered at all.
 const gateway = ref<string | null>(null);
 /// Why latchkey could not be asked, when it could not — shown at the
-/// top of the Connection section for every source, since without the
+/// top of the account row for every source, since without the
 /// answer it offers no way to sign in at all.
 const accountsFailure = ref<Failure | null>(null);
 /// Where signing in will install the latchkey plugin this service comes
@@ -836,8 +932,11 @@ async function connectViaLatchkey() {
         const field = accountField.value;
         if (landed && field) values.value[field.target] = landed;
         // What was checked and loaded before the login was done with a
-        // credential that has just been replaced.
+        // credential that has just been replaced. The account watcher
+        // resets them too, so the check waits for it.
         resetProbes();
+        await nextTick();
+        if (canProbe.value) void checkConnection();
         connect.value = {
           state: "ok",
           message: landed
@@ -932,6 +1031,15 @@ function resetProbes() {
   lists.value = {};
 }
 
+/// Set by "Use a different account": the sign-in controls stay open
+/// over a check that passed, until the next one does.
+const switching = ref(false);
+const connected = computed(() => check.value.state === "ok" && !switching.value);
+/// While latchkey is asked what it holds, and the check made of it on
+/// opening runs. The sign-in controls wait for both, so they never
+/// fold away mid-click.
+const autoChecking = ref(false);
+
 /// Can "Check connection" and the pickers' "Load" be offered here?
 const canProbe = computed(() => !!chosen.value?.canProbe && !!probeParams.value);
 
@@ -943,6 +1051,7 @@ async function checkConnection() {
   try {
     const report = await runProbe(entry.type, params, null);
     check.value = { state: "ok", failure: null, report };
+    switching.value = false;
   } catch (e) {
     check.value = { state: "failed", failure: toFailure(e), report: null };
   }
@@ -1100,7 +1209,19 @@ watch(
     signInTab.value = null;
     pasteSecret.value = "";
     paste.value = { state: "idle", message: "" };
-    if (name) void loadAccounts();
+    switching.value = false;
+    if (!name) return;
+    // An account latchkey already holds is checked at once, so the row
+    // can say who it reaches instead of asking for a click. Not while
+    // it holds several and the form names none: which one is the
+    // person's to say.
+    autoChecking.value = true;
+    void loadAccounts()
+      .then(async () => {
+        const known = accounts.value?.length === 1 || accountValue.value !== "";
+        if (known && canProbe.value && check.value.state === "idle") await checkConnection();
+      })
+      .finally(() => (autoChecking.value = false));
   },
   { immediate: true },
 );
@@ -1132,8 +1253,30 @@ function submit() {
       :aria-label="isEdit ? 'Edit source' : 'Add data source'"
       @click="keepHelpSelectable"
     >
-      <header class="wiz-head dialog-head">
-        <h2>{{ isEdit ? `Edit ${name || id}` : "Add a data source" }}</h2>
+      <header class="wiz-head dialog-head" :class="{ 'wiz-chosen': stage === 'configure' }">
+        <img
+          v-if="stage === 'configure' && chosen && iconUrl(chosen.icon)"
+          :src="iconUrl(chosen.icon)!"
+          alt=""
+          class="wiz-icon"
+        />
+        <h2>
+          {{
+            isEdit
+              ? `Edit ${name || id}`
+              : stage === "configure" && chosen
+                ? `Add ${chosen.label}`
+                : "Add a data source"
+          }}
+        </h2>
+        <span v-if="isEdit && chosen" class="wiz-kind">{{ chosen.label }}</span>
+        <button
+          v-if="mode === 'create' && stage === 'configure'"
+          class="btn ghost"
+          @click="stage = 'pick'"
+        >
+          Change
+        </button>
         <button class="wiz-x dialog-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
 
@@ -1174,335 +1317,22 @@ function submit() {
         </div>
       </div>
 
-      <!-- Stage 2: configure -->
-      <div v-else-if="chosen" class="wiz-body dialog-body">
-        <div class="wiz-chosen">
-          <img v-if="iconUrl(chosen.icon)" :src="iconUrl(chosen.icon)!" alt="" class="wiz-icon" />
-          <div>
-            <b>{{ chosen.label }}</b>
-            <small>{{ chosen.blurb }}</small>
-          </div>
-          <button v-if="mode === 'create'" class="btn ghost" @click="stage = 'pick'">Change</button>
+      <!-- Stage 2: configure. Name, the sign-in, the source's sections,
+           then Advanced options. docs/dev/wizard_design.md. -->
+      <div v-else-if="chosen" class="wiz-body dialog-body wiz-form">
+        <p v-if="chosen.intro" class="wiz-intro">{{ chosen.intro }}</p>
+        <div v-if="chosen.before && !isEdit" class="wiz-before">
+          <b>Before you start</b>
+          <p>{{ chosen.before.text }}</p>
+          <ol>
+            <li v-for="need in chosen.before.needs" :key="need">
+              <template v-for="(part, i) in codeParts(need)" :key="i"
+                ><code v-if="part.code">{{ part.text }}</code
+                ><template v-else>{{ part.text }}</template></template
+              >
+            </li>
+          </ol>
         </div>
-
-        <!-- Connection: the account the ingest step authenticates as. -->
-        <section v-if="service" class="wiz-conn">
-          <h3 class="wiz-conn-head">Connection</h3>
-          <p class="wiz-help wiz-conn-intro">
-            Credentials are held by latchkey, under its
-            <code>{{ service }}</code> service — datalib never stores them itself.
-          </p>
-          <!-- Every way to sign in below comes from latchkey's answer, so
-               while it is asked the section says so, and when it cannot
-               be asked the section says why — for every source, not only
-               the ones with an account picker. -->
-          <p v-if="accounts === null" class="wiz-help wiz-conn-asking" role="status">
-            Asking latchkey how you can sign in…
-          </p>
-          <IssueNote
-            v-if="accountsFailure"
-            class="wiz-conn-note wiz-accounts-failed"
-            :failure="accountsFailure"
-            :service="chosen.label"
-            :where="signInWhere"
-          />
-
-          <div v-if="accountField" class="wiz-field">
-            <span class="wiz-label">{{ accountField.label }}</span>
-            <AccountCombo
-              :model-value="accountValue"
-              :options="accountOptions"
-              :label="accountField.label"
-              :placeholder="
-                accountNaming === 'service' ? 'named when you sign in' : 'you@example.com'
-              "
-              @update:model-value="chooseAccount"
-            />
-            <small v-if="accountHelp" class="wiz-help wiz-account-help">{{ accountHelp }}</small>
-            <small v-if="accounts && accounts.length === 0 && !accountsFailure" class="wiz-help">
-              latchkey has no <code>{{ service }}</code> credential stored yet.
-              {{ canConnect ? "Connect below." : "" }}
-            </small>
-          </div>
-
-          <!-- Under a gateway the login happens on the gateway's side,
-               and every command a sign-in would run is refused. -->
-          <p v-if="gateway" class="wiz-help wiz-conn-note">
-            Credentials are held by a latchkey gateway (<code>{{ gateway }}</code
-            >). Sign in where that gateway is managed, then press <b>Check connection</b>.
-          </p>
-          <p
-            v-if="installsPlugin && signInWays.length"
-            class="wiz-help wiz-conn-note wiz-plugin-note"
-          >
-            latchkey reaches {{ chosen.label }} through a plugin. Signing in installs it into
-            <code>{{ installsPlugin }}</code
-            >.
-          </p>
-          <!-- How a credential gets into latchkey under the name above. A
-               tab per way the service offers; a lone way is shown bare. -->
-          <div v-if="signInWays.length" class="wiz-signin">
-            <div v-if="signInWays.length > 1" class="wiz-tabs" role="tablist">
-              <button
-                v-for="way in signInWays"
-                :id="`wiz-tab-${way}`"
-                :key="way"
-                type="button"
-                role="tab"
-                class="wiz-tab"
-                :aria-selected="signInTab === way"
-                aria-controls="wiz-signin-panel"
-                @click="chooseSignIn(way)"
-              >
-                {{ way === "web" ? "Web login" : pasteTabLabel }}
-              </button>
-            </div>
-            <div
-              v-if="signInTab === 'web'"
-              id="wiz-signin-panel"
-              class="wiz-tabpanel"
-              :role="signInWays.length > 1 ? 'tabpanel' : undefined"
-              :aria-labelledby="signInWays.length > 1 ? 'wiz-tab-web' : undefined"
-            >
-              <p class="wiz-help">
-                Opens a browser window to sign in. latchkey keeps what the sign-in grants, which is
-                usually full access: it can read and change everything the account can.
-                <template v-if="signInWays.includes('paste') && pasteShape.kind !== 'directory'"
-                  >For less, use <b>Paste a key</b>.</template
-                >
-              </p>
-              <p
-                v-if="nameLeftToService(accountNaming, storedNames, accountValue)"
-                class="wiz-help wiz-name-left"
-              >
-                {{ chosen.label }} names the new account itself, so
-                <code>{{ accountValue }}</code> is replaced by the name it reports.
-              </p>
-              <p v-if="chosen.credentialConnectWarning" class="wiz-help">
-                {{ chosen.credentialConnectWarning }}
-              </p>
-              <div class="wiz-conn-actions">
-                <button
-                  type="button"
-                  class="btn"
-                  :disabled="connect.state === 'running'"
-                  @click="connectViaLatchkey"
-                >
-                  {{
-                    connect.state !== "running"
-                      ? signsInAgainAs
-                        ? `Sign in again as ${signsInAgainAs}`
-                        : "Sign in with browser"
-                      : connect.phase === "downloading_browser"
-                        ? "Getting a browser…"
-                        : "Waiting for the browser…"
-                  }}
-                </button>
-              </div>
-              <IssueNote
-                v-if="connect.state === 'failed' && connect.failure"
-                class="wiz-connect-failed"
-                :failure="connect.failure"
-                :service="chosen.label"
-                :where="signInWhere"
-              />
-              <p v-else-if="connect.state !== 'idle'" class="wiz-help wiz-connect-status">
-                {{ connect.message }}
-              </p>
-              <!-- What the button says on a service that has no browser
-                   login. Shown rather than done: latchkey refuses to
-                   re-register a name it holds, so the only way to add one
-                   destroys the credentials already stored under it. -->
-              <div v-if="showConversion" class="wiz-conn-note wiz-convert">
-                <p class="wiz-help wiz-convert-head">
-                  latchkey holds <code>{{ service }}</code> without a browser login, and won’t add
-                  one to a name it already has. Adding one means taking the service apart and
-                  registering it again — which
-                  <b
-                    >deletes every credential stored under <code>{{ service }}</code></b
-                  >, so it is yours to run, not this dialog’s:
-                </p>
-                <pre class="wiz-probe-detail">{{ conversionCommands }}</pre>
-                <p class="wiz-help">
-                  Then come back and press <b>Sign in with browser</b>. Or skip all of it and use
-                  the <b>Paste a key</b> tab — that needs no conversion and is what this service
-                  does today.
-                </p>
-              </div>
-            </div>
-            <!-- latchkey's `auth set`, run by the server. The secret is
-                 sent once and never kept in the form after it is stored. -->
-            <div
-              v-else-if="signInTab === 'paste'"
-              id="wiz-signin-panel"
-              class="wiz-tabpanel wiz-paste"
-              :role="signInWays.length > 1 ? 'tabpanel' : undefined"
-              :aria-labelledby="signInWays.length > 1 ? 'wiz-tab-paste' : undefined"
-            >
-              <p v-if="!signInWays.includes('web')" class="wiz-help">
-                <code>{{ service }}</code> has no web login, so its credential is pasted here.
-              </p>
-              <p v-if="chosen.credentialPaste?.help" class="wiz-help">
-                {{ chosen.credentialPaste.help }}
-              </p>
-              <label v-if="pasteShape.kind === 'basic'" class="wiz-field">
-                <span class="wiz-label">Username</span>
-                <input
-                  v-model="pasteUsername"
-                  class="wiz-input"
-                  :placeholder="pasteShape.userHint"
-                  autocomplete="off"
-                  spellcheck="false"
-                />
-              </label>
-              <label class="wiz-field">
-                <span class="wiz-label">{{ pasteSecretLabel }}</span>
-                <input
-                  v-model="pasteSecret"
-                  class="wiz-input"
-                  :type="pasteShape.kind === 'directory' ? 'text' : 'password'"
-                  :placeholder="
-                    pasteShape.kind === 'directory' ? pasteShape.placeholder : undefined
-                  "
-                  autocomplete="off"
-                  spellcheck="false"
-                />
-                <small v-if="pasteHeaderHint" class="wiz-help">
-                  Sent as <code>{{ pasteHeaderHint }}</code>
-                </small>
-              </label>
-              <p v-if="pasteNeedsName" class="wiz-help">
-                <template v-if="pasteLandsOn.kind === 'unnamed'">
-                  Name the {{ accountField?.label ?? "account" }} above: latchkey stores this
-                  credential under that name.
-                </template>
-                <template v-else-if="pasteLandsOn.kind === 'replaces'">
-                  Stored as <code>{{ pasteLandsOn.account }}</code
-                  >, replacing the <code>{{ service }}</code> credential latchkey already holds
-                  under that name — every source that uses it gets this one. Choose another name
-                  above to keep it.
-                </template>
-                <template v-else>
-                  Stored as <code>{{ accountValue }}</code
-                  >.
-                  <template v-if="pasteLandsOn.besideUnnamed">
-                    latchkey also holds an unnamed <code>{{ service }}</code> credential; with both
-                    stored, it won’t pick one for a source that names no account, so name an account
-                    in those sources too.
-                  </template>
-                </template>
-              </p>
-              <div class="wiz-conn-actions">
-                <button
-                  type="button"
-                  class="btn"
-                  :disabled="
-                    !pasted ||
-                    (pasteNeedsName && pasteLandsOn.kind === 'unnamed') ||
-                    paste.state === 'saving'
-                  "
-                  @click="savePasted"
-                >
-                  {{ paste.state === "saving" ? "Storing…" : "Store in latchkey" }}
-                </button>
-              </div>
-              <IssueNote
-                v-if="paste.state === 'failed' && paste.failure"
-                :failure="paste.failure"
-                :service="chosen.label"
-                :where="signInWhere"
-              />
-              <p v-else-if="paste.message" class="wiz-help">
-                {{ paste.message }}
-              </p>
-              <p class="wiz-help">
-                From a terminal instead: <code>{{ setCommand }}</code>
-              </p>
-            </div>
-          </div>
-
-          <div v-if="canProbe" class="wiz-conn-actions wiz-check">
-            <button
-              type="button"
-              class="btn ghost"
-              :disabled="check.state === 'running'"
-              @click="checkConnection"
-            >
-              {{ check.state === "running" ? "Checking…" : "Check connection" }}
-            </button>
-          </div>
-          <!-- The verdict is a mark before the words — the Manage
-               screen's own tick and "!", in its colours — so the eye
-               gets the answer before reading what it was. -->
-          <IssueNote
-            v-if="check.state === 'failed' && check.failure"
-            class="wiz-conn-note wiz-probe-failed"
-            :failure="check.failure"
-            :service="chosen.label"
-            :where="signInWhere"
-          />
-          <p
-            v-else-if="check.state === 'ok' && check.report"
-            class="wiz-help wiz-conn-note wiz-probe-note wiz-probe-ok"
-          >
-            <svg class="wiz-probe-mark" viewBox="0 0 24 24" role="img" aria-label="Connected">
-              <path :d="STATUS_GLYPHS.succeeded" fill="currentColor" />
-            </svg>
-            Connected to
-            <b>{{ reachedName(check.report) }}</b
-            ><!-- A message estimate is only shown when the provider gave
-                  one for free: Gmail's profile carries it, JMAP's
-                  session does not. --><template v-if="check.report.account.message_estimate">
-              — about
-              {{ check.report.account.message_estimate.toLocaleString() }} messages</template
-            >.
-            <!-- What the provider wanted said alongside a success. -->
-            <span v-for="note in check.report.notes" :key="note" class="wiz-probe-aside">{{
-              note
-            }}</span>
-          </p>
-        </section>
-
-        <label class="wiz-field">
-          <span class="wiz-label">Name</span>
-          <input v-model="name" class="wiz-input" />
-          <small class="wiz-help">
-            What this source is called on screen — anything you like, spaces and capitals included:
-            <b>{{ nameHint }}</b
-            >, say. Change it whenever you like: nothing on disk moves and no step re-runs. Leave it
-            blank to be shown as <code>{{ groupId || "…" }}</code
-            >.
-          </small>
-        </label>
-
-        <!-- Only while creating. Editing cannot change the id without a
-             migration, and a disabled box holding a value you cannot
-             alter is a control that exists only to be refused. What it
-             was telling you is worth keeping, so Edit says it below as
-             the fact it is. -->
-        <label v-if="mode === 'create'" class="wiz-field">
-          <span class="wiz-label">Id</span>
-          <input v-model="id" class="wiz-input" spellcheck="false" @input="idTouched = true" />
-          <small class="wiz-help">
-            <b class="wiz-permanent">Permanent — this is your last chance to change it.</b>
-            Suggested from the name. Creates
-            <code>{{ stepIdFor(groupId || "…", "download") }}</code>
-            <template v-if="renders">
-              and <code>{{ stepIdFor(groupId || "…", "render") }}</code>
-            </template>
-            under the data root.
-          </small>
-          <small v-if="idError && idTouched" class="wiz-error">{{ idError }}</small>
-        </label>
-        <p v-else class="wiz-help wiz-fixed-id">
-          Writes under <code>{{ groupId }}/</code> — this source’s folder on disk, and the path the
-          search index has already recorded for every document in it, so it can’t change here. Use
-          <b>Name</b> above for something you can.
-        </p>
-        <!-- With no Id field there is nowhere for its validator to
-             speak, and `canSubmit` still consults it — so a bad
-             inherited id would disable Save with no explanation. -->
-        <p v-if="idError && mode !== 'create'" class="wiz-error wiz-fixed-id">{{ idError }}</p>
 
         <p v-if="missingSteps.length" class="wiz-cred">
           This source is missing
@@ -1512,7 +1342,7 @@ function submit() {
         </p>
         <p v-if="orphanRender" class="wiz-cred">
           <template v-if="providerRenders">
-            Rendering is off below, and this source has a render step,
+            Rendering is off under Advanced options, and this source has a render step,
             <code>{{ orphanRender }}</code
             >.
           </template>
@@ -1523,265 +1353,755 @@ function submit() {
           Saving removes it, and takes it out of the index steps’ inputs.
         </p>
 
+        <label class="wiz-field wiz-row">
+          <span class="wiz-label">Name</span>
+          <span class="wiz-controls">
+            <input v-model="name" class="wiz-input" :placeholder="nameHint" />
+            <small class="wiz-help">
+              Optional. What Datalib calls this source; left blank, it is shown as
+              <code>{{ groupId || "…" }}</code
+              >. You can rename it at any time.
+            </small>
+          </span>
+        </label>
+
+        <!-- The account the ingest step signs in as. Once a check has
+             reached the account, the row says who; everything about
+             signing in is behind "Use a different account". -->
+        <section v-if="service" class="wiz-field wiz-row wiz-conn">
+          <span class="wiz-label">Your {{ chosen.label }} account</span>
+          <div class="wiz-controls">
+            <p v-if="accounts === null" class="wiz-help wiz-conn-asking" role="status">
+              Asking latchkey how you can sign in…
+            </p>
+            <IssueNote
+              v-if="accountsFailure"
+              class="wiz-accounts-failed"
+              :failure="accountsFailure"
+              :service="chosen.label"
+              :where="signInWhere"
+            />
+
+            <p v-if="autoChecking && accounts !== null" class="wiz-help" role="status">
+              Checking the connection…
+            </p>
+            <template v-if="autoChecking" />
+            <div v-else-if="connected && check.report" class="wiz-ok wiz-probe-ok">
+              <svg class="wiz-probe-mark" viewBox="0 0 24 24" role="img" aria-label="Connected">
+                <path :d="STATUS_GLYPHS.succeeded" fill="currentColor" />
+              </svg>
+              <span class="wiz-ok-text">
+                Connected as
+                <b>{{ reachedName(check.report) }}</b
+                ><!-- A message estimate is only shown when the provider gave
+                      one for free: Gmail's profile carries it, JMAP's
+                      session does not. --><template v-if="check.report.account.message_estimate">
+                  — about
+                  {{ check.report.account.message_estimate.toLocaleString() }} messages</template
+                >
+                <span v-for="note in check.report.notes" :key="note" class="wiz-probe-aside">{{
+                  note
+                }}</span>
+              </span>
+              <button type="button" class="wiz-link" @click="switching = true">
+                Use a different account
+              </button>
+            </div>
+
+            <template v-else>
+              <div v-if="accountField" class="wiz-item">
+                <span class="wiz-sublabel">{{ accountField.label }}</span>
+                <AccountCombo
+                  :model-value="accountValue"
+                  :options="accountOptions"
+                  :label="accountField.label"
+                  :placeholder="
+                    accountNaming === 'service' ? 'named when you sign in' : 'you@example.com'
+                  "
+                  @update:model-value="chooseAccount"
+                />
+                <small v-if="accountHelp" class="wiz-help wiz-account-help">{{
+                  accountHelp
+                }}</small>
+              </div>
+
+              <!-- Under a gateway the login happens on the gateway's side,
+                   and every command a sign-in would run is refused. -->
+              <p v-if="gateway" class="wiz-help wiz-conn-note">
+                Credentials are held by a latchkey gateway (<code>{{ gateway }}</code
+                >). Sign in where that gateway is managed, then press <b>Check connection</b>.
+              </p>
+              <p v-if="installsPlugin && signInWays.length" class="wiz-help wiz-plugin-note">
+                latchkey reaches {{ chosen.label }} through a plugin. Signing in installs it into
+                <code>{{ installsPlugin }}</code
+                >.
+              </p>
+              <!-- How a credential gets into latchkey under the name above. A
+                   tab per way the service offers; a lone way is shown bare. -->
+              <div v-if="signInWays.length" class="wiz-signin">
+                <div v-if="signInWays.length > 1" class="wiz-tabs" role="tablist">
+                  <button
+                    v-for="way in signInWays"
+                    :id="`wiz-tab-${way}`"
+                    :key="way"
+                    type="button"
+                    role="tab"
+                    class="wiz-tab"
+                    :aria-selected="signInTab === way"
+                    aria-controls="wiz-signin-panel"
+                    @click="chooseSignIn(way)"
+                  >
+                    {{ way === "web" ? "Web login" : pasteTabLabel }}
+                  </button>
+                </div>
+                <div
+                  v-if="signInTab === 'web'"
+                  id="wiz-signin-panel"
+                  class="wiz-tabpanel"
+                  :role="signInWays.length > 1 ? 'tabpanel' : undefined"
+                  :aria-labelledby="signInWays.length > 1 ? 'wiz-tab-web' : undefined"
+                >
+                  <p class="wiz-help">
+                    A browser window opens; sign in there, then come back here. Signing in usually
+                    gives full access: what the account can read and change, this sign-in can too.
+                    <template v-if="signInWays.includes('paste') && pasteShape.kind !== 'directory'"
+                      >For less, use <b>Paste a key</b>.</template
+                    >
+                  </p>
+                  <p
+                    v-if="nameLeftToService(accountNaming, storedNames, accountValue)"
+                    class="wiz-help wiz-name-left"
+                  >
+                    {{ chosen.label }} names the new account itself, so
+                    <code>{{ accountValue }}</code> is replaced by the name it reports.
+                  </p>
+                  <p v-if="chosen.credentialConnectWarning" class="wiz-help">
+                    {{ chosen.credentialConnectWarning }}
+                  </p>
+                  <div class="wiz-conn-actions">
+                    <button
+                      type="button"
+                      class="btn primary"
+                      :disabled="connect.state === 'running'"
+                      @click="connectViaLatchkey"
+                    >
+                      {{
+                        connect.state !== "running"
+                          ? signsInAgainAs
+                            ? `Sign in again as ${signsInAgainAs}`
+                            : "Sign in with browser"
+                          : connect.phase === "downloading_browser"
+                            ? "Getting a browser…"
+                            : "Waiting for the browser…"
+                      }}
+                    </button>
+                  </div>
+                  <IssueNote
+                    v-if="connect.state === 'failed' && connect.failure"
+                    class="wiz-connect-failed"
+                    :failure="connect.failure"
+                    :service="chosen.label"
+                    :where="signInWhere"
+                  />
+                  <p v-else-if="connect.state !== 'idle'" class="wiz-help wiz-connect-status">
+                    {{ connect.message }}
+                  </p>
+                  <!-- What the button says on a service that has no browser
+                       login. Shown rather than done: latchkey refuses to
+                       re-register a name it holds, so the only way to add one
+                       destroys the credentials already stored under it. -->
+                  <div v-if="showConversion" class="wiz-conn-note wiz-convert">
+                    <p class="wiz-help wiz-convert-head">
+                      latchkey holds <code>{{ service }}</code> without a browser login, and won’t
+                      add one to a name it already has. Adding one means taking the service apart
+                      and registering it again — which
+                      <b
+                        >deletes every credential stored under <code>{{ service }}</code></b
+                      >, so it is yours to run, not this dialog’s:
+                    </p>
+                    <pre class="wiz-probe-detail">{{ conversionCommands }}</pre>
+                    <p class="wiz-help">
+                      Then come back and press <b>Sign in with browser</b>. Or skip all of it and
+                      use the <b>Paste a key</b> tab — that needs no conversion and is what this
+                      service does today.
+                    </p>
+                  </div>
+                </div>
+                <!-- latchkey's `auth set`, run by the server. The secret is
+                     sent once and never kept in the form after it is stored. -->
+                <div
+                  v-else-if="signInTab === 'paste'"
+                  id="wiz-signin-panel"
+                  class="wiz-tabpanel wiz-paste"
+                  :role="signInWays.length > 1 ? 'tabpanel' : undefined"
+                  :aria-labelledby="signInWays.length > 1 ? 'wiz-tab-paste' : undefined"
+                >
+                  <p v-if="!signInWays.includes('web')" class="wiz-help">
+                    <code>{{ service }}</code> has no web login, so its credential is pasted here.
+                  </p>
+                  <p v-if="chosen.credentialPaste?.help" class="wiz-help">
+                    {{ chosen.credentialPaste.help }}
+                  </p>
+                  <label v-if="pasteShape.kind === 'basic'" class="wiz-item">
+                    <span class="wiz-sublabel">Username</span>
+                    <input
+                      v-model="pasteUsername"
+                      class="wiz-input"
+                      :placeholder="pasteShape.userHint"
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                  </label>
+                  <label class="wiz-item">
+                    <span class="wiz-sublabel">{{ pasteSecretLabel }}</span>
+                    <input
+                      v-model="pasteSecret"
+                      class="wiz-input"
+                      :type="pasteShape.kind === 'directory' ? 'text' : 'password'"
+                      :placeholder="
+                        pasteShape.kind === 'directory' ? pasteShape.placeholder : undefined
+                      "
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                    <small v-if="pasteHeaderHint" class="wiz-help">
+                      Sent as <code>{{ pasteHeaderHint }}</code>
+                    </small>
+                  </label>
+                  <p v-if="pasteNeedsName" class="wiz-help">
+                    <template v-if="pasteLandsOn.kind === 'unnamed'">
+                      Name the {{ accountField?.label ?? "account" }} above: latchkey stores this
+                      credential under that name.
+                    </template>
+                    <template v-else-if="pasteLandsOn.kind === 'replaces'">
+                      Stored as <code>{{ pasteLandsOn.account }}</code
+                      >, replacing the <code>{{ service }}</code> credential latchkey already holds
+                      under that name — every source that uses it gets this one. Choose another name
+                      above to keep it.
+                    </template>
+                    <template v-else>
+                      Stored as <code>{{ accountValue }}</code
+                      >.
+                      <template v-if="pasteLandsOn.besideUnnamed">
+                        latchkey also holds an unnamed <code>{{ service }}</code> credential; with
+                        both stored, it won’t pick one for a source that names no account, so name
+                        an account in those sources too.
+                      </template>
+                    </template>
+                  </p>
+                  <div class="wiz-conn-actions">
+                    <button
+                      type="button"
+                      class="btn primary"
+                      :disabled="
+                        !pasted ||
+                        (pasteNeedsName && pasteLandsOn.kind === 'unnamed') ||
+                        paste.state === 'saving'
+                      "
+                      @click="savePasted"
+                    >
+                      {{ paste.state === "saving" ? "Storing…" : "Store in latchkey" }}
+                    </button>
+                  </div>
+                  <IssueNote
+                    v-if="paste.state === 'failed' && paste.failure"
+                    :failure="paste.failure"
+                    :service="chosen.label"
+                    :where="signInWhere"
+                  />
+                  <p v-else-if="paste.message" class="wiz-help">
+                    {{ paste.message }}
+                  </p>
+                  <p class="wiz-help">
+                    From a terminal instead: <code>{{ setCommand }}</code>
+                  </p>
+                </div>
+              </div>
+
+              <div v-if="canProbe" class="wiz-conn-actions wiz-check">
+                <button
+                  type="button"
+                  class="btn ghost"
+                  :disabled="check.state === 'running'"
+                  @click="checkConnection"
+                >
+                  {{ check.state === "running" ? "Checking…" : "Check connection" }}
+                </button>
+              </div>
+              <IssueNote
+                v-if="check.state === 'failed' && check.failure"
+                class="wiz-conn-note wiz-probe-failed"
+                :failure="check.failure"
+                :service="chosen.label"
+                :where="signInWhere"
+              />
+              <p class="wiz-help wiz-conn-intro">
+                Sign-ins are kept by latchkey, under its <code>{{ service }}</code> service. Datalib
+                never stores them itself.
+              </p>
+            </template>
+          </div>
+        </section>
+
         <p
-          v-if="formFields.length === 0 && renderFields.length === 0 && isEdit"
+          v-if="layout.basic.length === 0 && layout.advanced.length === 0 && isEdit"
           class="wiz-help wiz-nofields"
         >
           This source has no options — its id, its name and what it reads are its whole
           configuration.
         </p>
 
-        <template v-for="section in sections" :key="section.key">
-          <section v-if="section.heading && providerRenders" class="wiz-section">
-            <h3 class="wiz-section-head">{{ section.heading }}</h3>
-            <label class="wiz-field wiz-inline">
-              <span class="wiz-label">Render this source into markdown</span>
-              <input v-model="renderWanted" type="checkbox" class="wiz-bool" />
-              <small class="wiz-help">
-                A second step, <code>{{ stepIdFor(groupId || "…", "render") }}</code
-                >, turns what this brings in into markdown and makes it searchable. It runs on its
-                own and can be re-run without fetching anything again. Turn it off and the data is
-                still mirrored, but nothing about it reaches the grid or the search index.<template
-                  v-if="renderWanted && section.fields.length === 0"
-                >
-                  It has no settings of its own.</template
-                >
-              </small>
-            </label>
-            <label class="wiz-field wiz-inline">
-              <span class="wiz-label">Keyword-index the markdown</span>
-              <input
-                v-model="keywordWanted"
-                type="checkbox"
-                class="wiz-bool"
-                :disabled="!renderWanted"
-              />
-              <small class="wiz-help">
-                A step of its own, <code>{{ `${groupId || "…"}/keyword_index` }}</code
-                >, puts this source's markdown into the index every free-text search goes to, so
-                typing words into the search bar finds it. Turn it off and the source keeps its
-                rows, its columns and its filters in the grid, but the search bar will not find
-                it.<template v-if="!renderWanted">
-                  Nothing to index while rendering is off.</template
-                >
-              </small>
-            </label>
-            <label class="wiz-field wiz-inline">
-              <span class="wiz-label">Embed it for search by meaning</span>
-              <input
-                v-model="embedWanted"
-                type="checkbox"
-                class="wiz-bool"
-                :disabled="!renderWanted || !keywordWanted"
-              />
-              <small class="wiz-help">
-                Another step, <code>{{ `${groupId || "…"}/embed` }}</code
-                >, computes vectors so a search matches on meaning as well as on words, and places
-                the source on the map. Embedding is the slow part of a sync. Turn it off and keyword
-                search still finds the source.<template v-if="renderWanted && !keywordWanted">
-                  It reads the keyword index, so it needs that on.</template
-                >
-              </small>
-            </label>
-          </section>
-
-          <label
-            v-for="f in section.fields"
-            :key="f.target"
-            class="wiz-field"
-            :class="{ 'wiz-inline': INLINE_KINDS.has(f.kind) }"
+        <template v-for="zone in zones" :key="zone.key">
+          <component
+            :is="zone.advanced ? 'details' : 'div'"
+            :class="zone.advanced ? 'wiz-advanced' : 'wiz-basic'"
+            :open="zone.advanced ? advancedOpen : undefined"
+            @toggle="onZoneToggle(zone.advanced, $event)"
           >
-            <span class="wiz-label">
-              {{ f.label }}
-              <em v-if="'required' in f && f.required" class="wiz-req">required</em>
-            </span>
+            <summary v-if="zone.advanced">Advanced options</summary>
 
-            <input
-              v-if="f.kind === 'bool'"
-              type="checkbox"
-              class="wiz-bool"
-              :checked="!!values[f.target]"
-              @change="values[f.target] = ($event.target as HTMLInputElement).checked"
-            />
-            <select
-              v-else-if="f.kind === 'select'"
-              class="wiz-input wiz-select"
-              :value="values[f.target] as string"
-              @change="values[f.target] = ($event.target as HTMLSelectElement).value"
-            >
-              <option v-for="o in selectOptions(f)" :key="o.value" :value="o.value">
-                {{ o.label }}
-              </option>
-            </select>
-            <input
-              v-else-if="f.kind === 'date'"
-              type="date"
-              class="wiz-input"
-              :value="values[f.target] as string"
-              @input="values[f.target] = ($event.target as HTMLInputElement).value"
-            />
-            <input
-              v-else-if="f.kind === 'int'"
-              type="number"
-              class="wiz-input wiz-num"
-              :value="values[f.target] as string"
-              @input="values[f.target] = ($event.target as HTMLInputElement).value"
-            />
-            <span v-else-if="f.kind === 'bytes'" class="wiz-bytes">
-              <input
-                type="number"
-                min="0"
-                step="1"
-                class="wiz-input wiz-num"
-                :value="byteAmount(f)"
-                @input="setByteAmount(f, ($event.target as HTMLInputElement).value)"
-              />
-              <select
-                class="wiz-input wiz-select wiz-unit"
-                :value="byteUnit(f)"
-                @change="setByteUnit(f, ($event.target as HTMLSelectElement).value as ByteUnit)"
-              >
-                <option v-for="u in BYTE_UNITS" :key="u" :value="u">{{ u }}</option>
-              </select>
-            </span>
-            <!-- Typed path + native picker. The input stays even in the
-                 app: paste is a legitimate way in, and in a browser it is
-                 the only one. docs/dev/wizard_file_pickers.md. -->
-            <span v-else-if="f.kind === 'path'" class="wiz-pathrow">
-              <input
-                class="wiz-input wiz-path"
-                :value="values[f.target] as string"
-                spellcheck="false"
-                @input="values[f.target] = ($event.target as HTMLInputElement).value"
-              />
-              <button v-if="canPick" type="button" class="btn ghost wiz-browse" @click="browse(f)">
-                {{ f.picks === "file" ? "Choose file…" : "Choose folder…" }}
-              </button>
-            </span>
-            <span v-else-if="f.kind === 'string_list'" class="wiz-listfield">
-              <input
-                class="wiz-input"
-                :value="listText(f)"
-                spellcheck="false"
-                @input="setListText(f, ($event.target as HTMLInputElement).value)"
-              />
-              <!-- Loading a list is its own button, not part of the
-                   check: a big account's list takes a while, so it is
-                   asked for only where it is wanted, and says how far
-                   it has got. -->
-              <div v-if="f.probe && canProbe" class="wiz-load">
-                <template v-if="listLoad(f.probe).state === 'running'">
-                  <progress
-                    class="wiz-load-bar"
-                    :value="
-                      listLoad(f.probe).progress?.total != null
-                        ? listLoad(f.probe).progress?.done
-                        : undefined
-                    "
-                    :max="listLoad(f.probe).progress?.total ?? undefined"
+            <!-- Only while creating. Editing cannot change the id without
+                 a migration, so Edit states it as the fact it is. -->
+            <template v-if="zone.advanced">
+              <label v-if="mode === 'create'" class="wiz-field wiz-row">
+                <span class="wiz-label">ID</span>
+                <span class="wiz-controls">
+                  <input
+                    v-model="id"
+                    class="wiz-input wiz-id"
+                    spellcheck="false"
+                    @input="idTouched = true"
                   />
-                  <small class="wiz-help wiz-load-status" role="status">{{
-                    loadingLine(f.probe)
-                  }}</small>
-                </template>
-                <button
-                  v-else
-                  type="button"
-                  class="btn ghost wiz-load-btn"
-                  @click="loadList(f.probe)"
-                >
-                  {{
-                    listLoad(f.probe).state === "ok"
-                      ? `Reload ${probeNoun(f.probe)}`
-                      : `Load ${probeNoun(f.probe)} from ${chosen.label}`
-                  }}
-                </button>
-                <small v-if="listLoad(f.probe).state === 'ok'" class="wiz-help wiz-load-done">
-                  {{ loadedLine(f) }}
-                  <span
-                    v-for="note in listLoad(f.probe).report?.notes ?? []"
-                    :key="note"
-                    class="wiz-probe-aside"
-                    >{{ note }}</span
-                  >
-                </small>
-                <IssueNote
-                  v-else-if="listLoad(f.probe).state === 'failed' && listLoad(f.probe).failure"
-                  class="wiz-load-failed"
-                  :failure="listLoad(f.probe).failure!"
-                  :service="chosen.label"
-                  :where="signInWhere"
-                />
+                  <small class="wiz-help">
+                    <b>Permanent once the source is added.</b> Names the folder under the data root
+                    and the steps <code>{{ stepIdFor(groupId || "…", "download") }}</code>
+                    <template v-if="renders">
+                      and <code>{{ stepIdFor(groupId || "…", "render") }}</code></template
+                    >.
+                  </small>
+                  <small v-if="idError && idTouched" class="wiz-error">{{ idError }}</small>
+                </span>
+              </label>
+              <div v-else class="wiz-field wiz-row">
+                <span class="wiz-label">ID</span>
+                <span class="wiz-controls">
+                  <span class="wiz-help wiz-fixed-id">
+                    <code>{{ groupId }}/</code> — this source’s folder on disk, and the path the
+                    search index has recorded for every document in it, so it can’t change here.
+                  </span>
+                </span>
               </div>
-              <!-- The picker is an *addition* to the box above, never
-                   a replacement: a list needs credentials that may not
-                   exist yet, and this form has to stay usable before one
-                   has ever loaded. Both edit the same array. -->
-              <ProbeItemPicker
-                v-if="f.probe && probeOptions(f).length"
-                :items="probeOptions(f)"
-                :model-value="chosenValues(f)"
-                @update:model-value="values[f.target] = $event"
-              />
-              <small v-if="f.probe && unknownValues(f).length" class="wiz-error">
-                Not on this account: {{ unknownValues(f).join(", ") }}. Nothing can be mirrored for
-                a name the account doesn’t have — check the spelling, or tick it in the list.
-              </small>
-            </span>
-            <input
-              v-else
-              class="wiz-input"
-              :value="values[f.target] as string"
-              spellcheck="false"
-              @input="values[f.target] = ($event.target as HTMLInputElement).value"
-            />
+            </template>
 
-            <small v-if="helpAroundStart(f)" class="wiz-help"
-              >{{ helpAroundStart(f)!.before
-              }}<span class="wiz-startin"
-                ><code>{{ helpAroundStart(f)!.path }}</code
-                ><button
-                  type="button"
-                  class="wiz-copy"
-                  :title="copiedStart === f.target ? 'Copied' : 'Copy this path'"
-                  :aria-label="`Copy ${helpAroundStart(f)!.path}`"
-                  @click="copyStart(f)"
-                >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      :d="copiedStart === f.target ? STATUS_GLYPHS.succeeded : PATH_GLYPHS.copy"
-                      fill="currentColor"
-                    />
-                  </svg></button></span
-              >{{ helpAroundStart(f)!.after }}</small
+            <section
+              v-for="row in zone.rows"
+              :key="row.heading"
+              class="wiz-field wiz-row"
+              :role="row.answers ? 'radiogroup' : undefined"
+              :aria-label="row.answers ? row.heading : undefined"
             >
-            <small v-else-if="f.help" class="wiz-help">{{ f.help }}</small>
-            <small v-if="pickFailed[f.target]" class="wiz-error">
-              Couldn’t open the file picker ({{ pickFailed[f.target] }}). Type or paste the path
-              instead.
-            </small>
-          </label>
+              <span class="wiz-label">{{ row.heading }}</span>
+              <div class="wiz-controls">
+                <small v-if="row.help" class="wiz-help">{{ row.help }}</small>
+                <template v-for="item in itemsOf(row)" :key="item.key">
+                  <label v-if="item.answer" class="wiz-choice">
+                    <input
+                      type="radio"
+                      :name="`wiz-answer-${row.heading}`"
+                      :checked="item.checked"
+                      @change="chooseAnswer(row, item.index)"
+                    />
+                    <span>
+                      {{ item.answer.label }}
+                      <small v-if="item.answer.help" class="wiz-help">{{ item.answer.help }}</small>
+                    </span>
+                  </label>
+
+                  <template v-for="f in item.field ? [item.field] : []" :key="f.target">
+                    <label
+                      v-if="f.kind === 'bool'"
+                      class="wiz-choice"
+                      :class="{ 'wiz-nested': item.nested }"
+                    >
+                      <input
+                        type="checkbox"
+                        class="wiz-bool"
+                        :checked="!!values[f.target]"
+                        @change="values[f.target] = ($event.target as HTMLInputElement).checked"
+                      />
+                      <span>
+                        {{ f.label }}
+                        <small v-if="f.help" class="wiz-help">{{ f.help }}</small>
+                      </span>
+                    </label>
+
+                    <div
+                      v-else
+                      class="wiz-item"
+                      :class="{ 'wiz-nested': item.nested, 'wiz-inline': INLINE_KINDS.has(f.kind) }"
+                    >
+                      <span v-if="!item.bare" class="wiz-sublabel">
+                        {{ f.label }}
+                        <em v-if="'required' in f && f.required" class="wiz-req">required</em>
+                      </span>
+
+                      <select
+                        v-if="f.kind === 'select'"
+                        class="wiz-input wiz-select"
+                        :aria-label="f.label"
+                        :value="values[f.target] as string"
+                        @change="values[f.target] = ($event.target as HTMLSelectElement).value"
+                      >
+                        <option v-for="o in selectOptions(f)" :key="o.value" :value="o.value">
+                          {{ o.label }}
+                        </option>
+                      </select>
+                      <input
+                        v-else-if="f.kind === 'date'"
+                        type="date"
+                        class="wiz-input wiz-date"
+                        :aria-label="f.label"
+                        :value="values[f.target] as string"
+                        @input="values[f.target] = ($event.target as HTMLInputElement).value"
+                      />
+                      <input
+                        v-else-if="f.kind === 'int'"
+                        type="number"
+                        class="wiz-input wiz-num"
+                        :aria-label="f.label"
+                        :value="values[f.target] as string"
+                        @input="values[f.target] = ($event.target as HTMLInputElement).value"
+                      />
+                      <span v-else-if="f.kind === 'bytes'" class="wiz-bytes">
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          class="wiz-input wiz-num"
+                          :aria-label="f.label"
+                          :value="byteAmount(f)"
+                          @input="setByteAmount(f, ($event.target as HTMLInputElement).value)"
+                        />
+                        <select
+                          class="wiz-input wiz-select wiz-unit"
+                          :aria-label="`${f.label}, unit`"
+                          :value="byteUnit(f)"
+                          @change="
+                            setByteUnit(f, ($event.target as HTMLSelectElement).value as ByteUnit)
+                          "
+                        >
+                          <option v-for="u in BYTE_UNITS" :key="u" :value="u">{{ u }}</option>
+                        </select>
+                      </span>
+
+                      <!-- A path: the native picker where there is one, with
+                           the typed box behind a disclosure; the box alone in
+                           a browser. docs/dev/wizard_file_pickers.md. -->
+                      <template v-else-if="f.kind === 'path'">
+                        <div v-if="canPick && f.guarded && !values[f.target]" class="wiz-guard">
+                          <b>{{ f.guarded }}</b>
+                          <span class="wiz-help">
+                            macOS keeps this private. Click the button and confirm it in the window
+                            that opens: choosing it there is what lets Datalib read it.
+                          </span>
+                          <button type="button" class="btn primary wiz-browse" @click="browse(f)">
+                            Choose {{ f.label }}…
+                          </button>
+                        </div>
+                        <div v-else-if="canPick" class="wiz-pathrow">
+                          <button
+                            type="button"
+                            class="btn wiz-browse"
+                            :class="{ primary: !values[f.target] }"
+                            @click="browse(f)"
+                          >
+                            {{ f.picks === "file" ? "Choose file…" : "Choose folder…" }}
+                          </button>
+                          <code v-if="values[f.target]" class="wiz-picked">{{
+                            values[f.target]
+                          }}</code>
+                          <span v-else class="wiz-help">
+                            No {{ f.picks === "file" ? "file" : "folder" }} chosen yet
+                          </span>
+                        </div>
+                        <details v-if="canPick" class="wiz-sub">
+                          <summary>Type the path instead</summary>
+                          <input
+                            class="wiz-input wiz-path"
+                            :aria-label="f.label"
+                            :value="values[f.target] as string"
+                            spellcheck="false"
+                            @input="values[f.target] = ($event.target as HTMLInputElement).value"
+                          />
+                        </details>
+                        <input
+                          v-else
+                          class="wiz-input wiz-path"
+                          :aria-label="f.label"
+                          :value="values[f.target] as string"
+                          spellcheck="false"
+                          @input="values[f.target] = ($event.target as HTMLInputElement).value"
+                        />
+                      </template>
+
+                      <!-- A list a probe can enumerate: the picker, and the
+                           typed box beside it. The box is never replaced: a
+                           list needs credentials that may not exist yet, and
+                           both edit the same array. -->
+                      <span v-else-if="f.kind === 'string_list'" class="wiz-listfield">
+                        <div v-if="f.probe && canProbe" class="wiz-load">
+                          <template v-if="listLoad(f.probe).state === 'running'">
+                            <progress
+                              class="wiz-load-bar"
+                              :value="
+                                listLoad(f.probe).progress?.total != null
+                                  ? listLoad(f.probe).progress?.done
+                                  : undefined
+                              "
+                              :max="listLoad(f.probe).progress?.total ?? undefined"
+                            />
+                            <small class="wiz-help wiz-load-status" role="status">{{
+                              loadingLine(f.probe)
+                            }}</small>
+                          </template>
+                          <button
+                            v-else
+                            type="button"
+                            class="btn ghost wiz-load-btn"
+                            @click="loadList(f.probe)"
+                          >
+                            {{
+                              listLoad(f.probe).state === "ok"
+                                ? `Reload ${probeNoun(f.probe)}`
+                                : `Load ${probeNoun(f.probe)} from ${chosen.label}`
+                            }}
+                          </button>
+                          <small
+                            v-if="listLoad(f.probe).state === 'ok'"
+                            class="wiz-help wiz-load-done"
+                          >
+                            {{ loadedLine(f) }}
+                            <span
+                              v-for="note in listLoad(f.probe).report?.notes ?? []"
+                              :key="note"
+                              class="wiz-probe-aside"
+                              >{{ note }}</span
+                            >
+                          </small>
+                          <IssueNote
+                            v-else-if="
+                              listLoad(f.probe).state === 'failed' && listLoad(f.probe).failure
+                            "
+                            class="wiz-load-failed"
+                            :failure="listLoad(f.probe).failure!"
+                            :service="chosen.label"
+                            :where="signInWhere"
+                          />
+                        </div>
+                        <ProbeItemPicker
+                          v-if="f.probe && probeOptions(f).length"
+                          :items="probeOptions(f)"
+                          :model-value="chosenValues(f)"
+                          @update:model-value="values[f.target] = $event"
+                        />
+                        <small v-if="f.probe && canProbe" class="wiz-help">
+                          Not in the list? Type {{ probeNoun(f.probe) }}, separated by commas:
+                        </small>
+                        <input
+                          class="wiz-input"
+                          :aria-label="f.label"
+                          :value="listText(f)"
+                          spellcheck="false"
+                          @input="setListText(f, ($event.target as HTMLInputElement).value)"
+                        />
+                        <small v-if="f.probe && unknownValues(f).length" class="wiz-error">
+                          Not on this account: {{ unknownValues(f).join(", ") }}. Nothing can be
+                          copied for a name the account doesn’t have — check the spelling, or tick
+                          it in the list.
+                        </small>
+                      </span>
+
+                      <!-- The name of an environment variable holding a
+                           secret: the default name to copy, and the box only
+                           for someone who uses another. -->
+                      <template v-else-if="f.kind === 'text' && f.envVar">
+                        <span class="wiz-note">
+                          Datalib reads the {{ f.envVar.holds }} from an environment variable on
+                          this computer, so the {{ f.envVar.holds }} itself is never saved in
+                          Datalib’s settings.
+                        </span>
+                        <span class="wiz-envvar">
+                          <span class="wiz-help">Variable name</span>
+                          <code>{{ envVarName(f) }}</code>
+                          <button
+                            type="button"
+                            class="wiz-copy"
+                            :title="copiedStart === f.target ? 'Copied' : 'Copy this name'"
+                            :aria-label="`Copy ${envVarName(f)}`"
+                            @click="copyText(f.target, envVarName(f))"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path
+                                :d="
+                                  copiedStart === f.target
+                                    ? STATUS_GLYPHS.succeeded
+                                    : PATH_GLYPHS.copy
+                                "
+                                fill="currentColor"
+                              />
+                            </svg>
+                          </button>
+                        </span>
+                        <small class="wiz-help">
+                          Set this variable to your {{ f.envVar.holds }} before the first sync.
+                        </small>
+                        <details class="wiz-sub" :open="!!values[f.target]">
+                          <summary>Use a different variable name</summary>
+                          <input
+                            class="wiz-input"
+                            :aria-label="f.label"
+                            :placeholder="f.envVar.default"
+                            :value="values[f.target] as string"
+                            spellcheck="false"
+                            @input="values[f.target] = ($event.target as HTMLInputElement).value"
+                          />
+                        </details>
+                      </template>
+
+                      <input
+                        v-else
+                        class="wiz-input"
+                        :aria-label="f.label"
+                        :value="values[f.target] as string"
+                        spellcheck="false"
+                        @input="values[f.target] = ($event.target as HTMLInputElement).value"
+                      />
+
+                      <small v-if="helpAroundStart(f)" class="wiz-help"
+                        >{{ helpAroundStart(f)!.before
+                        }}<span class="wiz-startin"
+                          ><code>{{ helpAroundStart(f)!.path }}</code
+                          ><button
+                            type="button"
+                            class="wiz-copy"
+                            :title="copiedStart === f.target ? 'Copied' : 'Copy this path'"
+                            :aria-label="`Copy ${helpAroundStart(f)!.path}`"
+                            @click="copyStart(f)"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path
+                                :d="
+                                  copiedStart === f.target
+                                    ? STATUS_GLYPHS.succeeded
+                                    : PATH_GLYPHS.copy
+                                "
+                                fill="currentColor"
+                              />
+                            </svg></button></span
+                        >{{ helpAroundStart(f)!.after }}</small
+                      >
+                      <small v-else-if="f.help" class="wiz-help">{{ f.help }}</small>
+                      <small v-if="f.kind === 'path' && f.guarded" class="wiz-help">
+                        If a sync still fails with “Operation not permitted”, grant Datalib Full
+                        Disk Access in System Settings.
+                      </small>
+                      <small v-if="pickFailed[f.target]" class="wiz-error">
+                        Couldn’t open the file picker ({{ pickFailed[f.target] }}). Type or paste
+                        the path instead.
+                      </small>
+                    </div>
+                  </template>
+                </template>
+              </div>
+            </section>
+
+            <template v-if="zone.advanced">
+              <section v-if="providerRenders" class="wiz-field wiz-row wiz-section">
+                <span class="wiz-label wiz-section-head">Rendering</span>
+                <div class="wiz-controls">
+                  <label class="wiz-choice">
+                    <input v-model="renderWanted" type="checkbox" class="wiz-bool" />
+                    <span>
+                      Render this source into markdown
+                      <small class="wiz-help">
+                        Step <code>{{ stepIdFor(groupId || "…", "render") }}</code
+                        >. Off: the data is still copied, but it reaches neither the grid nor
+                        search.<template v-if="renderWanted && !hasRenderFields">
+                          It has no settings of its own.</template
+                        >
+                      </small>
+                    </span>
+                  </label>
+                  <label class="wiz-choice">
+                    <input
+                      v-model="keywordWanted"
+                      type="checkbox"
+                      class="wiz-bool"
+                      :disabled="!renderWanted"
+                    />
+                    <span>
+                      Keyword-index the markdown
+                      <small class="wiz-help">
+                        Step <code>{{ `${groupId || "…"}/keyword_index` }}</code
+                        >. Off: the source stays in the grid, but the search bar will not find
+                        it.<template v-if="!renderWanted">
+                          Nothing to index while rendering is off.</template
+                        >
+                      </small>
+                    </span>
+                  </label>
+                  <label class="wiz-choice">
+                    <input
+                      v-model="embedWanted"
+                      type="checkbox"
+                      class="wiz-bool"
+                      :disabled="!renderWanted || !keywordWanted"
+                    />
+                    <span>
+                      Embed it for search by meaning
+                      <small class="wiz-help">
+                        Step <code>{{ `${groupId || "…"}/embed` }}</code
+                        >. Adds search by meaning and places the source on the map. The slow part of
+                        a sync.<template v-if="renderWanted && !keywordWanted">
+                          It reads the keyword index, so it needs that on.</template
+                        >
+                      </small>
+                    </span>
+                  </label>
+                </div>
+              </section>
+
+              <label class="wiz-field wiz-row">
+                <span class="wiz-label">Description</span>
+                <span class="wiz-controls">
+                  <input v-model="description" class="wiz-input" />
+                  <small class="wiz-help">
+                    Optional. Kept with the source's settings; nothing reads it yet.
+                  </small>
+                </span>
+              </label>
+
+              <details class="wiz-review">
+                <summary>Review the TOML this writes</summary>
+                <pre>{{ preview }}</pre>
+              </details>
+            </template>
+          </component>
         </template>
-
-        <label class="wiz-field">
-          <span class="wiz-label">Description</span>
-          <input v-model="description" class="wiz-input" />
-          <small class="wiz-help">
-            Optional. A sentence on what this source holds and what it is to you, for telling it
-            apart from another of the same kind. Kept with the source's settings; nothing reads it
-            yet. Change it whenever you like: nothing re-runs.
-          </small>
-        </label>
-
-        <details class="wiz-review">
-          <summary>Review the TOML this writes</summary>
-          <pre>{{ preview }}</pre>
-        </details>
+        <!-- With the ID folded away there is nowhere for its validator
+             to speak, and `canSubmit` still consults it. -->
+        <p v-if="idError && (mode !== 'create' || !advancedOpen)" class="wiz-error wiz-id-error">
+          {{ idError }}
+        </p>
       </div>
 
       <footer class="wiz-foot dialog-foot">
-        <span v-if="stage === 'configure' && missingRequired.length" class="wiz-foot-note">
-          Still needed: {{ missingRequired.join(", ") }}
+        <span v-if="stage === 'configure'" class="wiz-foot-note">
+          {{
+            missingRequired.length
+              ? `Still needed: ${missingRequired.join(", ")}`
+              : "You can change all of this later."
+          }}
         </span>
         <button class="btn ghost" @click="emit('close')">Cancel</button>
         <button
@@ -1926,26 +2246,6 @@ function submit() {
   text-align: center;
 }
 
-.wiz-chosen {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px;
-  border: 1px solid var(--datalib-border);
-  border-radius: var(--datalib-radius);
-  background: var(--datalib-surface-2);
-  margin-bottom: 14px;
-}
-.wiz-chosen div {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-.wiz-chosen small {
-  color: var(--datalib-muted);
-  font-size: var(--datalib-font-size-small);
-}
-
 .wiz-cred {
   font-size: var(--datalib-font-size);
   color: var(--datalib-muted);
@@ -1954,40 +2254,6 @@ function submit() {
   margin: 0 0 16px;
 }
 
-.wiz-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 16px;
-}
-/* Label and control on one line, with the help text wrapping to its own
-   full-width row beneath them. */
-.wiz-field.wiz-inline {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-}
-.wiz-field.wiz-inline .wiz-help,
-.wiz-field.wiz-inline .wiz-error {
-  flex: 1 0 100%;
-}
-/* A tickbox reads as "[x] thing", not "thing [x]". */
-.wiz-field.wiz-inline .wiz-bool {
-  order: -1;
-}
-.wiz-label {
-  font-size: var(--datalib-font-size);
-  font-weight: 600;
-}
-.wiz-nofields {
-  margin: 0 0 16px;
-}
-/* The id where it is a fact rather than a field, and the id error that
-   then has nowhere else to go. Both sit in the form's flow. */
-.wiz-fixed-id {
-  margin: 0 0 16px;
-}
 .wiz-help {
   color: var(--datalib-muted);
   font-size: var(--datalib-font-size-small);
@@ -1996,9 +2262,6 @@ function submit() {
 .wiz-error {
   color: var(--datalib-error-fg);
   font-size: var(--datalib-font-size-small);
-}
-.wiz-permanent {
-  color: var(--datalib-error-fg);
 }
 .wiz-probe-mark {
   width: 14px;
@@ -2058,7 +2321,6 @@ function submit() {
 .wiz-signin {
   border: 1px solid var(--datalib-border);
   border-radius: var(--datalib-radius);
-  margin-bottom: 10px;
 }
 .wiz-tabs {
   display: flex;
@@ -2086,10 +2348,6 @@ function submit() {
 }
 .wiz-tabpanel > p,
 .wiz-tabpanel > .wiz-conn-actions {
-  margin: 0;
-}
-.wiz-paste p,
-.wiz-paste .wiz-field {
   margin: 0;
 }
 .wiz-req {
@@ -2148,57 +2406,6 @@ function submit() {
   color: var(--datalib-muted);
 }
 
-/* The Rendering heading: a rule and a small-caps title, so the render
-   step's settings read as a second part of one form rather than a
-   second form. */
-.wiz-section {
-  border-top: 1px solid var(--datalib-border);
-  padding-top: 14px;
-  margin: 20px 0 12px;
-}
-.wiz-section-head,
-.wiz-conn-head {
-  margin: 0 0 6px;
-  font-size: var(--datalib-font-size-small);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--datalib-muted);
-}
-/* The section's own toggle sits flush under its heading. */
-.wiz-section > .wiz-field {
-  margin-bottom: 0;
-}
-
-/* The Connection block: latchkey account + the two buttons. Boxed
-   because it is about the *account*, not about one setting — the
-   fields below it are all things you type, and this is the one place
-   that talks to something outside. */
-.wiz-conn {
-  border: 1px solid var(--datalib-border);
-  border-radius: var(--datalib-radius);
-  padding: 12px 14px 4px;
-  margin-bottom: 16px;
-}
-.wiz-conn-intro {
-  margin: 0 0 12px;
-}
-.wiz-conn-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-.wiz-conn-note {
-  margin: 0 0 10px;
-}
-.wiz-listfield {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.wiz-review {
-  margin-top: 8px;
-}
 .wiz-review summary {
   cursor: pointer;
   font-size: var(--datalib-font-size);
@@ -2211,5 +2418,220 @@ function submit() {
   border-radius: var(--datalib-radius);
   overflow-x: auto;
   font-size: var(--datalib-font-size-small);
+}
+
+.wiz-kind {
+  color: var(--datalib-muted);
+}
+
+/* The form: a heading in the left column, its controls in the right,
+   and a line between one heading's group and the next. */
+.wiz-basic {
+  display: contents;
+}
+.wiz-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 16px;
+  margin: 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--datalib-border-soft);
+}
+.wiz-form > .wiz-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.wiz-label {
+  font-size: var(--datalib-title-size);
+  font-weight: 600;
+}
+.wiz-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.wiz-intro,
+.wiz-nofields {
+  margin: 0 0 14px;
+}
+.wiz-before {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--datalib-border-soft);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-surface-2);
+}
+.wiz-before p,
+.wiz-before ol {
+  margin: 0;
+}
+.wiz-before ol {
+  padding-left: 20px;
+}
+
+/* One answer, or one tickbox: the mark, then the words with their
+   help under them. */
+.wiz-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.wiz-choice > input {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 1px 0 0;
+  accent-color: var(--datalib-accent);
+}
+.wiz-choice > span {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+/* One field inside a row. */
+.wiz-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+/* Label and control on one line, with the help on a row of its own. */
+.wiz-item.wiz-inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.wiz-item.wiz-inline > .wiz-help,
+.wiz-item.wiz-inline > .wiz-error {
+  flex: 1 0 100%;
+}
+.wiz-nested {
+  margin-left: 23px;
+}
+.wiz-sublabel {
+  font-size: var(--datalib-font-size);
+}
+.wiz-date {
+  width: 11em;
+}
+.wiz-id {
+  width: 240px;
+  font-family: var(--datalib-mono);
+}
+
+/* Advanced options: one box, closed or open. Closed it is a row to
+   click; open, the row heads a tinted panel holding every advanced
+   setting, so they read as one group apart from the questions above. */
+.wiz-advanced {
+  margin-top: 6px;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  overflow: hidden;
+}
+.wiz-advanced > summary {
+  padding: 10px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wiz-advanced[open] {
+  background: var(--datalib-surface-2);
+}
+.wiz-advanced[open] > summary {
+  border-bottom: 1px solid var(--datalib-border);
+  background: var(--datalib-border-soft);
+}
+.wiz-advanced > .wiz-row {
+  margin: 0 14px;
+  border-top-color: var(--datalib-border);
+}
+.wiz-advanced > summary + .wiz-row {
+  border-top: none;
+}
+.wiz-review {
+  margin: 0 14px;
+  padding: 12px 0;
+  border-top: 1px solid var(--datalib-border);
+}
+.wiz-sub > summary {
+  cursor: pointer;
+  color: var(--datalib-accent);
+  font-size: var(--datalib-font-size-small);
+}
+.wiz-sub > .wiz-input {
+  margin-top: 8px;
+}
+
+/* The account row once a check has reached the account. */
+.wiz-ok {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--datalib-log-ok) 30%, transparent);
+  border-radius: var(--datalib-radius);
+  background: color-mix(in srgb, var(--datalib-log-ok) 8%, transparent);
+}
+.wiz-ok-text {
+  flex: 1;
+  min-width: 0;
+}
+.wiz-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--datalib-accent);
+  font: inherit;
+  cursor: pointer;
+}
+.wiz-link:hover {
+  text-decoration: underline;
+}
+.wiz-conn-intro,
+.wiz-conn-note {
+  margin: 0;
+}
+.wiz-conn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.wiz-paste p {
+  margin: 0;
+}
+.wiz-listfield {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* A folder macOS guards: the one thing to do, said large. */
+.wiz-guard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  text-align: center;
+}
+.wiz-picked {
+  overflow-wrap: anywhere;
+  font-size: var(--datalib-font-size-small);
+}
+.wiz-envvar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
 }
 </style>

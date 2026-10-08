@@ -9,7 +9,10 @@ exports_files(["Cargo.toml"])
 # //tests/fixtures:ingested_tng.
 filegroup(
     name = "tng_fixture",
-    srcs = glob(["tests/fixtures/claude_export/**/*.json"]),
+    srcs = glob([
+        "tests/fixtures/claude_export/**/*.json",
+        "tests/fixtures/claude_export/files/*",
+    ]),
     visibility = ["//visibility:public"],
 )
 
@@ -28,6 +31,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",
         "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/problems:datalib_problems",
@@ -75,11 +79,14 @@ rust_test(
         "INSTA_WORKSPACE_ROOT": ".",
         "RUST_TEST_THREADS": "1",
     },
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         "//datalib/backend/etl/providers/claude_render:datalib_etl_claude_render",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         ":datalib_etl_claude",
+        "//datalib/backend/problems:datalib_problems",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:insta",
         "@datalib_crates//:serde_json",

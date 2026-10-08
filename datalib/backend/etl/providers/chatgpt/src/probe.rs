@@ -32,12 +32,12 @@ pub async fn probe(
         ));
     }
 
-    let mut client = ChatGPTClient::with_latchkey(config.latchkey_settings.clone());
+    let client = ChatGPTClient::with_latchkey(config.latchkey_settings.clone());
     let me = client.me().await.map_err(credential_hint)?;
     match ask {
         ProbeAsk::Account => Ok(build_report(&me, Vec::new(), None)),
         ProbeAsk::List(ProbeList::Conversations) => {
-            let (items, total) = list_conversations(&mut client, progress).await?;
+            let (items, total) = list_conversations(&client, progress).await?;
             Ok(build_report(&me, items, total))
         }
         ProbeAsk::List(other) => bail!("a ChatGPT source has no `{}` list", other.as_str()),
@@ -47,7 +47,7 @@ pub async fn probe(
 /// The newest conversations, up to [`MAX_ITEMS`], and how many the
 /// account has in all when the listing says.
 async fn list_conversations(
-    client: &mut ChatGPTClient,
+    client: &ChatGPTClient,
     progress: OnProgress<'_>,
 ) -> Result<(Vec<Value>, Option<u64>)> {
     let mut items: Vec<Value> = Vec::new();
@@ -162,7 +162,7 @@ fn credential_hint(e: ChatGPTError) -> anyhow::Error {
     if !setup_problem {
         return anyhow!("fetch /me: {s}");
     }
-    let lk = datalib_etl::latchkey::latchkey_cli_hint();
+    let lk = datalib_etl_web::latchkey::latchkey_cli_hint();
     anyhow!(
         "chatgpt.com credentials are not set up: {s}\n\
          Sign in through latchkey, which captures the access token itself:\n  \

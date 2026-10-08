@@ -7,7 +7,47 @@
 use datalib_handle::Handle;
 use datalib_time::IsoOffsetTimestamp;
 
-use crate::html::{escape_attr, escape_md_inline};
+use crate::html::{escape_attr, escape_md_inline, md_link_dest};
+
+/// A chip: a markdown link naming a person, which datalib draws as a
+/// chip and every other viewer shows as a link with a tooltip
+/// (`docs/dev/plans/chips.md`). The text is what the source showed, the
+/// href is the handle as a URI, and the title is the static hover — the
+/// name and the identifier — which datalib's live hover card replaces.
+pub fn chip_link(shown: &str, handle: &Handle) -> String {
+    let shown = shown.trim();
+    let text = if shown.is_empty() {
+        handle.value()
+    } else {
+        shown
+    };
+    link_with_title(text, &handle.to_uri(), &handle.describe(shown))
+}
+
+/// A chip naming anything else the app resolves — a group, a step — by
+/// its URI (`datalib:group/slack`). The same link shape as a person's:
+/// the text is the name to show until it resolves, the title the hover.
+pub fn entity_link(text: &str, uri: &str, title: &str) -> String {
+    link_with_title(text, uri, title)
+}
+
+fn link_with_title(text: &str, href: &str, title: &str) -> String {
+    format!(
+        "[{}]({} \"{}\")",
+        escape_md_inline(text),
+        md_link_dest(href),
+        md_link_title(title),
+    )
+}
+
+/// Text inside a link's double-quoted title: the quote and the
+/// backslash escaped, a line break a space. markdown-it HTML-escapes the
+/// attribute it makes of it.
+fn md_link_title(s: &str) -> String {
+    s.replace(['\r', '\n'], " ")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
 
 /// One message header, rendered as a `## ` line whose parts are tagged
 /// for the frontend.
@@ -17,9 +57,9 @@ pub struct MessageHeader<'a> {
     /// "@jlpicard"). Plain text: the span sits on a markdown line, so it
     /// is escaped as markdown and HTML both.
     pub author: &'a str,
-    /// Who said it, as an identifier: written as `data-handle` on the
-    /// author span, where the UI turns it into a contact chip. The text
-    /// stays `author` whether or not anything resolves it.
+    /// Who said it, as an identifier. With one, the author is a chip
+    /// link ([`chip_link`]) that the UI resolves to a contact; without,
+    /// a plain `msg-author` span. The text is `author` either way.
     pub handle: Option<&'a Handle>,
     /// When, in Unix milliseconds. `None` renders as "(no timestamp)"
     /// rather than as a stand-in instant.
@@ -45,13 +85,14 @@ impl MessageHeader<'_> {
         // room-creation notice, say). Say nothing rather than drawing an
         // empty name.
         if !self.author.is_empty() {
-            let handle = self.handle.map_or(String::new(), |h| {
-                format!(" data-handle=\"{}\"", escape_attr(h.as_str()))
-            });
-            s.push_str(&format!(
-                "<span class=\"msg-author\"{handle}>{}</span> ",
-                escape_md_inline(self.author),
-            ));
+            match self.handle {
+                Some(h) => s.push_str(&chip_link(self.author, h)),
+                None => s.push_str(&format!(
+                    "<span class=\"msg-author\">{}</span>",
+                    escape_md_inline(self.author),
+                )),
+            }
+            s.push(' ');
         }
         s.push_str(&timestamp_html(self.date_ms));
         if let Some(url) = self.source_url {
@@ -167,9 +208,10 @@ mod tests {
     }
 
     /// The handle is what lets a link made after this document rendered
-    /// still find the author, so it has to reach the markdown verbatim.
+    /// still find the author, so it reaches the markdown as the href;
+    /// the title is the hover every other viewer shows.
     #[test]
-    fn a_handle_rides_on_the_author_span() {
+    fn an_author_with_a_handle_is_a_chip_link() {
         let riker = Handle::email("riker@enterprise.org").unwrap();
         let h = MessageHeader {
             author: "Will Riker",
@@ -179,10 +221,31 @@ mod tests {
         };
         assert!(
             h.render().starts_with(
-                "## <span class=\"msg-author\" data-handle=\"email:riker@enterprise.org\">Will Riker</span> "
+                "## [Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\") "
             ),
             "{}",
             h.render()
+        );
+    }
+
+    /// The link text is escaped as any header author is, and the title
+    /// cannot close its own quotes.
+    #[test]
+    fn a_chip_link_escapes_its_text_and_its_title() {
+        let q = Handle::email("q@continuum.org").unwrap();
+        assert_eq!(
+            chip_link("[Q] \"the\" <entity>", &q),
+            "[\\[Q\\] \"the\" &lt;entity&gt;](mailto:q@continuum.org \
+             \"[Q] \\\"the\\\" <entity> <q@continuum.org>\")"
+        );
+        assert_eq!(
+            chip_link("", &q),
+            "[q@continuum.org](mailto:q@continuum.org \"q@continuum.org\")"
+        );
+        let tel = Handle::tel("+15550123456").unwrap();
+        assert_eq!(
+            chip_link("Will", &tel),
+            "[Will](tel:+15550123456 \"Will (+15550123456)\")"
         );
     }
 }

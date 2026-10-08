@@ -45,6 +45,7 @@ merge conflict waiting to happen.
 - [`docs/dev/latchkey.md`](docs/dev/latchkey.md) — how a web source signs in: the three kinds of latchkey service, who names an account, the keychain, the gateway. Read before touching a sign-in.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column.
+- [`docs/dev/contacts.md`](docs/dev/contacts.md) — who a handle is: handles, each source's record of a person (`NormalizedContact`), the contacts app, and the chips that draw them. **Start here** for anything about a person; read before adding a handle kind.
 - [`docs/dev/edges.md`](docs/dev/edges.md), [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — cross-document edges; the one rule for minting a uuid (read before any `*_uuid` recipe).
 - [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — what the engine does (branches, locks, reads, diffs, plans, write cost, gc), inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
 - [`docs/dev/app_stores.md`](docs/dev/app_stores.md) — the stores `datalib-http` owns and where every store lives under a data root.
@@ -53,6 +54,7 @@ merge conflict waiting to happen.
 
 - [`docs/dev/cards.md`](docs/dev/cards.md), [`docs/dev/dactal.md`](docs/dev/dactal.md) — the card system and the containers layout that hosts every card; the dactal view bridge.
 - [`datalib/backend/etl/chat-common/README.md`](datalib/backend/etl/chat-common/README.md) — the one chat layout and the sanitizer allowlist. Read before changing how a message looks.
+- [`docs/dev/wizard_design.md`](docs/dev/wizard_design.md) — how an "Add source" form is put together: what is basic, what is advanced, how each part is worded. Read before adding or changing a catalog entry.
 - [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md) — a path field in the source wizard offers a native picker.
 - [`docs/dev/applets.md`](docs/dev/applets.md) — how to write an applet, and the secret every applet requires.
 
@@ -166,6 +168,14 @@ datalib/
     etl/           shared ingest machinery (raw stores, blob CAS, render
                    cursors) — the download side, and where a
                    downloader's dependencies stop.
+    etl/files/     `datalib_etl_files`: what changed on disk for a
+                   source that reads local files (fsscan, the
+                   fingerprint cache, the per-feed file checkpoint).
+                   Only those sources link it.
+    etl/web/       `datalib_etl_web`: what a source that reaches a web
+                   service shares — `latchkey curl` with retries and
+                   stops, HTTP playback, DAV, the owed-record
+                   bookkeeping. Only those sources link it.
     etl/render/    `datalib_etl_render`: the render store, the
                    unified-index load, `RenderCtx`. Everything that knows
                    `datalib_schema` sits here or above.
@@ -173,12 +183,12 @@ datalib/
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
                    (config schema) per provider. Twelve of the
                    file-backed ones scan a local tree through
-                   etl/src/fsscan.rs (claude_code and codex by way of
-                   etl/agent_sessions/; fsindex has its own walker over
-                   etl/src/fswalk.rs); four mirror a SQLite file through
-                   etl/sqlite_mirror/; three render time series
-                   (airvisual, yolink, garmin). fsindex, media, lightroom
-                   and apple_photos have no <p>_render.
+                   etl/files/src/fsscan.rs (claude_code and codex by way
+                   of etl/agent_sessions/; fsindex has its own walker
+                   over etl/files/src/fswalk.rs); four mirror a SQLite
+                   file through etl/sqlite_mirror/; three render time
+                   series (airvisual, yolink, garmin). fsindex, media,
+                   lightroom and apple_photos have no <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
     probe/         what "Check connection" and a picker's "Load" ask
@@ -202,7 +212,7 @@ datalib/
     handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
                    `slack:`), normalized; what renders write as
                    `data-handle`. No first-party deps.
-    contact_schema/ `DatalibContact`: a person as one source describes
+    contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
     contacts/      the contacts app's store under `datalib_curated/`;
                    the `datalib_contacts` applet is its one writer.
@@ -585,22 +595,27 @@ is `source_id` everywhere. `source_name` survives in one place because a
 ## A local file or folder: ask `fsscan` what changed
 
 **Don't walk a folder or re-read an input yourself to learn whether it
-changed; ask `datalib_etl::fsscan`.** It hashes each file once per host
+changed; ask `datalib_etl_files::fsscan`.** It hashes each file once per host
 (a shared fingerprint cache), so an unchanged input costs a `stat` —
 milliseconds, where re-reading costs seconds — and `file_checkpoint`
 keeps this source's `path → blake3` cursor to diff against. The recipe
-is `datalib/backend/etl/README.md` §"Answering "did it change?" for a
-file-backed source"; `lightroom`'s `ingest/sync.rs` is a small example.
+is `datalib/backend/etl/files/README.md` §"Answering "did it change?"
+for a file-backed source"; `lightroom`'s `ingest/sync.rs` is a small example.
 
-## A cursor is only valid under the config that set it
+## A network source owes what upstream listed and the store does not hold
 
-A provider that resumes from a stored cursor never re-reads the config
-that narrowed its first walk, so *widening* it is a silent no-op unless
-the provider records the scope beside the cursor and diffs it next run —
-`datalib_etl::scope_config`, written up in
-`docs/dev/data_architecture_ingestion.md` § "When the cursor swallows a
-config change". `lint_repo.py` check 8 catches a new provider that keeps
-a cursor without the record.
+**Never store a position in a walk, and never mark a record done.** A
+download stores what upstream *listed* (key and version), the version
+each record's content satisfies (`held_version` on its `_bookkeeping`
+sidecar, written with the content), and for a range, the spans already
+walked (`datalib_etl_web::coverage`). What is owed is a query over those;
+`datalib_etl_web::owed` fetches it and records every outcome. A stored
+cursor is the bug this replaces: a run that stopped halfway, or a
+config widened later, leaves work no cursor will ever name. The one
+position kept is upstream's own delta token, written with the page it
+covers. `docs/dev/data_architecture_ingestion.md` § "What is left to
+fetch" has the per-source table; each provider's
+`tests/*/interrupt.rs` is the proof it holds.
 
 ## Unordered collections: give a bag an order before storing it
 
@@ -722,8 +737,12 @@ find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop —
 
 ## Auth (web API)
 
-Every web source signs in through latchkey, and a downloader only ever
-runs `latchkey curl`: [`docs/dev/latchkey.md`](docs/dev/latchkey.md).
+Every web source that needs a credential signs in through latchkey,
+and its requests go out as `latchkey curl`:
+[`docs/dev/latchkey.md`](docs/dev/latchkey.md). A URL that carries its
+own authority skips latchkey and goes out as plain `curl` through the
+same HTTP layer (`HttpRequest::plain`): YoLink's signed CSV downloads,
+Notion's pre-signed file links, LinkedIn's public photos.
 Cloudflare-fronted hosts go through the bundled `curl-impersonate`
 ([`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md)); if
 Cloudflare still 403s, the IP or user agent may be flagged — wait it

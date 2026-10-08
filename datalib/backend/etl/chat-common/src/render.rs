@@ -22,7 +22,17 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 8;
+///
+/// It also covers what `render_markdown` writes beside the markdown:
+/// v10 moved only the `source_contacts` rows (`people.rs` counts
+/// reactors), and every document had to be rendered again for an
+/// existing root to hold them.
+/// v12: the people baseline counts a reactor to a message not in
+/// the mirror, which moves only the `source_contacts` rows.
+/// v13: an attachment's size comes from its bytes when the provider
+/// gave none, lost bytes are a `blob_missing` problem, and the versions
+/// a conversation left fold in as `<details class="branch">`.
+pub const LAYOUT_VERSION: u32 = 13;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -47,17 +57,17 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::message::{timestamp_html, MessageHeader};
+use datalib_etl_render::message::{chip_link, timestamp_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section};
 use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
+use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::html::{
-    escape_attr, escape_md_block, escape_md_inline, escape_text, md_code_span, md_link_dest,
+    escape_attr, escape_md_block, escape_md_inline, md_code_span, md_link_dest,
 };
 
 /// What a provider's [`NormalizedChatItem::text`] is: what a person
@@ -290,7 +300,12 @@ fn render_one(
         rows,
         sections,
         edges: Vec::new(),
-        contacts: crate::people::document_contacts(source_id, &doc.items, &chat.contacts),
+        contacts: crate::people::document_contacts(
+            source_id,
+            &doc.items,
+            &doc.orphan_reactions,
+            &chat.contacts,
+        ),
         problems,
     })
     .with_context(|| format!("on_doc_complete {}", doc.markdown_uuid))?;
@@ -310,6 +325,7 @@ fn materialize_attachment_bytes(
     blobs: &BlobBundle,
 ) -> NormalizedDoc {
     let mut out = doc.clone();
+    report_missing_bytes(&mut out, blobs);
     if blobs.is_empty() {
         return out;
     }
@@ -328,10 +344,33 @@ fn materialize_attachment_bytes(
             };
             if let Some(fname) = blobs.filename_for(ref_id) {
                 att.rel_path = Some(format!("blobs/{fname}"));
+                if att.byte_len.is_none() {
+                    att.byte_len = blobs.get(ref_id).map(|b| b.bytes.len() as i64);
+                }
             }
         }
     }
     out
+}
+
+/// An attachment the download stored but the blob store has lost would
+/// otherwise read as merely not fetched yet.
+fn report_missing_bytes(doc: &mut NormalizedDoc, blobs: &BlobBundle) {
+    if !blobs.has_missing() {
+        return;
+    }
+    for item in &mut doc.items {
+        for att in &item.attachments {
+            let Some(ref_id) = att.ref_id.as_deref() else {
+                continue;
+            };
+            if blobs.is_missing(ref_id) {
+                let name = att.file_name.as_deref().unwrap_or(ref_id);
+                item.problems
+                    .push(Problem::field("attachment", Reason::BlobMissing, name));
+            }
+        }
+    }
 }
 
 /// `<out>/<stanza>/render_markdown/<chat_uuid>/<period>.md` plus the matching
@@ -419,11 +458,31 @@ fn render_markdown(
 
     let first_unread = doc.items.iter().position(|it| it.unread);
     let mut sections = vec![Section::unkeyed(s)];
+    let mut open_branches: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < doc.items.len() {
+        let item = &doc.items[i];
+        let shared = open_branches
+            .iter()
+            .zip(&item.branch)
+            .take_while(|(open, b)| **open == b.as_str())
+            .count();
+        while open_branches.len() > shared {
+            open_branches.pop();
+            sections.push(Section::unkeyed("</details>\n\n".to_string()));
+        }
+        while open_branches.len() < item.branch.len() {
+            let depth = open_branches.len();
+            let inside = doc.items[i..]
+                .iter()
+                .take_while(|it| it.branch.get(..=depth) == item.branch.get(..=depth))
+                .count();
+            sections.push(Section::unkeyed(branch_opener(inside)));
+            open_branches.push(&item.branch[depth]);
+        }
         let run_end = doc.items[i..]
             .iter()
-            .position(|it| !it.is_aside)
+            .position(|it| !it.is_aside || it.branch != item.branch)
             .map_or(doc.items.len(), |n| i + n);
         if run_end > i {
             render_aside_run(
@@ -438,10 +497,33 @@ fn render_markdown(
             i += 1;
         }
     }
+    for _ in open_branches {
+        sections.push(Section::unkeyed("</details>\n\n".to_string()));
+    }
     if let Some(orphans) = render_orphan_reactions(doc) {
         sections.push(Section::unkeyed(orphans));
     }
     sections
+}
+
+/// A version of the conversation the account left, folded like a run of
+/// tool steps: outside the messages' own `<div>`s, so every anchor in it
+/// still works.
+fn branch_opener(messages: usize) -> String {
+    let plural = if messages == 1 { "" } else { "s" };
+    format!(
+        "<details class=\"branch\">\n<summary>✎ Another version · {messages} message{plural}</summary>\n\n"
+    )
+}
+
+/// Who reacted: a chip link where the provider has their handle, so the
+/// reactor resolves to a contact as an author does
+/// (docs/dev/plans/chips.md); the name as shown otherwise.
+fn reactor(r: &crate::types::NormalizedReaction) -> String {
+    match &r.reactor_handle {
+        Some(h) => chip_link(&r.reactor_display, h),
+        None => escape_md_inline(&r.reactor_display),
+    }
 }
 
 /// Reactions the provider could not place on any message in this
@@ -462,7 +544,7 @@ fn render_orphan_reactions(doc: &NormalizedDoc) -> Option<String> {
                 "  - <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span> ({ts})\n",
                 uuid = r.reaction_uuid,
                 emoji = escape_md_inline(&r.emoji),
-                who = escape_md_inline(&r.reactor_display),
+                who = reactor(r),
                 ts = timestamp_html(r.date_ms),
             ));
         }
@@ -541,7 +623,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
             if let Some(line) = recipients_line(&item.recipients) {
                 s.push('\n');
                 s.push_str(&line);
-                s.push('\n');
+                s.push_str("\n\n");
             }
         }
     }
@@ -599,7 +681,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 "- <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span>\n",
                 uuid = r.reaction_uuid,
                 emoji = escape_md_inline(&r.emoji),
-                who = escape_md_inline(&r.reactor_display),
+                who = reactor(r),
             ));
         }
     }
@@ -608,10 +690,11 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
     Section::keyed(&item.message_uuid, s)
 }
 
-/// Who an item was addressed to, one line straight under its header:
-/// `To <span data-handle="email:…">Will Riker</span>, …; Cc …`. The UI
-/// trusts a `data-handle` here only because nothing a sender wrote can
-/// come between the header and this line.
+/// Who an item was addressed to, one paragraph straight under its
+/// header: `To [Will Riker](mailto:…), …; Cc …`, each recipient with a
+/// handle a chip link and each without a plain span. It is a paragraph
+/// with inline HTML, not an HTML block, because markdown is not parsed
+/// inside a block and the links have to be.
 fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
     use crate::types::RecipientRole;
     let mut groups: Vec<String> = Vec::new();
@@ -619,14 +702,12 @@ fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
         let names: Vec<String> = recipients
             .iter()
             .filter(|r| r.role == role)
-            .map(|r| {
-                let handle = r.handle.as_ref().map_or(String::new(), |h| {
-                    format!(" data-handle=\"{}\"", escape_attr(h.as_str()))
-                });
-                format!(
-                    "<span class=\"msg-recipient\"{handle}>{}</span>",
-                    escape_text(&r.display)
-                )
+            .map(|r| match &r.handle {
+                Some(h) => chip_link(&r.display, h),
+                None => format!(
+                    "<span class=\"msg-recipient\">{}</span>",
+                    escape_md_inline(&r.display)
+                ),
             })
             .collect();
         if !names.is_empty() {
@@ -637,8 +718,12 @@ fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
             ));
         }
     }
-    (!groups.is_empty())
-        .then(|| format!("<div class=\"msg-recipients\">{}</div>", groups.join("; ")))
+    (!groups.is_empty()).then(|| {
+        format!(
+            "<span class=\"msg-recipients\">{}</span>",
+            groups.join("; ")
+        )
+    })
 }
 
 fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
@@ -780,14 +865,16 @@ fn build_grid_rows(
             .conversation_name(conversation_name.clone())
             .conversation_uuid(chat.chat_uuid.clone())
             .entire_chat(entire_chat.clone())
-            // What was said: no system events, and none of the asides — a
-            // tool call, a harness's injected preamble — that the page
-            // folds away.
+            // What was said: no system events, none of the asides — a
+            // tool call, a harness's injected preamble — and no version of
+            // the conversation the account left; the page folds those away.
             .body(
                 doc.items
                     .iter()
                     .zip(&bodies)
-                    .filter(|(i, _)| !matches!(i.kind, ItemKind::System) && !i.is_aside)
+                    .filter(|(i, _)| {
+                        !matches!(i.kind, ItemKind::System) && !i.is_aside && i.branch.is_empty()
+                    })
                     .map(|(_, body)| body.as_str())
                     .filter(|body| !body.is_empty())
                     .collect::<Vec<_>>()
@@ -854,6 +941,7 @@ fn build_grid_rows(
                 // null — never a row whose author is the empty string,
                 // and never a stand-in like "unknown".
                 .author(non_empty(&item.author_display))
+                .author_handle(item.author_handle.as_ref().map(|h| h.as_str().to_string()))
                 .account(chat.account.clone())
                 .org_uuid(chat.org_uuid.clone())
                 .org_name(chat.org_name.clone())
@@ -933,6 +1021,7 @@ fn reaction_row(
         .upstream_account(chat.upstream_account.clone())
         .created_at(stamp_from_ms(r.date_ms, profile.stamp_precision))
         .author(non_empty(&r.reactor_display))
+        .author_handle(r.reactor_handle.as_ref().map(|h| h.as_str().to_string()))
         .account(chat.account.clone())
         .org_uuid(chat.org_uuid.clone())
         .org_name(chat.org_name.clone())
@@ -1062,6 +1151,7 @@ mod tests {
                     attachments: vec![],
                     reactions: vec![NormalizedReaction {
                         reaction_uuid: "44444444-4444-4444-4444-444444444444".to_string(),
+                        reactor_handle: None,
                         reactor_display: "Will Riker".to_string(),
                         emoji: "🫡".to_string(),
                         date_ms: Some(12442118410000),
@@ -1073,6 +1163,7 @@ mod tests {
                     kind_label: None,
                     source_ref: None,
                     is_aside: false,
+                    branch: Vec::new(),
                     unread: false,
                     recipients: Vec::new(),
                     problems: Vec::new(),
@@ -1136,7 +1227,7 @@ mod tests {
         assert_eq!(p.reason, Reason::NoIdentity);
         assert_eq!(p.field.as_deref(), Some("uuid"));
         // Stamping is the store's job, not the renderer's.
-        assert!(p.first_seen_at_utc.is_empty() && p.last_seen_at_utc.is_empty());
+        assert!(p.first_seen_at_utc.is_empty() && p.changed_at_utc.is_empty());
     }
 
     /// A problem the provider found while normalizing an item — a
@@ -1246,6 +1337,7 @@ mod tests {
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
             problems: Vec::new(),
@@ -1453,6 +1545,7 @@ mod tests {
             target_native_id: "gone-upstream".to_string(),
             reactions: vec![NormalizedReaction {
                 reaction_uuid: "55555555-5555-5555-5555-555555555555".to_string(),
+                reactor_handle: None,
                 reactor_display: "Will Riker".to_string(),
                 emoji: "\u{1fae1}".to_string(),
                 // Ten seconds after the message, which only the long
@@ -1498,6 +1591,7 @@ mod tests {
             kind_label: Some("Tool Call".to_string()),
             source_ref: None,
             is_aside: true,
+            branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
             problems: Vec::new(),
@@ -1667,6 +1761,110 @@ mod tests {
         let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(md.contains("not yet fetched"));
         assert!(md.contains("https://example/vscapture"));
+    }
+
+    /// An attachment whose stored bytes the blob store has lost is a
+    /// problem on its message, not a silent "(not yet fetched)".
+    #[test]
+    fn an_attachment_the_blob_store_lost_is_reported() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].attachments = vec![NormalizedAttachment {
+            rel_path: None,
+            file_name: Some("away-team-scan.png".to_string()),
+            mime_type: Some("image/png".to_string()),
+            byte_len: None,
+            source_url: None,
+            ref_id: Some("scan-1".to_string()),
+        }];
+        let mut blobs = BlobBundle::default();
+        blobs.mark_missing("scan-1");
+        // No bytes to write, so nothing touches the page directory.
+        let doc = materialize_attachment_bytes(&chat.buckets[0], Path::new("/nonexistent"), &blobs);
+
+        let problems = &doc.items[0].problems;
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems[0].reason, Reason::BlobMissing);
+        assert_eq!(problems[0].sample, "away-team-scan.png");
+    }
+
+    /// A version of the conversation the account left is kept, folded
+    /// in where it forked; a version left inside it folds inside it.
+    #[test]
+    fn another_version_folds_where_it_forked() {
+        let mut chat = mk_chat();
+        let base = chat.buckets[0].items[0].clone();
+        let item = |id: &str, branch: &[&str]| NormalizedChatItem {
+            message_uuid: id.to_string(),
+            text: Some(format!("text of {id}")),
+            branch: branch.iter().map(|b| b.to_string()).collect(),
+            reactions: Vec::new(),
+            ..base.clone()
+        };
+        chat.buckets[0].items = vec![
+            item("q-original", &["q-original"]),
+            item("a-first", &["q-original", "a-first"]),
+            item("a-retried", &["q-original"]),
+            item("q-edited", &[]),
+            item("a-edited", &[]),
+        ];
+        let md = join(&render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test",
+        ));
+        let at = |needle: &str| {
+            md.find(needle)
+                .unwrap_or_else(|| panic!("{needle} in {md}"))
+        };
+        assert!(md.contains("Another version · 3 messages"));
+        assert!(md.contains("Another version · 1 message<"));
+        assert!(at("Another version · 3") < at("text of q-original"));
+        assert!(at("text of a-first") < at("text of a-retried"));
+        assert!(at("text of a-retried") < at("text of q-edited"));
+        assert_eq!(md.matches("<details class=\"branch\">").count(), 2);
+        assert_eq!(md.matches("</details>").count(), 2);
+        let between = &md[at("text of a-retried")..at("text of q-edited")];
+        assert!(
+            between.contains("</details>"),
+            "the outer version closes before the edit"
+        );
+
+        let rows = rows_of(&test_profile(), &chat);
+        assert_eq!(rows.len(), 6, "every version keeps its own grid row");
+        assert!(
+            rows[0].preview.starts_with("text of q-edited"),
+            "the document's text is the version shown: {}",
+            rows[0].preview
+        );
+    }
+
+    /// A provider that does not know an attachment's size gets it from
+    /// the bytes, rather than "size unknown" beside a file on disk.
+    #[test]
+    fn a_held_attachment_takes_its_size_from_its_bytes() {
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].attachments = vec![NormalizedAttachment {
+            rel_path: None,
+            file_name: Some("warp-core-schematic.pdf".to_string()),
+            mime_type: None,
+            byte_len: None,
+            source_url: None,
+            ref_id: Some("schematic".to_string()),
+        }];
+        let mut blobs = BlobBundle::default();
+        blobs.add(
+            "schematic",
+            vec![0; 2048],
+            Some("application/pdf".into()),
+            None,
+        );
+        let dir = tempfile::tempdir().unwrap();
+
+        let doc = materialize_attachment_bytes(&chat.buckets[0], dir.path(), &blobs);
+
+        assert_eq!(doc.items[0].attachments[0].byte_len, Some(2048));
+        assert!(doc.items[0].attachments[0].rel_path.is_some());
     }
 
     #[test]
@@ -1958,6 +2156,29 @@ mod tests {
         }
     }
 
+    /// A reactor with a handle resolves to a contact as an author does,
+    /// so the bullet carries a chip link; one without stays the name.
+    #[test]
+    fn a_reactor_with_a_handle_is_a_chip_link() {
+        use crate::types::NormalizedReaction;
+        let r = |handle, display: &str| NormalizedReaction {
+            reaction_uuid: "r".into(),
+            reactor_handle: handle,
+            reactor_display: display.into(),
+            emoji: "🖖".into(),
+            date_ms: None,
+            source_ref: None,
+        };
+        assert_eq!(
+            reactor(&r(
+                datalib_handle::Handle::email("riker@enterprise.org"),
+                "Will Riker"
+            )),
+            "[Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\")"
+        );
+        assert_eq!(reactor(&r(None, "[Me]")), "\\[Me\\]");
+    }
+
     #[test]
     fn recipients_line_names_each_with_its_handle_and_escapes_what_it_shows() {
         use crate::types::{Recipient, RecipientRole};
@@ -1974,17 +2195,18 @@ mod tests {
         .unwrap();
         assert_eq!(
             line,
-            "<div class=\"msg-recipients\"><span class=\"msg-recipients-role\">To</span> \
-             <span class=\"msg-recipient\" data-handle=\"email:riker@enterprise.org\">Will Riker</span>, \
+            "<span class=\"msg-recipients\"><span class=\"msg-recipients-role\">To</span> \
+             [Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\"), \
              <span class=\"msg-recipient\">Deanna Troi</span>; \
              <span class=\"msg-recipients-role\">Cc</span> \
-             <span class=\"msg-recipient\" data-handle=\"email:q@continuum.org\">&lt;Q&gt;</span></div>"
+             [&lt;Q&gt;](mailto:q@continuum.org \"<Q> <q@continuum.org>\")</span>"
         );
         assert_eq!(recipients_line(&[]), None);
     }
 
-    /// The recipients line is an HTML block; a blank line in a name
-    /// ended it, and markdown read the rest of the name (#992).
+    /// A blank line in a name once ended the recipients line and
+    /// markdown read the rest of the name (#992); the line is a
+    /// paragraph now, which a blank line would end just the same.
     #[test]
     fn a_recipient_with_a_blank_line_in_the_name_stays_in_the_line() {
         use crate::types::{Recipient, RecipientRole};

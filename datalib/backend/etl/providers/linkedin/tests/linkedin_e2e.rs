@@ -4,9 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_linkedin::ingest::photos::load_photo_blobs;
 use datalib_etl_linkedin::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_linkedin::synthesize::LinkedinSynth;
@@ -16,6 +14,8 @@ use datalib_etl_linkedin_render::processor::Source;
 use datalib_etl_linkedin_render::render;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 
 fn build_export(root: &Path) -> Result<()> {
     // Who the export belongs to. The primary address is deliberately not
@@ -603,6 +603,19 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         std::env::remove_var(PLAYBACK_ENV);
         assert_eq!(problems(&db3).await, [], "they fetched, so the row is gone");
 
+        // ── a photo is fetched once ────────────────────────────────
+        // The export read again, with every fetch bound to miss: a
+        // connection whose photo the store holds asks for nothing, so
+        // nothing misses and the photo stays.
+        std::env::set_var(PLAYBACK_ENV, &empty_pb);
+        let again = ingest::fetch(with_photos(&db)).await;
+        std::env::remove_var(PLAYBACK_ENV);
+        again?;
+        assert_eq!(problems(&db).await, [], "no connection was asked for again");
+        assert!(load_photo_blobs(&db)
+            .await?
+            .contains_key("https://www.linkedin.com/in/jlp"));
+
         Ok::<_, anyhow::Error>(())
     })?;
 
@@ -737,6 +750,148 @@ async fn a_walk_error_deletes_no_article() -> Result<()> {
     );
     let keys: Vec<String> = problems(&db).await.into_iter().map(|r| r.0).collect();
     assert_eq!(keys, ["listing:files"]);
+    db.close().await;
+    Ok(())
+}
+
+/// A CSV that is nothing (0 bytes, or the Notes preamble and no header)
+/// read as one listing no rows and emptied its table. A CSV the export
+/// left out keeps its table: the export form offers a subset. Only a
+/// well-formed CSV with a header and no rows empties it.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_a_well_formed_csv_empties_its_table() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let export = tmp.path().join("export");
+    fs::create_dir_all(&export)?;
+    build_export(&export)?;
+    let db = RawDb::open(&db_path_for(tmp.path())).await?;
+    let fetch = || {
+        ingest::fetch(FetchOptions {
+            db: db.clone(),
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+    };
+    fetch().await?;
+    assert_eq!(rows(&db, "connections").await.len(), 2);
+    assert_eq!(rows(&db, "messages").await.len(), 3);
+    assert_eq!(rows(&db, "email_addresses").await.len(), 2);
+
+    fs::write(export.join("Connections.csv"), b"")?;
+    fs::write(
+        export.join("Email Addresses.csv"),
+        "Notes:\n\"Some preamble text about email visibility.\"\n",
+    )?;
+    fs::remove_file(export.join("messages.csv"))?;
+    let s = fetch().await?;
+    assert_eq!(
+        rows(&db, "connections").await.len(),
+        2,
+        "a 0-byte Connections.csv is not an empty network"
+    );
+    assert_eq!(rows(&db, "email_addresses").await.len(), 2);
+    assert_eq!(
+        rows(&db, "messages").await.len(),
+        3,
+        "left out, not emptied"
+    );
+    assert_eq!(s.parse_errors, 2, "{s:?}");
+    let keys: Vec<String> = problems(&db).await.into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        [
+            "listing:csv Connections.csv",
+            "listing:csv Email Addresses.csv"
+        ]
+    );
+
+    fs::write(
+        export.join("Connections.csv"),
+        "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n",
+    )?;
+    fetch().await?;
+    assert!(rows(&db, "connections").await.is_empty());
+    db.close().await;
+    Ok(())
+}
+
+/// A connection a newer Connections.csv no longer lists kept its photo
+/// edge, so the photo outlived the contact. An export without the CSV, or
+/// with one that will not read, says nothing about who is connected, and
+/// keeps every edge.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_dropped_from_the_export_loses_its_photo_edge() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let export = tmp.path().join("export");
+    fs::create_dir_all(&export)?;
+    build_export(&export)?;
+    let db = RawDb::open(&db_path_for(tmp.path())).await?;
+    let fetch = || {
+        ingest::fetch(FetchOptions {
+            db: db.clone(),
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+    };
+    let owners = || async {
+        sqlx::query_scalar::<_, String>("SELECT owner_id FROM contact_photos ORDER BY owner_id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+    };
+    fetch().await?;
+    // What the photo sweep records for both connections.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS contact_photos (id TEXT PRIMARY KEY, \
+         owner_id TEXT NOT NULL, source_url TEXT NOT NULL, blake3 TEXT NULL)",
+    )
+    .execute(db.pool())
+    .await?;
+    for owner in [
+        "https://www.linkedin.com/in/bev",
+        "https://www.linkedin.com/in/jlp",
+    ] {
+        sqlx::query("INSERT INTO contact_photos VALUES (?, ?, ?, NULL)")
+            .bind(format!("{owner}#{owner}"))
+            .bind(owner)
+            .bind(owner)
+            .execute(db.pool())
+            .await?;
+    }
+
+    let both = fs::read(export.join("Connections.csv"))?;
+    fs::write(export.join("Connections.csv"), b"")?;
+    fetch().await?;
+    assert_eq!(
+        owners().await.len(),
+        2,
+        "a CSV that will not read keeps both"
+    );
+
+    fs::remove_file(export.join("Connections.csv"))?;
+    fetch().await?;
+    assert_eq!(owners().await.len(), 2, "a CSV left out keeps both");
+
+    fs::write(export.join("Connections.csv"), both)?;
+    assert_eq!(fetch().await?.photos_removed, 0);
+    fs::write(
+        export.join("Connections.csv"),
+        "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n\
+         Jean-Luc,Picard,https://www.linkedin.com/in/jlp,,Starfleet,Captain,16 Jun 2026\n",
+    )?;
+    let s = fetch().await?;
+    assert_eq!(
+        owners().await,
+        ["https://www.linkedin.com/in/jlp"],
+        "Crusher is no longer a connection"
+    );
+    assert_eq!(s.photos_removed, 1);
     db.close().await;
     Ok(())
 }

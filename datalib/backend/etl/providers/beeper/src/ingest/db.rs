@@ -1,11 +1,13 @@
-//! Doltlite-backed raw store for the Beeper provider.
+//! Doltlite-backed raw store for the Beeper provider. Every run reads the
+//! whole cache, so a row's sidecar is stamped the first time it is seen
+//! and reading an unchanged cache again commits nothing.
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::bulk_upsert_first_seen_in_tx;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -73,15 +75,14 @@ impl RawDb {
         })
     }
 
-    /// Bulk-upsert rooms in a single transaction via the shared
-    /// [`bulk_upsert_in_tx`] helper. A row's `id` is its native room id.
+    /// A row's `id` is its native room id.
     pub async fn bulk_upsert_rooms(&self, rows: &[RoomRow]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool().begin().await.context("begin bulk rooms tx")?;
-        bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+        bulk_upsert_first_seen_in_tx(&mut tx, rows, &now).await?;
         tx.commit().await.context("commit bulk rooms tx")?;
         Ok(())
     }
@@ -92,7 +93,7 @@ impl RawDb {
         }
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool().begin().await.context("begin bulk users tx")?;
-        bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+        bulk_upsert_first_seen_in_tx(&mut tx, rows, &now).await?;
         tx.commit().await.context("commit bulk users tx")?;
         Ok(())
     }
@@ -103,7 +104,7 @@ impl RawDb {
         }
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool().begin().await.context("begin bulk events tx")?;
-        bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+        bulk_upsert_first_seen_in_tx(&mut tx, rows, &now).await?;
         tx.commit().await.context("commit bulk events tx")?;
         Ok(())
     }
@@ -136,7 +137,7 @@ impl RawDb {
             .begin()
             .await
             .context("begin bulk media attachments tx")?;
-        bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+        bulk_upsert_first_seen_in_tx(&mut tx, rows, &now).await?;
         tx.commit()
             .await
             .context("commit bulk media attachments tx")?;

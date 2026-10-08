@@ -8,33 +8,43 @@ pub mod api;
 pub mod ingest;
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
+use async_trait::async_trait;
+use datalib_etl::blob_cas::CasInsert;
+use datalib_etl::bulk::{bulk_upsert_bookkeeping, BulkUpsertable as _};
 use datalib_etl::control::DownloadControl;
+use datalib_etl::doltlite_raw as dr;
 use datalib_etl::download_problems::DownloadProblem;
 use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
+use datalib_etl_web::http::LatchkeySettings;
+use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Listed, Outcome};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
+use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
 
 use datalib_etl_email_config::EmailGmailApi;
 
-use super::db::RawDb;
-use super::listed::{self, Held, Named, WHOLE_ACCOUNT};
-use super::schema_raw::EmlBlobRow;
+use super::db::{write_eml_edges_in_tx, RawDb};
+use super::envelope::GmailId;
+use super::listed::{self, Named, WHOLE_ACCOUNT};
+use super::schema_raw::{EmailRow, EmlBlobRow};
 use api::{Client, QuotaThrottle};
-use ingest::LabelIndex;
+use ingest::{Ingested, LabelIndex};
 
 /// `messages.list` page size. Google's maximum is 500; ids are tiny, so
 /// there is no reason to ask for less.
 const LIST_PAGE_SIZE: u32 = 500;
-/// Fetched messages held in memory before they are written.
+/// Fetched messages written in one transaction, and the bytes of raw
+/// messages that force a write sooner: they wait in memory until then.
 const FLUSH_BATCH: usize = 200;
+const FLUSH_BYTES: usize = 32 * 1024 * 1024;
 
 /// The phase name a `problems` row carries when the fetch gave up.
 const P_MESSAGES_GET: &str = "messages.get";
@@ -59,7 +69,7 @@ pub struct FetchOptions {
     /// whose canonical path exactly matches one of these.
     pub only_labels: Vec<String>,
     pub blob_size_limit_bytes: Option<u64>,
-    /// Messages fetched before they are written. `None` is [`FLUSH_BATCH`].
+    /// Messages written in one transaction. `None` is [`FLUSH_BATCH`].
     pub flush_batch: Option<usize>,
     pub progress: Progress,
     pub control: DownloadControl,
@@ -393,7 +403,7 @@ impl Run<'_> {
         let mut tx = self.db.pool().begin().await.context("begin history tx")?;
         listed::list_in_tx(&mut tx, &changes.named, Some(history_id), Named::Changed).await?;
         summary.emails_destroyed +=
-            listed::forget_in_tx(&mut tx, self.now, &changes.deleted).await?;
+            listed::forget_in_tx(&mut tx, self.now, &changes.deleted, email_id_of).await?;
         listed::save_token_in_tx(&mut tx, &scope, history_id).await?;
         tx.commit().await.context("commit history tx")?;
         Ok(true)
@@ -490,6 +500,7 @@ impl Run<'_> {
                 self.now,
                 std::slice::from_ref(&scope),
                 label_id.is_none().then_some(&named),
+                email_id_of,
             )
             .await?;
             info!(
@@ -504,11 +515,13 @@ impl Run<'_> {
         Ok(())
     }
 
-    /// Fetch, with `messages.get`, every listed message the store owes
-    /// (`listed::owed_with_bodies`), newest first, until the work, the
-    /// budget or the quota runs out. A message Gmail no longer has, or
-    /// that carries none of the configured labels, loses its listing and
-    /// whatever was held for it. One that will not fetch stays owed.
+    /// Fetch, with `messages.get`, every listed message the store owes,
+    /// newest first, until the work or the budget runs out:
+    /// `owed::drain`, one `messages.get` per request, `flush_batch` to a
+    /// transaction. A message Gmail no longer has, or that carries none
+    /// of the configured labels, is gone: its listing, its row and
+    /// whatever was held for it go. One that will not fetch or will not
+    /// store stays owed.
     async fn fetch_owed(
         &mut self,
         throttle: &mut QuotaThrottle,
@@ -517,10 +530,24 @@ impl Run<'_> {
         if summary.stopped_early() {
             return Ok(());
         }
-        let build = build_identity();
-        let owed =
-            listed::owed_with_bodies(self.db.pool(), &build, self.opts.blob_size_limit_bytes)
-                .await?;
+        let pool = self.db.pool();
+        let mut owed = owed::owed(pool, listed::LISTED, listed::listing(pool, true).await?).await?;
+        with_the_bodiless(
+            &mut owed,
+            held_without_bytes(pool, self.opts.blob_size_limit_bytes).await?,
+        );
+        if let Some(budget) = self.opts.config.message_budget {
+            if owed.len() > budget {
+                summary.budget_exhausted = true;
+                info!(
+                    event = "gmail_budget_exhausted",
+                    budget,
+                    left = owed.len() - budget,
+                    "fetching the budget's worth; the next run fetches what is still owed",
+                );
+                owed.truncate(budget);
+            }
+        }
         if owed.is_empty() {
             return Ok(());
         }
@@ -532,201 +559,260 @@ impl Run<'_> {
         );
         self.bar.expect(owed.len() as u64);
         self.bar.doing("fetching");
-        // Belt-and-braces client-side label check. A walk is narrowed
-        // server-side, but `history.list` names every message in the
-        // account.
-        let only_labels: BTreeSet<&str> =
-            self.opts.only_labels.iter().map(String::as_str).collect();
-        let flush_at = self.opts.flush_batch.unwrap_or(FLUSH_BATCH);
-        let mut pending = Pending {
-            known_blobs: self.db.loaded_blob_ids().await?.into_keys().collect(),
-            ..Default::default()
+
+        let f = MessagesGet {
+            db: self.db,
+            index: self.index,
+            account_id: self.account_id,
+            user_id: self.user_id,
+            client: self.client,
+            throttle: tokio::sync::Mutex::new(throttle),
+            stop: &self.opts.control.stop,
+            cap: self.opts.blob_size_limit_bytes,
+            // Belt-and-braces client-side label check. A walk is narrowed
+            // server-side, but `history.list` names every message in the
+            // account.
+            only_labels: self.opts.only_labels.iter().map(String::as_str).collect(),
+            now: self.now,
+            bar: &self.bar,
+            filtered: AtomicUsize::new(0),
+            blobs_stored: AtomicUsize::new(0),
+            blobs_oversize: AtomicUsize::new(0),
+            destroyed: AtomicUsize::new(0),
         };
-        let mut fetched = 0usize;
-        // What ends the fetch early: a refused credential, a spent daily
-        // quota, a retry loop that gave up. Walking on would fail every
-        // remaining message the same way, one attempt each.
-        let mut gave_up: Option<anyhow::Error> = None;
-        for message in &owed {
-            if self.stopping() {
-                summary.interrupted = true;
-                break;
-            }
-            if self
-                .opts
-                .config
-                .message_budget
-                .is_some_and(|b| fetched >= b)
-            {
-                summary.budget_exhausted = true;
-                info!(
-                    event = "gmail_budget_exhausted",
-                    fetched,
-                    left = owed.len() - fetched,
-                    "stopping early with a partial result; the next run fetches what is still owed",
-                );
-                break;
-            }
-            throttle.acquire(api::UNITS_MESSAGES_GET).await;
-            let msg = match api::get_message_raw(self.user_id, self.client, &message.id).await {
-                Ok(m) => m,
-                Err(e) if is_not_found(&e) => {
-                    // Deleted since it was listed: normal on a busy
-                    // mailbox, and nothing to come back for.
-                    summary.emails_destroyed += self.forget(&message.id).await?;
-                    self.bar.did(1);
-                    continue;
-                }
-                // A cancel that lands mid-backoff arrives here as an
-                // error, and it is not one.
-                Err(_) if self.stopping() => {
-                    summary.interrupted = true;
-                    break;
-                }
-                Err(e) if api::is_terminal(&e) => {
-                    gave_up = Some(e);
-                    break;
-                }
-                Err(e) => {
-                    summary.messages_failed += 1;
-                    let ids = std::slice::from_ref(&message.id);
-                    listed::record_failures(self.db.pool(), ids, &format!("{e}")).await?;
-                    self.bar.did(1);
-                    continue;
-                }
-            };
-            fetched += 1;
-            self.bar.did(1);
-
-            let ingested = match ingest::ingest(self.account_id, self.index, &msg) {
-                Ok(i) => i,
-                Err(e) => {
-                    listed::mark_unstorable(self.db.pool(), message, &build, &format!("{e}"))
-                        .await?;
-                    continue;
-                }
-            };
-            if !only_labels.is_empty()
-                && !ingested
-                    .label_paths
-                    .iter()
-                    .any(|p| only_labels.contains(p.as_str()))
-            {
-                summary.messages_filtered += 1;
-                summary.emails_destroyed += self.forget(&message.id).await?;
-                continue;
-            }
-
-            let oversize = self
-                .opts
-                .blob_size_limit_bytes
-                .filter(|cap| ingested.raw.len() as u64 > *cap);
-            if let Some(cap) = oversize {
-                summary.blobs_oversize += 1;
-                pending.cas.add_skipped(
-                    &ingested.email_id,
-                    &ingested.blob_id,
-                    datalib_problems::Reason::OverSizeLimit,
-                    format!(
-                        "the .eml is {} bytes, over blob_size_limit_bytes ({cap})",
-                        ingested.raw.len()
-                    ),
-                );
-            } else if !pending.known_blobs.insert(ingested.blob_id.clone()) {
-                summary.blobs_skipped += 1;
-            } else {
-                pending.cas.add_fetched(
-                    &ingested.email_id,
-                    &ingested.blob_id,
-                    ingested.raw,
-                    Some("message/rfc822".to_string()),
-                    None,
-                );
-                summary.blobs_stored += 1;
-            }
-            pending.held.push(Held {
-                id: message.id.clone(),
-                stamp: message.stamp.clone(),
-                row: ingested.row,
-            });
-            if pending.held.len() >= flush_at {
-                self.flush(&mut pending, summary).await?;
-            }
-        }
-        self.flush(&mut pending, summary).await?;
-
-        let Some(e) = gave_up else {
-            return Ok(());
+        let l = owed::Loop {
+            pool,
+            table: listed::LISTED,
+            phase: P_MESSAGES_GET,
+            stop: &self.opts.control.stop,
+            found: self.found,
+            sealer: self.opts.sealer.as_ref(),
+            batch: 1,
+            concurrency: 1,
+            flush: self.opts.flush_batch.unwrap_or(FLUSH_BATCH),
+            flush_bytes: FLUSH_BYTES,
+            failures_in_a_row: 0,
         };
+        let drained = owed::drain(&l, owed, &f).await?;
+        summary.emails_upserted += drained.got;
+        summary.messages_failed += drained.failed;
+        summary.emails_destroyed += f.destroyed.load(Ordering::Relaxed);
+        summary.messages_filtered += f.filtered.load(Ordering::Relaxed);
+        summary.blobs_stored += f.blobs_stored.load(Ordering::Relaxed);
+        summary.blobs_oversize += f.blobs_oversize.load(Ordering::Relaxed);
+        summary.interrupted |= drained.left > 0 && self.stopping();
         // With nothing mirrored there is nothing a partial run keeps.
-        if !listed::holds_any(self.db.pool()).await? {
-            return Err(e.context("messages.get"));
-        }
-        let left = owed.len() - fetched;
-        warn!(
-            event = "gmail_fetch_stopped",
-            fetched,
-            left,
-            error = %format!("{e:#}"),
-            "the fetch gave up; the next run fetches what is still owed"
-        );
-        self.found.phase(
-            P_MESSAGES_GET,
-            format!("{fetched} fetched, {left} left: {e:#}"),
-        );
-        self.found.cut_short();
-        Ok(())
-    }
-
-    async fn forget(&self, gmail_id: &str) -> Result<usize> {
-        let mut tx = self.db.pool().begin().await.context("begin forget tx")?;
-        let ids = [gmail_id.to_string()];
-        let gone = listed::forget_in_tx(&mut tx, self.now, &ids).await?;
-        tx.commit().await.context("commit forget tx")?;
-        Ok(gone)
-    }
-
-    /// One transaction writes the fetched messages: email rows, thread
-    /// rows and the stamp each fetch satisfies. Their `.eml` bytes follow
-    /// through the shared CAS-edge write; a message whose bytes never
-    /// land is owed again by having none.
-    async fn flush(&self, pending: &mut Pending, summary: &mut FetchSummary) -> Result<()> {
-        let held = std::mem::take(&mut pending.held);
-        if held.is_empty() {
-            return Ok(());
-        }
-        let written = held.len();
-        summary.emails_upserted += written;
-        let mut tx = self.db.pool().begin().await.context("begin messages tx")?;
-        listed::hold_in_tx(&mut tx, self.now, held).await?;
-        tx.commit().await.context("commit messages tx")?;
-
-        std::mem::take(&mut pending.cas)
-            .flush(
-                self.db.pool(),
-                self.db.cas(),
-                |email_id, blob_id, blake3| EmlBlobRow {
-                    id: EmlBlobRow::pk_recipe(email_id, blob_id),
-                    email_id: email_id.to_string(),
-                    blob_id: blob_id.to_string(),
-                    blake3: blake3.map(str::to_string),
-                },
-            )
-            .await?;
-        if let Some(sealer) = &self.opts.sealer {
-            sealer.wrote(written as u64).await;
+        if let Some(said) = drained.terminal {
+            if !listed::holds_any(pool).await? {
+                anyhow::bail!("messages.get: {said}");
+            }
         }
         Ok(())
     }
 }
 
-/// Fetched messages waiting for one write.
-#[derive(Default)]
-struct Pending {
-    held: Vec<Held>,
-    cas: CasEdgeAccumulator,
-    /// `.eml` blobs stored already, or waiting in `cas`.
-    known_blobs: BTreeSet<String>,
+/// The fetcher: one `messages.get` per request; a flush's bytes into
+/// the CAS in one write, then its email rows and `.eml` edges.
+struct MessagesGet<'a> {
+    db: &'a RawDb,
+    index: &'a LabelIndex,
+    account_id: &'a str,
+    user_id: &'a str,
+    client: &'a Client,
+    throttle: tokio::sync::Mutex<&'a mut QuotaThrottle>,
+    stop: &'a StopFlag,
+    cap: Option<u64>,
+    only_labels: BTreeSet<&'a str>,
+    now: &'a IsoOffsetTimestamp,
+    bar: &'a RunBar,
+    filtered: AtomicUsize,
+    blobs_stored: AtomicUsize,
+    blobs_oversize: AtomicUsize,
+    destroyed: AtomicUsize,
+}
+
+/// A fetched message: its row, its `.eml` edge, and the bytes for the
+/// CAS, or why they were left out when over the cap.
+struct Stored {
+    row: EmailRow,
+    eml: EmlBlobRow,
+    bytes: Result<Vec<u8>, String>,
+}
+
+impl MessagesGet<'_> {
+    /// What a fetched message comes to: gone when it carries none of
+    /// the configured labels; else its row, with its bytes when they fit
+    /// under the cap and a warning on its `.eml` when not.
+    fn keep(&self, ingested: Ingested) -> Outcome<Stored> {
+        if !self.only_labels.is_empty()
+            && !ingested
+                .label_paths
+                .iter()
+                .any(|p| self.only_labels.contains(p.as_str()))
+        {
+            self.filtered.fetch_add(1, Ordering::Relaxed);
+            return Outcome::Gone;
+        }
+        let mut eml = EmlBlobRow::new(&ingested.email_id, &ingested.blob_id);
+        let bytes = match self.cap.filter(|cap| ingested.raw.len() as u64 > *cap) {
+            Some(cap) => {
+                self.blobs_oversize.fetch_add(1, Ordering::Relaxed);
+                Err(format!(
+                    "the .eml is {} bytes, over blob_size_limit_bytes ({cap})",
+                    ingested.raw.len()
+                ))
+            }
+            None => {
+                // The blob id is the hash of the bytes (`ingest::ingest`).
+                eml.blake3 = Some(ingested.blob_id.clone());
+                self.blobs_stored.fetch_add(1, Ordering::Relaxed);
+                Ok(ingested.raw)
+            }
+        };
+        Outcome::Got(Stored {
+            row: ingested.row,
+            eml,
+            bytes,
+        })
+    }
+}
+
+#[async_trait]
+impl Fetcher<Stored> for MessagesGet<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<Fetched<Stored>>, BatchError> {
+        let mut answers = Vec::with_capacity(batch.len());
+        for listed in batch {
+            self.throttle
+                .lock()
+                .await
+                .acquire(api::UNITS_MESSAGES_GET)
+                .await;
+            let got = api::get_message_raw(self.user_id, self.client, &listed.key).await;
+            self.bar.did(1);
+            let outcome = match got {
+                Ok(msg) => match ingest::ingest(self.account_id, self.index, &msg) {
+                    Ok(ingested) => self.keep(ingested),
+                    Err(e) => Outcome::Failed(format!("{e}")),
+                },
+                // Deleted since it was listed: normal on a busy mailbox,
+                // and nothing to come back for.
+                Err(e) if is_not_found(&e) => Outcome::Gone,
+                // A cancel that lands mid-backoff arrives here as an
+                // error, and it is not one.
+                Err(e) if self.stop.requested() => return Err(BatchError::Batch(e)),
+                Err(e) if api::is_terminal(&e) => return Err(BatchError::Terminal(e)),
+                Err(e) => Outcome::Failed(format!("{e}")),
+            };
+            answers.push(Fetched { listed, outcome });
+        }
+        Ok(answers)
+    }
+
+    /// The flush's bytes into the CAS; then the email rows, their joins
+    /// and threads, and the messages that are gone
+    /// (`listed::write_batch_in_tx`); then the `.eml` edges, whose
+    /// sidecar is this fetcher's to stamp, the listing's being the loop's.
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<Stored>],
+    ) -> Result<()> {
+        let mut got = Vec::new();
+        let mut gone = Vec::new();
+        let mut edges = Vec::new();
+        for f in batch {
+            match &f.outcome {
+                Outcome::Got(s) | Outcome::Unusable(s, ..) => {
+                    got.push(s.row.clone());
+                    edges.push(s);
+                }
+                Outcome::Gone => gone.push(f.listed.key.clone()),
+                Outcome::Failed(_) | Outcome::Skipped(..) => {}
+            }
+        }
+        let inserts: Vec<CasInsert<'_>> = edges
+            .iter()
+            .filter_map(|s| {
+                let bytes = s.bytes.as_ref().ok()?;
+                Some(CasInsert {
+                    blake3: &s.eml.blob_id,
+                    bytes,
+                    content_type: Some("message/rfc822"),
+                })
+            })
+            .collect();
+        self.db.cas().put_many(&inserts).await?;
+        let n = listed::write_batch_in_tx(tx, self.now, got, &gone, email_id_of).await?;
+        self.destroyed.fetch_add(n, Ordering::Relaxed);
+
+        let rows: Vec<EmlBlobRow> = edges.iter().map(|s| s.eml.clone()).collect();
+        write_eml_edges_in_tx(tx, &rows).await?;
+        let landed = edges
+            .iter()
+            .filter(|s| s.eml.blake3.is_some())
+            .map(|s| s.eml.id.as_str());
+        bulk_upsert_bookkeeping(tx, EmlBlobRow::TABLE, landed, self.now).await?;
+        for s in &edges {
+            if let Err(why) = &s.bytes {
+                dr::record_object_skipped(
+                    tx,
+                    EmlBlobRow::TABLE,
+                    &s.eml.id,
+                    datalib_problems::Reason::OverSizeLimit,
+                    why,
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    fn weight(&self, s: &Stored) -> usize {
+        s.bytes.as_ref().map_or(0, Vec::len)
+    }
+}
+
+/// How the `emails` row for a Gmail message is keyed: `GmailId`'s key,
+/// the one `ingest::ingest` mints.
+fn email_id_of(gmail_id: &str) -> String {
+    GmailId::from_api(gmail_id).map_or_else(|| gmail_id.to_string(), GmailId::key)
+}
+
+/// [`email_id_of`] in SQL: Gmail's hex id, zero-padded to sixteen.
+const EMAIL_ID_OF_SQL: &str = "substr('0000000000000000' || lower(l.id), -16)";
+
+/// Also owed: a listed message whose email has no `.eml` stored and fits
+/// under `cap`. Its listing says nothing about its bytes, so the loop
+/// alone would not ask for it again once the cap allows it.
+async fn held_without_bytes(pool: &sqlx::SqlitePool, cap: Option<u64>) -> Result<Vec<Listed>> {
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        // Audited: a constant expression over the row; the cap is bound.
+        "SELECT l.id, l.stamp FROM listed_messages l
+         JOIN emails e ON e.id = {EMAIL_ID_OF_SQL}
+         WHERE (?1 IS NULL OR e.size <= ?1)
+           AND NOT EXISTS (SELECT 1 FROM email_blobs b
+                           WHERE b.blob_id = e.blob_id AND b.blake3 IS NOT NULL)
+         ORDER BY l.id DESC"
+    )))
+    .bind(cap.map(|c| c as i64))
+    .fetch_all(pool)
+    .await
+    .context("select the messages held without their bytes")?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, stamp)| Listed::new(id, stamp))
+        .collect())
+}
+
+/// `owed` with the messages of `bodiless` it does not already name,
+/// newest first.
+fn with_the_bodiless(owed: &mut Vec<Listed>, bodiless: Vec<Listed>) {
+    let named: BTreeSet<String> = owed.iter().map(|l| l.key.clone()).collect();
+    owed.extend(bodiless.into_iter().filter(|l| !named.contains(&l.key)));
+    owed.sort_by(|a, b| b.key.cmp(&a.key));
 }
 
 #[derive(Debug, Default)]
@@ -774,16 +860,6 @@ async fn collect_history(
     Ok(out)
 }
 
-/// The build that is running: a message it could not store is tried
-/// again only by another.
-fn build_identity() -> String {
-    format!(
-        "{}+{}",
-        datalib_runtime::build_id::DATALIB_VERSION,
-        datalib_runtime::build_id::git_hash().unwrap_or_default()
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -807,6 +883,27 @@ mod tests {
     /// reads it as an expired cursor, `messages.get` as a deleted
     /// message, and everything else is a failure that leaves the message
     /// owed.
+    /// The SQL spelling of the email id and `ingest::ingest`'s agree,
+    /// or a message held without its bytes is never asked for again.
+    #[tokio::test]
+    async fn the_sql_email_id_is_the_one_ingest_mints() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = datalib_etl::doltlite_raw::open(&d.path().join("k.doltlite_db"), &[])
+            .await
+            .unwrap();
+        for id in ["18c9f2a1b2c3d601", "18C9F2A1B2C3D601", "ab", "0"] {
+            let sql = format!("SELECT {}", EMAIL_ID_OF_SQL.replace("l.id", "?"));
+            // Audited: a constant expression; the id is bound.
+            let in_sql: String = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(in_sql, email_id_of(id), "{id}");
+        }
+        pool.close().await;
+    }
+
     #[test]
     fn recognizes_a_404_through_context() {
         let e = anyhow::Error::new(api::GmailApiError::NotFound)

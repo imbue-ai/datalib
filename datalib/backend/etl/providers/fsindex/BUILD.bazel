@@ -34,6 +34,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/fsindex_config:datalib_etl_fsindex_config",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/time:datalib_time",
@@ -58,6 +59,7 @@ rust_binary(
     deps = [
         ":datalib_etl_fsindex",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -99,6 +101,7 @@ rust_test(
     },
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         ":datalib_etl_fsindex",
         "@datalib_crates//:insta",
         "@datalib_crates//:sqlx",

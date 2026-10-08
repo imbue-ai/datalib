@@ -3,15 +3,15 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use tracing::warn;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::file_checkpoint;
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
 
 use super::api::{split_vcards, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
 use super::db::{addressbook_pk, RawDb};
@@ -144,6 +144,7 @@ async fn ingest_one(
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let body = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
+    let cards = whole_cards(&body)?;
     let label = addressbook_label(file);
     let book_href = relative_href(root, file);
     let book_id = addressbook_pk(account_id, &book_href);
@@ -157,7 +158,7 @@ async fn ingest_one(
     // How many cards of each synthesized name this file has had so far,
     // so a second "John Smith" gets an id of his own.
     let mut synth_seen: HashMap<String, usize> = HashMap::new();
-    for (idx, block) in split_vcards(&body).into_iter().enumerate() {
+    for (idx, block) in cards.into_iter().enumerate() {
         let href = if idx == 0 {
             book_href.clone()
         } else {
@@ -188,6 +189,25 @@ async fn ingest_one(
     summary.contacts_deleted += gone.len();
     db.delete_contacts_by_uid(&book_id, &gone).await?;
     Ok(())
+}
+
+/// The file's cards, or why it cannot stand for its whole address book.
+/// vCard has no envelope that could say "no cards", so a file holding none
+/// is unreadable rather than empty: deleting the file is what empties a
+/// book.
+fn whole_cards(body: &str) -> Result<Vec<String>> {
+    let cards = split_vcards(body);
+    if cards.is_empty() {
+        bail!("the file holds no vCard (BEGIN:VCARD … END:VCARD)");
+    }
+    let begun = body
+        .split(['\r', '\n'])
+        .filter(|l| l.trim().eq_ignore_ascii_case("BEGIN:VCARD"))
+        .count();
+    if begun != cards.len() {
+        bail!("a vCard in the file has no END:VCARD: a copy cut off part-way");
+    }
+    Ok(cards)
 }
 
 /// Stable id for one vCard, in priority order:
@@ -565,6 +585,44 @@ mod tests {
         fetch(opts()).await.unwrap();
         assert!(problems().await.is_empty());
         assert_eq!(uids(&db).await, vec!["hugh", "locutus"]);
+        db.close().await;
+    }
+
+    /// A `.vcf` rewritten to nothing (0 bytes, text that holds no vCard, a
+    /// copy cut off inside a card) read as an address book with fewer
+    /// cards, and every card it lost was deleted. vCard has no envelope
+    /// that could say "no cards", so a file holding none never empties its
+    /// book; deleting the file does.
+    #[tokio::test]
+    async fn a_file_that_is_recognizably_nothing_deletes_nothing() {
+        let input = tempfile::tempdir().unwrap();
+        let path = input.path().join("Borg.vcf");
+        std::fs::write(&path, BORG).unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&store.path().join("c.doltlite_db"))
+            .await
+            .unwrap();
+        let cache = test_cache().await;
+        let opts = || options(&db, input.path(), cache.clone());
+        fetch(opts()).await.unwrap();
+        assert_eq!(uids(&db).await, vec!["hugh", "locutus"]);
+
+        let cut_off = &BORG[..BORG.rfind("END:VCARD").unwrap()];
+        for (what, body) in [
+            ("an empty file", ""),
+            ("text that holds no vCard", "We are the Borg.\n"),
+            ("a copy cut off inside a card", cut_off),
+        ] {
+            std::fs::write(&path, body).unwrap();
+            let s = fetch(opts()).await.unwrap();
+            assert_eq!(s.contacts_deleted, 0, "{what} deleted contacts");
+            assert_eq!(uids(&db).await, vec!["hugh", "locutus"], "{what}");
+            let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+            assert_eq!(problems, vec!["listing:vcf Borg.vcf"], "{what}");
+        }
         db.close().await;
     }
 

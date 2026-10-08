@@ -15,9 +15,9 @@
 use std::path::PathBuf;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
 use datalib_etl_codex::ingest::{db_path_for, fetch, FetchOptions, RawDb};
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 
 fn fixture_dir() -> PathBuf {
     if let Ok(d) = std::env::var("CODEX_FIXTURE_DIR") {

@@ -6,9 +6,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use datalib_etl::http::HttpResponse;
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
 use datalib_etl_email::ingest::RawDb;
+use datalib_etl_web::http::HttpResponse;
 use serde_json::json;
 
 use crate::support::{
@@ -19,13 +19,11 @@ use crate::support::{
 const PICARD: &str = "18c9f2a1b2c3d701";
 const RIKER: &str = "18c9f2a1b2c3d702";
 
-/// A message that fetched but would not store is not named again by any
-/// later listing. Its bytes never change, so fetching it again with the
-/// same build would cost 20 quota units every run for the same answer:
-/// the row stands, and a new build asks for it, because the store says
-/// which build it was that could not store it.
+/// A message that fetched but would not store is owed like one that
+/// would not fetch: its row stands and every run asks for it again,
+/// and the fetch that stores it clears the row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_message_that_would_not_store_is_fetched_again_by_a_new_build() {
+async fn a_message_that_would_not_store_stays_owed() {
     let m = Mirror::new();
     put_gmail_account(&m.playback, "9001", json!([inbox_label()]));
     put_gmail(
@@ -41,7 +39,8 @@ async fn a_message_that_would_not_store_is_fetched_again_by_a_new_build() {
     let mut unusable = gmail_message(RIKER, &["INBOX"], "Number One");
     unusable["raw"] = json!("");
     put_gmail(&m.playback, &gmail_get_url(RIKER), &unusable);
-    run(&m, |_| {}).await.expect("first run");
+    let first = run(&m, |_| {}).await.expect("first run");
+    assert_eq!(first.messages_failed, 1, "{first:?}");
     assert_eq!(problems(&m).await, [format!("listed_messages:{RIKER}")]);
 
     // Nothing changed upstream since.
@@ -52,21 +51,17 @@ async fn a_message_that_would_not_store_is_fetched_again_by_a_new_build() {
     );
     let second = run(&m, |_| {}).await.expect("second run");
     assert_eq!(
-        second.quota_units_spent, 4,
-        "profile, labels and history only; the message was fetched again: {second:?}"
+        second.quota_units_spent, 24,
+        "profile, labels, history and the one message: {second:?}"
     );
     assert_eq!(problems(&m).await, [format!("listed_messages:{RIKER}")]);
 
-    // A build that stores it.
     put_gmail(
         &m.playback,
         &gmail_get_url(RIKER),
         &gmail_message(RIKER, &["INBOX"], "Number One"),
     );
-    std::env::set_var(datalib_runtime::build_id::GIT_HASH_ENV, "f00dfacade");
-    let third = run(&m, |_| {}).await;
-    std::env::remove_var(datalib_runtime::build_id::GIT_HASH_ENV);
-    third.expect("third run");
+    run(&m, |_| {}).await.expect("third run");
     assert_eq!(m.gmail_ids().await, ids(&[PICARD, RIKER]));
     assert!(problems(&m).await.is_empty());
 }

@@ -3,7 +3,7 @@
 //! mirror engine, register `Media/` in the CAS. Present when `backup` is
 //! configured; the render processor lives in `datalib_etl_whatsapp_render`.
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};

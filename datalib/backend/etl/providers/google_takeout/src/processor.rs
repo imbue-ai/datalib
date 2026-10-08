@@ -4,7 +4,7 @@
 //! the chat-shaped feeds (Google Chat / Google Voice). The source owns its raw
 //! store (open/commit/checkpoint); the orchestrator only drives `run`.
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};

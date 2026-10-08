@@ -54,6 +54,10 @@ test("a card opened from the Dashboard gets a tab of its own", async ({ page }) 
   await expect(tabs(page)).toHaveCount(2);
   await expect(tabs(page).nth(1)).toHaveClass(/is-selected/);
   await expect(mainCards(page)).toHaveCount(1);
+  // The card fills the tab: no Columns container around it, so no card
+  // header and no "+" strip.
+  await expect(mainCards(page).locator(".ct-card-head")).toHaveCount(0);
+  await expect(page.locator(".ct-main .ct-add")).toHaveCount(0);
 
   // The Dashboard kept its shape.
   await tabs(page).first().click();

@@ -63,7 +63,7 @@ mkdir -p "$stage"
 # files. `datalib-dag`/`datalib-step` keep those exact names:
 # datalib-http resolves them via sibling lookup (http/src/worker.rs
 # resolve_bin), datalib-step looks for `latchkey-curl-router` next to
-# itself (datalib/backend/etl/src/latchkey.rs) and the router for
+# itself (datalib/backend/etl/web/src/latchkey.rs) and the router for
 # `curl-impersonate` next to itself.
 [[ -d "$bin/datalib/backend/bin" ]] || fail "no $bin/datalib/backend/bin — build //datalib/backend:bin first"
 log "copying the binaries from $bin/datalib/backend/bin"

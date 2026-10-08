@@ -1,12 +1,14 @@
-//! What upstream listed, what is held for it, and what is owed: the
-//! state both API downloads (JMAP, Gmail) keep, and the queries over it.
+//! What upstream listed, and what the store writes for a batch the
+//! fetch answered: the state both API downloads (JMAP, Gmail) keep.
 //!
 //! `listed_messages` has a row per message upstream named, keyed by
 //! upstream's own id, with the token of the response that last named it
-//! as changed. `fetched_messages` has a row per message we fetched: the
-//! email row it produced and the token it was fetched for, written in
-//! the transaction that writes the email. A message is owed when the two
-//! disagree, and that is asked of the store each time, never stored.
+//! as changed. It is the one listing that has to be stored: a delta's
+//! answer cannot be asked for again once the token has moved. What is
+//! held for a message is `held_version` on its
+//! `listed_messages_bookkeeping` row, which `datalib_etl_web::owed` writes
+//! in the transaction that writes the email; what is owed is the
+//! difference, asked of the store each time and never stored.
 //! `listed_whole` names the scopes (a mailbox, a label, or the account)
 //! an enumeration has listed to its end. The rule and why:
 //! docs/dev/plans/sync_state.md §2.
@@ -16,6 +18,7 @@ use std::collections::BTreeSet;
 use anyhow::{Context, Result};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw as dr;
+use datalib_etl_web::owed::{self, Listed};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
 use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
@@ -27,17 +30,20 @@ pub const LISTED: &str = "listed_messages";
 
 pub const DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS listed_messages (id TEXT PRIMARY KEY, stamp TEXT NULL)",
-    "CREATE TABLE IF NOT EXISTS fetched_messages (
-        id TEXT PRIMARY KEY,
-        email_id TEXT NULL,
-        fetched_for TEXT NULL,
-        unstorable_by TEXT NULL
-    )",
     "CREATE TABLE IF NOT EXISTS listed_whole (scope TEXT PRIMARY KEY)",
 ];
 
 /// The scope of an enumeration no filter narrows.
 pub const WHOLE_ACCOUNT: &str = "*";
+
+/// How the `emails` row for a message is keyed from upstream's id for
+/// it: the id itself for JMAP, `GmailId`'s key for Gmail.
+pub type EmailIdOf = fn(&str) -> String;
+
+/// [`EmailIdOf`] for JMAP, whose `Email.id` is the row's id.
+pub fn same_id(id: &str) -> String {
+    id.to_string()
+}
 
 /// What naming a message says about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,61 +81,21 @@ pub async fn list_in_tx(
     Ok(())
 }
 
-/// A listed message to fetch, and the stamp the fetch will satisfy.
-#[derive(Debug, Clone)]
-pub struct Owed {
-    pub id: String,
-    pub stamp: Option<String>,
-}
-
-const NOT_HELD_AT_ITS_STAMP: &str = "SELECT l.id, l.stamp FROM listed_messages l
-     LEFT JOIN fetched_messages f ON f.id = l.id
-     LEFT JOIN emails e ON e.id = f.email_id
-     WHERE (f.id IS NULL OR f.fetched_for IS NOT l.stamp";
-
-/// Every listed message not held at its listed stamp, in id order.
-pub async fn owed(pool: &SqlitePool) -> Result<Vec<Owed>> {
-    let rows: Vec<(String, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        // Audited: two constants.
-        "{NOT_HELD_AT_ITS_STAMP}) ORDER BY l.id"
-    )))
-    .fetch_all(pool)
-    .await
-    .context("select the messages owed")?;
+/// Every listed message at its stamp, as `owed::owed` takes it: in id
+/// order, or newest first.
+pub async fn listing(pool: &SqlitePool, newest_first: bool) -> Result<Vec<Listed>> {
+    let sql = if newest_first {
+        "SELECT id, stamp FROM listed_messages ORDER BY id DESC"
+    } else {
+        "SELECT id, stamp FROM listed_messages ORDER BY id"
+    };
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(sql)
+        .fetch_all(pool)
+        .await
+        .context("select the listed messages")?;
     Ok(rows
         .into_iter()
-        .map(|(id, stamp)| Owed { id, stamp })
-        .collect())
-}
-
-/// [`owed`] for a download whose fetch brings the body with the message
-/// (Gmail), newest id first. Also owed: a held message whose `.eml` is
-/// not stored and fits under `cap`, and one a build other than `build`
-/// could not store. One this build could not store is not asked for
-/// again until it is listed anew: its bytes do not change.
-pub async fn owed_with_bodies(
-    pool: &SqlitePool,
-    build: &str,
-    cap: Option<u64>,
-) -> Result<Vec<Owed>> {
-    let rows: Vec<(String, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        // Audited: constants; the build and the cap are bound.
-        "{NOT_HELD_AT_ITS_STAMP}
-            OR (f.unstorable_by IS NOT NULL AND f.unstorable_by != ?1)
-            OR (f.unstorable_by IS NULL AND e.id IS NOT NULL
-                AND (?2 IS NULL OR e.size <= ?2)
-                AND NOT EXISTS (SELECT 1 FROM email_blobs b
-                                WHERE b.blob_id = e.blob_id AND b.blake3 IS NOT NULL)))
-         ORDER BY l.id DESC"
-    )))
-    .bind(build)
-    .bind(cap.map(|c| c as i64))
-    .fetch_all(pool)
-    .await
-    .context("select the messages owed")?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, stamp)| Owed { id, stamp })
+        .map(|(id, stamp)| Listed::new(id, stamp))
         .collect())
 }
 
@@ -141,96 +107,70 @@ pub async fn lists_any(pool: &SqlitePool) -> Result<bool> {
         .context("ask whether any message is listed")
 }
 
-/// Whether anything upstream listed has been fetched.
+/// Whether the store holds any email at all.
 pub async fn holds_any(pool: &SqlitePool) -> Result<bool> {
-    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM fetched_messages WHERE email_id IS NOT NULL)")
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM emails)")
         .fetch_one(pool)
         .await
-        .context("ask whether any message is held")
+        .context("ask whether any email is held")
 }
 
-/// A fetched message: upstream's id for it, the stamp the fetch
-/// satisfies, and the email row it produced.
-pub struct Held {
-    pub id: String,
-    pub stamp: Option<String>,
-    pub row: EmailRow,
-}
-
-/// Write fetched messages: the email rows and their joins, what is held
-/// for each, and the thread rows they belong to.
-pub async fn hold_in_tx(
+/// Write what a batch came to: the email rows and their joins for the
+/// messages that came, the listing and email rows of the messages that
+/// are gone, and the thread rows of both. Returns how many emails went.
+pub async fn write_batch_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     now: &IsoOffsetTimestamp,
-    held: Vec<Held>,
-) -> Result<()> {
-    if held.is_empty() {
-        return Ok(());
-    }
-    let mut rows = Vec::with_capacity(held.len());
+    got: Vec<EmailRow>,
+    gone: &[String],
+    email_id_of: EmailIdOf,
+) -> Result<usize> {
     let mut threads = BTreeSet::new();
-    for h in held {
-        sqlx::query(
-            "INSERT INTO fetched_messages (id, email_id, fetched_for, unstorable_by)
-             VALUES (?, ?, ?, NULL)
-             ON CONFLICT(id) DO UPDATE SET email_id = excluded.email_id,
-                fetched_for = excluded.fetched_for, unstorable_by = NULL",
-        )
-        .bind(&h.id)
-        .bind(h.row.id())
-        .bind(&h.stamp)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("hold message {}", h.id))?;
-        forget_attempts_in_tx(tx, &h.id).await?;
-        threads.insert((h.row.account_id.clone(), h.row.thread_id.clone()));
-        rows.push(h.row);
+    for row in &got {
+        threads.insert((row.account_id.clone(), row.thread_id.clone()));
     }
-    bulk_upsert_in_tx(tx, &rows, now).await?;
-    for row in &rows {
+    bulk_upsert_in_tx(tx, &got, now).await?;
+    for row in &got {
         refresh_email_joins(tx, row).await?;
     }
-    rebuild_threads_in_tx(tx, now, &threads).await
-}
 
-/// Upstream no longer has these messages, or a fetch found them outside
-/// what the download mirrors: the listing, what is held and the email
-/// rows go together. Returns how many emails went.
-pub async fn forget_in_tx(
-    tx: &mut Transaction<'_, Sqlite>,
-    now: &IsoOffsetTimestamp,
-    ids: &[String],
-) -> Result<usize> {
     let mut emails = Vec::new();
-    let mut threads = BTreeSet::new();
-    for id in ids {
-        let held: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT e.id, e.account_id, e.thread_id FROM fetched_messages f
-             JOIN emails e ON e.id = f.email_id WHERE f.id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&mut **tx)
-        .await
-        .with_context(|| format!("look up what is held for message {id}"))?;
-        for sql in [
-            "DELETE FROM fetched_messages WHERE id = ?",
-            "DELETE FROM listed_messages WHERE id = ?",
-        ] {
-            sqlx::query(sql)
-                .bind(id)
-                .execute(&mut **tx)
+    for id in gone {
+        sqlx::query("DELETE FROM listed_messages WHERE id = ?")
+            .bind(id)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("unlist message {id}"))?;
+        let email_id = email_id_of(id);
+        let held: Option<(String, String)> =
+            sqlx::query_as("SELECT account_id, thread_id FROM emails WHERE id = ?")
+                .bind(&email_id)
+                .fetch_optional(&mut **tx)
                 .await
-                .with_context(|| format!("forget message {id}"))?;
-        }
-        forget_attempts_in_tx(tx, id).await?;
-        if let Some((email_id, account_id, thread_id)) = held {
+                .with_context(|| format!("look up the email of message {id}"))?;
+        if let Some(thread) = held {
+            threads.insert(thread);
             emails.push(email_id);
-            threads.insert((account_id, thread_id));
         }
     }
     delete_emails_in_tx(tx, &emails).await?;
     rebuild_threads_in_tx(tx, now, &threads).await?;
     Ok(emails.len())
+}
+
+/// Upstream no longer has these messages: the listing, what is held and
+/// the email rows go together. Returns how many emails went.
+pub async fn forget_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    now: &IsoOffsetTimestamp,
+    ids: &[String],
+    email_id_of: EmailIdOf,
+) -> Result<usize> {
+    let gone = write_batch_in_tx(tx, now, Vec::new(), ids, email_id_of).await?;
+    for id in ids {
+        owed::forget(tx, LISTED, id).await?;
+    }
+    Ok(gone)
 }
 
 /// A thread row is its emails, oldest first: written from the email
@@ -271,54 +211,6 @@ async fn rebuild_threads_in_tx(
         )?);
     }
     bulk_upsert_in_tx(tx, &rows, now).await
-}
-
-/// A fetch of these listed messages failed. They stay owed; this counts
-/// the attempt and gives each a `problems` row, which the fetch that
-/// works clears.
-pub async fn record_failures(pool: &SqlitePool, ids: &[String], err: &str) -> Result<()> {
-    let mut tx = pool.begin().await.context("begin fetch failure tx")?;
-    for id in ids {
-        dr::record_object_error(&mut tx, LISTED, id, err).await?;
-    }
-    tx.commit().await.context("commit fetch failure tx")
-}
-
-/// The message fetched and this build could not make a row of it. That
-/// is an answer for its listed stamp: it is not asked for again by this
-/// build until it is listed anew. An email an earlier fetch produced
-/// stays.
-pub async fn mark_unstorable(pool: &SqlitePool, owed: &Owed, build: &str, err: &str) -> Result<()> {
-    let mut tx = pool.begin().await.context("begin unstorable tx")?;
-    sqlx::query(
-        "INSERT INTO fetched_messages (id, email_id, fetched_for, unstorable_by)
-         VALUES (?, NULL, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET fetched_for = excluded.fetched_for,
-            unstorable_by = excluded.unstorable_by",
-    )
-    .bind(&owed.id)
-    .bind(&owed.stamp)
-    .bind(build)
-    .execute(&mut *tx)
-    .await
-    .with_context(|| format!("mark message {} unstorable", owed.id))?;
-    dr::record_object_error(&mut tx, LISTED, &owed.id, err).await?;
-    tx.commit().await.context("commit unstorable tx")
-}
-
-async fn forget_attempts_in_tx(tx: &mut Transaction<'_, Sqlite>, id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM listed_messages_bookkeeping WHERE id = ?")
-        .bind(id)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("forget the attempts on message {id}"))?;
-    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
-        .bind(datalib_problems::ScopeKind::Entity.as_str())
-        .bind(format!("{LISTED}:{id}"))
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("forget the problem of message {id}"))?;
-    Ok(())
 }
 
 // ── tokens and scopes ───────────────────────────────────────────────
@@ -377,7 +269,7 @@ pub async fn start_over(
             .execute(&mut *tx)
             .await
             .context("list every message again")?;
-        sqlx::query("UPDATE fetched_messages SET fetched_for = NULL")
+        sqlx::query("UPDATE listed_messages_bookkeeping SET held_version = NULL")
             .execute(&mut *tx)
             .await
             .context("let nothing held answer for its listing")?;
@@ -417,6 +309,7 @@ pub async fn close_enumeration(
     now: &IsoOffsetTimestamp,
     scopes: &[String],
     named: Option<&BTreeSet<String>>,
+    email_id_of: EmailIdOf,
 ) -> Result<usize> {
     let mut tx = pool.begin().await.context("begin enumeration close tx")?;
     let mut gone = 0;
@@ -430,7 +323,7 @@ pub async fn close_enumeration(
             .filter(|id| !named.contains(*id))
             .cloned()
             .collect();
-        gone = forget_in_tx(&mut tx, now, &unnamed).await?;
+        gone = forget_in_tx(&mut tx, now, &unnamed, email_id_of).await?;
         datalib_etl::prune::record("listed messages", listed.len(), unnamed.len());
     }
     for scope in scopes {
@@ -444,7 +337,21 @@ pub async fn close_enumeration(
     Ok(gone)
 }
 
-// ── the rung that brings an older store here ────────────────────────
+// ── the rungs that bring an older store here ────────────────────────
+
+/// The tables the second rung made, as it made them. A rung is a record
+/// of the day it was written: the third rung reshapes what this one
+/// leaves.
+const SECOND_RUNG_DDL: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS listed_messages (id TEXT PRIMARY KEY, stamp TEXT NULL)",
+    "CREATE TABLE IF NOT EXISTS fetched_messages (
+        id TEXT PRIMARY KEY,
+        email_id TEXT NULL,
+        fetched_for TEXT NULL,
+        unstorable_by TEXT NULL
+    )",
+    "CREATE TABLE IF NOT EXISTS listed_whole (scope TEXT PRIMARY KEY)",
+];
 
 /// Fills the listing from what an older store holds, so its tokens stay
 /// good and nothing is fetched again: every message `gmail_messages`
@@ -459,7 +366,11 @@ pub async fn migrate_from_cursors(conn: &mut SqliteConnection) -> Result<()> {
         .bind(table)
     };
     let listing_bookkeeping = dr::bookkeeping_ddl_for(LISTED);
-    for ddl in DDL.iter().copied().chain([listing_bookkeeping.as_str()]) {
+    for ddl in SECOND_RUNG_DDL
+        .iter()
+        .copied()
+        .chain([listing_bookkeeping.as_str()])
+    {
         // Audited: this module's own DDL.
         sqlx::query(sqlx::AssertSqlSafe(ddl.to_string()))
             .execute(&mut *conn)
@@ -504,26 +415,80 @@ pub async fn migrate_from_cursors(conn: &mut SqliteConnection) -> Result<()> {
     Ok(())
 }
 
+/// Moves what `fetched_messages` held into the listing's sidecar: every
+/// message it mapped to an email is held at the stamp it was fetched
+/// for, as of when its email was fetched, with the attempts its sidecar
+/// row already counts. A message a build could not store is held at
+/// nothing, so it is owed once more.
+pub async fn migrate_held_into_the_sidecar(conn: &mut SqliteConnection) -> Result<()> {
+    let has_held_version: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('listed_messages_bookkeeping')
+         WHERE name = 'held_version')",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if !has_held_version {
+        sqlx::query("ALTER TABLE listed_messages_bookkeeping ADD COLUMN held_version TEXT NULL")
+            .execute(&mut *conn)
+            .await?;
+    }
+    let (now, _) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    sqlx::query(
+        "INSERT INTO listed_messages_bookkeeping (id, attempt_count, held_version, fetched_at_utc)
+         SELECT f.id, 0, f.fetched_for, coalesce(e.fetched_at_utc, ?1)
+         FROM fetched_messages f LEFT JOIN emails_bookkeeping e ON e.id = f.email_id
+         WHERE f.email_id IS NOT NULL
+         ON CONFLICT(id) DO UPDATE SET held_version = excluded.held_version,
+            fetched_at_utc = excluded.fetched_at_utc",
+    )
+    .bind(&now)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query("DROP TABLE fetched_messages")
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ingest::schema_raw::full_ddl;
     use crate::ingest::RawDb;
 
-    /// A store an older build wrote opens on the second rung with its
+    fn strings(db: &RawDb, sql: &'static str) -> impl std::future::Future<Output = Vec<String>> {
+        let pool = db.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, String>(sql)
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+        }
+    }
+
+    async fn owed_ids(db: &RawDb) -> Vec<String> {
+        owed::owed(db.pool(), LISTED, listing(db.pool(), false).await.unwrap())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|l| l.key)
+            .collect()
+    }
+
+    /// A store an older build wrote climbs the whole ladder with its
     /// tokens intact and nothing to fetch again: what `gmail_messages`
     /// mapped and what a JMAP account's state covered are listed and
     /// held, a Gmail message recorded as unfetched is owed, an mbox
     /// import's email is left alone, and the state the old cursors kept
     /// beside the tokens is gone.
     #[tokio::test]
-    async fn the_second_rung_lists_what_an_older_store_holds() {
+    async fn the_ladder_lists_what_an_older_store_holds() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("j.doltlite_db");
         {
             let mut ddl: Vec<String> = full_ddl()
                 .into_iter()
-                .filter(|sql| !sql.contains("listed_") && !sql.contains("fetched_messages"))
+                .filter(|sql| !sql.contains("listed_"))
                 .collect();
             ddl.push(
                 "CREATE TABLE gmail_messages (gmail_id TEXT PRIMARY KEY, \
@@ -563,40 +528,98 @@ mod tests {
         }
 
         let db = RawDb::open(&path).await.expect("the rungs carry it");
-        let strings = |sql: &'static str| {
-            let pool = db.pool().clone();
-            async move {
-                sqlx::query_scalar::<_, String>(sql)
-                    .fetch_all(&pool)
-                    .await
-                    .unwrap()
-            }
-        };
         assert_eq!(
-            strings("SELECT id FROM listed_messages ORDER BY id").await,
+            strings(&db, "SELECT id FROM listed_messages ORDER BY id").await,
             ["18c9", "18cb", "M1"]
         );
         assert_eq!(
-            strings("SELECT id || '=' || email_id FROM fetched_messages ORDER BY id").await,
-            ["18c9=picard", "M1=M1"]
+            strings(
+                &db,
+                "SELECT id || '=' || coalesce(held_version, '') FROM listed_messages_bookkeeping ORDER BY id"
+            )
+            .await,
+            ["18c9=", "M1="],
+            "held under no stamp, as listed under none"
         );
-        let owed: Vec<String> = owed(db.pool())
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|o| o.id)
-            .collect();
-        assert_eq!(owed, ["18cb"]);
+        assert_eq!(owed_ids(&db).await, ["18cb"]);
         assert_eq!(
-            strings("SELECT scope FROM sync_scope_state ORDER BY scope").await,
+            strings(&db, "SELECT scope FROM sync_scope_state ORDER BY scope").await,
             ["gmail:g@example.test:historyId", "jmap:A1:state:Email"]
         );
-        assert!(strings("SELECT scope_key FROM problems").await.is_empty());
-        assert!(
-            strings("SELECT name FROM sqlite_master WHERE name = 'gmail_messages'")
+        assert!(strings(&db, "SELECT scope_key FROM problems")
+            .await
+            .is_empty());
+        assert!(strings(
+            &db,
+            "SELECT name FROM sqlite_master WHERE name IN ('gmail_messages', 'fetched_messages')"
+        )
+        .await
+        .is_empty());
+        db.close().await;
+    }
+
+    /// A store at the second rung opens on the third with what it held
+    /// in the sidecar: a message held at its stamp stays held, one held
+    /// at an older stamp keeps the attempts counted since, one a build
+    /// could not store and one never fetched are owed, and a sidecar
+    /// written before it had `held_version` gets the column.
+    #[tokio::test]
+    async fn the_third_rung_carries_what_was_held_into_the_sidecar() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("j.doltlite_db");
+        {
+            let mut ddl: Vec<String> = full_ddl()
+                .into_iter()
+                .filter(|sql| !sql.contains("listed_messages_bookkeeping"))
+                .collect();
+            ddl.extend(
+                [
+                    "CREATE TABLE listed_messages_bookkeeping (id TEXT PRIMARY KEY, \
+                     fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, \
+                     last_attempt_at_utc TEXT NULL, last_error TEXT NULL, \
+                     volatile_payload TEXT NULL, tz_offset TEXT NULL)",
+                    SECOND_RUNG_DDL[1],
+                ]
+                .map(str::to_string),
+            );
+            let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+            let pool = dr::open(&path, &ddl).await.unwrap();
+            for sql in [
+                "INSERT INTO listed_messages (id, stamp) VALUES
+                    ('data', 'h2'), ('picard', 'h2'), ('riker', 'h2'), ('worf', 'h2')",
+                "INSERT INTO fetched_messages (id, email_id, fetched_for, unstorable_by) VALUES
+                    ('picard', 'picard', 'h2', NULL),
+                    ('riker', 'riker', 'h1', NULL),
+                    ('worf', NULL, 'h2', 'an older build')",
+                "INSERT INTO listed_messages_bookkeeping (id, attempt_count, last_error)
+                    VALUES ('riker', 3, 'HTTP 500')",
+                "UPDATE _datalib_meta SET value = '2' WHERE key = 'schema_version'",
+            ] {
+                sqlx::query(sql).execute(&pool).await.unwrap();
+            }
+            dr::commit_run(&pool, "the second rung's rows")
                 .await
-                .is_empty()
+                .unwrap();
+            pool.close().await;
+        }
+
+        let db = RawDb::open(&path).await.expect("the third rung carries it");
+        assert_eq!(
+            strings(
+                &db,
+                "SELECT id || '=' || coalesce(held_version, '') || '/' || attempt_count
+                 FROM listed_messages_bookkeeping ORDER BY id"
+            )
+            .await,
+            ["picard=h2/0", "riker=h1/3"]
         );
+        assert_eq!(owed_ids(&db).await, ["data", "riker", "worf"]);
+        assert!(strings(
+            &db,
+            "SELECT name FROM sqlite_master WHERE name = 'fetched_messages'"
+        )
+        .await
+        .is_empty());
         db.close().await;
     }
 }

@@ -48,6 +48,7 @@ pub fn item(
         kind_label: Some(kind_label.to_string()),
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside,
+        branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
         problems: Vec::new(),

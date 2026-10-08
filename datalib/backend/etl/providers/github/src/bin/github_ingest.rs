@@ -27,7 +27,8 @@ struct Args {
     #[arg(long = "scope")]
     scope: Vec<String>,
 
-    /// Only refetch PRs updated in the last N days. 0 = unbounded.
+    /// On a store with data, search only for PRs updated in the last N
+    /// days. 0 = unbounded.
     #[arg(long, default_value_t = 30)]
     refresh_window_days: u32,
 
@@ -41,7 +42,7 @@ struct Args {
     #[arg(long = "pull-request", value_name = "REF")]
     pull_request: Vec<String>,
 
-    /// Ignore sync_state.json and walk the full refresh window.
+    /// Search everything and fetch everything listed.
     #[arg(long)]
     full: bool,
 

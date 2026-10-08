@@ -1,6 +1,6 @@
 //! End-to-end test for the "SMS Backup & Restore" provider.
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use std::fs;
 use std::path::PathBuf;
 
@@ -473,5 +473,147 @@ fn deletions_held_back_are_made_once_every_file_reads() -> Result<()> {
         assert!(problems(&db).await?.is_empty());
         db.close().await;
         Ok::<_, anyhow::Error>(())
+    })
+}
+
+/// A backup rewritten to nothing (0 bytes, bytes that are not XML, or a
+/// copy cut off before its end) read as a clean archive holding fewer
+/// messages, and the prune deleted every message only it held. Each is a
+/// problem on the file and deletes nothing.
+#[test]
+fn a_backup_that_is_recognizably_nothing_deletes_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    let sms = input.join("sms-2369041512000.xml");
+    fs::copy(fixture_root().join("sms-2369041512000.xml"), &sms)?;
+    let whole = fs::read_to_string(&sms)?;
+    let cut_off = whole[..whole.rfind("<sms ").expect("an <sms> element")].to_string();
+    let cache = tmp.path().join("fpcache.sqlite");
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let messages = |db: &RawDb| {
+            let pool = db.pool().clone();
+            async move {
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sms_messages")
+                    .fetch_one(&pool)
+                    .await
+            }
+        };
+        fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(messages(&db).await?, 6);
+
+        for (what, bytes) in [
+            ("an empty file", String::new()),
+            (
+                "bytes that are not XML",
+                "\u{1}\u{2} not a backup".to_string(),
+            ),
+            ("a copy cut off before its end", cut_off),
+        ] {
+            fs::write(&sms, &bytes)?;
+            let s = fetch_dir(&db, &input, &cache).await?;
+            assert_eq!(s.removed, 0, "{what} deleted messages");
+            assert_eq!(messages(&db).await?, 6, "{what} deleted messages");
+            assert!(
+                problems(&db)
+                    .await?
+                    .iter()
+                    .any(|(k, _)| k == "file:sms_backup_restore/xml:sms-2369041512000.xml"),
+                "{what} is a problem on the file"
+            );
+        }
+
+        // An empty backup that says so is a backup of nothing.
+        fs::write(&sms, r#"<?xml version='1.0' ?><smses count="0"></smses>"#)?;
+        let emptied = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(emptied.removed, 6);
+        assert_eq!(messages(&db).await?, 0);
+        assert!(problems(&db).await?.is_empty());
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
+/// The files read were stamped in one transaction and the records no file
+/// held were pruned in a later one. A run that failed between the two left
+/// the rewritten file stamped as read, so no later run read every file
+/// again and the record it dropped was never deleted.
+#[test]
+fn a_run_that_fails_before_its_prune_prunes_on_the_next() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    let sms = input.join("sms-2369041512000.xml");
+    fs::copy(fixture_root().join("sms-2369041512000.xml"), &sms)?;
+    let cache = tmp.path().join("fpcache.sqlite");
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        fetch_dir(&db, &input, &cache).await?;
+
+        let xml = fs::read_to_string(&sms)?;
+        let first = xml.find("<sms ").expect("an <sms> element");
+        let end = first + xml[first..].find("/>").expect("self-closing <sms>") + 2;
+        fs::write(&sms, format!("{}{}", &xml[..first], &xml[end..]))?;
+
+        // The run fails at its prune, the way a crash there would end it.
+        sqlx::query(
+            "CREATE TRIGGER refuse_prune BEFORE DELETE ON sms_messages \
+             BEGIN SELECT RAISE(ABORT, 'crash at the prune'); END",
+        )
+        .execute(db.pool())
+        .await?;
+        assert!(fetch_dir(&db, &input, &cache).await.is_err());
+        sqlx::query("DROP TRIGGER refuse_prune")
+            .execute(db.pool())
+            .await?;
+
+        fetch_dir(&db, &input, &cache).await?;
+        let messages: i64 = sqlx::query_scalar("SELECT count(*) FROM sms_messages")
+            .fetch_one(db.pool())
+            .await?;
+        assert_eq!(messages, 5, "the message the backup dropped is deleted");
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
+/// Reading an unchanged export again must leave the store as it was: a
+/// re-stamped sidecar is a commit, and a bigger store, on every sync.
+#[test]
+fn reading_an_unchanged_export_again_commits_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    fs::create_dir_all(&raw_dir)?;
+    let cache = tmp.path().join("fpcache.sqlite");
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let mut commits = Vec::new();
+        for _ in 0..2 {
+            fetch_dir(&db, &fixture_root(), &cache).await?;
+            commits.push(datalib_etl::doltlite_raw::commit_run(db.pool(), "test").await?);
+        }
+        db.close().await;
+        assert!(commits[0].is_some());
+        assert_eq!(
+            commits[1], None,
+            "reading an unchanged export again changes nothing in the store"
+        );
+        Ok(())
     })
 }

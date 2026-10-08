@@ -18,7 +18,7 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
-use datalib_contact_schema::{ContactHandle, DatalibContact, Medium, Photo};
+use datalib_contact_schema::{is_drawable_photo, ContactHandle, Medium, NormalizedContact, Photo};
 
 use crate::types::ContactDoc;
 
@@ -150,13 +150,34 @@ fn render_one(
         sections,
         edges: Vec::new(),
         // The page is about this person, so it carries them: the index
-        // can then say who any of their handles is.
-        contacts: vec![contact.clone()],
+        // can then say who any of their handles is, and where their
+        // photo is served from.
+        contacts: vec![with_photo_url(contact, m_uuid, photo_rel.as_deref())],
         problems,
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
 
     Ok(photo_written)
+}
+
+/// The contact as the index will hold it: with the photo this render
+/// wrote beside the page as the URL the app serves it at, where it is an
+/// image a browser draws. The index's asset route takes
+/// `<markdown_uuid>/<path relative to the page>`.
+fn with_photo_url(
+    contact: &NormalizedContact,
+    doc_uuid: &str,
+    photo_rel: Option<&str>,
+) -> NormalizedContact {
+    let drawable = matches!(
+        &contact.photo,
+        Some(Photo::Inline { content_type, .. }) if is_drawable_photo(content_type)
+    );
+    let mut out = contact.clone();
+    out.photo_url = photo_rel
+        .filter(|_| drawable)
+        .map(|rel| format!("/applet/unified_index/asset/{doc_uuid}/{rel}"));
+    out
 }
 
 fn output_paths(out_dir: &Path, source_id: &str, doc: &ContactDoc) -> (PathBuf, PathBuf) {
@@ -180,7 +201,7 @@ fn display_or_id(doc: &ContactDoc) -> &str {
 /// The page's field table and the grid row's text, in one order for
 /// every source: where the person is filed, who they are, how to reach
 /// them, then whatever else the source says.
-pub fn table_rows(contact: &DatalibContact) -> Vec<(String, String)> {
+pub fn table_rows(contact: &NormalizedContact) -> Vec<(String, String)> {
     let mut rows: Vec<(String, String)> = Vec::new();
     rows.extend(
         contact
@@ -409,7 +430,7 @@ mod tests {
     use datalib_contact_schema::{ContactKind, Detail};
 
     fn mk_contact() -> ContactDoc {
-        let mut contact = DatalibContact::new(
+        let mut contact = NormalizedContact::new(
             "linkedin",
             "https://www.linkedin.com/in/jlp",
             ContactKind::Person,
@@ -435,7 +456,7 @@ mod tests {
     /// number with no country code is still on it.
     #[test]
     fn the_table_is_one_order_for_every_source() {
-        let mut c = DatalibContact::new("s", "k", ContactKind::Person);
+        let mut c = NormalizedContact::new("s", "k", ContactKind::Person);
         c.note = Some("two\nlines".into());
         c.details = vec![Detail::new("Address (home)", "1 Main St")];
         c.handles = vec![
@@ -561,6 +582,74 @@ mod tests {
         // The profile's account, not the source name: a source name is
         // not a login and polluted every `account:` filter.
         assert_eq!(row.account.as_deref(), Some("jlp@enterprise.test"));
+    }
+
+    /// A photo the source gave is written beside the page and reaches
+    /// the index as the URL the app serves it at; a contact without one
+    /// carries no URL, so the chip draws an initial.
+    #[test]
+    fn a_photo_written_beside_the_page_is_the_contacts_photo_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut with_photo = mk_contact();
+        with_photo.contact.photo = Some(Photo::Inline {
+            content_type: "image/png".to_string(),
+            bytes: b"\x89PNG not really".to_vec(),
+        });
+        let mut without = mk_contact();
+        without.doc_uuid = "33333333-3333-3333-3333-333333333333".to_string();
+        // Written beside the page as the source gave it, but no browser
+        // draws it: no URL, so the chip draws an initial.
+        let mut opaque = mk_contact();
+        opaque.doc_uuid = "44444444-4444-4444-4444-444444444444".to_string();
+        opaque.contact.photo = Some(Photo::Inline {
+            content_type: "application/octet-stream".to_string(),
+            bytes: b"who knows".to_vec(),
+        });
+        let mut got: Vec<RenderedMarkdown> = Vec::new();
+        let mut sink = |r: RenderedMarkdown| -> Result<()> {
+            got.push(r);
+            Ok(())
+        };
+        render_all(
+            &mk_profile(),
+            &[with_photo, without, opaque],
+            dir.path(),
+            "linkedin",
+            &Progress::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let urls: Vec<Option<String>> = got
+            .iter()
+            .map(|r| r.contacts[0].photo_url.clone())
+            .collect();
+        assert_eq!(
+            urls,
+            [
+                Some(
+                    "/applet/unified_index/asset/11111111-1111-1111-1111-111111111111\
+                     /blobs/11111111-1111-1111-1111-111111111111.png"
+                        .to_string()
+                ),
+                None,
+                None,
+            ]
+        );
+        assert!(
+            got[2]
+                .md_path
+                .parent()
+                .unwrap()
+                .join("blobs/44444444-4444-4444-4444-444444444444.bin")
+                .is_file(),
+            "the undrawable photo is still kept beside its page"
+        );
+        let written = got[0]
+            .md_path
+            .parent()
+            .unwrap()
+            .join("blobs/11111111-1111-1111-1111-111111111111.png");
+        assert!(written.is_file(), "the URL names a file beside the page");
     }
 
     /// The sink's answer is the run's answer: a document it refuses fails

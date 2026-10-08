@@ -272,11 +272,16 @@ pub struct SearchResponse {
     /// these as toasts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
+    /// Why the query cannot be read as typed — an unknown key, a word a
+    /// closed key does not take. Often a filter not finished yet, so the
+    /// UI keeps what it showed and says why beside the bar.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused: Vec<String>,
 }
 
 impl SearchResponse {
     /// A request the search could not read: no rows, and why.
-    fn refused(errors: Vec<String>) -> Self {
+    fn unread(errors: Vec<String>) -> Self {
         SearchResponse {
             query_echo: serde_json::json!({}),
             columns: columns::columns(),
@@ -286,6 +291,7 @@ impl SearchResponse {
             next_offset: None,
             at: None,
             errors,
+            refused: Vec::new(),
         }
     }
 }
@@ -332,7 +338,10 @@ async fn search_handler(
     let q = p.q.unwrap_or_default();
     let parsed = parse_query(&q);
     if let Some(why) = parsed.refusal() {
-        return Json(SearchResponse::refused(vec![why]));
+        return Json(SearchResponse {
+            refused: vec![why],
+            ..SearchResponse::unread(Vec::new())
+        });
     }
     let limit = p.limit.unwrap_or(200).min(results::MAX_PAGE);
     let mut errors: Vec<String> = Vec::new();
@@ -360,7 +369,7 @@ async fn search_handler(
         Ok(within) => within.unwrap_or_default(),
         Err(e) => {
             errors.push(e);
-            return Json(SearchResponse::refused(errors));
+            return Json(SearchResponse::unread(errors));
         }
     };
     let spec = PageSpec {
@@ -412,6 +421,7 @@ async fn search_handler(
         next_offset: page.next_offset,
         at: page.at,
         errors,
+        refused: Vec::new(),
     })
 }
 
@@ -433,6 +443,9 @@ pub struct GroupsResponse {
     /// Free text before the first sync has built a qmd index: no groups.
     pub qmd_index_missing: bool,
     pub errors: Vec<String>,
+    /// As on `/search`: why the query cannot be read as typed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub refused: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -456,7 +469,7 @@ async fn groups_handler(
     let parsed = parse_query(&q);
     let mut out = GroupsResponse::default();
     if let Some(why) = parsed.refusal() {
-        out.errors.push(why);
+        out.refused.push(why);
         return Json(out);
     }
     let by = match grouping::parse_by::<GridColumn>(&p.by) {
@@ -653,6 +666,10 @@ async fn ranked(
         within: Vec::new(),
         at,
     };
+    if let Some(list) = s.results.get(&key) {
+        return Ok((list, key.at));
+    }
+    let _turn = s.results.turn(&key).await;
     if let Some(list) = s.results.get(&key) {
         return Ok((list, key.at));
     }
@@ -1495,7 +1512,9 @@ mod tests {
     }
 
     /// A key the search does not have is refused by name, by the search
-    /// and by the groups, rather than quietly matching every row.
+    /// and by the groups, rather than quietly matching every row. It is
+    /// a refusal, not an error: mid-keystroke, `is:do` is a filter not
+    /// yet finished, and the grid toasted every error it was handed.
     #[tokio::test]
     async fn an_unknown_key_is_refused_not_ignored() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1504,17 +1523,20 @@ mod tests {
 
         let r = search(&s, "rank:captain", None, 10, None).await;
         assert!(r.rows.is_empty());
-        assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
-        assert!(r.errors[0].contains("`rank:`"), "{:?}", r.errors);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert_eq!(r.refused.len(), 1, "{:?}", r.refused);
+        assert!(r.refused[0].contains("`rank:`"), "{:?}", r.refused);
 
         let g = groups(&s, "rank:captain", "kind").await;
         assert!(g.groups.is_empty());
-        assert_eq!(g.errors.len(), 1, "{:?}", g.errors);
+        assert!(g.errors.is_empty(), "{:?}", g.errors);
+        assert_eq!(g.refused.len(), 1, "{:?}", g.refused);
 
         let org = search(&s, "org_name:*", None, 10, None).await;
         assert!(
-            org.errors.is_empty(),
-            "a key every column now has: {:?}",
+            org.refused.is_empty() && org.errors.is_empty(),
+            "a key every column now has: {:?} {:?}",
+            org.refused,
             org.errors
         );
     }

@@ -9,12 +9,11 @@ use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
-use datalib_etl::scope_config;
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_lightroom::ingest::sync::{self, SyncRun};
-use datalib_etl_lightroom::ingest::{mirror, MirrorOptions};
+use datalib_etl_lightroom::ingest::{mirror, unpack, MirrorOptions};
 
 struct Fixture {
     dir: tempfile::TempDir,
@@ -293,8 +292,8 @@ async fn each_backup_is_a_commit_dated_when_it_was_taken() -> Result<()> {
     Ok(())
 }
 
-/// A second sync over the same folder has nothing to do, and commits
-/// nothing.
+/// A second sync over the same folder mirrors the newest backup again,
+/// which changes nothing, so it commits nothing.
 #[tokio::test]
 async fn a_folder_with_nothing_new_commits_nothing() -> Result<()> {
     let f = Fixture::new();
@@ -310,8 +309,45 @@ async fn a_folder_with_nothing_new_commits_nothing() -> Result<()> {
 
     let run = f.sync(&options()).await?;
     assert!(run.mirrored.is_empty());
+    assert!(run.last.is_some(), "the newest is mirrored again");
     assert_eq!(run.backups_found, 1);
     assert_eq!(head(&f.read().await).await, before);
+    Ok(())
+}
+
+/// HEAD left on an older state, as a run that failed or was stopped
+/// after replaying an older backup leaves it, is put back on the newest
+/// by the next sync, though the folder has nothing new.
+#[tokio::test]
+async fn a_head_left_behind_is_put_right_by_the_next_sync() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2022-06-15 1400",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[RERATE],
+    )
+    .await;
+    f.sync(&options()).await?;
+
+    let scratch = tempfile::tempdir()?;
+    let older = scratch.path().join("TngCatalog.lrcat");
+    write_catalog(&older, &[]).await;
+    let pool = mirror::open_mirror(&f.store()).await?;
+    let keep_ledger = MirrorOptions {
+        sidecar_tables: vec!["lightroom_snapshots".into()],
+        ..options()
+    };
+    unpack::mirror_file(&pool, &older, &keep_ledger, &Progress::noop()).await?;
+    dr::commit_run(&pool, "an older state, left as HEAD").await?;
+    pool.close().await;
+    assert_eq!(rating_of_picard(&f.read().await).await, Some(5));
+
+    let run = f.sync(&options()).await?;
+    assert!(run.mirrored.is_empty(), "{:?}", run.mirrored);
+    let pool = f.read().await;
+    assert_eq!(rating_of_picard(&pool).await, Some(1), "HEAD is 2022 again");
+    pool.close().await;
     Ok(())
 }
 
@@ -430,8 +466,9 @@ async fn a_backup_is_mirrored_with_the_keys_its_catalog_declares() -> Result<()>
     Ok(())
 }
 
-/// A filter changed with no new backup to carry it: the newest backup is
-/// mirrored again, so HEAD shows the catalog as the filters now say.
+/// A filter changed with no new backup to carry it reaches HEAD: every
+/// sync ends by mirroring the newest backup again under the filters it
+/// is given.
 #[tokio::test]
 async fn a_changed_filter_mirrors_the_newest_backup_again() -> Result<()> {
     let f = Fixture::new();
@@ -455,54 +492,17 @@ async fn a_changed_filter_mirrors_the_newest_backup_again() -> Result<()> {
     assert!(run.mirrored.is_empty(), "{:?}", run.mirrored);
     let pool = f.read().await;
     assert!(!table_exists(&pool, "AgOzSpaceIds").await);
-    assert!(log(&pool)
-        .await
-        .iter()
-        .any(|(m, _)| m.contains("mirrored again under new filters")));
+    assert!(log(&pool).await.iter().any(|(m, _)| m.lines().next()
+        == Some(
+            "download lightroom: backup 2021-03-01 0900/TngCatalog.zip, \
+             mirrored again to put the newest back on top"
+        )));
     let before = head(&pool).await;
     pool.close().await;
 
     let run = f.sync(&narrowed).await?;
-    assert!(run.mirrored.is_empty(), "the new filters are recorded now");
-    assert_eq!(head(&f.read().await).await, before);
-    Ok(())
-}
-
-/// A store synced under an older key rule mirrors its newest backup
-/// again, so its tables take the keys the engine gives them now.
-#[tokio::test]
-async fn a_store_from_an_older_key_rule_mirrors_the_newest_backup_again() -> Result<()> {
-    let f = Fixture::new();
-    f.backup(
-        "2021-03-01 0900",
-        "TngCatalog.lrcat",
-        Some("TngCatalog.zip"),
-        &[],
-    )
-    .await;
-    f.sync(&options()).await?;
-
-    // What a store synced before the rule was recorded has: no `key_rule`.
-    let pool = mirror::open_mirror(&f.store()).await?;
-    let mut scope = scope_config::load(&pool, "backups")
-        .await?
-        .expect("the first sync records its scope");
-    scope
-        .as_object_mut()
-        .and_then(|o| o.remove("key_rule"))
-        .expect("the scope records the key rule");
-    scope_config::store(&pool, "backups", &scope).await?;
-    dr::commit_run(&pool, "a store from an older key rule").await?;
-    pool.close().await;
-
-    // This store already has the keys, so mirroring again changes no row
-    // and commits nothing; `last` is what says it ran.
-    let run = f.sync(&options()).await?;
     assert!(run.mirrored.is_empty(), "{:?}", run.mirrored);
-    assert!(run.last.is_some(), "the newest backup is mirrored again");
-
-    let run = f.sync(&options()).await?;
-    assert!(run.last.is_none(), "the rule is recorded now");
+    assert_eq!(head(&f.read().await).await, before, "nothing new to commit");
     Ok(())
 }
 
@@ -609,9 +609,60 @@ async fn a_newest_that_cannot_go_back_on_top_is_retried_until_it_does() -> Resul
     assert_eq!(problem_keys(&f).await, Vec::<String>::new());
     let pool = f.read().await;
     assert_eq!(rating_of_picard(&pool).await, Some(1), "HEAD is 2022 again");
+    let before = head(&pool).await;
     pool.close().await;
+    f.sync(&options()).await?;
+    assert_eq!(
+        head(&f.read().await).await,
+        before,
+        "and nothing more to commit"
+    );
+    Ok(())
+}
+
+/// The newest backup's folder deleted by hand: HEAD keeps that state
+/// rather than going back to an older backup, and the missing backup is
+/// a problem until a newer one arrives.
+#[tokio::test]
+async fn a_deleted_newest_backup_leaves_head_where_it_is() -> Result<()> {
+    let f = Fixture::new();
+    f.backup(
+        "2021-03-01 0900",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[],
+    )
+    .await;
+    f.backup(
+        "2022-06-15 1400",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[RERATE],
+    )
+    .await;
+    f.sync(&options()).await?;
+
+    std::fs::remove_dir_all(f.backups().join("2022-06-15 1400"))?;
     let run = f.sync(&options()).await?;
-    assert!(run.last.is_none(), "and nothing is left to put back");
+    assert!(run.mirrored.is_empty(), "{:?}", run.mirrored);
+    assert_eq!(
+        problem_keys(&f).await,
+        ["record:lightroom_snapshots:2022-06-15 1400"]
+    );
+    let pool = f.read().await;
+    assert_eq!(rating_of_picard(&pool).await, Some(1), "HEAD is still 2022");
+    pool.close().await;
+
+    f.backup(
+        "2023-01-02 0800",
+        "TngCatalog.lrcat",
+        Some("TngCatalog.zip"),
+        &[RERATE, KEYWORD],
+    )
+    .await;
+    let run = f.sync(&options()).await?;
+    assert_eq!(run.mirrored, ["2023-01-02 0800"]);
+    assert_eq!(problem_keys(&f).await, Vec::<String>::new());
     Ok(())
 }
 
@@ -802,10 +853,10 @@ async fn a_changed_filter_reaches_head_through_the_live_catalog() -> Result<()> 
     Ok(())
 }
 
-/// An unchanged catalog is a stat: no snapshot, no mirror, no commit.
-/// An edit, or a changed filter, mirrors it again.
+/// The catalog is mirrored on every sync; unchanged, it commits nothing.
+/// An edit, or a changed filter, lands.
 #[tokio::test]
-async fn an_unchanged_catalog_is_not_mirrored_again() -> Result<()> {
+async fn an_unchanged_catalog_commits_nothing() -> Result<()> {
     let f = Fixture::new();
     let live = f.live(&[]).await;
     let run = f.sync_catalog(&options(), &live).await?;
@@ -813,7 +864,7 @@ async fn an_unchanged_catalog_is_not_mirrored_again() -> Result<()> {
     let before = head(&f.read().await).await;
 
     let run = f.sync_catalog(&options(), &live).await?;
-    assert!(run.live.is_none() && run.catalog_unchanged, "{run:?}");
+    assert!(run.live.is_some(), "mirrored again: {run:?}");
     assert_eq!(head(&f.read().await).await, before);
 
     let live = f.live(&[RERATE]).await;
@@ -829,6 +880,14 @@ async fn an_unchanged_catalog_is_not_mirrored_again() -> Result<()> {
     assert!(run.live.is_some(), "a changed filter is mirrored");
     assert!(!table_exists(&f.read().await, "AgOzSpaceIds").await);
     Ok(())
+}
+
+#[tokio::test]
+async fn a_missing_catalog_fails_the_run() {
+    let f = Fixture::new();
+    let gone = f.dir.path().join("Gone.lrcat");
+    let err = f.sync_catalog(&options(), &gone).await.unwrap_err();
+    assert!(format!("{err:#}").contains("Gone.lrcat"), "{err:#}");
 }
 
 /// A backup is known by its bytes. Renaming its folder changes nothing;

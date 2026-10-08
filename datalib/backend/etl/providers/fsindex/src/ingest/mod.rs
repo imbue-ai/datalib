@@ -7,6 +7,7 @@ pub mod options;
 pub mod schema_raw;
 pub mod walker;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -18,10 +19,10 @@ use tracing::{info, warn};
 
 use datalib_etl::control::DownloadControl;
 use datalib_etl::download_problems::RecordProblem;
-use datalib_etl::fingerprint_cache::{CachedTree, Fingerprint, FingerprintCache};
-use datalib_etl::fswalk::StampKind;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::fingerprint_cache::{CachedTree, Fingerprint, FingerprintCache};
+use datalib_etl_files::fswalk::StampKind;
 
 pub use db::RawDb;
 
@@ -55,7 +56,7 @@ pub struct FetchOptions {
     pub root: PathBuf,
     pub target_doltlite_branch: Option<String>,
     /// This host's fingerprint cache. Unversioned and disposable —
-    /// see [`datalib_etl::fingerprint_cache`] for why it is not a table
+    /// see [`datalib_etl_files::fingerprint_cache`] for why it is not a table
     /// in the scan store.
     pub cache: FingerprintCache,
     pub no_stamp: bool,
@@ -123,7 +124,7 @@ async fn forget_deleted(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Re
         // cache row for something that is really there.
         match std::fs::symlink_metadata(&abs) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                gone.push(datalib_etl::fingerprint_cache::abs_key(root, rel));
+                gone.push(datalib_etl_files::fingerprint_cache::abs_key(root, rel));
             }
             // Present, or unreadable for some other reason (a
             // permission change on a parent). Either way, not evidence
@@ -188,9 +189,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
 
     opts.progress
         .set_message(&format!("indexing {}", opts.root.display()));
-    let truncate_start = Instant::now();
-    db.reset().await?;
-    let phase_truncate = truncate_start.elapsed();
+    db.clear_other_scan_meta(&opts.source_id).await?;
 
     let default_stamp_kind = if cfg!(unix) {
         StampKind::Inode
@@ -207,6 +206,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
         phase_walk,
         phase_write_total,
         cache_entries_written,
+        seen,
     ) = streaming_pipeline(
         opts.root.clone(),
         default_stamp_kind,
@@ -217,6 +217,18 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
         opts.progress.clone(),
     )
     .await?;
+
+    // Every run re-walks the whole tree, so a row it did not write is an
+    // entry gone from disk, unless it is under one the walk found and
+    // could not read.
+    let prune_start = Instant::now();
+    let held: Vec<&str> = walker_errors
+        .iter()
+        .filter(|e| e.holds)
+        .map(|e| e.id.as_str())
+        .collect();
+    db.prune_unseen(&seen, &held).await?;
+    let phase_prune = prune_start.elapsed();
 
     // Stamping is a post-write enrichment pass, never a separate scan
     // engine. The stream has already written every row; here we walk
@@ -330,7 +342,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
         event = "fsindex_phase_breakdown",
         total_ms = total_elapsed.as_millis() as u64,
         load_caches_ms = phase_load.as_millis() as u64,
-        truncate_ms = phase_truncate.as_millis() as u64,
+        prune_ms = phase_prune.as_millis() as u64,
         walk_ms = phase_walk.as_millis() as u64,
         write_total_ms = phase_write_total.as_millis() as u64,
         scan_meta_ms = phase_scan_meta.as_millis() as u64,
@@ -381,6 +393,8 @@ async fn streaming_pipeline(
     Duration,
     // Fingerprints written back to the host cache.
     u64,
+    // The id of every row written.
+    HashSet<String>,
 )> {
     let (tx, mut rx) = mpsc::channel::<Batch>(BATCH_CHANNEL_CAPACITY);
     let counters = Arc::new(WalkerCounters::default());
@@ -398,7 +412,10 @@ async fn streaming_pipeline(
         let mut total_write = Duration::ZERO;
         let mut batches_written: u64 = 0;
         let mut fingerprints_written: u64 = 0;
+        let mut seen: HashSet<String> = HashSet::new();
         while let Some((files, dirs, fingerprints)) = rx.recv().await {
+            seen.extend(files.iter().map(|f| f.id.clone()));
+            seen.extend(dirs.iter().map(|d| d.id.clone()));
             // Two destinations, deliberately: content to the versioned
             // store, host observations to the unversioned cache.
             let took = writer_db.write_batch(&files, &dirs, &writer_now).await?;
@@ -407,10 +424,11 @@ async fn streaming_pipeline(
             total_write += took;
             batches_written += 1;
         }
-        Ok::<(Duration, u64, u64), anyhow::Error>((
+        Ok::<(Duration, u64, u64, HashSet<String>), anyhow::Error>((
             total_write,
             batches_written,
             fingerprints_written,
+            seen,
         ))
     });
 
@@ -511,6 +529,7 @@ async fn streaming_pipeline(
                 let mut fingerprints = Vec::with_capacity(batch.len());
                 for r in batch {
                     match r.row {
+                        _ if r.held => {}
                         ScanRow::File(f) => files.push(f),
                         ScanRow::Dir(d) => dirs.push(d),
                     }
@@ -537,7 +556,7 @@ async fn streaming_pipeline(
     // walker's `blocking_send` then fails with a generic "channel
     // closed". That masks the real cause. So if the writer errored,
     // surface the writer's error regardless of what the walker said.
-    let (phase_write_total, _batches_written, fingerprints_written) = match writer_join {
+    let (phase_write_total, _batches_written, fingerprints_written, seen) = match writer_join {
         Ok(v) => v,
         Err(writer_err) => {
             return Err(writer_err.context("doltlite writer task failed"));
@@ -571,6 +590,7 @@ async fn streaming_pipeline(
         phase_walk,
         phase_write_total,
         fingerprints_written,
+        seen,
     ))
 }
 
@@ -645,6 +665,7 @@ fn stamp_error(id: &str, e: anyhow::Error) -> walker::WalkerError {
         table: "dirs",
         id: id.to_string(),
         message: format!("could not stamp: {e:#}"),
+        holds: false,
     }
 }
 

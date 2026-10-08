@@ -5,8 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_fsindex::ingest::{self, FetchOptions, FetchSummary, RawDb};
 use tempfile::TempDir;
 
@@ -127,6 +127,77 @@ async fn a_folder_that_would_not_list_is_listed_again() {
     assert_eq!(s.errors, 0, "{s:?}");
     assert_eq!(env.ids("files").await, ["holodeck/program_picard.txt"]);
     assert_eq!(env.problem_keys().await, Vec::<String>::new());
+}
+
+/// A folder that would not list read as a folder emptied: the scan
+/// rebuilt the tables from what it saw, so every row under it went. Its
+/// rows stay as the last scan wrote them until it lists again, and a
+/// file that went from it meanwhile goes then.
+#[tokio::test]
+async fn a_folder_that_would_not_list_keeps_its_rows() {
+    let env = Env::new().await;
+    env.write("holodeck/program_picard.txt", "Dixon Hill");
+    env.write("holodeck/program_data.txt", "Sherlock Holmes");
+    env.write("bridge/viewscreen.txt", "on screen");
+    env.scan(false).await;
+    let dirs = env.ids("dirs").await;
+
+    // A new file moves the folder's mtime, so the scan must list it
+    // rather than take its children from the cache.
+    env.write("holodeck/program_worf.txt", "Klingon calisthenics");
+    let holodeck = env.root.join("holodeck");
+    set_mode(&holodeck, 0o000);
+    if fs::read_dir(&holodeck).is_ok() {
+        set_mode(&holodeck, 0o755);
+        return;
+    }
+    fs::remove_file(env.root.join("bridge/viewscreen.txt")).unwrap();
+    env.scan(false).await;
+    set_mode(&holodeck, 0o755);
+    assert_eq!(
+        env.ids("files").await,
+        ["holodeck/program_data.txt", "holodeck/program_picard.txt"],
+        "the folder's files stay; the one that went from a folder that listed goes"
+    );
+    assert_eq!(env.ids("dirs").await, dirs);
+    let entries: i64 = sqlx::query_scalar("SELECT entries FROM dirs WHERE id = 'holodeck'")
+        .fetch_one(env.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(entries, 2, "the folder's own row is the last scan's");
+    assert_eq!(env.problem_keys().await, ["record:dirs:holodeck"]);
+
+    fs::remove_file(env.root.join("holodeck/program_data.txt")).unwrap();
+    env.scan(false).await;
+    assert_eq!(
+        env.ids("files").await,
+        ["holodeck/program_picard.txt", "holodeck/program_worf.txt"]
+    );
+    assert_eq!(env.problem_keys().await, Vec::<String>::new());
+}
+
+/// A changed file that would not read lost its row; it keeps the row the
+/// last scan wrote until it reads.
+#[tokio::test]
+async fn a_file_that_would_not_read_keeps_its_row() {
+    let env = Env::new().await;
+    env.write("engineering/warp_core.txt", "dilithium");
+    env.scan(false).await;
+
+    env.write("engineering/warp_core.txt", "dilithium, recrystallized");
+    let core = env.root.join("engineering/warp_core.txt");
+    set_mode(&core, 0o000);
+    if fs::read(&core).is_ok() {
+        set_mode(&core, 0o644);
+        return;
+    }
+    env.scan(false).await;
+    set_mode(&core, 0o644);
+    assert_eq!(env.ids("files").await, ["engineering/warp_core.txt"]);
+    assert_eq!(
+        env.problem_keys().await,
+        ["record:files:engineering/warp_core.txt"]
+    );
 }
 
 fn set_mode(path: &Path, mode: u32) {

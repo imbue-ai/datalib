@@ -70,7 +70,9 @@ pub fn from_doc(doc: &Document) -> Option<String> {
         }
         hasher.update(&buf);
     }
-    Some(datalib_etl::fswalk::to_hex(hasher.finalize().as_bytes()))
+    Some(datalib_etl_files::fswalk::to_hex(
+        hasher.finalize().as_bytes(),
+    ))
 }
 
 fn catalog_id(doc: &Document) -> Option<ObjectId> {

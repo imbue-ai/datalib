@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { EVERY_ROW, clickRowByUuid, inDocFrame } from "./grid-helpers";
+import { EVERY_ROW, selectRowByUuid, inDocFrame } from "./grid-helpers";
 
 // Clicking a grid row opens that row's document as a column on the
 // right with the corresponding section highlighted and scrolled into
@@ -75,10 +75,10 @@ test("row clicks highlight and scroll to the right message", async ({ page, requ
   await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
-  await clickRowByUuid(page, chosen!.uuidA);
+  await selectRowByUuid(page, chosen!.uuidA);
   await assertSelectedVisible(page, chosen!.uuidA);
 
-  await clickRowByUuid(page, chosen!.uuidB);
+  await selectRowByUuid(page, chosen!.uuidB);
   await assertSelectedVisible(page, chosen!.uuidB);
   // The previous selection is gone — exactly one selected section.
   // The previous selection is gone from every document frame.

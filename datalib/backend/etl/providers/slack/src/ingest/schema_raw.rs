@@ -1,12 +1,8 @@
 //! Raw-store schema for the Slack provider.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
-use datalib_etl::bulk::BulkUpsertable;
-use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
+use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
-use sqlx::query::Query;
-use sqlx::sqlite::SqliteArguments;
-use sqlx::Sqlite;
 
 /// Names of the entity / bookkeeping tables, in the order they should
 /// be iterated for full-table operations (truncate, full-DDL
@@ -17,7 +13,7 @@ pub const DATA_TABLES: &[&str] = &[
     "users",
     "channels",
     "messages",
-    "replies_pages",
+    THREADS,
     "slack_attachments",
     "channel_read_states",
     "bookmarks",
@@ -192,46 +188,16 @@ pub const MESSAGES_BY_CHANNEL_TS_INDEX_DDL: &str =
 pub const MESSAGES_BY_THREAD_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS messages_by_thread ON messages(thread_root_uuid)";
 
-/// `replies_pages` — what the store holds of each thread's replies: one
-/// row per thread, keyed like its root message
-/// ([`slack_thread_key`]). `latest_reply` is the newest reply the last
-/// whole read of the thread reached, and null on a thread only ever
-/// tried; a failed read is in this row's sidecar. A thread is owed while
-/// its root lists a newer `latest_reply` than this
-/// (`RawDb::threads_owed`).
-pub const REPLIES_PAGES_DDL: &str = "CREATE TABLE IF NOT EXISTS replies_pages (
-    id           TEXT PRIMARY KEY,
-    channel_id   TEXT NOT NULL,
-    thread_ts    TEXT NOT NULL,
-    latest_reply TEXT NULL
-)";
+/// `threads` — one row per thread whose replies have been asked for,
+/// keyed like its root message ([`slack_thread_key`]). The row is only
+/// its id: what the thread is held at, the `latest_reply` its replies
+/// were last read whole for, is `held_version` in its sidecar
+/// (`datalib_etl_web::owed`), and a failed read is an attempt there. Its own
+/// row, rather than the root message's, so that a history page storing
+/// the root again does not clear a read that failed.
+pub const THREADS: &str = "threads";
 
-#[derive(Debug, Clone)]
-pub struct RepliesPagesRow {
-    pub id: String,
-    pub channel_id: String,
-    pub thread_ts: String,
-    pub latest_reply: Option<String>,
-}
-
-impl BulkUpsertable for RepliesPagesRow {
-    const TABLE: &'static str = "replies_pages";
-    const TYPED_COLUMNS: &'static [&'static str] = &["channel_id", "thread_ts", "latest_reply"];
-    const PAYLOAD_COLUMN: Option<&'static str> = None;
-
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn bind_into<'q>(
-        &'q self,
-        q: Query<'q, Sqlite, SqliteArguments>,
-    ) -> Query<'q, Sqlite, SqliteArguments> {
-        q.bind(&self.id)
-            .bind(&self.channel_id)
-            .bind(&self.thread_ts)
-            .bind(self.latest_reply.as_deref())
-    }
-}
+pub const THREADS_DDL: &str = "CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY)";
 
 /// `slack_attachments` — N:M edge between one Slack message's
 /// attachment slot and a `cas_objects` blob. Replaces this provider's
@@ -330,6 +296,67 @@ pub fn split_key(key: &str) -> Option<(&str, &str, &str)> {
     Some((it.next()?, it.next()?, it.next()?))
 }
 
+/// The raw store's migration ladder (etl/README.md §"The migration
+/// ladder").
+pub const LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "a thread's held version lives in its sidecar",
+    apply: |conn| Box::pin(replies_pages_into_threads(conn)),
+}];
+
+/// Rung 1. `replies_pages` held one row per thread with the
+/// `latest_reply` its last whole read reached, null on a thread only
+/// ever tried, and its sidecar carried the attempts. Each becomes a
+/// `threads` row held at that `latest_reply`, with the sidecar carried
+/// over; each problem row is rekeyed; the old table goes.
+async fn replies_pages_into_threads(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
+    let has = |table: &'static str| {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+        )
+        .bind(table)
+    };
+    for ddl in [THREADS_DDL.to_string(), dr::bookkeeping_ddl_for(THREADS)] {
+        // Audited: this module's own DDL.
+        sqlx::query(sqlx::AssertSqlSafe(ddl))
+            .execute(&mut *conn)
+            .await?;
+    }
+    if !has("replies_pages").fetch_one(&mut *conn).await? {
+        return Ok(());
+    }
+    sqlx::query("INSERT OR IGNORE INTO threads (id) SELECT id FROM replies_pages")
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query(
+        "INSERT OR REPLACE INTO threads_bookkeeping \
+            (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, \
+             volatile_payload, tz_offset, held_version) \
+         SELECT r.id, b.fetched_at_utc, COALESCE(b.attempt_count, 0), b.last_attempt_at_utc, \
+                b.last_error, b.volatile_payload, b.tz_offset, r.latest_reply \
+         FROM replies_pages r LEFT JOIN replies_pages_bookkeeping b ON b.id = r.id",
+    )
+    .execute(&mut *conn)
+    .await?;
+    if has("problems").fetch_one(&mut *conn).await? {
+        sqlx::query(
+            "UPDATE problems \
+             SET scope_key = 'threads:' || substr(scope_key, length('replies_pages:') + 1) \
+             WHERE scope_kind = ? AND instr(scope_key, 'replies_pages:') = 1",
+        )
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .execute(&mut *conn)
+        .await?;
+    }
+    for sql in [
+        "DROP TABLE replies_pages",
+        "DROP TABLE IF EXISTS replies_pages_bookkeeping",
+    ] {
+        sqlx::query(sql).execute(&mut *conn).await?;
+    }
+    Ok(())
+}
+
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         WorkspaceRow::ddl(),
@@ -338,8 +365,8 @@ pub fn full_ddl() -> Vec<String> {
         MessageRow::ddl(),
         MESSAGES_BY_CHANNEL_TS_INDEX_DDL.to_string(),
         MESSAGES_BY_THREAD_INDEX_DDL.to_string(),
-        REPLIES_PAGES_DDL.to_string(),
-        datalib_etl::coverage::DDL.to_string(),
+        THREADS_DDL.to_string(),
+        datalib_etl_web::coverage::DDL.to_string(),
         ChannelReadStateRow::ddl(),
         BookmarkRow::ddl(),
         BOOKMARKS_BY_CHANNEL_INDEX_DDL.to_string(),

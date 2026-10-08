@@ -6,12 +6,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use datalib_etl::http::{fixture_key, HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
-use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{write_fixture, Synthesizer};
 use datalib_etl_chatgpt::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_chatgpt::synthesize::ChatgptSynth;
+use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::retry::{self, RetryGuard};
+use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -174,6 +174,7 @@ async fn part_of_a_sync_that_fails_is_a_problem_row() {
     a_later_page_that_is_not_a_listing_prunes_nothing().await;
     a_named_conversation_that_fails_costs_only_itself().await;
     a_pruned_conversation_takes_its_problem_with_it().await;
+    a_listed_conversation_whose_detail_is_missing_keeps_what_is_held().await;
     a_failed_attachment_says_why_and_is_tried_again_while_unchanged().await;
     a_file_chatgpt_no_longer_has_is_not_asked_for_again().await;
     a_rate_limit_on_a_file_ends_the_walk().await;
@@ -199,12 +200,8 @@ async fn a_rate_limit_is_a_phase_row_until_the_rest_is_fetched() {
     let problems = acct.problems().await;
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert_eq!(problems[0].0, "phase:conversations");
-    assert!(
-        problems[0]
-            .1
-            .contains("rate-limited after 1 fetched; 2 left"),
-        "{problems:?}"
-    );
+    // The sample shows the cause first; the counts are the summary's.
+    assert!(problems[0].1.contains("rate-limited"), "{problems:?}");
 
     acct.list(&convs);
     let s = acct.run(&[]).await.unwrap();
@@ -345,6 +342,29 @@ async fn a_pruned_conversation_takes_its_problem_with_it() {
     assert_eq!(acct.keys().await, Vec::<String>::new());
 }
 
+/// A conversation the listing still names, whose detail answers 404, was
+/// deleted from the mirror on every run while the listing kept naming it.
+/// Only a complete listing that leaves it out says it is gone.
+async fn a_listed_conversation_whose_detail_is_missing_keeps_what_is_held() {
+    let acct = Account::new(&[conversation("c-a", 1.0)]);
+    acct.run(&[]).await.unwrap();
+    assert_eq!(acct.stored_conversations().await, 1);
+
+    acct.list(&[conversation("c-a", 2.0)]);
+    acct.answer(&conversation_request("c-a"), 404);
+    acct.run(&[]).await.unwrap();
+    assert_eq!(
+        acct.stored_conversations().await,
+        1,
+        "what the mirror held stays while the listing names it"
+    );
+    assert_eq!(acct.keys().await, ["conversations:c-a"]);
+
+    acct.list(&[conversation("c-a", 2.0)]);
+    acct.run(&[]).await.unwrap();
+    assert_eq!(acct.keys().await, Vec::<String>::new());
+}
+
 /// An attachment's row said "no bytes" whatever went wrong, and was tried
 /// again only when its conversation changed.
 async fn a_failed_attachment_says_why_and_is_tried_again_while_unchanged() {
@@ -419,13 +439,15 @@ async fn a_file_chatgpt_no_longer_has_is_not_asked_for_again() {
 }
 
 /// A rate limit on a file was an ordinary failure, so the walk went on
-/// with one refused request and one row per file after it.
+/// with one refused request and one row per file after it. The
+/// conversations land first now, so the limit ends the attachment loop
+/// with the conversations kept and every file left owed.
 async fn a_rate_limit_on_a_file_ends_the_walk() {
     let acct = Account::new(&[with_file("c-a"), with_file("c-b")]);
     acct.answer(&file_metadata(), 429);
     let s = acct.run(&[]).await.unwrap();
-    assert_eq!((s.fetched, s.failed_blobs), (0, 0), "{s:?}");
-    assert_eq!(acct.keys().await, ["phase:conversations"]);
+    assert_eq!((s.fetched, s.failed_blobs), (2, 0), "{s:?}");
+    assert_eq!(acct.keys().await, ["phase:attachments"]);
 }
 
 /// A rate limit that ends a `conv_uuids` run before an entry leaves that

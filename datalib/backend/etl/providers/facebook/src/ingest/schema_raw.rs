@@ -30,13 +30,16 @@ pub struct MediaBlobRow {
     pub blake3: Option<String>,
 }
 
-pub fn media_ddl() -> Vec<String> {
+/// The tables every store has: the media edge, and `ingested_files`,
+/// which names the chunk files each record table was last read from.
+pub fn store_ddl() -> Vec<String> {
     use datalib_etl::blob_cas::CasEdgeRow as _;
     use datalib_etl::bulk::BulkUpsertable as _;
     let mut out = MediaBlobRow::all_ddl();
     out.push(datalib_etl::doltlite_raw::bookkeeping_ddl_for(
         MediaBlobRow::TABLE,
     ));
+    out.push(datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string());
     out
 }
 
@@ -45,7 +48,7 @@ pub fn media_ddl() -> Vec<String> {
 /// Facebook splits a long file on
 /// (`your_posts__check_ins__photos_and_videos_1.json`, `album/0.json`),
 /// and every chunk belongs in the one table.
-pub use datalib_etl::export_files::table_name as canonical_table;
+pub use datalib_etl_files::export_files::table_name as canonical_table;
 
 pub fn facebook_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"facebook.datalib")

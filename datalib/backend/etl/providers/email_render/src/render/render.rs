@@ -460,6 +460,7 @@ fn build_chat(
             kind_label: None,
             source_ref: Some(UpstreamRef::new(email_id.entity_kind, email_id.natural_key)),
             is_aside: false,
+            branch: Vec::new(),
             unread,
             recipients: parsed_eml.recipients.clone(),
             problems,

@@ -199,6 +199,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
             kind_label: Some(kind_for_message(&room.network, &m.event_type)),
             source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
             is_aside: false,
+            branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
             problems: Vec::new(),
@@ -224,6 +225,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         kind_label: Some(kind_for_message(&room.network, &m.event_type)),
         source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
         is_aside: false,
+        branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
         problems: Vec::new(),
@@ -257,6 +259,9 @@ fn to_reaction(source_id: &str, r: &Event) -> NormalizedReaction {
         // Beeper's own event_uuid already collapses sender+target+emoji
         // on the source side, so it is the reaction's identity.
         reaction_uuid: ids::event(source_id, &r.native_event_id, r.timestamp_ms).uuid,
+        // A Matrix user id has no handle kind yet (contacts.md's table
+        // lists `beeper` as a later one).
+        reactor_handle: None,
         reactor_display: r.sender_label.clone().unwrap_or_else(|| "?".into()),
         emoji: r.reaction_emoji.clone().unwrap_or_else(|| "?".into()),
         date_ms: Some(r.timestamp_ms),

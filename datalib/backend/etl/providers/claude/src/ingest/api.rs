@@ -1,15 +1,16 @@
 //! Claude (claude.ai) API transport. Every request goes through
-//! [`datalib_etl::http::latchkey_curl`], which captures the full
+//! [`datalib_etl_web::http::latchkey_curl`], which captures the full
 //! response (status + every header + body) and supports playback from
 //! disk fixtures. Mirrors `src/ingest/claude_web.py:_get`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
 use tracing::instrument;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const BASE: &str = "https://claude.ai/api";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(120);
@@ -28,22 +29,15 @@ pub enum ClaudeError {
     Permanent(String),
 }
 
+/// Requests go out from `&self`, so the fetch loop's `Fetcher` can hold
+/// one client; the counts are atomics for the same reason.
+#[derive(Default)]
 pub struct ClaudeClient {
-    pub requests: u64,
-    pub network_seconds: f64,
+    requests: AtomicU64,
+    network_ms: AtomicU64,
     /// The source's latchkey settings, forwarded onto every request this
     /// client issues (see `HttpRequest::latchkey`).
     latchkey: LatchkeySettings,
-}
-
-impl Default for ClaudeClient {
-    fn default() -> Self {
-        Self {
-            requests: 0,
-            network_seconds: 0.0,
-            latchkey: LatchkeySettings::default(),
-        }
-    }
 }
 
 impl ClaudeClient {
@@ -58,16 +52,35 @@ impl ClaudeClient {
         }
     }
 
+    /// The identity this client authenticates as, for a file's bytes,
+    /// which the fetch builds as its own `HttpRequest`.
+    pub fn latchkey(&self) -> &LatchkeySettings {
+        &self.latchkey
+    }
+
+    pub fn requests(&self) -> u64 {
+        self.requests.load(Ordering::Relaxed)
+    }
+
+    pub fn network_seconds(&self) -> f64 {
+        self.network_ms.load(Ordering::Relaxed) as f64 / 1000.0
+    }
+
+    /// Counts a request this client did not make through [`Self::get`].
+    pub fn count(&self, duration_ms: u64) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        self.network_ms.fetch_add(duration_ms, Ordering::Relaxed);
+    }
+
     #[instrument(skip(self), fields(path = path))]
-    pub async fn get(&mut self, path: &str) -> Result<Value, ClaudeError> {
+    pub async fn get(&self, path: &str) -> Result<Value, ClaudeError> {
         let url = format!("{BASE}{path}");
         let req = HttpRequest::get(HttpService::Claude, &url)
             .header("Accept", "application/json")
             .latchkey(self.latchkey.clone())
             .timeout(LATCHKEY_TIMEOUT);
         let resp = latchkey_curl(&req).await.map_err(map_transport_error)?;
-        self.network_seconds += (resp.duration_ms as f64) / 1000.0;
-        self.requests += 1;
+        self.count(resp.duration_ms);
 
         let body = resp.body_str();
         if resp.status == 403 {
@@ -95,18 +108,18 @@ impl ClaudeClient {
         Ok(value)
     }
 
-    pub async fn current_account(&mut self) -> Result<Value, ClaudeError> {
+    pub async fn current_account(&self) -> Result<Value, ClaudeError> {
         self.get("/account").await
     }
 
-    pub async fn list_orgs(&mut self) -> Result<Vec<Value>, ClaudeError> {
+    pub async fn list_orgs(&self) -> Result<Vec<Value>, ClaudeError> {
         let v = self.get("/organizations").await?;
         v.as_array()
             .cloned()
             .ok_or_else(|| ClaudeError::Permanent("/organizations: expected array".to_string()))
     }
 
-    pub async fn list_conversations(&mut self, org_uuid: &str) -> Result<Vec<Value>, ClaudeError> {
+    pub async fn list_conversations(&self, org_uuid: &str) -> Result<Vec<Value>, ClaudeError> {
         let v = self
             .get(&format!("/organizations/{org_uuid}/chat_conversations"))
             .await?;
@@ -120,7 +133,7 @@ impl ClaudeClient {
     /// `GET /organizations/{org}/projects` — every project in one org.
     /// Like the conversation listing, a `403` here means "no project
     /// permission for this org" and is the caller's to swallow.
-    pub async fn list_projects(&mut self, org_uuid: &str) -> Result<Vec<Value>, ClaudeError> {
+    pub async fn list_projects(&self, org_uuid: &str) -> Result<Vec<Value>, ClaudeError> {
         let v = self
             .get(&format!("/organizations/{org_uuid}/projects"))
             .await?;
@@ -136,7 +149,7 @@ impl ClaudeClient {
     /// doc carries its full text inline in `content`, so there is no
     /// second fetch and nothing to put in the blob CAS.
     pub async fn list_project_docs(
-        &mut self,
+        &self,
         org_uuid: &str,
         project_uuid: &str,
     ) -> Result<Vec<Value>, ClaudeError> {
@@ -148,7 +161,7 @@ impl ClaudeClient {
     }
 
     pub async fn get_conversation(
-        &mut self,
+        &self,
         org_uuid: &str,
         conv_uuid: &str,
     ) -> Result<Value, ClaudeError> {

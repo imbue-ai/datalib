@@ -28,7 +28,7 @@ async function openSlack(page: Page) {
   await page.goto("/data_sources");
   await page.getByRole("button", { name: "Add source" }).click();
   await wizard(page)
-    .locator(".wiz-tile", { hasText: "Mirror channels and DMs from one Slack workspace." })
+    .locator(".wiz-tile", { hasText: "Copy channels and DMs from one Slack workspace." })
     .click();
 }
 

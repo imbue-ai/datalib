@@ -144,6 +144,16 @@ CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "|00000000-0000-89b3-8bed-0eecc97d45ce"  # conversation c0000004's row
     "||fetch_failed|no recorded response: GET https://claude.ai/api/fake/files/f0000001-1701-4d00-80…"
 )
+# A file Claude's sandbox made and sent names no URL to fetch it from;
+# how claude.ai serves such a file is not known yet. Real ones say the same.
+CLAUDE_SANDBOX_FILE_WITHOUT_URL = (
+    "a361236d-3cfc-57ee-be26-fdd7c1a9b1da"
+    "|warning|fetch|entity"
+    "|claude_attachments:c0000008-1701-4d00-8000-00000000c008"
+    "#f8000004-1701-4d00-8000-0000000f8004"
+    "|00000000-0000-8c06-8231-9340b6e3de70"  # conversation c0000008's row
+    "||not_found|the file has no preview URL"
+)
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
     "1c9f7753-ba2d-5a9e-8fbb-b9b6a0d5ad13"
     "|warning|fetch|entity"
@@ -178,7 +188,11 @@ TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
     "|http://maps.google.com/?q=Quark%27s+Bar,+Deep+Space+Nine"
 )
 EXPECTED_PROBLEMS = {
-    "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
+    "claude-api": [
+        POISONED_PROBLEM,
+        CLAUDE_ATTACHMENT_WITHOUT_BYTES,
+        CLAUDE_SANDBOX_FILE_WITHOUT_URL,
+    ],
     "facebook": [FACEBOOK_VIDEO_NOT_IN_EXPORT],
     "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
     "google-takeout": [
@@ -1045,6 +1059,143 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "every source that knows people put them in the index",
         )
+        # WhatsApp's account of a person is the phone's address book:
+        # every name its entries give, then the name they gave
+        # themselves, keyed by the number — reached through a linked id
+        # (Data writes as `…@lid`, mapped to his number) as well as the
+        # number itself. Geordi has only a `wa_name`, and it still counts.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT h.handle || '|' || json_extract(c.contact_json, '$.names') "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'whatsapp' AND h.handle IN "
+                "('tel:+17015550102', 'tel:+17015550103', 'tel:+17015550104') "
+                "GROUP BY 1 ORDER BY 1;",
+            ),
+            [
+                'tel:+17015550102|["William Riker","Will Riker (Starfleet)","Number One"]',
+                'tel:+17015550103|["Data"]',
+                'tel:+17015550104|["Geordi La Forge"]',
+            ],
+            "WhatsApp's address book, as each chat's contacts",
+        )
+        # What only the provider's account says: an address-book entry's
+        # company and title (the baseline has names and counts alone),
+        # and a name from given and family name. Troi only reacts, so she
+        # reaches the index as a reactor (no items written) under the
+        # account her entry gives.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT h.handle || '|' "
+                "|| coalesce(json_extract(c.contact_json, '$.org'), '') || '|' "
+                "|| coalesce(json_extract(c.contact_json, '$.title'), '') "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550103';",
+            ),
+            ["tel:+17015550103|Starfleet|Second Officer"],
+            "Data's company and title, from the address book alone",
+        )
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT h.handle || '|' || json_extract(c.contact_json, '$.names') || '|' "
+                "|| json_extract(c.contact_json, '$.org') || '|' "
+                "|| json_extract(c.contact_json, '$.title') || '|' || c.seen_items "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550106';",
+            ),
+            ['tel:+17015550106|["Deanna Troi"]|Starfleet|Counselor|0'],
+            "a WhatsApp reactor who writes nothing, under her address-book entry",
+        )
+        # A 1:1 chat leaves an incoming reaction's sender empty, as it does
+        # a message's: the chat's person reacted. The account's own
+        # reaction names nobody.
+        riker_chat = self._markdown("whatsapp", "private word about Commander Data")
+        self.assertIn(
+            '🖖 [William Riker](tel:+17015550102 "William Riker (+17015550102)")',
+            riker_chat,
+            "a 1:1 reaction is the chat's person, as a chip",
+        )
+        self.assertIn("👍 Me</span>", riker_chat, "the account's own reaction is Me")
+        # A Slack reactor with no profile and no message: in the document
+        # all the same, under the id Slack gave, having written nothing.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.name || '|' || c.seen_items "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "WHERE h.handle = 'slack:T_NCC1701D/U_TROI';",
+            ),
+            ["U_TROI|0"],
+            "a Slack reactor who writes nothing",
+        )
+        # A card's photo is written beside its page and the index holds
+        # where the app serves it from, so a chip can draw it; a card
+        # without one carries no URL. Only `Bridge.vcf`'s two cards have one.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url') "
+                "  = '/applet/unified_index/asset/' || c.markdown_uuid || '/blobs/' "
+                "    || c.markdown_uuid || '.png', 'none') "
+                "FROM source_contacts c JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'tng_contacts' "
+                "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Worf') ORDER BY 1;",
+            ),
+            ["Jean-Luc Picard|1", "William T. Riker|1", "Worf|none"],
+            "a card's photo, as the URL the index serves it at",
+        )
+        # Signal ties a number to an ACI: Riker's account carries both,
+        # so a link made through either finds the other; Q, whom the
+        # backup knows by ACI alone, has the ACI as his handle; Guinan,
+        # known by PNI alone, has none and is not a person the index
+        # knows.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT h.handle || '|' || c.name || '|' "
+                "|| (SELECT group_concat(json_extract(j.value, '$.handle'), ' ') "
+                "    FROM json_each(c.contact_json, '$.handles') j) "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'signal' AND (c.name IN ('Will Riker', 'Q', 'Guinan') "
+                "OR h.handle LIKE 'signal_aci:%') GROUP BY 1 ORDER BY 1;",
+            ),
+            [
+                (
+                    "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c|Will Riker|"
+                    "tel:+17015550101 signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+                (
+                    "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f|Q|"
+                    "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f"
+                ),
+                (
+                    "tel:+17015550101|Will Riker|"
+                    "tel:+17015550101 signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+            ],
+            "Signal's account of a person: number and ACI together",
+        )
+        # A Slack mention is a chip link: the viewer resolves the href to
+        # the person, and any other markdown viewer shows a link whose
+        # title says who it names (docs/dev/plans/chips.md).
+        self.assertIn(
+            "[@Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "
+            '"@Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)"), I must object',
+            self._markdown("slack", "beaming down unarmed"),
+            "a <@U…> mention in a Slack body renders as a chip link",
+        )
         self.assertEqual(
             self._diff_shape(CONTACTS_DIFF_GROUP),
             {
@@ -1147,7 +1298,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             worf,
             "a word edit inside a chat message",
         )
-        self.assertIn("<ins>🛡️ Jean-Luc Picard</ins>", worf, "the reaction added")
+        # The reactor is a chip link (docs/dev/plans/chips.md), so the
+        # added reaction carries Picard's Slack handle.
+        self.assertIn(
+            "<ins>🛡️ [Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "
+            '"Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)")</ins>',
+            worf,
+            "the reaction added",
+        )
 
         # PDFs specifically: 4 renderable documents, 5 pages between
         # them (the scanned blueprints are recorded but not rendered,

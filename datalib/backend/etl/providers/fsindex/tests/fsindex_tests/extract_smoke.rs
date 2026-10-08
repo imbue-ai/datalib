@@ -6,9 +6,9 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::{EntryKind, FingerprintCache};
-use datalib_etl::fswalk::StampKind;
 use datalib_etl::progress::Progress;
+use datalib_etl_files::fingerprint_cache::{EntryKind, FingerprintCache};
+use datalib_etl_files::fswalk::StampKind;
 use datalib_etl_fsindex::ingest::{self, FetchOptions, RawDb};
 use sqlx::Row;
 use tempfile::TempDir;
@@ -209,7 +209,7 @@ async fn initial_scan_and_incremental_rescan() {
     write(&root.join("hello.txt"), b"hello world\n");
     // Add a new file under subdir.
     write(&root.join("subdir/added.txt"), b"brand new");
-    // DELETE one file. After truncate-and-rebuild, the row should
+    // DELETE one file. The scan does not write it, so its row should
     // be gone from `files` (visible in the after_edits snapshot).
     fs::remove_file(root.join("empty.txt")).unwrap();
 
@@ -238,7 +238,7 @@ async fn initial_scan_and_incremental_rescan() {
     }
 
     let dump_b = dump_entries(&db).await;
-    // Truncate-and-rebuild: the deleted file must not appear.
+    // The prune after the walk: the deleted file must not appear.
     assert!(
         !dump_b.contains("empty.txt"),
         "empty.txt was deleted but row survives: \n{dump_b}",

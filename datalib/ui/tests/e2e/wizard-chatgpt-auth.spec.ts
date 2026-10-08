@@ -1,4 +1,4 @@
-// The Connection block for ChatGPT, whose latchkey login is a token
+// The account row for ChatGPT, whose latchkey login is a token
 // capture rather than Claude's cookie capture.
 //
 // The service is the common case for an old install: `chatgpt` was
@@ -29,7 +29,7 @@ async function openChatgpt(page: Page, service: object) {
   await page.route("**/api/latchkey/chatgpt", (route) => route.fulfill({ json: service }));
   await page.goto("/data_sources");
   await page.getByRole("button", { name: "Add source" }).click();
-  await wizard(page).locator(".wiz-tile", { hasText: "Mirror your ChatGPT conversations" }).click();
+  await wizard(page).locator(".wiz-tile", { hasText: "Copy your ChatGPT conversations" }).click();
 }
 
 test("a set-only chatgpt service is shown the token-capture conversion", async ({ page }) => {

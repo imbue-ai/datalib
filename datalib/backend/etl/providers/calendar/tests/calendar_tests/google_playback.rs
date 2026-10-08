@@ -5,24 +5,24 @@
 use datalib_probe::{ProbeAsk, ProbeList};
 use std::path::Path;
 
-use datalib_etl::http::{HttpRequest, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_calendar::ingest::google::{
     self, calendar_list_url, events_url, windowed_events_url,
 };
 use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb, Window};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
 
-const PRIMARY: &str = "picard@enterprise.test";
-const AWAY: &str = "c_awayteam@group.calendar.google.com";
+pub(crate) const PRIMARY: &str = "picard@enterprise.test";
+pub(crate) const AWAY: &str = "c_awayteam@group.calendar.google.com";
 
-fn fixture(root: &Path, url: &str, resp: HttpResponse) {
+pub(crate) fn fixture(root: &Path, url: &str, resp: HttpResponse) {
     let req = HttpRequest::get(google::HTTP_SERVICE, url).header("Accept", "application/json");
     write_fixture(root, &req, &resp).expect("write fixture");
 }
 
-fn page(items: Value, next_page: Option<&str>, next_sync: Option<&str>) -> HttpResponse {
+pub(crate) fn page(items: Value, next_page: Option<&str>, next_sync: Option<&str>) -> HttpResponse {
     let mut v = json!({"kind": "calendar#events", "items": items});
     if let Some(p) = next_page {
         v["nextPageToken"] = json!(p);
@@ -33,17 +33,22 @@ fn page(items: Value, next_page: Option<&str>, next_sync: Option<&str>) -> HttpR
     json_response(&v)
 }
 
-fn calendar_list(root: &Path) {
+pub(crate) fn calendar_list(root: &Path) {
+    calendar_list_of(root, true);
+}
+
+/// The account's calendars, with or without the away team's.
+fn calendar_list_of(root: &Path, with_away: bool) {
+    let mut items = vec![
+        json!({"id": PRIMARY, "summary": PRIMARY, "primary": true, "timeZone": "America/Los_Angeles", "accessRole": "owner"}),
+    ];
+    if with_away {
+        items.push(json!({"id": AWAY, "summary": "Away team", "timeZone": "America/Los_Angeles", "accessRole": "reader"}));
+    }
     fixture(
         root,
         &calendar_list_url(None),
-        json_response(&json!({
-            "kind": "calendar#calendarList",
-            "items": [
-                {"id": PRIMARY, "summary": PRIMARY, "primary": true, "timeZone": "America/Los_Angeles", "accessRole": "owner"},
-                {"id": AWAY, "summary": "Away team", "timeZone": "America/Los_Angeles", "accessRole": "reader"}
-            ]
-        })),
+        json_response(&json!({"kind": "calendar#calendarList", "items": items})),
     );
 }
 
@@ -61,6 +66,7 @@ async fn run_in(playback: &Path, store: &Path, window: Option<Window>) -> FetchS
         latchkey: LatchkeySettings::default(),
         progress: Default::default(),
         control: Default::default(),
+        sealer: None,
     })
     .await;
     if summary.is_ok() {
@@ -299,6 +305,7 @@ async fn a_stopped_run_leaves_the_last_listing_rows() {
         latchkey: LatchkeySettings::default(),
         progress: Default::default(),
         control,
+        sealer: None,
     })
     .await
     .expect("a stopped run");
@@ -390,4 +397,46 @@ async fn a_whole_listing_it_cannot_fully_read_deletes_nothing() {
     assert_eq!(fourth.events_deleted, 0, "{fourth:?}");
     assert_eq!(ids(&store).await, vec![format!("{PRIMARY}#staff01")]);
     assert_eq!(problem_keys(&store).await, vec![listing]);
+}
+
+/// A calendar the account's list no longer names goes with its events:
+/// the list is whole by nature, so absence from it is deletion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_calendar_the_list_no_longer_names_goes_with_its_events() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    calendar_list(&one);
+    let away = json!({"id": "away01", "status": "confirmed", "summary": "Away mission: Rigel VII",
+        "start": {"dateTime": "2026-10-01T08:00:00-07:00"}, "end": {"dateTime": "2026-10-01T18:00:00-07:00"}});
+    fixture(
+        &one,
+        &events_url(PRIMARY, None, None),
+        page(json!([]), None, Some("s1")),
+    );
+    fixture(
+        &one,
+        &events_url(AWAY, None, None),
+        page(json!([away]), None, Some("a1")),
+    );
+    calendar_list_of(&two, false);
+    fixture(
+        &two,
+        &events_url(PRIMARY, Some("s1"), None),
+        page(json!([]), None, Some("s1")),
+    );
+
+    let first = run(&one, &store).await;
+    assert_eq!(first.events_new, 1, "{first:?}");
+    let second = run(&two, &store).await;
+    assert_eq!(
+        (second.calendars, second.events_deleted),
+        (1, 1),
+        "{second:?}"
+    );
+    assert!(ids(&store).await.is_empty());
 }

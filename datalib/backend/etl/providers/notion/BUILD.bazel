@@ -27,15 +27,16 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/notion_config:datalib_etl_notion_config",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:thiserror",
-        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
     ],
 )
@@ -62,9 +63,7 @@ rust_test(
     edition = "2021",
     deps = [
         "@datalib_crates//:tempfile",
-        # Used by `gather_documents_is_linear_in_blocks` to flush the
-        # per-phase `tracing::debug!` events from `gather_documents`
-        # to stderr — see the test's `init_tracing()` helper.
+        "@datalib_crates//:tokio",
     ],
 )
 
@@ -82,10 +81,12 @@ rust_test(
         "INSTA_WORKSPACE_ROOT": ".",
         "RUST_TEST_THREADS": "1",
     },
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         "//datalib/backend/etl/providers/notion_render:datalib_etl_notion_render",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         ":datalib_etl_notion",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:insta",

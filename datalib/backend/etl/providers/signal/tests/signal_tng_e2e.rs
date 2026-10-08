@@ -8,8 +8,8 @@ use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_signal::ingest::{self, FetchOptions};
 use datalib_etl_signal_render::render::{parse_raw_dir, render_all};
@@ -217,9 +217,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         "outgoing author labelled as Me in:\n{md}"
     );
     assert!(
-        md.contains(
-            "<span class=\"msg-author\" data-handle=\"tel:+17015550101\">Will Riker</span>"
-        ),
+        md.contains("## [Will Riker](tel:+17015550101 \"Will Riker (+17015550101)\") "),
         "Riker's name resolved from recipient, his number as the handle, in:\n{md}"
     );
 
@@ -455,15 +453,18 @@ fn chat_item(
 }
 
 async fn fetch_once(snapshot_root: &Path, store: &Path, cache: &Path) -> Result<()> {
-    fetch_with(snapshot_root, store, cache, DownloadControl::default()).await
+    fetch_with(snapshot_root, store, cache, DownloadControl::default())
+        .await
+        .map(|_| ())
 }
 
+/// One fetch and its commit: `None` when the run changed nothing.
 async fn fetch_with(
     snapshot_root: &Path,
     store: &Path,
     cache: &Path,
     control: DownloadControl,
-) -> Result<()> {
+) -> Result<Option<String>> {
     unsafe {
         std::env::set_var("SIGNAL_BACKUP_PASSPHRASE", FIXTURE_AEP);
     }
@@ -478,9 +479,10 @@ async fn fetch_with(
         control,
     })
     .await;
-    datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test download").await?;
+    // The CAS beside it is plain SQLite and commits as it writes.
+    let committed = datalib_etl::doltlite_raw::commit_run(db.pool(), "test download").await?;
     db.close().await;
-    summary.map(|_| ())
+    summary.map(|_| committed)
 }
 
 async fn problems(store: &Path) -> Result<Vec<(String, String)>> {
@@ -556,7 +558,7 @@ async fn what_a_backup_does_not_hold_is_a_problem() -> Result<()> {
     frames.push(backup::Frame {
         item: Some(backup::frame::Item::ChatItem(too_deep)),
     });
-    frames.push(not_downloaded);
+    frames.push(not_downloaded.clone());
     write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &frames)?;
 
     fetch_once(&snapshots, &store, &cache).await?;
@@ -574,8 +576,11 @@ async fn what_a_backup_does_not_hold_is_a_problem() -> Result<()> {
     fetch_once(&snapshots, &store, &cache).await?;
     assert_eq!(problems(&store).await?, expected);
 
-    // A newer backup is read whole: its frames all decode.
-    write_frames(&snapshots, "signal-backup-2364-04-10-12-00-00", &crew)?;
+    // A newer backup is read whole: its frames all decode. It still holds
+    // the message, so the message's own problem stands.
+    let mut whole = crew.to_vec();
+    whole.push(not_downloaded);
+    write_frames(&snapshots, "signal-backup-2364-04-10-12-00-00", &whole)?;
     fetch_once(&snapshots, &store, &cache).await?;
     assert_eq!(problems(&store).await?, expected[..1].to_vec());
     Ok(())
@@ -684,6 +689,200 @@ async fn a_stopped_run_still_reports_what_did_not_decode() -> Result<()> {
     assert_eq!(
         problems(&store).await?,
         vec![("phase:frames".to_string(), "error".to_string())]
+    );
+    Ok(())
+}
+
+async fn ids(store: &Path, table: &str) -> Result<Vec<String>> {
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
+    let rows = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT id FROM {table} ORDER BY id"
+    )))
+    .fetch_all(db.pool())
+    .await?;
+    db.close().await;
+    Ok(rows)
+}
+
+fn with_attachment(mut frame: backup::Frame, att: backup::MessageAttachment) -> backup::Frame {
+    if let Some(backup::frame::Item::ChatItem(ci)) = frame.item.as_mut() {
+        if let Some(backup::chat_item::Item::StandardMessage(sm)) = ci.item.as_mut() {
+            sm.attachments.push(att);
+        }
+    }
+    frame
+}
+
+/// Every snapshot was upserted over the last, so a message, a contact or
+/// an attachment the newer backup no longer holds stayed in the store
+/// for good.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_newer_backup_replaces_what_the_older_one_held() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let (_, plaintext_hash) = write_test_attachment(&snapshots.join("files"))?;
+
+    let status = chat_item(100, 1, 12442118400000, "Status report.", true);
+    let older = [
+        recipient_self(1, "Jean-Luc Picard"),
+        recipient_contact(2, "Will Riker", 17015550101),
+        recipient_contact(3, "Data Soong", 17015550102),
+        chat_frame(100, 2),
+        status.clone(),
+        chat_item(100, 2, 12442118460000, "All decks at green status.", false),
+        with_attachment(
+            chat_item(100, 1, 12442118940000, "Make it so.", true),
+            png_attachment(&plaintext_hash),
+        ),
+    ];
+    write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &older)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    assert_eq!(ids(&store, "chat_items").await?.len(), 3);
+    assert_eq!(ids(&store, "chat_item_attachments").await?.len(), 1);
+
+    let newer = [
+        recipient_self(1, "Jean-Luc Picard"),
+        recipient_contact(2, "Will Riker", 17015550101),
+        chat_frame(100, 2),
+        status,
+    ];
+    write_frames(&snapshots, "signal-backup-2364-04-10-12-00-00", &newer)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    assert_eq!(
+        ids(&store, "chat_items").await?,
+        [ingest::schema_raw::chat_item_id_recipe(
+            "100",
+            "1",
+            12442118400000
+        )],
+        "the messages the newer backup dropped are gone"
+    );
+    assert_eq!(ids(&store, "recipients").await?, ["1", "2"]);
+    assert_eq!(ids(&store, "chats").await?, ["100"]);
+    assert!(ids(&store, "chat_item_attachments").await?.is_empty());
+    Ok(())
+}
+
+/// A backup with a frame that would not decode was not read whole, so
+/// what it seems to have dropped may only be in that frame.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_backup_not_read_whole_deletes_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let crew = [
+        recipient_self(1, "Jean-Luc Picard"),
+        recipient_contact(2, "Will Riker", 17015550101),
+        chat_frame(100, 2),
+    ];
+    let mut older = crew.to_vec();
+    older.push(chat_item(100, 1, 12442118400000, "Status report.", true));
+    older.push(chat_item(
+        100,
+        2,
+        12442118460000,
+        "All decks at green status.",
+        false,
+    ));
+    write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &older)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+
+    let mut too_deep = backup::ChatItem {
+        chat_id: 100,
+        author_id: 2,
+        date_sent: 12442118460000,
+        ..Default::default()
+    };
+    for _ in 0..120 {
+        too_deep = backup::ChatItem {
+            revisions: vec![too_deep],
+            ..Default::default()
+        };
+    }
+    let mut newer = crew.to_vec();
+    newer.push(backup::Frame {
+        item: Some(backup::frame::Item::ChatItem(too_deep)),
+    });
+    write_frames(&snapshots, "signal-backup-2364-04-10-12-00-00", &newer)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    assert_eq!(ids(&store, "chat_items").await?.len(), 2);
+    assert_eq!(
+        problems(&store).await?,
+        [("phase:frames".to_string(), "error".to_string())]
+    );
+    Ok(())
+}
+
+/// A backup folder that is gone, or a passphrase that is not set, is no
+/// backup at all: the run fails and the store keeps what it had.
+#[tokio::test(flavor = "multi_thread")]
+async fn no_backup_to_read_deletes_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let frames = [
+        recipient_self(1, "Jean-Luc Picard"),
+        recipient_contact(2, "Will Riker", 17015550101),
+        chat_frame(100, 2),
+        chat_item(100, 1, 12442118400000, "Status report.", true),
+    ];
+    write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &frames)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
+    let unset = ingest::fetch(FetchOptions {
+        db: db.clone(),
+        cache: FingerprintCache::open(&cache).await?,
+        snapshot_root: snapshots.clone(),
+        files_root: None,
+        aep_env_var: Some("SIGNAL_BACKUP_PASSPHRASE_NEVER_SET_IN_THIS_TEST".into()),
+        progress: Progress::noop(),
+        control: DownloadControl::default(),
+    })
+    .await;
+    datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test download").await?;
+    db.close().await;
+    assert!(unset.is_err());
+    assert_eq!(ids(&store, "chat_items").await?.len(), 1);
+
+    std::fs::remove_dir_all(&snapshots)?;
+    assert!(fetch_once(&snapshots, &store, &cache).await.is_err());
+    assert_eq!(ids(&store, "chat_items").await?.len(), 1);
+    assert_eq!(ids(&store, "recipients").await?, ["1", "2"]);
+    Ok(())
+}
+
+/// Reading an unchanged backup again must leave the store as it was: a
+/// re-stamped sidecar is a commit, and a bigger store, on every sync.
+#[tokio::test(flavor = "multi_thread")]
+async fn reading_an_unchanged_backup_again_commits_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let (_, plaintext_hash) = write_test_attachment(&snapshots.join("files"))?;
+    let frames = [
+        recipient_self(1, "Jean-Luc Picard"),
+        recipient_contact(2, "Will Riker", 17015550101),
+        chat_frame(100, 2),
+        chat_item(100, 2, 12442118460000, "All decks at green status.", false),
+        with_attachment(
+            chat_item(100, 1, 12442118940000, "Make it so.", true),
+            png_attachment(&plaintext_hash),
+        ),
+    ];
+    write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &frames)?;
+
+    let first = fetch_with(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    let second = fetch_with(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert!(first.is_some());
+    assert_eq!(
+        second, None,
+        "reading an unchanged backup again changes nothing in the store"
     );
     Ok(())
 }

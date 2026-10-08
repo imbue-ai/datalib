@@ -93,9 +93,18 @@ pub async fn prune_scope_in_tx(
     Ok(gone)
 }
 
+/// One record's problems, for a record upstream no longer has.
+pub async fn forget_record_problems_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    table: &str,
+    id: &str,
+) -> Result<()> {
+    forget_problems_in_tx(tx, table, "?", std::slice::from_ref(&id.to_string())).await
+}
+
 /// A record upstream no longer has cannot fail to fetch, so its problem
 /// goes with it rather than standing for good.
-async fn forget_problems_in_tx(
+pub(crate) async fn forget_problems_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     table: &str,
     placeholders: &str,

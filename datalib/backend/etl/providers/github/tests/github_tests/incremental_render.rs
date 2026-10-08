@@ -6,14 +6,14 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use datalib_etl::event_store::{diff_and_save, make_record};
-use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_github::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_github::synthesize::GithubSynth;
 use datalib_etl_github_render::render::{parse_api_dir, render_github};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 use tokio::sync::Mutex;

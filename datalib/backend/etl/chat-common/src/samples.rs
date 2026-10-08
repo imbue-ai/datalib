@@ -84,6 +84,7 @@ fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
         kind_label: None,
         source_ref: None,
         is_aside: false,
+        branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
         problems: Vec::new(),
@@ -94,6 +95,7 @@ fn aside(uuid: &str, at: i64, body: &str) -> NormalizedChatItem {
     NormalizedChatItem {
         kind_label: Some("Tool Call".to_string()),
         is_aside: true,
+        branch: Vec::new(),
         ..text(uuid, "claude-opus-5", at, body)
     }
 }
@@ -203,6 +205,7 @@ fn group_chat() -> NormalizedChat {
     picard.reactions = vec![
         NormalizedReaction {
             reaction_uuid: "s2-react-1".to_string(),
+            reactor_handle: datalib_handle::Handle::email("riker@enterprise.org"),
             reactor_display: "Will Riker".to_string(),
             emoji: "🫡".to_string(),
             date_ms: Some(T0 + 60000),
@@ -210,6 +213,7 @@ fn group_chat() -> NormalizedChat {
         },
         NormalizedReaction {
             reaction_uuid: "s2-react-2".to_string(),
+            reactor_handle: None,
             reactor_display: "Deanna Troi".to_string(),
             emoji: "👍".to_string(),
             date_ms: Some(T0 + 90000),

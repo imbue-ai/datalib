@@ -9,9 +9,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_gitlab_config::{GitlabApiSync, GitlabConfig};
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
 
@@ -53,7 +53,7 @@ impl DataProcessor for GitlabIngest {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
         let pool = db.pool().clone();
-        ctx.run_store(pool, None, |_| async {
+        ctx.run_store(pool, None, |sealer| async {
             let targets = self
                 .sync
                 .merge_requests
@@ -63,13 +63,6 @@ impl DataProcessor for GitlabIngest {
                 .context("parse gitlab merge_requests refs")?;
             let s = ingest::fetch(ingest::FetchOptions {
                 latchkey: self.latchkey.clone(),
-                // full_sync stays false (FetchOptions default) so the
-                // gitlab provider honors saved `sync_scope_state` and
-                // narrows discovery via `updated_after`. The previous
-                // unconditional `true` here disabled the entire
-                // incremental path — every run re-discovered and
-                // re-fetched every MR in the user's scope; a clean re-pull
-                // is `datalib-dag --reset`.
                 refresh_window_days: self
                     .sync
                     .refresh_window_days
@@ -80,6 +73,7 @@ impl DataProcessor for GitlabIngest {
                 sleep_between: Duration::ZERO,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
+                sealer: Some(sealer),
                 ..ingest::FetchOptions::new(db, now)
             })
             .await?;

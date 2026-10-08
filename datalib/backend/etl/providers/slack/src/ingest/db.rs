@@ -13,17 +13,18 @@ use sqlx::{Row, Sqlite, Transaction};
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable, EventBatch};
-use datalib_etl::coverage::{self, Span};
 use datalib_etl::doltlite_raw::{self as dr, bulk_upsert_with_tape, bulk_upsert_with_tape_split};
 use datalib_etl::event_tape::EventTape;
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::owed::{Fetched, Listed, Outcome};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
     full_ddl, join_dm_user_ids, parse_dm_user_ids, saved_item_key, slack_message_key,
-    slack_thread_key, BookmarkRow, ChannelReadStateRow, ChannelRow, MessageRow, RepliesPagesRow,
-    SavedItemRow, SlackAttachmentRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS,
-    MESSAGE_VOLATILE_PATHS, READ_STATE_VOLATILE_PATHS, USER_VOLATILE_PATHS,
+    slack_thread_key, BookmarkRow, ChannelReadStateRow, ChannelRow, MessageRow, SavedItemRow,
+    SlackAttachmentRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, LADDER,
+    MESSAGE_VOLATILE_PATHS, READ_STATE_VOLATILE_PATHS, THREADS, USER_VOLATILE_PATHS,
 };
 use datalib_etl::doltlite_raw::WirePayload;
 
@@ -47,7 +48,7 @@ impl std::ops::Deref for RawDb {
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
         Ok(Self {
-            store: CasEntityStore::open(db_path, &full_ddl()).await?,
+            store: CasEntityStore::open_migrating(db_path, &full_ddl(), LADDER).await?,
             tape: None,
         })
     }
@@ -352,7 +353,12 @@ impl RawDb {
     // ── messages ────────────────────────────────────────────────────
 
     pub async fn upsert_messages(&self, inputs: &[MessageInput]) -> Result<()> {
-        self.store_replies_page(inputs, None).await.map(|_| ())
+        let page = prepare(inputs)?;
+        let mut tx = self.pool().begin().await.context("begin messages")?;
+        write_messages(&mut tx, &page).await?;
+        tx.commit().await.context("commit messages")?;
+        self.tape_messages(&page);
+        Ok(())
     }
 
     /// One `conversations.history` page, in one transaction: its
@@ -384,48 +390,71 @@ impl RawDb {
         Ok(pruned)
     }
 
-    /// One `conversations.replies` page, in one transaction. The last
-    /// page of a thread read whole carries `read`: the stamp of what the
-    /// thread now holds, and the deletion of the stored replies the walk
-    /// did not return. Returns how many rows went.
-    pub async fn store_replies_page(
+    /// The threads of `channel_id` with replies, each at the version its
+    /// stored root lists: the root's `latest_reply`, keyed like the root.
+    /// Every stored root is listed, not only the ones this run's walk
+    /// returned, so a root stored by a run that died before its replies
+    /// is owed.
+    pub async fn threads_listed(&self, channel_id: &str) -> Result<Vec<Listed>> {
+        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT id, json_extract(payload, '$.latest_reply') FROM messages \
+             WHERE channel_id = ? AND is_thread_root = 1 \
+               AND json_extract(payload, '$.reply_count') > 0 \
+             ORDER BY ts",
+        )
+        .bind(channel_id)
+        .fetch_all(self.pool())
+        .await
+        .with_context(|| format!("list the threads of {channel_id}"))?;
+        Ok(rows
+            .into_iter()
+            .map(|(key, latest_reply)| Listed::new(key, latest_reply))
+            .collect())
+    }
+
+    /// Each thread `conversations.replies` returned whole, in the
+    /// transaction the loop holds the threads in: its row, its messages,
+    /// and the deletion of the stored replies the read did not return.
+    /// Returns how many rows went.
+    pub async fn store_threads(
         &self,
-        inputs: &[MessageInput],
-        read: Option<&ThreadRead<'_>>,
+        tx: &mut Transaction<'_, Sqlite>,
+        fetched: &[Fetched<Thread>],
     ) -> Result<usize> {
-        let page = prepare(inputs)?;
-        let mut tx = self.pool().begin().await.context("begin replies page")?;
-        write_messages(&mut tx, &page).await?;
         let mut pruned = 0;
-        if let Some(read) = read {
-            let thread = slack_thread_key(read.team_id, read.channel_id, read.thread_ts);
-            let stamp = RepliesPagesRow {
-                id: thread.clone(),
-                channel_id: read.channel_id.to_string(),
-                thread_ts: read.thread_ts.to_string(),
-                latest_reply: read.latest_reply.map(String::from),
+        for f in fetched {
+            let Outcome::Got(thread) = &f.outcome else {
+                continue;
             };
-            let now = datalib_time::IsoOffsetTimestamp::now_local();
-            bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&stamp), &now).await?;
+            sqlx::query("INSERT OR IGNORE INTO threads (id) VALUES (?)")
+                .bind(&f.listed.key)
+                .execute(&mut **tx)
+                .await
+                .with_context(|| format!("list the thread {}", f.listed.key))?;
+            let page = prepare(&thread.rows)?;
+            write_messages(tx, &page).await?;
+            let returned: HashSet<String> = page
+                .iter()
+                .map(|p| p.row.id_and_payload.id.clone())
+                .collect();
             let gone = datalib_etl::prune::prune_scope_in_tx(
-                &mut tx,
+                tx,
                 MessageRow::TABLE,
-                &[("thread_root_uuid", &thread)],
-                read.returned,
+                &[("thread_root_uuid", f.listed.key.as_str())],
+                &returned,
             )
             .await?;
             if !gone.is_empty() {
                 tracing::info!(
                     event = "slack_replies_pruned",
-                    thread = %thread,
+                    thread = %f.listed.key,
                     removed = gone.len(),
                     "these replies are gone from the thread Slack just returned whole",
                 );
             }
-            pruned = gone.len();
+            pruned += gone.len();
+            self.tape_messages(&page);
         }
-        tx.commit().await.context("commit replies page")?;
-        self.tape_messages(&page);
         Ok(pruned)
     }
 
@@ -448,64 +477,6 @@ impl RawDb {
                 "the messages are stored, but the event tape is missing their lines"
             );
         }
-    }
-
-    /// The threads of `channel_id` whose replies the store does not hold
-    /// at the version their root lists: a stored root with replies whose
-    /// `replies_pages` stamp is absent, empty, or older than the root's
-    /// `latest_reply`. The root's two fields are read out of its payload.
-    pub async fn threads_owed(&self, channel_id: &str) -> Result<Vec<OwedThread>> {
-        let rows = sqlx::query(
-            "SELECT m.ts, \
-                    json_extract(m.payload, '$.latest_reply') AS latest_reply, \
-                    json_extract(m.payload, '$.reply_count') AS reply_count \
-             FROM messages m LEFT JOIN replies_pages r ON r.id = m.id \
-             WHERE m.channel_id = ? AND m.is_thread_root = 1 \
-               AND json_extract(m.payload, '$.reply_count') > 0 \
-               AND (r.latest_reply IS NULL \
-                    OR json_extract(m.payload, '$.latest_reply') > r.latest_reply) \
-             ORDER BY m.ts",
-        )
-        .bind(channel_id)
-        .fetch_all(self.pool())
-        .await
-        .with_context(|| format!("select the threads owed in {channel_id}"))?;
-        rows.iter()
-            .map(|r| {
-                Ok(OwedThread {
-                    ts: r.try_get("ts")?,
-                    latest_reply: r.try_get("latest_reply")?,
-                    reply_count: r.try_get::<i64, _>("reply_count")?.max(0) as u64,
-                })
-            })
-            .collect()
-    }
-
-    /// A `conversations.replies` call that failed, on the thread's own
-    /// stamp row. The stamp it holds is left as it was, so the thread is
-    /// still owed.
-    pub async fn record_replies_failure(
-        &self,
-        team_id: &str,
-        channel_id: &str,
-        thread_ts: &str,
-        err: &str,
-    ) -> Result<()> {
-        let id = slack_thread_key(team_id, channel_id, thread_ts);
-        let mut tx = self.pool().begin().await.context("begin replies failure")?;
-        sqlx::query(
-            "INSERT INTO replies_pages (id, channel_id, thread_ts) VALUES (?, ?, ?) \
-             ON CONFLICT(id) DO NOTHING",
-        )
-        .bind(&id)
-        .bind(channel_id)
-        .bind(thread_ts)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("stub the replies stamp of {id}"))?;
-        dr::record_object_error(&mut tx, RepliesPagesRow::TABLE, &id, err).await?;
-        tx.commit().await.context("commit replies failure")?;
-        Ok(())
     }
 
     pub async fn load_messages(&self) -> Result<Vec<LoadedMessage>> {
@@ -732,36 +703,62 @@ impl RawDb {
     }
 
     /// The files of `channel_id` whose bytes the store does not hold: an
-    /// edge with no `blake3`, with the file object its stored message
-    /// carries. An edge's key starts with its message's, and a message's
-    /// with its channel's, so one channel's edges are a range of keys.
-    pub async fn files_owed(&self, team_id: &str, channel_id: &str) -> Result<Vec<OwedFile>> {
+    /// edge with no `blake3`. An edge's key starts with its message's,
+    /// and a message's with its channel's, so one channel's edges are a
+    /// range of keys. A file has no version: it only has to land.
+    pub async fn files_listed(&self, team_id: &str, channel_id: &str) -> Result<Vec<Listed>> {
         let from = slack_message_key(team_id, channel_id, "");
         // `$` is the character after `#`.
         let to = format!("{team_id}#{channel_id}$");
-        let rows = sqlx::query(
-            "SELECT a.message_uuid, json(f.value) AS file \
-             FROM slack_attachments a \
-             JOIN messages m ON m.id = a.message_uuid \
-             JOIN json_each(m.payload, '$.files') f \
-               ON json_extract(f.value, '$.id') = a.file_id \
-             WHERE a.id >= ? AND a.id < ? AND a.blake3 IS NULL \
-             ORDER BY a.id",
+        let keys: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM slack_attachments WHERE id >= ? AND id < ? AND blake3 IS NULL \
+             ORDER BY id",
         )
         .bind(&from)
         .bind(&to)
         .fetch_all(self.pool())
         .await
-        .with_context(|| format!("select the files owed in {channel_id}"))?;
-        rows.iter()
-            .map(|r| {
-                let file: String = r.try_get("file")?;
-                Ok(OwedFile {
-                    message_uuid: r.try_get("message_uuid")?,
+        .with_context(|| format!("list the files of {channel_id}"))?;
+        Ok(keys
+            .into_iter()
+            .map(|key| Listed::new(key, None::<String>))
+            .collect())
+    }
+
+    /// The file object each of `keys` names, as its stored message
+    /// carries it: what a fetch asks Slack with. An edge whose message no
+    /// longer carries the file is left out.
+    pub async fn file_objects(&self, keys: &[&str]) -> Result<Vec<OwedFile>> {
+        let mut out = Vec::with_capacity(keys.len());
+        for chunk in keys.chunks(datalib_etl::bulk::SQL_CHUNK) {
+            // Audited: the placeholders are one `?` per key, every key
+            // bound.
+            let sql = format!(
+                "SELECT a.id, a.message_uuid, json(f.value) AS file \
+                 FROM slack_attachments a \
+                 JOIN messages m ON m.id = a.message_uuid \
+                 JOIN json_each(m.payload, '$.files') f \
+                   ON json_extract(f.value, '$.id') = a.file_id \
+                 WHERE a.id IN ({}) ORDER BY a.id",
+                vec!["?"; chunk.len()].join(",")
+            );
+            let mut q = sqlx::query_as::<_, (String, String, String)>(sqlx::AssertSqlSafe(sql));
+            for key in chunk {
+                q = q.bind(*key);
+            }
+            let rows = q
+                .fetch_all(self.pool())
+                .await
+                .context("read the file objects of a batch")?;
+            for (key, message_uuid, file) in rows {
+                out.push(OwedFile {
+                    key,
+                    message_uuid,
                     file: serde_json::from_str(&file)?,
-                })
-            })
-            .collect()
+                });
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -782,27 +779,18 @@ pub struct Enumerated {
     pub latest_included: bool,
 }
 
-/// A thread `conversations.replies` returned whole.
-pub struct ThreadRead<'a> {
-    pub team_id: &'a str,
-    pub channel_id: &'a str,
-    pub thread_ts: &'a str,
-    /// The newest reply the thread holds as of this read.
-    pub latest_reply: Option<&'a str>,
-    /// The message keys the walk returned.
-    pub returned: &'a HashSet<String>,
+/// What one `conversations.replies` read of a thread returned, root
+/// copy included.
+#[derive(Debug)]
+pub struct Thread {
+    pub rows: Vec<MessageInput>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OwedThread {
-    pub ts: String,
-    /// The root's `latest_reply`, as listed.
-    pub latest_reply: Option<String>,
-    pub reply_count: u64,
-}
-
+/// One edge without bytes and the file object its message carries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OwedFile {
+    /// The edge's key.
+    pub key: String,
     pub message_uuid: String,
     pub file: Value,
 }
@@ -889,8 +877,8 @@ async fn write_messages(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>])
 }
 
 /// Delete the stored top-level messages of `stretch` that are not in
-/// `returned`, each with the replies of its thread and the thread's
-/// stamp. Only rows history could have returned are judged: it lists a
+/// `returned`, each with the replies of its thread and the thread's own
+/// row. Only rows history could have returned are judged: it lists a
 /// thread's root and never its replies, so a reply goes only with its
 /// root, since nothing asks for the replies of a root no longer listed.
 async fn prune_enumerated(
@@ -930,8 +918,8 @@ async fn prune_enumerated(
             &messages,
         )
         .await?;
-        let stamp = [("id", thread.as_str())];
-        datalib_etl::prune::prune_scope_in_tx(tx, RepliesPagesRow::TABLE, &stamp, &none).await?;
+        let own = [("id", thread.as_str())];
+        datalib_etl::prune::prune_scope_in_tx(tx, THREADS, &own, &none).await?;
         gone += messages.len();
     }
     datalib_etl::prune::record(
@@ -1053,6 +1041,7 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::schema_raw::split_key;
     use serde_json::json;
 
     #[tokio::test]
@@ -1275,26 +1264,41 @@ mod tests {
     }
 
     async fn owed_threads(db: &RawDb) -> Vec<String> {
-        let owed = db.threads_owed("C1").await.unwrap();
-        owed.into_iter().map(|t| t.ts).collect()
+        let listed = db.threads_listed("C1").await.unwrap();
+        datalib_etl_web::owed::owed(db.pool(), THREADS, listed)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|l| split_key(&l.key).unwrap().2.to_string())
+            .collect()
     }
 
+    /// A read of the thread returning its root copy and no reply, held
+    /// at `latest_reply`: what the loop does for a thread that came
+    /// whole.
     async fn read_thread(db: &RawDb, ts: &str, latest_reply: &str) {
-        let read = ThreadRead {
-            team_id: "T1",
-            channel_id: "C1",
-            thread_ts: ts,
-            latest_reply: Some(latest_reply),
-            returned: &HashSet::from([slack_message_key("T1", "C1", ts)]),
+        let key = slack_message_key("T1", "C1", ts);
+        let fetched = Fetched {
+            listed: Listed::new(key.clone(), Some(latest_reply)),
+            outcome: Outcome::Got(Thread {
+                rows: vec![root(ts, 2, Some(latest_reply))],
+            }),
         };
-        db.store_replies_page(&[], Some(&read)).await.unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_threads(&mut tx, std::slice::from_ref(&fetched))
+            .await
+            .unwrap();
+        datalib_etl_web::owed::hold(&mut tx, THREADS, &key, Some(latest_reply))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
     }
 
     /// A stored root with replies is owed with no run having "listed" it,
-    /// until its stamp reaches the `latest_reply` it lists; and again
-    /// when the root is stored listing a newer one.
+    /// until it is held at the `latest_reply` it lists; and again when
+    /// the root is stored listing a newer one.
     #[tokio::test]
-    async fn a_thread_is_owed_while_its_stamp_is_behind_what_its_root_lists() {
+    async fn a_thread_is_owed_while_its_root_lists_a_version_it_is_not_held_at() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
         db.upsert_messages(&[
@@ -1315,9 +1319,9 @@ mod tests {
         assert_eq!(owed_threads(&db).await, ["1.0", "6.0"]);
     }
 
-    /// A failed read is on the thread's stamp row, so storing the root
-    /// again (a refresh does) neither clears it nor the thread's place
-    /// among the owed; the next whole read clears both.
+    /// A failed read is an attempt on the thread's own row, so storing
+    /// the root again (a refresh does) neither clears it nor the thread's
+    /// place among the owed; the next whole read clears both.
     #[tokio::test]
     async fn a_failed_replies_read_stays_on_the_thread_until_it_is_read() {
         let d = tempfile::tempdir().unwrap();
@@ -1326,9 +1330,12 @@ mod tests {
         db.upsert_messages(std::slice::from_ref(&thread))
             .await
             .unwrap();
-        db.record_replies_failure("T1", "C1", "1.0", "internal_error")
+        let key = slack_message_key("T1", "C1", "1.0");
+        let mut tx = db.pool().begin().await.unwrap();
+        dr::record_object_error(&mut tx, THREADS, &key, "internal_error")
             .await
             .unwrap();
+        tx.commit().await.unwrap();
         db.upsert_messages(std::slice::from_ref(&thread))
             .await
             .unwrap();
@@ -1339,7 +1346,7 @@ mod tests {
                 .await
                 .unwrap()
         };
-        assert_eq!(problems().await, ["replies_pages:T1#C1#1.0"]);
+        assert_eq!(problems().await, ["threads:T1#C1#1.0"]);
         assert_eq!(owed_threads(&db).await, ["1.0"]);
 
         read_thread(&db, "1.0", "3.0").await;
@@ -1373,15 +1380,17 @@ mod tests {
             with_file("2.0", json!({"id": "F2", "mode": "tombstone"})),
         ];
         db.upsert_messages(&messages).await.unwrap();
-        let owed = db.files_owed("T1", "C1").await.unwrap();
+        let listed = db.files_listed("T1", "C1").await.unwrap();
+        assert_eq!(listed, [Listed::new("T1#C1#1.0#F1", None::<String>)]);
         assert_eq!(
-            owed,
+            db.file_objects(&["T1#C1#1.0#F1"]).await.unwrap(),
             [OwedFile {
+                key: "T1#C1#1.0#F1".into(),
                 message_uuid: "T1#C1#1.0".into(),
                 file: log,
             }]
         );
-        assert!(db.files_owed("T1", "C10").await.unwrap().is_empty());
+        assert!(db.files_listed("T1", "C10").await.unwrap().is_empty());
 
         let hash = "a".repeat(64);
         sqlx::query("UPDATE slack_attachments SET blake3 = ? WHERE file_id = 'F1'")
@@ -1390,7 +1399,7 @@ mod tests {
             .await
             .unwrap();
         db.upsert_messages(&messages).await.unwrap();
-        assert!(db.files_owed("T1", "C1").await.unwrap().is_empty());
+        assert!(db.files_listed("T1", "C1").await.unwrap().is_empty());
     }
 
     fn id_set(values: &[Value], key: &str) -> Vec<String> {

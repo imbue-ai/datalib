@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use crate::doltlite_raw::Migration;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datalib_etl_macros::RawStoreHandle;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
@@ -123,7 +123,9 @@ impl CasEntityStore {
         let Some(entities) = EntityStore::open_reader(db_path, commit).await? else {
             return Ok(None);
         };
-        let cas = BlobCas::open_reader(&blob_cas::cas_path_for(db_path)).await?;
+        let cas = BlobCas::open_for_render(db_path)
+            .await?
+            .with_context(|| format!("no blob store beside {}", db_path.display()))?;
         Ok(Some(Self { entities, cas }))
     }
 

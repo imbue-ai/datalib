@@ -1,8 +1,8 @@
 //! Content hashing for fsindex.
 
-use datalib_etl::fingerprint_cache::EntryKind;
+use datalib_etl_files::fingerprint_cache::EntryKind;
 
-pub use datalib_etl::fswalk::{hash_file, hash_symlink_target, Blake3};
+pub use datalib_etl_files::fswalk::{hash_file, hash_symlink_target, Blake3};
 
 /// One immediate-child contribution to a directory's tree-hash.
 pub struct TreeChild {

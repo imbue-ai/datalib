@@ -12,18 +12,19 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::{db_path_for, fetch, FetchOptions, RawDb};
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 
 use crate::jmap_tape::{Account, Email, Tape, HOST};
 
-/// What the download mirrors, what upstream listed and what is held for
-/// it, and the state tokens. Not the `_bookkeeping` sidecars (attempt
-/// counts and stamps, which a run that was cut off has more of),
-/// `problems` or `sync_runs`.
+/// What the download mirrors, what upstream listed, and the state
+/// tokens. Not the `_bookkeeping` sidecars (attempt counts and stamps,
+/// which a run that was cut off has more of), `problems` or `sync_runs`;
+/// what is held for each listed message, which lives on the listing's
+/// sidecar, is read by [`contents`] on its own.
 pub const MIRRORED: &[&str] = &[
     "accounts",
     "mailboxes",
@@ -33,10 +34,25 @@ pub const MIRRORED: &[&str] = &[
     "email_keywords",
     "email_blobs",
     "listed_messages",
-    "fetched_messages",
     "listed_whole",
     "sync_scope_state",
 ];
+
+/// [`MIRRORED`], then the version held for each listed message.
+pub async fn contents(db: &RawDb) -> Result<String> {
+    let mut out = dump_tables(db.pool(), MIRRORED).await?;
+    out.push_str("== held\n");
+    let held: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, held_version FROM listed_messages_bookkeeping
+         WHERE held_version IS NOT NULL ORDER BY id",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    for (id, version) in held {
+        out.push_str(&format!("{id}={version}\n"));
+    }
+    Ok(out)
+}
 
 /// Copies the store an earlier run left under `earlier` into `dir`.
 pub fn copy_store(earlier: &Path, dir: &Path) -> Result<()> {
@@ -76,7 +92,7 @@ impl Rig for Jmap {
         // One at a time, so the order of the `.eml` requests is the same
         // in every run and a cut lands on the same one.
         opts.blob_download_concurrency = Some(1);
-        opts.blob_flush_bytes = Some(1);
+        opts.blob_flush_count = Some(1);
         opts.control = DownloadControl {
             stop,
             ..Default::default()
@@ -92,7 +108,7 @@ impl Rig for Jmap {
 
     async fn contents(&self, dir: &Path) -> Result<String> {
         let db = self.open(dir).await?;
-        let out = dump_tables(db.pool(), MIRRORED).await;
+        let out = contents(&db).await;
         db.close().await;
         out
     }

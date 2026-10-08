@@ -4,12 +4,13 @@ The ingest step of a `slack` group mirrors a Slack workspace into
 `<data_root>/<group>/ingest/entities.doltlite_db`, with the blob CAS
 beside it (`slack-ingest` does the same from the command line). The
 tables (`src/ingest/schema_raw.rs`) are `workspaces`, `users`,
-`channels`, `messages`, `replies_pages`, `slack_attachments` (the edges
-to file bytes in the CAS), and the account's own state:
-`channel_read_states`, `saved_items` and `bookmarks`. Each row is keyed
-by its upstream Slack identifier — a message and a thread by
-`{team}#{channel}#{ts}` — with the response stored as JSONB in
-`payload` and a `<table>_bookkeeping` sidecar beside each table.
+`channels`, `messages`, `threads` (one id per thread whose replies have
+been asked for), `slack_attachments` (the edges to file bytes in the
+CAS), and the account's own state: `channel_read_states`, `saved_items`
+and `bookmarks`. Each row is keyed by its upstream Slack identifier — a
+message and a thread by `{team}#{channel}#{ts}` — with the response
+stored as JSONB in `payload` and a `<table>_bookkeeping` sidecar beside
+each table.
 
 ## Auth
 
@@ -143,8 +144,8 @@ nothing to remember in between.
 | Kind | Wanted | Held | Owed |
 |---|---|---|---|
 | a channel's history | everything from `since` on | the `coverage` spans of scope `history:<channel>` | the gaps |
-| a thread's replies | each stored root's `latest_reply` | `replies_pages.latest_reply` for that thread | a root with replies whose stamp is absent, empty or older |
-| a file's bytes | an edge in `slack_attachments`, written with its message | the edge's `blake3` | an edge with no `blake3`, when `media` is on |
+| a thread's replies | each stored root's `latest_reply` | `held_version` in the thread's sidecar | a root with replies whose thread is not held at that version |
+| a file's bytes | an edge in `slack_attachments`, written with its message | the edge's `blake3`, and the fetch that landed it | an edge with no `blake3`, when `media` is on |
 
 **History.** `conversations.history` returns a stretch newest first.
 Each page is one transaction: its messages, an edge for each file they
@@ -164,13 +165,17 @@ span, and is asked from `since` each run.
 A span's ends are `ts`es padded to one width (`ts_key`), so they sort as
 instants do. The TNG fixtures' stardate `ts`es have an eleventh digit.
 
-**Threads.** After a channel's history, `RawDb::threads_owed` asks the
-store which roots list a newer `latest_reply` than the thread's
-`replies_pages` stamp, or have replies and no stamp. It is a query over
-every stored root, not over the roots this run happened to list, so a
-root stored by a run that died before its replies is owed. The two
-fields are read out of the root's payload with `json_extract`. The stamp
-is written by the transaction that stores the thread's last page.
+**Threads.** After a channel's history, `RawDb::threads_listed` lists
+every stored root with replies at the `latest_reply` its payload
+carries, and `datalib_etl_web::owed` subtracts the threads held at that
+version (`held_version` in `threads_bookkeeping`, keyed like the root).
+It is a query over every stored root, not over the roots this run
+happened to list, so a root stored by a run that died before its replies
+is owed. A thread is one record whose fetch is paged: `owed::drain` asks
+for one at a time, `conversations.replies` is walked to its end, and one
+transaction stores the thread's row and messages, deletes the stored
+replies the walk did not return, and holds the thread at the version it
+was listed at. A walk cut off part way stores nothing of the thread.
 
 **Files.** See [Attachments](#attachments).
 
@@ -199,8 +204,8 @@ Only top-level messages are judged this way. `conversations.history`
 lists a thread's root and never its replies, so a reply missing from the
 re-walk is not evidence of anything and is left alone. The one way the
 window removes a reply is with its root: when a root is gone, its
-replies and the thread's `replies_pages` row go with it, because nothing
-would ever ask for that thread again. A reply that was also sent to the
+replies and the version it was held at go with it, because nothing would
+ever ask for that thread again. A reply that was also sent to the
 channel (`thread_broadcast`) does appear in history, but it is stored as
 a reply and treated as one here.
 
@@ -222,9 +227,9 @@ from last year stays in our copy indefinitely.
 ### Thread replies: when the thread is re-fetched anyway
 
 A thread is read again when its root lists a newer reply than the one
-its stamp holds. `conversations.replies` hands back the whole thread, so
+it is held at. `conversations.replies` hands back the whole thread, so
 a reply we hold that is missing from it was deleted, and we drop it in
-the transaction that stores the thread's last page.
+the transaction that stores the thread.
 
 The catch: **deleting a reply does not make a thread look stale.** The
 newest reply either stays where it was or moves *backwards*, and neither
@@ -234,8 +239,9 @@ time somebody posts in that thread, and not before.
 ### A page that claims more and gives no cursor
 
 Slack pages with a cursor. A response with `has_more` and no cursor to
-ask with is not a listing of anything: its messages are stored, nothing
-is deleted and nothing is covered or stamped, and the channel (or the
+ask with is not a listing of anything. A history page's messages are
+stored, but nothing is deleted or covered; a thread's are not stored at
+all, since the thread is one record. Either way the channel (or the
 thread) is reported as failed, so the next run asks again.
 
 ### Deleting our copy is not as final as it sounds
@@ -278,13 +284,14 @@ and the sync goes on with the rest.
   `listing:conversations.history <channel>`). The run walks what an
   earlier listing stored. A run that gets to its end replaces the last
   run's rows, so the next run that lists cleanly clears them.
-- **A thread** whose `conversations.replies` fails is a row on the
-  thread's own stamp (`replies_pages:<team>#<channel>#<ts>`, the key its
-  root message has), an error while its replies have never been read and
-  a warning once they have. Render names the root's grid row, so the
-  problem shows on the thread's document. The stamp did not move, so the
-  thread is still owed and the next run asks again; the read that
-  succeeds clears the row. Storing the root again does not.
+- **A thread** whose `conversations.replies` fails is an attempt on the
+  thread's own row (`threads:<team>#<channel>#<ts>`, the key its root
+  message has), an error while its replies have never been read and a
+  warning once they have. Render names the root's grid row, so the
+  problem shows on the thread's document. The held version did not move,
+  so the thread is still owed and the next run asks again; the read that
+  succeeds clears the row. Storing the root again does not: the thread's
+  row is its own, so a history page cannot touch it.
 
 A channel whose history fails still has its owed threads and files
 fetched on that run: they are in the store whatever the walk did.
@@ -297,10 +304,13 @@ not hosted elsewhere) is a `slack_attachments` row, written without a
 `media` is on. The bytes are owed from then on.
 
 When `media` is on, each channel's owed files are fetched after its
-history and threads, from the file object the stored message carries:
-a batch of `FILE_BATCH` goes into the blob CAS, then one transaction
-gives their edges a `blake3`. A file whose bytes we already hold, under
-any message, is not fetched again.
+history and threads through `owed::drain` (`ingest/files.rs`), from the
+file object the stored message carries: a request is `FILE_BATCH` files,
+and storing them puts their bytes into the blob CAS (its own file, which
+commits itself) before the one transaction that gives their edges a
+`blake3` and holds them, so a kill between leaves only unnamed bytes. A
+file whose bytes we already hold, under any message, is not fetched
+again.
 
 A file that does not land — the fetch failed, or it is over
 `common.blob_size_limit_bytes` — keeps its edge without bytes, with
@@ -309,7 +319,8 @@ keyed `slack_attachments:<row id>`: `fetch_failed` (an error — the file
 is missing) for a failure, `over_size_limit` (a warning) for a skip. It
 is still owed, so every run tries it again: a transient failure
 recovers, a size skip is judged against today's limit, and either way
-the `problems` row is rewritten or cleared.
+the `problems` row is rewritten or cleared. An edge whose message no
+longer carries a file Slack serves is deleted.
 
 The stored `url_private_download` does not expire: it has no signature
 in it, and the credential signs each request. Checked against the live

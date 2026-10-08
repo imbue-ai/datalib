@@ -249,3 +249,28 @@ export function subscribeLive(handlers: LiveHandlers, opts: LiveOptions = {}): U
     }
   };
 }
+
+/// A refetch a frame asks for, never more than one in flight: frames
+/// that arrive while it runs are answered by one more run after it. A
+/// search costs seconds and the index commits every few while a sync
+/// runs, so restarting it on each frame only queues work on the server,
+/// which finishes an aborted search anyway.
+export function oneAtATime(run: () => Promise<void>): () => void {
+  let running = false;
+  let owed = false;
+  const loop = async () => {
+    running = true;
+    try {
+      do {
+        owed = false;
+        await run().catch(() => {});
+      } while (owed);
+    } finally {
+      running = false;
+    }
+  };
+  return () => {
+    if (running) owed = true;
+    else void loop();
+  };
+}

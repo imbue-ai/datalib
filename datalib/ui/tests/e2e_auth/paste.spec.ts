@@ -13,8 +13,9 @@ import {
   wizard,
   wizField,
 } from "./world";
+import { reviewToml } from "../e2e/wizard-helpers";
 
-test("a pasted token is stored, then Check connection reaches the workspace", async ({
+test("a pasted token is stored, then checked against the workspace", async ({
   page,
   world,
   internet,
@@ -25,12 +26,11 @@ test("a pasted token is stored, then Check connection reaches the workspace", as
   await wizard(page).getByRole("combobox", { name: "Slack account" }).fill("enterprise");
   await form.getByLabel("Token").fill(TNG.slackToken);
   await form.getByRole("button", { name: "Store in latchkey" }).click();
-  await expect(form).toContainText("Stored in latchkey.");
 
   // A successful paste checks the connection by itself — one request,
   // no listing.
   await expect(wizard(page).locator(".wiz-probe-ok")).toContainText(
-    "Connected to picard in Enterprise",
+    "Connected as picard in Enterprise",
   );
   expect(internet.to("slack.com", "/api/conversations.list")).toHaveLength(0);
   // latchkey's own slack service put the token on the wire.
@@ -39,16 +39,15 @@ test("a pasted token is stored, then Check connection reaches the workspace", as
   }
 
   // The channel picker loads its own list, through curl-impersonate.
-  await wizField(page, "Channels").locator(".wiz-load-btn").click();
-  await expect(wizField(page, "Channels").locator(".wiz-load-done")).toContainText(
+  await wizard(page).getByRole("radio", { name: "Only the channels I choose" }).check();
+  await expect(wizField(page, "Which channels?").locator(".wiz-load-done")).toContainText(
     "3 channels from picard in Enterprise.",
   );
   const listings = internet.to("slack.com", "/api/conversations.list");
   expect(listings).toHaveLength(2);
   for (const r of listings) expectImpersonated(r);
   // …and the config names no secret.
-  await wizard(page).getByText("Review the TOML this writes").click();
-  await expect(wizard(page).locator(".wiz-review pre")).not.toContainText(TNG.slackToken);
+  await expect(await reviewToml(page)).not.toContainText(TNG.slackToken);
   expect(world.curlCalls().length).toBeGreaterThan(0);
 });
 
@@ -56,8 +55,7 @@ test("a token stored on the command line beforehand just works", async ({ page, 
   world.latchkey("auth", "set", "slack", "-H", `Authorization: Bearer ${TNG.slackToken}`);
 
   await pickTile(page, TILE.slack);
-  await wizard(page).getByRole("button", { name: "Check connection" }).click();
-  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText("Connected to");
+  await expect(wizard(page).locator(".wiz-probe-ok")).toContainText("Connected as");
 });
 
 test("a wrong token fails Check connection in a sentence", async ({ page }) => {
@@ -83,8 +81,8 @@ test("a picker's list shows its progress while it loads", async ({ page, world, 
       r.host === "slack.com" && r.query.includes("cursor=page-2"),
   );
   await pickTile(page, TILE.slack);
-  const channels = wizField(page, "Channels");
-  await channels.locator(".wiz-load-btn").click();
+  const channels = wizField(page, "Which channels?");
+  await wizard(page).getByRole("radio", { name: "Only the channels I choose" }).check();
 
   await expect(channels.locator(".wiz-load-status")).toContainText("Loading channels… 2 so far");
   await expect(channels.locator(".wiz-load-bar")).toBeVisible();

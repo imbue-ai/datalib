@@ -3,7 +3,6 @@
 //! it. The same path the orchestrator takes when a `type: email` source has
 //! no `sync:` block and `input_path` points at an `.mbox`.
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -32,19 +31,21 @@ fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mbox/star_trek.mbox")
 }
 
+fn enterprise() -> mbox::MboxAccountConfig {
+    mbox::MboxAccountConfig {
+        account_id: Some("enterprise".to_string()),
+        ..Default::default()
+    }
+}
+
 async fn fetch_into_tmp(mbox_path: PathBuf) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("e.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
     mbox::fetch(mbox::FetchOptions {
         input_path: mbox_path,
-        account_id_override: Some("enterprise".to_string()),
-        ..mbox::FetchOptions::new(
-            db.clone(),
-            FingerprintCache::open(&tmp.path().join("fp.sqlite"))
-                .await
-                .unwrap(),
-        )
+        account_config: enterprise(),
+        ..mbox::FetchOptions::new(db.clone())
     })
     .await
     .expect("mbox download fetch");
@@ -151,13 +152,8 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     let db2 = RawDb::open(&db_path).await.unwrap();
     mbox::fetch(mbox::FetchOptions {
         input_path: fixture_path(),
-        account_id_override: Some("enterprise".to_string()),
-        ..mbox::FetchOptions::new(
-            db2.clone(),
-            FingerprintCache::open(&_tmp.path().join("fp.sqlite"))
-                .await
-                .unwrap(),
-        )
+        account_config: enterprise(),
+        ..mbox::FetchOptions::new(db2.clone())
     })
     .await
     .unwrap();
@@ -182,14 +178,9 @@ async fn mbox_only_labels_filters_extraction() {
     let db = RawDb::open(&db_path).await.unwrap();
     mbox::fetch(mbox::FetchOptions {
         input_path: fixture_path(),
-        account_id_override: Some("enterprise".to_string()),
+        account_config: enterprise(),
         only_labels: vec!["Sent".to_string()],
-        ..mbox::FetchOptions::new(
-            db.clone(),
-            FingerprintCache::open(&tmp.path().join("fp.sqlite"))
-                .await
-                .unwrap(),
-        )
+        ..mbox::FetchOptions::new(db.clone())
     })
     .await
     .expect("mbox download fetch with label filter");

@@ -56,7 +56,7 @@ test --zip_undeclared_test_outputs=true
 # (handy when running the sync binary directly outside bazel), but
 # bazel doesn't propagate it into the action graph.
 # Resolver:
-#   * NPX_BIN  — datalib_etl::latchkey::latchkey_command (the manual
+#   * NPX_BIN  — datalib_etl_web::latchkey::latchkey_command (the manual
 #                `*_live` tests). Nothing qmd-shaped reaches npx under
 #                bazel any more: both consumers stage a
 #                DATALIB_RUNTIME_DIR from Bazel-managed inputs, so

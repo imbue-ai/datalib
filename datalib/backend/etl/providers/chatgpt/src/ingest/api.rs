@@ -1,15 +1,16 @@
 //! ChatGPT API transport. Every request goes through
-//! [`datalib_etl::http::latchkey_curl`], which captures the full
+//! [`datalib_etl_web::http::latchkey_curl`], which captures the full
 //! response (status, every header, body) and supports playback from
 //! disk fixtures. Mirrors `src/ingest/chatgpt_web.py:_curl_get`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
 use tracing::instrument;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const BASE: &str = "https://chatgpt.com";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(120);
@@ -26,22 +27,15 @@ pub enum ChatGPTError {
     Permanent(String),
 }
 
+/// Requests go out from `&self`, so the fetch loop's `Fetcher` can hold
+/// one client; the counts are atomics for the same reason.
+#[derive(Default)]
 pub struct ChatGPTClient {
-    pub requests: u64,
-    pub network_seconds: f64,
+    requests: AtomicU64,
+    network_ms: AtomicU64,
     /// The source's latchkey settings, forwarded onto every request this
     /// client issues (see `HttpRequest::latchkey`).
     latchkey: LatchkeySettings,
-}
-
-impl Default for ChatGPTClient {
-    fn default() -> Self {
-        Self {
-            requests: 0,
-            network_seconds: 0.0,
-            latchkey: LatchkeySettings::default(),
-        }
-    }
 }
 
 impl ChatGPTClient {
@@ -56,15 +50,29 @@ impl ChatGPTClient {
         }
     }
 
-    /// The identity this client authenticates as, for the one fetch that
-    /// builds its `latchkey curl` invocation by hand rather than going
-    /// through `HttpRequest` (the signed-CDN attachment GET).
+    /// The identity this client authenticates as, for the attachment
+    /// bytes behind a signed URL, which the fetch builds as its own
+    /// `HttpRequest`.
     pub fn latchkey(&self) -> &LatchkeySettings {
         &self.latchkey
     }
 
+    pub fn requests(&self) -> u64 {
+        self.requests.load(Ordering::Relaxed)
+    }
+
+    pub fn network_seconds(&self) -> f64 {
+        self.network_ms.load(Ordering::Relaxed) as f64 / 1000.0
+    }
+
+    /// Counts a request this client did not make through [`Self::get`].
+    pub fn count(&self, duration_ms: u64) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        self.network_ms.fetch_add(duration_ms, Ordering::Relaxed);
+    }
+
     #[instrument(skip(self), fields(path = path))]
-    pub async fn get(&mut self, path: &str) -> Result<Value, ChatGPTError> {
+    pub async fn get(&self, path: &str) -> Result<Value, ChatGPTError> {
         let url = format!("{BASE}{path}");
         let req = HttpRequest::get(HttpService::Chatgpt, &url)
             .header("Accept", "application/json")
@@ -81,8 +89,7 @@ impl ChatGPTClient {
             },
             other => ChatGPTError::Permanent(format!("GET {path}: {other}")),
         })?;
-        self.network_seconds += (resp.duration_ms as f64) / 1000.0;
-        self.requests += 1;
+        self.count(resp.duration_ms);
 
         if resp.status == 200 {
             let body = resp.body_str();
@@ -104,12 +111,12 @@ impl ChatGPTClient {
         )))
     }
 
-    pub async fn me(&mut self) -> Result<Value, ChatGPTError> {
+    pub async fn me(&self) -> Result<Value, ChatGPTError> {
         self.get("/backend-api/me").await
     }
 
     pub async fn list_conversations_page(
-        &mut self,
+        &self,
         offset: usize,
         limit: usize,
     ) -> Result<Value, ChatGPTError> {
@@ -119,7 +126,7 @@ impl ChatGPTClient {
         .await
     }
 
-    pub async fn get_conversation(&mut self, conv_id: &str) -> Result<Value, ChatGPTError> {
+    pub async fn get_conversation(&self, conv_id: &str) -> Result<Value, ChatGPTError> {
         self.get(&format!("/backend-api/conversation/{conv_id}"))
             .await
     }

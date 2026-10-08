@@ -62,7 +62,7 @@ test("a column dropped on the search bar keeps the rows with a value in it", asy
 
   await openGrid(page);
   await page.evaluate(() =>
-    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.dropOnSearch("author"),
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.dropOnSearch("author_ref"),
   );
   await expect(page.getByTestId("search-input")).toHaveValue("author:*");
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${withAuthor})`);

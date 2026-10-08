@@ -41,7 +41,7 @@ pub async fn probe(config: &EmailConfig, ask: ProbeAsk) -> Result<ProbeReport> {
 
 async fn probe_gmail(
     user_id: &str,
-    latchkey: &datalib_etl::http::LatchkeySettings,
+    latchkey: &datalib_etl_web::http::LatchkeySettings,
     list: bool,
 ) -> Result<ProbeReport> {
     // Two requests, so a throttle would never wait; it exists here only
@@ -111,7 +111,7 @@ async fn probe_gmail(
 
 async fn probe_jmap(
     sync: &datalib_etl_email_config::EmailSync,
-    latchkey: &datalib_etl::http::LatchkeySettings,
+    latchkey: &datalib_etl_web::http::LatchkeySettings,
     list: bool,
 ) -> Result<ProbeReport> {
     if sync.hostname.trim().is_empty() {

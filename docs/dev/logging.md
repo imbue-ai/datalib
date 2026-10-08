@@ -119,8 +119,9 @@ has the server's, since the bundle is embedded in the binary.
 | the UI | `track("name", { …fields }, { level, msg })` from [`ui/src/telemetry.ts`](../../datalib/ui/src/telemetry.ts) | `target:ui.name` under the page's own process, with the page's clock; batched, `keepalive`, never throws |
 
 Adding a UI event is one word in the `PageEventName` union and the
-call; the server files any word. Uncaught exceptions and route changes
-are already tracked — see the union for what is.
+call; the server files any word. Uncaught exceptions, route changes
+and every toast shown (`target:ui.toast`, its text as the line, at its
+level) are already tracked — see the union for what is.
 
 Levels are `trace` … `error`. The level a root logs at is
 `log_level` at the top of its `config.toml` — `trace` when it does

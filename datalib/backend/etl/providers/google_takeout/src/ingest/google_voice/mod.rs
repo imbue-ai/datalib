@@ -6,19 +6,20 @@ pub mod schema_raw;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::{RunProblem, SkippedRecord};
-use datalib_etl::file_checkpoint;
-use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fsscan;
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
+use sqlx::{Sqlite, Transaction};
 
 use self::parse::{parse_bills, parse_chat_log, parse_haudio, CallKind, Party};
 use self::schema_raw::{
@@ -138,9 +139,18 @@ pub async fn ingest(
         .iter()
         .find(|f| f.rel.eq_ignore_ascii_case("Voice/Bills.html"))
     {
-        match std::fs::read_to_string(&f.path) {
-            Ok(html) => {
-                let (headers, rows) = parse_bills(&html);
+        match std::fs::read_to_string(&f.path).map(|html| parse_bills(&html)) {
+            // A bills page with no table header is not one this reader
+            // knows; a table with no rows is a page of no bills.
+            Ok((headers, _)) if headers.is_empty() => {
+                unread(
+                    f,
+                    Reason::Undeserializable,
+                    "the page holds no bills table".to_string(),
+                );
+                failed += 1;
+            }
+            Ok((headers, rows)) => {
                 for cells in rows {
                     let key = sha8(&cells.join("\u{1f}"));
                     let payload = json!({
@@ -238,14 +248,6 @@ pub async fn ingest(
     // An incomplete file is read again next run. Its old stamp would say
     // "rewritten" for good and make every run read every file, so once
     // this run has read them all it goes, and the file reads as new.
-    if deletes {
-        for f in &incomplete {
-            file_checkpoint::forget_file(&mut tx, SCOPE, &f.rel).await?;
-        }
-    }
-    tx.commit().await.context("commit google_voice tx")?;
-    found.skipped("google_voice", skipped);
-
     let mut summary = VoiceSummary {
         messages: n_messages,
         bills: n_bills,
@@ -254,7 +256,12 @@ pub async fn ingest(
         blobs_stored,
         ..VoiceSummary::default()
     };
+    // The prune lands with the stamps: a rewritten file stamped without it
+    // would not be seen rewritten again, and what it dropped would stay.
     if deletes {
+        for f in &incomplete {
+            file_checkpoint::forget_file(&mut tx, SCOPE, &f.rel).await?;
+        }
         let kept = Kept {
             messages: message_rows
                 .iter()
@@ -269,13 +276,17 @@ pub async fn ingest(
                 .map(|r| r.id_and_payload.id.clone())
                 .collect(),
         };
-        summary.removed = prune_unseen(db, &kept, include_spam).await?;
+        summary.removed = prune_unseen(&mut tx, &kept, include_spam).await?;
         let gone = changes.gone();
         summary.files_removed = gone.len();
-        file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
+        for rel in gone {
+            file_checkpoint::forget_file(&mut tx, SCOPE, rel).await?;
+        }
     } else if failed > 0 && changes.may_have_dropped_records() {
         summary.held_back = Some(fsscan::Scan::deletions_held_back(failed));
     }
+    tx.commit().await.context("commit google_voice tx")?;
+    found.skipped("google_voice", skipped);
     Ok(summary)
 }
 
@@ -290,7 +301,11 @@ struct Kept {
 /// edges. Messages only in the folders this run read, so turning spam off
 /// never deletes it. Only right after reading every file. Returns how many
 /// records went.
-async fn prune_unseen(db: &RawDb, kept: &Kept, include_spam: bool) -> Result<usize> {
+async fn prune_unseen(
+    tx: &mut Transaction<'_, Sqlite>,
+    kept: &Kept,
+    include_spam: bool,
+) -> Result<usize> {
     let folders: &[&str] = if include_spam {
         &["calls", "spam"]
     } else {
@@ -299,18 +314,13 @@ async fn prune_unseen(db: &RawDb, kept: &Kept, include_spam: bool) -> Result<usi
     let mut owners: Vec<String> = Vec::new();
     for folder in folders {
         owners.extend(
-            prune::prune_scope(
-                db.pool(),
-                "voice_messages",
-                &[("folder", folder)],
-                &kept.messages,
-            )
-            .await?,
+            prune::prune_scope_in_tx(tx, "voice_messages", &[("folder", folder)], &kept.messages)
+                .await?,
         );
     }
-    owners.extend(prune::prune_scope(db.pool(), "voice_greetings", &[], &kept.greetings).await?);
-    let bills = prune::prune_scope(db.pool(), "voice_bills", &[], &kept.bills).await?;
-    prune::delete_owned(db.pool(), "voice_attachments", "message_id", &owners).await?;
+    owners.extend(prune::prune_scope_in_tx(tx, "voice_greetings", &[], &kept.greetings).await?);
+    let bills = prune::prune_scope_in_tx(tx, "voice_bills", &[], &kept.bills).await?;
+    prune::delete_owned_in_tx(tx, "voice_attachments", "message_id", &owners).await?;
     Ok(owners.len() + bills.len())
 }
 
@@ -353,7 +363,7 @@ fn ingest_record(
                     acc,
                     n_attachments,
                     missing,
-                );
+                )?;
                 Ok(true)
             }
             Some(tok) if CallKind::from_type_token(tok).is_some() => {
@@ -368,7 +378,7 @@ fn ingest_record(
                     acc,
                     n_attachments,
                     missing,
-                );
+                )?;
                 Ok(true)
             }
             _ => Ok(false),
@@ -412,8 +422,13 @@ fn ingest_text_thread(
     acc: &mut CasEdgeAccumulator,
     n_attachments: &mut usize,
     missing: &mut Vec<String>,
-) {
+) -> Result<()> {
     let msgs = parse_chat_log(html);
+    // Voice writes a thread file only for a thread with messages, so one
+    // holding none is a file this reader could not read.
+    if msgs.is_empty() {
+        bail!("the thread holds no message");
+    }
     // Channel = the distinct non-me parties in this file.
     let tels: Vec<String> = msgs
         .iter()
@@ -481,6 +496,7 @@ fn ingest_text_thread(
             folder: Some(folder.to_string()),
         });
     }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -494,8 +510,11 @@ fn ingest_event(
     acc: &mut CasEdgeAccumulator,
     n_attachments: &mut usize,
     missing: &mut Vec<String>,
-) {
+) -> Result<()> {
     let ev = parse_haudio(html);
+    if ev.published.trim().is_empty() {
+        bail!("the call record has no time");
+    }
     let tels: Vec<String> = ev.party.tel.iter().cloned().collect();
     let (conversation_key, conversation_display) = derive_channel(label, &tels);
     let when = normalize_ts(&ev.published);
@@ -551,6 +570,7 @@ fn ingest_event(
         kind: Some(kind.as_str().to_string()),
         folder: Some(folder.to_string()),
     });
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

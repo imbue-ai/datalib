@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const BASE: &str = "https://api.notion.com/v1";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(180);

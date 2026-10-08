@@ -5,13 +5,13 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::file_checkpoint;
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
 use datalib_problems::{Outcome, Problem, Reason};
 use tracing::warn;
 
@@ -137,6 +137,7 @@ async fn ingest_one(
 ) -> Result<usize> {
     let body = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
     let split = ical::split_file(&body);
+    ensure_whole_calendar(&body, &split)?;
     let calendar_id = calendar_id(root, file);
     let name = split.calendar_name.clone().or_else(|| {
         file.file_stem()
@@ -179,6 +180,33 @@ async fn ingest_one(
     summary.events_deleted += gone.len();
     db.delete_ics_uids(&calendar_id, &gone).await?;
     Ok(split.events_without_uid)
+}
+
+/// A file stands for its whole calendar only when it holds a `VCALENDAR`
+/// that closes, and an event it lists can be told apart from the rest.
+/// A well-formed calendar with no events is an empty calendar.
+fn ensure_whole_calendar(body: &str, split: &ical::SplitFile) -> Result<()> {
+    let lines = ical::unfold(body);
+    let marks = |mark: &str| {
+        lines
+            .iter()
+            .filter(|l| l.trim().eq_ignore_ascii_case(mark))
+            .count()
+    };
+    let (begun, ended) = (marks("BEGIN:VCALENDAR"), marks("END:VCALENDAR"));
+    if begun == 0 {
+        bail!("the file holds no calendar (BEGIN:VCALENDAR … END:VCALENDAR)");
+    }
+    if begun != ended {
+        bail!("the file ends before its END:VCALENDAR: a copy cut off part-way");
+    }
+    if split.events.is_empty() && split.events_without_uid > 0 {
+        bail!(
+            "none of the file's {} events has a UID, so it cannot say which stored events it still holds",
+            split.events_without_uid
+        );
+    }
+    Ok(())
 }
 
 /// The file's path under the configured directory, without `.ics`:
@@ -379,6 +407,55 @@ mod tests {
         e.fetch().await;
         assert!(e.problems().await.is_empty());
         assert_eq!(e.uids().await, vec!["dixon-hill"]);
+        e.db.close().await;
+    }
+
+    /// An `.ics` rewritten to nothing (0 bytes, text that is not a
+    /// calendar, a copy cut off before `END:VCALENDAR`, events none of
+    /// which has a UID) read as a calendar with no events, and every event
+    /// was deleted. Only a whole `VCALENDAR` with no events empties it.
+    #[tokio::test]
+    async fn a_file_that_is_recognizably_nothing_deletes_nothing() {
+        let e = Env::new().await;
+        let path = e.input.path().join("Bridge.ics");
+        let whole = ics("red-alert");
+        std::fs::write(&path, &whole).unwrap();
+        e.fetch().await;
+        assert_eq!(e.uids().await, vec!["red-alert"]);
+
+        let cut_off = whole[..whole.find("END:VCALENDAR").unwrap()].to_string();
+        let no_uid = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+             DTSTART:23640101T090000Z\r\nSUMMARY:drill\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+            .to_string();
+        for (what, body) in [
+            ("an empty file", String::new()),
+            ("text that is not a calendar", "Red alert.\n".to_string()),
+            ("a copy cut off before its end", cut_off),
+            ("events none of which has a UID", no_uid),
+        ] {
+            std::fs::write(&path, &body).unwrap();
+            let s = e.fetch().await;
+            assert_eq!(s.events_deleted, 0, "{what} deleted events");
+            assert_eq!(e.uids().await, vec!["red-alert"], "{what}");
+            assert_eq!(
+                e.problems().await,
+                [(
+                    "listing:ics Bridge.ics".to_string(),
+                    "fetch_failed".to_string()
+                )],
+                "{what}"
+            );
+        }
+
+        std::fs::write(
+            &path,
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nX-WR-CALNAME:Bridge\r\nEND:VCALENDAR\r\n",
+        )
+        .unwrap();
+        let emptied = e.fetch().await;
+        assert_eq!(emptied.events_deleted, 1);
+        assert!(e.uids().await.is_empty());
+        assert!(e.problems().await.is_empty());
         e.db.close().await;
     }
 

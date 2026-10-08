@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl::raw_layout;
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl_fsindex_config::FsindexConfig;
 
 use crate::ingest;

@@ -3,12 +3,14 @@
 pub mod db;
 pub mod schema_raw;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
+use datalib_etl::prune;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
@@ -33,8 +35,8 @@ pub struct FetchOptions {
     /// timestamps sort correctly) is the one we ingest.
     pub snapshot_root: PathBuf,
     /// This host's shared fingerprint cache. Host state, so it lives
-    /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
-    pub cache: datalib_etl::fingerprint_cache::FingerprintCache,
+    /// outside the scan store — see [`datalib_etl_files::fingerprint_cache`].
+    pub cache: datalib_etl_files::fingerprint_cache::FingerprintCache,
     /// Directory holding the encrypted attachment blobs (the shared
     /// `files/XX/<media_name>` tree). When `None`, defaults to
     /// `snapshot_root.join("files")` — the layout Signal Android
@@ -70,6 +72,8 @@ pub struct FetchSummary {
     pub snapshot: String,
     /// Blake3 hex of the snapshot (see `schema_raw::SNAPSHOT_BLAKE3_RECIPE_DOC`).
     pub snapshot_blake3: String,
+    /// Rows an older snapshot held that this one does not.
+    pub pruned: usize,
     /// True when fetch short-circuited because this snapshot was
     /// already recorded in `ingested_backups`. When true, all other
     /// counters are zero.
@@ -287,34 +291,39 @@ async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
         }
     }
 
-    // One generic UPSERT path per table — same call, different row
-    // type. All four batches land in their own tx; an inner crash
-    // never leaves a half-applied snapshot because the snapshot-level
-    // commit happens in the orchestrator (see §"Commit lifecycle").
+    // The snapshot is the whole store, so read whole it replaces what an
+    // older one left, in the transaction that writes it. One with a frame
+    // that would not decode was not read whole: what it seems to have
+    // dropped may be in that frame, so it deletes nothing.
+    let read_whole = undecoded.is_empty();
     let now = datalib_time::IsoOffsetTimestamp::now_local();
-    {
-        let mut tx = db.pool().begin().await.context("begin account tx")?;
-        bulk_upsert_in_tx(&mut tx, &accounts, &now).await?;
-        tx.commit().await.context("commit account tx")?;
+    let mut tx = db.pool().begin().await.context("begin snapshot tx")?;
+    bulk_upsert_in_tx(&mut tx, &accounts, &now).await?;
+    bulk_upsert_in_tx(&mut tx, &recipients, &now).await?;
+    bulk_upsert_in_tx(&mut tx, &chats, &now).await?;
+    bulk_upsert_in_tx(&mut tx, &chat_items, &now).await?;
+    if read_whole {
+        let kept = [
+            (AccountRow::TABLE, ids_of(&accounts)),
+            (RecipientRow::TABLE, ids_of(&recipients)),
+            (ChatRow::TABLE, ids_of(&chats)),
+            (ChatItemRow::TABLE, ids_of(&chat_items)),
+            (
+                schema_raw::ChatItemAttachmentRow::TABLE,
+                ids_of(&pending_attachments.rows),
+            ),
+        ];
+        for (table, keep) in &kept {
+            let gone = prune::prune_scope_in_tx(&mut tx, table, &[], keep).await?;
+            prune::record(table, keep.len() + gone.len(), gone.len());
+            summary.pruned += gone.len();
+        }
     }
-    {
-        let mut tx = db.pool().begin().await.context("begin recipients tx")?;
-        bulk_upsert_in_tx(&mut tx, &recipients, &now).await?;
-        tx.commit().await.context("commit recipients tx")?;
-    }
-    {
-        let mut tx = db.pool().begin().await.context("begin chats tx")?;
-        bulk_upsert_in_tx(&mut tx, &chats, &now).await?;
-        tx.commit().await.context("commit chats tx")?;
-    }
-    {
-        let mut tx = db.pool().begin().await.context("begin chat_items tx")?;
-        bulk_upsert_in_tx(&mut tx, &chat_items, &now).await?;
-        tx.commit().await.context("commit chat_items tx")?;
-    }
+    tx.commit().await.context("commit snapshot tx")?;
     // Attachment bulk-flush: one CAS-pool tx (`put_many`) + one
     // entity-pool tx (chat_item_attachments + bookkeeping + per-row
-    // error annotations).
+    // error annotations). The run's one seal publishes it with the rows
+    // above, or neither.
     flush_attachments(&db, pending_attachments).await?;
 
     // The next snapshot is read whole, so its report replaces this one.
@@ -322,8 +331,9 @@ async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
         found.phase(
             "frames",
             format!(
-                "{} backup frame(s) did not decode, so their records are missing \
-                 until a newer backup reads; first: {first}",
+                "{} backup frame(s) did not decode, so their records are missing and \
+                 nothing this backup dropped was deleted, until a newer backup reads; \
+                 first: {first}",
                 undecoded.len()
             ),
         );
@@ -339,6 +349,10 @@ async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
     .context("record snapshot in ingested_backups")?;
 
     Ok(summary)
+}
+
+fn ids_of<T: BulkUpsertable>(rows: &[T]) -> HashSet<String> {
+    rows.iter().map(|r| r.id().to_string()).collect()
 }
 
 fn compute_snapshot_blake3(snapshot_dir: &Path) -> Result<(String, u64)> {

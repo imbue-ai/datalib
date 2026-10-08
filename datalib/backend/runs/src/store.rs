@@ -330,7 +330,10 @@ async fn write_meta(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         pool,
         datalib_store_meta::StoreKind::Runs,
         &hash,
-        SCHEMA_VERSION as u32,
+        datalib_store_meta::Versions {
+            schema: SCHEMA_VERSION as u32,
+            shared: 0,
+        },
     )
     .await
     .map_err(|e| sqlx::Error::Protocol(format!("_datalib_meta: {e:#}")))?;

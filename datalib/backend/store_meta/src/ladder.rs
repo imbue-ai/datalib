@@ -2,7 +2,9 @@
 //! cannot get it there. A store owner declares its migrations in order;
 //! `_datalib_meta.schema_version` says how many have run; an open runs
 //! the rest, one at a time, each in its own transaction and — for a
-//! doltlite store — its own commit. The reference is etl/README.md
+//! doltlite store — its own commit. The tables every store shares climb
+//! a second ladder the framework keeps, counted by
+//! `shared_schema_version`. The reference is etl/README.md
 //! §"The migration ladder"; the design record is
 //! docs/dev/plans/completed/schema_migrations.md §3.3.
 
@@ -27,6 +29,23 @@ pub struct Migration {
     /// One line; the commit message.
     pub name: &'static str,
     pub apply: Apply,
+}
+
+/// Which of a store's two ladders: its owner's, or the framework's for
+/// the tables every store shares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ladder {
+    Own,
+    Shared,
+}
+
+impl Ladder {
+    fn key(self) -> &'static str {
+        match self {
+            Ladder::Own => "schema_version",
+            Ladder::Shared => "shared_schema_version",
+        }
+    }
 }
 
 /// The rungs above `current`, in order. A ladder is checked for being
@@ -75,7 +94,7 @@ impl std::error::Error for AheadOfLadder {}
 /// Run one rung: its body and the version bump, in one transaction.
 /// The owner commits after, so a crash between the two leaves the
 /// working set for the next open to discard and the rung to run again.
-pub async fn apply(pool: &SqlitePool, m: &Migration) -> Result<()> {
+pub async fn apply(pool: &SqlitePool, m: &Migration, ladder: Ladder) -> Result<()> {
     let mut tx = pool
         .begin()
         .await
@@ -86,26 +105,35 @@ pub async fn apply(pool: &SqlitePool, m: &Migration) -> Result<()> {
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     sqlx::query(
         "INSERT INTO _datalib_meta (key, value, written_at_utc, tz_offset) \
-         VALUES ('schema_version', ?, ?, ?) \
+         VALUES (?, ?, ?, ?) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, \
          written_at_utc = excluded.written_at_utc, tz_offset = excluded.tz_offset",
     )
+    .bind(ladder.key())
     .bind(m.version.to_string())
     .bind(&now)
     .bind(&tz_offset)
     .execute(&mut *tx)
     .await
-    .context("write schema_version")?;
+    .with_context(|| format!("write {}", ladder.key()))?;
     tx.commit()
         .await
         .with_context(|| format!("commit migration v{}", m.version))?;
-    tracing::info!(version = m.version, name = m.name, "migrated");
+    tracing::info!(
+        version = m.version,
+        name = m.name,
+        ladder = ladder.key(),
+        "migrated"
+    );
     Ok(())
 }
 
-/// The store's `schema_version`, `0` with no meta or no such row.
-pub async fn stored_version(pool: &SqlitePool) -> Result<u32> {
-    Ok(crate::read(pool).await?.map_or(0, |m| m.schema_version))
+/// Where the store stands on `ladder`, `0` with no meta or no such row.
+pub async fn stored_version(pool: &SqlitePool, ladder: Ladder) -> Result<u32> {
+    Ok(crate::read(pool).await?.map_or(0, |m| match ladder {
+        Ladder::Own => m.schema_version,
+        Ladder::Shared => m.shared_schema_version,
+    }))
 }
 
 #[cfg(test)]

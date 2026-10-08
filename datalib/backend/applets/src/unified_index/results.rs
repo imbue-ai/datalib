@@ -2,7 +2,7 @@
 //! per query, sort and commit, then every page of it is a slice of the
 //! list: the second page of a search does not run it again.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use datalib_unified_index::group::Within;
@@ -34,11 +34,29 @@ pub struct Entry {
 }
 
 #[derive(Default)]
-pub struct ResultCache(Mutex<VecDeque<(Key, Arc<Vec<Entry>>)>>);
+pub struct ResultCache {
+    lists: Mutex<VecDeque<(Key, Arc<Vec<Entry>>)>>,
+    turns: Mutex<HashMap<Key, Arc<tokio::sync::Mutex<()>>>>,
+}
 
 impl ResultCache {
+    /// Held while one request lists `key`. A search card asks for a
+    /// query's rows and its groups at once, and qmd answers one search at
+    /// a time in seconds: without a turn, both miss the cache and qmd
+    /// ranks the same words twice, the second waiting behind the first.
+    /// Look in the cache again once the turn is yours.
+    pub async fn turn(&self, key: &Key) -> tokio::sync::OwnedMutexGuard<()> {
+        let gate = {
+            let mut turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
+            // A gate only the map holds is one nobody is waiting on.
+            turns.retain(|_, g| Arc::strong_count(g) > 1);
+            turns.entry(key.clone()).or_default().clone()
+        };
+        gate.lock_owned().await
+    }
+
     pub fn get(&self, key: &Key) -> Option<Arc<Vec<Entry>>> {
-        let mut entries = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut entries = self.lists.lock().unwrap_or_else(|e| e.into_inner());
         let i = entries.iter().position(|(k, _)| k == key)?;
         let found = entries.remove(i)?;
         let list = found.1.clone();
@@ -47,7 +65,7 @@ impl ResultCache {
     }
 
     pub fn put(&self, key: Key, list: Arc<Vec<Entry>>) {
-        let mut entries = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut entries = self.lists.lock().unwrap_or_else(|e| e.into_inner());
         entries.retain(|(k, _)| k != &key);
         entries.push_front((key, list));
         entries.truncate(CAPACITY);
@@ -164,5 +182,45 @@ mod tests {
             cache.get(&key("q1", "c")).is_none(),
             "least recently used, so gone"
         );
+    }
+
+    /// The search card's rows and groups arrive together for one query;
+    /// the second must wait for the first's list rather than run qmd
+    /// again (a demo search took 4–14 s, two qmd passes queued on one
+    /// daemon).
+    #[tokio::test]
+    async fn a_second_ask_waits_for_the_list_being_made() {
+        let cache = Arc::new(ResultCache::default());
+        let k = key("warp core", "c1");
+        let first = cache.turn(&k).await;
+
+        let ranked_again = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let second = tokio::spawn({
+            let (cache, k, ranked_again) = (cache.clone(), k.clone(), ranked_again.clone());
+            async move {
+                let _turn = cache.turn(&k).await;
+                if cache.get(&k).is_none() {
+                    ranked_again.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        });
+        // On the test's one thread, this is where the second ask runs up
+        // to its turn.
+        tokio::task::yield_now().await;
+        cache.put(k.clone(), Arc::new(list(3)));
+        drop(first);
+        second.await.unwrap();
+        assert!(
+            !ranked_again.load(std::sync::atomic::Ordering::SeqCst),
+            "the second ask found the first one's list"
+        );
+    }
+
+    #[tokio::test]
+    async fn different_searches_do_not_wait_on_each_other() {
+        let cache = ResultCache::default();
+        let _a = cache.turn(&key("a", "c1")).await;
+        let _b = cache.turn(&key("b", "c1")).await;
+        let _a_later = cache.turn(&key("a", "c2")).await;
     }
 }

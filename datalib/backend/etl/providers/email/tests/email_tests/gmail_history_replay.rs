@@ -114,13 +114,12 @@ async fn run(m: &Mirror) -> FetchSummary {
         .expect("gmail fetch under playback")
 }
 
-/// The mailboxes the message with this Gmail id is filed under.
+/// The mailboxes the message with this Gmail id is filed under. The
+/// ids here are sixteen hex digits, so the email row's id is the same.
 async fn filed(m: &Mirror, gmail_id: &'static str) -> Vec<String> {
     m.read(|db: RawDb| async move {
         sqlx::query_scalar(
-            "SELECT j.mailbox_id FROM fetched_messages f
-             JOIN email_mailboxes j ON j.email_id = f.email_id
-             WHERE f.id = ? ORDER BY j.mailbox_id",
+            "SELECT mailbox_id FROM email_mailboxes WHERE email_id = ? ORDER BY mailbox_id",
         )
         .bind(gmail_id)
         .fetch_all(db.pool())

@@ -5,8 +5,8 @@
 //! and applies the one rule the UI applies too
 //! (`datalib/ui/src/config/ingestMethods.ts`): a method is held when its
 //! path is written and its value is neither `null` nor `false`. It also
-//! refuses the two keys every method table replaced, `sync` and
-//! `common.input_path`, naming the tool that rewrites them.
+//! refuses the keys an earlier config shape wrote, naming the tool that
+//! rewrites them, and drops the ones that are only inert.
 
 use anyhow::Result;
 use datalib_source_common::{IngestMethod, IngestMethods, Reach};
@@ -93,6 +93,27 @@ pub fn refuse_retired_params(source_type: SourceType, params: &serde_json::Value
          `datalib-migrate-config <data root> --force`.",
         written.join(" and "),
     )
+}
+
+/// Keys of `common` that no longer do anything. Unlike the retired ones
+/// they are dropped rather than refused: the config still means what it
+/// says without them, and `datalib-dag --check` warns at the line.
+const INERT_COMMON_KEYS: &[&str] = &["always_clear_before_ingest"];
+
+/// Removes the [`INERT_COMMON_KEYS`] these params write, returning the
+/// ones it removed.
+pub fn drop_inert_params(params: &mut serde_json::Value) -> Vec<&'static str> {
+    let Some(common) = params
+        .get_mut("common")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return Vec::new();
+    };
+    INERT_COMMON_KEYS
+        .iter()
+        .copied()
+        .filter(|k| common.remove(*k).is_some())
+        .collect()
 }
 
 pub fn held<'a>(params: &serde_json::Value, methods: &'a [IngestMethod]) -> Vec<&'a IngestMethod> {

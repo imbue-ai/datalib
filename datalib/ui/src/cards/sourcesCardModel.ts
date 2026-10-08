@@ -84,9 +84,9 @@ folder its data is in.
 step's log — from the run in flight while it runs, else from the run it last took
 part in, with a picker for its other runs — as a grid you can sort, filter and
 search; on a group row, the log of the step its status came from.
-A <b>red or yellow number</b> after a name counts the errors (records dropped) and
-warnings (records kept with something lost) its store holds as of its last run; a row
-with none shows nothing. <b>Double-click the number</b> for the list.
+A <b>red or yellow number</b> after a name counts the errors and warnings that step
+found in its last run; a source's is the sum of its steps'. A row with none shows
+nothing. <b>Double-click the number</b> for the list.
 <b>Queue</b> is how much work a step says is still ahead of it, and <b>ETA</b> when
 that work is done at the pace work has come off the queue over the last two minutes
 (since the step started, when nothing came off in those two) — or a word when there
@@ -410,9 +410,11 @@ export function useSourcesCard(ctx: CardCtx) {
   }
 
   /// Double-clicking a status opens the log it came from; a problems count,
-  /// the problems; a queue or an ETA, the sync dashboard.
+  /// the problems, or on System, whose count is the config's warnings, the
+  /// config; a queue or an ETA, the sync dashboard.
   function onCellDoubleClicked(data: Row, field: string) {
-    if (field === "problems") actions.openProblems(data, `${UNIFIED_INDEX}/problems`);
+    if (field === "problems" && data.kind === "system") openConfig();
+    else if (field === "problems") actions.openProblems(data, `${UNIFIED_INDEX}/problems`);
     else if (field === "status") void actions.openStepLog(data);
     else if (field === "queue" || field === "eta") actions.openDashboard(data);
   }

@@ -5,8 +5,11 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::periodize::Period;
 use datalib_etl::processor::PlanContext;
-use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use datalib_etl_render::processor::{
+    plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
+};
 use datalib_etl_signal_config::SignalRenderConfig;
+use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use std::path::Path;
 
 pub fn plan_render(
@@ -49,6 +52,24 @@ impl SourceRender for SignalRender {
 
         let parsed = parse(raw_path, self.period, ctx.name, ctx.raw_range())
             .with_context(|| format!("signal parse {}", raw_path.display()))?;
+        // Every recipient is read every run, so the report is whole for
+        // the table: one that reads cleanly now loses its row.
+        let aci_rows: Vec<ProblemRow> = parsed
+            .aci_unreadable
+            .iter()
+            .map(|(id, sample)| {
+                ProblemRow::new(
+                    ctx.name,
+                    Stage::Parse,
+                    Scope::Entity(&format!("recipients:{id}")),
+                    None,
+                    Outcome::Nulled,
+                    Problem::field("aci", Reason::CoercionFailed, sample),
+                    Some(self.render_version()),
+                )
+            })
+            .collect();
+        ctx.report_entity_problems(&ReadScope::Whole(vec!["recipients"]), &aci_rows)?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let summary = render_all(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
             .context("signal render_all")?;

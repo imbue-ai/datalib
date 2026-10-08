@@ -1,6 +1,6 @@
 //! Program-A `DataProcessor`s for the `sms_backup_restore` source.
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};

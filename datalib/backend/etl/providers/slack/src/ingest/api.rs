@@ -1,21 +1,17 @@
 //! Slack API transport: latchkey curl shellout with retry.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::Result;
 use serde_json::Value;
-use tracing::{debug, instrument};
+use tracing::instrument;
 
-use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::events;
-use datalib_etl::http::{
-    default_retryability, latchkey_curl, latchkey_curl_classified, parse_retry_after, HttpError,
-    HttpRequest, HttpResponse, HttpService, LatchkeySettings, Retryability,
+use datalib_etl_web::http::{
+    default_retryability, latchkey_curl_classified, parse_retry_after, HttpError, HttpRequest,
+    HttpResponse, HttpService, LatchkeySettings, Retryability,
 };
-
-use super::db::{OwedFile, RawDb};
-use super::schema_raw::SlackAttachmentRow;
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -159,13 +155,11 @@ pub async fn call_slack(
     })
 }
 
-// File-download path: `latchkey curl` against files.slack.com.
-
 /// Where Slack serves a file object's bytes. `None` for a tombstone, a
 /// file hosted elsewhere, or one with no id: nothing to fetch, so no edge.
 /// The URL carries no signature (the session credential signs the
 /// request), so the one in a stored message stays good.
-fn served(file_obj: &Value) -> Option<(&str, &str)> {
+pub(crate) fn served(file_obj: &Value) -> Option<(&str, &str)> {
     let id = file_obj.get("id").and_then(Value::as_str)?;
     if file_obj.get("mode").and_then(Value::as_str) == Some("tombstone")
         || file_obj.get("is_external").and_then(Value::as_bool) == Some(true)
@@ -181,143 +175,4 @@ fn served(file_obj: &Value) -> Option<(&str, &str)> {
 
 pub fn served_file_id(file_obj: &Value) -> Option<&str> {
     served(file_obj).map(|(id, _)| id)
-}
-
-/// How many files a batch holds in memory before it is written.
-pub const FILE_BATCH: usize = 8;
-
-/// Fetch one batch of owed files into the CAS and stamp their edges, in
-/// one transaction. What was tried is written before an interruption is
-/// handed back. Returns what became of each, by outcome.
-pub async fn fetch_files(
-    db: &RawDb,
-    files: &[OwedFile],
-    blake3_by_file: &mut HashMap<String, String>,
-    blob_size_limit_bytes: Option<u64>,
-    latchkey: &LatchkeySettings,
-) -> Result<BTreeMap<String, usize>> {
-    let mut attach = CasEdgeAccumulator::new();
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    // Hashes this batch computed, known to later batches only once the
-    // bytes behind them are written.
-    let mut fresh: HashMap<String, String> = HashMap::new();
-    let mut tried = Ok(());
-    for owed in files {
-        let (Some((file_id, url)), message_uuid) = (served(&owed.file), &owed.message_uuid) else {
-            continue;
-        };
-        if let Some(blake3) = blake3_by_file.get(file_id).or_else(|| fresh.get(file_id)) {
-            attach.add_known(message_uuid, file_id, blake3.clone());
-            *counts.entry("skipped".to_string()).or_insert(0) += 1;
-            continue;
-        }
-        let fetched = fetch_one_file(
-            message_uuid,
-            file_id,
-            url,
-            &owed.file,
-            &mut attach,
-            blob_size_limit_bytes,
-            latchkey,
-        )
-        .await;
-        match fetched {
-            Ok((outcome, blake3)) => {
-                *counts.entry(outcome.to_string()).or_insert(0) += 1;
-                fresh.extend(blake3.map(|h| (file_id.to_string(), h)));
-            }
-            Err(e) => {
-                tried = Err(e);
-                break;
-            }
-        }
-    }
-    attach
-        .flush(db.pool(), db.cas(), |message_uuid, file_id, blake3| {
-            SlackAttachmentRow {
-                id: SlackAttachmentRow::pk_recipe(message_uuid, file_id),
-                message_uuid: message_uuid.to_string(),
-                file_id: file_id.to_string(),
-                blake3: blake3.map(String::from),
-            }
-        })
-        .await?;
-    blake3_by_file.extend(fresh);
-    tried.map(|()| counts)
-}
-
-/// The outcome, and the hash of the bytes when they were fetched.
-async fn fetch_one_file(
-    message_uuid: &str,
-    file_id: &str,
-    url: &str,
-    file_obj: &Value,
-    attach: &mut CasEdgeAccumulator,
-    blob_size_limit_bytes: Option<u64>,
-    latchkey: &LatchkeySettings,
-) -> Result<(&'static str, Option<String>)> {
-    if let (Some(limit), Some(size)) = (
-        blob_size_limit_bytes,
-        file_obj.get("size").and_then(|v| v.as_u64()),
-    ) {
-        if size > limit {
-            debug!(
-                event = "slack_media_too_large",
-                file_id = file_id,
-                size = size,
-                limit = limit,
-                "a file is over the size limit; skipped it"
-            );
-            // Not `add_failed`: the config asked for this.
-            attach.add_skipped(
-                message_uuid,
-                file_id,
-                datalib_problems::Reason::OverSizeLimit,
-                format!("size {size} > limit {limit}"),
-            );
-            return Ok(("too_large", None));
-        }
-    }
-
-    let name = file_obj.get("name").and_then(|v| v.as_str());
-    let mime = file_obj.get("mimetype").and_then(|v| v.as_str());
-
-    let req = HttpRequest::get(HttpService::Slack, url)
-        .latchkey(latchkey.clone())
-        .timeout(LATCHKEY_FILE_TIMEOUT);
-    let resp = match latchkey_curl(&req).await {
-        Ok(resp) if resp.status == 200 => resp,
-        Err(e @ HttpError::Interrupted { .. }) => return Err(e.into()),
-        failed => {
-            let failure = match failed {
-                // What a stored URL answers for a file that is gone, or
-                // that the credential cannot see: a redirect to a 404.
-                Ok(resp) if resp.status == 302 => {
-                    "HTTP 302: the file is gone or this account cannot see it".to_string()
-                }
-                Ok(resp) => format!("HTTP {}", resp.status),
-                Err(e) => e.to_string(),
-            };
-            attach.add_failed(message_uuid, file_id, failure);
-            return Ok(("error", None));
-        }
-    };
-    let bytes = resp.body;
-    let len = bytes.len() as u64;
-    let blake3 = datalib_etl::blob_cas::blake3_hex(&bytes);
-    attach.add_fetched(
-        message_uuid,
-        file_id,
-        bytes,
-        mime.map(String::from),
-        name.map(String::from),
-    );
-    events::item_fetched(url, len, resp.duration_ms);
-    debug!(
-        event = "slack_media_downloaded",
-        file_id = file_id,
-        bytes = len,
-        "downloaded one file"
-    );
-    Ok(("downloaded", Some(blake3)))
 }

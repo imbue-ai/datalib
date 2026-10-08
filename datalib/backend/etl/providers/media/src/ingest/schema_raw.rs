@@ -518,10 +518,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn content_keyed_tables_are_never_swept() {
-        // Sweeping them would drop the item's bookkeeping and re-parse
-        // every item whose path merely moved. Only the path-keyed tables
-        // are.
+    fn content_keyed_tables_are_not_swept_by_path() {
+        // Sweeping them by path would drop the item's bookkeeping and
+        // re-parse every item whose path merely moved. An item goes only
+        // once no path names it (`RawDb::delete_unnamed_items`).
         for t in ["media_items", "media_audio", "media_visual"] {
             assert!(
                 !DATA_TABLES.contains(&t),

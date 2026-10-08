@@ -1,12 +1,12 @@
-//! What [`crate::render`] takes: a `DatalibContact` — who the person is —
+//! What [`crate::render`] takes: a `NormalizedContact` — who the person is —
 //! and what rendering it as a document needs besides, which is the
 //! render framework's business and never part of the person.
 
-use datalib_contact_schema::DatalibContact;
+use datalib_contact_schema::NormalizedContact;
 
 #[derive(Debug, Clone)]
 pub struct ContactDoc {
-    pub contact: DatalibContact,
+    pub contact: NormalizedContact,
     /// The document's id: its `markdown_uuid` and grid row `uuid`,
     /// minted by the provider through `datalib_id` from `contact.key`.
     pub doc_uuid: String,

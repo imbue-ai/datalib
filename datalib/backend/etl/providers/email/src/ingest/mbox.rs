@@ -3,6 +3,10 @@
 //! `X-GM-THRID` / `X-Gmail-Labels` headers) and lands every
 //! message into the shared email raw store as if it had come off a JMAP
 //! server. No body parsing here — render handles that off the `.eml` blob.
+//!
+//! Every run reads every `.mbox` under the input. The folder is the unit:
+//! two files can hold one message and rows are keyed by content, so only a
+//! clean read of all of them says what left the input.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
@@ -11,19 +15,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
-use datalib_etl::bulk::{
-    bulk_upsert_entity_in_tx, push_placeholder_list, push_placeholders, SQL_CHUNK,
-};
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, push_placeholder_list, SQL_CHUNK};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl::download_problems::{self, RunProblem, SkippedRecord};
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
-use datalib_etl::{download_problems, file_checkpoint, fsscan};
+use datalib_etl_files::fswalk;
 use mail_parser::MessageParser;
 use serde::Serialize;
-use serde_json::{json, Value};
 use sqlx::{Sqlite, Transaction};
-use tracing::{info, warn};
 
 use super::db::{EmailRow, RawDb};
 use super::envelope::{self, header_text, GmailId};
@@ -35,9 +35,11 @@ use super::schema_raw::{AccountRow, EmailKeywordRow, EmailMailboxRow, EmlBlobRow
 /// per-transaction page rewrite across many rows.
 const FLUSH_BATCH: usize = 2000;
 
-/// Account-row data the orchestrator pipes in from the source YAML.
+/// Account-row data from the source's `mbox` block.
 #[derive(Debug, Clone, Default)]
 pub struct MboxAccountConfig {
+    /// The account every email is filed under; with none, one is made
+    /// from the input's name.
     pub account_id: Option<String>,
     pub display_name: Option<String>,
     pub email_address: Option<String>,
@@ -53,42 +55,24 @@ pub struct FetchOptions {
     pub db: RawDb,
     /// `.mbox` file (or directory containing `*.mbox` files).
     pub input_path: PathBuf,
-    /// Host-wide fingerprint cache — the shared answer to "did this
-    /// file change?", so an unchanged mbox costs a `stat`.
-    pub cache: FingerprintCache,
-    /// Overrides the file-stem default for `account_id`. (Kept
-    /// alongside `account_config` for back-compat with tests / older
-    /// call sites; if `account_config.account_id` is set, that wins.)
-    pub account_id_override: Option<String>,
-    /// Account-row config from the source YAML (display name, email,
-    /// is_personal flag). See [`MboxAccountConfig`].
     pub account_config: MboxAccountConfig,
     /// When non-empty, only ingest messages carrying an `X-Gmail-Labels` label
     /// whose full path exactly matches one of these. Gmail nested labels are
     /// already stored as `Parent/Child`, so this is a direct string compare.
     pub only_labels: Vec<String>,
-    /// Skip attachment bytes whose size exceeds this. The
-    /// `email_attachments` row still lands (so we record what was
-    /// referenced), but the bytes never enter the CAS — render
-    /// will render `_(blob not materialized)_` for them.
-    pub blob_size_limit_bytes: Option<u64>,
     pub progress: Progress,
     pub control: DownloadControl,
 }
 
 impl FetchOptions {
-    /// Every field defaulted except the two live handles, which have
-    /// none to give: the store the caller opens and closes, and this
-    /// host's fingerprint cache.
-    pub fn new(db: RawDb, cache: FingerprintCache) -> Self {
+    /// Every field defaulted except the store, which the caller opens and
+    /// closes.
+    pub fn new(db: RawDb) -> Self {
         Self {
-            cache,
             db,
             input_path: PathBuf::new(),
-            account_id_override: None,
             account_config: MboxAccountConfig::default(),
             only_labels: Vec::new(),
-            blob_size_limit_bytes: None,
             progress: Progress::noop(),
             control: DownloadControl::default(),
         }
@@ -102,136 +86,15 @@ pub struct FetchSummary {
     pub emails_upserted: usize,
     pub blobs_stored: usize,
     pub blobs_skipped: usize,
-    pub blobs_oversize: usize,
     pub parse_errors: usize,
-    /// Emails deleted because no mbox file still holds them.
+    /// Emails deleted because no mbox file holds them.
     pub emails_removed: usize,
     /// Labels no message in the files carries any more, whose rows went.
     pub mailboxes_removed: usize,
-    /// `.mbox` files that are gone since the last run.
-    pub files_removed: usize,
 }
 
-/// Scope key for the mbox path's [`datalib_etl::scope_config`]
-/// record. Distinct from the JMAP path's `jmap:download` — the two
-/// modes of `type: email` keep separate state.
-/// `file_checkpoint` scope for the per-`.mbox` resume cursor.
-const CHECKPOINT_SCOPE: &str = "email/mbox";
-
-const SCOPE_CONFIG_KEY: &str = "mbox:download";
-
-/// Blob keys. Named so writer and reader can't drift.
+/// The config key `only_labels` comes from, for its `config:` rows.
 const K_ONLY_LABELS: &str = "only_extract_labels";
-const K_BLOB_CAP: &str = "blob_size_limit_bytes";
-const K_ACCOUNT: &str = "account";
-
-/// The config knobs a stored scope record is compared against. Split
-/// out of [`FetchOptions`] so the comparison can be exercised without a
-/// live store handle.
-struct ScopeInputs<'a> {
-    only_labels: &'a [String],
-    blob_size_limit_bytes: Option<u64>,
-    account_config: &'a MboxAccountConfig,
-}
-
-impl FetchOptions {
-    fn scope_inputs(&self) -> ScopeInputs<'_> {
-        ScopeInputs {
-            only_labels: &self.only_labels,
-            blob_size_limit_bytes: self.blob_size_limit_bytes,
-            account_config: &self.account_config,
-        }
-    }
-}
-
-fn scope_config_blob(inputs: &ScopeInputs<'_>) -> Value {
-    // Sorted so a reordered config list isn't mistaken for a change.
-    let mut labels: Vec<&str> = inputs.only_labels.iter().map(String::as_str).collect();
-    labels.sort_unstable();
-    json!({
-        K_ONLY_LABELS: labels,
-        K_BLOB_CAP: inputs.blob_size_limit_bytes,
-        // The account row is derived wholly from these, so comparing the
-        // rendered values is exactly right.
-        K_ACCOUNT: {
-            "account_id": inputs.account_config.account_id,
-            "display_name": inputs.account_config.display_name,
-            "email_address": inputs.account_config.email_address,
-            "is_personal": inputs.account_config.is_personal,
-        },
-    })
-}
-
-/// What a config change since the last satisfying run requires.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct Adjustments {
-    /// Ignore the per-file checkpoints and re-read every mbox.
-    reingest_files: bool,
-    /// Re-run the account/lookup flush even if every file was skipped.
-    refresh_account: bool,
-}
-
-impl Adjustments {
-    fn plan(prior: Option<&Value>, inputs: &ScopeInputs<'_>) -> Self {
-        let mut out = Self::default();
-        let Some(prior) = prior else {
-            // Every store predating this record. Adopt, do nothing.
-            return out;
-        };
-
-        use datalib_etl::scope_config::FilterChange;
-        match datalib_etl::scope_config::filter_widened(
-            Some(prior),
-            K_ONLY_LABELS,
-            inputs.only_labels,
-        ) {
-            FilterChange::Unchanged => {}
-            FilterChange::WidenedToAll => {
-                out.reingest_files = true;
-                info!(
-                    event = "mbox_labels_widened",
-                    added = "<filter removed>",
-                    "re-reading mbox files; every label is now in scope",
-                );
-            }
-            FilterChange::Added(added) => {
-                out.reingest_files = true;
-                info!(
-                    event = "mbox_labels_widened",
-                    added = %added.join(", "),
-                    "re-reading mbox files for newly-in-scope labels",
-                );
-            }
-        }
-
-        if datalib_etl::scope_config::limit_relaxed(
-            Some(prior),
-            K_BLOB_CAP,
-            inputs.blob_size_limit_bytes,
-        ) {
-            out.reingest_files = true;
-            info!(
-                event = "mbox_blob_limit_relaxed",
-                limit = inputs.blob_size_limit_bytes,
-                "re-reading mbox files for previously-oversize attachments",
-            );
-        }
-
-        let cur_account = scope_config_blob(inputs);
-        if prior.get(K_ACCOUNT) != cur_account.get(K_ACCOUNT) {
-            // Deliberately does NOT set `reingest_files`: the account row
-            // is written by `flush_account_and_lookups`, which doesn't
-            // read a single message.
-            out.refresh_account = true;
-            info!(
-                event = "mbox_account_config_changed",
-                "refreshing the account row without re-reading any mbox",
-            );
-        }
-
-        out
-    }
-}
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
@@ -240,85 +103,23 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
 async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
-
-    // One scan finds the `.mbox` files and says which have changed
-    // since the last run, hashing only what the host cache cannot
-    // vouch for.
-    let scan = fsscan::scan(
-        &opts.cache,
-        &opts.input_path,
-        &fsscan::ScanOptions::default(),
-        |p| p.extension().and_then(|s| s.to_str()) == Some("mbox"),
-    )
-    .await?;
-    for e in &scan.errors {
-        warn!(event = "mbox_walk_error", path = %e.path.display(), error = %e.error, "an entry of the mbox directory could not be walked");
-    }
-    let cursor = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
-    let changes = scan.changes_since(&cursor);
-    found.extend(scan.walk_problems());
-    if scan.files.is_empty() && !changes.may_have_dropped_records() {
-        return Ok(FetchSummary::default());
-    }
+    let (files, walk_errors) = list_mbox_files(&opts.input_path)?;
+    found.extend(walk_problem(&opts.input_path, &walk_errors));
     let account_id = opts
         .account_config
         .account_id
         .clone()
-        .or_else(|| opts.account_id_override.clone())
         .unwrap_or_else(|| default_account_id(&opts.input_path));
 
-    // Diff the scope-affecting params against the ones that produced the
-    // current checkpoints.
-    let scope_cfg = scope_config_blob(&opts.scope_inputs());
-    let prior_scope_cfg =
-        datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
-    let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts.scope_inputs());
-
+    // An `.eml` the store already holds is not written again: rewriting
+    // its edge would restamp it on every run.
     let known_blobs = db.loaded_blob_ids().await?;
-
-    // Which files still need reading. A widened `only_labels` (or any
-    // other scope change) re-reads everything: the cursor says the
-    // bytes are unchanged, which is true and beside the point — the
-    // question being asked of them changed. So does a file removed or
-    // rewritten: two mbox files can hold one message, so only a read of
-    // every file says which emails left the input.
-    let read_all = adjust.reingest_files
-        || changes.may_have_dropped_records()
-        || changes.needs_reading().count() == scan.files.len();
-    let to_process: Vec<&fsscan::ScannedFile> = if read_all {
-        scan.files.iter().collect()
-    } else {
-        changes.needs_reading().collect()
-    };
-    let skipped_count = scan.files.len() - to_process.len();
-    let skipped_total_bytes: u64 = scan
-        .files
-        .iter()
-        .filter(|f| !to_process.iter().any(|p| p.rel == f.rel))
-        .map(|f| f.size as u64)
-        .sum();
-    if skipped_count > 0 {
-        info!(
-            event = "mbox_files_skipped",
-            count = skipped_count,
-            bytes = skipped_total_bytes,
-            "contents match the checkpoint; skipping",
-        );
-    }
 
     // The bar runs over bytes consumed rather than emails processed, because
     // the filesystem gives a real total up front and an email count only
-    // resolves at EOF. Skipped files' bytes are pre-incremented, so 100% means
-    // done with this run.
-    let total_bytes: u64 = to_process
-        .iter()
-        .map(|f| f.size as u64)
-        .sum::<u64>()
-        .saturating_add(skipped_total_bytes);
-    opts.progress.set_length(Some(total_bytes));
-    if skipped_total_bytes > 0 {
-        opts.progress.inc(skipped_total_bytes);
-    }
+    // resolves at EOF.
+    opts.progress
+        .set_length(Some(files.iter().map(|f| f.size).sum()));
 
     let label_filter: Option<HashSet<String>> = if opts.only_labels.is_empty() {
         None
@@ -345,14 +146,9 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
     let mut summary = FetchSummary::default();
     let mut batch = PendingBatch::default();
     let mut emails_seen: u64 = 0;
-    let mut files_processed: usize = 0;
-    // A rewritten file is stamped only once the run has pruned what it
-    // dropped: stamped before, the next run would not see it rewritten,
-    // so it would never read every file and prune.
-    let modified: BTreeSet<&str> = changes.modified.iter().map(|f| f.rel.as_str()).collect();
-    let mut stamp_after_prune: Vec<(&fsscan::ScannedFile, Option<FileProblem>)> = Vec::new();
+    let mut unparsed_files: Vec<SkippedRecord> = Vec::new();
 
-    for f in &to_process {
+    for f in &files {
         let messages = match iter_mbox_messages(&f.path) {
             Ok(messages) => messages,
             Err(e) => {
@@ -361,21 +157,19 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
                 continue;
             }
         };
-        files_processed += 1;
         let mut unparsed = Unparsed::default();
-        let mut read_whole = true;
+        let mut failed: Option<anyhow::Error> = None;
+        let mut messages_in_file = 0usize;
         for message in messages {
+            // An error can repeat on every read, so the file ends here.
             let message = match message {
                 Ok(m) => m,
-                // An error can repeat on every read, so the file ends here
-                // and is read again next run.
                 Err(e) => {
-                    summary.parse_errors += 1;
-                    found.push(file_unread(f, &e));
-                    read_whole = false;
+                    failed = Some(e);
                     break;
                 }
             };
+            messages_in_file += 1;
             opts.progress.inc(message.bytes_consumed);
             match accumulator.ingest_message(
                 &message.raw,
@@ -391,66 +185,49 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
                         flush_batch(&db, &mut batch, &mut summary).await?;
                     }
                 }
-                Ok(false) => {} // duplicate; skipped
+                Ok(false) => {} // duplicate, or outside the label filter
                 Err(e) => {
                     summary.parse_errors += 1;
                     unparsed.add(&e);
                 }
             }
         }
-        // Flush at the file boundary so the checkpoint we stamp next
-        // is causally after every row this file produced. Without
-        // this, a Ctrl-C between two files' messages could leave the
-        // checkpoint ahead of the data.
-        flush_batch(&db, &mut batch, &mut summary).await?;
-        if !read_whole {
-            continue;
-        }
-        if modified.contains(f.rel.as_str()) {
-            stamp_after_prune.push((f, unparsed.problem()));
-        } else {
-            stamp(&db, f, unparsed.problem()).await?;
+        unparsed_files.extend(unparsed.problem(f));
+        // An mbox has no envelope that could say "no messages", so a file
+        // with none (0 bytes, no `From ` line) is not read as an empty
+        // mailbox: it holds the prune back, and deleting the file is what
+        // drops what it held.
+        let failed = failed.or_else(|| {
+            (messages_in_file == 0)
+                .then(|| anyhow!("the file holds no message: not one `From ` line"))
+        });
+        if let Some(e) = failed {
+            summary.parse_errors += 1;
+            found.push(file_unread(f, &e));
         }
     }
     flush_batch(&db, &mut batch, &mut summary).await?;
-
-    // Account, mailboxes, threads and bookkeeping land in one closing
-    // transaction — skipped entirely when nothing was processed, since even
-    // idempotent no-op upserts aren't worth the round-trip.
-    if files_processed > 0 || adjust.refresh_account {
-        // With no files processed the accumulator is empty, so this
-        // writes the account row and nothing else — which is exactly
-        // what an `mbox:` block edit needs. Every write here is an
-        // idempotent ON CONFLICT chain, never delete-then-insert, so
-        // running it over an empty accumulator can't drop anything.
-        flush_account_and_lookups(
-            &db,
-            &account_id,
-            &opts.account_config,
-            &accumulator,
-            &mut summary,
-        )
-        .await?;
-    }
-    if files_processed == 0 && skipped_count > 0 {
-        info!(
-            event = "mbox_all_files_skipped",
-            skipped_count,
-            account_refreshed = adjust.refresh_account,
-            "every mbox file matched its checkpoint",
-        );
-    }
+    flush_account_and_lookups(
+        &db,
+        &account_id,
+        &opts.account_config,
+        &accumulator,
+        &mut summary,
+    )
+    .await?;
+    found.skipped("mbox", unparsed_files);
 
     // Every message of every file was read: the run knows what the input
     // holds, so it can say what left it and which configured label
     // nothing carries.
-    let read_everything = read_all && changes.walk_errors == 0 && summary.parse_errors == 0;
-    if read_everything {
+    let seen = &accumulator.seen_email_ids;
+    if walk_errors.is_empty() && summary.parse_errors == 0 {
         // `seen` is every message id the read met, before the label
         // filter, so narrowing `only_labels` never deletes.
-        summary.emails_removed = db
-            .prune_emails_to(&account_id, &accumulator.seen_email_ids)
-            .await?;
+        summary.emails_removed = db.prune_emails_to(&account_id, seen).await?;
+        for was in other_accounts(&db, &account_id).await? {
+            summary.emails_removed += retire_account(&db, &was).await?;
+        }
         // Every message was read and refiled, so a label this run's
         // own recipe minted that none of them carries is gone from the
         // export. A label filter hides the rest of the labels, and a
@@ -471,36 +248,152 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
             let now = datalib_time::IsoOffsetTimestamp::now_local();
             super::refile_mailboxes(&db, &now, &gone).await?;
         }
-        let gone = changes.gone();
-        summary.files_removed = gone.len();
-        file_checkpoint::forget_files(db.pool(), CHECKPOINT_SCOPE, &gone).await?;
-        for (f, problem) in stamp_after_prune {
-            stamp(&db, f, problem).await?;
-        }
         found.config(unmatched_labels(
             &opts.only_labels,
             &accumulator.labels_seen,
         ));
-    } else if read_all && changes.may_have_dropped_records() {
-        found.push(fsscan::Scan::deletions_held_back(summary.parse_errors));
+    } else {
+        let held_back = stored_but_unseen(&db, &account_id, seen).await?;
+        if held_back > 0 {
+            found.push(RunProblem::listing(
+                "removed_records",
+                format!(
+                    "{held_back} stored emails are in no file this run read, but not every \
+                     file read cleanly, so none was deleted"
+                ),
+            ));
+        }
     }
-
-    // Record the config only once this run satisfied it, so a file it
-    // could not read through leaves the previous record in place and the
-    // next run reads every file again.
-    datalib_etl::scope_config::store_if_satisfied(
-        db.pool(),
-        SCOPE_CONFIG_KEY,
-        &scope_cfg,
-        summary.parse_errors == 0 && changes.walk_errors == 0,
-    )
-    .await;
 
     Ok(summary)
 }
 
-/// What one read of a file could not use, as its `file:` problem row.
-type FileProblem = (datalib_problems::Outcome, datalib_problems::Problem);
+/// One `.mbox` to read, named by its path under the input.
+struct MboxFile {
+    path: PathBuf,
+    rel: String,
+    size: u64,
+}
+
+fn is_mbox(path: &Path) -> bool {
+    path.extension().and_then(|s| s.to_str()) == Some("mbox")
+}
+
+/// Every `.mbox` under `input`, in name order, and the entries the walk
+/// could not see. A file as the input is that one file.
+fn list_mbox_files(input: &Path) -> Result<(Vec<MboxFile>, Vec<fswalk::WalkError>)> {
+    let root = input
+        .canonicalize()
+        .with_context(|| format!("resolve {}", input.display()))?;
+    if root.is_file() {
+        let size = std::fs::metadata(&root)
+            .with_context(|| format!("stat {}", root.display()))?
+            .len();
+        let rel = root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let files = is_mbox(&root).then_some(MboxFile {
+            path: root,
+            rel,
+            size,
+        });
+        return Ok((files.into_iter().collect(), Vec::new()));
+    }
+    let (walked, errors) = fswalk::walk_files(&root, &[], None, is_mbox)
+        .with_context(|| format!("walk {}", root.display()))?;
+    let mut files: Vec<MboxFile> = walked
+        .into_iter()
+        .map(|w| MboxFile {
+            size: w.meta.len(),
+            path: w.path,
+            rel: w.rel,
+        })
+        .collect();
+    files.sort_by(|a, b| a.rel.cmp(&b.rel));
+    Ok((files, errors))
+}
+
+/// The `listing:files` row of a walk that could not see every entry. A
+/// file it missed may hold any stored email, so nothing is deleted.
+fn walk_problem(input: &Path, errors: &[fswalk::WalkError]) -> Option<RunProblem> {
+    let first = errors.first()?;
+    Some(RunProblem::listing(
+        "files",
+        format!(
+            "{}: {} ({} unreadable under {}; nothing was deleted this run)",
+            first.path.display(),
+            first.error,
+            errors.len(),
+            input.display(),
+        ),
+    ))
+}
+
+/// The accounts the store files rows under other than `account_id`: ids
+/// the config named before. Once every file has been read under the one
+/// it names now, what is left under them is no file's.
+async fn other_accounts(db: &RawDb, account_id: &str) -> Result<Vec<String>> {
+    sqlx::query_scalar(
+        "SELECT account_id FROM emails WHERE account_id <> ?1 \
+         UNION SELECT account_id FROM threads WHERE account_id <> ?1 \
+         UNION SELECT account_id FROM mailboxes WHERE account_id <> ?1 \
+         UNION SELECT id FROM accounts WHERE id <> ?1",
+    )
+    .bind(account_id)
+    .fetch_all(db.pool())
+    .await
+    .context("list the accounts the config no longer names")
+}
+
+/// How many stored emails a clean read would have deleted: under another
+/// account, or in no file this run read.
+async fn stored_but_unseen(db: &RawDb, account_id: &str, seen: &BTreeSet<String>) -> Result<usize> {
+    let stored: Vec<(String, String)> = sqlx::query_as("SELECT id, account_id FROM emails")
+        .fetch_all(db.pool())
+        .await
+        .context("list the stored emails")?;
+    Ok(stored
+        .iter()
+        .filter(|(id, account)| account != account_id || !seen.contains(id))
+        .count())
+}
+
+/// Drop what is left under an account the config no longer names: its
+/// emails (no file holds them), its threads and its name-keyed labels. The
+/// account row goes once nothing names it; a label with a real Gmail id is
+/// the API sync's.
+async fn retire_account(db: &RawDb, account_id: &str) -> Result<usize> {
+    let removed = db.prune_emails_to(account_id, &BTreeSet::new()).await?;
+    let labels: Vec<(String, Option<String>)> = db
+        .mailbox_names(account_id)
+        .await?
+        .into_keys()
+        .filter(|id| id.starts_with(labels::NAME_KEYED_PREFIX))
+        .map(|id| (id, None))
+        .collect();
+    let now = datalib_time::IsoOffsetTimestamp::now_local();
+    super::refile_mailboxes(db, &now, &labels).await?;
+    let still_named: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM emails WHERE account_id = ?1) \
+              + (SELECT count(*) FROM threads WHERE account_id = ?1) \
+              + (SELECT count(*) FROM mailboxes WHERE account_id = ?1)",
+    )
+    .bind(account_id)
+    .fetch_one(db.pool())
+    .await
+    .context("count what still names the old account")?;
+    if still_named == 0 {
+        datalib_etl::prune::prune_scope(
+            db.pool(),
+            "accounts",
+            &[("id", account_id)],
+            &HashSet::new(),
+        )
+        .await?;
+    }
+    Ok(removed)
+}
 
 /// The messages of one file that would not parse.
 #[derive(Default)]
@@ -515,31 +408,24 @@ impl Unparsed {
         self.first.get_or_insert_with(|| format!("{e:#}"));
     }
 
-    fn problem(&self) -> Option<FileProblem> {
+    fn problem(&self, f: &MboxFile) -> Option<SkippedRecord> {
         let first = self.first.as_deref()?;
-        Some((
-            datalib_problems::Outcome::Dropped,
-            datalib_problems::Problem::record(
+        Some(SkippedRecord {
+            entry: f.rel.clone(),
+            problem: datalib_problems::Problem::record(
                 datalib_problems::Reason::Undeserializable,
                 &format!(
-                    "{} messages could not be parsed; first: {first}",
-                    self.count
+                    "{}: {} messages could not be parsed; first: {first}",
+                    f.rel, self.count
                 ),
             ),
-        ))
+        })
     }
 }
 
-/// A file the run could not read through, as a `listing:` row. It is not
-/// stamped, so the next run reads it again.
-fn file_unread(f: &fsscan::ScannedFile, e: &anyhow::Error) -> download_problems::RunProblem {
-    download_problems::RunProblem::listing(&format!("mbox {}", f.rel), format!("{e:#}"))
-}
-
-async fn stamp(db: &RawDb, f: &fsscan::ScannedFile, problem: Option<FileProblem>) -> Result<()> {
-    let mut tx = db.pool().begin().await.context("begin mbox stamp tx")?;
-    file_checkpoint::record_file_with_problem(&mut tx, CHECKPOINT_SCOPE, f, problem).await?;
-    tx.commit().await.context("commit mbox stamp tx")
+/// A file the run could not read through, as a `listing:` row.
+fn file_unread(f: &MboxFile, e: &anyhow::Error) -> RunProblem {
+    RunProblem::listing(&format!("mbox {}", f.rel), format!("{e:#}"))
 }
 
 /// The configured labels no message in the files carries.
@@ -895,8 +781,8 @@ struct PendingBatch {
     /// each edge's `blake3` off them at flush time — see
     /// [`datalib_etl::blob_cas::CasEdgeAccumulator`].
     cas: CasEdgeAccumulator,
-    /// In-run dedupe of blob ref ids. For mbox the ref_id is
-    /// `sha256(bytes)`, so identical bodies collapse to one row and
+    /// In-run dedupe of blob ref ids. For mbox the ref_id is the
+    /// `.eml`'s blake3, so identical bodies collapse to one row and
     /// doltlite never sees a conflicting bind pair inside one multi-row
     /// statement.
     seen_blob_ids: std::collections::HashSet<String>,
@@ -961,7 +847,7 @@ async fn flush_account_and_lookups(
     let mut tx = db.pool().begin().await.context("begin lookups tx")?;
 
     // Account row: route through `AccountRow::from_mbox_config` and
-    // the shared `bulk_upsert_in_tx` so the synthesized row has the
+    // the shared bulk upsert so the synthesized row has the
     // exact same shape (columns + JSONB payload) that the JMAP path
     // produces. Display name defaults to the account id when the
     // config doesn't supply one; `is_personal` defaults to true.
@@ -975,7 +861,7 @@ async fn flush_account_and_lookups(
         account_config.email_address.as_deref(),
         account_config.is_personal.unwrap_or(true),
     );
-    datalib_etl::bulk::bulk_upsert_in_tx(&mut tx, &[account_row], &now).await?;
+    datalib_etl::bulk::bulk_upsert_first_seen_in_tx(&mut tx, &[account_row], &now).await?;
 
     // Mailboxes.
     let mailbox_specs: Vec<(String, String, Option<&'static str>, String)> = accumulator
@@ -1000,7 +886,7 @@ async fn flush_account_and_lookups(
         })
         .collect();
     bulk_insert_mailboxes(&mut tx, account_id, &mailbox_specs).await?;
-    datalib_etl::bulk::bulk_upsert_bookkeeping(
+    datalib_etl::bulk::bulk_stamp_first_seen(
         &mut tx,
         "mailboxes",
         mailbox_specs.iter().map(|(id, _, _, _)| id.as_str()),
@@ -1023,7 +909,7 @@ async fn flush_account_and_lookups(
         thread_specs.push((tid.clone(), count, payload));
     }
     bulk_insert_threads(&mut tx, account_id, &thread_specs).await?;
-    datalib_etl::bulk::bulk_upsert_bookkeeping(
+    datalib_etl::bulk::bulk_stamp_first_seen(
         &mut tx,
         "threads",
         thread_specs.iter().map(|(id, _, _)| id.as_str()),
@@ -1037,13 +923,10 @@ async fn flush_account_and_lookups(
 }
 
 async fn bulk_insert_emails(tx: &mut Transaction<'_, Sqlite>, rows: &[EmailRow]) -> Result<()> {
-    // Standard `bulk_upsert_in_tx` path — `EmailRow` carries its
-    // own `BulkUpsertable` impl. The framework picks the right
-    // column list + binding sequence; the conflict clause uses the
-    // universal "every non-PK col = excluded.<col>" shape from
-    // `data_architecture_ingestion.md` §"One writer per row".
+    // `EmailRow` carries its own `BulkUpsertable` impl; the sidecar is
+    // stamped once, since every run reads every file.
     let now = datalib_time::IsoOffsetTimestamp::now_local();
-    datalib_etl::bulk::bulk_upsert_in_tx(tx, rows, &now).await
+    datalib_etl::bulk::bulk_upsert_first_seen_in_tx(tx, rows, &now).await
 }
 
 async fn bulk_insert_email_mailboxes(
@@ -1116,11 +999,13 @@ async fn bulk_insert_mailboxes(
     if specs.is_empty() {
         return Ok(());
     }
-    let cols = 5;
     for chunk in specs.chunks(SQL_CHUNK) {
+        // `jsonb(?)` on the insert as on the update: a payload stored as
+        // text once and as JSONB the next time differs by its bytes, and
+        // an unchanged mailbox would read as modified.
         let mut sql =
             String::from("INSERT INTO mailboxes (id, account_id, name, role, payload) VALUES ");
-        push_placeholders(&mut sql, chunk.len(), cols);
+        sql.push_str(&vec!["(?, ?, ?, ?, jsonb(?))"; chunk.len()].join(", "));
         sql.push_str(
             " ON CONFLICT(id) DO UPDATE SET
                 account_id = excluded.account_id,
@@ -1155,7 +1040,7 @@ async fn bulk_insert_threads(
     for chunk in specs.chunks(SQL_CHUNK) {
         let mut sql =
             String::from("INSERT INTO threads (id, account_id, email_count, payload) VALUES ");
-        push_placeholders(&mut sql, chunk.len(), 4);
+        sql.push_str(&vec!["(?, ?, ?, jsonb(?))"; chunk.len()].join(", "));
         sql.push_str(
             " ON CONFLICT(id) DO UPDATE SET
                 account_id = excluded.account_id,
@@ -1170,8 +1055,6 @@ async fn bulk_insert_threads(
     }
     Ok(())
 }
-
-// Label mapping
 
 // Path + hash helpers
 
@@ -1200,49 +1083,6 @@ fn slugify(s: &str) -> String {
         out.pop();
     }
     out
-}
-
-fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
-        let entry = entry.with_context(|| format!("entry in {}", dir.display()))?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk_dir(&path, out)?;
-        } else if path.extension().and_then(|s| s.to_str()) == Some("mbox") {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
-
-/// True iff the user-pointed input is an `.mbox` file or a directory
-/// containing one. Sync's download dispatch uses this to pick between
-/// the JMAP API and the mbox extractors when a `SourceConfig::Email`
-/// has no `sync:` block.
-pub fn is_mbox_input(input_path: &Path) -> bool {
-    if input_path.is_file() {
-        return input_path.extension().and_then(|s| s.to_str()) == Some("mbox");
-    }
-    if input_path.is_dir() {
-        let mut paths: Vec<PathBuf> = Vec::new();
-        if walk_dir(input_path, &mut paths).is_ok() {
-            return !paths.is_empty();
-        }
-    }
-    false
-}
-
-// Tests
-
-/// A fingerprint cache in a throwaway directory, so no test touches —
-/// or is influenced by — the host's real one. The temp dir is leaked
-/// deliberately: its lifetime should be the test process.
-#[cfg(test)]
-async fn test_cache() -> FingerprintCache {
-    let d = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    FingerprintCache::open(&d.path().join("fp.sqlite"))
-        .await
-        .unwrap()
 }
 
 #[cfg(test)]
@@ -1352,7 +1192,7 @@ mod tests {
         let db = RawDb::open(&db_path).await.unwrap();
         let summary = fetch(FetchOptions {
             input_path: path,
-            ..FetchOptions::new(db.clone(), test_cache().await)
+            ..FetchOptions::new(db.clone())
         })
         .await
         .unwrap();
@@ -1405,41 +1245,39 @@ mod tests {
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
         let mut summaries: Vec<FetchSummary> = Vec::new();
+        let mut commits: Vec<Option<String>> = Vec::new();
         for _ in 0..2 {
             let db = RawDb::open(&db_path).await.unwrap();
             let s = fetch(FetchOptions {
                 input_path: path.clone(),
-                ..FetchOptions::new(db.clone(), test_cache().await)
+                ..FetchOptions::new(db.clone())
             })
             .await
             .unwrap();
             summaries.push(s);
-            db.commit_all("test").await.unwrap();
+            commits.push(
+                datalib_etl::doltlite_raw::commit_run(db.pool(), "test")
+                    .await
+                    .unwrap(),
+            );
             db.close().await;
         }
+        assert!(commits[0].is_some());
+        assert_eq!(
+            commits[1], None,
+            "reading an unchanged folder again changes nothing in the store"
+        );
         let db = RawDb::open(&db_path).await.unwrap();
         assert_eq!(db.load_emails().await.unwrap().len(), 2);
 
-        // First run did real work; second run hit the checkpoint and
-        // skipped every file. The mbox file's (size, mtime) is
-        // unchanged between the two runs, so the cursor short-
-        // circuits before `iter_mbox_messages` opens it.
+        // The second run reads the file again and stores what it read
+        // again; the `.eml` bytes are already in the CAS, so none is
+        // written twice, and nothing is removed.
         assert_eq!(summaries[0].emails_upserted, 2);
-        assert_eq!(summaries[1].emails_upserted, 0);
+        assert_eq!(summaries[1].emails_upserted, 2);
         assert_eq!(summaries[1].blobs_stored, 0);
-        assert_eq!(summaries[1].mailboxes_upserted, 0);
-        assert_eq!(summaries[1].threads_upserted, 0);
-
-        // And the cursor row is present after the first run — in the
-        // shared table every file-backed provider now uses, under this
-        // provider's own scope.
-        let stamped: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM ingested_files WHERE scope = ?")
-                .bind(CHECKPOINT_SCOPE)
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
-        assert_eq!(stamped, 1);
+        assert_eq!(summaries[1].blobs_skipped, 2);
+        assert_eq!(summaries[1].emails_removed, 0);
     }
 
     /// `build` gets the store handle this run opens, and returns the
@@ -1462,31 +1300,28 @@ mod tests {
         s
     }
 
-    /// The headline case: an unchanged file whose config widened must be
-    /// re-read. Guards the plumbing, not just `Adjustments::plan` — the
-    /// gate fails silently to a no-op, so a dropped `!adjust.reingest_files`
-    /// would leave every unit test green while restoring the bug.
+    /// An unchanged file whose label filter widened lands the newly
+    /// admitted messages: a skip keyed on the file's bytes alone would
+    /// never read it again.
     #[tokio::test(flavor = "multi_thread")]
     async fn widening_labels_reingests_an_unchanged_file() {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
 
         // Only the `Sent` message is in scope. (Msg two carries
         // `Inbox,Sent`; msg one carries `Inbox,Starred,Unread`.)
         let first = run_once(&db_path, &path, |db| FetchOptions {
             only_labels: vec!["Sent".into()],
-            ..FetchOptions::new(db, cache.clone())
+            ..FetchOptions::new(db)
         })
         .await;
         assert_eq!(first.emails_upserted, 1, "only the Sent message");
 
-        // Widen to include Inbox. The file is byte-identical, so the
-        // (size, mtime) checkpoint alone would skip it forever.
+        // Widen to include Inbox; the file is byte-identical.
         let second = run_once(&db_path, &path, |db| FetchOptions {
             only_labels: vec!["Sent".into(), "Inbox".into()],
-            ..FetchOptions::new(db, cache.clone())
+            ..FetchOptions::new(db)
         })
         .await;
         assert_eq!(
@@ -1499,21 +1334,18 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn narrowing_labels_does_not_reingest() {
+    async fn narrowing_labels_drops_nothing() {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
 
-        run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        run_once(&db_path, &path, FetchOptions::new).await;
         let second = run_once(&db_path, &path, |db| FetchOptions {
             only_labels: vec!["Sent".into()],
-            ..FetchOptions::new(db, cache.clone())
+            ..FetchOptions::new(db)
         })
         .await;
-        // The store is already a superset; re-reading would produce
-        // nothing. This is the case a config *hash* would get wrong.
-        assert_eq!(second.emails_upserted, 0);
+        assert_eq!(second.emails_upserted, 1, "only the Sent message");
         let db = RawDb::open(&db_path).await.unwrap();
         assert_eq!(
             db.load_emails().await.unwrap().len(),
@@ -1522,30 +1354,25 @@ mod tests {
         );
     }
 
-    /// The case that motivated storing values instead of a hash: an
-    /// `mbox:` block edit updates one row and never opens the file.
+    /// An `mbox:` block edit reaches the account row though no message
+    /// changed.
     #[tokio::test(flavor = "multi_thread")]
-    async fn account_edit_refreshes_without_reingesting() {
+    async fn an_account_edit_reaches_the_account_row() {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
 
-        run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        run_once(&db_path, &path, FetchOptions::new).await;
 
-        let second = run_once(&db_path, &path, |db| FetchOptions {
+        run_once(&db_path, &path, |db| FetchOptions {
             account_config: MboxAccountConfig {
                 display_name: Some("Work Gmail".into()),
                 is_personal: Some(false),
                 ..Default::default()
             },
-            ..FetchOptions::new(db, cache.clone())
+            ..FetchOptions::new(db)
         })
         .await;
-        assert_eq!(
-            second.emails_upserted, 0,
-            "an account-field edit must not re-read the mbox"
-        );
 
         let db = RawDb::open(&db_path).await.unwrap();
         let accounts = db.load_accounts().await.unwrap();
@@ -1597,12 +1424,7 @@ mod tests {
         std::fs::write(dir.path().join("b.mbox"), msg_two()).unwrap();
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
-        let run = || {
-            run_once(&db_path, dir.path(), |db| {
-                FetchOptions::new(db, cache.clone())
-            })
-        };
+        let run = || run_once(&db_path, dir.path(), FetchOptions::new);
         run().await;
         // 1111 = 0x457, 2222 = 0x8ae.
         assert_eq!(
@@ -1612,7 +1434,7 @@ mod tests {
 
         std::fs::remove_file(dir.path().join("b.mbox")).unwrap();
         let second = run().await;
-        assert_eq!((second.emails_removed, second.files_removed), (1, 1));
+        assert_eq!(second.emails_removed, 1);
         assert_eq!(
             stored(&db_path).await,
             (vec!["0000000000000457".into()], vec!["1111".into()])
@@ -1631,12 +1453,11 @@ mod tests {
         let (dir, path) = write_tmp_mbox(TWO_MSG_MBOX);
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
-        run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        run_once(&db_path, &path, FetchOptions::new).await;
 
         std::fs::write(&path, msg_one()).unwrap();
-        let second = run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
-        assert_eq!((second.emails_removed, second.files_removed), (1, 0));
+        let second = run_once(&db_path, &path, FetchOptions::new).await;
+        assert_eq!(second.emails_removed, 1);
         assert_eq!(
             stored(&db_path).await,
             (vec!["0000000000000457".into()], vec!["1111".into()])
@@ -1652,17 +1473,12 @@ mod tests {
         std::fs::write(dir.path().join("sent.mbox"), msg_two()).unwrap();
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
-        let run = || {
-            run_once(&db_path, dir.path(), |db| {
-                FetchOptions::new(db, cache.clone())
-            })
-        };
+        let run = || run_once(&db_path, dir.path(), FetchOptions::new);
         run().await;
 
         std::fs::remove_file(dir.path().join("sent.mbox")).unwrap();
         let second = run().await;
-        assert_eq!((second.emails_removed, second.files_removed), (0, 1));
+        assert_eq!(second.emails_removed, 0);
         assert_eq!(stored(&db_path).await.0.len(), 2);
     }
 
@@ -1676,17 +1492,13 @@ mod tests {
         std::fs::write(dir.path().join("b.mbox"), MSG_THREE).unwrap();
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
-        run_once(&db_path, dir.path(), |db| {
-            FetchOptions::new(db, cache.clone())
-        })
-        .await;
+        run_once(&db_path, dir.path(), FetchOptions::new).await;
         assert_eq!(stored(&db_path).await.0.len(), 3);
 
         std::fs::remove_file(dir.path().join("b.mbox")).unwrap();
         let second = run_once(&db_path, dir.path(), |db| FetchOptions {
             only_labels: vec!["Sent".into()],
-            ..FetchOptions::new(db, cache.clone())
+            ..FetchOptions::new(db)
         })
         .await;
         assert_eq!(second.emails_removed, 1, "only Worf's drill went");
@@ -1694,6 +1506,90 @@ mod tests {
             stored(&db_path).await.0,
             vec!["0000000000000457", "00000000000008ae"]
         );
+    }
+
+    /// A `.mbox` rewritten to 0 bytes, or to text with no `From ` line,
+    /// read as a clean file holding no messages, and the prune deleted what
+    /// only it held. An mbox has no envelope that could say "no messages",
+    /// so such a file is a problem and deletes nothing; deleting the file
+    /// is what drops what it held.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_mbox_that_is_recognizably_nothing_deletes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mbox"), msg_one()).unwrap();
+        std::fs::write(dir.path().join("b.mbox"), msg_two()).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let run = || run_once(&db_path, dir.path(), FetchOptions::new);
+        run().await;
+
+        for (what, body) in [
+            ("an empty file", ""),
+            (
+                "text with no From line",
+                "Captain's log, stardate 41153.7\n",
+            ),
+        ] {
+            std::fs::write(dir.path().join("b.mbox"), body).unwrap();
+            let s = run().await;
+            assert_eq!(s.emails_removed, 0, "{what} deleted emails");
+            assert_eq!(stored(&db_path).await.0.len(), 2, "{what}");
+            assert!(
+                problems(&db_path)
+                    .await
+                    .iter()
+                    .any(|(k, _)| k == "listing:mbox b.mbox"),
+                "{what} is a problem on the file"
+            );
+        }
+    }
+
+    /// A changed `account_id` wrote the account row and read nothing, so
+    /// every email stayed filed under the old account and nothing ever
+    /// removed it. The files are read again under the new id and the old
+    /// account goes.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_changed_account_id_moves_the_emails_and_retires_the_old_account() {
+        let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let account = |id: &str| MboxAccountConfig {
+            account_id: Some(id.to_string()),
+            ..Default::default()
+        };
+        run_once(&db_path, &path, |db| FetchOptions {
+            account_config: account("enterprise"),
+            ..FetchOptions::new(db)
+        })
+        .await;
+        run_once(&db_path, &path, |db| FetchOptions {
+            account_config: account("defiant"),
+            ..FetchOptions::new(db)
+        })
+        .await;
+
+        let db = RawDb::open(&db_path).await.unwrap();
+        let accounts_of = |table: &'static str| {
+            let pool = db.pool().clone();
+            async move {
+                sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(format!(
+                    "SELECT DISTINCT account_id FROM {table} ORDER BY account_id"
+                )))
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(accounts_of("emails").await, ["defiant"]);
+        assert_eq!(accounts_of("threads").await, ["defiant"]);
+        assert_eq!(accounts_of("mailboxes").await, ["defiant"]);
+        let accounts: Vec<String> = sqlx::query_scalar("SELECT id FROM accounts")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(accounts, ["defiant"]);
+        assert_eq!(db.load_emails().await.unwrap().len(), 2);
+        db.close().await;
     }
 
     #[cfg(unix)]
@@ -1704,12 +1600,7 @@ mod tests {
         std::fs::write(dir.path().join("b.mbox"), msg_two()).unwrap();
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
-        let run = || {
-            run_once(&db_path, dir.path(), |db| {
-                FetchOptions::new(db, cache.clone())
-            })
-        };
+        let run = || run_once(&db_path, dir.path(), FetchOptions::new);
         run().await;
 
         std::fs::remove_file(dir.path().join("b.mbox")).unwrap();
@@ -1770,12 +1661,7 @@ mod tests {
         std::os::unix::fs::symlink(dir.path().join("nowhere"), &link).unwrap();
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
-        let run = || {
-            run_once(&db_path, dir.path(), |db| {
-                FetchOptions::new(db, cache.clone())
-            })
-        };
+        let run = || run_once(&db_path, dir.path(), FetchOptions::new);
         run().await;
         assert_eq!(
             problems(&db_path).await,
@@ -1797,23 +1683,22 @@ mod tests {
         std::fs::write(dir.path().join("b.mbox"), MSG_THREE).unwrap();
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
         let labels = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         run_once(&db_path, dir.path(), |db| FetchOptions {
             only_labels: labels(&["Sent"]),
-            ..FetchOptions::new(db, cache.clone())
+            ..FetchOptions::new(db)
         })
         .await;
 
-        // Unchanged bytes, so only a run that reads every file opens it:
-        // one whose label filter widened.
+        // The filter widens to take in Worf's drill, which only b.mbox
+        // holds.
         let b = dir.path().join("b.mbox");
         if unreadable(&b).is_none() {
             return;
         }
         let widened = |db| FetchOptions {
             only_labels: labels(&["Sent", "Archived"]),
-            ..FetchOptions::new(db, cache.clone())
+            ..FetchOptions::new(db)
         };
         run_once(&db_path, dir.path(), widened).await;
         assert_eq!(
@@ -1837,7 +1722,7 @@ mod tests {
     }
 
     /// A message that will not parse is a row on its file, which stands
-    /// until the file is read again.
+    /// until a run reads the file without it.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_message_that_will_not_parse_is_a_row_on_its_file() {
         // The first `From ` line opens a message with nothing in it.
@@ -1845,26 +1730,22 @@ mod tests {
         let (_d, path) = write_tmp_mbox(&body);
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
-        let first = run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        let first = run_once(&db_path, &path, FetchOptions::new).await;
         assert_eq!(first.parse_errors, 1);
         assert_eq!(first.emails_upserted, 2);
-        assert_eq!(
-            problems(&db_path).await,
-            [(
-                "file:email/mbox:trek.mbox".to_string(),
-                "undeserializable".to_string()
-            )]
-        );
+        let rows = problems(&db_path).await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].0.starts_with("skipped:mbox:"), "{rows:?}");
+        assert_eq!(rows[0].1, "undeserializable");
 
         std::fs::write(&path, TWO_MSG_MBOX).unwrap();
-        run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        run_once(&db_path, &path, FetchOptions::new).await;
         assert!(problems(&db_path).await.is_empty());
     }
 
-    /// A rewritten file read on a run that could not read another is not
-    /// stamped: stamped, the next run would not see it rewritten, would not
-    /// read every file, and would never drop what it no longer holds.
+    /// A rewritten file read on a run that could not read another deletes
+    /// nothing; the first run that reads every file drops what it no
+    /// longer holds.
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_held_back_deletion_happens_once_every_file_reads() {
@@ -1875,12 +1756,7 @@ mod tests {
         std::fs::write(&b, MSG_THREE).unwrap();
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
-        let run = || {
-            run_once(&db_path, dir.path(), |db| {
-                FetchOptions::new(db, cache.clone())
-            })
-        };
+        let run = || run_once(&db_path, dir.path(), FetchOptions::new);
         run().await;
         assert_eq!(stored(&db_path).await.0.len(), 3);
 
@@ -1910,10 +1786,9 @@ mod tests {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
         run_once(&db_path, &path, |db| FetchOptions {
             only_labels: vec!["Sent".into(), "Starbase".into()],
-            ..FetchOptions::new(db, cache.clone())
+            ..FetchOptions::new(db)
         })
         .await;
         assert_eq!(
@@ -1924,191 +1799,90 @@ mod tests {
             )]
         );
 
-        run_once(&db_path, &path, |db| FetchOptions::new(db, cache.clone())).await;
+        run_once(&db_path, &path, FetchOptions::new).await;
         assert!(problems(&db_path).await.is_empty());
     }
 
+    /// Every run reads every file, so a file that stopped reading is a row
+    /// even though its bytes never changed, and the emails only it holds
+    /// stay until it reads again.
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
-    async fn unchanged_config_still_skips() {
-        // Guards the other direction: the adjustment must not fire on
-        // every run and turn each sync into a full re-read.
-        let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
+    async fn an_unchanged_file_that_will_not_read_is_a_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = dir.path().join("b.mbox");
+        std::fs::write(dir.path().join("a.mbox"), TWO_MSG_MBOX).unwrap();
+        std::fs::write(&b, MSG_THREE).unwrap();
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
-        let cache = test_cache().await;
-        let opts = |db| FetchOptions {
-            only_labels: vec!["Inbox".into()],
-            ..FetchOptions::new(db, cache.clone())
-        };
-        assert_eq!(run_once(&db_path, &path, opts).await.emails_upserted, 2);
-        assert_eq!(run_once(&db_path, &path, opts).await.emails_upserted, 0);
-        assert_eq!(run_once(&db_path, &path, opts).await.emails_upserted, 0);
-    }
-}
+        let run = || run_once(&db_path, dir.path(), FetchOptions::new);
+        run().await;
 
-#[cfg(test)]
-mod scope_config_tests {
-    use super::*;
-    use serde_json::json;
+        if unreadable(&b).is_none() {
+            return;
+        }
+        assert_eq!(run().await.emails_removed, 0);
+        assert_eq!(
+            problems(&db_path)
+                .await
+                .into_iter()
+                .map(|p| p.0)
+                .collect::<Vec<_>>(),
+            ["listing:mbox b.mbox", "listing:removed_records"]
+        );
+        assert_eq!(stored(&db_path).await.0.len(), 3);
 
-    /// The knobs under test, with no store handle: these cases are
-    /// about the scope-record comparison, which never touches one.
-    struct Inputs {
-        only_labels: Vec<String>,
-        blob_size_limit_bytes: Option<u64>,
-        account_config: MboxAccountConfig,
+        readable(&b);
+        assert_eq!(run().await.emails_removed, 0);
+        assert!(problems(&db_path).await.is_empty());
     }
 
-    impl Inputs {
-        fn as_scope(&self) -> ScopeInputs<'_> {
-            ScopeInputs {
-                only_labels: &self.only_labels,
-                blob_size_limit_bytes: self.blob_size_limit_bytes,
-                account_config: &self.account_config,
+    /// The account to retire was read from a record of the last id, which
+    /// a run that could not read every file left unchanged: an id changed
+    /// twice across such a run left the middle account's row and labels
+    /// behind for good. What the store files under any other account goes.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn every_account_the_config_no_longer_names_is_retired() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mbox"), TWO_MSG_MBOX).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        let under = |id: &str| {
+            let (db_path, path) = (db_path.clone(), dir.path().to_path_buf());
+            let account_config = MboxAccountConfig {
+                account_id: Some(id.to_string()),
+                ..Default::default()
+            };
+            async move {
+                run_once(&db_path, &path, |db| FetchOptions {
+                    account_config,
+                    ..FetchOptions::new(db)
+                })
+                .await
             }
+        };
+        under("enterprise").await;
+        // A file holding nothing holds the prune, and the retirement with it.
+        std::fs::write(dir.path().join("c.mbox"), "").unwrap();
+        under("defiant").await;
+        std::fs::remove_file(dir.path().join("c.mbox")).unwrap();
+        under("voyager").await;
+
+        let db = RawDb::open(&db_path).await.unwrap();
+        for table in ["emails", "threads", "mailboxes"] {
+            let accounts: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT DISTINCT account_id FROM {table} ORDER BY account_id"
+            )))
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+            assert_eq!(accounts, ["voyager"], "{table}");
         }
-    }
-
-    fn opts(labels: &[&str], cap: Option<u64>, account: MboxAccountConfig) -> Inputs {
-        Inputs {
-            only_labels: labels.iter().map(|s| s.to_string()).collect(),
-            blob_size_limit_bytes: cap,
-            account_config: account,
-        }
-    }
-
-    fn named(display: Option<&str>) -> MboxAccountConfig {
-        MboxAccountConfig {
-            display_name: display.map(str::to_string),
-            ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn absent_record_plans_nothing() {
-        // Every mbox store predating this record. Must not re-read a
-        // multi-gigabyte export on upgrade.
-        let o_owned = opts(&["Sent"], Some(1000), named(None));
-        let o = o_owned.as_scope();
-        assert_eq!(Adjustments::plan(None, &o), Adjustments::default());
-    }
-
-    #[tokio::test]
-    async fn unchanged_config_plans_nothing() {
-        let o_owned = opts(&["Sent"], Some(1000), named(Some("Work")));
-        let o = o_owned.as_scope();
-        let prior = scope_config_blob(&o);
-        assert_eq!(Adjustments::plan(Some(&prior), &o), Adjustments::default());
-    }
-
-    #[tokio::test]
-    async fn label_order_is_not_a_change() {
-        let prior = scope_config_blob(&opts(&["Sent", "Inbox"], None, named(None)).as_scope());
-        let o_owned = opts(&["Inbox", "Sent"], None, named(None));
-        let o = o_owned.as_scope();
-        assert_eq!(Adjustments::plan(Some(&prior), &o), Adjustments::default());
-    }
-
-    // ── the headline case ────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn widened_labels_reingest_files() {
-        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).as_scope());
-        let plan = Adjustments::plan(
-            Some(&prior),
-            &opts(&["Sent", "Inbox"], None, named(None)).as_scope(),
-        );
-        assert!(plan.reingest_files);
-        assert!(!plan.refresh_account);
-    }
-
-    #[tokio::test]
-    async fn adding_to_an_empty_filter_is_a_narrowing() {
-        // `[]` means "no filter", so it is the *widest* setting: moving
-        // to `["Sent"]` shrinks scope even though the list grew. Caught
-        // by `narrowing_labels_does_not_reingest` before this existed.
-        let prior = scope_config_blob(&opts(&[], None, named(None)).as_scope());
-        let plan = Adjustments::plan(Some(&prior), &opts(&["Sent"], None, named(None)).as_scope());
-        assert_eq!(plan, Adjustments::default());
-    }
-
-    #[tokio::test]
-    async fn removing_the_filter_reingests() {
-        // The mirror image: dropping to `[]` admits every label, and the
-        // naive set-difference reading would see no addition at all.
-        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).as_scope());
-        assert!(
-            Adjustments::plan(Some(&prior), &opts(&[], None, named(None)).as_scope())
-                .reingest_files
-        );
-    }
-
-    #[tokio::test]
-    async fn narrowed_labels_are_a_noop() {
-        // The store is already a superset. A hash-based record would
-        // re-read the whole export here and produce nothing.
-        let prior = scope_config_blob(&opts(&["Sent", "Inbox"], None, named(None)).as_scope());
-        let plan = Adjustments::plan(Some(&prior), &opts(&["Sent"], None, named(None)).as_scope());
-        assert_eq!(plan, Adjustments::default());
-    }
-
-    #[tokio::test]
-    async fn relaxed_blob_cap_reingests_files() {
-        let prior = scope_config_blob(&opts(&[], Some(1000), named(None)).as_scope());
-        assert!(
-            Adjustments::plan(Some(&prior), &opts(&[], Some(5000), named(None)).as_scope())
-                .reingest_files
-        );
-        assert!(
-            Adjustments::plan(Some(&prior), &opts(&[], None, named(None)).as_scope())
-                .reingest_files
-        );
-    }
-
-    #[tokio::test]
-    async fn tightened_blob_cap_is_a_noop() {
-        let prior = scope_config_blob(&opts(&[], Some(5000), named(None)).as_scope());
-        let plan = Adjustments::plan(Some(&prior), &opts(&[], Some(1000), named(None)).as_scope());
-        assert_eq!(plan, Adjustments::default());
-    }
-
-    // ── the case a hash would get wrong ──────────────────────────────
-
-    #[tokio::test]
-    async fn account_edit_refreshes_without_rereading() {
-        // The account row is written by `flush_account_and_lookups`,
-        // which never reads a message — so this must cost one UPSERT,
-        // not a re-read of the whole export.
-        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).as_scope());
-        let plan = Adjustments::plan(
-            Some(&prior),
-            &opts(&["Sent"], None, named(Some("Work"))).as_scope(),
-        );
-        assert!(plan.refresh_account);
-        assert!(
-            !plan.reingest_files,
-            "an account-field edit must not re-read the mbox"
-        );
-    }
-
-    #[tokio::test]
-    async fn account_and_labels_can_both_move() {
-        let prior = scope_config_blob(&opts(&["Sent"], None, named(None)).as_scope());
-        let plan = Adjustments::plan(
-            Some(&prior),
-            &opts(&["Sent", "Inbox"], None, named(Some("Work"))).as_scope(),
-        );
-        assert!(plan.reingest_files);
-        assert!(plan.refresh_account);
-    }
-
-    #[tokio::test]
-    async fn blob_shape_is_the_scope_affecting_subset() {
-        let obj = scope_config_blob(&opts(&["Sent"], Some(7), named(Some("Work"))).as_scope());
-        let obj = obj.as_object().unwrap();
-        assert_eq!(obj.len(), 3, "unexpected keys: {obj:?}");
-        assert_eq!(obj[K_ONLY_LABELS], json!(["Sent"]));
-        assert_eq!(obj[K_BLOB_CAP], json!(7));
-        assert_eq!(obj[K_ACCOUNT]["display_name"], json!("Work"));
+        let accounts: Vec<String> = sqlx::query_scalar("SELECT id FROM accounts ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(accounts, ["voyager"]);
+        db.close().await;
     }
 }

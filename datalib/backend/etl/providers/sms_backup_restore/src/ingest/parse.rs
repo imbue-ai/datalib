@@ -2,16 +2,19 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use base64::Engine as _;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
 /// Which kind of export a file is, sniffed from its root element.
+/// `Other` is well-formed XML of some other kind, which a backup folder may
+/// hold beside the backups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RootKind {
     Smses,
     Calls,
+    Other,
 }
 
 /// One `<sms>` record.
@@ -74,23 +77,38 @@ pub struct CallRecord {
     pub contact_name: Option<String>,
 }
 
-pub fn detect_root(xml: &str) -> Option<RootKind> {
+/// An error when the file holds no element at all (0 bytes, bytes that are
+/// not XML) or breaks before its first one: that is a backup that could not
+/// be read, not a backup of nothing.
+pub fn detect_root(xml: &str) -> Result<RootKind> {
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                return match e.name().as_ref() {
-                    b"smses" => Some(RootKind::Smses),
-                    b"calls" => Some(RootKind::Calls),
-                    _ => None,
-                };
+        match reader
+            .read_event_into(&mut buf)
+            .context("read the root element")?
+        {
+            Event::Start(e) | Event::Empty(e) => {
+                return Ok(match e.name().as_ref() {
+                    b"smses" => RootKind::Smses,
+                    b"calls" => RootKind::Calls,
+                    _ => RootKind::Other,
+                });
             }
-            Ok(Event::Eof) | Err(_) => return None,
+            Event::Eof => bail!("the file holds no XML element"),
             _ => {}
         }
         buf.clear();
     }
+}
+
+/// A copy cut off part-way still parses up to where it stops, so a backup
+/// counts as read only once its root element has closed.
+fn ensure_closed(closed: bool, root: &str) -> Result<()> {
+    if !closed {
+        bail!("the file ends before its </{root}>: a copy cut off part-way");
+    }
+    Ok(())
 }
 
 pub fn parse_smses(xml: &str) -> Result<(Vec<SmsRecord>, Vec<MmsRecord>)> {
@@ -98,9 +116,12 @@ pub fn parse_smses(xml: &str) -> Result<(Vec<SmsRecord>, Vec<MmsRecord>)> {
     let mut buf = Vec::new();
     let mut smses = Vec::new();
     let mut mmses = Vec::new();
+    let mut closed = false;
 
     loop {
         match reader.read_event_into(&mut buf).context("read xml event")? {
+            Event::Empty(e) if e.name().as_ref() == b"smses" => closed = true,
+            Event::End(e) if e.name().as_ref() == b"smses" => closed = true,
             Event::Empty(e) if e.name().as_ref() == b"sms" => {
                 smses.push(sms_from_attrs(&attrs(&e)?));
             }
@@ -121,6 +142,7 @@ pub fn parse_smses(xml: &str) -> Result<(Vec<SmsRecord>, Vec<MmsRecord>)> {
         }
         buf.clear();
     }
+    ensure_closed(closed, "smses")?;
     Ok((smses, mmses))
 }
 
@@ -128,8 +150,11 @@ pub fn parse_calls(xml: &str) -> Result<Vec<CallRecord>> {
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut calls = Vec::new();
+    let mut closed = false;
     loop {
         match reader.read_event_into(&mut buf).context("read xml event")? {
+            Event::Empty(e) if e.name().as_ref() == b"calls" => closed = true,
+            Event::End(e) if e.name().as_ref() == b"calls" => closed = true,
             Event::Empty(e) | Event::Start(e) if e.name().as_ref() == b"call" => {
                 let a = attrs(&e)?;
                 calls.push(CallRecord {
@@ -146,6 +171,7 @@ pub fn parse_calls(xml: &str) -> Result<Vec<CallRecord>> {
         }
         buf.clear();
     }
+    ensure_closed(closed, "calls")?;
     Ok(calls)
 }
 
@@ -284,12 +310,30 @@ mod tests {
 
     #[test]
     fn detect_root_kinds() {
-        assert_eq!(detect_root(SMSES), Some(RootKind::Smses));
+        assert_eq!(detect_root(SMSES).unwrap(), RootKind::Smses);
         assert_eq!(
-            detect_root("<calls count=\"0\"></calls>"),
-            Some(RootKind::Calls)
+            detect_root("<calls count=\"0\"></calls>").unwrap(),
+            RootKind::Calls
         );
-        assert_eq!(detect_root("<other/>"), None);
+        assert_eq!(detect_root("<other/>").unwrap(), RootKind::Other);
+    }
+
+    #[test]
+    fn a_file_with_no_element_is_not_an_export_of_nothing() {
+        assert!(detect_root("").is_err());
+        assert!(detect_root("<?xml version='1.0' ?>\n").is_err());
+        assert!(detect_root("\u{1}\u{2} not xml").is_err());
+    }
+
+    #[test]
+    fn a_backup_cut_off_part_way_does_not_parse() {
+        let cut = &SMSES[..SMSES.find("</smses>").unwrap()];
+        assert!(parse_smses(cut).is_err());
+        assert!(parse_calls("<calls count=\"1\"><call number=\"1\" />").is_err());
+        assert_eq!(parse_smses("<smses count=\"0\"/>").unwrap().0.len(), 0);
+        assert!(parse_calls("<calls count=\"0\"></calls>")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

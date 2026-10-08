@@ -5,18 +5,20 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
-use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{write_fixture, Synthesizer};
 use datalib_etl_claude::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_claude::synthesize::{ClaudeSynth, BASE, DETAIL_QUERY};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::retry::{self, RetryGuard};
+use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
 const ENTERPRISE: (&str, &str) = ("org-a", "Enterprise");
 const DEFIANT: (&str, &str) = ("org-b", "Defiant");
 const VOYAGER: (&str, &str) = ("org-c", "Voyager");
+/// An API-console org: same name as a chat org, no chat.
+const CONSOLE: (&str, &str) = ("org-d", "Enterprise");
 
 fn conv(id: &str, (org, org_name): (&str, &str)) -> Value {
     json!({
@@ -124,6 +126,18 @@ impl Account {
         write_fixture(&self.playback, req, &resp).unwrap();
     }
 
+    fn orgs(&self, orgs: &[((&str, &str), &[&str])]) {
+        let body: Vec<Value> = orgs
+            .iter()
+            .map(|((uuid, name), caps)| json!({"uuid": uuid, "name": name, "capabilities": caps}))
+            .collect();
+        self.answer(
+            &api_get("/organizations"),
+            200,
+            &serde_json::to_vec(&body).unwrap(),
+        );
+    }
+
     fn fail(&self, req: &HttpRequest, status: u16) {
         self.answer(req, status, b"{\"error\":\"no\"}");
     }
@@ -157,6 +171,11 @@ impl Account {
     /// `(scope_key, sample)` of every `problems` row.
     async fn problems(&self) -> Vec<(String, String)> {
         self.query("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+            .await
+    }
+
+    async fn problems_with_severity(&self) -> Vec<(String, String)> {
+        self.query("SELECT scope_key, severity FROM problems ORDER BY scope_key")
             .await
     }
 
@@ -199,10 +218,12 @@ async fn part_of_a_sync_that_fails_is_a_problem_row() {
     an_account_that_will_not_load_is_a_phase_row().await;
     a_failed_attachment_says_why_and_lands_on_a_later_run().await;
     a_stub_no_listing_names_goes_with_its_problem().await;
+    a_listed_conversation_whose_detail_is_missing_keeps_what_is_held().await;
     a_refused_org_holds_back_the_stub_prune_and_all_refused_fails().await;
     a_project_whose_docs_failed_is_asked_again().await;
     a_file_claude_no_longer_has_is_not_asked_for_again().await;
     a_rate_limit_ends_the_walk_with_one_row().await;
+    an_org_without_chat_is_not_walked_and_keeps_what_it_held().await;
 }
 
 /// A conversation listing that failed other than 403 used to fail the
@@ -221,10 +242,17 @@ async fn an_org_whose_listing_fails_costs_only_that_org() {
     acct.fail(&listing(DEFIANT), 500);
     acct.fail(&listing(VOYAGER), 403);
     acct.run(|_| {}).await.expect("two orgs listed nothing");
+    let problems = acct.problems().await;
     assert_eq!(
-        acct.keys().await,
-        ["listing:conversations org:Defiant", "listing:org:Voyager"]
+        problems.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+        ["listing:conversations org:org-b", "listing:org:org-c"],
+        "an org is keyed by its uuid: two orgs can share a name"
     );
+    assert!(
+        problems[0].1.starts_with("org \"Defiant\": "),
+        "{problems:?}"
+    );
+    assert!(problems[1].1.contains("\"Voyager\""), "{problems:?}");
     assert_eq!(
         acct.conversation_ids().await,
         ["c-a1", "c-b1", "c-c1"],
@@ -264,17 +292,29 @@ async fn project_listings_that_fail_are_rows_until_they_list() {
     acct.run(day_two)
         .await
         .expect("the conversations still synced");
+    // A project's docs listing is a record of its own, keyed by the
+    // project. p-1's were listed the day before, so its failure leaves
+    // them stale rather than missing; a refusal is a warning by kind.
     assert_eq!(
-        acct.keys().await,
+        acct.problems_with_severity().await,
         [
-            "listing:project_docs Bridge Operations",
-            "listing:project_docs Holodeck",
-            "listing:projects org:Defiant",
+            (
+                "listing:projects org:org-b".to_string(),
+                "error".to_string()
+            ),
+            (
+                "project_docs_listings:p-1".to_string(),
+                "warning".to_string()
+            ),
+            (
+                "project_docs_listings:p-2".to_string(),
+                "warning".to_string()
+            ),
         ]
     );
 
-    // A docs listing that failed left its sweep marker alone, so the
-    // same run's now asks for it again.
+    // A docs listing that failed is not held, so the same run's now
+    // asks for it again.
     acct.holds(&convs, &held);
     let s = acct.run(day_two).await.unwrap();
     assert_eq!(s.project_docs_fetched, 3, "{s:?}");
@@ -374,6 +414,32 @@ async fn a_stub_no_listing_names_goes_with_its_problem() {
     assert_eq!(acct.conversation_ids().await, ["c-a1"]);
 }
 
+/// A conversation the listing still names, whose detail answers 404, was
+/// deleted from the mirror on every run while the listing kept naming it.
+/// Only a listing that leaves it out says it is gone.
+async fn a_listed_conversation_whose_detail_is_missing_keeps_what_is_held() {
+    let acct = Account::new(true);
+    acct.holds(&[conv("c-a1", ENTERPRISE)], &[]);
+    acct.run(|_| {}).await.unwrap();
+    assert_eq!(acct.conversation_ids().await, ["c-a1"]);
+
+    let mut edited = conv("c-a1", ENTERPRISE);
+    edited["updated_at"] = json!("2369-01-03T00:00:00Z");
+    acct.holds(&[edited.clone()], &[]);
+    acct.fail(&detail(ENTERPRISE, "c-a1"), 404);
+    acct.run(|_| {}).await.unwrap();
+    assert_eq!(
+        acct.conversation_ids().await,
+        ["c-a1"],
+        "what the mirror held stays while the listing names it"
+    );
+    assert_eq!(acct.keys().await, ["conversations:c-a1"]);
+
+    acct.holds(&[edited], &[]);
+    acct.run(|_| {}).await.unwrap();
+    assert_eq!(acct.keys().await, no_keys());
+}
+
 /// A stub belongs to whichever org listed it, so an org that refused its
 /// listing holds the stub prune back; and a run every org refuses (a
 /// session expired inside the org cache) fails rather than reading as
@@ -397,7 +463,7 @@ async fn a_refused_org_holds_back_the_stub_prune_and_all_refused_fails() {
     acct.run(|_| {}).await.unwrap();
     assert_eq!(
         acct.keys().await,
-        ["conversations:c-x", "listing:org:Defiant"],
+        ["conversations:c-x", "listing:org:org-b"],
         "the stub may be Defiant's"
     );
 
@@ -423,10 +489,7 @@ async fn a_project_whose_docs_failed_is_asked_again() {
     acct.fail(&docs(ENTERPRISE, "p-1"), 500);
     let an_hour_on = |o: &mut FetchOptions| o.now = Some("2369-02-01T01:00:00Z".into());
     acct.run(an_hour_on).await.unwrap();
-    assert_eq!(
-        acct.keys().await,
-        ["listing:project_docs Bridge Operations"]
-    );
+    assert_eq!(acct.keys().await, ["project_docs_listings:p-1"]);
 
     acct.holds(&convs, &[changed]);
     let s = acct.run(an_hour_on).await.unwrap();
@@ -505,5 +568,33 @@ async fn a_rate_limit_ends_the_walk_with_one_row() {
     assert_eq!(
         acct.keys().await,
         ["claude_attachments:c-a1#f-1", "phase:attachments"]
+    );
+}
+
+/// An API-console org answers 403 to every chat request, and its refusal
+/// was a warning named only "Enterprise" — the same name as the chat org
+/// beside it. An org whose capabilities leave out `chat` is not asked for
+/// anything, so it is not pruned either: an empty answer from it would
+/// have deleted what the store holds for it.
+async fn an_org_without_chat_is_not_walked_and_keeps_what_it_held() {
+    let acct = Account::new(true);
+    acct.holds(&[conv("c-a1", ENTERPRISE), conv("c-d1", CONSOLE)], &[]);
+    let at = |now: &'static str| move |o: &mut FetchOptions| o.now = Some(now.into());
+    acct.run(at("2369-02-01T00:00:00Z")).await.unwrap();
+    assert_eq!(acct.conversation_ids().await, ["c-a1", "c-d1"]);
+
+    acct.orgs(&[
+        (ENTERPRISE, &["chat", "customer_terms:standard"]),
+        (CONSOLE, &["api", "customer_terms:standard"]),
+    ]);
+    acct.answer(&listing(CONSOLE), 200, b"[]");
+    // Past the org listing's 6h cache, so /organizations is asked again.
+    let s = acct.run(at("2369-02-01T07:00:00Z")).await.unwrap();
+    assert_eq!((s.non_chat_orgs, s.forbidden_orgs), (1, 0), "{s:?}");
+    assert_eq!(acct.keys().await, no_keys());
+    assert_eq!(
+        acct.conversation_ids().await,
+        ["c-a1", "c-d1"],
+        "an org that is not walked is not pruned"
     );
 }

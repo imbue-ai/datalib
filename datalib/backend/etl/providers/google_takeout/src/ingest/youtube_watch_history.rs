@@ -1,13 +1,13 @@
 //! `YouTube and YouTube Music/history/watch-history.html` walker.
 
 use datalib_etl::download_problems::SkippedRecord;
-use datalib_etl::fsscan;
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::fsscan;
 use datalib_problems::{Problem, Severity};
 
 use anyhow::Result;
-use datalib_etl::file_checkpoint::{self, SnapshotCounts};
 use datalib_etl::progress::Progress;
+use datalib_etl_files::file_checkpoint::{self, SnapshotCounts};
 use serde_json::json;
 
 use super::db::RawDb;

@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use datalib_etl_slack::ingest::schema_raw::slack_message_key;
 use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
 use datalib_etl_slack::recorded::{record_call, History};
 use serde_json::{json, Value};
@@ -67,12 +68,13 @@ fn write_cold_start_with_thread(api: &Path) {
     .unwrap();
 }
 
-/// What `replies_pages` holds as the newest reply of the `TS_A` thread.
+/// The version the `TS_A` thread is held at: the newest reply its last
+/// whole read was for, in the thread's sidecar.
 async fn recorded_latest_reply(out: &Path) -> Option<String> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
     let held: Option<Option<String>> =
-        sqlx::query_scalar("SELECT latest_reply FROM replies_pages WHERE thread_ts = ?")
-            .bind(TS_A)
+        sqlx::query_scalar("SELECT held_version FROM threads_bookkeeping WHERE id = ?")
+            .bind(slack_message_key("T1", "C1", TS_A))
             .fetch_optional(db.pool())
             .await
             .unwrap();
@@ -261,7 +263,7 @@ async fn a_rewalked_window_keeps_the_replies_of_a_thread_it_lists() {
 
 /// A thread whose root is gone from the re-walked window goes whole: with
 /// the root deleted nothing would ever ask for its replies again, so
-/// leaving them would strand them, along with a `replies_pages` row that
+/// leaving them would strand them, along with a held version that
 /// vouches for a thread we no longer hold.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_thread_root_missing_from_a_rewalked_window_takes_its_replies() {

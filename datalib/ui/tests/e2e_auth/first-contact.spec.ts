@@ -17,7 +17,7 @@ test("picking a tile only reads", async ({ page, world, internet }) => {
   expect(internet.to("slack.com")).toHaveLength(0);
 });
 
-/// latchkey's answer is what the Connection section is built from, so
+/// latchkey's answer is what the account row is built from, so
 /// while it is asked the section says so rather than sitting half
 /// empty. A stored credential makes `services info` check it with
 /// Slack; holding that check keeps the question open.
@@ -30,7 +30,8 @@ test("while latchkey is asked, the section says so", async ({ page, world, inter
   const asking = wizard(page).getByText("Asking latchkey how you can sign in…");
   await expect(asking).toBeVisible();
   release();
-  await expect(wizard(page).getByRole("tab", { name: "Paste a key" })).toBeVisible();
+  // The stored token is then checked, and the row says who it reaches.
+  await expect(wizard(page).locator(".wiz-probe-ok")).toBeVisible();
   await expect(asking).toHaveCount(0);
 });
 
@@ -39,7 +40,7 @@ test.describe("with no bundled runtime", () => {
 
   /// Slack has no account picker, which is where this note used to
   /// live — so it showed no way to sign in and said nothing at all.
-  test("the Connection section says latchkey is missing, in a sentence", async ({ page }) => {
+  test("the account row says latchkey is missing, in a sentence", async ({ page }) => {
     await pickTile(page, TILE.slack);
     const note = wizard(page).locator(".wiz-accounts-failed");
     await expect(note).toHaveAttribute("data-issue", "no_runtime");

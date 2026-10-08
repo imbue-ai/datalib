@@ -15,7 +15,7 @@ pub async fn probe(config: &GarminConfig, ask: ProbeAsk) -> Result<ProbeReport> 
     if let ProbeAsk::List(list) = ask {
         bail!("a Garmin source has no `{}` list", list.as_str());
     }
-    let mut client = GarminClient::new(config.latchkey_settings.clone());
+    let client = GarminClient::new(config.latchkey_settings.clone());
     let profile = match client
         .get_json("/userprofile-service/socialProfile")
         .await?

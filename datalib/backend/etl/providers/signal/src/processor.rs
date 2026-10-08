@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl_signal_config::{SignalConfig, SignalSync};
 
 use crate::ingest;

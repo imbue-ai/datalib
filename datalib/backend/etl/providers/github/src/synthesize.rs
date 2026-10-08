@@ -5,13 +5,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use datalib_etl::event_store::load_latest_by_key;
-use datalib_etl::http::{HttpRequest, HttpService};
-use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
+use datalib_etl_web::http::{HttpRequest, HttpService};
+use datalib_etl_web::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
+use datalib_etl_forge_ingest_common::{covered_hi, Bounds};
+
 use crate::ingest::{
-    search_url, since_param, BASE, DEFAULT_SCOPES, ENTITY_ISSUE_COMMENT, ENTITY_PR,
-    ENTITY_PR_REVIEW, ENTITY_PR_REVIEW_COMMENT, ENTITY_SELF, PER_PAGE,
+    search_url, stamp, BASE, DEFAULT_SCOPES, ENTITY_ISSUE_COMMENT, ENTITY_PR, ENTITY_PR_REVIEW,
+    ENTITY_PR_REVIEW_COMMENT, ENTITY_SELF, PER_PAGE,
 };
 
 pub struct GithubSynth {
@@ -36,12 +38,15 @@ fn pr_repo_num(rec: &Value) -> Option<(String, u64)> {
     Some((repo, num))
 }
 
-/// The `since` a run resumed from a cursor stamped `at` sends, by the
-/// policy the download itself runs.
-fn resumed_since(scope: &str, at: &str) -> Option<String> {
+/// Where a run after one pinned at `at`, which listed PRs updated at
+/// `newest` at the latest, starts its search: the top of what that run
+/// covered, by the policy the download itself runs.
+fn resumed_from(at: &str, newest: Option<&str>) -> Option<Bounds> {
     let at = datalib_time::parse_strict(at).ok()?;
-    let cursors = std::collections::HashMap::from([(scope.to_string(), at.to_rfc3339_secs())]);
-    datalib_etl::scope_state::since_for_scope(&at, &cursors, scope, 0, false, None)
+    Some(Bounds {
+        lo: Some(covered_hi(&stamp(&at), newest).to_string()),
+        hi: None,
+    })
 }
 
 impl Synthesizer for GithubSynth {
@@ -88,16 +93,25 @@ impl Synthesizer for GithubSynth {
         }
 
         // Search fixtures per default scope — minimal item shape: download
-        // only reads `repository_url` (to derive repo) and `number`.
+        // reads `repository_url` (to derive repo), `number` and the
+        // `updated_at` it lists the PR at.
         let items: Vec<Value> = pr_by_key
-            .keys()
-            .map(|(repo, num)| {
-                json!({
+            .iter()
+            .map(|((repo, num), raw)| {
+                let mut item = json!({
                     "repository_url": format!("{BASE}/repos/{repo}"),
                     "number": num,
-                })
+                });
+                if let Some(updated_at) = raw.get("updated_at") {
+                    item["updated_at"] = updated_at.clone();
+                }
+                item
             })
             .collect();
+        let newest = pr_by_key
+            .values()
+            .filter_map(|raw| raw.get("updated_at").and_then(Value::as_str))
+            .max();
         let search_page = |items: &[Value]| {
             json_response(&json!({
                 "total_count": items.len(),
@@ -108,23 +122,23 @@ impl Synthesizer for GithubSynth {
         for scope in DEFAULT_SCOPES {
             write_fixture(
                 out_root,
-                &req_get(&search_url(scope, None)),
+                &req_get(&search_url(scope, &Bounds::default())),
                 &search_page(&items),
             )?;
             count += 1;
         }
-        // A sync whose cursors were stamped at the capture's own moment
-        // asks each scope what changed since; nothing had.
+        // A sync after one pinned at the capture's own moment asks each
+        // scope what changed since; nothing had.
         let captured_at = selves
             .first()
             .and_then(|(_, rec)| rec.get("_recorded_at")?.as_str());
         for scope in DEFAULT_SCOPES {
-            let Some(since) = captured_at.and_then(|at| resumed_since(scope, at)) else {
+            let Some(bounds) = captured_at.and_then(|at| resumed_from(at, newest)) else {
                 break;
             };
             write_fixture(
                 out_root,
-                &req_get(&search_url(scope, Some(&since_param(&since)))),
+                &req_get(&search_url(scope, &bounds)),
                 &search_page(&[]),
             )?;
             count += 1;
@@ -212,7 +226,7 @@ impl Synthesizer for GithubSynth {
 mod tests {
     use super::*;
     use datalib_etl::event_store::{diff_and_save, make_record};
-    use datalib_etl::http::{fixture_key, HttpResponse};
+    use datalib_etl_web::http::{fixture_key, HttpResponse};
     use serde_json::Map;
     use std::collections::HashMap;
     use std::fs;
@@ -271,7 +285,11 @@ mod tests {
         assert_eq!(report.fixtures_written, 11);
 
         // a search resumed from the capture's moment finds nothing new
-        let req = req_get(&search_url(DEFAULT_SCOPES[0], Some("2369-04-15")));
+        let resumed = Bounds {
+            lo: Some("2369-04-15T00:00:00Z".to_string()),
+            hi: None,
+        };
+        let req = req_get(&search_url(DEFAULT_SCOPES[0], &resumed));
         let p = out.join("github").join(fixture_key(&req));
         let resp: HttpResponse = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
         let body: Value = serde_json::from_slice(&resp.body).unwrap();
@@ -285,7 +303,7 @@ mod tests {
         assert_eq!(body["login"], "octocat");
 
         // search fixture contains our PR
-        let req = req_get(&search_url(DEFAULT_SCOPES[0], None));
+        let req = req_get(&search_url(DEFAULT_SCOPES[0], &Bounds::default()));
         let p = out.join("github").join(fixture_key(&req));
         let resp: HttpResponse = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
         let body: Value = serde_json::from_slice(&resp.body).unwrap();

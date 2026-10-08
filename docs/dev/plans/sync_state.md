@@ -1,6 +1,6 @@
 # Sync state: what is owed is what upstream listed, minus what we hold
 
-**Status: decided 2026-10-05; steps 0 to 3 of §7 are built (the three fixes, Garmin, Slack, email's two API paths).** This is the design and
+**Status: decided 2026-10-05; steps 0 to 6 of §7 are built: every network source is on one owed query and one fetch loop (§10), every local source names its units of completeness (§11), and the reference description is `data_architecture_ingestion.md` § "What is left to fetch" and § "Local inputs".** This is the design and
 the order of work. It came out of the audit in
 [`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 and a read of the four downloads with the most resume state (Slack,
@@ -263,12 +263,19 @@ Closes E2–E9.
 **Step 4 — Notion.** Closes N1–N4, N6, N7.
 
 **Step 5 — the rest of the network sources** (ChatGPT, Claude, GitHub
-and GitLab, DAV, AirVisual, YoLink), then delete `scope_config`, lint
-check 8 and the AGENTS.md section.
+and GitLab, DAV, YoLink), then delete lint check 8 and the AGENTS.md
+section. Built. AirVisual reads a mounted share, so it is a local
+source and moved to step 6. `scope_config` could not go: email's mbox
+path and `lightroom` still use it, and both are local.
 
-**Step 6 — local sources** move to one whole pass per run, after timing
-the large inputs. `file_checkpoint` and the three copies of the
-overlapping-snapshot protocol go.
+**Step 6 — local sources.** Built, with §11: completeness is a unit
+the provider names, a unit is replaced in the seal that rewrites it,
+and `always_clear_before_ingest` is gone. Then, on the owner's word that
+mbox and lightroom need no optimizations, both read their whole input
+every run, and `scope_config` went with the last of its users (its
+table is dropped when an older store opens). The skip for an unchanged
+file stays for the other file-backed sources, where it never decides a
+deletion.
 
 ## 8. The interruption test
 
@@ -438,4 +445,104 @@ worklist. mbox is a local source and moves in step 6.
   Notion: move the held version into the `_bookkeeping` sidecar every
   table already has, so "owed" is one shared query, and write one
   fetch loop whose unit is a batch with an outcome per item.
+
+## 10. The one loop, from doing the three again
+
+Each of the three had implemented "listed minus held" by hand: its own
+held-version columns or table, its own owed query, its own fetch loop
+with its own budget, stop handling, attempt stamps and problem rows.
+Doing them again onto one shared form, `etl/src/owed.rs`, settled what
+the shared form is:
+
+- **The held version lives in the sidecar every raw table already has**
+  (`_bookkeeping.held_version`), written in the transaction that wrote
+  the content. A provider adds no column and no table for it. A record
+  with two fetches that can fail on their own (a Slack root message and
+  its thread) is two records with two sidecars.
+- **Held means a fetch landed, at the listed version.** A failed attempt
+  leaves a sidecar row too; it must never read as held, or a failure is
+  never retried. A record listed with no version only has to have been
+  fetched.
+- **One loop, `owed::drain`**, with a provider as a `Fetcher`: what it
+  lists, how it fetches a batch, how it stores one. The loop owns the
+  rest: a request size and a flush size apart (one `messages.get` per
+  request, two hundred per transaction, or 32 MB of bodies if that
+  comes first), requests at once, five outcomes
+  per record (fetched; fetched but unusable, held with a warning; gone;
+  failed, owed with an error; skipped by our rule, owed with a warning),
+  a stop that writes what was answered, a give-up after N fruitless
+  requests or a terminal error as one `phase:` row, an abort that fails
+  the run after writing what came. Bytes for a CAS go in during `store`,
+  once per flush, before the rows that name them.
+
+What it did not do is make the providers smaller: Garmin, Slack and
+email each came out within a few percent of where they started, the
+one-time migration rungs aside. What they lost is every mechanism of
+their own; what they gained is the trait's surface, which for a
+provider of ten-line requests costs about what the hand loop did. The
+gain is that how a stop, a failure, a skip or a give-up is handled has
+one answer, proven once, and the three providers' private accidents are
+gone: email's own meaning of `attempt_count`, Slack's thread error at
+the wrong severity, Garmin counting an unreadable file as the run's
+error. The interruption tests held through both passes.
+
+Two things stay outside the loop by nature: a walk over a range
+(`coverage`), and a producer's own state (a delta token, a listing
+mark, which scopes were listed whole).
+
+
+## 11. Local sources: what a complete input licenses
+
+A local source reads files on disk: an export, a backup, a folder, a
+database file. When something is missing from its input, either it was
+deleted, or this input never had it. The provider knows which, per
+**unit of completeness**, so the person is not asked:
+
+| kind | unit | sources |
+|---|---|---|
+| one snapshot | the whole input | lightroom catalog, Apple Photos, WhatsApp msgstore, the Signal snapshot |
+| parts of an export | each product, file or table | Takeout per product (per file for a single-file feed), LinkedIn per CSV, Facebook per table, the claude export per file, each `.vcf` or `.ics` |
+| an overlapping collection | the whole folder, after a clean read of all of it | mbox folder, SMS backup folder |
+| a cache that evicts | none: never delete | beeper, claude_code, codex, airvisual, Apple Messages |
+
+Each run, each unit is one of three things:
+
+- **Present and read cleanly**: the store's rows for the unit become
+  what the input holds, and what it no longer holds is deleted, in the
+  transaction and the seal that rewrite it.
+- **Absent**: nothing is deleted. A unit not in the input looks the
+  same whether it was never exported or was emptied.
+- **Present but unreadable, or recognizably nothing** (a 0-byte file, a
+  corrupt header, a layout the reader does not know): nothing is
+  deleted, and it is a problem row. Only a well-formed input that lists
+  nothing deletes everything in its unit.
+
+This is the network rule turned around: there, a listing that is whole
+for a scope is what licenses a deletion inside it (email's
+`listed_whole`, DAV's `dav_unconfirmed`); here, a unit read whole is.
+
+**`always_clear_before_ingest` goes.** It wiped and sealed the store
+before the input was read, so a missing folder or an unset passphrase
+left readers an empty mirror and render deleted every document
+(`datalib_step/tests/step_tests/clear_before_ingest.rs`). It also
+cleared state that should outlive a run (LinkedIn's fetched photos,
+Signal's decrypted attachments), and for LinkedIn, whose export form
+offers a subset, it deleted every table the export left out. A config
+that still names it loads, and the System row on the Manage screen
+carries the warning, as it now carries every config warning.
+
+**Apple Messages becomes append-only.** With "Keep messages" set to 30
+days, `chat.db` evicts, and keeping what the phone drops is the reason
+to mirror it.
+
+**Bugs the survey found**, each to be fixed with a test that fails
+first: an SMS backup empty or corrupt at its start reads as a clean
+empty archive; a `.vcf` or `.ics` that parses to nothing deletes its
+book or calendar, as a 0-byte `.mbox` prunes what only it held; the
+SQLite mirror drops every table when its source has none; a crash
+between the stamp and the prune loses the prune (SMS, Takeout Voice and
+Chat); fsindex deletes a subtree that failed to list; pdf drops the
+row of a file it skipped as too large; mbox orphans an account whose id
+changed; the claude export prunes every conversation when none of its
+entries has a uuid; Facebook prunes a table missing one of its chunks.
 

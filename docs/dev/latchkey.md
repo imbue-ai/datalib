@@ -6,7 +6,7 @@ that keeps credentials encrypted on the machine and puts them on
 requests for us. A downloader never sees a token: it runs
 `latchkey curl <url>`, and latchkey adds the header or cookie that
 service needs. This page is what you need to know before touching a
-sign-in, the wizard's Connection section, or a provider's HTTP client.
+sign-in, the wizard's account row, or a provider's HTTP client.
 
 ## How datalib runs it
 
@@ -14,7 +14,7 @@ sign-in, the wizard's Connection section, or a provider's HTTP client.
   `datalib/backend/runtime/src/node_runtime.rs` names it, and the
   bundled runtime ships that version beside its own Node. Nothing runs
   whatever `latchkey` happens to be on the PATH.
-- **Requests** go through `datalib_etl::http::latchkey_curl`, which
+- **Requests** go through `datalib_etl_web::http::latchkey_curl`, which
   sets `LATCHKEY_CURL` to our router curl so that Cloudflare-fronted
   hosts get the Chrome-impersonating curl
   ([`curl_impersonate.md`](curl_impersonate.md)).
@@ -100,9 +100,9 @@ Three more rules follow from that:
 
 ### What the wizard does with this
 
-The Connection section has one account box per source, and it behaves
+The account row has one account box per source, and it behaves
 the way the service names accounts (`ServiceInfo.account_naming`, read
-off latchkey's `type`):
+off latchkey's `type` and whether the service has a browser login):
 
 - **The service names it** (Slack, Gmail, Garmin, …): the box says so
   and offers the accounts latchkey holds. "Sign in with browser" passes
@@ -112,9 +112,11 @@ off latchkey's `type`):
   for a pasted key, which latchkey stores under the name it is given,
   and the sign-in tab says the login will replace it. The pure decision
   is `datalib/ui/src/config/accountNaming.ts`.
-- **You name it** (Claude, ChatGPT): the box takes any name, a new one
-  included, and every way of signing in stores under it. Empty means
-  the default account.
+- **You name it** (Claude, ChatGPT, and every service with no browser
+  login, such as `fastmail-dav`, `notion` and `gitlab`, where a pasted
+  key is the only way in): the box takes any name, a new one included,
+  and every way of signing in stores under it. Empty means the default
+  account. Its help line is `NAME_IT_HELP` in the same file.
 
 ## It speaks HTTP and nothing else
 

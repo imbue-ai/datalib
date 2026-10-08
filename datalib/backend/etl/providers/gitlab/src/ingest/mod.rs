@@ -2,27 +2,30 @@
 //! assigned to / was a reviewer on, plus all discussion notes. Writes a
 //! single doltlite database at `<data_root>/<group>/ingest/entities.doltlite_db`;
 //! see [`db`] for schema and [`datalib_etl::doltlite_raw`] for
-//! design rationale.
+//! design rationale. The run itself — the listings, what is owed, the
+//! fetch loop — is `datalib_etl_forge_ingest_common`; this crate
+//! supplies the endpoints and the tables.
 
 pub mod canonicalize;
 pub mod db;
 pub mod schema_raw;
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use chrono::Utc;
 use datalib_etl::bulk::BulkUpsertable;
-use datalib_etl::http::{default_retryability, HttpService, LatchkeySettings};
-use datalib_etl::stop::StopFlag;
+use datalib_etl::raw_store::Sealer;
 use datalib_etl_forge_ingest_common::{
-    get_change_request, sync, walk_children, Fetched, Forge, ForgeClient, Listed, SyncOptions,
+    get_change_request, sync, walk_children, Answer, Bounds, Forge, ForgeClient, Listed, Search,
+    SyncOptions,
 };
+use datalib_etl_web::http::{default_retryability, HttpService, LatchkeySettings};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 pub use datalib_etl_forge_ingest_common::PER_PAGE;
 pub use db::{
@@ -51,20 +54,27 @@ pub struct FetchOptions {
     /// construction").
     pub db: RawDb,
     pub scopes: Vec<String>,
+    /// On a store with data, list only MRs updated in the last N days;
+    /// 0 is unbounded. A first listing has no floor.
     pub refresh_window_days: u32,
+    /// Most MRs to fetch this run (`None` = unbounded); the rest stay
+    /// owed to later runs.
     pub max_mrs: Option<usize>,
     /// Explicit MR targets. When non-empty, discovery is skipped and
     /// only these MRs are fetched. Each entry is `(project_full_path,
     /// mr_iid)`; callers parse user-supplied refs (URL or
     /// `namespace/project!IID`) via [`parse_mr_ref`] beforehand.
     pub targets: Vec<(String, u32)>,
+    /// List everything and fetch everything listed: a full backfill.
     pub full_sync: bool,
     pub sleep_between: Duration,
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
-    /// The run's pinned clock; a scope's cursor is stamped with it.
+    /// The run's pinned clock: the top of every listing.
     pub now: IsoOffsetTimestamp,
+    /// Seals as MRs land, when the step driver hands one over.
+    pub sealer: Option<Sealer>,
 }
 
 impl FetchOptions {
@@ -84,6 +94,7 @@ impl FetchOptions {
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
             now,
+            sealer: None,
         }
     }
 }
@@ -92,10 +103,8 @@ impl FetchOptions {
 pub struct FetchSummary {
     pub new_mrs: usize,
     pub new_discussions: usize,
-    /// MRs whose listing `updated_at` matched the local copy — the
-    /// detail + discussions fetch was skipped. Counted separately so
-    /// the per-source one-liner can show how much work the resume cursor
-    /// + per-MR skip actually saved.
+    /// MRs the listings named at the `updated_at` the store already
+    /// holds them at: not fetched.
     pub skipped_unchanged_mrs: usize,
     /// Discussion threads GitLab no longer lists — deleted on their MR.
     pub pruned: usize,
@@ -108,18 +117,23 @@ pub(crate) fn project_full_path_from_web_url(web_url: &str) -> Option<String> {
     Some(path.to_string())
 }
 
+/// An MR as fetched: its record and its whole discussion list.
+pub struct MergeRequest {
+    payload: Value,
+    discussions: Vec<Value>,
+}
+
 struct Gitlab<'a> {
     db: &'a RawDb,
-    stop: &'a StopFlag,
 }
 
 #[async_trait]
 impl Forge for Gitlab<'_> {
     type Summary = FetchSummary;
+    type Content = MergeRequest;
     const ITEM: &'static str = "MR";
     const SIGIL: char = '!';
     const ITEM_TABLE: &'static str = MergeRequestRow::TABLE;
-    const SCOPE_CONFIG_KEY: &'static str = "gitlab:download";
 
     fn pool(&self) -> &SqlitePool {
         self.db.pool()
@@ -138,10 +152,10 @@ impl Forge for Gitlab<'_> {
         client: &ForgeClient,
         scope: &str,
         me: &Value,
-        since: Option<&str>,
-    ) -> Result<Vec<Value>> {
+        bounds: &Bounds,
+    ) -> Result<Search> {
         let user_id = me.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-        Ok(client.paginate(&search_url(scope, user_id, since)).await?)
+        Ok(client.search(&search_url(scope, user_id, bounds)).await?)
     }
 
     fn listed(&self, item: &Value) -> Option<Listed> {
@@ -165,24 +179,23 @@ impl Forge for Gitlab<'_> {
         mr_pk_recipe(container, number)
     }
 
-    async fn any_stored(&self) -> Result<bool> {
-        self.db.any_merge_requests().await
+    fn stamp(&self, at: &IsoOffsetTimestamp) -> String {
+        stamp(at)
     }
 
-    async fn stored_updated_at(&self) -> Result<HashMap<(String, u32), String>> {
-        self.db.merge_request_updated_ats().await
+    async fn any_stored(&self) -> Result<bool> {
+        self.db.any_merge_requests().await
     }
 
     async fn fetch_one(
         &self,
         client: &ForgeClient,
-        cr: &Listed,
-        summary: &mut FetchSummary,
-    ) -> Result<Fetched> {
-        let (proj, iid) = (cr.container.as_str(), cr.number);
+        proj: &str,
+        iid: u32,
+    ) -> Result<Answer<MergeRequest>> {
         let pid = urlencoding::encode(proj);
         let mr_url = format!("{BASE}/projects/{pid}/merge_requests/{iid}");
-        let mr_data = match get_change_request(client, &mr_url).await? {
+        let payload = match get_change_request(client, &mr_url).await? {
             Ok(v) => v,
             Err(miss) => return Ok(miss),
         };
@@ -191,39 +204,56 @@ impl Forge for Gitlab<'_> {
         // GitLab.
         let disc_url =
             format!("{BASE}/projects/{pid}/merge_requests/{iid}/discussions?per_page={PER_PAGE}");
-        let discussions = walk_children(client, &disc_url, "discussions").await?;
-        // The MR's stored `updated_at` is what lets the next run skip
-        // it. A stop cut its discussions short; storing it now would
-        // skip them until the MR next changes.
-        if let (Err(e), true) = (&discussions, self.stop.requested()) {
-            return Ok(Fetched::Short(vec![e.clone()]));
-        }
-        self.db.upsert_merge_request(proj, iid, &mr_data).await?;
-        summary.new_mrs += 1;
-        let discussions = match discussions {
+        let discussions = match walk_children(client, &disc_url, "discussions").await? {
             Ok(d) => d,
-            Err(e) => return Ok(Fetched::Short(vec![e])),
+            Err(e) => return Ok(Answer::Short(vec![e])),
         };
         let without_id = discussions
             .iter()
             .filter(|d| d.get("id").and_then(|v| v.as_str()).is_none())
             .count();
         if without_id > 0 {
-            return Ok(Fetched::Short(vec![format!(
+            return Ok(Answer::Short(vec![format!(
                 "{without_id} of its discussions came back without an id"
             )]));
         }
-        self.db.upsert_discussions(proj, iid, &discussions).await?;
-        summary.new_discussions += discussions.len();
-        summary.pruned += self
-            .db
-            .prune_mr_discussions(proj, iid, &discussions)
-            .await?;
-        Ok(Fetched::Whole)
+        Ok(Answer::Whole(MergeRequest {
+            payload,
+            discussions,
+        }))
     }
 
-    fn record_skipped(&self, summary: &mut FetchSummary) {
-        summary.skipped_unchanged_mrs += 1;
+    async fn store_one(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        proj: &str,
+        iid: u32,
+        mr: &MergeRequest,
+        summary: &mut FetchSummary,
+    ) -> Result<()> {
+        self.db
+            .store_merge_request(tx, proj, iid, &mr.payload)
+            .await?;
+        summary.new_mrs += 1;
+        self.db
+            .store_discussions(
+                tx,
+                proj,
+                iid,
+                &mr.discussions,
+                &IsoOffsetTimestamp::now_local(),
+            )
+            .await?;
+        summary.new_discussions += mr.discussions.len();
+        summary.pruned += self
+            .db
+            .prune_mr_discussions(tx, proj, iid, &mr.discussions)
+            .await?;
+        Ok(())
+    }
+
+    fn record_unchanged(&self, summary: &mut FetchSummary, count: usize) {
+        summary.skipped_unchanged_mrs = count;
     }
 
     fn record_requests(&self, summary: &mut FetchSummary, requests: u64) {
@@ -231,9 +261,10 @@ impl Forge for Gitlab<'_> {
     }
 }
 
-/// The merge-request listing for one discovery scope. `reviewer` is not
-/// a `scope` GitLab takes: it is a filter on the user's own id.
-pub fn search_url(scope: &str, user_id: i64, since: Option<&str>) -> String {
+/// The merge-request listing for one discovery scope, bounded by
+/// `updated_at`. `reviewer` is not a `scope` GitLab takes: it is a
+/// filter on the user's own id.
+pub fn search_url(scope: &str, user_id: i64, bounds: &Bounds) -> String {
     let scope_param = if scope == "reviewer" {
         format!("reviewer_id={user_id}")
     } else {
@@ -242,10 +273,21 @@ pub fn search_url(scope: &str, user_id: i64, since: Option<&str>) -> String {
     let mut url = format!(
         "{BASE}/merge_requests?{scope_param}&state=all&per_page={PER_PAGE}&order_by=updated_at&sort=desc"
     );
-    if let Some(s) = since {
-        url.push_str(&format!("&updated_after={}", urlencoding::encode(s)));
+    if let Some(lo) = &bounds.lo {
+        url.push_str(&format!("&updated_after={}", urlencoding::encode(lo)));
+    }
+    if let Some(hi) = &bounds.hi {
+        url.push_str(&format!("&updated_before={}", urlencoding::encode(hi)));
     }
     url
+}
+
+/// `at` as GitLab spells `updated_at`: UTC, to the millisecond, `Z`.
+pub fn stamp(at: &IsoOffsetTimestamp) -> String {
+    at.inner()
+        .with_timezone(&Utc)
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string()
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -262,10 +304,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "full_sync": opts.full_sync,
     });
     sync(
-        &Gitlab {
-            db: &opts.db,
-            stop: &opts.control.stop,
-        },
+        &Gitlab { db: &opts.db },
         &client,
         SyncOptions {
             scopes: &opts.scopes,
@@ -277,6 +316,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             stop: &opts.control.stop,
             sleep_between: opts.sleep_between,
             progress: &opts.progress,
+            sealer: opts.sealer.as_ref(),
             run_config,
         },
     )
@@ -336,5 +376,32 @@ mod tests {
             ),
             Some("starfleet/enterprise".to_string())
         );
+    }
+
+    /// A listing is bounded by whole stamps, either end; the run's now
+    /// is spelled as GitLab spells `updated_at` so the two sort
+    /// together.
+    #[test]
+    fn a_listing_is_bounded_in_gitlabs_own_spelling() {
+        let lo = "2369-04-12T00:00:00.000Z".to_string();
+        let hi = "2369-04-15T00:00:00.000Z".to_string();
+        let url = search_url(
+            "created_by_me",
+            7,
+            &Bounds {
+                lo: Some(lo),
+                hi: Some(hi),
+            },
+        );
+        assert!(
+            url.ends_with(
+                "&updated_after=2369-04-12T00%3A00%3A00.000Z&updated_before=2369-04-15T00%3A00%3A00.000Z"
+            ),
+            "{url}"
+        );
+        let open = search_url("reviewer", 7, &Bounds::default());
+        assert!(!open.contains("updated_after") && !open.contains("updated_before"));
+        let at = datalib_time::parse_strict("2369-04-15T02:00:00+02:00").unwrap();
+        assert_eq!(stamp(&at), "2369-04-15T00:00:00.000Z");
     }
 }

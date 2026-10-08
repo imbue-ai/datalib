@@ -6,10 +6,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService};
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_email::ingest::api;
 use datalib_etl_email::ingest::session::Session;
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
 
 pub const HOST: &str = "jmap.example.test";

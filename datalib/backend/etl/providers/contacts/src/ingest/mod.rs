@@ -1,4 +1,6 @@
-//! CardDAV downloader entry point.
+//! CardDAV downloader entry point: discovery, then each address book
+//! kept in step through `datalib_etl_web::dav::sync`, which lists, stores
+//! and prunes; this crate says how a card becomes a row.
 
 pub mod api;
 pub mod db;
@@ -8,17 +10,19 @@ pub mod vcf_dir;
 pub use db::{db_path_for, RawDb};
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::dav::state as dav_state;
-use datalib_etl::dav::sync::{CollectionSync, Page};
 use datalib_etl::download_problems;
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
+use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::dav::sync::{self, CollectionSync, ObjectStore};
+use datalib_etl_web::http::LatchkeySettings;
+use sqlx::{Sqlite, Transaction};
 use tracing::info;
 
 use api::ContactProps;
-use datalib_etl::dav::absolutize;
+use datalib_etl_web::dav::absolutize;
 use db::{addressbook_pk, ContactRow};
 
 /// Options for one `fetch` run. Mirrors the FetchOptions shape every
@@ -45,6 +49,8 @@ pub struct FetchOptions {
     pub addressbooks: Vec<String>,
     pub progress: Progress,
     pub control: DownloadControl,
+    /// Seals as pages land, when the step driver hands one over.
+    pub sealer: Option<Sealer>,
 }
 
 /// Per-run summary. The sync runner formats this into its
@@ -61,7 +67,11 @@ pub struct FetchSummary {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
-    run_problems::collecting(&pool, &stop, |found| sync_account(opts, found)).await
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| {
+        sync_account(opts, found)
+    })
+    .await
 }
 
 async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
@@ -94,10 +104,20 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         .await?;
     }
     summary.addressbooks = books.len();
+    let listed: Vec<String> = books
+        .iter()
+        .map(|b| addressbook_pk(&account_id, &b.href))
+        .collect();
+    summary.contacts_deleted += db.delete_addressbooks_not_in(&account_id, &listed).await?;
 
     report_unmatched_names(&found, &opts.addressbooks, &books)?;
 
-    let mut synced_ids: Vec<String> = Vec::new();
+    let run = sync::Run {
+        pool: db.pool(),
+        stop: &opts.control.stop,
+        found: &found,
+        sealer: opts.sealer.as_ref(),
+    };
     for book in &books {
         let named = book
             .display_name
@@ -110,28 +130,83 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
             break;
         }
         let book_id = addressbook_pk(&account_id, &book.href);
+        let label = book.display_name.as_deref().unwrap_or(&book.href);
         opts.progress
             .set_message(&format!("syncing addressbook {}", book.href));
-        synced_ids.push(book_id.clone());
-        let synced = sync_addressbook(&db, &book_id, &book.url, &mut summary, &opts.latchkey).await;
-        let listing = format!(
-            "addressbook {}",
-            book.display_name.as_deref().unwrap_or(&book.href)
-        );
-        match synced {
-            Ok(None) => {}
-            Ok(Some(cut_short)) => found.listing(
-                &listing,
-                format!("{cut_short}; nothing it has not reached is deleted until it finishes"),
-            ),
+        let token = db.sync_token(&book_id).await?;
+        let listing = CollectionSync::new(&api::KIND, &book.url, token, &opts.latchkey);
+        let listing_name = format!("addressbook {label}");
+        match sync::sync_collection(&run, &db, &book_id, label, listing).await {
+            Ok(synced) => {
+                summary.contacts_new += synced.new;
+                summary.contacts_updated += synced.updated;
+                summary.contacts_deleted += synced.deleted;
+                summary.errors += synced.unusable + synced.failed;
+                summary.requests += synced.requests;
+                if let Some(cut_short) = synced.cut_short {
+                    found.listing(
+                        &listing_name,
+                        format!(
+                            "{cut_short}; nothing it has not reached is deleted until it finishes"
+                        ),
+                    );
+                }
+            }
             Err(e) => {
                 summary.errors += 1;
-                found.listing(&listing, format!("{e:#}"));
+                found.listing(&listing_name, format!("{e:#}"));
             }
         }
     }
-    dav_state::collect_unstored(db.pool(), &found, "contacts", &synced_ids).await;
     Ok(summary)
+}
+
+#[async_trait]
+impl ObjectStore for RawDb {
+    type Props = ContactProps;
+    type Row = ContactRow;
+
+    fn row(
+        &self,
+        collection: &str,
+        href: &str,
+        etag: Option<&str>,
+        vcard: &str,
+    ) -> std::result::Result<ContactRow, String> {
+        let uid = api::vcard_uid(vcard)
+            .ok_or_else(|| "the vCard has no UID, so it cannot be stored".to_string())?;
+        Ok(ContactRow::new(
+            collection.to_string(),
+            uid,
+            href.to_string(),
+            etag.map(String::from),
+            api::vcard_fn(vcard),
+            api::vcard_rev(vcard),
+            vcard,
+        ))
+    }
+
+    async fn put(&self, tx: &mut Transaction<'_, Sqlite>, rows: &[&ContactRow]) -> Result<()> {
+        RawDb::upsert_contacts_in_tx(tx, rows).await
+    }
+
+    async fn remove(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        collection: &str,
+        href: &str,
+    ) -> Result<u64> {
+        RawDb::delete_contact(tx, collection, href).await
+    }
+
+    async fn set_token(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        collection: &str,
+        token: Option<&str>,
+    ) -> Result<()> {
+        RawDb::set_sync_token(tx, collection, token).await
+    }
 }
 
 /// A configured name no address book has is reported and costs only
@@ -219,7 +294,7 @@ async fn discover(
     summary: &mut FetchSummary,
     latchkey: &LatchkeySettings,
 ) -> Result<(String, String)> {
-    let principal_url = datalib_etl::dav::find_principal(
+    let principal_url = datalib_etl_web::dav::find_principal(
         api::HTTP_SERVICE,
         server_url,
         "carddav",
@@ -272,103 +347,6 @@ async fn list_addressbooks(
         });
     }
     Ok(out)
-}
-
-/// Keeps one address book in step with `sync-collection` from its
-/// stored token. Returns why the listing stopped short, if it did.
-async fn sync_addressbook(
-    db: &RawDb,
-    book_id: &str,
-    book_url: &str,
-    summary: &mut FetchSummary,
-    latchkey: &LatchkeySettings,
-) -> Result<Option<String>> {
-    let token = db.sync_token(book_id).await?;
-    let mut sync = CollectionSync::new(&api::KIND, book_url, token, latchkey);
-    let stored = store_pages(db, book_id, &mut sync, summary).await;
-    summary.requests += sync.requests();
-    stored?;
-    if let Some(cut_short) = sync.cut_short() {
-        return Ok(Some(cut_short.to_string()));
-    }
-    for href in dav_state::finish_listing(db.pool(), book_id).await? {
-        db.delete_contact(book_id, &href).await?;
-        summary.contacts_deleted += 1;
-    }
-    Ok(None)
-}
-
-async fn store_pages(
-    db: &RawDb,
-    book_id: &str,
-    sync: &mut CollectionSync<'_>,
-    summary: &mut FetchSummary,
-) -> Result<()> {
-    while let Some(page) = sync.next_page::<ContactProps>().await? {
-        if page.begins_whole {
-            let stored = db.contact_hrefs(book_id).await?;
-            dav_state::begin_whole(db.pool(), book_id, &stored).await?;
-        }
-        let token = page.token.clone();
-        let (listed, deleted) = (page.listed.clone(), page.deleted.clone());
-        let unstored = apply(db, book_id, page, summary).await?;
-        dav_state::settle_page(db.pool(), book_id, &listed, &deleted, &unstored).await?;
-        db.set_sync_token(book_id, token.as_deref()).await?;
-    }
-    Ok(())
-}
-
-/// Store what one page changed and drop what it deleted. Returns what
-/// it named and could not store, with why.
-async fn apply(
-    db: &RawDb,
-    book_id: &str,
-    page: Page<ContactProps>,
-    summary: &mut FetchSummary,
-) -> Result<Vec<(String, String)>> {
-    let existing = db.contact_etags_by_href(book_id).await?;
-    let mut unstored: Vec<(String, String)> = page
-        .unfetched
-        .into_iter()
-        .map(|href| {
-            (
-                href,
-                "the address book listed this card, but did not return it when asked".to_string(),
-            )
-        })
-        .collect();
-    let mut rows: Vec<ContactRow> = Vec::with_capacity(page.changed.len());
-    for r in &page.changed {
-        let vcard = r.props.vcard.as_deref().unwrap_or_default();
-        let Some(uid) = api::vcard_uid(vcard) else {
-            unstored.push((
-                r.href.clone(),
-                "the vCard has no UID, so it cannot be stored".to_string(),
-            ));
-            continue;
-        };
-        if existing.contains_key(&r.href) {
-            summary.contacts_updated += 1;
-        } else {
-            summary.contacts_new += 1;
-        }
-        rows.push(ContactRow::new(
-            book_id.to_string(),
-            uid,
-            r.href.clone(),
-            r.props.etag.clone(),
-            api::vcard_fn(vcard),
-            api::vcard_rev(vcard),
-            vcard,
-        ));
-    }
-    summary.errors += unstored.len();
-    db.upsert_contacts(&rows).await?;
-    for href in &page.deleted {
-        db.delete_contact(book_id, href).await?;
-        summary.contacts_deleted += 1;
-    }
-    Ok(unstored)
 }
 
 /// Account identifier: the URL host. One latchkey credential entry

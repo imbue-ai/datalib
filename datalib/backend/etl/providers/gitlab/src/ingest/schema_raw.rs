@@ -1,7 +1,8 @@
 //! Raw-store schema for the GitLab provider.
 
-use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
-use datalib_etl_forge_ingest_common::{numeric_id, opt_str};
+use datalib_etl::bulk::BulkUpsertable;
+use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
+use datalib_etl_forge_ingest_common::{numeric_id, opt_str, rung_listed_minus_held, LISTED_DDL};
 use datalib_etl_macros::WirePayloadRow;
 use serde_json::Value;
 
@@ -159,10 +160,25 @@ pub fn discussion_pk_recipe(project_full_path: &str, mr_iid: u32, discussion_id:
     format!("{project_full_path}!{mr_iid}#{discussion_id}")
 }
 
+/// The raw store's migration ladder (etl/README.md §"The migration
+/// ladder").
+pub const LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "what is held is the sidecar's held_version; the listing cursors are coverage",
+    apply: |conn| {
+        Box::pin(rung_listed_minus_held(
+            conn,
+            MergeRequestRow::TABLE,
+            super::stamp,
+        ))
+    },
+}];
+
 /// Compose the full DDL list passed to
 /// [`datalib_etl::doltlite_raw::open`]: every entity table DDL,
-/// each entity's CREATE-INDEX statements, and the paired
-/// `<table>_bookkeeping` DDL produced by the shared layer.
+/// each entity's CREATE-INDEX statements, the listing and the coverage
+/// the shared sync keeps, and the paired `<table>_bookkeeping` DDL
+/// produced by the shared layer.
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         SelfIdentityRow::ddl(),
@@ -170,6 +186,8 @@ pub fn full_ddl() -> Vec<String> {
         MERGE_REQUESTS_BY_PROJ_INDEX_DDL.to_string(),
         DiscussionRow::ddl(),
         DISCUSSIONS_BY_MR_INDEX_DDL.to_string(),
+        LISTED_DDL.to_string(),
+        datalib_etl_web::coverage::DDL.to_string(),
     ];
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));

@@ -22,6 +22,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/problems:datalib_problems",
@@ -66,6 +67,7 @@ rust_test(
         "@datalib_crates//:anyhow",
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/pin:datalib_pin",
         ":datalib_etl_garmin",
         "@datalib_crates//:chrono",

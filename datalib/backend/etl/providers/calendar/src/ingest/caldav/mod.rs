@@ -1,16 +1,20 @@
 //! CalDAV download (RFC 4791): discover the account's calendars, then
-//! keep each one in step with `sync-collection`, one resource per event
-//! series. Fastmail, iCloud, Nextcloud and Google's CalDAV all answer it.
+//! keep each one in step through `datalib_etl_web::dav::sync`, which lists,
+//! stores and prunes, one resource per event series; this crate says
+//! how an object becomes a row. Fastmail, iCloud, Nextcloud and Google's
+//! CalDAV all answer `sync-collection`.
 
 pub mod dav;
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::dav::state as dav_state;
-use datalib_etl::dav::sync::{CollectionSync, Page};
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
+use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::dav::sync::{self, CollectionSync, ObjectStore};
+use datalib_etl_web::http::LatchkeySettings;
+use sqlx::{Sqlite, Transaction};
 use tracing::info;
 
 use super::db::RawDb;
@@ -30,11 +34,17 @@ pub struct FetchOptions {
     pub latchkey: LatchkeySettings,
     pub progress: Progress,
     pub control: DownloadControl,
+    /// Seals as pages land, when the step driver hands one over.
+    pub sealer: Option<Sealer>,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
-    run_problems::collecting(&pool, &stop, |problems| sync_account(opts, problems)).await
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |problems| {
+        sync_account(opts, problems)
+    })
+    .await
 }
 
 async fn sync_account(opts: FetchOptions, problems: RunProblems) -> Result<FetchSummary> {
@@ -64,6 +74,8 @@ async fn sync_account(opts: FetchOptions, problems: RunProblems) -> Result<Fetch
 
     db.upsert_calendars(&calendars.iter().map(|c| c.row.clone()).collect::<Vec<_>>())
         .await?;
+    let listed: Vec<String> = calendars.iter().map(|c| c.row.id.clone()).collect();
+    summary.events_deleted += db.delete_calendars_not_in(&account_id, &listed).await?;
 
     let selected = select_calendars(
         &problems,
@@ -74,31 +86,95 @@ async fn sync_account(opts: FetchOptions, problems: RunProblems) -> Result<Fetch
     )?;
     summary.calendars = selected.len();
 
-    let mut synced_ids: Vec<String> = Vec::new();
+    let run = sync::Run {
+        pool: db.pool(),
+        stop: &opts.control.stop,
+        found: &problems,
+        sealer: opts.sealer.as_ref(),
+    };
     for cal in calendars.iter().filter(|c| selected.contains(&c.row.id)) {
         if opts.control.stop.requested() {
             break;
         }
-        let label = cal.row.display_name.as_deref().unwrap_or(&cal.row.id);
+        let id = &cal.row.id;
+        let label = cal.row.display_name.as_deref().unwrap_or(id);
         opts.progress
             .set_message(&format!("syncing calendar {label}"));
-        synced_ids.push(cal.row.id.clone());
-        let synced = sync_calendar(db, cal, opts.window.as_ref(), lk, &mut summary).await;
-        let listing = format!("calendar {label}");
-        match synced {
-            Ok(None) => {}
-            Ok(Some(cut_short)) => problems.listing(
-                &listing,
-                format!("{cut_short}; nothing it has not reached is deleted until it finishes"),
-            ),
+        let listing = match &opts.window {
+            Some(w) => CollectionSync::query(&dav::KIND, &cal.url, dav::body_query_window(w), lk),
+            None => CollectionSync::new(&dav::KIND, &cal.url, db.sync_token(id).await?, lk),
+        };
+        let listing_name = format!("calendar {label}");
+        match sync::sync_collection(&run, db, id, label, listing).await {
+            Ok(synced) => {
+                summary.events_new += synced.new;
+                summary.events_updated += synced.updated;
+                summary.events_deleted += synced.deleted;
+                summary.errors += synced.unusable + synced.failed;
+                summary.requests += synced.requests;
+                if let Some(cut_short) = synced.cut_short {
+                    problems.listing(
+                        &listing_name,
+                        format!(
+                            "{cut_short}; nothing it has not reached is deleted until it finishes"
+                        ),
+                    );
+                }
+            }
             Err(e) => {
                 summary.errors += 1;
-                problems.listing(&listing, format!("{e:#}"));
+                problems.listing(&listing_name, format!("{e:#}"));
             }
         }
     }
-    dav_state::collect_unstored(db.pool(), &problems, "ics_objects", &synced_ids).await;
     Ok(summary)
+}
+
+#[async_trait]
+impl ObjectStore for RawDb {
+    type Props = CalendarProps;
+    type Row = IcsObjectRow;
+
+    fn row(
+        &self,
+        collection: &str,
+        href: &str,
+        etag: Option<&str>,
+        data: &str,
+    ) -> std::result::Result<IcsObjectRow, String> {
+        let uid = ical::first_event_uid(data).ok_or_else(|| {
+            "the calendar object has no VEVENT with a UID, so it cannot be stored".to_string()
+        })?;
+        Ok(IcsObjectRow::new(
+            collection,
+            &uid,
+            Some(href.to_string()),
+            etag.map(String::from),
+            data,
+        ))
+    }
+
+    async fn put(&self, tx: &mut Transaction<'_, Sqlite>, rows: &[&IcsObjectRow]) -> Result<()> {
+        RawDb::upsert_ics_objects_in_tx(tx, rows).await
+    }
+
+    async fn remove(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        collection: &str,
+        href: &str,
+    ) -> Result<u64> {
+        RawDb::delete_ics_href(tx, collection, href).await
+    }
+
+    async fn set_token(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        collection: &str,
+        token: Option<&str>,
+    ) -> Result<()> {
+        RawDb::set_sync_token(tx, collection, token).await
+    }
 }
 
 /// What discovery and the calendar listing found: everything a run
@@ -142,7 +218,7 @@ async fn discover(
     lk: &LatchkeySettings,
     summary: &mut FetchSummary,
 ) -> Result<Discovered> {
-    let principal_url = datalib_etl::dav::find_principal(
+    let principal_url = datalib_etl_web::dav::find_principal(
         dav::HTTP_SERVICE,
         server_url,
         "caldav",
@@ -224,110 +300,6 @@ fn last_segment(href: &str) -> Option<String> {
         .next()
         .filter(|s| !s.is_empty() && !s.contains("://"))
         .map(str::to_string)
-}
-
-/// Keeps one calendar in step: with `sync-collection` from its stored
-/// token, or with `calendar-query` over the window, which no token can
-/// bound. Returns why the listing stopped short, if it did.
-async fn sync_calendar(
-    db: &RawDb,
-    cal: &Calendar,
-    window: Option<&Window>,
-    lk: &LatchkeySettings,
-    summary: &mut FetchSummary,
-) -> Result<Option<String>> {
-    let id = &cal.row.id;
-    let mut sync = match window {
-        Some(w) => CollectionSync::query(&dav::KIND, &cal.url, dav::body_query_window(w), lk),
-        None => CollectionSync::new(&dav::KIND, &cal.url, db.sync_token(id).await?, lk),
-    };
-    let stored = store_pages(db, cal, &mut sync, summary).await;
-    summary.requests += sync.requests();
-    stored?;
-    if let Some(cut_short) = sync.cut_short() {
-        return Ok(Some(cut_short.to_string()));
-    }
-    let gone = dav_state::finish_listing(db.pool(), id).await?;
-    let stored = db.ics_hrefs(id).await?;
-    let uids: Vec<String> = gone.iter().filter_map(|h| stored.get(h).cloned()).collect();
-    summary.events_deleted += uids.len();
-    db.delete_ics_uids(id, &uids).await?;
-    Ok(None)
-}
-
-async fn store_pages(
-    db: &RawDb,
-    cal: &Calendar,
-    sync: &mut CollectionSync<'_>,
-    summary: &mut FetchSummary,
-) -> Result<()> {
-    let id = &cal.row.id;
-    while let Some(page) = sync.next_page::<CalendarProps>().await? {
-        if page.begins_whole {
-            let stored: Vec<String> = db.ics_hrefs(id).await?.into_keys().collect();
-            dav_state::begin_whole(db.pool(), id, &stored).await?;
-        }
-        let token = page.token.clone();
-        let (listed, deleted) = (page.listed.clone(), page.deleted.clone());
-        let unstored = apply(db, cal, page, summary).await?;
-        dav_state::settle_page(db.pool(), id, &listed, &deleted, &unstored).await?;
-        db.set_sync_token(id, token.as_deref()).await?;
-    }
-    Ok(())
-}
-
-/// Store what one page changed and drop what it deleted. Returns what
-/// it named and could not store, with why.
-async fn apply(
-    db: &RawDb,
-    cal: &Calendar,
-    page: Page<CalendarProps>,
-    summary: &mut FetchSummary,
-) -> Result<Vec<(String, String)>> {
-    let id = &cal.row.id;
-    let stored = db.ics_hrefs(id).await?;
-    let mut unstored: Vec<(String, String)> = page
-        .unfetched
-        .into_iter()
-        .map(|href| {
-            (
-                href,
-                "the calendar listed this object, but did not return it when asked".to_string(),
-            )
-        })
-        .collect();
-    let mut rows: Vec<IcsObjectRow> = Vec::with_capacity(page.changed.len());
-    for r in &page.changed {
-        let data = r.props.calendar_data.as_deref().unwrap_or_default();
-        let Some(uid) = ical::first_event_uid(data) else {
-            unstored.push((
-                r.href.clone(),
-                "the calendar object has no VEVENT with a UID, so it cannot be stored".to_string(),
-            ));
-            continue;
-        };
-        match stored.get(&r.href) {
-            Some(_) => summary.events_updated += 1,
-            None => summary.events_new += 1,
-        }
-        rows.push(IcsObjectRow::new(
-            id,
-            &uid,
-            Some(r.href.clone()),
-            r.props.etag.clone(),
-            data,
-        ));
-    }
-    summary.errors += unstored.len();
-    db.upsert_ics_objects(&rows).await?;
-    let deleted: Vec<String> = page
-        .deleted
-        .iter()
-        .filter_map(|href| stored.get(href).cloned())
-        .collect();
-    summary.events_deleted += deleted.len();
-    db.delete_ics_uids(id, &deleted).await?;
-    Ok(unstored)
 }
 
 #[cfg(test)]

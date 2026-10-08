@@ -155,7 +155,7 @@ pub trait IndexRepo: Send + Sync {
     }
 
     /// Every problem `query` matches, in the group `within` names, as
-    /// their ids in `sort`'s order, or the table's own (last seen first).
+    /// their ids in `sort`'s order, or the table's own (last changed first).
     /// Empty for a root with no index, or an index without the table.
     async fn problem_keys(
         &self,

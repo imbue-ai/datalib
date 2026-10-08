@@ -27,7 +27,8 @@ struct Args {
     #[arg(long = "scope")]
     scope: Vec<String>,
 
-    /// Only refetch MRs updated in the last N days. 0 = unbounded.
+    /// On a store with data, list only MRs updated in the last N days.
+    /// 0 = unbounded.
     #[arg(long, default_value_t = 30)]
     refresh_window_days: u32,
 
@@ -41,7 +42,7 @@ struct Args {
     #[arg(long = "merge-request", value_name = "REF")]
     merge_request: Vec<String>,
 
-    /// Ignore sync_state.json and walk the full refresh window.
+    /// List everything and fetch everything listed.
     #[arg(long)]
     full: bool,
 

@@ -44,11 +44,12 @@ async fn mirror(root: &Path, labels: &[&str], budget: Option<usize>) -> FetchSum
 
 async fn mirrored_gmail_ids(root: &Path) -> BTreeSet<String> {
     let db = RawDb::open(&db_path_for(root)).await.expect("open raw db");
-    let ids: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM fetched_messages WHERE email_id IS NOT NULL")
-            .fetch_all(db.pool())
-            .await
-            .expect("read fetched_messages");
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL",
+    )
+    .fetch_all(db.pool())
+    .await
+    .expect("read what is held");
     db.close().await;
     ids.into_iter().collect()
 }
@@ -182,15 +183,16 @@ async fn gmail_live_one_label_roundtrip() {
         );
     }
 
-    // ── the gmail id mapping exists for every row ───────────────────
-    let mapped: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM fetched_messages WHERE email_id IS NOT NULL")
-            .fetch_one(db.pool())
-            .await
-            .expect("count fetched_messages");
+    // ── every row is held for a listed message ───────────────────────
+    let held: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL",
+    )
+    .fetch_one(db.pool())
+    .await
+    .expect("count what is held");
     assert_eq!(
-        mapped, email_count,
-        "every row needs its Gmail-id mapping, or deletions can't find it",
+        held, email_count,
+        "every row is held for the Gmail id that lists it, or a deletion can't find it",
     );
 
     // Closed, not dropped: run 2 reopens this store, and a dropped pool

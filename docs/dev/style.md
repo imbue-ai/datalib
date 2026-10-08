@@ -62,10 +62,10 @@ shape.
 |---|---|---|
 | `supervisor::tick::tick(shape, intent, facts) -> Tick` in `dag/src/supervisor/tick.rs` | the loop in `supervisor/round.rs` | what each step is doing, and what to start, stop and close |
 | `RenderPlan::decide(stored, params, version_changed)` in `datalib_step/src/render.rs` | `render_source` | diff from the cursor, or render everything |
-| `Adjustments::plan(prev, inputs)` and `select_targets` in `slack/src/ingest/mod.rs` | `fetch` | what a config change means for the walk; which conversations to walk |
-| `Scan::changes_since(prev) -> Changes` in `etl/src/fsscan.rs` | `scan` | which files were added, modified, moved, removed |
+| `select_targets` in `slack/src/ingest/mod.rs` | `fetch` | which conversations to walk |
+| `coverage::gaps(want, held)` in `etl/web/src/coverage.rs` | each provider's walk | which stretches of a range are still owed |
+| `Scan::changes_since(prev) -> Changes` in `etl/files/src/fsscan.rs` | `scan` | which files were added, modified, moved, removed |
 | `config::check_text(text) -> ConfigCheck` in `dag/src/config.rs` | `load_graded` | what a config means and every problem in it |
-| `scope_config::{turned_on, limit_relaxed, filter_widened}` | the provider's `plan` | whether a knob widened |
 | `ui/src/config/{rowMenu,sourceSteps,browsePresets}.ts` | the Vue components | which menu entries, which steps, which columns a Browse card opens with |
 
 Every one of these has synchronous tests, and the tick's walk a sync

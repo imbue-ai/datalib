@@ -95,6 +95,7 @@ const SEARCH_ROW_COLUMNS: &[GridRowColumn] = {
         G::TouchedAt,
         G::IsDocument,
         G::Author,
+        G::AuthorHandle,
         G::Account,
         G::Project,
         G::OrgUuid,
@@ -191,6 +192,11 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .unwrap_or_default(),
         kind,
         author,
+        author_handle: r
+            .try_get::<Option<String>, _>(G::AuthorHandle.as_str())
+            .ok()
+            .flatten(),
+        author_ref: None,
         channel: r.try_get(G::Channel.as_str()).unwrap_or_default(),
         source_url: r.try_get(G::SourceUrl.as_str()).unwrap_or_default(),
         notion_page_uuid: r.try_get(G::NotionPageUuid.as_str()).unwrap_or_default(),
@@ -447,7 +453,7 @@ impl At {
         limit: usize,
     ) -> Result<Vec<ProblemRow>, RepoError> {
         let sql = format!(
-            "SELECT * FROM {}{where_sql} ORDER BY last_seen_at_utc DESC, problem_uuid LIMIT ?",
+            "SELECT * FROM {}{where_sql} ORDER BY changed_at_utc DESC, problem_uuid LIMIT ?",
             self.problems
         );
         // Audited: the table name is a literal; `where_sql` splices only

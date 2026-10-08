@@ -25,6 +25,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/etl/providers/signal_config:datalib_etl_signal_config",
         "//datalib/backend/signal-backup:datalib_signal_backup",
@@ -62,6 +63,7 @@ rust_test(
         ":datalib_etl_signal",
         "//datalib/backend/etl/providers/signal_render:datalib_etl_signal_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/signal-backup:datalib_signal_backup",
         "@datalib_crates//:anyhow",

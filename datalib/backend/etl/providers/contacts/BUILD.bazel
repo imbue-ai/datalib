@@ -25,6 +25,8 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/contacts_config:datalib_etl_contacts_config",
         "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/time:datalib_time",
@@ -55,9 +57,12 @@ rust_test(
     crate_root = "tests/contacts_tests/main.rs",
     edition = "2021",
     env = {"RUST_TEST_THREADS": "1"},
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         ":datalib_etl_contacts",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",

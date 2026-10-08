@@ -97,6 +97,21 @@ struct RecipientSpec {
     name: Option<String>,
     #[serde(default)]
     e164: Option<u64>,
+    /// A UUID, dashed or not: the account's id.
+    #[serde(default)]
+    aci: Option<String>,
+    /// A UUID: the id behind the number alone, for a contact the
+    /// account has not messaged.
+    #[serde(default)]
+    pni: Option<String>,
+}
+
+fn uuid_bytes(s: &str) -> Vec<u8> {
+    let hex: String = s.chars().filter(|c| *c != '-').collect();
+    assert_eq!(hex.len(), 32, "{s:?} is not a UUID");
+    (0..16)
+        .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("hex"))
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +141,8 @@ fn recipient_frame(r: &RecipientSpec) -> backup::Frame {
         let (given, family) = split_name(r.name.as_deref().unwrap_or(""));
         Some(Destination::Contact(backup::Contact {
             e164: r.e164,
+            aci: r.aci.as_deref().map(uuid_bytes),
+            pni: r.pni.as_deref().map(uuid_bytes),
             profile_given_name: given,
             profile_family_name: family,
             ..Default::default()

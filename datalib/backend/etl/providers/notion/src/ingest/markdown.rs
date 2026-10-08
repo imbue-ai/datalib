@@ -40,10 +40,10 @@ pub struct PageBody {
     pub markdown: String,
     pub truncated: bool,
     pub unresolved: Vec<Unresolved>,
-    /// Child pages linked from the body, in appearance order.
+    /// Child pages linked from the body, in appearance order. A
+    /// `<database>` link is not a child: its rows come back from search
+    /// as pages, and the roots walk does not query a data source.
     pub child_pages: Vec<String>,
-    /// Databases embedded in the body, in appearance order.
-    pub child_databases: Vec<String>,
 }
 
 impl PageBody {
@@ -178,7 +178,6 @@ pub fn parse(resp: &serde_json::Value) -> PageBody {
             .unwrap_or(false),
         unresolved,
         child_pages: ids("<page "),
-        child_databases: ids("<database "),
         markdown,
     }
 }
@@ -200,18 +199,15 @@ mod tests {
     }
 
     /// Real shape: `<page url="https://app.notion.com/p/Title-<hex32>">`.
+    /// A `<database>` link beside it is not a child.
     #[test]
-    fn child_pages_and_databases_are_read_from_their_tags() {
+    fn child_pages_are_read_from_their_tags() {
         let body = parse(&json!({"markdown":
             "intro\n<page url=\"https://app.notion.com/p/Standup-Notes-37ba550faf9580e7a583fc322a3ed287\">Standup Notes</page>\n\
              <database url=\"https://app.notion.com/p/Tasks-2e2a550faf9580498b0ecee9468fa146\">Tasks</database>\n"}));
         assert_eq!(
             body.child_pages,
             vec!["37ba550f-af95-80e7-a583-fc322a3ed287"]
-        );
-        assert_eq!(
-            body.child_databases,
-            vec!["2e2a550f-af95-8049-8b0e-cee9468fa146"]
         );
     }
 

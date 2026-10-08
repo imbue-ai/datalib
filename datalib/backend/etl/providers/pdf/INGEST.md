@@ -27,7 +27,19 @@ rescan hashes nothing and still retries the corrupt fixture.
 
 A scan truncates `pdf_paths` once the walk is done and rebuilds it, so
 deletions fall out; content already in `pdf_documents` is not
-identified again.
+identified again. A file over `max_bytes` is there and not read, so it
+keeps the path row the last scan wrote. Once the paths are rebuilt
+after a clean walk, a document no path names goes with its bookkeeping
+(`documents_removed`); a file moved within the tree is named at its new
+path by then and keeps its document.
+
+A row's `_bookkeeping` sidecar is stamped the first time a scan writes
+the row and left alone after; a path's survives the truncate and goes
+when the path does (`RawDb::prune_unnamed`). So scanning an unchanged
+tree again commits nothing
+(`a_second_scan_of_an_unchanged_tree_commits_nothing`), the corrupt
+fixture's `problems` row included: a problem recorded again unchanged
+keeps its stamps.
 
 ## When part of a scan fails
 
@@ -222,12 +234,10 @@ dropping it would lose when the document was first seen
 (`pdf_documents_bookkeeping.fetched_at_utc`) and force a re-convert of
 every document whose path merely moved.
 
-The consequence is that deleting the last copy of a document leaves an
-unreferenced `pdf_documents` row, deliberately: the row is cheap, it preserves the record that the document was once here, and the
-render side ignores it (its join against `pdf_paths` finds nothing).
-Reaping them is a `DELETE … WHERE blake3 NOT IN (SELECT blake3 FROM
-pdf_paths)` whenever we decide we want it. The rows stay in earlier
-commits, but HEAD stops recording that the document was once here.
+Instead, after a clean walk, a document no `pdf_paths` row names is
+deleted with its bookkeeping (`RawDb::prune_unnamed`,
+`a_document_no_path_names_goes`). The rows stay in earlier commits, but
+HEAD stops recording that the document was once here.
 
 ## Inspecting a scan
 

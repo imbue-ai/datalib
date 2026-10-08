@@ -20,8 +20,7 @@ pub struct DeviceRow {
     pub kind: String,
     /// Earliest timepoint the fetcher will ever walk back to.
     pub start_ms: i64,
-    /// High-water mark from the last successful fetch; `None` before the
-    /// first window landed a reading.
+    /// Its newest reading; `None` before the first window landed one.
     pub last_ts_ms: Option<i64>,
     /// SECRET — half of the per-device signed-URL credential pair. Never
     /// render it, never log it. Kept on the struct so a future consumer
@@ -41,21 +40,11 @@ pub struct ParsedYolink {
     /// Sorted by (device, metric) so the document and the plot legends
     /// are stable run to run.
     pub series: Vec<Series>,
-    /// `sync_scope_config` rows: what the download step was configured
-    /// to fetch, as of `updated_at`.
-    pub scope_config: Vec<ScopeConfigRow>,
     /// Reading rows whose last fetch attempt recorded an error.
     pub reading_errors: i64,
     /// Total rows in `yolink_readings` (equals the summed series
     /// lengths; kept separately so a mismatch is detectable).
     pub reading_count: i64,
-}
-
-#[derive(Debug, Clone)]
-pub struct ScopeConfigRow {
-    pub scope: String,
-    pub config: String,
-    pub updated_at: String,
 }
 
 /// The tables the page reads, whole: any row of any of them moving
@@ -65,7 +54,6 @@ pub fn inputs() -> Vec<Input> {
         "yolink_devices",
         "yolink_readings",
         "yolink_readings_bookkeeping",
-        "sync_scope_config",
     ]
     .into_iter()
     .map(Input::whole_table)
@@ -97,7 +85,6 @@ pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedYolink> {
                     head: None,
                     devices: Vec::new(),
                     series: Vec::new(),
-                    scope_config: Vec::new(),
                     reading_errors: 0,
                     reading_count: 0,
                 });
@@ -112,7 +99,6 @@ pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedYolink> {
 async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<ParsedYolink> {
     let devices = load_devices(pool).await?;
     let series = load_series(pool).await?;
-    let scope_config = load_scope_config(pool).await;
     let reading_errors: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM yolink_readings_bookkeeping WHERE last_error IS NOT NULL",
     )
@@ -128,7 +114,6 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
         head: Some(pin.commit().to_string()),
         devices,
         series,
-        scope_config,
         reading_errors,
         reading_count,
     })
@@ -136,8 +121,10 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
 
 async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
     let rows = sqlx::query(
-        "SELECT id, kind, start_ms, last_ts_ms, family_device_id \
-           FROM yolink_devices ORDER BY id",
+        "SELECT d.id, d.kind, d.start_ms, d.family_device_id, \
+                (SELECT MAX(r.ts_ms) FROM yolink_readings r WHERE r.device_name = d.id) \
+                AS last_ts_ms \
+           FROM yolink_devices d ORDER BY d.id",
     )
     .fetch_all(pool)
     .await
@@ -184,21 +171,4 @@ async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
         }
     }
     Ok(out)
-}
-
-async fn load_scope_config(pool: &SqlitePool) -> Vec<ScopeConfigRow> {
-    let Ok(rows) =
-        sqlx::query("SELECT scope, config, updated_at FROM sync_scope_config ORDER BY scope")
-            .fetch_all(pool)
-            .await
-    else {
-        return Vec::new();
-    };
-    rows.into_iter()
-        .map(|r| ScopeConfigRow {
-            scope: r.get::<String, _>("scope"),
-            config: r.get::<String, _>("config"),
-            updated_at: r.get::<String, _>("updated_at"),
-        })
-        .collect()
 }

@@ -22,6 +22,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { rmSync, writeFileSync } from "node:fs";
 import {
+  cardOf,
   expandGroup,
   groupRow,
   LAST_UPDATE_AT,
@@ -674,6 +675,20 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
       '.rl-grid .slick-row:not(.slick-group) .slick-cell[col-id="msg"]',
     );
     await expect(messages.filter({ hasText: /^walking page 1$/ })).toBeVisible();
+
+    // The line's Group and Step are chips: the group resolves to its
+    // failed status, and a double-click opens its dashboard.
+    const line = dialog.locator(".rl-grid .slick-row:has(.rl-jumped)");
+    await expect(line.locator('[col-id="step"] a.chip')).toHaveAttribute(
+      "data-entity",
+      "datalib:step/flaky/ingest",
+    );
+    const groupChip = line.locator('[col-id="group_id"] a.chip[data-entity="datalib:group/flaky"]');
+    await expect(groupChip).toHaveClass(/entity-failed/, { timeout: 10_000 });
+    await groupChip.dblclick();
+    await expect(cardOf(page, 'syncDashboardView({"group":"flaky"})')).toBeVisible({
+      timeout: 10_000,
+    });
   });
 
   // A source that syncs once and fails from then on: Last synced
@@ -705,8 +720,22 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     expect(succeeded).not.toBeNull();
     expect(await lastSuccessOf(page, "soured/ingest")).toBe(succeeded);
 
+    // The step's log, left open beside the table: its Group chip says the
+    // group succeeded, and follows the next sync's failure without a
+    // reload (the chip's answer is asked again on each live frame).
+    const log = shownCards(page).filter({ has: page.locator(".rl-panel") });
+    await pickRowMenu(page, row(page, "soured/ingest"), "Show step log", log);
+    const groupChip = log.locator('.rl-grid a.chip[data-entity="datalib:group/soured"]').first();
+    await expect(groupChip).toBeVisible({ timeout: 10_000 });
+    // Resolved and held: the hover carries the group's status.
+    await expect(groupChip).toHaveAttribute("title", /\nSucceeded/, { timeout: 10_000 });
+    await expect(groupChip).not.toHaveClass(/entity-failed/);
+
     await untilTheSecondTurns();
     await syncBtn(page, "soured/ingest").click();
+    // Before `settle`, which reloads the page and would ask afresh: this
+    // is the chip drawn before the sync, following it.
+    await expect(groupChip).toHaveClass(/entity-failed/, { timeout: 30_000 });
     expect(await settle(page, "soured/ingest", succeeded)).toBe("Failed");
     await expandGroup(page, "soured");
     const failed = await lastSyncedOf(page, "soured/ingest");

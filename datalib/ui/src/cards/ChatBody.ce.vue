@@ -24,14 +24,33 @@ import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remot
 import {
   copyWithHandles,
   decorateHandles,
-  hoverCard,
-  type DatalibContact,
-  type Decorated,
-  type HoverCard,
+  type NormalizedContact,
   type Who,
+  chipMenu,
+  copyText,
+  handleValue,
+  searchQueryFor,
+  people,
+  canLinkHandles,
+  NOBODY,
+  type ChipMenuEntry,
+  type ChipMenuId,
 } from "./contacts";
-import HandleHoverCard from "./HandleHoverCard.ce.vue";
+import ChipMenu from "./ChipMenu.ce.vue";
+import { entityFromUri } from "./chipLinks";
+import {
+  browseQuery,
+  decorateEntities,
+  entities,
+  entityCardSource,
+  entityCopyText,
+  entityMenu,
+  type EntityMenuEntry,
+  type EntityMenuId,
+} from "./entities";
 import HandlePopover from "./HandlePopover.ce.vue";
+import { copyToClipboard } from "@/clipboard";
+import { pushToast } from "@/toasts";
 import { renderDocument } from "./renderDocument";
 import { isBrowserClick, linkFromClick, type ClickedLink } from "./chatLink";
 import { DOC_FRAME_SRCDOC, asElement, forwardAppKeys, mirrorDensity } from "./docFrame";
@@ -105,6 +124,10 @@ const emit = defineEmits<{
   /** A right-click in a framed body, with the frame's window (whose
    *  selection it is) and where the frame sits in this one. */
   (e: "frame-contextmenu", ev: MouseEvent, view: { win: Window; dx: number; dy: number }): void;
+  /** A chip asked for everything from its person: the search to open. */
+  (e: "open-search", q: string): void;
+  /** A group or step chip asked to open its card: the card source. */
+  (e: "open-card", source: string): void;
 }>();
 
 const sanitized = computed(() =>
@@ -136,82 +159,211 @@ watch(
 type ChipTarget = {
   handle: string;
   shownAs: string;
-  resolved: DatalibContact | null;
+  resolved: NormalizedContact | null;
   x: number;
   y: number;
 };
 const chipTarget = ref<ChipTarget | null>(null);
-const decorated = ref<Decorated | null>(null);
-const NOBODY: Who = { mine: null, accounts: [] };
 
 async function redrawHandles() {
   if (!body.value) return;
-  decorated.value = await decorateHandles(body.value);
+  await decorateHandles(body.value);
 }
 
-/// Where the frame's viewport sits in this window: the hover card and
-/// the popover are drawn out here, over the frame, from points inside it.
+// An answer changed somewhere — a link made in another document, or in
+// this one — so draw again if any chip here shows one of those handles.
+const stopPeople = people.subscribe((handles) => {
+  const root = body.value;
+  if (!root) return;
+  const shown = Array.from(root.querySelectorAll<HTMLElement>("a.chip[data-handle]"));
+  if (shown.some((a) => handles.has(a.dataset.handle ?? ""))) void redrawHandles();
+});
+onBeforeUnmount(stopPeople);
+
+// The same for the group and step chips, answered by `entities`.
+const stopEntities = entities.subscribe((uris) => {
+  const root = body.value;
+  if (!root) return;
+  const shown = Array.from(root.querySelectorAll<HTMLElement>("a.chip[data-entity]"));
+  if (shown.some((a) => uris.has(a.dataset.entity ?? ""))) void decorateEntities(root);
+});
+onBeforeUnmount(stopEntities);
+
+/// Where the frame's viewport sits in this window: the popover and the
+/// chip menu are drawn out here, over the frame, from points inside it.
 function frameOrigin(): { x: number; y: number } {
   const r = frameEl.value?.getBoundingClientRect();
   return { x: r?.left ?? 0, y: r?.top ?? 0 };
 }
 
-const HOVER_DELAY_MS = 350;
-const hovered = ref<{ card: HoverCard; x: number; y: number } | null>(null);
-let hoverChip: HTMLElement | null = null;
-let hoverTimer: ReturnType<typeof setTimeout> | undefined;
-
-function onChipOver(ev: MouseEvent) {
-  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
-  if (!chip || chip === hoverChip) return;
-  hoverChip = chip;
-  clearTimeout(hoverTimer);
-  hoverTimer = setTimeout(() => {
-    if (chipTarget.value) return;
-    const handle = chip.dataset.handle ?? "";
-    const rect = chip.getBoundingClientRect();
-    const at = frameOrigin();
-    hovered.value = {
-      card: hoverCard(
-        handle,
-        chip.dataset.shownAs ?? "",
-        decorated.value?.who[handle] ?? NOBODY,
-        decorated.value?.canLink ?? false,
-      ),
-      x: at.x + rect.left,
-      y: at.y + rect.bottom,
-    };
-  }, HOVER_DELAY_MS);
+function chipAt(ev: MouseEvent): HTMLElement | null {
+  return asElement(ev.target)?.closest<HTMLElement>("a.chip[data-handle]") ?? null;
 }
 
-function onChipOut(ev: MouseEvent) {
-  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
-  if (!chip) return;
-  const to = asElement(ev.relatedTarget);
-  if (to && chip.contains(to)) return;
-  clearTimeout(hoverTimer);
-  hoverChip = null;
-  hovered.value = null;
+function whoIs(chip: HTMLElement): Who {
+  return people.get(chip.dataset.handle ?? "") ?? NOBODY;
+}
+
+/// The link/create popover for `chip`, at a point in this window.
+function openPopover(chip: HTMLElement, x: number, y: number) {
+  chipTarget.value = {
+    handle: chip.dataset.handle ?? "",
+    shownAs: chip.dataset.shownAs ?? "",
+    resolved: whoIs(chip).mine,
+    x,
+    y,
+  };
+}
+
+function entityChipAt(ev: MouseEvent): HTMLElement | null {
+  return asElement(ev.target)?.closest<HTMLElement>("a.chip[data-entity]") ?? null;
+}
+
+/// A group or step chip's href names something in this app, not a page:
+/// no click on it, plain or modified, leaves for the browser or the OS.
+function onEntityChipClick(ev: MouseEvent) {
+  if (!entityChipAt(ev)) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+}
+
+function openEntityCard(uri: string) {
+  const source = entityCardSource(uri);
+  if (source) emit("open-card", source);
 }
 
 function onHandleChipClick(ev: MouseEvent) {
-  const chip = asElement(ev.target)?.closest<HTMLElement>(".handle-chip[data-handle]");
-  // Without a contacts app there is nothing to change; the hover card is
+  const chip = chipAt(ev);
+  // A chip is a link; a plain click on it is for the chip, not for the
+  // mail client its href would open. A modifier click stays the
+  // browser's, as on any link.
+  if (!chip || isBrowserClick(ev)) return;
+  ev.preventDefault();
+  // The second click of a double-click is the double-click's.
+  if (ev.detail > 1) return;
+  // Without a contacts app there is nothing to change; the tooltip is
   // all a chip has to say.
-  if (!chip || !decorated.value?.canLink) return;
+  if (!canLinkHandles()) return;
+  ev.stopPropagation();
+  const at = frameOrigin();
+  openPopover(chip, at.x + ev.clientX, at.y + ev.clientY);
+}
+
+/// Double-click opens the person: the contact card once there is one
+/// (docs/dev/plans/contacts.md, phase 4); until then, everything from
+/// them, as a search.
+function onChipDblClick(ev: MouseEvent) {
+  const entity = entityChipAt(ev);
+  if (entity) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    openEntityCard(entity.dataset.entity ?? "");
+    return;
+  }
+  const chip = chipAt(ev);
+  if (!chip || isBrowserClick(ev)) return;
   ev.preventDefault();
   ev.stopPropagation();
-  clearTimeout(hoverTimer);
-  hovered.value = null;
-  const handle = chip.dataset.handle ?? "";
+  chipTarget.value = null;
+  emit(
+    "open-search",
+    searchQueryFor(chip.dataset.handle ?? "", chip.dataset.shownAs ?? "", whoIs(chip)),
+  );
+}
+
+type ChipMenuAt = {
+  chip: HTMLElement;
+  entries: (ChipMenuEntry | EntityMenuEntry)[];
+  x: number;
+  y: number;
+};
+const chipMenuAt = ref<ChipMenuAt | null>(null);
+
+/// Right-click on a chip is the chip's menu, not the document's.
+function onChipContextMenu(ev: MouseEvent): boolean {
+  const entity = entityChipAt(ev);
+  if (entity) {
+    ev.preventDefault();
+    const at = frameOrigin();
+    const uri = entity.dataset.entity ?? "";
+    chipMenuAt.value = {
+      chip: entity,
+      entries: entityMenu(uri, entity.dataset.label ?? entity.dataset.shownAs ?? uri),
+      x: at.x + ev.clientX,
+      y: at.y + ev.clientY,
+    };
+    return true;
+  }
+  const chip = chipAt(ev);
+  if (!chip) return false;
+  ev.preventDefault();
   const at = frameOrigin();
-  chipTarget.value = {
-    handle,
-    shownAs: chip.dataset.shownAs ?? "",
-    resolved: decorated.value.who[handle]?.mine ?? null,
+  chipMenuAt.value = {
+    chip,
+    entries: chipMenu(
+      chip.dataset.handle ?? "",
+      chip.dataset.shownAs ?? "",
+      whoIs(chip),
+      canLinkHandles(),
+    ),
     x: at.x + ev.clientX,
     y: at.y + ev.clientY,
   };
+  return true;
+}
+
+async function onChipMenuPick(id: ChipMenuId | EntityMenuId) {
+  const menu = chipMenuAt.value;
+  chipMenuAt.value = null;
+  if (!menu) return;
+  const { chip } = menu;
+  const handle = chip.dataset.handle ?? "";
+  const shownAs = chip.dataset.shownAs ?? "";
+  const name = chip.dataset.label ?? shownAs;
+  const copy = async (text: string) => {
+    if (await copyToClipboard(text)) pushToast(`Copied ${text}`, "info");
+    else pushToast("The clipboard refused the copy");
+  };
+  const uri = chip.dataset.entity;
+  if (uri) {
+    switch (id as EntityMenuId) {
+      case "copy-name":
+        await copy(name);
+        break;
+      case "copy-id":
+        await copy(entityFromUri(uri)?.id ?? uri);
+        break;
+      case "copy-both":
+        await copy(entityCopyText(uri, name));
+        break;
+      case "open":
+        openEntityCard(uri);
+        break;
+      case "browse": {
+        const q = browseQuery(uri);
+        if (q) emit("open-search", q);
+        break;
+      }
+    }
+    return;
+  }
+  switch (id as ChipMenuId) {
+    case "copy-name":
+      await copy(name);
+      break;
+    case "copy-id":
+      await copy(handleValue(handle));
+      break;
+    case "copy-both":
+      await copy(copyText(handle, name));
+      break;
+    case "search":
+      emit("open-search", searchQueryFor(handle, shownAs, whoIs(chip)));
+      break;
+    case "edit":
+      openPopover(chip, menu.x, menu.y);
+      break;
+  }
 }
 
 function onRemoteChipClick(ev: MouseEvent) {
@@ -370,8 +522,16 @@ function paint() {
   decorateRemoteMedia(el);
   decorateLongMessages(el);
   void redrawHandles();
+  void decorateEntities(el);
   decorateEdgeSources();
-  applySelection(bodyChanged);
+  if (bodyChanged) {
+    // The desktop app's WebKit could leave a body scrolled before it was
+    // first drawn unpainted until the wheel moved it; scroll once it is.
+    const win = el.ownerDocument.defaultView;
+    win?.requestAnimationFrame(() => win.requestAnimationFrame(() => applySelection(true)));
+  } else {
+    applySelection(false);
+  }
   bodyChanged = false;
   applyHoverDst();
 }
@@ -403,23 +563,23 @@ function onFrameLoad() {
     frameStops.push(() => doc.removeEventListener(type, fn));
   };
   on("click", (ev) => {
+    onEntityChipClick(ev);
     onHandleChipClick(ev);
     onBodyEdgeClick(ev);
     onCopyClick(ev);
     onRemoteChipClick(ev);
     onFrameLinkClick(ev);
   });
-  on("auxclick", onFrameLinkClick);
-  on("mouseover", (ev) => {
-    onBodyMouseOver(ev);
-    onChipOver(ev);
+  on("auxclick", (ev) => {
+    onEntityChipClick(ev);
+    onFrameLinkClick(ev);
   });
-  on("mouseout", (ev) => {
-    onBodyMouseOut(ev);
-    onChipOut(ev);
-  });
+  on("dblclick", onChipDblClick);
+  on("mouseover", onBodyMouseOver);
+  on("mouseout", onBodyMouseOut);
   on("copy", (ev) => copyWithHandles(ev, doc.body));
   on("contextmenu", (ev) => {
+    if (onChipContextMenu(ev)) return;
     const r = frame.getBoundingClientRect();
     emit("frame-contextmenu", ev, { win, dx: r.left, dy: r.top });
   });
@@ -477,7 +637,14 @@ onMounted(paint);
     :srcdoc="DOC_FRAME_SRCDOC"
     @load="onFrameLoad"
   ></iframe>
-  <HandleHoverCard v-if="hovered" v-bind="hovered" />
+  <ChipMenu
+    v-if="chipMenuAt"
+    :entries="chipMenuAt.entries"
+    :x="chipMenuAt.x"
+    :y="chipMenuAt.y"
+    @pick="onChipMenuPick"
+    @close="chipMenuAt = null"
+  />
   <HandlePopover
     v-if="chipTarget"
     :key="chipTarget.handle"

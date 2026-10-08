@@ -6,10 +6,12 @@
 //! UPSERT-by-upstream-id makes the overlap free.
 //!
 //! No walk keeps a cursor. What a run fetches is what the window wants
-//! less what the store holds (docs/dev/plans/sync_state.md): a day is
-//! held by its row and the date it was fetched on, the activity listing
-//! by `coverage` spans, a detail and a file by the listing version they
-//! were fetched for.
+//! less what the store holds (docs/dev/plans/sync_state.md, the shared
+//! form in `datalib_etl_web::owed`): a day is held by its row and the date
+//! it is final from, the activity listing by `coverage` spans, a detail
+//! and a file by the listing version they were answered for. Each kind
+//! is one `owed::drain` over a [`Fetcher`] of its own, one record per
+//! request.
 //!
 //! A walk prunes what its listing did not name only when the listing
 //! is an enumeration: an array (every page of it, for the paged ones),
@@ -22,42 +24,49 @@ pub mod api;
 pub mod db;
 pub mod schema_raw;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{anyhow, bail, Context, Result};
+use async_trait::async_trait;
 use chrono::{Duration, NaiveDate};
 use serde_json::Value;
+use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
 
-use datalib_etl::blob_cas::{blake3_hex, CasEdgeAccumulator};
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::blob_cas::{blake3_hex, BlobCas, CasInsert};
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx, BulkUpsertable};
 use datalib_etl::control::DownloadControl;
-use datalib_etl::coverage::{self, Span};
-use datalib_etl::doltlite_raw::{self as dr, WirePayload};
+use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::RunProblem;
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_garmin_config::{GarminApi, DEFAULT_SINCE_DAYS};
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::owed::{self, BatchError, Fetcher, Listed, Loop, Outcome};
 
 use api::{Fetched, GarminClient, GarminError};
 pub use db::{db_path_for, RawDb};
-use db::{ActivityWork, Enumerated, ACTIVITIES_SCOPE};
+use db::{Enumerated, ACTIVITIES_SCOPE};
 use schema_raw::*;
 
 /// Where the window starts when the config names no `since`: a year
 /// before the first run, kept here so later runs start there too.
 const DEFAULT_SINCE_SCOPE: &str = "garmin:default_since";
 
-/// Days of one metric written per transaction.
-const DAILY_BATCH_DAYS: usize = 31;
-/// Files and wellness days written per transaction.
-const FILE_BATCH: usize = 20;
-
 /// A metric that fails this many days in a row is abandoned for the
 /// run: a dead endpoint should not cost a request per day of history.
-const CONSECUTIVE_FAILURE_BUDGET: u32 = 10;
+const CONSECUTIVE_FAILURE_BUDGET: usize = 10;
+/// The other loops have no budget: a dead endpoint there costs one
+/// request per stored record, and every request is one record.
+const NO_BUDGET: usize = 0;
+/// Days of one metric written per transaction.
+const DAILY_FLUSH: usize = 31;
+/// Details, files and wellness days written per transaction.
+const FILE_FLUSH: usize = 20;
 /// `/weight-service/weight/range/<start>/<end>` per request.
 pub const WEIGHT_CHUNK_DAYS: i64 = 90;
 pub const ACTIVITY_PAGE: usize = 100;
@@ -136,7 +145,7 @@ pub fn item_listing_path(
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
     pub db: RawDb,
-    pub latchkey: datalib_etl::http::LatchkeySettings,
+    pub latchkey: datalib_etl_web::http::LatchkeySettings,
     pub api: GarminApi,
     /// The run's local calendar date: the last day every walk reaches,
     /// and the date every row this run fetches is stamped with.
@@ -233,26 +242,40 @@ fn walk_end(today: NaiveDate, until: Option<&str>) -> Result<NaiveDate> {
 /// for again until `refresh` days after it, and never settles while it
 /// is still that day.
 fn settles_on(day: NaiveDate, refresh: Duration) -> NaiveDate {
-    day + refresh.max(Duration::days(1))
+    day.checked_add_signed(refresh.max(Duration::days(1)))
+        .unwrap_or(NaiveDate::MAX)
 }
 
-/// The days of `since..=end` to fetch, oldest first: those with no row,
-/// and those whose row was fetched before the day had settled. `held` is
-/// `calendar_date → fetched_on`.
-fn owed_days(
+/// The days of a window as the calendar lists them, oldest first, keyed
+/// by `id`. A day's version is the date its content is final from:
+/// the date it settled, or today while it has not.
+struct Calendar {
+    settled: Vec<Listed>,
+    /// Still changing: fetched every run, whatever is held.
+    unsettled: Vec<Listed>,
+}
+
+fn calendar(
     since: NaiveDate,
     end: NaiveDate,
-    held: &HashMap<String, String>,
+    today: NaiveDate,
     refresh: Duration,
-) -> Vec<NaiveDate> {
-    since
-        .iter_days()
-        .take_while(|day| *day <= end)
-        .filter(|day| match held.get(&ymd(*day)) {
-            Some(fetched_on) => *fetched_on < ymd(settles_on(*day, refresh)),
-            None => true,
-        })
-        .collect()
+    id: impl Fn(&str) -> String,
+) -> Calendar {
+    let mut out = Calendar {
+        settled: Vec::new(),
+        unsettled: Vec::new(),
+    };
+    for day in since.iter_days().take_while(|day| *day <= end) {
+        let settles = settles_on(day, refresh);
+        let listed = Listed::new(id(&ymd(day)), Some(ymd(settles.min(today))));
+        if settles <= today {
+            out.settled.push(listed);
+        } else {
+            out.unsettled.push(listed);
+        }
+    }
+    out
 }
 
 /// The start date the activity listing is asked from: the lowest one
@@ -288,8 +311,8 @@ async fn walk_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     }
     let since = date(&since_str)?;
     let end = walk_end(opts.today, api.until.as_deref())?;
-    let refresh = Duration::days(api.refresh_days());
-    let mut client = GarminClient::new(opts.latchkey);
+    let refresh = Duration::try_days(api.refresh_days()).unwrap_or(Duration::MAX);
+    let client = GarminClient::new(opts.latchkey);
     let mut s = FetchSummary::default();
     let progress = &opts.progress;
 
@@ -298,7 +321,7 @@ async fn walk_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // all share. The run still returns `Ok` after a failed phase: the
     // step driver commits and reports the store's problem counts only on
     // `Ok`, so `Err` here would hide the very rows that say what failed.
-    let (account, settings_failed) = fetch_account(&mut client, &db, &opts.control.stop).await?;
+    let (account, settings_failed) = fetch_account(&client, &db, &opts.control.stop).await?;
     if let Some(problem) = settings_failed {
         s.errors += 1;
         s.listings_failed += 1;
@@ -306,9 +329,9 @@ async fn walk_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     }
     db.repair_shared_file_hashes(api.activity_files(), api.wellness_files())
         .await?;
-    let mut walk = Walk {
+    let walk = Walk {
         db: &db,
-        client: &mut client,
+        client: &client,
         account: &account,
         api: &api,
         since,
@@ -350,14 +373,14 @@ async fn walk_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     phase!("activities", walk.activities(&mut s));
     phase!("wellness", walk.wellness(&mut s));
     phase!("items", walk.items(&mut s));
-    s.requests = walk.client.requests;
+    s.requests = walk.client.requests();
     Ok(s)
 }
 
 /// Everything one run's walks share.
 struct Walk<'a> {
     db: &'a RawDb,
-    client: &'a mut GarminClient,
+    client: &'a GarminClient,
     account: &'a Account,
     api: &'a GarminApi,
     since: NaiveDate,
@@ -375,7 +398,7 @@ struct Walk<'a> {
 /// enumeration, and only a complete one is pruned to. `rows` on an
 /// incomplete one are the pages that did arrive; upserting them loses
 /// nothing.
-struct Listed {
+struct Listing {
     rows: Vec<Value>,
     /// Why this is not an enumeration, when it is not.
     incomplete: Option<String>,
@@ -412,7 +435,7 @@ fn listing_array(
 
 /// The account, and the problem of a user-settings fetch that failed.
 async fn fetch_account(
-    client: &mut GarminClient,
+    client: &GarminClient,
     db: &RawDb,
     stop: &StopFlag,
 ) -> Result<(Account, Option<RunProblem>)> {
@@ -484,13 +507,6 @@ async fn upsert<T: datalib_etl::bulk::BulkUpsertable>(db: &RawDb, rows: &[T]) ->
     Ok(())
 }
 
-async fn record_error(db: &RawDb, table: &str, id: &str, err: &str) -> Result<()> {
-    let mut tx = db.pool().begin().await?;
-    dr::record_object_error(&mut tx, table, id, err).await?;
-    tx.commit().await?;
-    Ok(())
-}
-
 fn id_of(v: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|k| match &v[*k] {
         Value::String(s) if !s.is_empty() => Some(s.clone()),
@@ -507,21 +523,8 @@ fn str_of(v: &Value, path: &[&str]) -> Option<String> {
     cur.as_str().map(str::to_string)
 }
 
-/// How one day's request came out.
-enum Day {
-    Fetched(DailyRow),
-    Failed,
-    /// The request failed because the step was told to stop. Not a
-    /// failure of the day: nothing is recorded.
-    Stopped,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum DaysEnd {
-    /// Every day was tried, or the metric was given up on.
-    Done,
-    Stopped,
-}
+const FIT_CONTENT_TYPE: &str = "application/vnd.ant.fit";
+const ZIP_CONTENT_TYPE: &str = "application/zip";
 
 impl Walk<'_> {
     fn stopping(&self) -> bool {
@@ -534,10 +537,70 @@ impl Walk<'_> {
         }
     }
 
+    /// One fetch loop over `table`. Garmin answers one record per
+    /// request, so a batch is one record and a failure budget counts
+    /// requests; `flush` records go in one transaction.
+    fn fetch_loop(
+        &self,
+        table: &'static str,
+        phase: &'static str,
+        flush: usize,
+        failures_in_a_row: usize,
+    ) -> Loop<'_> {
+        Loop {
+            pool: self.db.pool(),
+            table,
+            phase,
+            stop: self.stop,
+            found: &self.found,
+            sealer: self.sealer,
+            batch: 1,
+            concurrency: 1,
+            flush,
+            flush_bytes: 0,
+            failures_in_a_row,
+        }
+    }
+
+    /// A fetcher's batch, one request per record: `request` asks for
+    /// one by its key. A refused credential aborts the run, since every
+    /// request after it would share it; a request that failed on the
+    /// stop is the stop's, not the record's; any other failure is the
+    /// record's.
+    async fn each<T, Fut>(
+        &self,
+        batch: Vec<Listed>,
+        request: impl Fn(String) -> Fut,
+    ) -> std::result::Result<Vec<owed::Fetched<T>>, BatchError>
+    where
+        Fut: Future<Output = Result<Outcome<T>>>,
+    {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let outcome = match request(listed.key.clone()).await {
+                Ok(outcome) => outcome,
+                Err(e) if is_auth(&e) => return Err(BatchError::Abort(e)),
+                Err(e) if self.stopping() => return Err(BatchError::Batch(e)),
+                Err(e) => Outcome::Failed(format!("{e:#}")),
+            };
+            self.progress.inc(1);
+            out.push(owed::Fetched { listed, outcome });
+        }
+        Ok(out)
+    }
+
+    /// What a calendar walk fetches: the settled days not held at the
+    /// date they settled, and every day not yet settled.
+    async fn owed_days(&self, table: &'static str, calendar: Calendar) -> Result<Vec<Listed>> {
+        let mut owed = owed::owed(self.db.pool(), table, calendar.settled).await?;
+        owed.extend(calendar.unsettled);
+        Ok(owed)
+    }
+
     /// One listing request. Only an auth failure is an `Err`; any other
     /// way of not getting an array comes back as the reason.
     async fn list_once(
-        &mut self,
+        &self,
         path: &str,
         wrapped: bool,
     ) -> Result<std::result::Result<Vec<Value>, String>> {
@@ -553,11 +616,11 @@ impl Walk<'_> {
     /// array, or whose request failed, ends the walk incomplete; so does
     /// a walk that never reaches a short page.
     async fn list_pages(
-        &mut self,
+        &self,
         page: impl Fn(usize) -> String,
         page_size: usize,
         wrapped: bool,
-    ) -> Result<Listed> {
+    ) -> Result<Listing> {
         let mut rows: Vec<Value> = Vec::new();
         let mut offset = 0usize;
         for _ in 0..MAX_LISTING_PAGES {
@@ -567,7 +630,7 @@ impl Walk<'_> {
                     // An endpoint that ignores `start` answers the same
                     // full page forever; one repeat is enough to know.
                     if n > 0 && rows.ends_with(&page_rows) {
-                        return Ok(Listed {
+                        return Ok(Listing {
                             rows,
                             incomplete: Some(format!(
                                 "page at offset {offset} repeated the page before it"
@@ -576,7 +639,7 @@ impl Walk<'_> {
                     }
                     rows.extend(page_rows);
                     if n < page_size {
-                        return Ok(Listed {
+                        return Ok(Listing {
                             rows,
                             incomplete: None,
                         });
@@ -584,14 +647,14 @@ impl Walk<'_> {
                     offset += n;
                 }
                 Err(why) => {
-                    return Ok(Listed {
+                    return Ok(Listing {
                         rows,
                         incomplete: Some(format!("page at offset {offset}: {why}")),
                     })
                 }
             }
         }
-        Ok(Listed {
+        Ok(Listing {
             rows,
             incomplete: Some(format!("still a full page after {MAX_LISTING_PAGES} pages")),
         })
@@ -599,7 +662,7 @@ impl Walk<'_> {
 
     /// A listing that is not an enumeration: nothing is pruned to it
     /// this run, and the run says so. Counted once per listing.
-    fn listing_failed(&mut self, s: &mut FetchSummary, name: &str, why: &str) {
+    fn listing_failed(&self, s: &mut FetchSummary, name: &str, why: &str) {
         if self.stopping() {
             info!(
                 event = "garmin_listing_stopped",
@@ -621,7 +684,7 @@ impl Walk<'_> {
 
     // ── devices ──────────────────────────────────────────────────────
 
-    async fn devices(&mut self, s: &mut FetchSummary) -> Result<()> {
+    async fn devices(&self, s: &mut FetchSummary) -> Result<()> {
         let list = match self
             .list_once("/device-service/deviceregistration/devices", false)
             .await?
@@ -659,7 +722,7 @@ impl Walk<'_> {
 
     // ── per-day metrics ──────────────────────────────────────────────
 
-    async fn daily(&mut self, s: &mut FetchSummary) -> Result<()> {
+    async fn daily(&self, s: &mut FetchSummary) -> Result<()> {
         let forgotten = self
             .db
             .forget_daily_problems_outside(&ymd(self.since), &ymd(self.end))
@@ -669,8 +732,10 @@ impl Walk<'_> {
         }
         let mut walks = Vec::new();
         for metric in self.api.metrics() {
-            let held = self.db.daily_held(metric).await?;
-            walks.push((metric, owed_days(self.since, self.end, &held, self.refresh)));
+            let listed = calendar(self.since, self.end, self.today, self.refresh, |d| {
+                DailyRow::id_for(metric, d)
+            });
+            walks.push((metric, self.owed_days("garmin_daily", listed).await?));
         }
         let total: usize = walks.iter().map(|(_, days)| days.len()).sum();
         self.progress.set_length(Some(total as u64));
@@ -681,7 +746,16 @@ impl Walk<'_> {
                 days = days.len(),
                 "walking one daily metric"
             );
-            if self.walk_days(metric, &days, s).await? == DaysEnd::Stopped {
+            let l = self.fetch_loop(
+                "garmin_daily",
+                "daily",
+                DAILY_FLUSH,
+                CONSECUTIVE_FAILURE_BUDGET,
+            );
+            let drained = owed::drain(&l, days, &Days { walk: self, metric }).await?;
+            s.days += drained.got;
+            s.errors += drained.failed;
+            if self.stopping() {
                 return Ok(());
             }
             s.metrics += 1;
@@ -689,93 +763,9 @@ impl Walk<'_> {
         Ok(())
     }
 
-    /// Fetch `days` of one metric, in order. A day is one request; a
-    /// month of them is one write, so a run that dies re-fetches at most
-    /// a month.
-    async fn walk_days(
-        &mut self,
-        metric: &str,
-        days: &[NaiveDate],
-        s: &mut FetchSummary,
-    ) -> Result<DaysEnd> {
-        let mut pending: Vec<DailyRow> = Vec::new();
-        let mut consecutive_failures = 0u32;
-        let mut end = DaysEnd::Done;
-        for (i, day) in days.iter().enumerate() {
-            match self.fetch_day(metric, *day, s).await? {
-                Day::Stopped => {
-                    end = DaysEnd::Stopped;
-                    break;
-                }
-                Day::Fetched(row) => {
-                    pending.push(row);
-                    consecutive_failures = 0;
-                }
-                Day::Failed => consecutive_failures += 1,
-            }
-            self.progress.inc(1);
-            if consecutive_failures >= CONSECUTIVE_FAILURE_BUDGET {
-                warn!(
-                    event = "garmin_metric_abandoned",
-                    metric,
-                    after = consecutive_failures,
-                    "too many days in a row failed; leaving the rest of this metric for the next run"
-                );
-                self.progress.inc((days.len() - i - 1) as u64);
-                break;
-            }
-            if pending.len() >= DAILY_BATCH_DAYS {
-                self.flush_daily(&mut pending).await?;
-            }
-        }
-        self.flush_daily(&mut pending).await?;
-        Ok(end)
-    }
-
-    async fn fetch_day(
-        &mut self,
-        metric: &str,
-        day: NaiveDate,
-        s: &mut FetchSummary,
-    ) -> Result<Day> {
-        let d = ymd(day);
-        self.progress.set_message(&format!("garmin: {metric} {d}"));
-        let path = daily_path(metric, &self.account.display_name, &d);
-        let id = DailyRow::id_for(metric, &d);
-        match self.client.get_json(&path).await {
-            Ok(fetched) => {
-                let payload = match fetched {
-                    Fetched::Some(v) if !is_empty_answer(&v) => v.to_string(),
-                    _ => "null".to_string(),
-                };
-                s.days += 1;
-                Ok(Day::Fetched(DailyRow {
-                    id_and_payload: WirePayload { id, payload },
-                    metric: metric.to_string(),
-                    calendar_date: d,
-                    fetched_on: Some(ymd(self.today)),
-                }))
-            }
-            Err(e) if is_auth(&e) => Err(e),
-            Err(_) if self.stopping() => Ok(Day::Stopped),
-            Err(e) => {
-                s.errors += 1;
-                record_error(self.db, "garmin_daily", &id, &format!("{e:#}")).await?;
-                Ok(Day::Failed)
-            }
-        }
-    }
-
-    async fn flush_daily(&mut self, pending: &mut Vec<DailyRow>) -> Result<()> {
-        upsert(self.db, pending).await?;
-        self.wrote(pending.len() as u64).await;
-        pending.clear();
-        Ok(())
-    }
-
     // ── weigh-ins ────────────────────────────────────────────────────
 
-    async fn weight(&mut self, s: &mut FetchSummary) -> Result<()> {
+    async fn weight(&self, s: &mut FetchSummary) -> Result<()> {
         let mut chunk_start = self.since;
         let mut seen: HashSet<String> = HashSet::new();
         let mut complete = true;
@@ -830,12 +820,16 @@ impl Walk<'_> {
 
     // ── activities ───────────────────────────────────────────────────
 
-    async fn activities(&mut self, s: &mut FetchSummary) -> Result<()> {
+    async fn activities(&self, s: &mut FetchSummary) -> Result<()> {
         let want = Span::new(ymd(self.since), ymd(self.end));
         let held = coverage::held(self.db.pool(), ACTIVITIES_SCOPE).await?;
-        let start = listing_start(&want, &held, self.end - self.refresh)?;
+        let refresh_from = self
+            .end
+            .checked_sub_signed(self.refresh)
+            .unwrap_or(NaiveDate::MIN);
+        let start = listing_start(&want, &held, refresh_from)?;
         let start_date = ymd(start);
-        let Listed {
+        let Listing {
             rows: listed,
             incomplete,
         } = self
@@ -886,195 +880,80 @@ impl Walk<'_> {
     }
 
     /// Fetch what the stored activities are owed, whichever run listed
-    /// them.
-    async fn activity_details_and_files(&mut self, s: &mut FetchSummary) -> Result<()> {
-        let files_on = self.api.activity_files();
-        let work: Vec<ActivityWork> = self
-            .db
-            .activity_work()
+    /// them: every detail first, then every file.
+    async fn activity_details_and_files(&self, s: &mut FetchSummary) -> Result<()> {
+        let details = owed::owed(
+            self.db.pool(),
+            "garmin_activity_details",
+            self.db.listed_activities().await?,
+        )
+        .await?;
+        let files = if self.api.activity_files() {
+            owed::owed(
+                self.db.pool(),
+                "garmin_activity_files",
+                self.db.activity_files_without_bytes().await?,
+            )
             .await?
-            .into_iter()
-            .map(|w| ActivityWork {
-                file: w.file && files_on,
-                ..w
-            })
-            .filter(|w| w.detail || w.file)
-            .collect();
-        self.progress.set_length(Some(work.len() as u64));
-        let mut files = FitBatch::default();
-        for w in &work {
-            if self.stopping() {
-                break;
-            }
-            let id = &w.id;
-            self.progress.set_message(&format!("garmin: activity {id}"));
-            if w.detail {
-                let detail = match self
-                    .client
-                    .get_json(&format!("/activity-service/activity/{id}"))
-                    .await
-                {
-                    Ok(Fetched::Some(detail)) => {
-                        s.activities_fetched += 1;
-                        Some(detail.to_string())
-                    }
-                    // Garmin has none: held as `null` for this version of
-                    // the listing, so it is not asked for again until
-                    // the activity changes.
-                    Ok(Fetched::Nothing) => Some("null".to_string()),
-                    Err(e) if is_auth(&e) => return Err(e),
-                    Err(_) if self.stopping() => break,
-                    Err(e) => {
-                        s.errors += 1;
-                        record_error(self.db, "garmin_activity_details", id, &format!("{e:#}"))
-                            .await?;
-                        None
-                    }
-                };
-                if let Some(payload) = detail {
-                    upsert(
-                        self.db,
-                        &[ActivityDetailRow {
-                            id_and_payload: WirePayload {
-                                id: id.clone(),
-                                payload,
-                            },
-                            listing_hash: Some(w.listing_hash.clone()),
-                        }],
-                    )
-                    .await?;
-                }
-            }
-            if w.file {
-                let fit_ref = file_ref(id, FILE_KIND_FIT);
-                match self
-                    .client
-                    .get_bytes(&format!("/download-service/files/activity/{id}"))
-                    .await
-                {
-                    Ok(Fetched::Some(zip)) => {
-                        files
-                            .answered_for
-                            .insert(id.clone(), w.listing_hash.clone());
-                        match fit_from_zip(&zip) {
-                            Ok(fit) => {
-                                files.edges.add_fetched(
-                                    id,
-                                    &fit_ref,
-                                    fit,
-                                    Some("application/vnd.ant.fit".into()),
-                                    Some(format!("{id}_ACTIVITY.fit")),
-                                );
-                                s.activity_files += 1;
-                            }
-                            // The same bytes would come back, so this is
-                            // an answer for this version of the listing,
-                            // and a problem until the activity changes.
-                            Err(e) => {
-                                s.errors += 1;
-                                files.edges.add_failed(
-                                    id,
-                                    &fit_ref,
-                                    format!("the download held no readable FIT file: {e:#}"),
-                                );
-                            }
-                        }
-                    }
-                    // An activity entered by hand has no file.
-                    Ok(Fetched::Nothing) => {
-                        upsert(
-                            self.db,
-                            &[ActivityFileRow {
-                                id: fit_ref,
-                                activity_id: id.clone(),
-                                file_kind: FILE_KIND_FIT.to_string(),
-                                blake3: None,
-                                listing_hash: Some(w.listing_hash.clone()),
-                            }],
-                        )
-                        .await?;
-                    }
-                    Err(e) if is_auth(&e) => return Err(e),
-                    Err(_) if self.stopping() => break,
-                    Err(e) => {
-                        s.errors += 1;
-                        files.edges.add_failed(id, &fit_ref, format!("{e:#}"));
-                    }
-                }
-            }
-            self.progress.inc(1);
-            if files.edges.bundle_mut().len() >= FILE_BATCH {
-                std::mem::take(&mut files).flush(self.db).await?;
-                self.wrote(FILE_BATCH as u64).await;
-            }
+        } else {
+            Vec::new()
+        };
+        self.progress
+            .set_length(Some((details.len() + files.len()) as u64));
+
+        let l = self.fetch_loop(
+            "garmin_activity_details",
+            "activities",
+            FILE_FLUSH,
+            NO_BUDGET,
+        );
+        let f = Details {
+            walk: self,
+            with_a_detail: AtomicUsize::new(0),
+        };
+        let drained = owed::drain(&l, details, &f).await?;
+        s.activities_fetched += f.with_a_detail.load(Ordering::Relaxed);
+        s.errors += drained.failed;
+        if self.stopping() {
+            return Ok(());
         }
-        files.flush(self.db).await
+
+        let l = self.fetch_loop("garmin_activity_files", "activities", FILE_FLUSH, NO_BUDGET);
+        let f = Fits {
+            walk: self,
+            with_a_file: AtomicUsize::new(0),
+        };
+        let drained = owed::drain(&l, files, &f).await?;
+        s.activity_files += f.with_a_file.load(Ordering::Relaxed);
+        s.errors += drained.failed;
+        Ok(())
     }
 
     // ── wellness FIT bundles ─────────────────────────────────────────
 
-    async fn wellness(&mut self, s: &mut FetchSummary) -> Result<()> {
+    async fn wellness(&self, s: &mut FetchSummary) -> Result<()> {
         if !self.api.wellness_files() {
             return Ok(());
         }
-        let held = self.db.wellness_held().await?;
-        let days = owed_days(self.since, self.end, &held, self.refresh);
+        let listed = calendar(self.since, self.end, self.today, self.refresh, |d| {
+            file_ref(d, FILE_KIND_WELLNESS_ZIP)
+        });
+        let days = self.owed_days("garmin_wellness_files", listed).await?;
         self.progress.set_length(Some(days.len() as u64));
-        let mut batch = WellnessBatch::default();
-        for day in days {
-            if self.stopping() || self.wellness_day(day, &mut batch, s).await? == DaysEnd::Stopped {
-                break;
-            }
-            self.progress.inc(1);
-            if batch.pending() >= FILE_BATCH {
-                let wrote = batch.pending() as u64;
-                std::mem::take(&mut batch)
-                    .flush(self.db, self.today)
-                    .await?;
-                self.wrote(wrote).await;
-            }
-        }
-        batch.flush(self.db, self.today).await
-    }
-
-    async fn wellness_day(
-        &mut self,
-        day: NaiveDate,
-        batch: &mut WellnessBatch,
-        s: &mut FetchSummary,
-    ) -> Result<DaysEnd> {
-        let d = ymd(day);
-        let zip_ref = file_ref(&d, FILE_KIND_WELLNESS_ZIP);
-        self.progress.set_message(&format!("garmin: wellness {d}"));
-        match self
-            .client
-            .get_bytes(&format!("/download-service/files/wellness/{d}"))
-            .await
-        {
-            Ok(Fetched::Some(zip)) => {
-                batch.edges.add_fetched(
-                    &d,
-                    &zip_ref,
-                    zip,
-                    Some("application/zip".into()),
-                    Some(format!("{d}_wellness.zip")),
-                );
-                s.wellness_files += 1;
-            }
-            Ok(Fetched::Nothing) => batch.without_a_bundle.push(d),
-            Err(e) if is_auth(&e) => return Err(e),
-            Err(_) if self.stopping() => return Ok(DaysEnd::Stopped),
-            Err(e) => {
-                s.errors += 1;
-                batch.edges.add_failed(&d, &zip_ref, format!("{e:#}"));
-            }
-        }
-        Ok(DaysEnd::Done)
+        let l = self.fetch_loop("garmin_wellness_files", "wellness", FILE_FLUSH, NO_BUDGET);
+        let f = Bundles {
+            walk: self,
+            with_a_bundle: AtomicUsize::new(0),
+        };
+        let drained = owed::drain(&l, days, &f).await?;
+        s.wellness_files += f.with_a_bundle.load(Ordering::Relaxed);
+        s.errors += drained.failed;
+        Ok(())
     }
 
     // ── whole-account listings ───────────────────────────────────────
 
-    async fn items(&mut self, s: &mut FetchSummary) -> Result<()> {
+    async fn items(&self, s: &mut FetchSummary) -> Result<()> {
         let display_name = self.account.display_name.clone();
         let profile_pk = self.account.profile_pk.clone();
         for kind in ITEM_KINDS {
@@ -1093,7 +972,7 @@ impl Walk<'_> {
                 );
                 continue;
             };
-            let Listed {
+            let Listing {
                 rows: list,
                 incomplete,
             } = if kind.paged {
@@ -1105,11 +984,11 @@ impl Walk<'_> {
                 .await?
             } else {
                 match self.list_once(&first_page, true).await? {
-                    Ok(rows) => Listed {
+                    Ok(rows) => Listing {
                         rows,
                         incomplete: None,
                     },
-                    Err(why) => Listed {
+                    Err(why) => Listing {
                         rows: Vec::new(),
                         incomplete: Some(why),
                     },
@@ -1149,75 +1028,259 @@ impl Walk<'_> {
     }
 }
 
-/// The CAS bundle keys its blobs by ref id, so each record's file needs
-/// a ref of its own; the edge row's id is that ref.
-fn file_ref(owner: &str, file_kind: &str) -> String {
-    format!("{owner}#{file_kind}")
+// ── the fetchers: one per kind, a request per record ─────────────────
+
+/// The days of one metric.
+struct Days<'a> {
+    walk: &'a Walk<'a>,
+    metric: &'a str,
 }
 
-/// The FIT downloads of one transaction.
-#[derive(Default)]
-struct FitBatch {
-    edges: CasEdgeAccumulator,
-    /// `activity id → listing version` for each download Garmin
-    /// answered, readable or not. A request that failed is absent, so
-    /// its edge carries no version and the file stays owed.
-    answered_for: HashMap<String, String>,
+#[async_trait]
+impl Fetcher<DailyRow> for Days<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<owed::Fetched<DailyRow>>, BatchError> {
+        let (walk, metric) = (self.walk, self.metric);
+        walk.each(batch, |id| async move {
+            let d = DailyRow::date_of(&id).to_string();
+            walk.progress.set_message(&format!("garmin: {metric} {d}"));
+            let path = daily_path(metric, &walk.account.display_name, &d);
+            let payload = match walk.client.get_json(&path).await? {
+                Fetched::Some(v) if !is_empty_answer(&v) => v.to_string(),
+                _ => "null".to_string(),
+            };
+            Ok(Outcome::Got(DailyRow {
+                id_and_payload: WirePayload { id, payload },
+                metric: metric.to_string(),
+                calendar_date: d,
+            }))
+        })
+        .await
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[owed::Fetched<DailyRow>],
+    ) -> Result<()> {
+        store_rows(tx, batch).await
+    }
 }
 
-impl FitBatch {
-    async fn flush(self, db: &RawDb) -> Result<()> {
-        self.edges
-            .flush(db.pool(), db.cas(), |activity_id, file_ref, blake3| {
-                ActivityFileRow {
-                    id: file_ref.to_string(),
-                    activity_id: activity_id.to_string(),
-                    file_kind: FILE_KIND_FIT.to_string(),
-                    blake3: blake3.map(str::to_string),
-                    listing_hash: self.answered_for.get(activity_id).cloned(),
+/// The activity details. An activity Garmin has no detail for is held
+/// as `null` for this version of the listing, so it is not asked for
+/// again until the activity changes.
+struct Details<'a> {
+    walk: &'a Walk<'a>,
+    with_a_detail: AtomicUsize,
+}
+
+#[async_trait]
+impl Fetcher<ActivityDetailRow> for Details<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<owed::Fetched<ActivityDetailRow>>, BatchError> {
+        let walk = self.walk;
+        walk.each(batch, |id| async move {
+            walk.progress.set_message(&format!("garmin: activity {id}"));
+            let payload = match walk
+                .client
+                .get_json(&format!("/activity-service/activity/{id}"))
+                .await?
+            {
+                Fetched::Some(detail) => {
+                    self.with_a_detail.fetch_add(1, Ordering::Relaxed);
+                    detail.to_string()
                 }
-            })
-            .await
+                Fetched::Nothing => "null".to_string(),
+            };
+            Ok(Outcome::Got(ActivityDetailRow {
+                id_and_payload: WirePayload { id, payload },
+            }))
+        })
+        .await
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[owed::Fetched<ActivityDetailRow>],
+    ) -> Result<()> {
+        store_rows(tx, batch).await
     }
 }
 
-/// The wellness days of one transaction.
-#[derive(Default)]
-struct WellnessBatch {
-    edges: CasEdgeAccumulator,
-    /// Days Garmin answered with no bundle.
-    without_a_bundle: Vec<String>,
+/// The activities' FIT files: the file's bytes, or `None` for an
+/// activity entered by hand, which has none. A download that holds no
+/// readable FIT is unusable: held for this version of the listing,
+/// since the same bytes would come back until the activity changes.
+struct Fits<'a> {
+    walk: &'a Walk<'a>,
+    with_a_file: AtomicUsize,
 }
 
-impl WellnessBatch {
-    fn pending(&mut self) -> usize {
-        self.edges.bundle_mut().len() + self.without_a_bundle.len()
+#[async_trait]
+impl Fetcher<Option<Vec<u8>>> for Fits<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<owed::Fetched<Option<Vec<u8>>>>, BatchError> {
+        let walk = self.walk;
+        walk.each(batch, |file_ref| async move {
+            let id = file_owner(&file_ref);
+            walk.progress
+                .set_message(&format!("garmin: activity {id} file"));
+            let zip = match walk
+                .client
+                .get_bytes(&format!("/download-service/files/activity/{id}"))
+                .await?
+            {
+                Fetched::Some(zip) => zip,
+                Fetched::Nothing => return Ok(Outcome::Got(None)),
+            };
+            Ok(match fit_from_zip(&zip) {
+                Ok(fit) => {
+                    self.with_a_file.fetch_add(1, Ordering::Relaxed);
+                    Outcome::Got(Some(fit))
+                }
+                Err(e) => Outcome::Unusable(
+                    None,
+                    datalib_problems::Reason::Undeserializable,
+                    format!("the download held no readable FIT file: {e:#}"),
+                ),
+            })
+        })
+        .await
     }
 
-    /// A day is stamped with the date it was fetched on only when Garmin
-    /// answered for it: a bundle, or none. A failed request leaves the
-    /// stamp empty and the day owed.
-    async fn flush(self, db: &RawDb, today: NaiveDate) -> Result<()> {
-        let fetched_on = Some(ymd(today));
-        let row = |day: &str, blake3: Option<&str>, answered: bool| WellnessFileRow {
-            id: file_ref(day, FILE_KIND_WELLNESS_ZIP),
-            calendar_date: day.to_string(),
-            file_kind: FILE_KIND_WELLNESS_ZIP.to_string(),
-            blake3: blake3.map(str::to_string),
-            fetched_on: fetched_on.clone().filter(|_| answered),
-        };
-        let none: Vec<WellnessFileRow> = self
-            .without_a_bundle
-            .iter()
-            .map(|day| row(day, None, true))
-            .collect();
-        upsert(db, &none).await?;
-        self.edges
-            .flush(db.pool(), db.cas(), |day, _, blake3| {
-                row(day, blake3, blake3.is_some())
-            })
-            .await
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[owed::Fetched<Option<Vec<u8>>>],
+    ) -> Result<()> {
+        let cas = self.walk.db.cas();
+        store_edges(cas, FIT_CONTENT_TYPE, tx, batch, |file_ref, blake3| {
+            ActivityFileRow {
+                id: file_ref.to_string(),
+                activity_id: file_owner(file_ref).to_string(),
+                file_kind: FILE_KIND_FIT.to_string(),
+                blake3,
+            }
+        })
+        .await
     }
+}
+
+/// The wellness bundles: the day's zip, or `None` for a day Garmin has
+/// no bundle for (404).
+struct Bundles<'a> {
+    walk: &'a Walk<'a>,
+    with_a_bundle: AtomicUsize,
+}
+
+#[async_trait]
+impl Fetcher<Option<Vec<u8>>> for Bundles<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<owed::Fetched<Option<Vec<u8>>>>, BatchError> {
+        let walk = self.walk;
+        walk.each(batch, |file_ref| async move {
+            let d = file_owner(&file_ref);
+            walk.progress.set_message(&format!("garmin: wellness {d}"));
+            Ok(Outcome::Got(
+                match walk
+                    .client
+                    .get_bytes(&format!("/download-service/files/wellness/{d}"))
+                    .await?
+                {
+                    Fetched::Some(zip) => {
+                        self.with_a_bundle.fetch_add(1, Ordering::Relaxed);
+                        Some(zip)
+                    }
+                    Fetched::Nothing => None,
+                },
+            ))
+        })
+        .await
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[owed::Fetched<Option<Vec<u8>>>],
+    ) -> Result<()> {
+        let cas = self.walk.db.cas();
+        store_edges(cas, ZIP_CONTENT_TYPE, tx, batch, |file_ref, blake3| {
+            WellnessFileRow {
+                id: file_ref.to_string(),
+                calendar_date: file_owner(file_ref).to_string(),
+                file_kind: FILE_KIND_WELLNESS_ZIP.to_string(),
+                blake3,
+            }
+        })
+        .await
+    }
+}
+
+/// A flush's rows: what came, usable or not.
+async fn store_rows<T: BulkUpsertable + Clone + Sync>(
+    tx: &mut Transaction<'static, Sqlite>,
+    batch: &[owed::Fetched<T>],
+) -> Result<()> {
+    let rows: Vec<T> = batch
+        .iter()
+        .filter_map(|f| match &f.outcome {
+            Outcome::Got(row) | Outcome::Unusable(row, ..) => Some(row.clone()),
+            _ => None,
+        })
+        .collect();
+    bulk_upsert_entity_in_tx(tx, &rows).await
+}
+
+/// A flush's file edges: the bytes into the CAS in one `put_many`, then
+/// `edge(key, blake3)` per answer, an answer with no bytes as an edge
+/// with none.
+async fn store_edges<R: BulkUpsertable + Sync>(
+    cas: &BlobCas,
+    content_type: &str,
+    tx: &mut Transaction<'static, Sqlite>,
+    batch: &[owed::Fetched<Option<Vec<u8>>>],
+    edge: impl Fn(&str, Option<String>) -> R,
+) -> Result<()> {
+    let answered: Vec<(&str, Option<&[u8]>)> = batch
+        .iter()
+        .filter_map(|f| match &f.outcome {
+            Outcome::Got(bytes) | Outcome::Unusable(bytes, ..) => {
+                Some((f.listed.key.as_str(), bytes.as_deref()))
+            }
+            _ => None,
+        })
+        .collect();
+    let hashed: Vec<(&str, Option<String>)> = answered
+        .iter()
+        .map(|(key, bytes)| (*key, bytes.map(blake3_hex)))
+        .collect();
+    let inserts: Vec<CasInsert<'_>> = answered
+        .iter()
+        .zip(&hashed)
+        .filter_map(|((_, bytes), (_, blake3))| {
+            Some(CasInsert {
+                blake3: blake3.as_deref()?,
+                bytes: (*bytes)?,
+                content_type: Some(content_type),
+            })
+        })
+        .collect();
+    cas.put_many(&inserts).await?;
+    let rows: Vec<R> = hashed
+        .into_iter()
+        .map(|(key, blake3)| edge(key, blake3))
+        .collect();
+    bulk_upsert_entity_in_tx(tx, &rows).await
 }
 
 fn is_auth(e: &anyhow::Error) -> bool {
@@ -1365,46 +1428,67 @@ mod tests {
         assert_eq!(window_start(None, None, today), "2025-09-28");
     }
 
-    /// A day is asked for until a fetch lands on or after the date it
-    /// settles; a day with no row is asked for however old; a day never
-    /// settles on its own date, whatever the refresh window.
+    /// A settled day is listed at the date it settled, which is what its
+    /// row is held at once fetched; a day not yet settled is listed at
+    /// today and fetched every run; a day never settles on its own date,
+    /// whatever the refresh window.
     #[test]
-    fn a_day_is_owed_until_it_is_fetched_after_it_settled() {
+    fn a_day_is_listed_at_the_date_it_is_final_from() {
         let d = |s| date(s).unwrap();
         let week = Duration::days(7);
-        let held: HashMap<String, String> = [
-            ("2369-04-01", "2369-04-08"),
-            ("2369-04-02", "2369-04-08"),
-            ("2369-04-04", "2369-04-15"),
-            ("2369-04-08", "2369-04-15"),
-            ("2369-04-09", "2369-04-15"),
-        ]
-        .map(|(day, on)| (day.to_string(), on.to_string()))
-        .into();
+        let today = d("2369-04-15");
+        let cal = calendar(
+            d("2369-04-06"),
+            d("2369-04-10"),
+            today,
+            week,
+            str::to_string,
+        );
         assert_eq!(
-            owed_days(d("2369-04-01"), d("2369-04-10"), &held, week),
+            cal.settled,
             [
-                d("2369-04-02"),
-                d("2369-04-03"),
-                d("2369-04-05"),
-                d("2369-04-06"),
-                d("2369-04-07"),
-                d("2369-04-09"),
-                d("2369-04-10"),
+                Listed::new("2369-04-06", Some("2369-04-13")),
+                Listed::new("2369-04-07", Some("2369-04-14")),
+                Listed::new("2369-04-08", Some("2369-04-15")),
+            ],
+            "settled on or before today"
+        );
+        assert_eq!(
+            cal.unsettled,
+            [
+                Listed::new("2369-04-09", Some("2369-04-15")),
+                Listed::new("2369-04-10", Some("2369-04-15")),
             ]
         );
-        let same_day: HashMap<String, String> =
-            [("2369-04-15".to_string(), "2369-04-15".to_string())].into();
+        let same_day = calendar(today, today, today, Duration::zero(), str::to_string);
+        assert!(same_day.settled.is_empty());
         assert_eq!(
-            owed_days(
-                d("2369-04-15"),
-                d("2369-04-15"),
-                &same_day,
-                Duration::zero()
-            ),
-            [d("2369-04-15")]
+            same_day.unsettled,
+            [Listed::new("2369-04-15", Some("2369-04-15"))]
         );
-        assert!(owed_days(d("2369-04-09"), d("2369-04-08"), &held, week).is_empty());
+        let empty = calendar(
+            d("2369-04-09"),
+            d("2369-04-08"),
+            today,
+            week,
+            str::to_string,
+        );
+        assert!(empty.settled.is_empty() && empty.unsettled.is_empty());
+    }
+
+    /// `refresh_days` is unbounded above, and one past the calendar's
+    /// end panicked in the addition: such a day never settles.
+    #[test]
+    fn a_refresh_window_past_the_end_of_the_calendar_never_settles() {
+        let day = date("2369-04-01").unwrap();
+        for days in [99_999_999, i64::MAX] {
+            let refresh = Duration::try_days(days).unwrap_or(Duration::MAX);
+            assert_eq!(settles_on(day, refresh), NaiveDate::MAX, "{days}");
+        }
+        assert_eq!(
+            settles_on(day, Duration::days(3)),
+            date("2369-04-04").unwrap()
+        );
     }
 
     /// The listing starts at the lowest date nobody has listed — a

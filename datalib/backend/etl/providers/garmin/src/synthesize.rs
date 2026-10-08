@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::{Duration, NaiveDate};
-use datalib_etl::http::{HttpRequest, HttpResponse};
-use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
+use datalib_etl_web::http::{HttpRequest, HttpResponse};
+use datalib_etl_web::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde::Deserialize;
 use serde_json::{json, Value};
 

@@ -8,10 +8,8 @@ pub mod schema_raw;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use datalib_etl::download_run::DownloadRun;
 use datalib_etl::run_problems::{self, RunProblems};
 use serde::Serialize;
-use serde_json::json;
 use tracing::{info, instrument};
 
 pub use db::{db_path_for, RawDb};
@@ -116,13 +114,6 @@ async fn read_beeper(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     // reason. The path is handed straight to the reader, which
     // shells out to the system `sqlite3` CLI.
 
-    let run_config = json!({
-        "sources": opts.sources,
-        "beeper_data_dir": beeper_dir.display().to_string(),
-        "media": opts.media,
-    });
-    let run = DownloadRun::start(dst.pool(), &run_config).await?;
-
     let mut summary = FetchSummary::default();
     let result = (async {
         let unmatched = index_db::ingest(
@@ -170,7 +161,6 @@ async fn read_beeper(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     summary.blobs = counts.blobs;
     summary.blob_errors = counts.blob_errors;
 
-    run.finish(&result, &summary).await;
     result?;
 
     info!(

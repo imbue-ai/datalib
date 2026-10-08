@@ -2,11 +2,12 @@
 //! `chat-common` normalized model and delegate markdown / grid-row /
 //! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::{Context as _, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::branches::{reading_order, TreeNode};
 use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms};
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
@@ -17,13 +18,16 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::md_code_block;
+use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_block};
+use datalib_etl_render::sources::{sources_list, Source};
 
 use super::ids;
 use super::parse::{
     shred, OAAttachmentRef, OAContentPartRow, OAMessageRow, ParsedChatGPTApi, ShreddedConversation,
 };
+use datalib_schema::problems::{Problem, Reason};
 use datalib_schema::providers::Provider;
+use serde_json::Value;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v4: render via chat-common.
@@ -43,7 +47,10 @@ use datalib_schema::providers::Provider;
 ///     (`datalib_id`'s v8 layout).
 /// v11: the private-use characters around a cited span are dropped
 ///     instead of showing as boxes.
-pub const RENDER_VERSION: u32 = 11;
+/// v12: the words beside an image, quotes of uploaded files and named
+///     entities are kept; empty steps are left out; cited pages are
+///     listed after the text.
+pub const RENDER_VERSION: u32 = 12;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -129,7 +136,7 @@ fn build_chat(
     // Mirror the renderer's timestamp bump: a message with no create_time
     // inherits the previous item's time + 1ms so ordering stays stable.
     let mut last_ms = conv.create_time.as_deref().and_then(iso_to_ms);
-    for m in &path {
+    for (m, branch) in &path {
         // Own stamp, else the previous item's + 1ms (§6's sanctioned
         // inheritance), else nothing: a conversation with no
         // `create_time` of its own whose messages carry none either
@@ -161,10 +168,16 @@ fn build_chat(
             .cloned()
             .unwrap_or_default();
         parts.sort_by_key(|p| p.part_index);
-        let body = render_message_body(&parts);
+        let body = with_sources(render_message_body(&parts), &m.raw_json);
+        problems.extend(uncovered_parts(&parts));
 
         let attachments: Vec<NormalizedAttachment> =
             m.attachments.iter().map(att_to_norm).collect();
+        // An empty thought or a browsing step that showed nothing.
+        if body.is_none() && attachments.is_empty() && problems.is_empty() {
+            continue;
+        }
+        let is_aside = is_aside(m.role.as_deref(), !attachments.is_empty());
         let kind = if attachments.is_empty() {
             ItemKind::Text
         } else {
@@ -189,7 +202,8 @@ fn build_chat(
                 msg_id.entity_kind,
                 msg_id.natural_key.clone(),
             )),
-            is_aside: is_tool_role(m.role.as_deref()),
+            is_aside,
+            branch: branch.clone(),
             unread: false,
             recipients: Vec::new(),
             problems,
@@ -233,39 +247,44 @@ fn build_chat(
     }
 }
 
-/// Walk `current_node → root` via `parent_id`; fall back to a
-/// `create_time` sort when the tree is missing/broken.
-fn ordered_messages(shredded: &ShreddedConversation) -> Vec<&OAMessageRow> {
-    let msg_by_id: HashMap<&str, &OAMessageRow> = shredded
-        .messages
+/// Every message in reading order with the branches it sits in: the
+/// branch ending at `current_node`, the one last seen, with every other
+/// version folded in where it forked. With no usable `current_node`,
+/// everything by `create_time` on one branch.
+fn ordered_messages(shredded: &ShreddedConversation) -> Vec<(&OAMessageRow, Vec<String>)> {
+    let mut by_time: Vec<&OAMessageRow> = shredded.messages.iter().collect();
+    by_time.sort_by(|a, b| {
+        a.create_time
+            .as_deref()
+            .unwrap_or("")
+            .cmp(b.create_time.as_deref().unwrap_or(""))
+    });
+    let nodes: Vec<TreeNode<'_>> = by_time
         .iter()
-        .map(|m| (m.message_id.as_str(), m))
+        .map(|m| TreeNode {
+            id: &m.message_id,
+            parent: m.parent_id.as_deref(),
+        })
         .collect();
-    let mut path: Vec<&OAMessageRow> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut cursor = shredded.conv.current_node.clone();
-    while let Some(cid) = cursor {
-        if !seen.insert(cid.clone()) {
-            break;
-        }
-        let Some(m) = msg_by_id.get(cid.as_str()) else {
-            break;
-        };
-        path.push(*m);
-        cursor = m.parent_id.clone();
-    }
-    path.reverse();
-    if path.is_empty() {
-        let mut sorted: Vec<&OAMessageRow> = shredded.messages.iter().collect();
-        sorted.sort_by(|a, b| {
-            a.create_time
-                .as_deref()
-                .unwrap_or("")
-                .cmp(b.create_time.as_deref().unwrap_or(""))
-        });
-        path = sorted;
-    }
-    path
+    let order = shredded
+        .conv
+        .current_node
+        .as_deref()
+        .and_then(|leaf| reading_order(&nodes, leaf));
+    let Some(order) = order else {
+        return by_time.into_iter().map(|m| (m, Vec::new())).collect();
+    };
+    let by_id: HashMap<&str, &OAMessageRow> = by_time
+        .iter()
+        .map(|m| (m.message_id.as_str(), *m))
+        .collect();
+    order
+        .into_iter()
+        .map(|p| {
+            let branch = p.branch.iter().map(|b| b.to_string()).collect();
+            (by_id[p.id], branch)
+        })
+        .collect()
 }
 
 fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
@@ -278,14 +297,93 @@ fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
         let t = p.text.as_deref().unwrap_or("").trim_end();
         match p.kind.as_str() {
             "text" => blocks.push(t.to_string()),
-            "code" => blocks.push(md_code_block(p.language.as_deref().unwrap_or(""), t)),
+            // Code the interpreter ran comes labelled `unknown`.
+            "code" => blocks.push(md_code_block(
+                p.language
+                    .as_deref()
+                    .filter(|l| *l != "unknown")
+                    .unwrap_or(""),
+                t,
+            )),
             "execution_output" => blocks.push(md_code_block("", t)),
             "thoughts" | "reasoning_recap" => blocks.push(format!("> {}", t.replace('\n', "\n> "))),
+            "tether_quote" => {
+                let title = p
+                    .raw_json
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                // A file's own words, not the model's markdown.
+                let quote = format!("> {}", escape_md_block(t).replace('\n', "\n> "));
+                blocks.push(if title.is_empty() {
+                    quote
+                } else {
+                    format!("**{}**\n\n{quote}", escape_md_inline(title))
+                });
+            }
             _ => blocks.push(t.to_string()),
         }
     }
     let body = blocks.join("\n\n");
     (!body.trim().is_empty()).then_some(body)
+}
+
+/// The pages a message's citations point at, listed after its text:
+/// the `cite` markers in the text are dropped, and these are where
+/// their urls live.
+fn with_sources(body: Option<String>, message: &Value) -> Option<String> {
+    let refs = message
+        .pointer("/metadata/content_references")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let list = sources_list(refs.iter().flat_map(cited_pages));
+    match (body, list) {
+        (Some(body), Some(list)) => Some(format!("{body}\n\n{list}")),
+        (body, list) => body.or(list),
+    }
+}
+
+/// A reference's pages: its own url, a `grouped_webpages` group's items
+/// and the sites supporting them, a `sources_footnote`'s sources.
+fn cited_pages(reference: &Value) -> Vec<Source<'_>> {
+    let mut out: Vec<Source<'_>> = cited_page(reference).into_iter().collect();
+    for item in array_at(reference, "items") {
+        out.extend(cited_page(item));
+        out.extend(
+            array_at(item, "supporting_websites")
+                .iter()
+                .filter_map(cited_page),
+        );
+    }
+    out.extend(array_at(reference, "sources").iter().filter_map(cited_page));
+    out
+}
+
+fn cited_page(v: &Value) -> Option<Source<'_>> {
+    let str_at = |k: &str| v.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
+    Some(Source {
+        url: str_at("url")?,
+        title: str_at("title"),
+        site: str_at("attribution"),
+    })
+}
+
+fn array_at<'a>(v: &'a Value, key: &str) -> &'a [Value] {
+    v.get(key)
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+}
+
+/// A content type parse has no reading for: the message renders
+/// without it, and says so.
+fn uncovered_parts(parts: &[&OAContentPartRow]) -> Vec<Problem> {
+    parts
+        .iter()
+        .filter(|p| p.text.is_none())
+        .map(|p| Problem::field("content", Reason::UncoveredType, &p.kind))
+        .collect()
 }
 
 fn att_to_norm(a: &OAAttachmentRef) -> NormalizedAttachment {
@@ -299,6 +397,12 @@ fn att_to_norm(a: &OAAttachmentRef) -> NormalizedAttachment {
         source_url: None,
         ref_id: Some(a.file_id.clone()),
     }
+}
+
+/// Tool traffic folds away; a tool message carrying a file (a generated
+/// image) is what was asked for, and stays in the reading flow.
+fn is_aside(role: Option<&str>, carries_a_file: bool) -> bool {
+    is_tool_role(role) && !carries_a_file
 }
 
 /// Whether a message is tool traffic, and so belongs in a collapsed
@@ -356,5 +460,70 @@ mod tests {
             "````python\nprint('```')\n<script>x</script>\n````\n\n\
              ````\n```\n<script>x</script> & co\n````"
         );
+    }
+
+    #[test]
+    fn code_labelled_unknown_gets_a_bare_fence() {
+        let code = part("code", Some("unknown"), "print(1)");
+        assert_eq!(render_message_body(&[&code]).unwrap(), "```\nprint(1)\n```");
+    }
+
+    #[test]
+    fn a_file_quote_is_a_titled_blockquote() {
+        let mut quote = part("tether_quote", None, "Stardate 41153.7\nAll is well.");
+        quote.raw_json = serde_json::json!({"title": "Captains *Log*.pdf"});
+        assert_eq!(
+            render_message_body(&[&quote]).unwrap(),
+            "**Captains \\*Log\\*.pdf**\n\n> Stardate 41153.7\n> All is well."
+        );
+    }
+
+    /// A generated image arrives as a tool message, and was folded away
+    /// with the plumbing.
+    #[test]
+    fn a_tool_message_with_a_file_stays_in_the_flow() {
+        assert!(is_aside(Some("tool"), false));
+        assert!(!is_aside(Some("tool"), true));
+        assert!(!is_aside(Some("system"), false));
+    }
+
+    /// ChatGPT's `cite` markers are dropped from the text; the pages
+    /// they point at were dropped with them.
+    #[test]
+    fn cited_pages_are_listed_after_the_text() {
+        let message = serde_json::json!({"metadata": {"content_references": [
+            {"type": "grouped_webpages", "items": [{
+                "url": "https://memory-alpha.example/Risa", "title": "Risa",
+                "attribution": "Memory Alpha",
+                "supporting_websites": [{"url": "https://example.com/risa", "title": "Visit Risa"}]
+            }]},
+            {"type": "sources_footnote", "sources": [
+                {"url": "https://memory-alpha.example/Risa", "title": "Risa"}
+            ]},
+            {"type": "entity", "name": "Risa"}
+        ]}});
+        assert_eq!(
+            with_sources(Some("Risa is warm.".into()), &message).unwrap(),
+            "Risa is warm.\n\n**Sources**\n\n\
+             1. [Risa](https://memory-alpha.example/Risa) — Memory Alpha\n\
+             2. [Visit Risa](https://example.com/risa)"
+        );
+        assert_eq!(
+            with_sources(Some("x".into()), &serde_json::json!({})).unwrap(),
+            "x"
+        );
+    }
+
+    /// A content type parse cannot read is a problem on its message, not
+    /// a silently empty body.
+    #[test]
+    fn an_unread_content_type_is_reported() {
+        let mut unknown = part("holo_program", None, "");
+        unknown.text = None;
+        let text = part("text", None, "Computer, end program.");
+        let problems = uncovered_parts(&[&unknown, &text]);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].reason, Reason::UncoveredType);
+        assert_eq!(problems[0].sample, "holo_program");
     }
 }

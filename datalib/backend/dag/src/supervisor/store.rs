@@ -149,7 +149,10 @@ impl Store {
             &store.pool,
             datalib_store_meta::StoreKind::Supervisor,
             &datalib_store_meta::schema_hash(ddl()),
-            SCHEMA_VERSION,
+            datalib_store_meta::Versions {
+                schema: SCHEMA_VERSION,
+                shared: 0,
+            },
         )
         .await?;
         store.announce("store opened");

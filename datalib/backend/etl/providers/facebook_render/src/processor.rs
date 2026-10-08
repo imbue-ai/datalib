@@ -182,7 +182,7 @@ pub fn render_source(
                     .chain(&albums)
                     .chain(&comments)
                     .map(|chat| (chat.id.clone(), attachment_refs(chat)));
-                blobs = BlobBundle::load_many(db.pool(), cas.pool(), MEDIA_PROJECTION, refs)
+                blobs = BlobBundle::load_many(db.pool(), Some(cas.pool()), MEDIA_PROJECTION, refs)
                     .await
                     .context("load media")?;
             }

@@ -5,8 +5,6 @@ use std::fs;
 use std::time::Duration;
 
 use datalib_etl::event_store::{diff_and_save, make_record};
-use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_gitlab::ingest::{
     block_on_load_all, db_path_for, fetch, FetchOptions, RawDb, ENTITY_DISCUSSION, ENTITY_MR,
     ENTITY_SELF,
@@ -14,6 +12,8 @@ use datalib_etl_gitlab::ingest::{
 use datalib_etl_gitlab::synthesize::GitlabSynth;
 use datalib_etl_gitlab_render::render::parse_api_dir;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 

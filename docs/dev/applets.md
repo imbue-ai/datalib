@@ -405,7 +405,9 @@ applet (`slack`, `unified_index` and `datalib_contacts`), the same shape
 as `datalib-step`. `datalib_contacts` is the one that writes: it is the
 only writer of the contacts store under `datalib_curated/`
 (`app_stores.md`), and like `unified_index` it contributes endpoints
-only, which the document view calls. One
+only, which the document view calls; one of them,
+`/photo/<contact_id>`, serves the photo a person put on a contact (and
+takes one with `PUT`, drops it with `DELETE`). One
 binary rather than one per applet keeps the shared machinery in one
 place and ships one file instead of a growing list; adding an applet is
 a subcommand plus a module, not a new crate and five packaging edits.
