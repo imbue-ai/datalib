@@ -149,7 +149,10 @@ follows Google:
 - A timestamp in an HTML page or in Chat ends with the name the
   account's English locale has for its zone (`PDT`, `CEST`, `AEST`),
   or, for a zone with no name, its offset (`GMT+2`, `GMT+5:30`). A name
-  two zones share (`IST`) is not guessed (`src/ingest/time.rs`).
+  two zones share (`IST`) is not guessed (`src/ingest/time.rs`). An
+  entry whose date does not read is stored with no `when_ts` and its
+  date as written, and the render reports it on the entry's document;
+  Chat's render reads `created_date` with the same parser.
 - A Maps photo's sidecar is named after its media, extension and all:
   `<photo>.jpg.json` describes `<photo>.jpg`.
 - A Gemini entry's links are percent-encoded (`Prime%20Directive.pdf`), and
