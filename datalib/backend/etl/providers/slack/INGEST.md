@@ -165,7 +165,7 @@ span, and is asked from `since` each run.
 A span's ends are `ts`es padded to one width (`ts_key`), so they sort as
 instants do. The TNG fixtures' stardate `ts`es have an eleventh digit.
 
-**Threads.** After a channel's history, `RawDb::threads_listed` lists
+**Threads.** After every channel's history, `RawDb::threads_listed` lists
 every stored root with replies at the `latest_reply` its payload
 carries, and `datalib_etl_web::owed` subtracts the threads held at that
 version (`held_version` in `threads_bookkeeping`, keyed like the root).
@@ -263,6 +263,7 @@ what is owed is computed from the config a run has now.
 | `since` earlier | A gap below what each channel has covered, walked once. |
 | `since` later | Nothing. What is stored stays; nothing here deletes it. |
 | `media` off → on | Every edge without bytes is owed, and fetched from its stored message. No channel is walked again. |
+| `replies` off → on | Every stored root with replies is owed, and its thread is read. No channel is walked again. |
 | `common.blob_size_limit_bytes` raised | The edges skipped for their size are still without bytes, so they are fetched. |
 | a new channel, or `dms` on | The conversation has no coverage, so it is walked from `since`. |
 
@@ -296,6 +297,38 @@ and the sync goes on with the rest.
 A channel whose history fails still has its owed threads and files
 fetched on that run: they are in the store whatever the walk did.
 
+## The order of a run, and a run without replies
+
+A run walks **every channel's history first**, then goes round the
+channels again for what their stored messages owe: threads, then files.
+History is a few requests a channel and a thread is one request each,
+which Slack holds to about one a second, so on a workspace with tens of
+thousands of threads the first pass is minutes and the second is hours.
+In this order the whole workspace's top level is in the store, and
+sealed for render, before the long part starts. Nothing is carried
+from the first pass to the second but a count for the progress line:
+the second pass asks the store what is owed.
+
+`replies = false` skips the thread read altogether. The roots are
+stored with the `reply_count` and `latest_reply` Slack listed, so every
+thread is owed and stays owed; the run counts them (`threads_owed` in
+its summary and on the step's line) and a later run with `replies` on
+reads them. A root whose replies were never read renders as the root
+alone.
+
+`replies_channels` narrows the thread read to the channels it names,
+the way `dm_conversations` narrows `dms`: threads elsewhere are counted
+and left owed, and the list without `replies` on is a config error.
+Adding a channel makes its stored roots owed; removing one deletes
+nothing.
+
+## Archived channels
+
+A listing leaves archived channels out unless `channels` names any (a
+named channel is mirrored archived or not) or `archived` is set, which
+asks `conversations.list` with `exclude_archived=false` and walks what
+it returns like any other channel. The two listings are cached apart.
+
 ## Attachments
 
 Each file a stored message carries that Slack serves (not a tombstone,
@@ -304,7 +337,7 @@ not hosted elsewhere) is a `slack_attachments` row, written without a
 `media` is on. The bytes are owed from then on.
 
 When `media` is on, each channel's owed files are fetched after its
-history and threads through `owed::drain` (`ingest/files.rs`), from the
+threads, in the second pass, through `owed::drain` (`ingest/files.rs`), from the
 file object the stored message carries: a request is `FILE_BATCH` files,
 and storing them puts their bytes into the blob CAS (its own file, which
 commits itself) before the one transaction that gives their edges a
