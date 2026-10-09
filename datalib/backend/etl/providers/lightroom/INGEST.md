@@ -19,6 +19,10 @@ the catalog per run and stores only what actually changed, with every
 prior state still queryable. There is no render step; see
 [What render will need](#what-render-will-need).
 
+[`CASE_STUDY.md`](CASE_STUDY.md) tells the story of this provider with
+measurements, from first principles: what Lightroom and doltlite are,
+what the diffs of real backups showed, and where the space goes.
+
 A source reads `catalog.path`, a `.lrcat` or one backup `.zip`,
 mirrored again on every run; `backups.path`, a folder of Lightroom's
 backups, replayed as the catalog's history; or both, the backups first
