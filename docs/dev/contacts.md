@@ -461,17 +461,26 @@ A value that is a handle (`email:riker@enterprise.org`, or simply
 the search bar draws it as the person's chip; a quoted value matches a
 handle or name whole (`from:"Will Riker"`); anything else matches any
 handle or name holding it, so `from:riker` finds Riker under every
-spelling a source used, and anyone else whose name holds it. A chip's
-"Everything from <name>" writes `from:<handle>`.
+spelling a source used, and anyone else whose name holds it. A name
+also reaches every handle a source ever showed under it, through the
+search terms' `names` table, filled from the rows' authors and from
+`source_contacts`. A chip's "Everything from <name>" writes
+`from:<handle>`. Typing `@` at the start of a word offers people and
+writes the pick as `with:`.
 
-**Search cannot yet ask "everything from Riker, whatever handle he
-used".** Links sit over the view, so the search terms know handles and
-never contacts. A `contact:<id>` value, read from the contacts store
-when the search runs and matched against each of the contact's handles,
-is planned ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
-§"Contacts: expanded when the search runs"). It changes nothing in the
-index when a link is made: no document renders again, qmd re-indexes
-nothing, and search follows the link at once, as chips do.
+**`contact:<id>` is everything from Riker, whatever handle he used.**
+Links sit over the view, so the search terms know handles and never
+contacts. A `contact:<id>` value on a person key is read from the
+contacts store when the search runs (`datalib_contacts::read`, a
+detached read, so the applet stays the one writer) and matches each
+handle the contact reaches: its own, stopped ones included; those of
+the contact it was merged into, or merged into it; and, for a group,
+every member's. The search bar offers your contacts first and draws the
+value as a contact chip. Making a link changes nothing in the index: no
+document renders again, qmd re-indexes nothing, and search follows the
+link at once, as chips do. A root without the contacts app refuses
+`contact:` by name ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
+§"Contacts: expanded when the search runs").
 
 **Keeping the name out of the markdown is a choice, not a rule.**
 Writing a contact's name into each chip link (its text or its title)
@@ -526,7 +535,7 @@ chip in the UI is separate and always uses the latest answer.
 ## Not built
 
 Editing a contact on its card, merge, groups and members, undo, the triage grid of
-unresolved handles, a `contact:` search value, a
+unresolved handles, a
 handle for a number without its country code, a handle that stopped
 working in some apps but not others, mentions in Google Chat,
 WhatsApp and Messages (each marks them up, in a shape not yet checked

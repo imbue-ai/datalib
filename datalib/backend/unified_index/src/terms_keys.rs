@@ -91,26 +91,51 @@ pub fn key(typed: &str) -> Option<&'static TermsKey> {
 pub enum TermsValue {
     /// `*`: any term of the key's kinds.
     Any,
-    /// Any of these values whole, case-blind: a handle (`datalib_handle`'s
+    /// Any of `values` whole, case-blind: a handle (`datalib_handle`'s
     /// spelling, and as typed, for an author shown under an address a
-    /// source had no handle for), or a quoted value.
-    Exact(Vec<String>),
-    /// Anything else: a value holding it, case-blind.
-    Partial(String),
+    /// source had no handle for), or a quoted value. On a person key a
+    /// quoted name also reaches every handle seen under it (`by_name`).
+    Exact {
+        values: Vec<String>,
+        by_name: Option<String>,
+    },
+    /// A value holding `text`, case-blind; on a person key, also every
+    /// handle seen under a name holding it.
+    Partial { text: String, by_name: bool },
+    /// A contact in the contacts store, by id: the handles it reaches,
+    /// read when the search runs ([`FilterTerm::handles`]).
+    ///
+    /// [`FilterTerm::handles`]: crate::query::FilterTerm::handles
+    Contact(String),
 }
 
-/// How a term's value matches: `*` anything; a handle, or a quoted value,
-/// whole; anything else in part (`from:Data` finds "Lt. Cmdr. Data",
-/// `from:"Data"` only "Data").
+/// The prefix of a value naming a contact: `from:contact:<id>`.
+pub const CONTACT: &str = "contact:";
+
+/// How a term's value matches: `*` anything; `contact:<id>` that contact;
+/// a handle, or a quoted value, whole; anything else in part (`from:Data`
+/// finds "Lt. Cmdr. Data", `from:"Data"` only "Data"). A name on a person
+/// key also finds the handles that went by it.
 pub fn value_of(key: &TermsKey, value: &str, quoted: bool, any: &str) -> TermsValue {
     if value == any && !quoted {
         return TermsValue::Any;
     }
+    if let Some(id) = value.strip_prefix(CONTACT).filter(|_| key.person) {
+        return TermsValue::Contact(id.to_string());
+    }
+    let exact =
+        |values: Vec<String>, by_name: Option<String>| TermsValue::Exact { values, by_name };
     match handle_of(value).filter(|_| key.person) {
-        Some(handle) if handle == value => TermsValue::Exact(vec![handle]),
-        Some(handle) => TermsValue::Exact(vec![handle, value.to_string()]),
-        None if quoted => TermsValue::Exact(vec![value.to_string()]),
-        None => TermsValue::Partial(value.to_string()),
+        Some(handle) if handle == value => exact(vec![handle], None),
+        Some(handle) => exact(vec![handle, value.to_string()], None),
+        None if quoted => exact(
+            vec![value.to_string()],
+            key.person.then(|| value.to_string()),
+        ),
+        None => TermsValue::Partial {
+            text: value.to_string(),
+            by_name: key.person,
+        },
     }
 }
 
@@ -159,28 +184,51 @@ mod tests {
     #[test]
     fn a_handle_matches_exactly_and_anything_else_in_part() {
         let from = key("from").unwrap();
-        let exact = |v: &[&str]| TermsValue::Exact(v.iter().map(|s| s.to_string()).collect());
+        let exact = |v: &[&str], by_name: Option<&str>| TermsValue::Exact {
+            values: v.iter().map(|s| s.to_string()).collect(),
+            by_name: by_name.map(String::from),
+        };
         assert_eq!(
             value_of(from, "Ann@Example.com", false, "*"),
-            exact(&["email:ann@example.com", "Ann@Example.com"])
+            exact(&["email:ann@example.com", "Ann@Example.com"], None)
         );
         assert_eq!(
             value_of(from, "email:ann@example.com", false, "*"),
-            exact(&["email:ann@example.com"])
+            exact(&["email:ann@example.com"], None)
         );
         assert_eq!(
             value_of(from, "Riker", false, "*"),
-            TermsValue::Partial("Riker".into())
+            TermsValue::Partial {
+                text: "Riker".into(),
+                by_name: true
+            }
         );
-        assert_eq!(value_of(from, "Riker", true, "*"), exact(&["Riker"]));
+        assert_eq!(
+            value_of(from, "Riker", true, "*"),
+            exact(&["Riker"], Some("Riker"))
+        );
         assert_eq!(value_of(from, "*", false, "*"), TermsValue::Any);
-        assert_eq!(value_of(from, "*", true, "*"), exact(&["*"]));
+        assert_eq!(value_of(from, "*", true, "*"), exact(&["*"], Some("*")));
+        assert_eq!(
+            value_of(from, "contact:c-1", false, "*"),
+            TermsValue::Contact("c-1".into())
+        );
         let label = key("label").unwrap();
         assert_eq!(
             value_of(label, "a@b.c", false, "*"),
-            TermsValue::Partial("a@b.c".into()),
+            TermsValue::Partial {
+                text: "a@b.c".into(),
+                by_name: false
+            },
             "a label is never a person"
         );
-        assert_eq!(value_of(label, "Work", true, "*"), exact(&["Work"]));
+        assert_eq!(value_of(label, "Work", true, "*"), exact(&["Work"], None));
+        assert_eq!(
+            value_of(label, "contact:c-1", false, "*"),
+            TermsValue::Partial {
+                text: "contact:c-1".into(),
+                by_name: false
+            }
+        );
     }
 }

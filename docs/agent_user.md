@@ -313,7 +313,9 @@ Pick the surface that fits the question:
   `with:` (also `involves:`, any role), and `label:` an email's labels;
   a handle (`email:a@b.c`, or `a@b.c`, `+1…`) or a quoted value
   (`from:"Will Riker"`) matches whole, case-blind, anything else in
-  part. `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
+  part; a name also matches every handle a source showed under it, and
+  `contact:<id>` (`with:contact:<id>`) every handle linked to that
+  contact in the contacts app, its members' too for a group. `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
   the values one takes, most rows first. A key the search does not
   have is refused by name, in `refused`, rather than ignored. Free text
   made only of uuids and handles (an email address, `tel:+…`,

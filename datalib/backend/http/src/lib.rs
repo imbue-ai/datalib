@@ -2044,7 +2044,11 @@ async fn log_values(
     Ok(Json(
         values
             .into_iter()
-            .map(|(value, count)| datalib_columns::ValueSuggestion { value, count })
+            .map(|(value, count)| datalib_columns::ValueSuggestion {
+                value,
+                count,
+                label: None,
+            })
             .collect(),
     ))
 }

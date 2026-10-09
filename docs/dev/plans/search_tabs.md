@@ -190,6 +190,15 @@ kind for each ([`search_autocomplete.md`](search_autocomplete.md)
 pure function in code (`affinity(kind)`): a row's own id outranks a
 `to`, a `to` outranks a `cc`, a `title` outranks a `name`.
 
+**The names each handle went by** are a table of their own beside the
+terms, `names (handle, name)`, with an index on the name, case-blind.
+`grid_index` fills it from each row's author and author handle and from
+every source's record of a person (`source_contacts`), rewritten whole
+when the terms are. It is what lets a name reach a handle no row ever
+showed under that name: `from:"Number One"` finds Riker's Slack
+messages ([`search_autocomplete.md`](search_autocomplete.md) §"The
+keys").
+
 **Which rows carry a person, and in what role:**
 
 - **On the item, not the document.** A message, a reaction, an email

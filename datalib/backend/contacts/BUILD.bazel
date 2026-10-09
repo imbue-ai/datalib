@@ -8,6 +8,7 @@ rust_library(
     srcs = [
         "src/drafts.rs",
         "src/lib.rs",
+        "src/read.rs",
         "src/schema.rs",
     ],
     crate_name = "datalib_contacts",

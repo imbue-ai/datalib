@@ -181,6 +181,7 @@ pub fn words_holding(words: &[&'static str], typed: &str) -> Vec<ValueSuggestion
         .map(|w| ValueSuggestion {
             value: (*w).to_string(),
             count: None,
+            label: None,
         })
         .collect()
 }
@@ -191,6 +192,7 @@ pub fn counted(values: Vec<(String, u64)>) -> Vec<ValueSuggestion> {
         .map(|(value, count)| ValueSuggestion {
             value,
             count: Some(count),
+            label: None,
         })
         .collect()
 }
