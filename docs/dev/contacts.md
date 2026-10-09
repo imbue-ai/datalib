@@ -468,7 +468,7 @@ hold each row's people by handle:
 | `to:`, `cc:`, `bcc:` | was in that header |
 | `recipient:` | was in any of them |
 | `mention:` | was mentioned, where the source marks a mention up |
-| `with:` (and `involves:`) | had any role |
+| `with:` (and `involves:`) | had any role, or is who a contact's card is about |
 
 A value that is a handle (`email:riker@enterprise.org`, or simply
 `riker@enterprise.org`, `+12025550101`) matches that handle exactly, and
@@ -477,6 +477,11 @@ handle or name whole (`from:"Will Riker"`); anything else matches any
 handle or name holding it, so `from:riker` finds Riker under every
 spelling a source used, and anyone else whose name holds it. A chip's
 "Everything from <name>" writes `from:<handle>`.
+
+A contact's card answers `with:` and never `from:`: contact-common
+supplies an `about` search term for each handle the card holds and each
+name it gives, and nobody wrote the card. So `with:riker` finds his card
+beside everything he took part in.
 
 **Search cannot yet ask "everything from Riker, whatever handle he
 used".** Links sit over the view, so the search terms know handles and

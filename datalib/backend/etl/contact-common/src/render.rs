@@ -18,6 +18,7 @@ use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
+use datalib_schema::search_terms::{SearchTermKind, SuppliedSearchTerm};
 
 use datalib_contact_schema::{is_drawable_photo, ContactHandle, Medium, NormalizedContact, Photo};
 use datalib_handle::Handle;
@@ -135,6 +136,10 @@ fn render_one(
 
     let mut problems: Vec<ProblemRow> = Vec::new();
     let row = build_grid_row(profile, doc, source_id, &md_rel, &mut problems);
+    let search_terms = match &row {
+        Some(row) => about_terms(&row.uuid, contact),
+        None => Vec::new(),
+    };
 
     // `row` reaches the index through `on_doc_complete` below; the
     // renderer writes no projection of its own any more.
@@ -150,7 +155,7 @@ fn render_one(
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
         sections,
-        search_terms: Vec::new(),
+        search_terms,
         edges: Vec::new(),
         // The page is about this person, so it carries them: the index
         // can then say who any of their handles is, and where their
@@ -234,6 +239,34 @@ pub fn table_rows(contact: &NormalizedContact) -> Vec<(String, String)> {
         rows.push(("Note".to_string(), note.clone()));
     }
     rows
+}
+
+/// Who the card is about, as `with:` finds it: each handle it holds and
+/// each name it gives.
+fn about_terms(uuid: &str, contact: &NormalizedContact) -> Vec<SuppliedSearchTerm> {
+    let handles = contact
+        .handles
+        .iter()
+        .filter_map(|h| h.handle.as_ref())
+        .map(|h| h.as_str().to_string());
+    let names = contact
+        .names
+        .iter()
+        .map(|n| n.trim())
+        .filter(|n| !n.is_empty())
+        .map(str::to_string);
+    let mut out: Vec<SuppliedSearchTerm> = Vec::new();
+    for value in handles.chain(names) {
+        let term = SuppliedSearchTerm {
+            uuid: uuid.to_string(),
+            kind: SearchTermKind::About,
+            value,
+        };
+        if !out.contains(&term) {
+            out.push(term);
+        }
+    }
+    out
 }
 
 /// A contact's first email address or phone number, as the source wrote it.
@@ -745,6 +778,32 @@ mod tests {
             Some("tel:+12025550101")
         );
         assert_eq!(h(None, Some("(202) 555-0101")), None);
+    }
+
+    /// `with:` finds a card by each handle it holds and each name it
+    /// gives; a number with no country code makes no handle, so no term.
+    #[test]
+    fn a_card_is_about_its_handles_and_names() {
+        let mut c = mk_contact().contact;
+        c.names = vec!["Will Riker".into(), "Number One".into()];
+        c.handles = vec![
+            ContactHandle::email(None, "riker@enterprise.org"),
+            ContactHandle::email(None, "Riker@Enterprise.org"),
+            ContactHandle::phone(None, "(555) 010-1234"),
+        ];
+        let terms: Vec<(SearchTermKind, String)> = about_terms("u", &c)
+            .into_iter()
+            .map(|t| (t.kind, t.value))
+            .collect();
+        let about = |v: &str| (SearchTermKind::About, v.to_string());
+        assert_eq!(
+            terms,
+            [
+                about("email:riker@enterprise.org"),
+                about("Will Riker"),
+                about("Number One")
+            ]
+        );
     }
 
     /// A group's page lists its members, each a chip where the member has

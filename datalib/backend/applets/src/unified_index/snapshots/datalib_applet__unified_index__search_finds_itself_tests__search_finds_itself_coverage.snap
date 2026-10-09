@@ -27,6 +27,9 @@ diff_changed_columns:
 email:
   checked: linkedin 1, tng_contacts 8, tng_contacts-diff 4
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-takeout, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_email, tng_pdfs, whatsapp, yolink
+fields: about
+  checked: facebook 3, linkedin 4, tng_contacts 24
+  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, garmin, github, gitlab, google-takeout, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_contacts-diff, tng_email, tng_pdfs, whatsapp, yolink
 fields: author
   checked: beeper 12, chatgpt-api 28, claude-api 64, claude-code 26, codex 36, facebook 21, garmin 1, github 10, gitlab 9, google-takeout 30, linkedin 8, notion 8, ship-air 2, signal 12, slack 23, slack-diff 10, sms-backup-restore 9, tng_calendar 5, tng_email 6, tng_pdfs 7, whatsapp 24, yolink 4
   never: datalib, tng_contacts, tng_contacts-diff
@@ -103,8 +106,8 @@ terms: to:
   checked: tng_email 6
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
 terms: with:
-  checked: beeper 12, chatgpt-api 28, claude-api 64, claude-code 26, codex 36, facebook 21, garmin 1, github 10, gitlab 9, google-takeout 37, linkedin 8, notion 8, ship-air 2, signal 21, slack 47, slack-diff 20, sms-backup-restore 13, tng_calendar 5, tng_email 22, tng_pdfs 7, whatsapp 41, yolink 4
-  never: datalib, tng_contacts, tng_contacts-diff
+  checked: beeper 12, chatgpt-api 28, claude-api 64, claude-code 26, codex 36, facebook 24, garmin 1, github 10, gitlab 9, google-takeout 37, linkedin 12, notion 8, ship-air 2, signal 21, slack 47, slack-diff 20, sms-backup-restore 13, tng_calendar 5, tng_contacts 24, tng_email 22, tng_pdfs 7, whatsapp 41, yolink 4
+  never: datalib, tng_contacts-diff
 touched_at:
   checked: beeper 18, chatgpt-api 33, claude-api 66, claude-code 29, codex 40, datalib 220, facebook 24, garmin 2, github 10, gitlab 9, google-takeout 31, linkedin 14, notion 8, ship-air 3, signal 13, slack 35, slack-diff 13, sms-backup-restore 12, tng_calendar 9, tng_contacts 5, tng_contacts-diff 3, tng_email 10, tng_pdfs 5, whatsapp 29, yolink 5
 words: its rarest word
