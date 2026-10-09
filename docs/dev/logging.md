@@ -175,11 +175,12 @@ earlier ones, and the pages of the app); Manage opens it through
 on a Failed row. Selecting a line
 opens `logLineView(seq)` beside it: the whole message, the fields as a
 tree with copy and keep / exclude, the source link at the process's
-commit, both clocks. The grid shows Time, Group, Step, Level, Stream,
+commit, both clocks. The grid shows Time, Step, Level, Stream,
 Source, Message and Fields; the columns that would say the same thing on line
 after line of one process's log — run, process, commit, thread, target
-— start hidden, and the grid menu at the top right puts any of them
-back. The search bar takes the grammar every grid
+— start hidden, as does Group, which the Step chip already names
+("Slack · Download"), and the grid menu at the top right puts any of
+them back. The search bar takes the grammar every grid
 shares: the keys are the columns — `run`, `process`, `step`, `group`,
 `level`, `stream`, `target`, `thread`, `msg` — plus `process_id` and `attempt`,
 `min_level:warn` (this level and above) and `commit:0fc29cb` (prefix).

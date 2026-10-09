@@ -793,34 +793,42 @@ fn app_window<'a>(
             open_externally(&nav_app, next);
             false
         })
-        .on_new_window(move |url, features: NewWindowFeatures| {
+        .on_new_window(move |url, _features: NewWindowFeatures| {
             if leaves_the_app(&url, &new_app) {
                 open_externally(&new_app, &url);
-                return NewWindowResponse::Deny;
+            } else {
+                open_card_window(&new_app, url);
             }
-            let label = format!("card-{}", OPENED_WINDOWS.fetch_add(1, Ordering::Relaxed));
-            // `about:blank`: the opener drives the load, as `window.open`
-            // does in a browser. `window_features` hands the new webview
-            // the opener's configuration, which macOS requires and which
-            // is also what makes the two share the session cookie.
-            let blank: Url = "about:blank".parse().expect("about:blank parses");
-            let built = app_window(
-                WebviewWindowBuilder::new(&new_app, &label, WebviewUrl::External(blank))
-                    .title("Data Liberation")
-                    .inner_size(1100.0, 760.0)
-                    .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
-                    .window_features(features),
-                &new_app,
-            )
-            .build();
-            match built {
-                Ok(window) => NewWindowResponse::Create { window },
-                Err(e) => {
-                    eprintln!("could not open a window for {url}: {e}");
-                    NewWindowResponse::Deny
-                }
-            }
+            NewWindowResponse::Deny
         })
+}
+
+/// A second window of the app at `url`, built afresh rather than handed
+/// back to WebKit as the answer to `window.open`. That answer must use
+/// the opener's configuration, scripts included, and Tauri's script
+/// naming the window (`__TAURI_INTERNALS__.metadata`) cannot be
+/// redefined, so the opener's runs first and wins: the new window
+/// believed it was `main`, and dragging its toolbar moved the main
+/// window. Both windows use the default website data store, so they
+/// still share the session cookie. Built on a task, not in the
+/// callback: Tauri warns that building a window from a synchronous
+/// handler deadlocks on Windows.
+fn open_card_window(app: &AppHandle, url: Url) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let label = format!("card-{}", OPENED_WINDOWS.fetch_add(1, Ordering::Relaxed));
+        let built = app_window(
+            WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url.clone()))
+                .title("Data Liberation")
+                .inner_size(1100.0, 760.0)
+                .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
+            &app,
+        )
+        .build();
+        if let Err(e) = built {
+            eprintln!("could not open a window for {url}: {e}");
+        }
+    });
 }
 
 fn open_externally(app: &AppHandle, url: &Url) {
