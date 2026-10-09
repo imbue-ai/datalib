@@ -1181,12 +1181,6 @@ inputs = ["facebook/keyword_index"]
 # File-backed: point `export.path` at an unzipped LinkedIn "Get a copy
 # of your data" export. Download ingests every CSV; render emits the
 # message feeds and your connections (as first-class contacts).
-#
-# `fetch_photos` (default false) scrapes each connection's public profile
-# `og:image` into the per-source CAS, once per connection — transient
-# bot-blocks aren't recorded, so they retry on later runs. The
-# `download_params` override below bounds that: stop the photo sweep after
-# 20 consecutive failures (LinkedIn rate-limits bursts).
 [[groups]]
 id = "linkedin"
 type = "linkedin"
@@ -1197,10 +1191,6 @@ function = "ingest"
 
 [steps.params.export]
 path = "~/backups/LinkedInDataExport"
-fetch_photos = true
-
-[steps.params.common.download_params]
-maximum_sequential_failed_requests = 20
 
 [[steps]]
 group = "linkedin"

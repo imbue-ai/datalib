@@ -192,11 +192,19 @@ pub fn full_ddl() -> Vec<String> {
 
 /// The raw store's migration ladder (etl/README.md §"The migration
 /// ladder").
-pub const LADDER: &[Migration] = &[Migration {
-    version: 1,
-    name: "the Maps, YouTube history and Gemini files are read again by their fixed readers",
-    apply: |conn| Box::pin(read_again(conn, REREAD_V1)),
-}];
+pub const LADDER: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "the Maps, YouTube history and Gemini files are read again by their fixed readers",
+        apply: |conn| Box::pin(read_again(conn, REREAD_V1)),
+    },
+    Migration {
+        version: 2,
+        name: "the YouTube history, Gemini and Chat files are read again for time zones \
+               outside North America",
+        apply: |conn| Box::pin(read_again(conn, REREAD_V2)),
+    },
+];
 
 /// The feeds whose reader changed what it makes of an unchanged file:
 /// a Maps photo's media, a saved place keyed by its address, entity
@@ -206,6 +214,15 @@ pub const REREAD_V1: &[&str] = &[
     "google_takeout/maps_saved_places",
     "google_takeout/youtube_watch_history",
     "google_takeout/gemini_apps",
+];
+
+/// The feeds whose timestamps name a zone: one the reader did not know
+/// (`CEST`, `GMT+2`) left a YouTube watch or a Chat message with no time,
+/// and a Gemini file unread.
+pub const REREAD_V2: &[&str] = &[
+    "google_takeout/youtube_watch_history",
+    "google_takeout/gemini_apps",
+    "google_takeout/google_chat",
 ];
 
 /// Forget what these feeds' files hashed to, so the next sync reads

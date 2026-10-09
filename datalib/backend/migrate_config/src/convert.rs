@@ -310,11 +310,10 @@ fn rewrite_ingest_params(ty: &str, params: &mut toml::Table) -> Result<()> {
             insert(params, "export", with_path(feeds, input_path));
         }
         "linkedin" => {
-            let mut t = with_path(toml::Table::new(), input_path);
-            if let Some(photos) = params.remove("fetch_photos") {
-                t.insert("fetch_photos".into(), photos);
-            }
-            insert(params, "export", t);
+            // The photo fetch went: linkedin.com shows a profile only to a
+            // signed-in visitor.
+            params.remove("fetch_photos");
+            insert(params, "export", with_path(toml::Table::new(), input_path));
         }
         "fsindex" | "pdf" | "media" => {
             insert(params, "fswalk", with_path(toml::Table::new(), input_path));

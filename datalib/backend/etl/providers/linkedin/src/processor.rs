@@ -16,8 +16,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: always present — ingest the export CSVs (and
-/// optionally photos).
+/// Ingest wave: always present — ingest the export CSVs.
 pub fn plan_ingest(
     ctx: PlanContext,
     config: LinkedinConfig,
@@ -28,16 +27,10 @@ pub fn plan_ingest(
         .export
         .as_ref()
         .ok_or_else(|| anyhow!("linkedin source {name} missing `export.path`"))?;
-    let input_path = export.path();
-    let max_sequential_failures = config.common.download_params.max_sequential_failures();
     Ok(vec![Box::new(LinkedinIngest {
         id: format!("linkedin/{name}/download"),
         raw_path,
-        input_path,
-        fetch_photos: export.fetch_photos,
-        // The shared give-up knob, baked in at plan time: stop the photo
-        // sweep after this many consecutive failures.
-        photo_max_consecutive_failures: max_sequential_failures,
+        input_path: export.path(),
     })])
 }
 
@@ -46,8 +39,6 @@ struct LinkedinIngest {
     id: String,
     raw_path: PathBuf,
     input_path: PathBuf,
-    fetch_photos: bool,
-    photo_max_consecutive_failures: u64,
 }
 
 #[async_trait]
@@ -64,10 +55,6 @@ impl DataProcessor for LinkedinIngest {
             let s = ingest::fetch(ingest::FetchOptions {
                 db,
                 input_path: self.input_path.clone(),
-                fetch_photos: self.fetch_photos,
-                // Piggyback the shared give-up knob: stop the photo sweep after
-                // this many consecutive failures.
-                photo_max_consecutive_failures: self.photo_max_consecutive_failures,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
             })

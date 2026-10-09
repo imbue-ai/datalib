@@ -3,4 +3,3 @@
 
 pub mod ingest;
 pub mod processor;
-pub mod synthesize;

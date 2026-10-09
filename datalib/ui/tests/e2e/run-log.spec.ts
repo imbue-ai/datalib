@@ -240,8 +240,8 @@ test("a long log opens on its newest lines and reads older ones as it is scrolle
   );
 });
 
-// The log opens on the eight columns a reader wants on every line. The
-// other five are hidden rather than gone, and the grid menu's column
+// The log opens on the seven columns a reader wants on every line. The
+// other six are hidden rather than gone, and the grid menu's column
 // picker is the only way back to them — so this checks both halves:
 // what is up by default, and that a hidden one can be put back.
 test("the grid menu puts back a column the log starts without", async ({ page }) => {
@@ -249,7 +249,6 @@ test("the grid menu puts back a column the log starts without", async ({ page })
   const headers = dialog.locator(".rl-grid .slick-header-column");
   await expect(headers).toHaveText([
     "Time",
-    "Group",
     "Step",
     "Level",
     "Stream",
@@ -259,11 +258,11 @@ test("the grid menu puts back a column the log starts without", async ({ page })
   ]);
 
   await dialog.locator(".slick-grid-menu-button").click();
-  // The picker lists the hidden five as well, each with its box clear.
+  // The picker lists the hidden six as well, each with its box clear.
   const picker = page.locator(".slick-grid-menu .slick-column-picker-list").filter({
     hasText: "Thread",
   });
-  for (const name of ["Run", "Process", "Commit", "Thread", "Target"]) {
+  for (const name of ["Run", "Process", "Commit", "Group", "Thread", "Target"]) {
     await expect(picker.getByLabel(name, { exact: true })).not.toBeChecked();
   }
   await expect(picker.getByLabel("Time", { exact: true })).toBeChecked();
@@ -273,7 +272,6 @@ test("the grid menu puts back a column the log starts without", async ({ page })
   // Thread comes back where it sits in the set, not on the end.
   await expect(headers).toHaveText([
     "Time",
-    "Group",
     "Step",
     "Level",
     "Stream",
@@ -368,8 +366,8 @@ test("the copy key puts the selected lines on the clipboard as TSV", async ({ pa
 
   await expect.poll(readClipboard, { message: "nothing was copied" }).not.toBeNull();
   const lines = (await readClipboard())!.split("\n");
-  expect(lines[0]).toBe("Time\tGroup\tStep\tLevel\tStream\tSource\tMessage\tFields");
-  expect(lines.slice(1).map((l) => l.split("\t")[6])).toEqual(msgs);
+  expect(lines[0]).toBe("Time\tStep\tLevel\tStream\tSource\tMessage\tFields");
+  expect(lines.slice(1).map((l) => l.split("\t")[5])).toEqual(msgs);
 });
 
 /// Source is drawn from `fields`, so the grid's own Copy, which copies

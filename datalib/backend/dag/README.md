@@ -390,9 +390,9 @@ and the fix is on the group's line. The five warnings: a group nothing
 is filed under; a `name` written on a grouped step, whose label comes
 from the group; an applet filed under a group that does not exist; a
 `keyword_index` that `qmd_aggregator` does not read; and a built-in
-step's `common.always_clear_before_ingest`, which no longer does
-anything (`datalib-step` drops it before parsing, so the step still
-runs). The Manage screen's System row counts the warnings and shows
+step's `common.always_clear_before_ingest` or linkedin's
+`export.fetch_photos`, which no longer do anything (`datalib-step`
+drops them before parsing, so the step still runs). The Manage screen's System row counts the warnings and shows
 their words on hover. The retired
 shapes — `datalib-step download|render|grid_index|qmd_index` on a
 command line, and a built-in `qmd_index` step — are `Rejected`, because

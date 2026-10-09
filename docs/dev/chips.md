@@ -221,14 +221,15 @@ right-click away; linking a handle stays the popover's
 |---|---|---|---|
 | **click** | the link popover, where a contacts app is configured | nothing; the href is never followed | nothing; the href is never followed |
 | **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the group's sync dashboard | the step's log |
-| **right-click** | `chipMenu`: copy the name, the identifier or both; everything from them; link to a contact or edit the link | `entityMenu`: copy the name, the id or both; open its dashboard; browse its documents | `entityMenu`: copy; show its log |
+| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything from them; link to a contact or edit the link | `entityMenu`: copy the name, the id or both; open its dashboard; browse its documents | `entityMenu`: copy; show its log |
 | **hover** | the tooltip: who, the identifier, what each source calls them, their other handles | the tooltip: name and id, its type, its status | the same |
 | **copy** | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML | `Work Slack (datalib:group/slack)`, and the link | the same |
 
 A menu entry is an *id* the surface binds, never a handler, so a
 document and a grid cell draw the same entries and act on them their
 own way. A click with a modifier on a person chip is the browser's, as
-on any link; no click on a `datalib:` link ever leaves the app. A
+on any link; no click on a `datalib:` link ever leaves the app. The mail
+app opens only from the menu's Compose entry, through `openExternal`. A
 double-click opens a card by its card source (`cardSources.ts`, which
 carries no components, so naming a card does not load it).
 

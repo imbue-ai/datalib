@@ -20,7 +20,6 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/files:datalib_etl_files",
-        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:csv",
@@ -37,9 +36,6 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_linkedin",
     edition = "2021",
-    deps = [
-        "@datalib_crates//:tempfile",
-    ],
 )
 
 # End-to-end test: writes a synthetic export tree (Notes: preamble,
@@ -56,7 +52,6 @@ rust_test(
         ":datalib_etl_linkedin",
         "//datalib/backend/etl/providers/linkedin_render:datalib_etl_linkedin_render",
         "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",

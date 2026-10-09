@@ -67,12 +67,14 @@ fn main() {
     }
 
     // `bundle.resources` also lists `runtime/` — the Node runtime +
-    // latchkey/qmd package trees staged by stage-runtime.sh, which (like
-    // the binaries above) only runs under `tauri build`. Tauri validates
-    // the path at compile time, so make sure the directory exists for
-    // bare `cargo check`/`cargo build`. No read-only dance needed: the
+    // latchkey/qmd package trees — and `licenses/`, the third-party
+    // notices, both staged by stage-runtime.sh, which (like the binaries
+    // above) only runs under `tauri build`. Tauri validates the paths at
+    // compile time, so make sure the directories exist for bare
+    // `cargo check`/`cargo build`. No read-only dance needed: the
     // staging rsyncs writable copies out of Bazel's read-only outputs.
     let _ = fs::create_dir_all("runtime");
+    let _ = fs::create_dir_all("licenses");
 
     // Declaring the app's commands is what lets a capability grant one
     // to the main window, whose page comes from a remote origin (the

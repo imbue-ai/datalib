@@ -89,8 +89,8 @@ pub fn plan(
         }
     })?;
     crate::methods::refuse_retired_params(source_type, &source)?;
-    for key in crate::methods::drop_inert_params(&mut source) {
-        tracing::warn!(source = %name, "`common.{key}` has no effect; delete it from the config");
+    for path in crate::methods::drop_inert_params(&mut source) {
+        tracing::warn!(source = %name, "`{path}` has no effect; delete it from the config");
     }
     // Read before `source` is handed to serde: which of the provider's
     // declared methods these params hold. Judged after `validate`, so a
@@ -457,6 +457,23 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("unknown field"), "{err:#}");
+    }
+
+    /// LinkedIn's photo fetch went when linkedin.com stopped showing a
+    /// profile to anyone signed out; a config that turned it on still syncs.
+    #[test]
+    fn a_retired_linkedin_fetch_photos_key_still_plans() {
+        let td = tempfile::tempdir().unwrap();
+        for value in [true, false] {
+            plan(
+                "linkedin",
+                Phase::Ingest,
+                "linkedin",
+                raw_dir(td.path(), "linkedin", Phase::Ingest),
+                serde_json::json!({"export": {"path": "/tmp/li", "fetch_photos": value}}),
+            )
+            .unwrap();
+        }
     }
 
     #[test]

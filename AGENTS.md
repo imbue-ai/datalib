@@ -762,7 +762,7 @@ and its requests go out as `latchkey curl`:
 [`docs/dev/latchkey.md`](docs/dev/latchkey.md). A URL that carries its
 own authority skips latchkey and goes out as plain `curl` through the
 same HTTP layer (`HttpRequest::plain`): YoLink's signed CSV downloads,
-Notion's pre-signed file links, LinkedIn's public photos.
+Notion's pre-signed file links.
 Cloudflare-fronted hosts go through the bundled `curl-impersonate`
 ([`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md)); if
 Cloudflare still 403s, the IP or user agent may be flagged — wait it

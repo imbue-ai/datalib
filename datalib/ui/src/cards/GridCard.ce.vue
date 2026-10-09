@@ -58,6 +58,7 @@ import {
   chipCell,
   chipLook,
   chipMenu,
+  composeUri,
   handleKind,
   searchQueryFor,
   copyText as copyHandleText,
@@ -1593,6 +1594,7 @@ watch(
     if (specs.length === 0) return;
     const typed = typedColumns<Row>(specs, {
       overrides: columnOverrides,
+      onOpenDocument: (_uuid, row) => pickAndOpen(row),
       groupable: true,
       chips: {
         who: (h) => people.lookup(h),
@@ -1800,9 +1802,18 @@ const chipEntry = (id: ChipMenuEntry["id"], run: (m: MenuScope) => void) =>
   entry(`chip-${id}`, (m) => m.chip?.entries.find((e) => e.id === id)?.label ?? null, run);
 
 const menuItems: (MenuCommandItem | "divider")[] = [
-  chipEntry("copy-name", (m) => void copyToClipboard(m.chip!.name)),
+  chipEntry("open", (m) =>
+    props.ctx.host.openCards(personSource(m.chip!.handle, { seenIn: m.anchor?.source_id || null })),
+  ),
+  dividerAfter((m) => m.chip !== null),
+  chipEntry("compose", (m) => {
+    const mailto = composeUri(m.chip!.handle);
+    if (mailto) void openExternal(mailto);
+  }),
   chipEntry("copy-id", (m) => void copyToClipboard(handleValue(m.chip!.handle))),
+  chipEntry("copy-name", (m) => void copyToClipboard(m.chip!.name)),
   chipEntry("copy-both", (m) => void copyToClipboard(copyHandleText(m.chip!.handle, m.chip!.name))),
+  dividerAfter((m) => m.chip !== null),
   chipEntry("search", (m) => appendFilterToQuery(searchQueryFor(m.chip!.handle))),
   dividerAfter((m) => m.chip !== null),
   entityEntry("copy-name", (m) => void copyToClipboard(m.entity!.name)),
@@ -2174,6 +2185,21 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   if (doc) props.ctx.host.openCards(docSource(doc.md, doc.anchor));
 }
 
+/// A Document cell's link: the row is picked, as a click on the row
+/// picks it, and its document opens beside the grid — again, too, when
+/// the row was already the picked one and its document has been closed.
+function pickAndOpen(data: Row) {
+  if (!vueGrid) return;
+  const selected = selectedRows();
+  const at = vueGrid.dataView.getRowById(rowKey(data));
+  if (at != null && !(selected.length === 1 && rowKey(selected[0]) === rowKey(data))) {
+    vueGrid.slickGrid.setSelectedRows([at]);
+    return;
+  }
+  const doc = documentOf(data);
+  if (doc) props.ctx.host.openCards(docSource(doc.md, doc.anchor));
+}
+
 /// The chip under a pointer event in a cell, if any.
 function chipAt(e: SlickEventData): HTMLElement | null {
   const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
@@ -2197,6 +2223,10 @@ function onClick(e: SlickEventData, args: OnClickEventArgs) {
 }
 
 function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
+  // A document link's first click already opened the document beside
+  // the grid; the second is not a request for a window of it as well.
+  const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
+  if (target?.closest?.("a.tg-link")) return;
   // Double-click on a chip opens its card: a person's, led by this
   // row's source, or a group's dashboard or a step's log
   // (docs/dev/chips.md § Clicks).

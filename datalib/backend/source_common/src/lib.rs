@@ -218,8 +218,7 @@ impl Reach {
 /// a dotted path into the params (`api`, `gmail`, `export`) and
 /// what holding it means. A method is *held* when the path is written
 /// and its value is neither `null` nor `false`, so a table counts by
-/// presence (`api = {}` is a complete selection) and a flag such as
-/// linkedin's `export.fetch_photos` only when on.
+/// presence (`api = {}` is a complete selection).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct IngestMethod {
     pub path: &'static str,
