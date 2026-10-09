@@ -3,10 +3,11 @@ import type { SearchKeySpec } from "@/api";
 import { chipWords, completingAt, termValue, words } from "./queryText";
 
 const KEYS: SearchKeySpec[] = [
-  { key: "source_id", aliases: [], values: { kind: "source" } },
-  { key: "channel", aliases: [], values: { kind: "text" } },
-  { key: "step", aliases: [], values: { kind: "step" } },
-  { key: "author_handle", aliases: ["handle"], values: { kind: "text" } },
+  { key: "source_id", aliases: [], values: { kind: "source" }, partial: false },
+  { key: "channel", aliases: [], values: { kind: "text" }, partial: false },
+  { key: "step", aliases: [], values: { kind: "step" }, partial: false },
+  { key: "author_handle", aliases: ["handle"], values: { kind: "text" }, partial: false },
+  { key: "from", aliases: ["author"], values: { kind: "person" }, partial: true },
 ];
 
 /** `|` marks the cursor. */
@@ -75,6 +76,7 @@ describe("termValue", () => {
     expect(termValue("two words")).toBe('"two words"');
     expect(termValue("-leading")).toBe('"-leading"');
     expect(termValue('say "hi" \\ done')).toBe('"say \\"hi\\" \\\\ done"');
+    expect(termValue("Data", true)).toBe('"Data"');
   });
 });
 
@@ -82,11 +84,20 @@ describe("chipWords", () => {
   it("draws a source, a group or a step as its chip, by key or alias", () => {
     const q = "source_id:slack channel:bridge -step:slack/ingest";
     expect(
-      chipWords(q, KEYS).map(({ word, uri }) => [q.slice(word.valueFrom, word.to), uri]),
+      chipWords(q, KEYS).map(({ word, chip }) => [q.slice(word.valueFrom, word.to), chip]),
     ).toEqual([
-      ["slack", "datalib:group/slack"],
-      ["slack/ingest", "datalib:step/slack/ingest"],
+      ["slack", { kind: "entity", uri: "datalib:group/slack" }],
+      ["slack/ingest", { kind: "entity", uri: "datalib:step/slack/ingest" }],
     ]);
     expect(chipWords("nope:slack", KEYS)).toEqual([]);
+  });
+
+  /** A person is a chip only by a handle: a name matches in part. */
+  it("draws a person's handle as their chip, and leaves a name as text", () => {
+    const q = "from:email:riker@enterprise.org author:Riker author:tel:+12025550101";
+    expect(chipWords(q, KEYS).map(({ chip }) => chip)).toEqual([
+      { kind: "person", handle: "email:riker@enterprise.org" },
+      { kind: "person", handle: "tel:+12025550101" },
+    ]);
   });
 });

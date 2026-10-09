@@ -3,7 +3,7 @@
 //! reads inside one read transaction: one commit, and the plain tables'
 //! indexes (`docs/dev/plans/paged_grids.md`, "Pinned and indexed").
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -13,6 +13,7 @@ use sqlx::Row;
 use crate::db::{build_where, ChatMeta};
 use crate::group::{
     group_sql, like_pattern, values_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS,
+    MAX_VALUES,
 };
 use crate::problems::ProblemsQuery;
 use crate::qmd::GridRowRef;
@@ -20,6 +21,7 @@ use crate::query::ParsedQuery;
 use crate::repo::{DocRow, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow};
 use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
+use crate::terms_keys::ATTACHED_AS;
 use datalib_core::repo::RepoError;
 use datalib_pin::{is_missing_table, open_reader};
 use datalib_query::table::{Column, SearchTable};
@@ -35,9 +37,17 @@ pub struct DoltRepo {
     /// exists — a root that has never synced has none, and a reader must
     /// not be the thing that creates it. Filled on first use and kept: a
     /// table the step commits later is there in the next transaction.
-    pool: tokio::sync::Mutex<Option<SqlitePool>>,
+    pool: tokio::sync::Mutex<Option<Reader>>,
     db_path: PathBuf,
     root: Arc<PathBuf>,
+}
+
+/// The one read-only connection, and the search terms file attached to
+/// it, by inode: a file rebuilt under a new shape is a new file, and the
+/// old one stays attached until it is noticed.
+struct Reader {
+    pool: SqlitePool,
+    terms: Option<u64>,
 }
 
 /// One request's read of the index: a transaction on the read-only
@@ -46,6 +56,8 @@ pub struct DoltRepo {
 struct At {
     tx: sqlx::Transaction<'static, sqlx::Sqlite>,
     commit: String,
+    /// The search terms file is attached under [`ATTACHED_AS`].
+    terms: bool,
     grid_rows: &'static str,
     markdowns: &'static str,
     edges: &'static str,
@@ -199,6 +211,7 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .ok()
             .flatten(),
         author_ref: None,
+        author_term: None,
         channel: r.try_get(G::Channel.as_str()).unwrap_or_default(),
         source_url: r.try_get(G::SourceUrl.as_str()).unwrap_or_default(),
         notion_page_uuid: r.try_get(G::NotionPageUuid.as_str()).unwrap_or_default(),
@@ -250,18 +263,19 @@ impl DoltRepo {
         if !self.db_path.is_file() {
             return Ok(None);
         }
-        let pool = {
+        let (pool, terms) = {
             let mut slot = self.pool.lock().await;
-            match slot.as_ref() {
-                Some(pool) => pool.clone(),
-                None => {
-                    let pool = open_reader(&self.db_path)
-                        .await
-                        .map_err(|e| internal("open the grid index read-only", e))?;
-                    *slot = Some(pool.clone());
-                    pool
-                }
+            if slot.is_none() {
+                let pool = open_reader(&self.db_path)
+                    .await
+                    .map_err(|e| internal("open the grid index read-only", e))?;
+                *slot = Some(Reader { pool, terms: None });
             }
+            let reader = slot.as_mut().expect("opened above");
+            attach_terms(reader, &self.root)
+                .await
+                .map_err(|e| internal("attach the search terms", e))?;
+            (reader.pool.clone(), reader.terms.is_some())
         };
         let mut tx = pool
             .begin()
@@ -284,12 +298,74 @@ impl DoltRepo {
         Ok(Some(At {
             tx,
             commit,
+            terms,
             grid_rows: "grid_rows",
             markdowns: "markdowns",
             edges: "edges",
             problems: "problems",
         }))
     }
+}
+
+/// The values the search terms of `kinds` hold, holding one bound `LIKE`
+/// pattern, among the rows `where_sql` keeps in `grid_rows` (its values
+/// bound after the pattern): each with how many rows hold it, most first.
+pub fn term_values_sql(grid_rows: &str, where_sql: &str, kinds: &[u8]) -> String {
+    let s = ATTACHED_AS;
+    let codes: Vec<String> = kinds.iter().map(u8::to_string).collect();
+    let among = if where_sql.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " AND t.row_id IN (SELECT r.row_id FROM {s}.rows r \
+             WHERE r.uuid IN (SELECT uuid FROM {grid_rows}{where_sql}))"
+        )
+    };
+    format!(
+        "SELECT v.value, count(DISTINCT t.row_id) FROM {s}.terms t \
+         JOIN {s}.vals v ON v.val_id = t.val_id \
+         WHERE t.kind IN ({}) AND LOWER(v.value) LIKE ? ESCAPE '\\'{among} \
+         GROUP BY v.val_id ORDER BY 2 DESC, 1 LIMIT {MAX_VALUES}",
+        codes.join(", ")
+    )
+}
+
+/// Attaches the root's search terms file read-only under
+/// [`ATTACHED_AS`], so a term on a terms key is a clause of the grid's own
+/// query (`crate::terms_keys`). Outside any transaction, as SQLite
+/// requires; the file has no WAL through doltlite (dolthub/doltlite#3740),
+/// so a reader in a transaction holds off the terms writer for as long as
+/// it reads, which each request's transaction keeps short.
+async fn attach_terms(reader: &mut Reader, root: &Path) -> Result<(), sqlx::Error> {
+    use std::os::unix::fs::MetadataExt;
+    let path = datalib_runtime::layout::search_terms_db(root);
+    let now = std::fs::metadata(&path).ok().map(|m| m.ino());
+    if now == reader.terms {
+        return Ok(());
+    }
+    let mut conn = reader.pool.acquire().await?;
+    if reader.terms.is_some() {
+        // Audited: a fixed schema name.
+        let detach = format!("DETACH DATABASE {ATTACHED_AS}");
+        sqlx::query(sqlx::AssertSqlSafe(detach))
+            .execute(&mut *conn)
+            .await?;
+        reader.terms = None;
+    }
+    if now.is_some() {
+        let uri = format!("{}&mode=ro", datalib_runtime::plain_sqlite::uri(&path));
+        // Audited: the path comes from the data root's layout, escaped for
+        // a URI, and any quote in it doubled for the SQL string.
+        let attach = format!(
+            "ATTACH DATABASE '{}' AS {ATTACHED_AS}",
+            uri.replace('\'', "''")
+        );
+        sqlx::query(sqlx::AssertSqlSafe(attach))
+            .execute(&mut *conn)
+            .await?;
+        reader.terms = now;
+    }
+    Ok(())
 }
 
 /// One group as `group_sql` counts it: its values, its count, and its
@@ -635,6 +711,36 @@ impl IndexRepo for DoltRepo {
         let (where_sql, params) = where_within(q, &[]);
         at.value_counts(at.grid_rows, &where_sql, &params, column, typed)
             .await
+    }
+
+    async fn term_value_counts(
+        &self,
+        q: &ParsedQuery,
+        kinds: &[u8],
+        typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        if !at.terms || kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (where_sql, params) = where_within(q, &[]);
+        let sql = term_values_sql(at.grid_rows, &where_sql, kinds);
+        // Audited: the kinds are the enum's codes, the table names are
+        // `&'static str`, and every value is bound.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(like_pattern(typed));
+        for p in &params {
+            query = query.bind(p);
+        }
+        let rows = query
+            .fetch_all(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
+        Ok(rows
+            .iter()
+            .map(|r| (r.get::<String, _>(0), r.get::<i64, _>(1) as u64))
+            .collect())
     }
 
     async fn problem_value_counts(

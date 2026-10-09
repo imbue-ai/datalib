@@ -92,7 +92,8 @@ test("the menu's search opens everything from the person", async ({ page, reques
 
   await chip.click({ button: "right" });
   await page.locator(".chip-menu .chip-menu-item", { hasText: /^Everything from / }).click();
-  await expect(page.locator(SEARCH_INPUT)).toHaveAttribute("data-query", /^author:/, {
+  // By the handle itself, which the search bar draws as the person's chip.
+  await expect(page.locator(SEARCH_INPUT)).toHaveAttribute("data-query", /^from:slack:/, {
     timeout: 10_000,
   });
 });
@@ -115,7 +116,8 @@ test("a double-click opens the person's card, led by the document's source", asy
 
   // Everything from them is a search, opened beside the card.
   await card.getByRole("button", { name: "Everything from them" }).click();
-  await expect(page.locator(SEARCH_INPUT)).toHaveAttribute("data-query", /^author:/, {
+  // By the handle itself, which the search bar draws as the person's chip.
+  await expect(page.locator(SEARCH_INPUT)).toHaveAttribute("data-query", /^from:slack:/, {
     timeout: 10_000,
   });
 });

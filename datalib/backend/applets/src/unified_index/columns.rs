@@ -18,6 +18,7 @@ use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::search::SearchRow;
+use datalib_unified_index::terms_keys::TERMS_KEYS;
 use datalib_unified_index::view::{self, View};
 use serde::Deserialize;
 
@@ -88,6 +89,7 @@ pub fn keys_of<T: SearchTable>() -> Vec<SearchKeySpec> {
         key,
         aliases: &[],
         values,
+        partial: false,
     };
     let mut keys: Vec<SearchKeySpec> = T::KEYS
         .iter()
@@ -101,6 +103,7 @@ pub fn keys_of<T: SearchTable>() -> Vec<SearchKeySpec> {
                 None if k.column.as_str() == "source_id" => KeyValues::Source,
                 None => KeyValues::Text,
             },
+            partial: false,
         })
         .collect();
     if T::RANGE.is_some() {
@@ -115,6 +118,22 @@ pub fn keys_of<T: SearchTable>() -> Vec<SearchKeySpec> {
         keys.push(key("qmd", KeyValues::Text));
         keys.push(key("qmd_vsearch", KeyValues::Text));
     }
+    keys
+}
+
+/// The grid's keys: its columns' and those that read the search terms.
+pub fn grid_keys() -> Vec<SearchKeySpec> {
+    let mut keys = keys_of::<GridRow>();
+    keys.extend(TERMS_KEYS.iter().map(|k| SearchKeySpec {
+        key: k.key,
+        aliases: k.aliases,
+        values: if k.person {
+            KeyValues::Person
+        } else {
+            KeyValues::Text
+        },
+        partial: true,
+    }));
     keys
 }
 
@@ -183,6 +202,7 @@ pub fn searchable<V: View>(mut columns: Vec<ColumnSpec>) -> Vec<ColumnSpec> {
         c.search = view::for_column::<V>(&c.field).map(|(key, field)| ColumnSearch {
             key: key.into(),
             field: field.into(),
+            partial: datalib_unified_index::terms_keys::key(key).is_some(),
         });
     }
     columns
@@ -235,7 +255,7 @@ fn declared() -> Vec<ColumnSpec> {
         ColumnSpec::new("author_ref", "Author", ColumnType::Identity).describe(
             "Who wrote it, as the source showed them. Where the source has an identifier \
              for them — an address, a number, a Slack user — the cell is a chip the \
-             contacts app resolves, and `author_handle:` filters on that identifier.",
+             contacts app resolves, and `from:` finds it by that identifier.",
         ),
         ColumnSpec::new("account", "Account", ColumnType::Text).hidden(),
         ColumnSpec::new("org_name", "Org", ColumnType::Text).hidden(),
@@ -331,6 +351,11 @@ impl Sources {
         }
         row.source_ref = Some(source);
         row.author_ref = author_identity(&row.author, row.author_handle.as_deref());
+        row.author_term = row
+            .author_handle
+            .clone()
+            .or_else(|| Some(row.author.clone()))
+            .filter(|t| !t.is_empty());
     }
 
     /// The source as the grid shows it: the name the config gives the
@@ -384,7 +409,7 @@ mod tests {
     /// values are, so the bar can draw a source as its chip.
     #[test]
     fn the_grid_offers_every_key_it_reads() {
-        let keys = keys_of::<GridRow>();
+        let keys = grid_keys();
         assert_eq!(values_of(&keys, "source_id"), KeyValues::Source);
         assert_eq!(values_of(&keys, "channel"), KeyValues::Text);
         assert_eq!(values_of(&keys, "before"), KeyValues::Stamp);
@@ -395,6 +420,10 @@ mod tests {
             }
         );
         assert_eq!(values_of(&keys, "qmd_vsearch"), KeyValues::Text);
+        assert_eq!(values_of(&keys, "from"), KeyValues::Person);
+        assert_eq!(values_of(&keys, "label"), KeyValues::Text);
+        let from = keys.iter().find(|k| k.key == "from").unwrap();
+        assert_eq!(from.aliases, ["author", "author_handle"]);
         for k in &keys {
             let value = match &k.values {
                 KeyValues::Words { words } => words[0],
@@ -436,7 +465,13 @@ mod tests {
     /// the term's value from.
     #[test]
     fn every_column_but_score_and_contents_says_how_to_search_it() {
-        let row = serde_json::to_value(SearchRow::default()).unwrap();
+        // A row as the applet sends it, with what it resolves filled in.
+        let mut row = SearchRow {
+            author: "Worf".into(),
+            ..SearchRow::default()
+        };
+        Sources::read(Path::new("/nonexistent")).resolve(&mut row);
+        let row = serde_json::to_value(row).unwrap();
         for c in columns() {
             match (&c.search, c.field.as_str()) {
                 (None, "score" | "snippet") => {}
@@ -492,6 +527,7 @@ mod tests {
             author: "who".into(),
             author_handle: None,
             author_ref: None,
+            author_term: None,
             channel: "#c".into(),
             source_url: "https://x".into(),
             notion_page_uuid: "n".into(),
@@ -517,6 +553,7 @@ mod tests {
             "sender",
             "author",
             "author_handle",
+            "author_term",
             "entire_chat",
             "source",
             "provider",

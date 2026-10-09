@@ -78,5 +78,6 @@ describe("filterToken", () => {
     expect(filterToken("k", "two words", true)).toBe('-k:"two words"');
     expect(filterToken("k", "-leading", false)).toBe('k:"-leading"');
     expect(quoteValue("a:b")).toBe('"a:b"');
+    expect(filterToken("from", "Data", false, true)).toBe('from:"Data"');
   });
 });

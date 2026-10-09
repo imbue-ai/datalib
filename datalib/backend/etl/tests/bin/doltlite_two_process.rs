@@ -1015,8 +1015,14 @@ async fn rev_read(args: &Args) -> Result<Value> {
 /// `rev-read` with the terms file attached: each window opens `main`'s tip
 /// detached, attaches the plain SQLite terms file read-only, and samples
 /// one statement that counts the full-text index, the terms table, and
-/// the terms whose row is in the commit.
+/// the terms whose row is in the commit. With `--pinned`, it reads as the
+/// search applet does (`DoltRepo::pinned`): one read-only connection on
+/// `main`, the file attached once outside any transaction, and each
+/// window a transaction that holds one commit while it samples.
 async fn terms_read(args: &Args) -> Result<Value> {
+    if args.flag("pinned") {
+        return pinned_terms_read(args).await;
+    }
     let db = args.path("db")?;
     let terms = args.path("terms")?;
     let until = args.path("until")?;
@@ -1068,6 +1074,76 @@ async fn terms_read(args: &Args) -> Result<Value> {
         }
         txn += 1;
     }
+    Ok(json!({ "role": "terms-read", "samples": samples, "errors": errors }))
+}
+
+async fn pinned_terms_read(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let terms = args.path("terms")?;
+    let until = args.path("until")?;
+    let hold = Duration::from_millis(args.num("hold-ms", 100));
+    let interval = Duration::from_millis(args.num("interval-ms", 5));
+    let pool = datalib_pin::open_reader(&db)
+        .await
+        .context("open main read-only")?;
+    // Audited: the path is this test's own tempdir, and has no quote in it.
+    let attach = format!(
+        "ATTACH 'file:{}?doltlite_engine=sqlite&mode=ro' AS t",
+        terms.display()
+    );
+    sqlx::query(sqlx::AssertSqlSafe(attach))
+        .execute(&pool)
+        .await
+        .context("attach the terms file")?;
+    write_atomic(&args.path("ready-out")?, b"ready")?;
+    let sample_sql = "SELECT \
+        (SELECT COUNT(*) FROM t.terms_fts WHERE terms_fts MATCH 'email*'), \
+        (SELECT COUNT(*) FROM t.terms), \
+        (SELECT COUNT(*) FROM t.terms x JOIN entities g ON g.id = x.uuid), \
+        (SELECT COUNT(*) FROM entities)";
+    let mut samples: Vec<Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut txn = 0u64;
+    while !until.exists() {
+        let window = async {
+            let mut tx = pool.begin().await.context("begin")?;
+            let _: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master")
+                .fetch_one(&mut *tx)
+                .await
+                .context("load the commit")?;
+            let head: String = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
+                .fetch_one(&mut *tx)
+                .await
+                .context("read the commit")?;
+            // At least one sample: a request is a transaction around one
+            // query, which `--hold-ms 0` reads as.
+            let opened = Instant::now();
+            loop {
+                let started = Instant::now();
+                let row: (i64, i64, i64, i64) = sqlx::query_as(sample_sql)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .context("sample")?;
+                samples.push(json!({
+                    "txn": txn, "at_ms": now_ms(), "head": head,
+                    "ms": started.elapsed().as_millis() as u64,
+                    "fts": row.0, "terms": row.1, "joined": row.2, "rows": row.3,
+                }));
+                if opened.elapsed() >= hold || until.exists() {
+                    break;
+                }
+                tokio::time::sleep(interval).await;
+            }
+            tx.commit().await.context("end the read")?;
+            tokio::time::sleep(interval).await;
+            anyhow::Ok(())
+        };
+        if let Err(e) = window.await {
+            errors.push(format!("window {txn}: {e:#}"));
+        }
+        txn += 1;
+    }
+    pool.close().await;
     Ok(json!({ "role": "terms-read", "samples": samples, "errors": errors }))
 }
 

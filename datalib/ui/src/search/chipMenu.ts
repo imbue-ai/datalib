@@ -1,22 +1,27 @@
 // What a chip in the search field does beyond what it does everywhere:
-// its right-click menu is the chip's own (`entityMenu`) after the
-// field's entries, and the edits those entries make to the query.
-import { entityMenu, type EntityMenuEntry, type EntityMenuId } from "@/cards/entities";
+// its right-click menu is the field's entries followed by the chip's own
+// (`entityMenu` for a source, group or step, `chipMenu` for a person), and
+// the edits the field's entries make to the query.
+import type { ChipMenuId } from "@/cards/contacts";
+import type { EntityMenuId } from "@/cards/entities";
 import type { Word } from "./queryText";
 
-export type FieldMenuId = "edit" | "toggle-negate" | EntityMenuId;
+export type FieldMenuId = "edit-text" | "toggle-negate" | EntityMenuId | ChipMenuId;
 export type FieldMenuEntry = { id: FieldMenuId; label: string; separator?: boolean };
 
 /** The menu on a chip in the field: edit it as text, exclude or include
- *  what it names, then everything the chip offers anywhere. */
-export function fieldChipMenu(uri: string, name: string, negate: boolean): FieldMenuEntry[] {
-  const own: FieldMenuEntry[] = [
-    { id: "edit", label: "Edit as text" },
+ *  what it names, then `own`, everything the chip offers anywhere. */
+export function fieldChipMenu(
+  name: string,
+  negate: boolean,
+  own: FieldMenuEntry[],
+): FieldMenuEntry[] {
+  const field: FieldMenuEntry[] = [
+    { id: "edit-text", label: "Edit as text" },
     { id: "toggle-negate", label: negate ? `Include ${name} instead` : `Exclude ${name}` },
   ];
-  const chip: EntityMenuEntry[] = entityMenu(uri, name);
-  if (chip.length > 0) chip[0] = { ...chip[0], separator: true };
-  return [...own, ...chip];
+  const chip = own.map((e, i) => (i === 0 ? { ...e, separator: true } : e));
+  return [...field, ...chip];
 }
 
 /** The change that excludes what a term matches, or includes it again:

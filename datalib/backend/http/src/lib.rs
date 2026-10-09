@@ -2075,6 +2075,7 @@ fn log_key_specs() -> Vec<datalib_columns::SearchKeySpec> {
                 ),
                 _ => KeyValues::Text,
             },
+            partial: false,
         })
         .collect()
 }

@@ -114,6 +114,10 @@ pub struct ColumnSpec {
 pub struct ColumnSearch {
     pub key: String,
     pub field: String,
+    /// The key matches a bare value in part, so a cell's value is written
+    /// quoted to be matched whole ([`SearchKeySpec::partial`]).
+    #[serde(default)]
+    pub partial: bool,
 }
 
 /// What a paged grid reads of its rows beyond their columns: the field
@@ -134,6 +138,10 @@ pub struct SearchKeySpec {
     /// Older spellings it still reads.
     pub aliases: &'static [&'static str],
     pub values: KeyValues,
+    /// A bare value matches in part and a quoted one whole, so a value
+    /// picked to be matched is written quoted. Off for a key that compares
+    /// whole values either way.
+    pub partial: bool,
 }
 
 /// A value the search bar offers for a key, with how many rows have it
@@ -158,6 +166,9 @@ pub enum KeyValues {
     Group,
     /// A step's id, `<group>/<function>`, drawn as its step chip.
     Step,
+    /// A person: a handle, drawn as the person's chip, or text that
+    /// matches part of a handle or a name.
+    Person,
     /// A date or a moment, `before:` and `after:`.
     Stamp,
 }

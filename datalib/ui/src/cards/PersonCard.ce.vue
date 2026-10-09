@@ -6,6 +6,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { iconUrl } from "@/config/icons";
 import { formatStamp } from "@/config/timeFormat";
+import { searchSource } from "./cardSources";
 import { uriFromEntity } from "./chipLinks";
 import {
   canLinkHandles,
@@ -92,9 +93,7 @@ function handleMark(h: string | null): string | null {
 }
 
 function everything() {
-  const who = people.get(props.handle) ?? { mine: null, sourceContacts: [] };
-  const q = searchQueryFor(props.handle, "", who);
-  props.ctx.host.openCards(`searchView(${JSON.stringify({ q })})`);
+  props.ctx.host.openCards(searchSource(searchQueryFor(props.handle)));
 }
 
 // ── Create a contact, for a handle not linked to one ──────────────────
