@@ -20,13 +20,20 @@ reference behind them.
   (`datalib/backend/deny.toml`, `datalib/tauri/deny.toml`), on the bare
   runner, with no bazel in it.
 - `bazel test //...` — the repo hygiene lint, then
-  `bazel test -c opt --config=release --config=ci --nostamp --jobs=16 //...`,
+  `bazel test -c opt --config=release --config=ci --nostamp --jobs=16 -- //... -//datalib/ui:e2e_test`,
   then the "No crate built a second time for a tool" check (below), then
   a `bazel build //datalib/backend:bin` staged as a downloadable
   tarball. Everything but a `main` push adds `--config=pr-tests`, which
   builds our own crates at opt-level 1 and leaves third-party crates and
   doltlite's C at 3 (see "Every `rust_test` is a whole test binary"
   below); so a PR's tarball is not what a release ships.
+- `bazel test //datalib/ui:e2e_test` — the Playwright suite, alone. It
+  is tagged `cpu:4`, the whole runner, and takes about six minutes, so
+  in the job above every other test waited behind it. The two jobs'
+  patterns are complements (`//...` less one label, and that label), so
+  a new test lands in the first without anyone choosing. On a run where
+  the binaries the suite drives are not cached yet, both jobs compile
+  them; neither waits for the other.
 - `bazel build :dist (musl static)` — the fully static release leg,
   plus `doltlite_link_test` against those binaries. Separate job so
   its ~80 s is not on the other one's critical path.
@@ -316,6 +323,8 @@ job, from that job's log. Each row's PR has the run ids.
 | | test job wall clock, warm | ~250 s | ~144 s |
 | 2026-09-22 | `datalib/backend/http`'s 14 integration-test targets become 2 (#664) | for those targets: 447 s of `Compiling Rust bin`, 254 s of `Clippy`, 290 s of `Testing` | 39 s, 5 s, 24 s. The before run's box was saturated (713 sandbox actions) and the after run's was idle, so read it as "~10x, direction certain, factor approximate". The merged 13-file binary compiles in 23 s where each 1-file binary took 20–50 s: the per-file content is nearly free, the per-binary link is the whole cost |
 
+| 2026-10-09 | the Playwright suite in a job of its own (#1139) | from dispatch to the last test job done, median: 1565 s after a one-line change to `datalib_etl` (n=3), 614 s after a change to one e2e spec (n=5), 163 s with nothing changed | 974 s (n=3), 488 s (n=5), 156 s |
+
 The container pull (`Initialize containers`) is 55–75 s and is the
 largest fixed cost left. Dropping the archives from the image brought
 it back to within 7 s of the old, smaller image; pushing the layers
@@ -345,17 +354,31 @@ test job's pull (64 s → 56–60 s, two runs) and cut the *push* in
 
 ## Next levers, in the order they are worth trying
 
-1. **BuildBuddy remote execution** (`--config=remote`): −34% on a cold
+1. **More test jobs.** Measured on experiment branches beside #1139's
+   runs, same two changes, medians: the provider tests
+   (`//datalib/backend/etl/providers/...`) in a job apart from the
+   rest, 974 s → 701 s on the `datalib_etl` change (n=3); the e2e suite
+   in three Playwright shards (`--test_arg=--shard=i/3`), 488 s → 311 s
+   on the e2e-spec change (n=4) and nothing on the `datalib_etl` one,
+   where the Rust test job is the slowest. Each job added is another
+   required check and another chance to lose DNS to BuildBuddy.
+2. **BuildBuddy remote execution** (`--config=remote`): −34% on a cold
    run, measured in #324, left dispatch-only pending the free tier's
    cache-transfer quota — which #497 and #499 have since cut by most
-   of what a warm run moved.
-2. **A warm runner.** GitHub-hosted runners are fresh VMs, so the
+   of what a warm run moved. Measured again beside #1139's runs, on
+   the `datalib_etl` change: 496 s and 604 s against the runner's
+   1565 s, once the executors' cache held the tree (the two runs
+   before that rebuilt ~2700 actions and took ~25 min each). In all
+   six runs `//datalib/backend/applets:applet_unittests` timed out at
+   300 s on the executors; on a runner it takes ~30 s. That is the
+   thing to explain before this can gate anything.
+3. **A warm runner.** GitHub-hosted runners are fresh VMs, so the
    image pull (55–90 s) and the analysis (16 s) are paid every job.
    BuildBuddy's hosted CI runners keep the bazel server and its caches
    between runs, which removes both; self-hosted runners do the same
    at the cost of a machine. Either is a cost decision, not a config
    change.
-3. **Blast radius** — the only lever on a cold run, and a design
+4. **Blast radius** — what a cold run has to rebuild, and a design
    question per crate (the `rdeps` numbers above are the price tags).
 
 ## Locally, you are probably not on the remote cache
