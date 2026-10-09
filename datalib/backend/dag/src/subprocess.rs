@@ -280,8 +280,10 @@ pub(crate) async fn run_subprocess(
         .with_context(|| format!("spawn {prog:?}"))
         .map_err(internal)?;
     let _pid_guard = child.id().map(RegisteredChild::new);
-    // Aborted when the step exits, so a rung is only ever sent to a group
-    // whose leader is still there to be reaped.
+    // Aborted once the step has exited and its pipes have closed. Not at
+    // the exit alone: a child the step left behind is still in the group,
+    // holding stderr, and the drain below waits on it. While any member is
+    // alive the group's id cannot be reused, so a rung reaches only them.
     let stop_task = child.id().map(|pid| {
         let mut stop = ctx.stop.clone();
         tokio::spawn(async move {
@@ -373,10 +375,10 @@ pub(crate) async fn run_subprocess(
         .await
         .context("wait for subprocess")
         .map_err(internal)?;
+    let stderr_tail = stderr_task.await.unwrap_or_default();
     if let Some(t) = stop_task {
         t.abort();
     }
-    let stderr_tail = stderr_task.await.unwrap_or_default();
 
     if status.success() {
         let w = outcome.unwrap_or_default();
@@ -1030,6 +1032,60 @@ mod tests {
             }
         );
         until("the step's child to go with it", || !alive(child)).await;
+    }
+
+    /// The regression: a stopped `keyword_index` exited at its own grace
+    /// and left node running in its group, holding its stderr. The runner
+    /// had dropped the kill when the step exited, then waited on that
+    /// stderr until node finished on its own.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn what_a_stopped_step_leaves_behind_is_killed_after_the_grace() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().join("g/leaver");
+        let spec = StepSpec::new(
+            "g/leaver",
+            sh(r#"
+                trap 'exit 130' INT
+                out="$DATALIB_DAG_DATA_ROOT/g/leaver"
+                mkdir -p "$out"
+                (trap '' INT; exec sleep 120) >/dev/null &
+                echo $! > "$out/grandchild.pid"
+                while :; do sleep 0.1; done
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let (stop, stop_rx) = tokio::sync::watch::channel(false);
+        let mut runner = Runner::new(root.path()).stop_on(stop_rx);
+        runner.stop_grace = std::time::Duration::from_millis(300);
+        let round = tokio::spawn(async move { runner.run(&g).await });
+
+        let grandchild = || -> Option<libc::pid_t> {
+            std::fs::read_to_string(out.join("grandchild.pid"))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+        };
+        until("the step to spawn a child of its own", || {
+            grandchild().is_some()
+        })
+        .await;
+        let child = grandchild().unwrap();
+        stop.send(true).unwrap();
+        let rep = tokio::time::timeout(std::time::Duration::from_secs(20), round)
+            .await
+            .expect("the round waited on the step's leftover child")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            rep.step("g/leaver").status,
+            StepStatus::Failed {
+                kind: FailureKind::Cancelled
+            }
+        );
+        until("the leftover child to be killed", || !alive(child)).await;
     }
 
     /// A step is told the version of each input it was started against, as
