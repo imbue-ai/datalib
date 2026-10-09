@@ -42,7 +42,7 @@ export type SlickColumnOptions<T> = {
   /// no handler draws no button.
   actions?: Record<string, (row: T) => void>;
   /// A `markdown_uuid` cell was clicked.
-  onOpenDocument?: (uuid: string) => void;
+  onOpenDocument?: (uuid: string, row: T) => void;
   /// Every column can be dragged into the grouping bar. Off, no column
   /// carries a `grouping`, and the bar accepts none.
   groupable?: boolean;
@@ -428,7 +428,7 @@ export function typedColumns<T extends Record<string, unknown>>(
           };
         case "markdown_uuid":
           return {
-            formatter: (_r, _c, value) => {
+            formatter: (_r, _c, value, _col, row) => {
               const v = value as Identity | string | null;
               const id = typeof v === "string" ? v : v?.id;
               const a = document.createElement("a");
@@ -438,7 +438,7 @@ export function typedColumns<T extends Record<string, unknown>>(
               a.addEventListener("click", (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                if (id) opts.onOpenDocument?.(id);
+                if (id) opts.onOpenDocument?.(id, row);
               });
               return a;
             },

@@ -626,14 +626,15 @@ const plain: Formatter<RunLogLine> = (_r, _c, value, _col, line) => ({
 
 /// The Group and Step cells are chips (docs/dev/chips.md): the name
 /// the config gives the group or step now, its mark and its status, from
-/// `entities`. The line's level class stays on the cell.
+/// `entities`, or the id where it has none. The line's level class
+/// stays on the cell.
 const groupChip: Formatter<RunLogLine> = (r, c, value, col, line, grid) =>
   typeof value === "string" && value
     ? chipResult(uriFromEntity("group", value), value, line)
     : plain(r, c, value, col, line, grid);
 const stepChip: Formatter<RunLogLine> = (r, c, value, col, line, grid) =>
   typeof value === "string" && value.includes("/")
-    ? chipResult(uriFromEntity("step", value), value.slice(value.lastIndexOf("/") + 1), line)
+    ? chipResult(uriFromEntity("step", value), value, line)
     : plain(r, c, value, col, line, grid);
 function chipResult(uri: string, shown: string, line: RunLogLine) {
   return {
@@ -744,7 +745,8 @@ function buildColumns(): Column<RunLogLine>[] {
 /// Every column the log has, in the order they sit. The seven a reader
 /// wants on every line are shown; the rest — which run, which process,
 /// which commit, which thread, which module — say the same thing on
-/// line after line of one process's log, so they start hidden. The
+/// line after line of one process's log, so they start hidden. So does
+/// the group: the Step chip names it ("Slack · Download"). The
 /// grid menu puts any of them back, and the line opened beside the
 /// grid carries them all whether or not their column is up.
 function columnSet(): Column<RunLogLine>[] {
@@ -799,6 +801,7 @@ function columnSet(): Column<RunLogLine>[] {
       name: "Group",
       field: "group_id",
       width: 110,
+      hidden: true,
       formatter: groupChip,
       sortable: true,
       ...groupable("Group", "group_id"),

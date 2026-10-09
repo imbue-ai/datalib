@@ -486,8 +486,9 @@ programs against:
   table, its groups and the source chips all show the open tab's
   answer. The toolbar's search box (⌘K)
   opens one. Its table is the grid below, over the search: row click
-  opens the row's document via `host.openCards`; double-click opens it
-  as a standalone single-column page in a new tab. Persists
+  opens the row's document via `host.openCards`, as does one click on a
+  Document cell's link (the problems grid's); double-click on the row
+  opens it as a standalone single-column page in a new tab. Persists
   `q`/`sel`/`cols`/`view` state. A search given no `q` opens on
   `is:document`, one row per document; the empty bar suggests filters
   on the biggest source the index holds (`cards/searchDefaults.ts`).

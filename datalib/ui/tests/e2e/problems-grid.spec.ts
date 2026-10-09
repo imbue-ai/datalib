@@ -5,6 +5,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
   actOnRowByUuid,
+  cardOf,
   gridSettled,
   nameCell,
   SEARCH_ROWS,
@@ -12,7 +13,12 @@ import {
   type GridApi,
 } from "./grid-helpers";
 
-type Problem = { problem_uuid: string; source_id: string; severity: string };
+type Problem = {
+  problem_uuid: string;
+  source_id: string;
+  severity: string;
+  markdown_uuid: string | null;
+};
 
 async function problems(request: APIRequestContext, q: string): Promise<Problem[]> {
   const r = await request.get(`/applet/unified_index/problems?q=${encodeURIComponent(q)}`);
@@ -112,4 +118,33 @@ test("a severity cell's right-click keeps only its severity", async ({ page, req
   const kept = await held(page);
   expect(kept.length).toBe(theirs.filter((p) => p.severity === target.severity).length);
   expect(new Set(kept.map((r) => r.severity))).toEqual(new Set([target.severity]));
+});
+
+/// A Document cell is a link, and one click on it opens the document
+/// beside the grid. It used to swallow the click and do nothing, so only
+/// the row's double-click — a whole new window — reached the document.
+test("a Document link opens its document beside the grid on one click", async ({
+  page,
+  request,
+}) => {
+  const all = await problems(request, "");
+  const target = all.find((p) => p.markdown_uuid);
+  expect(target, "the fixture has a problem on a document").toBeDefined();
+  const { source_id: source, problem_uuid, markdown_uuid } = target!;
+  await withCounts(page, source);
+  await page.goto("/data_sources");
+  await counts(page, source).dblclick();
+  await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
+  await gridSettled(page);
+
+  await actOnRowByUuid(
+    page,
+    problem_uuid,
+    (row) => row.locator('[col-id="markdown_uuid"] a.tg-link').click({ timeout: 3_000 }),
+    "markdown_uuid",
+  );
+  await expect(cardOf(page, `documentView(${JSON.stringify(markdown_uuid)}`)).toBeVisible({
+    timeout: 10_000,
+  });
+  expect(page.context().pages()).toHaveLength(1);
 });
