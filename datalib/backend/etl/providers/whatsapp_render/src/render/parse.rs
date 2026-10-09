@@ -12,7 +12,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::blob_cas::{self, BlobBundle};
+use datalib_etl::doltlite_raw::table_exists;
 use datalib_etl::periodize::Period;
 use datalib_etl_chat_common::types::UpstreamRef;
 use datalib_etl_chat_common::{
@@ -20,6 +22,7 @@ use datalib_etl_chat_common::{
     NormalizedReaction,
 };
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_handle::Handle;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -142,6 +145,7 @@ async fn parse_async(
             display,
             last_read_rowid: r.get("last_read_message_row_id"),
             items_by_period: HashMap::new(),
+            person_jids: Vec::new(),
             inputs,
         });
     }
@@ -309,13 +313,20 @@ async fn parse_async(
         if let Some(i) = sender_jid_row_id {
             inputs.read("jid", &i.to_string());
         }
-        let sender_jid = sender_jid_row_id.and_then(|i| jids.get(&i));
+        // The author's rule: the account's own reaction names nobody, and
+        // a 1:1 chat leaves the sender empty, as it does on a message, so
+        // the chat JID is who reacted (a group's maps to no handle).
+        let reactor: Option<String> = (from_me != 1).then(|| {
+            sender_jid_row_id
+                .and_then(|i| jids.get(&i))
+                .map_or(chat_jid, String::as_str)
+                .to_string()
+        });
         let emoji: Option<String> = r.get("reaction");
         let timestamp: Option<i64> = r.get("timestamp");
-        let reactor_display = match sender_jid {
+        let reactor_display = match reactor.as_deref() {
             Some(j) => names.label(j, inputs),
-            None if from_me == 1 => "Me".to_string(),
-            None => "?".to_string(),
+            None => "Me".to_string(),
         };
         // A NULL `timestamp` column is "we don't know when", which is a
         // null `created_at` — not 1970.
@@ -325,11 +336,18 @@ async fn parse_async(
             .or_default()
             .push(NormalizedReaction {
                 reaction_uuid: id.uuid,
+                reactor_handle: reactor.as_deref().and_then(|j| names.handle(j)),
                 reactor_display,
                 source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                 emoji: emoji.unwrap_or_else(|| "?".to_string()),
                 date_ms: timestamp,
             });
+        if let Some(j) = reactor {
+            let people = &mut chats[chat_idx].person_jids;
+            if !people.contains(&j) {
+                people.push(j);
+            }
+        }
     }
 
     // 5) Walk messages, bucket by period, attach media + reactions.
@@ -343,6 +361,13 @@ async fn parse_async(
             chats[idx].inputs.read("jid", &i.to_string());
         }
         let sender_jid = sender_jid_row_id.and_then(|i| jids.get(&i).cloned());
+        if key.from_me == 0 {
+            // 1:1 incoming: the chat JID is the sender, by definition.
+            let author = sender_jid.clone().unwrap_or_else(|| key.chat_jid.clone());
+            if !chats[idx].person_jids.contains(&author) {
+                chats[idx].person_jids.push(author);
+            }
+        }
         let rowid: i64 = r.get("_id");
         let unread =
             key.from_me == 0 && chats[idx].last_read_rowid.is_some_and(|mark| rowid > mark);
@@ -394,6 +419,12 @@ async fn parse_async(
             });
         }
         out.push(NormalizedChat {
+            // Each author's address-book entry, read the way their label was.
+            contacts: ch
+                .person_jids
+                .iter()
+                .filter_map(|j| names.contact(j, source_id))
+                .collect(),
             inputs: ch.inputs.declared(),
             path_prefix: None,
             id: ch.chat_jid.clone(),
@@ -417,27 +448,25 @@ async fn parse_async(
     //    sibling CAS in one shot via ATTACHMENTS_PROJECTION_SQL. Same
     //    shape slack uses for per-thread bundles — render no longer
     //    has to open a CAS pool itself.
-    let cas_path = blob_cas::cas_path_for(db_path);
-    let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
-    if cas_path.is_file() {
-        let cas_pool: SqlitePool = datalib_etl::blob_cas::open_cas_reader(&cas_path)
-            .await
-            .with_context(|| format!("open CAS for render at {}", cas_path.display()))?;
-        let refs = out.iter().map(|chat| {
-            let refs = chat
-                .buckets
-                .iter()
-                .flat_map(|bucket| &bucket.items)
-                .flat_map(|item| &item.attachments)
-                .filter_map(|att| att.ref_id.as_deref());
-            (chat.id.clone(), refs)
-        });
-        let loaded =
-            BlobBundle::load_many(&pool, &cas_pool, ATTACHMENTS_PROJECTION_SQL, refs).await;
-        cas_pool.close().await;
-        blobs_by_chat = loaded?;
-        blobs_by_chat.retain(|_, bundle| !bundle.is_empty());
+    let cas_pool = blob_cas::open_cas_for_render(db_path)
+        .await
+        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
+    let refs = out.iter().map(|chat| {
+        let refs = chat
+            .buckets
+            .iter()
+            .flat_map(|bucket| &bucket.items)
+            .flat_map(|item| &item.attachments)
+            .filter_map(|att| att.ref_id.as_deref());
+        (chat.id.clone(), refs)
+    });
+    let loaded =
+        BlobBundle::load_many(&pool, cas_pool.as_ref(), ATTACHMENTS_PROJECTION_SQL, refs).await;
+    if let Some(cas) = cas_pool {
+        cas.close().await;
     }
+    let mut blobs_by_chat = loaded?;
+    blobs_by_chat.retain(|_, bundle| !bundle.is_empty() || bundle.has_missing());
     pool.close().await;
 
     Ok(ParsedWhatsApp {
@@ -470,7 +499,11 @@ fn build_item(
         // 1:1 incoming: the chat JID IS the sender, by definition.
         names.label(&key.chat_jid, inputs)
     };
-    let author_id = sender_jid.unwrap_or_else(|| format!("chat:{}", key.chat_jid));
+    let author_handle = if key.from_me == 1 {
+        None
+    } else {
+        names.handle(sender_jid.as_deref().unwrap_or(&key.chat_jid))
+    };
 
     // WhatsApp message_type codes (Android schema):
     //   0  text
@@ -503,7 +536,7 @@ fn build_item(
     );
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_id,
+        author_handle,
         author_display,
         // A NULL `timestamp` column is "we don't know when", which is a
         // null `created_at` — not 1970. See
@@ -519,7 +552,10 @@ fn build_item(
         kind_label: None,
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
+        branch: Vec::new(),
         unread,
+        recipients: Vec::new(),
+        mentions: Vec::new(),
         problems: Vec::new(),
     }
 }
@@ -529,6 +565,9 @@ struct ChatHeader {
     display: String,
     last_read_rowid: Option<i64>,
     items_by_period: HashMap<String, Vec<NormalizedChatItem>>,
+    /// Who wrote or reacted in the chat, in the order they first did;
+    /// the account itself is not among them.
+    person_jids: Vec<String>,
     inputs: Inputs,
 }
 
@@ -544,18 +583,6 @@ async fn load_jids(pool: &SqlitePool) -> Result<HashMap<i64, String>> {
         .iter()
         .map(|r| (r.get::<i64, _>("_id"), r.get::<String, _>("jid")))
         .collect())
-}
-
-/// Older msgstore versions have neither of the two LID tables. Absent is
-/// "nothing to map", not a failed render.
-async fn has_table(pool: &SqlitePool, table: &str) -> Result<bool> {
-    let n: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
-            .bind(table)
-            .fetch_one(pool)
-            .await
-            .with_context(|| format!("probe for {table}"))?;
-    Ok(n > 0)
 }
 
 /// Who a JID is. A `…@lid` (linked id) is an opaque number;
@@ -574,6 +601,9 @@ struct JidNames {
     book_name: HashMap<String, String>,
     /// `wa_contacts.wa_name`, by jid: the name the person set themselves.
     own_name: HashMap<String, String>,
+    /// Every `wa_contacts` row for a jid, in `_id` order: what the
+    /// provider's account of the person is built from.
+    book: HashMap<String, Vec<serde_json::Value>>,
     /// Whether the store has `wa_db_contacts` to declare reads of.
     has_contacts: bool,
     /// `jid` string → its row id, so a name lookup can declare the
@@ -588,7 +618,9 @@ impl JidNames {
         for (rowid, jid) in jids {
             out.row_id.entry(jid.clone()).or_insert(*rowid);
         }
-        if has_table(pool, "lid_display_name").await? {
+        // Older msgstore versions have neither LID table, and a backup may
+        // come without wa.db: absent is "nothing to map", not a failed render.
+        if table_exists(pool, "lid_display_name").await? {
             let rows = sqlx::query("SELECT lid_row_id, display_name FROM lid_display_name")
                 .fetch_all(pool)
                 .await
@@ -602,7 +634,7 @@ impl JidNames {
                 }
             }
         }
-        if has_table(pool, "wa_db_contacts").await? {
+        if table_exists(pool, "wa_db_contacts").await? {
             out.has_contacts = true;
             let rows: Vec<(String, String)> =
                 sqlx::query_as("SELECT jid, rows FROM wa_db_contacts")
@@ -624,11 +656,12 @@ impl JidNames {
                     out.book_name.insert(jid.clone(), n);
                 }
                 if let Some(n) = first("wa_name") {
-                    out.own_name.insert(jid, n);
+                    out.own_name.insert(jid.clone(), n);
                 }
+                out.book.insert(jid, contact_rows);
             }
         }
-        if has_table(pool, "jid_map").await? {
+        if table_exists(pool, "jid_map").await? {
             let rows = sqlx::query("SELECT lid_row_id, jid_row_id FROM jid_map")
                 .fetch_all(pool)
                 .await
@@ -642,6 +675,63 @@ impl JidNames {
             }
         }
         Ok(out)
+    }
+
+    /// A linked id's handle is its phone number's, where `jid_map` knows it.
+    fn handle(&self, jid: &str) -> Option<Handle> {
+        Handle::whatsapp_jid(self.phone_jid.get(jid).map_or(jid, String::as_str))
+    }
+
+    /// The person as the phone's address book has them: every name an
+    /// entry gives, the name they gave themselves, their company and
+    /// title, keyed by their number. `None` for a jid with no handle
+    /// or no entry. The reads are the ones [`JidNames::label`] declares.
+    fn contact(&self, jid: &str, source_id: &str) -> Option<NormalizedContact> {
+        let handle = self.handle(jid)?;
+        // Under the jid and, for a linked id, its number, as `label` reads.
+        let phone = self.phone_jid.get(jid).map(String::as_str);
+        let rows: Vec<&serde_json::Value> = [Some(jid), phone.filter(|p| *p != jid)]
+            .into_iter()
+            .flatten()
+            .filter_map(|j| self.book.get(j))
+            .flatten()
+            .collect();
+        if rows.is_empty() {
+            return None;
+        }
+        let field = |row: &serde_json::Value, name: &str| {
+            row.get(name)?
+                .as_str()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(String::from)
+        };
+        let mut c = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
+        let mut push_name = |name: Option<String>| {
+            if let Some(name) = name {
+                if !c.names.contains(&name) {
+                    c.names.push(name);
+                }
+            }
+        };
+        for row in &rows {
+            push_name(field(row, "display_name"));
+        }
+        for row in &rows {
+            push_name(
+                match (field(row, "given_name"), field(row, "family_name")) {
+                    (Some(g), Some(f)) => Some(format!("{g} {f}")),
+                    (g, f) => g.or(f),
+                },
+            );
+        }
+        for row in &rows {
+            push_name(field(row, "wa_name"));
+        }
+        c.handles.push(ContactHandle::of(handle));
+        c.org = rows.iter().find_map(|r| field(r, "company"));
+        c.title = rows.iter().find_map(|r| field(r, "title"));
+        Some(c)
     }
 
     fn label(&self, jid: &str, inputs: &Inputs) -> String {
@@ -699,7 +789,78 @@ fn label_from_jid(jid: &str) -> String {
 
 #[cfg(test)]
 mod jid_names_tests {
-    use super::{Inputs, JidNames};
+    use super::{Handle, Inputs, JidNames};
+
+    /// The address book's account of a person: every name its entries
+    /// give, keyed by the number, reached through a linked id too; a jid
+    /// with no entry, or no handle, has none.
+    #[test]
+    fn an_address_book_entry_is_the_providers_account_of_the_person() {
+        let mut names = JidNames {
+            has_contacts: true,
+            ..JidNames::default()
+        };
+        let riker = "17015550102@s.whatsapp.net".to_string();
+        names.phone_jid.insert("8@lid".into(), riker.clone());
+        names.book.insert(
+            riker.clone(),
+            vec![
+                serde_json::json!({"display_name": "William Riker", "given_name": "William",
+                    "family_name": "Riker", "wa_name": "Number One", "company": "Starfleet",
+                    "title": " First Officer "}),
+                serde_json::json!({"display_name": "Will Riker (Starfleet)", "wa_name": "Number One"}),
+            ],
+        );
+        names.book.insert(
+            "bridge-crew@g.us".into(),
+            vec![serde_json::json!({"display_name": "Bridge"})],
+        );
+        // A row under the linked id itself counts as well as the number's.
+        names
+            .book
+            .insert("8@lid".into(), vec![serde_json::json!({"wa_name": "Bill"})]);
+        let c = names.contact("8@lid", "wa").expect("through the linked id");
+        assert_eq!(c.key, "tel:+17015550102");
+        assert_eq!(
+            c.names,
+            [
+                "William Riker",
+                "Will Riker (Starfleet)",
+                "Bill",
+                "Number One"
+            ],
+            "every distinct name once, the address book's first, from both jids"
+        );
+        assert_eq!(c.handles.len(), 1);
+        assert_eq!(c.handles[0].handle, Handle::tel("+17015550102"));
+        assert_eq!(c.org.as_deref(), Some("Starfleet"));
+        assert_eq!(c.title.as_deref(), Some("First Officer"));
+        assert_eq!(names.contact(&riker, "wa").map(|c| c.key), Some(c.key));
+        assert!(
+            names.contact("17015550109@s.whatsapp.net", "wa").is_none(),
+            "no entry"
+        );
+        assert!(
+            names.contact("bridge-crew@g.us", "wa").is_none(),
+            "no handle"
+        );
+    }
+
+    /// Most people in a current backup are a linked id, not a phone JID;
+    /// without the map their messages would carry no handle at all.
+    #[test]
+    fn a_linked_id_takes_its_phone_numbers_handle() {
+        let mut names = JidNames::default();
+        names.phone_jid.insert(
+            "1@lid".to_string(),
+            "17015550101@s.whatsapp.net".to_string(),
+        );
+        let phone = Handle::tel("+17015550101");
+        assert_eq!(names.handle("1@lid"), phone);
+        assert_eq!(names.handle("17015550101@s.whatsapp.net"), phone);
+        assert_eq!(names.handle("3@lid"), None);
+        assert_eq!(names.handle("bridge-crew@g.us"), None);
+    }
 
     /// The precedence the issue asked for: a learned name, else the
     /// phone number behind the linked id, else the raw JID — and a

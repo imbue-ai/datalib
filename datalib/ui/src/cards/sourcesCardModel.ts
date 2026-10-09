@@ -9,6 +9,8 @@ import {
   listGroups,
   listSteps,
   insertEntries,
+  moveGroup,
+  moveAgainstDataFlow,
   removeSteps,
   describeGroup,
   renameGroup,
@@ -47,7 +49,7 @@ its chevron for the <b>steps</b> that do the work — fetch, render, index — a
 disabled and say why.</p>
 <p>Each row says what its step is doing now. <b>Sync</b> on a source fetches what’s
 new, then rebuilds everything downstream: its own steps, and the index every source
-feeds. Each of those rows then shows the sync in its own <b>Last update</b> — queued,
+feeds. Each of those rows then shows the sync in its own <b>Status</b> — queued,
 and what it waits for; running; then how it ended — so pressing Sync on one row moves
 others too. Syncs run side by side: a source synced while another syncs starts at
 once.</p>
@@ -67,36 +69,40 @@ syncs it stops everything.</p>
 every sync skips it, and if it is running it stops; what reads it waits. Turned back
 on, it runs in the next sync — turning it on starts nothing by itself. On a group it
 turns every step under it off or on. Hover it to see who turned it off.</p>
-<p>A group row reads off its steps: <b>Last update</b> shows the liveliest of them —
-running if any step is, else queued, off, failed or stopped if any is, and otherwise
+<p>A group row reads off its steps: <b>Status</b> shows the one that matters most —
+running if any step is, else waiting, failed, queued, off or stopped if any is, and otherwise
 the last step’s in pipeline order. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
 with it.</p>
 <p>Rows come in the order <code>config.toml</code> lists them. Click a header to sort by
-that column; a third click puts the config's order back.</p>
-<p><b>Name</b> stays in view while the table scrolls sideways. <b>Last update</b> leads
+that column; a third click puts the config's order back. <b>Drag a group</b> by the grip
+at its left to move it: the move is written to <code>config.toml</code>, with everything
+under the group kept beside it. Groups move only while the table is in the config's
+order, and never above a group they read from.</p>
+<p><b>Name</b> stays in view while the table scrolls sideways. <b>Status</b> leads
 with an icon for what the row is doing or did last, then says when it got there. That
 icon, and the mark before a name — the service a source mirrors, or what a step
 does — give their word on hover. Hovering a name shows its id: for a group, the
 folder its data is in.
 <b>Right-click a header</b> to show or hide columns: <b>Last synced</b> and
-<b>Last success</b> start hidden. <b>Double-click a Last update</b> to read that
+<b>Last success</b> start hidden. <b>Double-click a Status</b> to read that
 step's log — from the run in flight while it runs, else from the run it last took
 part in, with a picker for its other runs — as a grid you can sort, filter and
 search; on a group row, the log of the step its status came from.
-A <b>red or yellow number</b> after a name counts the errors (records dropped) and
-warnings (records kept with something lost) its store holds as of its last run; a row
-with none shows nothing. <b>Double-click the number</b> for the list.
-<b>Queue</b> is how much work a step says is still ahead of it, and <b>ETA</b> when
-that work is done at the pace work has come off the queue over the last two minutes
+A <b>red or yellow number</b> after a name counts the errors and warnings that step
+found in its last run; a source's is the sum of its steps'. A row with none shows
+nothing. <b>Double-click the number</b> for the list.
+While a row has work queued, its Status goes on to say how much the step says is
+still ahead of it (<i>1,204 to go</i>), and when
+that work is done (<i>3m left</i>) at the pace work has come off the queue over the last two minutes
 (since the step started, when nothing came off in those two) — or a word when there
 is no pace to go by: <i>stalled</i> (nothing has moved for a minute),
 <i>measuring</i> (nothing has come off yet), <i>growing</i>, <i>flat</i>. A queue a
 step reads in passes climbs as work arrives and falls to nothing when a pass ends,
 so its ETA holds steady through the climb rather than reading it as growth. A group sums its steps' queues and
 waits on its slowest step; a stall anywhere under it shows. Hover either for how it
-was reached. The <b>chart button</b> in a row's Actions — or a double-click on its
-Queue or ETA, or <b>Show sync dashboard</b> on its menu — opens the group's
+was reached. The <b>chart button</b> in a row's Actions — or <b>Show sync dashboard</b> on its
+menu — opens the group's
 <b>sync dashboard</b>: its row and each step's,
 laid out one under another with the same actions, charts over the run — what was
 queued and done, rows written, requests made, checkpoints, warnings and errors
@@ -129,7 +135,7 @@ is its whole folder, measured on the same walk — plotted over the last few min
 its change over that time beside it. Each row’s line is scaled to its own range, so a
 jump in a small source shows as plainly as one in a large one: the line is the shape of
 the change, and the numbers are its size. Hover for the breakdown.</p>
-<p><b>Last update</b> and <b>Last synced</b> are per step, read from the runner’s own
+<p><b>Status</b> and <b>Last synced</b> are per step, read from the runner’s own
 record — so a sync you or an agent start from a terminal shows up here too.
 <b>Last success</b> is when the step last ran without failing: when it is older than
 Last synced, every run since has failed, and a source's mirror is only known to match
@@ -410,11 +416,12 @@ export function useSourcesCard(ctx: CardCtx) {
   }
 
   /// Double-clicking a status opens the log it came from; a problems count,
-  /// the problems; a queue or an ETA, the sync dashboard.
+  /// the problems, or on System, whose count is the config's warnings, the
+  /// config.
   function onCellDoubleClicked(data: Row, field: string) {
-    if (field === "problems") actions.openProblems(data, `${UNIFIED_INDEX}/problems`);
+    if (field === "problems" && data.kind === "system") openConfig();
+    else if (field === "problems") actions.openProblems(data, `${UNIFIED_INDEX}/problems`);
     else if (field === "status") void actions.openStepLog(data);
-    else if (field === "queue" || field === "eta") actions.openDashboard(data);
   }
 
   /// An in-place edit of the Name cell: a group's rename.
@@ -475,6 +482,42 @@ export function useSourcesCard(ctx: CardCtx) {
       next,
       name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`,
     );
+  }
+
+  /// Groups are dragged into a new order; nothing else is, and nothing
+  /// while the config cannot be written.
+  function isMovable(row: Row): boolean {
+    return row.kind === "group" && !busy.value && !parseError.value && !configError.value;
+  }
+
+  /// Write a dragged group down where it was dropped. Read off the config
+  /// as the server has it, as `openEdit` does, so a move cannot write back
+  /// over an editor save that has not reached this card yet.
+  async function onRowMove(row: Row, before: Row | null) {
+    if (row.kind !== "group") return;
+    await loadConfig();
+    const name = (id: string) =>
+      rows.value.find((r) => r.kind === "group" && r.id === id)?.name.label ?? id;
+    const against = moveAgainstDataFlow(configText.value, row.id, before?.id ?? null);
+    if (against) {
+      say(
+        false,
+        "reads" in against
+          ? `${row.name.label} can't go above ${name(against.reads)}: it reads what ${name(against.reads)} makes, and the config lists each group below the ones it reads.`
+          : `${row.name.label} can't go below ${name(against.readBy)}: ${name(against.readBy)} reads what it makes, and the config lists each group below the ones it reads.`,
+      );
+      return;
+    }
+    let next: string;
+    try {
+      next = moveGroup(configText.value, row.id, before?.id ?? null);
+    } catch (e) {
+      say(false, (e as Error).message);
+      return;
+    }
+    if (next === configText.value) return;
+    const where = before ? `above ${before.name.label}` : "to the bottom";
+    await writeConfig(next, `Moved ${row.name.label} ${where}.`);
   }
 
   // ── Which groups are open. Remembered per browser, so a reload — or
@@ -953,6 +996,8 @@ export function useSourcesCard(ctx: CardCtx) {
     onCellDoubleClicked,
     onCellEdit,
     onRowGroupOpened,
+    isMovable,
+    onRowMove,
     wizardOpen,
     wizardKey,
     takenIds,

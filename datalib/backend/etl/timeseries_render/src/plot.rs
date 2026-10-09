@@ -1,6 +1,7 @@
 //! Build one self-contained Plotly page per physical quantity.
 
 use anyhow::{Context, Result};
+use datalib_etl_render::html::escape_attr;
 use serde_json::{json, Map, Value};
 
 use crate::units::{Axis, Quantity};
@@ -69,8 +70,8 @@ pub fn figure_config(filename: &str) -> Value {
 pub fn figure_page(title: &str, spec: &Value) -> Result<String> {
     let spec_json =
         escape_json_for_html(&serde_json::to_string(spec).context("serialize plotly figure spec")?);
-    let title = html_escape(title);
-    let notice = html_escape(OFFLINE_NOTICE);
+    let title = escape_attr(title);
+    let notice = escape_attr(OFFLINE_NOTICE);
     Ok(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -112,8 +113,8 @@ pub fn figure_page(title: &str, spec: &Value) -> Result<String> {
 </body>
 </html>
 "#,
-        src = html_escape(PLOTLY_SRC),
-        integrity = html_escape(PLOTLY_INTEGRITY),
+        src = escape_attr(PLOTLY_SRC),
+        integrity = escape_attr(PLOTLY_INTEGRITY),
     ))
 }
 
@@ -178,13 +179,6 @@ fn layout_json(quantity: &Quantity, subtitle: &str) -> Value {
 /// Make a JSON document safe to embed in a `<script>` element.
 pub fn escape_json_for_html(json: &str) -> String {
     json.replace('<', "\\u003c")
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }
 
 #[cfg(test)]

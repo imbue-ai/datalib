@@ -1,6 +1,6 @@
 //! Raw-store schema for the Google Takeout provider.
 
-use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
+use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
 use uuid::Uuid;
 
@@ -177,7 +177,7 @@ pub fn full_ddl() -> Vec<String> {
         GeminiActivityRow::ddl(),
         // Shared file-cursor table; we own one or more
         // `google_takeout/<feed>` scopes inside it.
-        datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
+        datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
     out.extend(ChatAttachmentRow::all_ddl());
     out.extend(GeminiAttachmentRow::all_ddl());
@@ -188,6 +188,44 @@ pub fn full_ddl() -> Vec<String> {
         out.push(dr::bookkeeping_ddl_for(table));
     }
     out
+}
+
+/// The raw store's migration ladder (etl/README.md §"The migration
+/// ladder").
+pub const LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "the Maps, YouTube history and Gemini files are read again by their fixed readers",
+    apply: |conn| Box::pin(read_again(conn, REREAD_V1)),
+}];
+
+/// The feeds whose reader changed what it makes of an unchanged file:
+/// a Maps photo's media, a saved place keyed by its address, entity
+/// decoding in YouTube titles, Gemini's prompt and response.
+pub const REREAD_V1: &[&str] = &[
+    "google_takeout/maps_photos",
+    "google_takeout/maps_saved_places",
+    "google_takeout/youtube_watch_history",
+    "google_takeout/gemini_apps",
+];
+
+/// Forget what these feeds' files hashed to, so the next sync reads
+/// them whole, as if new.
+async fn read_again(conn: &mut sqlx::SqliteConnection, scopes: &[&str]) -> anyhow::Result<()> {
+    let has_cursor: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ingested_files')",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if !has_cursor {
+        return Ok(());
+    }
+    for scope in scopes {
+        sqlx::query("DELETE FROM ingested_files WHERE scope = ?")
+            .bind(scope)
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

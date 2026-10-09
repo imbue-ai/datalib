@@ -44,10 +44,12 @@ async fn mirror(root: &Path, labels: &[&str], budget: Option<usize>) -> FetchSum
 
 async fn mirrored_gmail_ids(root: &Path) -> BTreeSet<String> {
     let db = RawDb::open(&db_path_for(root)).await.expect("open raw db");
-    let ids: Vec<String> = sqlx::query_scalar("SELECT gmail_id FROM gmail_messages")
-        .fetch_all(db.pool())
-        .await
-        .expect("read gmail_messages");
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL",
+    )
+    .fetch_all(db.pool())
+    .await
+    .expect("read what is held");
     db.close().await;
     ids.into_iter().collect()
 }
@@ -69,8 +71,8 @@ async fn gmail_live_one_label_roundtrip() {
     eprintln!("[test] run 1: {first:?}");
 
     assert!(
-        first.full_sync,
-        "first run with no cursor must be a full sync"
+        !first.walked.is_empty(),
+        "first run with no cursor must walk the label"
     );
     assert!(
         first.emails_upserted > 0,
@@ -181,14 +183,16 @@ async fn gmail_live_one_label_roundtrip() {
         );
     }
 
-    // ── the gmail id mapping exists for every row ───────────────────
-    let mapped: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM gmail_messages")
-        .fetch_one(db.pool())
-        .await
-        .expect("count gmail_messages");
+    // ── every row is held for a listed message ───────────────────────
+    let held: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL",
+    )
+    .fetch_one(db.pool())
+    .await
+    .expect("count what is held");
     assert_eq!(
-        mapped, email_count,
-        "every row needs its Gmail-id mapping, or deletions can't find it",
+        held, email_count,
+        "every row is held for the Gmail id that lists it, or a deletion can't find it",
     );
 
     // Closed, not dropped: run 2 reopens this store, and a dropped pool
@@ -200,7 +204,7 @@ async fn gmail_live_one_label_roundtrip() {
     eprintln!("[test] run 2: {second:?}");
 
     assert!(
-        !second.full_sync,
+        second.walked.is_empty(),
         "second run should resume from the stored historyId, not re-enumerate",
     );
     assert_eq!(
@@ -269,8 +273,8 @@ async fn gmail_live_budget_limited_backfill_makes_progress() {
         let s = mirror(&tmp, &[&label], Some(BUDGET)).await;
         runs += 1;
         eprintln!(
-            "[test] budget run {runs}: +{} emails, exhausted={}, full_sync={}, units={}",
-            s.emails_upserted, s.budget_exhausted, s.full_sync, s.quota_units_spent,
+            "[test] budget run {runs}: +{} emails, exhausted={}, walked={:?}, units={}",
+            s.emails_upserted, s.budget_exhausted, s.walked, s.quota_units_spent,
         );
 
         assert!(
@@ -286,8 +290,6 @@ async fn gmail_live_budget_limited_backfill_makes_progress() {
         written += s.emails_upserted;
 
         if !s.budget_exhausted {
-            // The run that finishes the backfill is the one that may
-            // store the cursor.
             break;
         }
         assert!(
@@ -304,9 +306,8 @@ async fn gmail_live_budget_limited_backfill_makes_progress() {
     // And now that it has caught up, it should go incremental.
     let after = mirror(&tmp, &[&label], None).await;
     assert!(
-        !after.full_sync,
-        "once the backfill completes, the cursor should be stored and the next run \
-         should resume incrementally",
+        after.walked.is_empty(),
+        "once the label is listed whole, the next run should replay history only",
     );
     assert_eq!(after.emails_upserted, 0, "the catch-up run wrote new rows");
 

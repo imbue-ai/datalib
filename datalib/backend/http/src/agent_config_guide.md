@@ -209,4 +209,5 @@ so the shared index steps pick it up.
 - `POST <origin>/api/requests` with `{"roots": ["<step id>", …]}` syncs
   those steps and everything downstream of them (`{}` syncs every
   source). A source step always runs, any other only if it is out of
-  date, and nothing upstream of a root runs.
+  date, and nothing upstream of a root runs but a render whose store is
+  in a shape this build no longer writes, which runs before what reads it.

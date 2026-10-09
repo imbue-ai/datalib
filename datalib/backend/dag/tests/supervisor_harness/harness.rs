@@ -20,7 +20,7 @@ use datalib_dag::supervisor::announce::{
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::record::{InvocationEnd, InvocationRow, Record};
 use datalib_dag::supervisor::reload::ConfigFile;
-use datalib_dag::supervisor::store::{RequestOutcome, RequestRow, Store};
+use datalib_dag::supervisor::store::{RequestOutcome, RequestRow, Store, WipeKind, WipeRow};
 use datalib_dag::{Event, EventSink, Runner};
 use tokio::sync::{mpsc, watch};
 
@@ -115,6 +115,7 @@ pub struct State {
     pub record: Record,
     pub invocations: Vec<(InvocationRow, Option<InvocationEnd>)>,
     pub requests: Vec<RequestRow>,
+    pub wipes: Vec<WipeRow>,
 }
 
 impl State {
@@ -144,6 +145,11 @@ impl State {
     /// The version the loop recorded for what `step` writes.
     pub fn version(&self, step: &str) -> Option<&str> {
         self.record.steps.get(step)?.version.as_deref()
+    }
+
+    /// `None` while it is open; then `None` inside if it was done.
+    pub fn wiped(&self, id: &str) -> Option<Option<String>> {
+        self.wipes.iter().find(|w| w.id == id)?.closed.clone()
     }
 
     pub fn detail(&self, step: &str) -> Option<&str> {
@@ -557,6 +563,7 @@ impl Harness {
             record: self.person.load_record().await.unwrap(),
             invocations: self.person.invocations().await.unwrap(),
             requests: self.person.recent_requests(1000).await.unwrap(),
+            wipes: self.person.wipes().await.unwrap(),
         }
     }
 
@@ -626,6 +633,31 @@ impl Harness {
     pub async fn turn_on(&mut self, step: &str) {
         self.person.turn_on(step).await.unwrap();
         self.note(format!("person: turn_on {step}"));
+    }
+
+    pub async fn reset(&mut self, steps: &[&str]) -> String {
+        self.wipe(WipeKind::Reset, steps).await
+    }
+
+    pub async fn purge(&mut self, groups: &[&str]) -> String {
+        self.wipe(WipeKind::Purge, groups).await
+    }
+
+    async fn wipe(&mut self, kind: WipeKind, targets: &[&str]) -> String {
+        let targets: Vec<String> = targets.iter().map(|t| t.to_string()).collect();
+        let id = self
+            .person
+            .open_wipe(kind, &targets, "person")
+            .await
+            .unwrap();
+        self.note(format!("person: {} {targets:?} = {id}", kind.as_str()));
+        id
+    }
+
+    /// Wait for a wipe to close; why it was not done, or `None`.
+    pub async fn wiped(&mut self, wipe: &str) -> Option<String> {
+        let desc = format!("wipe {wipe} to close");
+        self.until(&desc, |s| s.wiped(wipe)).await
     }
 
     /// Wait for a request to close; how it did.
@@ -730,12 +762,6 @@ impl host::Periods for Periods {
                 None
             }
         }
-    }
-
-    async fn idle_work(&mut self, _: &Store) {}
-
-    async fn nudged(&self) {
-        std::future::pending().await
     }
 }
 

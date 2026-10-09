@@ -916,6 +916,7 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
             (true, _) => quote! { self.#ident.as_str() },
             (false, Some(PromotedKind::TextNotNull)) => quote! { &self.#ident },
             (false, Some(PromotedKind::TextNullable)) => quote! { self.#ident.as_deref() },
+            (false, None) if is_byte_vec(&f.ty) => quote! { &self.#ident },
             (
                 false,
                 Some(
@@ -928,8 +929,8 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
             ) => quote! { self.#ident },
             (false, None) => return Err(syn::Error::new_spanned(
                 &f.ty,
-                "PortableTable can only bind String, i64, f64, bool or Option of the first three, \
-                     or an enum marked #[col(sql = \"…\", enum)]; \
+                "PortableTable can only bind String, i64, f64, bool, Vec<u8> or Option of the first \
+                     three, or an enum marked #[col(sql = \"…\", enum)]; \
                      add support to `classify` rather than binding this column by hand",
             )),
         };
@@ -1259,6 +1260,24 @@ fn parse_derived_attrs(field: &Field) -> syn::Result<Vec<Derived>> {
         out.push(Derived { name, sql, search });
     }
     Ok(out)
+}
+
+/// `Vec<u8>`: bytes, bound as a BLOB.
+fn is_byte_vec(ty: &Type) -> bool {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return false;
+    };
+    let Some(seg) = path.segments.last() else {
+        return false;
+    };
+    let PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return false;
+    };
+    seg.ident == "Vec"
+        && matches!(
+            args.args.first(),
+            Some(GenericArgument::Type(Type::Path(TypePath { path, .. }))) if path.is_ident("u8")
+        )
 }
 
 fn is_option(ty: &Type) -> bool {

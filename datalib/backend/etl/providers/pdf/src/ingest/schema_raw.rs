@@ -69,12 +69,10 @@ pub const PDF_PATHS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_pdf_paths_blake3 ON pdf_paths (blake3)",
 ];
 
-/// The tables written through the paired sidecar: when a row was last
+/// The tables written through the paired sidecar: when a row was first
 /// written is `<table>_bookkeeping.fetched_at_utc`, not a column of the
-/// row, so a scan that finds nothing changed changes no content row.
-/// For the content-keyed `pdf_documents` that stamp is when the
-/// document was first identified, because a document is only written
-/// when its hash is new.
+/// row, and later scans leave it alone, so a scan that finds nothing
+/// changed changes nothing.
 pub const STAMPED_TABLES: &[&str] = &["pdf_documents", "pdf_paths", "pdf_scan_meta"];
 
 pub fn full_ddl() -> Vec<String> {

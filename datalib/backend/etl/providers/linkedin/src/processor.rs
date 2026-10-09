@@ -10,6 +10,12 @@ use datalib_etl_linkedin_config::LinkedinConfig;
 
 use crate::ingest;
 
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
+
 /// Ingest wave: always present — ingest the export CSVs (and
 /// optionally photos).
 pub fn plan_ingest(
@@ -53,28 +59,24 @@ impl DataProcessor for LinkedinIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(
-                db.pool().clone(),
-                db.cas().map(|cas| cas.pool().clone()),
-                entity_db,
-            )
-            .await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            input_path: self.input_path.clone(),
-            fetch_photos: self.fetch_photos,
-            // Piggyback the shared give-up knob: stop the photo sweep after
-            // this many consecutive failures.
-            photo_max_consecutive_failures: self.photo_max_consecutive_failures,
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().map(|cas| cas.pool().clone()));
+        ctx.run_store(pool, cas_pool, |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                input_path: self.input_path.clone(),
+                fetch_photos: self.fetch_photos,
+                // Piggyback the shared give-up knob: stop the photo sweep after
+                // this many consecutive failures.
+                photo_max_consecutive_failures: self.photo_max_consecutive_failures,
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "files={} rows={} parse_errors={}",
+                s.files, s.rows, s.parse_errors,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "files={} rows={} parse_errors={}",
-            s.files, s.rows, s.parse_errors,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

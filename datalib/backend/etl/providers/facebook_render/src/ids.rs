@@ -17,7 +17,7 @@ pub const KIND_ALBUM: &str = "album";
 pub const KIND_ALBUM_DESCRIPTION: &str = "album_description";
 pub const KIND_PHOTO: &str = "photo";
 pub const KIND_FEED: &str = "feed";
-pub const KIND_FEED_MONTH: &str = "feed_month";
+pub const KIND_FEED_YEAR: &str = "feed_year";
 pub const KIND_COMMENT: &str = "comment";
 pub const KIND_REACTION: &str = "reaction";
 pub const KIND_FRIEND: &str = "friend";
@@ -61,10 +61,10 @@ pub fn feed(source_id: &str, name: &str) -> Identity {
     IDS.mint(source_id, KIND_FEED, name.to_string(), None)
 }
 
-pub fn feed_month(source_id: &str, name: &str, period_key: &str) -> Identity {
+pub fn feed_year(source_id: &str, name: &str, period_key: &str) -> Identity {
     IDS.mint(
         source_id,
-        KIND_FEED_MONTH,
+        KIND_FEED_YEAR,
         composite_key(&[name, period_key]),
         None,
     )
@@ -107,7 +107,7 @@ mod tests {
             album_description("src", "r2", MS),
             photo("src", "r2", "photos/a.jpg", MS),
             feed("src", "comments"),
-            feed_month("src", "comments", "2024-03"),
+            feed_year("src", "comments", "2024"),
             comment("src", "r3", MS),
             reaction("src", &["r4", "r5"], MS),
             friend("src", "r6"),

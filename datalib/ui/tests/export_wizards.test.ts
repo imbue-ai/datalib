@@ -1,7 +1,8 @@
 // The forms for Google Takeout, LinkedIn, SMS Backup & Restore and
 // `contacts` from .vcf files. What each must get right: write the table
 // that names its ingest method, and read back the configs people have
-// written by hand, which may carry `always_clear_before_ingest`.
+// written by hand, which may still carry the retired
+// `always_clear_before_ingest`.
 import { describe, expect, it } from "vitest";
 import { CATALOG } from "../src/config/catalog";
 import type { CatalogEntry } from "../src/config/catalog";
@@ -41,18 +42,49 @@ function = "render_markdown"
 inputs = ["s/ingest"]
 `);
 
-/// Each input here is a complete snapshot, so a new source drops what
-/// the next export no longer holds unless someone unticks the box.
-describe("the snapshot switch", () => {
-  it("starts on for every file-backed form, and is written", () => {
-    for (const entry of [
-      byType("linkedin"),
-      byType("sms_backup_restore"),
-      byType("contacts", "vcf"),
-    ]) {
-      expect(seedFieldValues(entry)["common.always_clear_before_ingest"], entry.label).toBe(true);
-      expect(toml(entry), entry.label).toContain("always_clear_before_ingest = true");
+/// `always_clear_before_ingest` went: no form offers it or writes it, and
+/// a config that still carries it stays editable, since saving drops the
+/// line the config check warns about.
+describe("the retired snapshot switch", () => {
+  const FORMS = [
+    byType("linkedin"),
+    byType("sms_backup_restore"),
+    byType("contacts", "vcf"),
+    byType("google_takeout"),
+  ];
+
+  it("is in no form and in nothing a form writes", () => {
+    for (const entry of FORMS) {
+      const targets = (entry.fields ?? []).map((f) => f.target);
+      expect(targets, entry.label).not.toContain("common.always_clear_before_ingest");
+      expect(toml(entry), entry.label).not.toContain("always_clear_before_ingest");
     }
+  });
+
+  it("does not block editing a config that still carries it", () => {
+    const steps = ingestStep(
+      "sms_backup_restore",
+      `[steps.params.backup]
+path = "~/backups/SMSBackupRestore"
+[steps.params.common]
+always_clear_before_ingest = true`,
+    );
+    expect(paramsAreRepresentable(steps[0], byType("sms_backup_restore"))).toEqual({ ok: true });
+  });
+
+  it("does not hide a key the form really cannot model", () => {
+    const steps = ingestStep(
+      "sms_backup_restore",
+      `[steps.params.backup]
+path = "~/backups/SMSBackupRestore"
+[steps.params.common]
+always_clear_before_ingest = true
+blob_size_limit_bytes = 5`,
+    );
+    expect(paramsAreRepresentable(steps[0], byType("sms_backup_restore"))).toEqual({
+      ok: false,
+      unknown: ["common.blob_size_limit_bytes"],
+    });
   });
 });
 
@@ -71,16 +103,19 @@ describe("Google Takeout", () => {
   ];
 
   /// `GoogleTakeoutSync` in google_takeout_config: a feed with no box
-  /// here could be neither turned on nor kept on an edit.
-  it("has a box for every feed the provider reads, each starting off", () => {
+  /// here could be neither turned on nor kept on an edit. The provider
+  /// defaults every feed off, so the form ticks each one and writes it.
+  it("has a box for every feed the provider reads, each starting on", () => {
     const targets = TAKEOUT.fields!.map((f) => f.target);
     for (const feed of FEEDS) expect(targets, feed).toContain(`export.${feed}`);
     const seeded = seedFieldValues(TAKEOUT);
-    for (const feed of FEEDS) expect(seeded[`export.${feed}`], feed).toBe(false);
+    for (const feed of FEEDS) expect(seeded[`export.${feed}`], feed).toBe(true);
+    const added = toml(TAKEOUT, { "export.path": "~/backups/Takeout" });
+    for (const feed of FEEDS) expect(added, feed).toContain(`${feed} = true`);
   });
 
   it("writes the feeds ticked, and the spam switch only under Voice", () => {
-    const off = toml(TAKEOUT, { "export.path": "~/backups/Takeout", "export.google_chat": true });
+    const off = toml(TAKEOUT, { "export.path": "~/backups/Takeout", "export.google_voice": false });
     expect(off).toContain("[steps.params.export]");
     expect(off).toContain("google_chat = true");
     expect(off).toContain("google_voice = false");
@@ -91,13 +126,6 @@ describe("Google Takeout", () => {
       "export.google_voice_include_spam": true,
     });
     expect(on).toContain("google_voice_include_spam = true");
-  });
-
-  /// Every feed drops what a newer export lost, so the wipe would only add
-  /// the partial-export trap.
-  it("starts with the wipe off", () => {
-    expect(seedFieldValues(TAKEOUT)["common.always_clear_before_ingest"]).toBe(false);
-    expect(toml(TAKEOUT)).toContain("always_clear_before_ingest = false");
   });
 
   it("can edit a config that still turns the wipe on", () => {
@@ -171,9 +199,7 @@ describe("SMS Backup & Restore", () => {
     const steps = ingestStep(
       "sms_backup_restore",
       `[steps.params.backup]
-path = "~/backups/SMSBackupRestore"
-[steps.params.common]
-always_clear_before_ingest = true`,
+path = "~/backups/SMSBackupRestore"`,
     );
     expect(paramsAreRepresentable(steps[0], SMS)).toEqual({ ok: true });
   });

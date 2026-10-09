@@ -67,16 +67,18 @@ impl SourceRender for PdfRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let s = render::render_targets(&to_render, &out_dir, ctx.name, ctx.progress, &mut on_doc)
             .context("pdf render")?;
-        for (doc_uuid, error) in &s.failures {
-            ctx.report_document_failed(doc_uuid, error, Some(self.render_version()))?;
+        // A failed conversion's page is stale rather than gone: its
+        // bucket is declared failed, so the page stays, even on a full
+        // walk, and the problem says why.
+        for f in &s.failures {
+            ctx.report_document_failed(&f.doc_uuid, &f.error, Some(self.render_version()))?;
+            ctx.fail_bucket(&f.blake3, &f.error)?;
         }
 
-        // Every document this run looked at is declared with nothing —
-        // one the corpus no longer reaches, because its last file was
-        // deleted, builds no page and its old one goes — and then the
-        // converted ones with what they read. One whose conversion failed
-        // is left out of both: its page is stale rather than gone, and a
-        // declared bucket keeps only what the run emitted.
+        // Every other document this run looked at is declared with
+        // nothing — one the corpus no longer reaches, because its last
+        // file was deleted, builds no page and its old one goes — and
+        // then the converted ones with what they read.
         let looked_at: Option<std::collections::HashSet<String>> =
             scan.render.as_ref().map(|set| {
                 set.iter()
@@ -97,8 +99,8 @@ impl SourceRender for PdfRender {
             ctx.consumed(head);
         }
         Ok(format!(
-            "converted={} skipped={} failed={}",
-            s.converted, skipped, s.failed
+            "converted={} skipped={} failed={} changed={}",
+            s.converted, skipped, s.failed, s.changed
         ))
     }
 }

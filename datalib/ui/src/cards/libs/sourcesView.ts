@@ -8,6 +8,10 @@ import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-them
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
 
-export function sourcesView(): CardRender {
-  return vueCard(SourcesCard, {}, { styleSources: [slickCss, tableGridCss, sourcesCardCss] });
+export function sourcesView(opts?: { add?: boolean }): CardRender {
+  return vueCard(
+    SourcesCard,
+    { add: opts?.add === true },
+    { styleSources: [slickCss, tableGridCss, sourcesCardCss] },
+  );
 }

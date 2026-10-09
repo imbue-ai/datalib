@@ -56,12 +56,13 @@ export const browseAction = (r: ManageRow) => r.actions.find((a) => a.id === "br
 function groupBrowse(g: ManageRow): string | null {
   if (!browseAction(g)?.enabled) return null;
   const type = g.type?.id ?? null;
-  if (!type) return "gridView()";
+  if (!type) return "searchView()";
   const columns = browseColumns(type);
   const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id, type))}`];
-  if (columns) args.push(`columns: ${JSON.stringify(columns)}`);
+  // A set of columns is something only the table shows.
+  if (columns) args.push(`columns: ${JSON.stringify(columns)}`, `view: "table"`);
   args.push(`name: ${JSON.stringify(browseName(g.name.label, type))}`);
-  return `gridView({ ${args.join(", ")} })`;
+  return `searchView({ ${args.join(", ")} })`;
 }
 
 /// A row's Browse: `system/` browses the run log, a group its view, a
@@ -192,17 +193,29 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
   }
 
   /// The problems behind a row's count, as a grid over the index's
-  /// `problems` table, its search bar holding the row's source. A step's
-  /// problems are its group's — the render store is where a source's
-  /// live — so a step row opens the same grid as its group. The index
-  /// group shows every source's.
+  /// `problems` table, its search bar holding what the row counts. The
+  /// index holds every step's, so a step row narrows to the stage it
+  /// counts: the download's are fetch-stage, render's the rest. The
+  /// index counts only the render stores it could not read
+  /// (`grid_index::UNREADABLE_STORE_KEY`).
   function openProblems(row: R, problemsUrl: string) {
     const sourceId = row.kind === "group" ? row.id : (row.group ?? row.id);
-    const q = sourceId === "unified_index" ? "" : `source_id:${sourceId}`;
+    const stage =
+      row.kind !== "step"
+        ? ""
+        : row.phase === "ingest"
+          ? " stage:fetch"
+          : row.phase === "render"
+            ? " -stage:fetch"
+            : "";
+    const q =
+      sourceId === "unified_index" ? "scope_key:render_store" : `source_id:${sourceId}${stage}`;
     const source =
       row.kind === "group" ? row : h.rows().find((r) => r.kind === "group" && r.id === sourceId);
     const name =
-      sourceId === "unified_index" ? "Problems" : `Problems: ${source?.name.label ?? sourceId}`;
+      sourceId === "unified_index"
+        ? "Problems: the index"
+        : `Problems: ${source?.name.label ?? sourceId}`;
     const opts = {
       url: problemsUrl,
       q,
@@ -343,8 +356,8 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
 
   /// Empty what these rows wrote, keeping the history. A render is
   /// rebuilt from what it reads at once; a download is not refilled, but
-  /// what reads it catches up, so its documents leave the grid. The
-  /// server runs it once no sync is running, and refuses it while one is.
+  /// what reads it catches up, so its documents leave the grid. Whatever
+  /// else is syncing, the rows' own steps are stopped and emptied at once.
   async function resetRows(targets: R[]) {
     const ids = resetTargets(targets);
     const names = targets.map((t) => t.name.label).join(", ");
@@ -363,8 +376,13 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
     if (!(await confirmAction(what))) return;
     await act(async () => {
       h.say(true, `Resetting ${names}…`);
-      await h.api.resetSteps(ids);
-      h.say(true, `Reset ${names}.`);
+      const done = await h.api.resetSteps(ids);
+      h.say(
+        true,
+        done === "done"
+          ? `Reset ${names}.`
+          : `Resetting ${names}: it is emptied as soon as it has stopped.`,
+      );
       await h.reload(true);
     });
   }

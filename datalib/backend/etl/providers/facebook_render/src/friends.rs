@@ -2,7 +2,8 @@
 //! gives a friend a name and the day the friendship was made, nothing
 //! more — no profile URL, no id.
 
-use datalib_etl_contact_common::{ContactField, ContactRenderProfile, NormalizedContact};
+use datalib_contact_schema::{ContactKind, Detail, NormalizedContact};
+use datalib_etl_contact_common::{ContactDoc, ContactRenderProfile};
 use datalib_etl_facebook::ingest::schema_raw::FRIENDS_TABLE;
 
 use crate::ids;
@@ -26,7 +27,7 @@ pub fn friends_profile(owner: &Owner) -> ContactRenderProfile {
     }
 }
 
-pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<NormalizedContact> {
+pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<ContactDoc> {
     friends
         .iter()
         .map(|(row_id, v)| {
@@ -39,21 +40,22 @@ pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<Normaliz
                 .and_then(datalib_time::IsoOffsetTimestamp::from_unix_millis)
                 .map(|t| t.to_rfc3339_secs());
             let id = ids::friend(&owner.source_id, row_id);
-            NormalizedContact {
-                contact_uuid: id.uuid,
+            let mut person =
+                NormalizedContact::new(&owner.source_id, id.natural_key, ContactKind::Person);
+            person.names = str_field(v, "name")
+                .map(str::to_string)
+                .into_iter()
+                .collect();
+            person.created_at = since.clone();
+            person.details = since
+                .map(|s| vec![Detail::new("Friends since", s)])
+                .unwrap_or_default();
+            ContactDoc {
+                contact: person,
+                doc_uuid: id.uuid,
                 group_uuid: ids::friends_group(&owner.source_id).uuid,
                 group_label: GROUP_LABEL.to_string(),
-                display_name: str_field(v, "name").map(str::to_string),
-                external_id: Some(id.natural_key),
                 upstream_account: None,
-                created_at: since.clone(),
-                modified_at: None,
-                source_url: None,
-                fields: since
-                    .map(|s| vec![ContactField::new("Friends since", s)])
-                    .unwrap_or_default(),
-                photo: None,
-                photo_url: None,
                 inputs: inputs.declared(),
             }
         })
@@ -79,10 +81,11 @@ mod tests {
         )];
         let contacts = build_friends(&rows, &owner);
         assert_eq!(contacts.len(), 1);
-        assert_eq!(contacts[0].display_name.as_deref(), Some("William Riker"));
+        assert_eq!(contacts[0].contact.name(), Some("William Riker"));
         assert_eq!(contacts[0].group_label, "Friends");
-        assert_eq!(contacts[0].fields[0].label, "Friends since");
+        assert_eq!(contacts[0].contact.details[0].label, "Friends since");
         assert!(contacts[0]
+            .contact
             .created_at
             .as_deref()
             .unwrap()

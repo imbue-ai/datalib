@@ -4,7 +4,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # model of a change request and its comments, the one document it
 # renders to and its grid rows. A provider's parse fills the model in
 # from its raw store; this does the rest. Render side: it knows
-# `datalib_schema`. Bazel-only (no Cargo.toml).
+# `datalib_schema`..
 rust_library(
     name = "datalib_etl_forge_render_common",
     srcs = glob(["src/**/*.rs"]),

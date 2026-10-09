@@ -75,8 +75,11 @@ impl LabelIndex {
                 moves.entry(by_name).or_insert_with(|| Some(id.clone()));
             }
         }
+        // Every account has the system labels, so a list that names
+        // nothing is a server that answered oddly; it must not take every
+        // label off every email.
         let prefix = labels::gmail_mailbox_prefix(account_id);
-        for id in held {
+        for id in held.iter().filter(|_| !listed.is_empty()) {
             if id.starts_with(&prefix) && !listed.contains(id.as_str()) {
                 moves.insert(id.clone(), None);
             }
@@ -222,8 +225,6 @@ pub fn normalize_thread_id(gmail_thread_id: &str) -> String {
 pub struct Ingested {
     pub row: EmailRow,
     pub email_id: String,
-    pub thread_id: String,
-    pub received_at: String,
     pub blob_id: String,
     pub raw: Vec<u8>,
     /// Canonical label paths, for the extract-time label filter.
@@ -281,8 +282,6 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
     Ok(Ingested {
         row,
         email_id,
-        thread_id,
-        received_at,
         blob_id,
         raw: msg.raw.clone(),
         label_paths: index.label_paths(&msg.label_ids),

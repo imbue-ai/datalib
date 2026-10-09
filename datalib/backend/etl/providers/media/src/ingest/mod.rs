@@ -12,10 +12,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
-use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
+use datalib_etl_files::fswalk;
 
 pub use db::{db_path_for, RawDb, WriteBatch};
 use kind::{Container, MediaClass};
@@ -41,7 +43,7 @@ pub struct FetchOptions {
     pub root: PathBuf,
     pub ignore: Vec<String>,
     /// This host's shared fingerprint cache. Host state, so it lives
-    /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
+    /// outside the scan store — see [`datalib_etl_files::fingerprint_cache`].
     pub cache: FingerprintCache,
     pub max_bytes: Option<u64>,
     pub payload_max_bytes: Option<u64>,
@@ -95,10 +97,19 @@ pub struct FetchSummary {
     /// Path rows dropped because this scan did not see them — files and
     /// playlists that are gone from the tree.
     pub removed: usize,
+    /// Items no path names any more, dropped with their class rows.
+    pub items_removed: usize,
     pub errors: usize,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let pool = opts.db.pool().clone();
+    // The scan has no stop to honour, so it always covers the whole tree.
+    let never_stops = StopFlag::new();
+    run_problems::collecting(&pool, &never_stops, |found| scan_tree(opts, found)).await
+}
+
+async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let now = datalib_time::parse_strict(&opts.now)
         .with_context(|| format!("parse the run's now {:?}", opts.now))?;
@@ -127,7 +138,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // — evicted to iCloud — must not be read at all: it has a size and
     // an mtime, and touching a byte silently pulls the whole thing back
     // over the network.
-    let dataless_skipped = std::sync::atomic::AtomicUsize::new(0);
+    let dataless = std::sync::Mutex::new(Vec::new());
     let scan = fsscan::scan_with(
         &opts.cache,
         &opts.root,
@@ -139,8 +150,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         kind::accept,
         |path, meta| {
             if opts.skip_dataless && is_dataless(meta) {
-                dataless_skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 tracing::info!(path = %path.display(), "media_skipped_dataless");
+                dataless.lock().unwrap().push(path.to_path_buf());
                 return false;
             }
             true
@@ -148,10 +159,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await?;
     summary.errors += scan.errors.len();
-    for e in &scan.errors {
-        tracing::warn!(path = %e.path.display(), error = %e.error, "media_walk_error");
+    scan.report_problems(&found, "files");
+    summary.dataless_skipped = dataless.into_inner().unwrap().len();
+    // A file the scan found and did not read — evicted to the cloud, or
+    // over `max_bytes` — is still there, so its rows stay.
+    let declined = scan.present_unread.clone();
+    for rel in &declined {
+        prev.paths.remove(rel);
+        prev.playlists.remove(rel);
     }
-    summary.dataless_skipped = dataless_skipped.into_inner();
     summary.entries_scanned = scan.files.len();
     summary.too_large = scan.stats.too_large;
     summary.hashed = scan.stats.hashed;
@@ -202,9 +218,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         batch.visual.push(v);
                     }
                 }
+                // Retried every scan: an item that never identified is
+                // not in `known_items`.
                 Err(e) => {
                     summary.errors += 1;
-                    tracing::warn!(path = %f.rel, error = %e, "media_identify_failed");
+                    found.record_failed("media_files", &f.rel, format!("{e:#}"));
                     continue;
                 }
             }
@@ -223,19 +241,42 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.db.write_batch(&batch, &now).await?;
 
     if opts.playlists {
-        scan_playlists(&opts, &now, &playlist_files, &mut prev, &mut summary).await?;
+        scan_playlists(
+            &opts,
+            &now,
+            &playlist_files,
+            &mut prev,
+            &mut summary,
+            &found,
+        )
+        .await?;
     }
 
     // Reconcile last. Whatever is still in the cache was never visited,
-    // so it is a path that is gone.
-    let gone_files: Vec<String> = prev.paths.into_keys().collect();
-    let gone_playlists: Vec<String> = prev.playlists.into_iter().collect();
-    summary.removed = (opts.db.delete_files(&gone_files).await?
-        + opts
-            .db
-            .delete_playlists(&gone_playlists)
-            .await
-            .context("delete vanished playlists")?) as usize;
+    // so it is a path that is gone — unless the walk reported errors, when
+    // an unreadable folder's files look gone too, and nothing is deleted.
+    if scan.errors.is_empty() {
+        let gone_files: Vec<String> = prev.paths.into_keys().collect();
+        let gone_playlists: Vec<String> = prev.playlists.into_iter().collect();
+        summary.removed = (opts.db.delete_files(&gone_files).await?
+            + opts
+                .db
+                .delete_playlists(&gone_playlists)
+                .await
+                .context("delete vanished playlists")?) as usize;
+        // An item is reached only through a path, so one no path names is
+        // gone from the tree. A file moved within it is named at its new
+        // path by now, and keeps its item.
+        summary.items_removed = opts.db.delete_unnamed_items().await? as usize;
+    }
+    // Every scan retries every file it could not read, so a row stands
+    // only on a path this scan did not try: under an entry the walk could
+    // not read, or found and not read (dataless, or over `max_bytes`).
+    let declined: std::collections::HashSet<String> = declined.into_iter().collect();
+    for table in ["media_files", "media_playlists"] {
+        let (declined, unseen) = (declined.clone(), scan.unseen());
+        found.records_tried_all_but(table, move |id| declined.contains(id) || unseen(id));
+    }
     Ok(summary)
 }
 
@@ -330,6 +371,7 @@ async fn scan_playlists(
     files: &[fsscan::ScannedFile],
     prev: &mut db::PrevCache,
     summary: &mut FetchSummary,
+    found: &RunProblems,
 ) -> Result<()> {
     let mut rows: Vec<MediaPlaylistRow> = Vec::new();
     let mut entries: Vec<MediaPlaylistEntryRow> = Vec::new();
@@ -339,19 +381,20 @@ async fn scan_playlists(
         if size == 0 || size > MAX_PLAYLIST_BYTES {
             continue;
         }
+        // Seen, whatever we decide about it below — an HLS manifest we
+        // skip, or one that would not read, is still not a playlist that
+        // vanished.
+        prev.playlists.remove(&f.rel);
         // No dataless check here: the scan's admit hook already refused
         // to read those, so they never reached this list.
         let bytes = match std::fs::read(&f.path) {
             Ok(b) => b,
             Err(e) => {
                 summary.errors += 1;
-                tracing::warn!(path = %f.rel, error = %e, "media_playlist_read_failed");
+                found.record_failed("media_playlists", &f.rel, e.to_string());
                 continue;
             }
         };
-        // Seen, whatever we decide about it below — an HLS manifest we
-        // skip is still not a playlist that vanished.
-        prev.playlists.remove(&f.rel);
 
         let parsed = playlist::parse(&bytes);
         if parsed.is_hls {

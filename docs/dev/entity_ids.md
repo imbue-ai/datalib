@@ -153,6 +153,16 @@ Two kinds of row are about a source's data without being it:
   are distinct from the source's by construction and nothing has to be
   re-keyed. `upstream_id` is the source's: it points at the real thing.
 
+### The one id a person mints
+
+A contact in the contacts app is keyed by `contact_id`, a random v4.
+It is the one exception to the rule: a contact is made by a person's
+act, not by a record, so there is no upstream data to derive it from,
+and nothing rebuilds it — the store is the only copy
+([`contacts.md`](contacts.md) §"The contacts app"). What a contact
+holds is keyed by handles, which are the upstream's own identifiers,
+never by a `grid_rows.uuid`, which moves when a recipe changes.
+
 ### Why not opaque random ids
 
 A v4 per row makes collisions impossible and is the obvious answer. It
@@ -281,7 +291,7 @@ back by render as the natural key.
 | apple_messages | none — `message.guid` is a UUID Messages mints | messages, tapbacks |
 | beeper | none — `rooms.account_id` is nullable; keys are Matrix ids | events, at millisecond precision |
 | calendar | none — keyed on `{calendar}#{UID}` (iCalendar) or `{calendar}#{event id}` (Google); a changed iCalendar occurrence adds its `RECURRENCE-ID` as a UTC instant | none — an event's start moves when it is rescheduled |
-| chatgpt | none — keys are OpenAI's conversation and message ids | messages |
+| chatgpt | none — keys are OpenAI's conversation id, and a message's `{conversation}#{message}`, since a conversation branched into a new chat repeats the original's message ids | messages |
 | claude | none — `org_uuid` is nullable (see above); keys are Anthropic's uuids | messages, blocks, project documents |
 | claude_code | none — session ids, record uuids and tool-use ids are all Claude Code's own | records, blocks |
 | codex | none — a thread id is Codex's own UUIDv7; a line is keyed by its number within the thread | records — each rollout line's own `timestamp` |
@@ -328,7 +338,7 @@ backup, and expect a re-key when you do:
    on every bucket whose id is not the chat's own — a period of a chat,
    a subagent's transcript. For contact-common providers,
    `ContactRenderProfile::contact_entity_kind` and
-   `NormalizedContact::{external_id, upstream_account}`.
+   `ContactDoc::upstream_account` (the external id is the contact's `key`).
 3. Thread `source_id` — the render's `ctx.name` — to wherever the ids
    are minted; a bucket key the driver hands back is the raw key, so
    a parse that narrows by it maps the id back (beeper, chatgpt,

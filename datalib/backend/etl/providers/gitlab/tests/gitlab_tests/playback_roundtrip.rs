@@ -5,8 +5,6 @@ use std::fs;
 use std::time::Duration;
 
 use datalib_etl::event_store::{diff_and_save, make_record};
-use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_gitlab::ingest::{
     block_on_load_all, db_path_for, fetch, FetchOptions, RawDb, ENTITY_DISCUSSION, ENTITY_MR,
     ENTITY_SELF,
@@ -14,6 +12,8 @@ use datalib_etl_gitlab::ingest::{
 use datalib_etl_gitlab::synthesize::GitlabSynth;
 use datalib_etl_gitlab_render::render::parse_api_dir;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 
@@ -61,7 +61,8 @@ async fn gitlab_synth_playback_extract_roundtrip() {
     write_event(&api, ENTITY_DISCUSSION, k, disc_raw.clone());
 
     let report = GitlabSynth::new(&api).synthesize(&playback).unwrap();
-    assert_eq!(report.fixtures_written, 6);
+    // 1 user + 3 scopes + 3 resumed ones + 1 MR detail + 1 discussions
+    assert_eq!(report.fixtures_written, 9);
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
@@ -72,7 +73,7 @@ async fn gitlab_synth_playback_extract_roundtrip() {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), crate::tng_now())
     })
     .await;
     // Seal on the same handle, the way the download step's

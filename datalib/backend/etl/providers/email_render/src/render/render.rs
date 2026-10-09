@@ -12,11 +12,15 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, Recipient,
+    RecipientRole, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::Lookup;
+use datalib_handle::Handle;
 use datalib_schema::providers::Provider;
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 
@@ -37,7 +41,10 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 ///     Every uuid moved, `chat_uuid` among them.
 /// v10: the label line leads with Starred and Important, and leaves out
 ///     Gmail's All Mail.
-pub const RENDER_VERSION: u32 = 10;
+/// v11: the author span carries the author's handle as `data-handle`.
+/// v12: a recipients line (To, Cc) under the header, each with its handle.
+/// v13: Bcc on the recipients line, and an `@` mention drawn as a chip.
+pub const RENDER_VERSION: u32 = 13;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -117,6 +124,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Email Reaction".to_string(),
         chat_entity_kind: ids::KIND_THREAD,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -136,6 +144,14 @@ pub fn render_params(outlink: Option<OutlinkFormat>, only_labels: &[String]) -> 
     })
 }
 
+/// What [`render_all`] did with the threads it was handed.
+pub struct Rendered {
+    pub buckets: Buckets,
+    /// The threads the label filter keeps out, by bucket key: left out
+    /// on purpose, so their documents go.
+    pub excluded: Vec<String>,
+}
+
 pub fn render_all(
     parsed: &ParsedEmail,
     root: &std::path::Path,
@@ -144,7 +160,7 @@ pub fn render_all(
     only_labels: &[String],
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<Buckets> {
+) -> Result<Rendered> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
         source = source_id,
@@ -203,19 +219,26 @@ pub fn render_all(
     // Thread-level inclusion: keep the whole thread if ANY of its
     // emails is filed under an allowed mailbox, so conversations
     // aren't fragmented across the filter boundary.
-    let in_scope = |bucket: &&super::parse::EmailThreadBucket| {
-        !bucket.emails.is_empty()
-            && label_allow.as_ref().is_none_or(|allow| {
-                bucket.emails.iter().any(|em| {
-                    bucket
-                        .joins
-                        .mailboxes
-                        .get(&em.id)
-                        .is_some_and(|ids| ids.iter().any(|m| allow.contains(m)))
-                })
+    let allowed = |bucket: &&super::parse::EmailThreadBucket| {
+        label_allow.as_ref().is_none_or(|allow| {
+            bucket.emails.iter().any(|em| {
+                bucket
+                    .joins
+                    .mailboxes
+                    .get(&em.id)
+                    .is_some_and(|ids| ids.iter().any(|m| allow.contains(m)))
             })
+        })
     };
-    let threads: Vec<_> = parsed.docs.iter().filter(in_scope).collect();
+    let (threads, filtered): (Vec<_>, Vec<_>) = parsed
+        .docs
+        .iter()
+        .filter(|bucket| !bucket.emails.is_empty())
+        .partition(allowed);
+    let excluded = filtered
+        .iter()
+        .map(|b| ids::thread(source_id, &b.account_id, &b.thread_id).uuid)
+        .collect();
     // One document per thread. Each thread is built as it renders:
     // building means parsing every `.eml` and converting its HTML, which
     // for a large mailbox is minutes of work nobody would see.
@@ -234,7 +257,10 @@ pub fn render_all(
             .render_chat(&chat, &bundle)
             .context("email chat-common render")?;
     }
-    Ok(renderer.finish().buckets)
+    Ok(Rendered {
+        buckets: renderer.finish().buckets,
+        excluded,
+    })
 }
 
 /// The `accounts` row is a JMAP `Account` object, a Gmail stand-in
@@ -364,6 +390,9 @@ fn build_chat(
         let body = email_body_markdown(&parsed_eml, atts, &materialized, &inline_cid_to_fname)
             .unwrap_or_default();
         let (fresh, quoted) = split_quoted(&body);
+        // Only the fresh part: a quoted reply repeats the mentions of the
+        // message it quotes.
+        let (fresh, mentions) = super::mentions::mention_chips(&fresh);
 
         // Its flags and the mailboxes it is filed under: drawn above the
         // body, and kept out of the row's Contents.
@@ -405,7 +434,7 @@ fn build_chat(
         if !trailing.is_empty() {
             text.push_str("\n\n### Attachments\n");
             for a in trailing {
-                let label = a.name.clone().unwrap_or_else(|| a.part_id.clone());
+                let label = escape_md_inline(a.name.as_deref().unwrap_or(&a.part_id));
                 match materialized.get(&a.blob_id) {
                     Some(fname) => text.push_str(&format!("\n- [{label}](blobs/{fname})")),
                     None => text.push_str(&format!("\n- {label} _(blob not materialized)_")),
@@ -435,7 +464,7 @@ fn build_chat(
             .is_some_and(|kws| kws.iter().any(|k| k == "$seen"));
         items.push(NormalizedChatItem {
             message_uuid: email_id.uuid.clone(),
-            author_id: em.account_id.clone(),
+            author_handle: parsed_eml.from_handle.clone(),
             author_display: if parsed_eml.from_display.is_empty() {
                 "(unknown sender)".to_string()
             } else {
@@ -453,7 +482,10 @@ fn build_chat(
             kind_label: None,
             source_ref: Some(UpstreamRef::new(email_id.entity_kind, email_id.natural_key)),
             is_aside: false,
+            branch: Vec::new(),
             unread,
+            recipients: parsed_eml.recipients.clone(),
+            mentions,
             problems,
         });
     }
@@ -461,6 +493,7 @@ fn build_chat(
     // The thread's title `↗` points at the root (first) email's outlink.
     let thread_source_url = items.first().and_then(|i| i.source_url.clone());
     let mut chat = NormalizedChat {
+        contacts: Vec::new(),
         inputs: Vec::new(),
         path_prefix: None,
         id: tuid.clone(),
@@ -619,6 +652,8 @@ struct InlinePart {
 #[derive(Default)]
 struct ParsedEml {
     from_display: String,
+    from_handle: Option<Handle>,
+    recipients: Vec<Recipient>,
     text_body: String,
     html_body: String,
     inline_parts: Vec<InlinePart>,
@@ -630,6 +665,33 @@ impl ParsedEml {
             return Self::default();
         };
         let from_display = format_address(msg.from());
+        let from_handle = msg
+            .from()
+            .and_then(|a| a.iter().next())
+            .and_then(|a| a.address())
+            .and_then(Handle::email);
+        let recipients = [
+            (RecipientRole::To, msg.to()),
+            (RecipientRole::Cc, msg.cc()),
+            (RecipientRole::Bcc, msg.bcc()),
+        ]
+        .into_iter()
+        .flat_map(|(role, addrs)| {
+            addrs
+                .into_iter()
+                .flat_map(|a| a.iter())
+                .filter_map(move |a| {
+                    let address = a.address().unwrap_or_default();
+                    let name = a.name().unwrap_or_default();
+                    let display = if name.is_empty() { address } else { name };
+                    (!display.is_empty()).then(|| Recipient {
+                        role,
+                        display: display.to_string(),
+                        handle: Handle::email(address),
+                    })
+                })
+        })
+        .collect();
         let mut text_body = String::new();
         for &idx in &msg.text_body {
             if let Some(part) = msg.part(idx) {
@@ -664,6 +726,8 @@ impl ParsedEml {
         }
         Self {
             from_display,
+            from_handle,
+            recipients,
             text_body,
             html_body,
             inline_parts,
@@ -707,7 +771,7 @@ fn is_inline_attachment(a: &LoadedAttachment) -> bool {
 
 /// Render one email's body to markdown. Prefers the HTML part (htmd
 /// after rewriting `cid:` srcs to materialized blobs); falls back to
-/// plaintext with a light URL-autolink pass.
+/// the plain-text part, escaped.
 fn email_body_markdown(
     parsed: &ParsedEml,
     attachments: &[LoadedAttachment],
@@ -726,12 +790,7 @@ fn email_body_markdown(
     }
 
     if !parsed.html_body.trim().is_empty() {
-        let rewritten = rewrite_cid_srcs(&parsed.html_body, &cid_to_blob);
-        let md = htmd::HtmlToMarkdown::builder()
-            .skip_tags(vec!["script", "style", "head"])
-            .build()
-            .convert(&rewritten)
-            .unwrap_or_default();
+        let md = html_markdown(&rewrite_cid_srcs(&parsed.html_body, &cid_to_blob));
         if !md.trim().is_empty() {
             return Some(md);
         }
@@ -739,7 +798,31 @@ fn email_body_markdown(
     if parsed.text_body.trim().is_empty() {
         return None;
     }
-    Some(autolink_bare_urls(&parsed.text_body))
+    Some(plain_body_markdown(&parsed.text_body))
+}
+
+/// An HTML body as markdown.
+pub(crate) fn html_markdown(html: &str) -> String {
+    htmd::HtmlToMarkdown::builder()
+        .skip_tags(vec!["script", "style", "head"])
+        .build()
+        .convert(html)
+        .unwrap_or_default()
+}
+
+/// A `text/plain` body as markdown that reads as the sender typed it:
+/// every line escaped as plain text, bare URLs made links, and the
+/// leading `>` marks of a quoted reply kept as markdown quotes — they
+/// mean one, and they are what [`split_quoted`] folds.
+fn plain_body_markdown(text: &str) -> String {
+    text.split('\n')
+        .map(|line| {
+            let rest = line.trim_start_matches(['>', ' ', '\t']);
+            let quote_marks = &line[..line.len() - rest.len()];
+            format!("{quote_marks}{}", autolink_bare_urls(rest))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn rewrite_cid_srcs(html: &str, cid_to_blob: &HashMap<String, String>) -> String {
@@ -786,10 +869,10 @@ fn autolink_bare_urls(s: &str) -> String {
     while i < s.len() {
         let rest = &s[i..];
         let Some(pos) = rest.find("http://").or_else(|| rest.find("https://")) else {
-            out.push_str(rest);
+            out.push_str(&escape_md_block(rest));
             break;
         };
-        out.push_str(&rest[..pos]);
+        out.push_str(&escape_md_block(&rest[..pos]));
         let after = &rest[pos..];
         let end = after
             .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
@@ -803,12 +886,12 @@ fn autolink_bare_urls(s: &str) -> String {
             }
         }
         if url.is_empty() {
-            out.push_str(&after[..end]);
+            out.push_str(&escape_md_block(&after[..end]));
         } else {
             out.push('<');
             out.push_str(url);
             out.push('>');
-            out.push_str(&after[url.len()..end]);
+            out.push_str(&escape_md_block(&after[url.len()..end]));
         }
         i += pos + end;
     }
@@ -818,6 +901,42 @@ fn autolink_bare_urls(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `text/plain` email is what the sender typed: a `<b>` in it is
+    /// those three characters, not bold, and a URL in it is still a link.
+    #[test]
+    fn a_plain_text_body_reads_as_typed() {
+        let typed = "<script>x</script> & co\n\
+                     # not a heading\n\
+                     see https://e.invalid/log?a=1&b=2.\n\
+                     \n\
+                     On Tue, Apr 14, Data <data@enterprise.invalid> wrote:\n\
+                     > The warp core is at <99.7%>.\n\
+                     > Proceed?";
+        let md = plain_body_markdown(typed);
+        assert_eq!(
+            md,
+            "&lt;script&gt;x&lt;/script&gt; &amp; co\n\
+             \\# not a heading\n\
+             see <https://e.invalid/log?a=1&b=2>.\n\
+             \n\
+             On Tue, Apr 14, Data &lt;data@enterprise.invalid&gt; wrote:\n\
+             > The warp core is at &lt;99.7%&gt;.\n\
+             > Proceed?"
+        );
+        let (fresh, quoted) = split_quoted(&md);
+        assert!(
+            fresh
+                .trim_end()
+                .ends_with("see <https://e.invalid/log?a=1&b=2>."),
+            "{fresh}"
+        );
+        let quoted = quoted.expect("the reply history still folds");
+        assert!(
+            quoted.contains("> The warp core is at &lt;99.7%&gt;."),
+            "{quoted}"
+        );
+    }
 
     #[test]
     fn split_quoted_folds_attribution_and_keeps_fresh() {

@@ -4,19 +4,21 @@
 // the last sync did, notices as strips above the table, and a status
 // column that says its word before its time. Its logic is
 // sourcesCardModel.ts.
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import type { Column } from "@slickgrid-universal/common";
 import type { CardCtx } from "./types";
-import type { StatusView } from "@/api";
+import type { Quantity, StatusView } from "@/api";
+import { quantityText, renderQuantity } from "./cellRenderers";
 import TableGrid from "./TableGrid.ce.vue";
 import SourceWizard from "@/components/SourceWizard.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import { SOURCES_HELP, useSourcesCard, type Row } from "./sourcesCardModel";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { density } from "@/density";
-import { statusTone } from "./home";
+import { statusTone } from "./dashboard";
 
-const props = defineProps<{ ctx: CardCtx }>();
+// `add`: open on the add-source form, as the Dashboard's "Add source" does.
+const props = defineProps<{ ctx: CardCtx; add?: boolean }>();
 
 props.ctx.setTitle("Sources");
 props.ctx.setHelp(SOURCES_HELP);
@@ -43,6 +45,8 @@ const {
   onCellDoubleClicked,
   onCellEdit,
   onRowGroupOpened,
+  isMovable,
+  onRowMove,
   wizardOpen,
   wizardKey,
   takenIds,
@@ -64,10 +68,24 @@ const headLine = computed(() => banner.value ?? runLine.value);
 
 const configBlocked = computed(() => busy.value || !!parseError.value || !!configError.value);
 
-/// The status as a word first, then when: "Failed · 2 hours ago". The
-/// mark carries the word for assistive tech (`role="img"`), and the
-/// cell keeps the shared `tg-status*` classes the tests read it by.
-function statusCell(s: StatusView | null): HTMLElement {
+/// A part of the status cell that is a quantity: its figure, or the
+/// word it has in place of one, then what the figure counts.
+function quantityPart(cls: string, q: Quantity, counted: string): HTMLElement {
+  const part = document.createElement("span");
+  part.className = cls;
+  if (q.detail) part.title = q.detail;
+  const figure = renderQuantity(q);
+  part.appendChild(figure);
+  if (q.value != null) part.append(` ${counted}`);
+  return part;
+}
+
+/// The status as a word first, then when: "Failed · 2 hours ago". A row
+/// with work queued goes on to say how much and when it is done:
+/// "Running · 2 minutes ago · 1,204 to go · 3m left". The mark carries
+/// the word for assistive tech (`role="img"`), and the cell keeps the
+/// shared `tg-status*` classes the tests read it by.
+function statusCell(s: StatusView | null, row: Row | undefined): HTMLElement {
   const wrap = document.createElement("span");
   if (!s) return wrap;
   const key = s.key.replace(/[\s_]+/g, "-");
@@ -90,19 +108,32 @@ function statusCell(s: StatusView | null): HTMLElement {
     when.title = formatStamp(s.at);
     wrap.appendChild(when);
   }
+  if (row && quantityText(row.queue)) {
+    wrap.appendChild(quantityPart("sx-queue", row.queue, "to go"));
+  }
+  if (row && quantityText(row.eta)) wrap.appendChild(quantityPart("sx-eta", row.eta, "left"));
   return wrap;
 }
 
+// Narrower than their types' defaults, so more of the table is in view
+// before it scrolls sideways; Status is wider, for the queue and the ETA.
 const columnOverrides: Record<string, Partial<Column<Row>>> = {
+  name: { width: 270 },
   status: {
-    width: 220,
-    formatter: (_r, _c, value) => statusCell(value as StatusView | null),
+    width: 250,
+    formatter: (_r, _c, value, _col, row) => statusCell(value as StatusView | null, row),
   },
+  items: { width: 140 },
+  disk: { width: 140 },
 };
 
-// Rows sized to the density switch; the grid reads its height once, so
-// a switch rebuilds it.
-const rowHeight = computed(() => (density.value === "comfortable" ? 36 : 28));
+onMounted(() => {
+  if (props.add) openAdd();
+});
+
+// Rows sized to the density; the grid reads its height once, so a
+// change rebuilds it.
+const rowHeight = computed(() => Math.round(28 + 8 * density.value));
 </script>
 
 <template>
@@ -176,10 +207,12 @@ const rowHeight = computed(() => (density.value === "comfortable" ? 36 : 28));
         :pinnedColumns="1"
         :columnOverrides="columnOverrides"
         :rowHeight="rowHeight"
+        :movable="isMovable"
         @ready="onGridReady"
         @cellDoubleClick="onCellDoubleClicked"
         @edit="onCellEdit"
         @rowGroupOpened="onRowGroupOpened"
+        @move="onRowMove"
       />
     </div>
 

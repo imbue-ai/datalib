@@ -8,8 +8,9 @@
 //
 //   1. **The Pipeline table shows the whole chain in flight at once.**
 //      The index's Queue cell counts the work its producers handed it;
-//      each render and the index behind it read Running *while the
-//      download is still Running* — not queued behind it.
+//      each render and the index behind it read Running, or Waiting for
+//      the next seal once it has read the last, *while the download is
+//      still Running* — not Queued behind it.
 //   2. **Rows reach the Explore grid before the download that produced
 //      them finishes.** The grid was opened and searched before the sync
 //      began, and is never touched again; it refetches itself when the
@@ -32,22 +33,23 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { rmSync, writeFileSync } from "node:fs";
 import {
-  GRID,
-  savedConfig,
   expandGroup,
+  GRID,
+  type GridApi,
+  MANAGE_WITH_CONFIG,
   pipelineRow,
   readRow,
-  searchAndSettle,
-  settleRow,
-  settleRunner,
-  stampsBefore,
-  statusOf,
-  MANAGE_WITH_CONFIG,
-  TABLE_ROWS,
+  savedConfig,
   SEARCH_ROWS,
+  searchAndSettle,
   searchHeader,
   selectRowByUuid,
-  type GridApi,
+  settleRow,
+  settleRunner,
+  shownCards,
+  stampsBefore,
+  statusOf,
+  TABLE_ROWS,
 } from "./grid-helpers";
 import { expectSanePaints, watchPaints } from "./paint-watch";
 
@@ -288,12 +290,16 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
       .evaluateAll((els) => els.forEach((el) => el.setAttribute("data-probe", "")));
 
     // ── 1. the Pipeline table shows the whole chain in flight ───────
-    // Every row Running in one reading: both downloads, the render
-    // behind each, and the index behind both, with a figure in the
-    // index's Queue: the scheduler keeps a `queued` gauge per producer.
+    // In one reading: both downloads Running, the render behind each and
+    // the index behind both started (Running, or Waiting between passes),
+    // and a figure in the index's Queue: the scheduler keeps a `queued`
+    // gauge per producer.
     let last = await readRows(page, STEPS);
-    const inFlight = () =>
-      STEPS.every((id) => last.status[id] === "Running") && /^[\d,]+$/.test(last.queue[INDEX]);
+    const started = (id: string) =>
+      INGESTS.includes(id)
+        ? last.status[id] === "Running"
+        : ["Running", "Waiting"].includes(last.status[id]);
+    const inFlight = () => STEPS.every(started) && /^[\d,]+$/.test(last.queue[INDEX]);
     await expect
       .poll(
         async () => {
@@ -386,7 +392,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
       .toBe("Running");
 
     await pipelineRow(page, ingest).locator('[col-id="status"] .tg-status').dblclick();
-    const log = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+    const log = shownCards(page).filter({ has: page.locator(".rl-panel") });
     const lines = log.locator(".rl-grid .slick-row:not(.slick-group)");
     await expect(lines.first()).toBeVisible({ timeout: 10_000 });
     const before = await logLineCount(log);

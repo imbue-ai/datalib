@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { BUILTIN_META, cardMeta, galleryBuiltins } from "../src/cards/catalog";
+import { BUILTIN_META, byAudience, cardMeta, galleryBuiltins } from "../src/cards/catalog";
 import { CARD_GLYPHS, DEFAULT_CARD_ICON, resolveIcon } from "../src/cards/icons";
 import { frontendManifest } from "../src/cards/frontendRegistry";
 import type { Meta } from "../src/api";
@@ -21,12 +21,60 @@ describe("the card catalog", () => {
     }
   });
 
-  it("offers Home first in the gallery, then Sources", () => {
-    expect(
-      galleryBuiltins()
-        .slice(0, 2)
-        .map((e) => e.source),
-    ).toEqual(["homeView()", "sourcesView()"]);
+  it("offers Sources first among the builtins", () => {
+    expect(galleryBuiltins()[0].source).toBe("sourcesView()");
+  });
+
+  /** The gallery's two groups come from each entry's own `devTool`, not from a list of names. */
+  it("lists the developer tools apart from the views, each group by title", () => {
+    const { views, devTools } = byAudience(galleryBuiltins());
+    expect(views.map((e) => e.title)).toEqual([
+      "Embedding map",
+      "Manage data sources",
+      "Markdown Document",
+      "Perseus corpus",
+      "Search",
+    ]);
+    // Case-blind: config.toml sits among the capitals.
+    expect(devTools.map((e) => e.title)).toEqual([
+      "Component library",
+      "config.toml",
+      "DACTAL explorer",
+      "Dashboard: Latest activity",
+      "Dashboard: Needs you",
+      "Dashboard: Sources overview",
+      "Dashboard: Sync",
+      "Dashboard: Your library",
+      "Logs",
+      "Pipeline DAG",
+      "Table",
+    ]);
+  });
+
+  it("sorts an entry of any kind into its group by its title", () => {
+    const { views, devTools } = byAudience([
+      { title: "Zebra" },
+      { title: "apple", devTool: true },
+      { title: "Mango" },
+      { title: "Banana", devTool: true },
+    ]);
+    expect(views.map((e) => e.title)).toEqual(["Mango", "Zebra"]);
+    expect(devTools.map((e) => e.title)).toEqual(["apple", "Banana"]);
+  });
+
+  it("reads a custom component's dev_tool as its devTool", () => {
+    manifest("user", {
+      probe: {
+        title: "Probe",
+        description: "",
+        component_hash: "a",
+        component_args: [],
+        dev_tool: true,
+      },
+      tetris: { title: "Tetris", description: "", component_hash: "b", component_args: [] },
+    });
+    expect(cardMeta("comp.user.probe()")?.devTool).toBe(true);
+    expect(cardMeta("comp.user.tetris()")?.devTool).toBe(false);
   });
 
   it("answers for a builtin by the factory the source calls", () => {

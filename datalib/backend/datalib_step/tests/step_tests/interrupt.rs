@@ -9,9 +9,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_slack::recorded::record_workspace;
 use datalib_etl_slack::synthesize::SlackSynth;
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Value};
 
 const STEP: &str = "work-slack/ingest";

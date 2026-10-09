@@ -50,11 +50,17 @@ pub const ENV_READS: &str = "DATALIB_READS";
 /// step so all stamped outputs agree. Steps that record times should
 /// prefer it over sampling their own clock.
 pub const ENV_NOW: &str = "DATALIB_DAG_NOW";
-/// Set by `datalib-dag --reset`, and then the step does no work: it
-/// empties what the value names — always `store` — commits that, and exits. The
-/// runner then forgets the step ever succeeded, so the next run does its
-/// work from the start.
-pub const ENV_RESET: &str = "DATALIB_DAG_RESET";
+/// Appended, with the part to empty (`store`), by `datalib-dag --reset`:
+/// the step does no work but empty that part, commit and exit. The runner
+/// then forgets the step ever succeeded, so the next run does its work
+/// from the start. A verb rides on argv rather than in the environment so
+/// that a command which does not know it refuses it instead of running.
+pub const RESET_FLAG: &str = "--reset";
+/// Appended by a launch after an upgrade, to a step that takes it
+/// (`StepSpec::migrates`): the step brings what it wrote to this build's
+/// shape where it can do that in place, fetches nothing, and says in its
+/// outcome when it cannot (`needs_rerun`).
+pub const MIGRATE_FLAG: &str = "--migrate";
 /// Seconds between a step's checkpoints, at most — see
 /// `config::CheckpointCadence`.
 pub const ENV_CHECKPOINT_CADENCE: &str = "DATALIB_DAG_CHECKPOINT_CADENCE";
@@ -105,6 +111,10 @@ pub fn write_params_file(
 struct WireOutcome {
     #[serde(default)]
     outputs: Vec<WireArtifactState>,
+    /// A `--migrate` answer: what this step wrote is in a shape it cannot
+    /// reach in place, so it has to run again.
+    #[serde(default)]
+    needs_rerun: bool,
     /// Set (with a non-zero exit) to classify the failure.
     #[serde(default)]
     failure: Option<FailureKind>,
@@ -270,8 +280,10 @@ pub(crate) async fn run_subprocess(
         .with_context(|| format!("spawn {prog:?}"))
         .map_err(internal)?;
     let _pid_guard = child.id().map(RegisteredChild::new);
-    // Aborted when the step exits, so a rung is only ever sent to a group
-    // whose leader is still there to be reaped.
+    // Aborted once the step has exited and its pipes have closed. Not at
+    // the exit alone: a child the step left behind is still in the group,
+    // holding stderr, and the drain below waits on it. While any member is
+    // alive the group's id cannot be reused, so a rung reaches only them.
     let stop_task = child.id().map(|pid| {
         let mut stop = ctx.stop.clone();
         tokio::spawn(async move {
@@ -363,16 +375,16 @@ pub(crate) async fn run_subprocess(
         .await
         .context("wait for subprocess")
         .map_err(internal)?;
+    let stderr_tail = stderr_task.await.unwrap_or_default();
     if let Some(t) = stop_task {
         t.abort();
     }
-    let stderr_tail = stderr_task.await.unwrap_or_default();
 
     if status.success() {
+        let w = outcome.unwrap_or_default();
         Ok(StepOutcome {
-            outputs: outcome
-                .map(|w| w.into_outputs(sink, &ctx.step_id))
-                .unwrap_or_default(),
+            needs_rerun: w.needs_rerun,
+            outputs: w.into_outputs(sink, &ctx.step_id),
             exit: Some(status.into()),
         })
     } else {
@@ -407,33 +419,102 @@ pub(crate) async fn run_subprocess(
 /// The part of a step's stderr that belongs in its error message. Every
 /// line is already in the run store; the message is what a person reads
 /// on the Manage row's hover, so it keeps only what they could not guess
-/// from "it failed": plain lines (a panic, a shell's complaint) and the
-/// message of a structured warn/error line. A structured info line — the
-/// bulk of a tracing stream — is dropped, JSON envelope and all.
+/// from "it failed", and says the cause first: the last unbroken run of
+/// panic or error lines. After it come the warnings, plain lines and
+/// earlier errors around it, in order. A structured line below `warn` —
+/// the bulk of a tracing stream — is dropped, and so are a panic's
+/// backtrace and the per-record `problems_recorded` summary, which says
+/// what happened to records rather than why the step ended.
 #[derive(Default)]
 struct ErrorTail {
-    lines: Vec<String>,
+    /// Each kept line is numbered, so an earlier cause can rejoin the
+    /// context in its place.
+    seen: u64,
+    cause: Vec<(u64, String)>,
+    context: Vec<(u64, String)>,
+    cause_open: bool,
+    in_panic: bool,
+    in_backtrace: bool,
 }
 
 impl ErrorTail {
     const KEEP: usize = 8;
 
     fn consider(&mut self, event: &Event, raw: &str) {
-        let Event::Log { level, msg, .. } = event else {
+        let Event::Log {
+            level, msg, fields, ..
+        } = event
+        else {
             return;
         };
         let structured = msg != raw;
-        if structured && *level == LogLevel::Info {
+        if structured {
+            self.in_panic = false;
+            self.in_backtrace = false;
+        }
+        let about_records = fields
+            .as_ref()
+            .and_then(|f| f.get("event"))
+            .and_then(|e| e.as_str())
+            == Some("problems_recorded");
+        let backtrace_hint = msg.starts_with("note: ") && msg.contains("RUST_BACKTRACE");
+        if msg.trim().is_empty() || backtrace_hint || about_records {
             return;
         }
-        if self.lines.len() == Self::KEEP {
-            self.lines.remove(0);
+        if !structured {
+            if msg == "stack backtrace:" {
+                self.in_panic = false;
+                self.in_backtrace = true;
+            }
+            // Every frame line is indented; the first line that is not
+            // ends the backtrace.
+            if self.in_backtrace && (msg == "stack backtrace:" || msg.starts_with(' ')) {
+                return;
+            }
+            self.in_backtrace = false;
+            if msg.starts_with("thread '") && msg.contains(" panicked at ") {
+                self.in_panic = true;
+            }
         }
-        self.lines.push(msg.clone());
+        let is_cause = self.in_panic || (structured && *level == LogLevel::Error);
+        if !is_cause {
+            self.cause_open = false;
+        }
+        if structured && !matches!(level, LogLevel::Warn | LogLevel::Error) {
+            return;
+        }
+        self.seen += 1;
+        let line = (self.seen, msg.clone());
+        if !is_cause {
+            Self::push(&mut self.context, line);
+            return;
+        }
+        if !self.cause_open {
+            self.cause_open = true;
+            self.context.append(&mut self.cause);
+            self.context.sort_by_key(|(n, _)| *n);
+            Self::trim(&mut self.context);
+        }
+        Self::push(&mut self.cause, line);
+    }
+
+    fn push(lines: &mut Vec<(u64, String)>, line: (u64, String)) {
+        lines.push(line);
+        Self::trim(lines);
+    }
+
+    fn trim(lines: &mut Vec<(u64, String)>) {
+        let over = lines.len().saturating_sub(Self::KEEP);
+        lines.drain(..over);
     }
 
     fn join(&self) -> String {
-        self.lines.join("\n")
+        self.cause
+            .iter()
+            .chain(&self.context)
+            .map(|(_, line)| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -953,6 +1034,60 @@ mod tests {
         until("the step's child to go with it", || !alive(child)).await;
     }
 
+    /// The regression: a stopped `keyword_index` exited at its own grace
+    /// and left node running in its group, holding its stderr. The runner
+    /// had dropped the kill when the step exited, then waited on that
+    /// stderr until node finished on its own.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn what_a_stopped_step_leaves_behind_is_killed_after_the_grace() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().join("g/leaver");
+        let spec = StepSpec::new(
+            "g/leaver",
+            sh(r#"
+                trap 'exit 130' INT
+                out="$DATALIB_DAG_DATA_ROOT/g/leaver"
+                mkdir -p "$out"
+                (trap '' INT; exec sleep 120) >/dev/null &
+                echo $! > "$out/grandchild.pid"
+                while :; do sleep 0.1; done
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let (stop, stop_rx) = tokio::sync::watch::channel(false);
+        let mut runner = Runner::new(root.path()).stop_on(stop_rx);
+        runner.stop_grace = std::time::Duration::from_millis(300);
+        let round = tokio::spawn(async move { runner.run(&g).await });
+
+        let grandchild = || -> Option<libc::pid_t> {
+            std::fs::read_to_string(out.join("grandchild.pid"))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+        };
+        until("the step to spawn a child of its own", || {
+            grandchild().is_some()
+        })
+        .await;
+        let child = grandchild().unwrap();
+        stop.send(true).unwrap();
+        let rep = tokio::time::timeout(std::time::Duration::from_secs(20), round)
+            .await
+            .expect("the round waited on the step's leftover child")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            rep.step("g/leaver").status,
+            StepStatus::Failed {
+                kind: FailureKind::Cancelled
+            }
+        );
+        until("the leftover child to be killed", || !alive(child)).await;
+    }
+
     /// A step is told the version of each input it was started against, as
     /// the runner recorded it — which is how the qmd index versions itself
     /// by what it indexed.
@@ -1157,6 +1292,31 @@ mod tests {
         assert_eq!(queued, vec![7, 0, 3, 0]);
     }
 
+    /// A step that seals and then finishes on the commit it sealed moved
+    /// its output this run. The summary used to keep only the last thing
+    /// it heard, the finish, which matched the seal, and so said
+    /// "unchanged" for an output the round had moved.
+    #[tokio::test]
+    async fn the_summary_says_changed_for_an_output_moved_by_a_seal() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "src/raw",
+            sh(r#"
+                mkdir -p "$DATALIB_DAG_DATA_ROOT/src/raw"
+                echo '{"event":"capabilities","step":"me","streams_output":true}'
+                echo '{"event":"checkpoint","step":"me","version":"v1"}'
+                echo '{"event":"outcome","outputs":[{"path":"src/raw","version":"v1"}]}'
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let r = Runner::new(root.path());
+        let first = r.run(&g).await.unwrap();
+        assert!(first.all_ok(), "{first:#?}");
+        assert!(first.step("src/raw").outputs[0].2, "{first:#?}");
+        let second = r.run(&g).await.unwrap();
+        assert!(!second.step("src/raw").outputs[0].2, "{second:#?}");
+    }
+
     /// A seal a child announces on stdout reaches the event stream once.
     /// It used to arrive twice -- forwarded from the wire, and again from
     /// the scheduler when the signal reached it -- so every subprocess
@@ -1344,9 +1504,10 @@ mod tests {
         );
     }
 
-    /// `--reset` invokes the step with `DATALIB_DAG_RESET` naming the
-    /// part, and forgets the step's last success, so the next run runs it
-    /// again with nothing marked as changed.
+    /// `--reset` appends `--reset store` to the step's argv, and forgets
+    /// the step's last success, so the next run runs it again with nothing
+    /// marked as changed. A verb on argv, not in the environment: a command
+    /// that does not know it refuses it rather than running as if synced.
     #[tokio::test]
     async fn a_reset_invokes_the_step_with_the_part_and_forgets_its_success() {
         let root = tempfile::tempdir().unwrap();
@@ -1354,7 +1515,7 @@ mod tests {
             "src/raw",
             sh(r#"
                 mkdir -p src/raw
-                echo "${DATALIB_DAG_RESET:-run}" >> src/raw/log.txt
+                if [ "$0" = --reset ]; then echo "$1"; else echo run; fi >> src/raw/log.txt
             "#),
         );
         let g = Graph::build(vec![spec]).unwrap();
@@ -1383,15 +1544,84 @@ mod tests {
         assert!(err.to_string().contains("no such step"), "{err:#}");
     }
 
+    /// `--migrate` is appended to argv. A step that migrated in place
+    /// reports its new version, which the record takes and keeps its last
+    /// success; one that cannot answers `needs_rerun`, which the record
+    /// keeps and the rerun offer names until the step next succeeds.
+    #[tokio::test]
+    async fn a_migrate_records_each_steps_answer_and_keeps_its_success() {
+        let root = tempfile::tempdir().unwrap();
+        let answering = |id: &'static str, answer: &'static str| {
+            StepSpec::new(
+                id,
+                sh(&format!(
+                    r#"
+                    mkdir -p {id}
+                    if [ "$0" = --migrate ]; then
+                        echo migrate >> {id}/log.txt
+                        echo '{answer}'
+                    else
+                        echo run >> {id}/log.txt
+                        echo '{{"event":"outcome","outputs":[{{"path":"{id}","version":"v1"}}]}}'
+                    fi
+                "#
+                )),
+            )
+        };
+        let g = Graph::build(vec![
+            answering(
+                "raw/ingest",
+                r#"{"event":"outcome","outputs":[{"path":"raw/ingest","version":"v2"}]}"#,
+            ),
+            answering(
+                "doc/render",
+                r#"{"event":"outcome","needs_rerun":true,"outputs":[]}"#,
+            ),
+        ])
+        .unwrap();
+        let r = Runner::new(root.path());
+        assert!(r.run(&g).await.unwrap().all_ok());
+        let before = crate::supervisor::record::recorded(root.path()).await;
+
+        let asked: Vec<String> = vec!["raw/ingest".into(), "doc/render".into()];
+        let answers = r.migrate(&g, &asked).await.unwrap();
+        assert_eq!(
+            answers.iter().map(|m| m.answer.clone()).collect::<Vec<_>>(),
+            [Ok(false), Ok(true)]
+        );
+        for id in ["raw/ingest", "doc/render"] {
+            assert_eq!(
+                std::fs::read_to_string(root.path().join(id).join("log.txt")).unwrap(),
+                "run\nmigrate\n"
+            );
+        }
+        let after = crate::supervisor::record::recorded(root.path()).await;
+        let (raw, doc) = (&after.steps["raw/ingest"], &after.steps["doc/render"]);
+        assert!(raw.version.as_deref().is_some_and(|v| v.ends_with(":v2")));
+        assert!(!raw.needs_rerun);
+        assert_eq!(
+            (raw.succeeded, &raw.last_success_at),
+            (true, &before.steps["raw/ingest"].last_success_at),
+            "a migrate is not a run"
+        );
+        assert!(doc.needs_rerun);
+        assert_eq!(doc.version, before.steps["doc/render"].version);
+        assert_eq!(
+            crate::supervisor::round::rerun_offer(&g, &after),
+            ["doc/render"]
+        );
+    }
+
     /// The error message a stopped or failed step leaves behind is what
-    /// the Manage row shows on hover. Structured info lines — the
-    /// tracing stream a step writes as JSON — stay in the run store and
-    /// out of the message; a warning's text and a plain line stay in.
+    /// the Manage row shows on hover. Structured info and debug lines —
+    /// the tracing stream a step writes as JSON — stay in the run store
+    /// and out of the message; a warning's text and a plain line stay in.
     #[test]
     fn error_tail_keeps_prose_and_drops_structured_info() {
         let mut tail = ErrorTail::default();
         let lines = [
             r#"{"timestamp":"2026-09-18T20:16:06Z","level":"INFO","fields":{"message":"walked one messages.list page","page":2},"target":"gmail"}"#,
+            r#"{"timestamp":"2026-09-18T20:16:07Z","level":"DEBUG","fields":{"message":"committed"},"target":"datalib_etl::doltlite_raw"}"#,
             r#"{"timestamp":"2026-09-18T20:24:07Z","level":"WARN","fields":{"message":"interrupt checkpoint: store busy"},"target":"datalib_step"}"#,
             "429 too many requests",
         ];
@@ -1408,8 +1638,116 @@ mod tests {
             let line = format!("line {i}");
             tail.consider(&unwrap_line("s", Stream::Stderr, &line), &line);
         }
-        assert_eq!(tail.lines.len(), ErrorTail::KEEP);
-        assert_eq!(tail.lines.last().map(String::as_str), Some("line 15"));
+        let last: Vec<String> = (ErrorTail::KEEP..ErrorTail::KEEP * 2)
+            .map(|i| format!("line {i}"))
+            .collect();
+        assert_eq!(tail.join(), last.join("\n"));
+    }
+
+    /// A Takeout ingest once failed with four warnings first and its
+    /// panic last, under Rust's backtrace hint, so the hover read as the
+    /// warnings. The cause leads; the hint, the blank line and the step's
+    /// summary of its problems rows are not part of it.
+    #[test]
+    fn error_tail_puts_the_panic_first() {
+        let mut tail = ErrorTail::default();
+        let warn =
+            r#"{"level":"WARN","fields":{"message":"an entry was skipped"},"target":"takeout"}"#;
+        let recorded = r#"{"level":"ERROR","fields":{"message":"records were lost; each is a problems row","event":"problems_recorded","count":3},"target":"datalib_problems::recorded"}"#;
+        let lines = [
+            warn,
+            warn,
+            recorded,
+            "",
+            "thread 'main' (15274739) panicked at src/ingest/mdl_html.rs:89:23:",
+            "start byte index 48 is not a char boundary",
+            "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+        ];
+        for line in lines {
+            tail.consider(&unwrap_line("s", Stream::Stderr, line), line);
+        }
+        assert_eq!(
+            tail.join(),
+            "thread 'main' (15274739) panicked at src/ingest/mdl_html.rs:89:23:\n\
+             start byte index 48 is not a char boundary\n\
+             an entry was skipped\n\
+             an entry was skipped"
+        );
+    }
+
+    /// `datalib-step` ends a failed run with its error chain at `error`;
+    /// that is the cause, ahead of any warning before it.
+    #[test]
+    fn error_tail_puts_the_error_chain_first() {
+        let mut tail = ErrorTail::default();
+        for line in [
+            r#"{"level":"WARN","fields":{"message":"429 from upstream; backing off"},"target":"http"}"#,
+            r#"{"level":"ERROR","fields":{"message":"error: fetch the inbox"},"target":"datalib_step"}"#,
+            r#"{"level":"ERROR","fields":{"message":"caused by: HTTP 401"},"target":"datalib_step"}"#,
+        ] {
+            tail.consider(&unwrap_line("s", Stream::Stderr, line), line);
+        }
+        assert_eq!(
+            tail.join(),
+            "error: fetch the inbox\ncaused by: HTTP 401\n429 from upstream; backing off"
+        );
+    }
+
+    /// A step may log an error and carry on (a forge search that skips a
+    /// scope). Only the last run of error lines is the cause; an earlier
+    /// one is context, in its place among the rest.
+    #[test]
+    fn error_tail_leads_with_the_last_run_of_errors() {
+        let mut tail = ErrorTail::default();
+        for line in [
+            r#"{"level":"ERROR","fields":{"message":"search failed; skipping scope"},"target":"forge"}"#,
+            r#"{"level":"INFO","fields":{"message":"listing the next scope"},"target":"forge"}"#,
+            r#"{"level":"WARN","fields":{"message":"429 from upstream; backing off"},"target":"http"}"#,
+            r#"{"level":"ERROR","fields":{"message":"error: list the issues"},"target":"datalib_step"}"#,
+            r#"{"level":"ERROR","fields":{"message":"caused by: HTTP 401"},"target":"datalib_step"}"#,
+        ] {
+            tail.consider(&unwrap_line("s", Stream::Stderr, line), line);
+        }
+        assert_eq!(
+            tail.join(),
+            "error: list the issues\n\
+             caused by: HTTP 401\n\
+             search failed; skipping scope\n\
+             429 from upstream; backing off"
+        );
+    }
+
+    /// With `RUST_BACKTRACE` in the environment a panic is followed by
+    /// its frames, and keeping the last lines of the panic kept only
+    /// frames. The panic ends where its backtrace starts, and the frames
+    /// stay in the run store.
+    #[test]
+    fn error_tail_leaves_the_backtrace_out() {
+        let mut tail = ErrorTail::default();
+        let mut lines = vec![
+            r#"{"level":"WARN","fields":{"message":"an entry was skipped"},"target":"takeout"}"#
+                .to_string(),
+            "thread 'main' (15274739) panicked at src/ingest/mdl_html.rs:89:23:".into(),
+            "start byte index 48 is not a char boundary".into(),
+            "stack backtrace:".into(),
+        ];
+        for i in 0..ErrorTail::KEEP * 2 {
+            lines.push(format!("  {i:>2}: datalib_etl_takeout::ingest::frame_{i}"));
+            lines.push(format!("             at ./src/ingest/mdl_html.rs:{i}:5"));
+        }
+        lines.push(
+            "note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace."
+                .into(),
+        );
+        for line in &lines {
+            tail.consider(&unwrap_line("s", Stream::Stderr, line), line);
+        }
+        assert_eq!(
+            tail.join(),
+            "thread 'main' (15274739) panicked at src/ingest/mdl_html.rs:89:23:\n\
+             start byte index 48 is not a char boundary\n\
+             an entry was skipped"
+        );
     }
 
     /// A step that answers SIGINT with a `cancelled` outcome is told

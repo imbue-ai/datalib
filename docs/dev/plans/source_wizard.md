@@ -54,7 +54,7 @@ picker fields (`label`, `blurb`, `keywords`, `kind`, `icon`,
   it has never heard of it — Claude's is a cookie capture of
   `sessionKey`, ChatGPT's a token capture) and
   `credentialConnectWarning`.
-- `canProbe`, which offers "Test connection".
+- `canProbe`, which offers "Check connection" and each picker's "Load".
 - `variantKey`: Gmail and Fastmail are two entries over the one
   `email` type, told apart by which params table is present, so `type`
   is not a unique key. `entryKey` is, and `catalogForStep` picks the
@@ -90,17 +90,19 @@ under the reserved `system` directory.
 GET  /api/latchkey/{service}               stored accounts, authOptions, gateway
 POST /api/latchkey/{service}/connect       start `latchkey auth browser` → {id}
 GET  /api/latchkey/connect/{id}/status     poll it → running | ok | failed
-POST /api/probe   {type, params}           → the provider's probe report
+POST /api/probe   {type, params, list?}    start `datalib-step probe` → {id, status, …}
+GET  /api/probe/{id}                       poll it → progress, then the report or the failure
 ```
 
 `connect` registers the service from `credentialRegister` first if
 latchkey lacks it, runs `ensure-browser` restricted to a browser
-already on the machine (the Chromium download stays something a person
-chooses by running the command), and seeds a placeholder with
+already on the machine — and, when there is none, again with the
+downloading source, which the wizard says while it runs
+(`ConnectPhase`) — and seeds a placeholder with
 `auth set` when the person named an account latchkey has not seen,
 since `auth browser` only refreshes. The login is polled, not
 streamed. Under a latchkey gateway the button is not offered — the
-note says where to sign in — and "Test connection" still works, since
+note says where to sign in — and "Check connection" still works, since
 the probe goes through `latchkey curl`, which the gateway serves. A
 service latchkey holds without a browser login is not converted behind
 the person's back: the dialog shows the `auth clear` / `deregister` /

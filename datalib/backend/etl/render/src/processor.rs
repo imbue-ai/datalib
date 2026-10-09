@@ -55,6 +55,14 @@ pub trait RenderProcessor: Send + Sync {
     fn item_of_entity(&self, _source_id: &str, _table: &str, _id: &str) -> Option<String> {
         None
     }
+
+    /// Where [`item_of_entity`](Self::item_of_entity) cannot mint the
+    /// uuid, because it embeds a stamp the raw key does not carry: the
+    /// row's `(upstream_entity_kind, upstream_id)`, which the driver
+    /// looks up in the store.
+    fn upstream_of_entity(&self, _table: &str, _id: &str) -> Option<(&'static str, String)> {
+        None
+    }
 }
 
 /// What a provider writes to render a source whose render wave is one
@@ -77,6 +85,11 @@ pub trait SourceRender: Send + Sync + 'static {
 
     /// See [`RenderProcessor::item_of_entity`].
     fn item_of_entity(&self, _source_id: &str, _table: &str, _id: &str) -> Option<String> {
+        None
+    }
+
+    /// See [`RenderProcessor::upstream_of_entity`].
+    fn upstream_of_entity(&self, _table: &str, _id: &str) -> Option<(&'static str, String)> {
         None
     }
 
@@ -123,6 +136,10 @@ impl<R: SourceRender> RenderProcessor for SourceRenderProcessor<R> {
     fn item_of_entity(&self, source_id: &str, table: &str, id: &str) -> Option<String> {
         self.render.item_of_entity(source_id, table, id)
     }
+
+    fn upstream_of_entity(&self, table: &str, id: &str) -> Option<(&'static str, String)> {
+        self.render.upstream_of_entity(table, id)
+    }
 }
 
 /// A render processor emits each finished document through this callback;
@@ -131,10 +148,26 @@ impl<R: SourceRender> RenderProcessor for SourceRenderProcessor<R> {
 /// like every other processor's.
 pub type DocCallback<'a> = dyn FnMut(RenderedMarkdown) -> Result<()> + Send + 'a;
 
-/// A bucket the run rendered, with every raw row its render asked for:
-/// whatever else the store holds under that bucket is gone, and a later
-/// change to any of those rows names the bucket again.
-pub type DeclareCallback<'a> = dyn FnMut(&str, &[Input]) -> Result<()> + Send + 'a;
+/// How a run ended one bucket it looked at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BucketEnd<'a> {
+    /// Built, from these raw rows — every one it asked for, found or
+    /// not, so a later change to any of them names the bucket again.
+    /// What the store holds under the bucket that the run did not emit
+    /// is gone. A bucket declared with no rows that emitted nothing is
+    /// gone only when the diff says the rows it was last built from
+    /// left; otherwise its documents stay, with a warning.
+    Read(&'a [Input]),
+    /// Left out on purpose — a filter the renderer applies — so its
+    /// documents go whatever the diff says.
+    Excluded,
+    /// Its build failed, for this reason. Its documents stay as they
+    /// were, each with the reason as a problem, even on a full walk.
+    Failed(&'a str),
+}
+
+/// Where a processor says how each bucket it looked at ended.
+pub type DeclareCallback<'a> = dyn FnMut(&str, BucketEnd<'_>) -> Result<()> + Send + 'a;
 
 /// A processor reports what it could not do with raw entities — a
 /// payload that would not deserialize has no document to hang a
@@ -193,6 +226,27 @@ impl Unparsed {
     pub fn entity_id(&self) -> String {
         format!("{}:{}", self.table, self.id)
     }
+}
+
+/// The problem a document carries when a run could not produce it
+/// again: [`RenderCtx::report_document_failed`]'s row, and the one the
+/// driver writes on each document of a failed bucket. One recipe, so the
+/// two are one row when both are written.
+pub fn document_failed(
+    source_id: &str,
+    markdown_uuid: &str,
+    error: &str,
+    render_version: Option<u32>,
+) -> ProblemRow {
+    ProblemRow::new(
+        source_id,
+        Stage::Render,
+        Scope::Markdown(markdown_uuid),
+        Some(markdown_uuid),
+        Outcome::Dropped,
+        Problem::record(Reason::RenderFailed, error),
+        render_version,
+    )
 }
 
 /// Interior-mutable wrapper around the orchestrator's fused-Load callback so
@@ -279,17 +333,6 @@ impl<'a> RenderCtx<'a> {
         }
     }
 
-    /// This run rendered `bucket_key`, and `inputs` is every raw row it
-    /// asked for — found or not: a thread rendered while its author's
-    /// `users` row had not arrived records `(users, U123)` anyway, so the
-    /// row's arrival names the thread. Any document the store holds
-    /// under that bucket which this run did not emit is one the bucket
-    /// no longer produces, and the driver removes it at the end.
-    ///
-    /// Only for a bucket the run actually rendered; a bucket it skipped
-    /// says nothing about its documents. Every emitted document carries
-    /// its `bucket_key` — that is how the driver knows which are the
-    /// bucket's.
     /// The raw store as this run should read it — see [`RawRange`].
     pub fn raw_range(&self) -> RawRange<'a> {
         RawRange {
@@ -299,9 +342,37 @@ impl<'a> RenderCtx<'a> {
         }
     }
 
+    /// This run rendered `bucket_key`, and `inputs` is every raw row it
+    /// asked for — found or not: a thread rendered while its author's
+    /// `users` row had not arrived records `(users, U123)` anyway, so the
+    /// row's arrival names the thread. See [`BucketEnd::Read`] for what
+    /// happens to the documents the store holds under it.
+    ///
+    /// Only for a bucket the run looked at; a bucket it skipped says
+    /// nothing about its documents. Every emitted document carries its
+    /// `bucket_key` — that is how the driver knows which are the
+    /// bucket's.
     pub fn declare_bucket(&self, bucket_key: &str, inputs: &[Input]) -> Result<()> {
+        self.end_bucket(bucket_key, BucketEnd::Read(inputs))
+    }
+
+    /// The renderer leaves `bucket_key` out on purpose, so its
+    /// documents go: see [`BucketEnd::Excluded`].
+    pub fn exclude_bucket(&self, bucket_key: &str) -> Result<()> {
+        self.end_bucket(bucket_key, BucketEnd::Excluded)
+    }
+
+    /// `bucket_key`'s build failed, for reason `why`: its documents
+    /// stay — see [`BucketEnd::Failed`]. A bucket that holds no document
+    /// yet has nothing to keep, and nothing carries `why`; report the
+    /// raw rows it could not read as well.
+    pub fn fail_bucket(&self, bucket_key: &str, why: &str) -> Result<()> {
+        self.end_bucket(bucket_key, BucketEnd::Failed(why))
+    }
+
+    fn end_bucket(&self, bucket_key: &str, end: BucketEnd<'_>) -> Result<()> {
         let mut cb = self.declare.cb.lock().unwrap();
-        (cb)(bucket_key, inputs)
+        (cb)(bucket_key, end)
     }
 
     /// Every bucket a render pass produced, each with the rows it read.
@@ -313,8 +384,9 @@ impl<'a> RenderCtx<'a> {
     }
 
     /// Buckets this run looked at and produced nothing for: each is
-    /// declared with no inputs, so its documents go. A pass that renders
-    /// some of them declares those again, after, and they stay.
+    /// declared with no inputs, so its documents go if the diff says its
+    /// rows left. A pass that renders some of them declares those
+    /// again, after, and they stay.
     pub fn declare_empty<'k>(&self, keys: impl IntoIterator<Item = &'k str>) -> Result<()> {
         for key in keys {
             self.declare_bucket(key, &[])?;
@@ -374,15 +446,7 @@ impl<'a> RenderCtx<'a> {
         error: &str,
         render_version: Option<u32>,
     ) -> Result<()> {
-        let row = ProblemRow::new(
-            self.name,
-            Stage::Render,
-            Scope::Markdown(markdown_uuid),
-            Some(markdown_uuid),
-            Outcome::Dropped,
-            Problem::record(Reason::RenderFailed, error),
-            render_version,
-        );
+        let row = document_failed(self.name, markdown_uuid, error, render_version);
         self.report_entity_problems(&ReadScope::Document(markdown_uuid.to_string()), &[row])
     }
 

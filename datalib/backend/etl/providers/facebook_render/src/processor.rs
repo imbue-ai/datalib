@@ -12,7 +12,7 @@ use datalib_etl::processor::PlanContext;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::render_all as chat_render_all;
 use datalib_etl_chat_common::types::NormalizedChat;
-use datalib_etl_contact_common::{render_all as contact_render_all, NormalizedContact};
+use datalib_etl_contact_common::{render_all as contact_render_all, ContactDoc};
 use datalib_etl_facebook::ingest::schema_raw::{
     ALBUMS_TABLE, COMMENTS_TABLE, FRIENDS_TABLE, OTHER_POSTS_TABLE, POSTS_TABLE, PROFILE_TABLE,
     REACTIONS_TABLE,
@@ -122,7 +122,7 @@ struct Loaded {
     albums: Vec<NormalizedChat>,
     comments: Vec<NormalizedChat>,
     reactions: Vec<NormalizedChat>,
-    friends: Vec<NormalizedContact>,
+    friends: Vec<ContactDoc>,
     /// Per chat id, the media bytes its attachments reference.
     blobs: HashMap<String, BlobBundle>,
     buckets: Buckets,
@@ -150,13 +150,12 @@ pub fn render_source(
                 return Ok(None);
             };
             let pin = db.pin().expect("a reader is pinned at open").clone();
-            // A table the export did not carry does not exist; that is
-            // "no rows", not a failed render.
             let mut tables: HashMap<&str, Vec<(String, Value)>> = HashMap::new();
             for table in ALL_TABLES {
-                let rows = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), table)
-                    .await
-                    .unwrap_or_default();
+                let rows =
+                    datalib_etl::doltlite_raw::load_payloads_with_id_if_present(db.pool(), table)
+                        .await
+                        .with_context(|| format!("load {table}"))?;
                 tables.insert(table, rows);
             }
             let changed = changed_rows(db.pool(), range, &pin, ALL_TABLES).await?;
@@ -182,7 +181,7 @@ pub fn render_source(
                     .chain(&albums)
                     .chain(&comments)
                     .map(|chat| (chat.id.clone(), attachment_refs(chat)));
-                blobs = BlobBundle::load_many(db.pool(), cas.pool(), MEDIA_PROJECTION, refs)
+                blobs = BlobBundle::load_many(db.pool(), Some(cas.pool()), MEDIA_PROJECTION, refs)
                     .await
                     .context("load media")?;
             }
@@ -265,7 +264,7 @@ fn narrow_chats(
 }
 
 fn narrow_contacts(
-    contacts: &mut Vec<NormalizedContact>,
+    contacts: &mut Vec<ContactDoc>,
     changed: Option<&HashMap<String, HashSet<String>>>,
     range: RawRange<'_>,
 ) -> Buckets {
@@ -273,12 +272,12 @@ fn narrow_contacts(
         contacts
             .iter()
             .filter(|c| touched(&c.inputs, changed))
-            .map(|c| c.contact_uuid.clone())
+            .map(|c| c.doc_uuid.clone())
             .collect::<HashSet<String>>()
     });
     let render = range.narrow(forward.as_ref());
     if let Some(render) = &render {
-        contacts.retain(|c| render.contains(&c.contact_uuid));
+        contacts.retain(|c| render.contains(&c.doc_uuid));
     }
     empty_buckets(render)
 }
@@ -350,6 +349,58 @@ impl SourceRender for FacebookRender {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn render(raw: &Path) -> Result<Outcome> {
+        let source = Source {
+            raw_dir: raw,
+            out_dir: raw,
+            name: "facebook",
+            range: RawRange {
+                cursor: None,
+                pin: None,
+                stale: None,
+            },
+        };
+        render_source(&source, &Progress::noop(), &mut |_| Ok(()))
+    }
+
+    /// A table that failed to load read as one the export did not carry,
+    /// so its documents were rendered from nothing and the render's sweep
+    /// deleted them, with the step reporting success. Only a table that
+    /// does not exist is "no rows".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_table_that_will_not_load_fails_the_render() {
+        let d = tempfile::tempdir().unwrap();
+        let raw = d.path();
+        let db = RawDb::open(&db_path_for(raw)).await.unwrap();
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "an export with no posts")
+            .await
+            .unwrap();
+        db.close().await;
+        assert!(
+            render(raw).is_ok(),
+            "a table the export did not carry is no rows"
+        );
+
+        let db = RawDb::open(&db_path_for(raw)).await.unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE TABLE {POSTS_TABLE} (id TEXT PRIMARY KEY)"
+        )))
+        .execute(db.pool())
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "INSERT INTO {POSTS_TABLE} (id) VALUES ('p1')"
+        )))
+        .execute(db.pool())
+        .await
+        .unwrap();
+        datalib_etl::doltlite_raw::commit_run(db.pool(), "a posts table it cannot read")
+            .await
+            .unwrap();
+        db.close().await;
+        assert!(render(raw).is_err());
+    }
 
     #[test]
     fn owner_is_the_email_then_the_name() {

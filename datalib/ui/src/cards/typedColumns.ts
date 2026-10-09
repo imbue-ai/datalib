@@ -7,6 +7,9 @@
 // hosts; a card with a grid of its own (`GridCard`) calls this and
 // keeps driving its grid itself.
 import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
+import { entityFromUri, handleFromUri } from "./chipLinks";
+import { entityCell, type EntityView } from "./entities";
+import { chipCell, type Who } from "./contacts";
 import { Editors } from "@slickgrid-universal/common";
 import type {
   Action,
@@ -46,6 +49,16 @@ export type SlickColumnOptions<T> = {
   /// Per-field refinements a type cannot know — a width, a hover, a
   /// formatter — merged over the typed definition.
   overrides?: Record<string, Partial<Column<T>>>;
+  /// An identity whose id names a person (a handle as a URI) is drawn
+  /// as a chip, the way a document draws one, from what the grid has
+  /// resolved so far (docs/dev/chips.md § "In a grid"). Absent,
+  /// every identity is icon and label.
+  chips?: {
+    who: (handle: string) => Who | undefined;
+    canLink: () => boolean;
+    /// A group or step identity (`Identity.entity`): what is known of it.
+    entity?: (uri: string) => EntityView | undefined;
+  };
 };
 
 /// A group row's title: the column, the value and how many rows share
@@ -287,12 +300,21 @@ export function typedColumns<T extends Record<string, unknown>>(
         case "identity": {
           const label = (v: unknown) => (v as Identity | null)?.label ?? "";
           const badges = spec.badges;
-          const inner: Formatter<T> = (_r, _c, _v, _col, row) =>
-            renderIdentity(
-              row?.[f] as Identity | null,
+          const inner: Formatter<T> = (_r, _c, _v, _col, row) => {
+            const v = row?.[f] as Identity | null;
+            if (opts.chips?.entity && v?.entity && entityFromUri(v.entity)) {
+              return entityCell(v.entity, v.label, opts.chips.entity(v.entity), v.icon ?? null);
+            }
+            const handle = opts.chips && v ? handleFromUri(v.id) : null;
+            if (handle && opts.chips) {
+              return chipCell(handle, v!.label, opts.chips.who(handle), opts.chips.canLink());
+            }
+            return renderIdentity(
+              v,
               !!row?.__hasChildren,
               badges ? { field: badges, chips: (row?.[badges] as Chip[] | null) ?? [] } : null,
             );
+          };
           return {
             // The cell's value is the label: what sorting, filtering and
             // an in-place edit see. The object is read off the row.

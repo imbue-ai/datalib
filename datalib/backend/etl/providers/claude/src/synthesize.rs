@@ -5,8 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_etl::http::{HttpRequest, HttpService};
-use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
 /// Public so a test can name the exact URL a fixture answers,
@@ -251,16 +251,74 @@ impl Synthesizer for ClaudeSynth {
             }
         }
 
+        count += synthesize_files(&self.api_dir.join("files"), &convs, out_root)?;
+
         Ok(SynthesizeReport {
             fixtures_written: count,
         })
     }
 }
 
+/// The bytes behind each conversation file whose `files/<file_uuid>.<ext>`
+/// is present, served where the download asks for them
+/// ([`crate::ingest::file_url`]).
+fn synthesize_files(files_dir: &Path, convs: &[Value], out_root: &Path) -> Result<usize> {
+    if !files_dir.is_dir() {
+        return Ok(0);
+    }
+    let mut on_disk: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for entry in fs::read_dir(files_dir).with_context(|| format!("read {}", files_dir.display()))? {
+        let path = entry?.path();
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            on_disk.insert(stem.to_string(), path);
+        }
+    }
+    let files = convs.iter().flat_map(|c| {
+        let org = org_uuid_of(c);
+        c.get("chat_messages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|m| m.get("files").and_then(Value::as_array))
+            .flatten()
+            .map(move |f| (org.clone(), f))
+    });
+    let mut count = 0;
+    for (org, file) in files {
+        let Some((file_uuid, path)) = file
+            .get("file_uuid")
+            .and_then(Value::as_str)
+            .and_then(|id| on_disk.get(id).map(|p| (id, p)))
+        else {
+            continue;
+        };
+        let Some(url) = crate::ingest::file_url(file, org.as_deref(), file_uuid) else {
+            continue;
+        };
+        let mime = match path.extension().and_then(|e| e.to_str()) {
+            Some("png") => "image/png",
+            Some("pdf") => "application/pdf",
+            // What claude.ai answers for a script, too.
+            Some("txt") => "text/plain",
+            _ => "application/octet-stream",
+        };
+        let bytes = HttpResponse {
+            status: 200,
+            headers: [("content-type".to_string(), mime.to_string())].into(),
+            body: fs::read(path).with_context(|| format!("read {}", path.display()))?,
+            duration_ms: 0,
+        };
+        let req = HttpRequest::get(HttpService::Claude, url);
+        write_fixture(out_root, &req, &bytes)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl::http::{fixture_key, HttpResponse};
+    use datalib_etl_web::http::{fixture_key, HttpResponse};
     use tempfile::tempdir;
 
     #[test]

@@ -54,16 +54,6 @@ It also means the ingester never has to know how Lightroom marks rows
 dirty. Whatever the catalog says today becomes HEAD; history
 accumulates behind it.
 
-**An unchanged catalog is not read at all.** Before mirroring, each run
-asks `fsscan` whether the catalog's files changed — the `.lrcat` and its
-`-wal`, where a running Lightroom keeps edits it has not yet written
-back. The host's fingerprint cache answers that with a `stat`, so a sync
-with nothing new takes milliseconds instead of a snapshot and a refill
-of every table. The hashes it compares against are the source's own, in
-`ingested_files`. A changed filter, or a backup committed under the
-catalog in the same run (below), mirrors it again whatever its files
-say.
-
 ### The copy runs inside SQLite
 
 doltlite reads plain SQLite files
@@ -82,6 +72,34 @@ Marshalling through Rust would force a decision about what such a column
 The test fixture is minted by `//tests/fixtures:make_lightroom_catalog.py`
 in a genrule rather than by Rust, so the input stays independent of the
 engine under test.
+
+### A source with nothing in it is refused
+
+SQLite opens a 0-byte file as an empty database, so a catalog truncated
+or replaced by a placeholder reads as one with no tables, and the drop
+above would empty the mirror. The engine refuses any source that leaves
+it no table to mirror — no tables at all, or filters that match none —
+before it drops anything (`NothingToMirror`). Run through
+`mirror::run_or_report` inside a download's problem collector, that is
+a `phase:source` row and the run seals with the mirror as it was;
+through `mirror::run`, it fails the run. A file that is not SQLite at
+all fails at the `ATTACH` the same way.
+
+### A source that evicts: `append_only`
+
+Some sources keep only a window: Messages with "Keep messages" set to
+30 days deletes older messages from `chat.db`. Dropping and refilling
+would delete them from HEAD too, when keeping them is the reason to
+mirror the file. With `MirrorOptions::append_only` the engine instead
+upserts each table: `INSERT OR REPLACE` by its key, so an edit is a
+`modified` and a row the source dropped stays; a keyless table adds
+only the rows it does not already hold whole, so an edited keyless row
+is kept in both versions. No table is dropped, a column the source
+gained is added (nullable, since the rows already kept have no value
+for it), and one it dropped stays, holding NULL in new rows. A table
+whose key would change fails the run before anything is written: the
+rows kept are keyed by the old key, and nothing can re-key them. Only
+`apple_messages` sets it.
 
 ## What gets mirrored
 
@@ -201,8 +219,8 @@ since a UNIQUE index lets NULLs repeat and a key does not; a table with
 NULLs there stays keyless and the run warns. A table with two UNIQUE
 indexes stays keyless too, since neither is more its key than the
 other; none of the test catalogs has one. A `primary_keys` entry
-or an `id_global` still wins. A store synced before this rule re-mirrors
-its newest backup once (the `key_rule` entry in its scope).
+or an `id_global` still wins. Every run mirrors the newest state again,
+so a store synced before this rule takes it on its next run.
 
 Set `stable_key_columns = []` to mirror declared keys verbatim, or use
 `primary_keys = { Table = ["a", "b"] }` to pin one explicitly (an empty
@@ -347,22 +365,31 @@ each sync mirrors every backup the store does not hold yet, oldest
 first, **one commit per backup**. Each backup is mirrored exactly as a
 catalog is; any two commits then diff like any two runs.
 
-**HEAD always ends on the newest state.** With `catalog.path` set too,
-the catalog is mirrored after the backups as the run's last commit, so
-the backups are the history and the live catalog is HEAD. Without one,
-the newest backup is HEAD. Whenever a sync replays any backup, it puts
-that newest state back on top as its last commit, whether or not it
-changed. That keeps things simple when a backup turns up late, older
-than what is already committed: it is replayed like any other, the
-history detours back to it for one commit, and the next commit returns
-to the present.
+**HEAD always ends on the newest state.** Every sync ends by mirroring
+it again, under the filters it was given, as its last commit: the live
+catalog when `catalog.path` is set too, so the backups are the history
+and the catalog is HEAD; otherwise the newest backup. When HEAD already
+is that state the mirror changes nothing and commits nothing, so
+nothing has to be recorded about whether HEAD is behind. That keeps
+things simple when a backup turns up late, older than what is already
+committed: it is replayed like any other, the history detours back to
+it for one commit, and the next commit returns to the present. A run
+that fails or is stopped before that last commit leaves HEAD behind, and
+the next sync puts it right.
 
-- **Which file is a backup.** The folder is scanned with `fsscan`, so a
-  backup already hashed costs a `stat`. Each entry in it is one backup:
-  a folder with a catalog in it, or a catalog file on its own. Its
-  time comes from the start of its name (`YYYY-MM-DD HHMM`), so a note
-  added after it (`2019-12-14 0731 - Before restoring captions`) is
-  fine. When a folder has both the `.zip` and an unpacked `.lrcat`, the
+When the newest backup the store holds is no longer in the folder, it
+cannot be mirrored again, and mirroring an older one on top would take
+its state out of HEAD; so HEAD stays where the last sync left it, and
+that backup is a problem on the Manage row until a newer one arrives.
+
+- **Which file is a backup.** The folder is scanned with `fsscan`. A
+  backup is known by its hash (below), so every run needs every
+  backup's hash; the host's fingerprint cache answers that with a
+  `stat` for a file it has hashed before. Each entry in the folder is
+  one backup: a folder with a catalog in it, or a catalog file on its
+  own. Its time comes from the start of its name (`YYYY-MM-DD HHMM`),
+  so a note added after it (`2019-12-14 0731 - Before restoring
+  captions`) is fine. When a folder has both the `.zip` and an unpacked `.lrcat`, the
   zip is used: it is what Lightroom wrote, and the unpacked copy may
   have been opened since. An entry with no catalog in it is ignored; a
   folder holding two catalogs, or one whose name does not start with a
@@ -386,21 +413,35 @@ to the present.
 - **A changed filter reaches HEAD without waiting for a backup.**
   `include_tables`, `exclude_tables`, `exclude_columns`, `skip_xmp`,
   `stable_key_columns` and `primary_keys` shape every mirror from then
-  on. With a catalog, its mirror carries the change to HEAD. Without
-  one, a sync that finds no new backup mirrors the newest backup again
-  under the new filters. The filters are recorded with `scope_config`
-  for the comparison; earlier commits keep the filters they were made
-  with.
+  on, and the sync's last commit is the newest state mirrored under
+  them. Earlier commits keep the filters they were made with.
 - **A folder with no backups fails the run**, as does one that cannot
-  be read (a backup drive that is not mounted).
+  be read (a backup drive that is not mounted), and so does a
+  `catalog.path` that is not there. An entry inside the folder the walk
+  could not read is a `listing:backups` row, a backup it found and could
+  not open a `record:backups:<path>` row, and the rest is mirrored.
+- **A backup that will not mirror is a problem on that backup**, keyed
+  `record:lightroom_snapshots:<entry name>` — a zip that will not open,
+  a catalog that is not one — and the backups after it are still
+  mirrored. It is not in `lightroom_snapshots`, so every sync tries it
+  again, replaying it like a late backup once it mirrors, and HEAD ends
+  on the newest backup that did mirror. The exception is a failure
+  after the mirror engine has emptied the mirror's tables: committing
+  anything on top of that would publish half a catalog, so that fails
+  the run, and the next run's open discards the half-written state.
+- **A stopped run clears no problems**, so the last complete run's
+  stand; a backup that would not mirror before the stop is still
+  recorded.
 
 A zip is unpacked into a temporary directory for the length of its
 mirror, so a run needs free space for one catalog at a time; the
 unpacked copy is read without a snapshot, since nothing else has it
 open. `tests/backups_folder.rs` covers the order, the dates, the
 messages, the ledger, a late older backup, the filter change, the live
-catalog on top, the unchanged catalog left unread and backups known by
-their bytes, against zipped copies of the TNG catalog.
+catalog on top, an unchanged catalog committing nothing, a HEAD left
+behind put right, a deleted newest backup, backups known by their
+bytes, a backup that will not mirror and a stopped run, against zipped
+copies of the TNG catalog.
 
 ## Store size and `gc`
 
@@ -416,13 +457,30 @@ after a few runs' history, on doltlite 0.11.50:
 | Mirror, collected, `skip_xmp` | **812 KB** |
 | Mirror, *not* collected | 4.0 – 5.2 MB, growing per run |
 
+The same holds at scale. A backups folder of ten catalogs (0.9 to 6.0 GB
+each, about 32 GiB in all; the newest 135 tables and 5.4 million rows),
+ingested in date order and never collected:
+
+| | Size |
+| --- | --- |
+| Mirror, *not* collected | **12.38 GiB** (13,293,589,085 bytes) |
+| Same file after `dolt_gc()` | **7.86 GiB** (8,443,844,496 bytes) |
+| Chunks removed | 783,443 of 1,756,444 (45%) |
+| Time to collect, Apple Silicon laptop | 2 min 41 s |
+
+That is a third of the file, taking the store from about 0.4 of the
+source's size to about 0.25. Collecting a copy of the file is a safe way to
+measure it without touching the store.
+
 `gc = true` runs it at the start of each run, which collects the
 *previous* run's garbage. Same steady-state result, and it happens while
 the working tree is provably clean and outside the commit lifecycle the
 orchestrator owns — but it does mean a brand-new store isn't collected
 until its second run.
 It is **off by default** because gc rewrites the whole file, which is
-time a routine no-op run shouldn't spend. Running it by hand
+time a routine no-op run shouldn't spend. It runs once per sync, before
+the sync's first mirror, and every sync mirrors at least the newest
+state, so with `gc = true` every sync collects. Running it by hand
 periodically, with no sync running, is a fine alternative:
 
 ```sh
@@ -484,8 +542,12 @@ What three catalogs from different Lightroom generations (2016, 2018,
   whenever rows are added; `AgLibraryImageSyncedAssetData` did before the
   mirror keyed it on its unique index.
 - **The size ratio is not the diff.** A catalog that shrank in the source
-  still grew the store, because a store keeps every version. Part of the
-  growth may also be uncollected garbage; `dolt_gc` (above) reclaims it.
+  still grew the store, because a store keeps every version. And a
+  quieter diff is not a smaller file: keying the sync tables cut the
+  rows modified between weekly backups by about 97% and changed the file
+  by under 0.01%, because those tables are small. On the ten-catalog
+  store above the size was history plus uncollected garbage, and
+  `dolt_gc` (above) reclaimed a third of it.
 
 The counts say *what* changed; only the values say *why*, and this
 recipe deliberately does not read them. The causes above are inferences

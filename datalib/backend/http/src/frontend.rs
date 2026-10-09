@@ -42,6 +42,11 @@ pub enum Meta {
         /// draws the generic component glyph.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         icon: Option<String>,
+        /// A tool for working on the library or on datalib itself,
+        /// rather than a view of the data: the new-card gallery lists it
+        /// under "Developer tools". Absent means it is not.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        dev_tool: bool,
     },
     /// This name no longer holds a component; it moved, within this
     /// same namespace. The UI follows the chain to repoint cards.
@@ -290,7 +295,7 @@ mod tests {
             &ns,
             "tetris.json",
             &format!(
-                r#"{{"title":"Tetris","description":"A game.","component_hash":"{hash}","component_args":[],"icon":"game"}}"#
+                r#"{{"title":"Tetris","description":"A game.","component_hash":"{hash}","component_args":[],"icon":"game","dev_tool":true}}"#
             ),
         );
 
@@ -303,8 +308,10 @@ mod tests {
                 component_hash,
                 component_args,
                 icon,
+                dev_tool,
                 ..
             } => {
+                assert!(*dev_tool, "dev_tool is read from the file");
                 assert_eq!(title, "Tetris");
                 assert_eq!(component_hash, &hash);
                 assert!(component_args.is_empty());

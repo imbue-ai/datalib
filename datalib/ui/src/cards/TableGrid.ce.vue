@@ -1,10 +1,11 @@
 <script setup lang="ts" generic="T extends Record<string, unknown>">
 // A grid over `typedColumns`, for the hosts that want a table and
 // nothing more: rows plus the specs their producer declared in, cells
-// drawn by type out. Tree data, in-place edit, a right-click menu, and
-// the clock that keeps "5 minutes ago" honest. A card that drives a
-// grid itself — its own selection, column state, sort — calls
-// `typedColumns` directly instead of mounting this.
+// drawn by type out. Tree data, in-place edit, a right-click menu,
+// rows dragged into a new order, and the clock that keeps "5 minutes
+// ago" honest. A card that drives a grid itself — its own selection,
+// column state, sort — calls `typedColumns` directly instead of
+// mounting this.
 //
 // The grid is `@slickgrid-universal/vanilla-bundle`, built into this
 // component's own element: a card is a custom element, and the bundle
@@ -64,6 +65,10 @@ const props = withDefaults(
     pinnedColumns?: number;
     /// Pixels per row. Read once, when the grid is built.
     rowHeight?: number;
+    /// Which rows carry a grip to drag them by. A row moves among its
+    /// siblings only, and the host is told where (`move`); the grid
+    /// keeps its order until new rows arrive. Read once.
+    movable?: (row: T) => boolean;
   }>(),
   {
     rowKey: "key",
@@ -85,11 +90,15 @@ const emit = defineEmits<{
   openDocument: [uuid: string];
   /// A tree row was opened or closed.
   rowGroupOpened: [row: T, expanded: boolean];
+  /// A movable row was dropped above `before`, a sibling of it, or
+  /// below the last of them when `before` is null.
+  move: [row: T, before: T | null];
 }>();
 
 /// The row's key.
 const keyOf = (row: T): string => String(row[props.rowKey]);
 
+const rootEl = ref<HTMLDivElement | null>(null);
 const boxEl = ref<HTMLDivElement | null>(null);
 type Grid = SlickVanillaGridBundle<T> & {
   dataView: NonNullable<SlickVanillaGridBundle<T>["dataView"]>;
@@ -107,6 +116,11 @@ const COLLAPSED = "__collapsed";
 /// returns to. A tree needs telling — the grid sorts one by its first
 /// column unless told which column.
 const ORDER = "hostOrder";
+/// The grip column, and the handle drawn in it.
+const GRIP = "tgGrip";
+const GRIP_HANDLE = "tg-grip";
+/// The depth the grid writes on each tree row.
+const LEVEL = "__treeLevel";
 const collapsedByKey = new Map<string, boolean>();
 
 function annotate(rows: T[]): T[] {
@@ -227,6 +241,7 @@ function buildColumns(): Column<T>[] {
     i < props.pinnedColumns ? { ...c, excludeFromColumnPicker: true, reorderable: false } : c,
   );
   return [
+    ...(props.movable ? [gripColumn()] : []),
     ...typed,
     {
       id: ORDER,
@@ -239,6 +254,139 @@ function buildColumns(): Column<T>[] {
       excludeFromColumnPicker: true,
     },
   ];
+}
+
+/// The handle a movable row is dragged by. The drag is ours
+/// (`onGripDown`), not the grid's row-move plugin: that one follows the
+/// pointer from `document.body`, where an event from inside a card's
+/// shadow root names the card as its target, so it never finds the row.
+function gripColumn(): Column<T> {
+  return {
+    id: GRIP,
+    field: GRIP as Column<T>["field"],
+    name: "",
+    width: 22,
+    minWidth: 22,
+    maxWidth: 22,
+    resizable: false,
+    sortable: false,
+    reorderable: false,
+    excludeFromColumnPicker: true,
+    formatter: (_r, _c, _v, _col, row) => {
+      if (!canMove(row as T)) return "";
+      const grip = document.createElement("div");
+      // The theme's own grip icon.
+      grip.className = `${GRIP_HANDLE} sgi slick-row-move-column`;
+      grip.title = "Drag to reorder";
+      return { addClasses: "cell-reorder", html: grip };
+    },
+  };
+}
+
+/// A row moves only while the grid shows the host's order: under a
+/// sort, where it lands says nothing about where it goes.
+function canMove(row: T | undefined): boolean {
+  if (!row || !props.movable?.(row)) return false;
+  // No grid yet is the first paint, which is in the host's order.
+  const sorts = bundle?.slickGrid.getSortColumns() ?? [];
+  return sorts.every((s) => s.columnId === ORDER);
+}
+
+/// Where a drag that would put the row at `insertBefore` (a visible
+/// row's index) lands: above a movable sibling, below the last one's
+/// subtree (`null`), or nowhere — between another row's children, or
+/// back where it was.
+function dropTarget(rowIndex: number, insertBefore: number): { before: T | null } | undefined {
+  if (!bundle) return undefined;
+  const { dataView } = bundle;
+  const item = (i: number) => dataView.getItem(i) as T | undefined;
+  const moved = item(rowIndex);
+  if (!moved || !canMove(moved)) return undefined;
+  const parent = moved[PARENT] ?? null;
+  const siblings: number[] = [];
+  for (let i = 0; i < dataView.getLength(); i++) {
+    const r = item(i);
+    if (r && (r[PARENT] ?? null) === parent && props.movable?.(r)) siblings.push(i);
+  }
+  const last = siblings[siblings.length - 1];
+  let end = last + 1;
+  const depth = Number(item(last)?.[LEVEL] ?? 0);
+  while (end < dataView.getLength() && Number(item(end)?.[LEVEL] ?? 0) > depth) end++;
+  const at = siblings.indexOf(insertBefore);
+  const before = at >= 0 ? siblings[at] : insertBefore === end ? null : undefined;
+  if (before === undefined) return undefined;
+  const from = siblings.indexOf(rowIndex);
+  const next = from + 1 < siblings.length ? siblings[from + 1] : null;
+  if (before === rowIndex || before === next) return undefined;
+  return { before: before === null ? null : item(before)! };
+}
+
+/// A drag in progress: the row by key (a refresh may move it), the line
+/// that shows where it lands, and where that is.
+let drag: {
+  key: string;
+  guide: HTMLDivElement;
+  target: { before: T | null } | undefined;
+} | null = null;
+
+/// A press on a grip starts a drag. Default prevented, so the grid's
+/// own mouse handling — text selection, its drag — never sees it.
+function onGripDown(e: PointerEvent) {
+  if (e.button !== 0 || !bundle || !rootEl.value) return;
+  if (!(e.target instanceof Element) || !e.target.closest(`.${GRIP_HANDLE}`)) return;
+  const cell = bundle.slickGrid.getCellFromEvent(e);
+  const row = cell ? (bundle.dataView.getItem(cell.row) as T | undefined) : undefined;
+  if (!row || !canMove(row)) return;
+  e.preventDefault();
+  const guide = document.createElement("div");
+  guide.className = "tg-move-guide";
+  rootEl.value.appendChild(guide);
+  drag = { key: keyOf(row), guide, target: undefined };
+  window.addEventListener("pointermove", onGripMove);
+  window.addEventListener("pointerup", onGripUp);
+  window.addEventListener("pointercancel", endDrag);
+  window.addEventListener("keydown", onDragKey);
+}
+
+/// Only the pointer's height is read, never the event's target, which
+/// outside the shadow root is the card rather than the row under it.
+function onGripMove(e: PointerEvent) {
+  if (!drag || !bundle || !rootEl.value) return;
+  e.preventDefault();
+  const { slickGrid: grid, dataView } = bundle;
+  const canvas = grid.getCanvasNode().getBoundingClientRect();
+  const height = grid.getOptions().rowHeight ?? props.rowHeight;
+  const insertBefore = Math.max(
+    0,
+    Math.min(Math.round((e.clientY - canvas.top) / height), dataView.getLength()),
+  );
+  const from = dataView.getRowById(drag.key);
+  drag.target = from == null ? undefined : dropTarget(from, insertBefore);
+  const root = rootEl.value.getBoundingClientRect();
+  drag.guide.style.top = `${canvas.top - root.top + insertBefore * height - 1}px`;
+  drag.guide.style.display = drag.target ? "block" : "none";
+}
+
+/// The grid's order is left alone: the host writes the move down, and
+/// the rows it hands back are the new order.
+function onGripUp() {
+  const target = drag?.target;
+  const moved = drag ? (bundle?.dataView.getItemById(drag.key) as T | undefined) : undefined;
+  endDrag();
+  if (target && moved) emit("move", moved, target.before);
+}
+
+function onDragKey(e: KeyboardEvent) {
+  if (e.key === "Escape") endDrag();
+}
+
+function endDrag() {
+  drag?.guide.remove();
+  drag = null;
+  window.removeEventListener("pointermove", onGripMove);
+  window.removeEventListener("pointerup", onGripUp);
+  window.removeEventListener("pointercancel", endDrag);
+  window.removeEventListener("keydown", onDragKey);
 }
 
 /// The menu's entries for the click in hand: the row under it, and the
@@ -283,7 +431,8 @@ function options(): GridOption {
     // declare some hidden until asked for.
     enableColumnPicker: true,
     columnPicker: { hideForceFitButton: true, hideSyncResizeButton: true },
-    frozenColumn: props.pinnedColumns - 1,
+    // The grip, when there is one, is pinned with them.
+    frozenColumn: props.pinnedColumns > 0 ? props.pinnedColumns - (props.movable ? 0 : 1) : -1,
     // A box narrower than the pinned columns scrolls them with the rest;
     // the grid's own answer to that is an alert().
     invalidColumnFreezeWidthCallback: () =>
@@ -482,6 +631,7 @@ onMounted(() => {
   });
 });
 onBeforeUnmount(() => {
+  endDrag();
   if (clock) clearInterval(clock);
   themeWatch?.disconnect();
   bundle?.dispose();
@@ -512,7 +662,7 @@ watch(
 </script>
 
 <template>
-  <div class="tg-root">
+  <div ref="rootEl" class="tg-root" @pointerdown="onGripDown">
     <div ref="boxEl" class="tg-grid" />
   </div>
 </template>

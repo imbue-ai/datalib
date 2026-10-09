@@ -1,6 +1,6 @@
 //! End-to-end test for the "SMS Backup & Restore" provider.
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use std::fs;
 use std::path::PathBuf;
 
@@ -293,6 +293,405 @@ fn a_walk_error_deletes_nothing() -> Result<()> {
             .fetch_one(db.pool())
             .await?;
         assert_eq!(calls, 3);
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
+async fn fetch_dir(
+    db: &RawDb,
+    input: &std::path::Path,
+    cache: &std::path::Path,
+) -> Result<ingest::FetchSummary> {
+    ingest::fetch(FetchOptions {
+        db: db.clone(),
+        input_path: input.to_path_buf(),
+        cache: FingerprintCache::open(cache).await?,
+        progress: Progress::noop(),
+        control: Default::default(),
+    })
+    .await
+}
+
+async fn problems(db: &RawDb) -> Result<Vec<(String, String)>> {
+    Ok(
+        sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+            .fetch_all(db.pool())
+            .await?,
+    )
+}
+
+/// A backup file that would not parse was a log line and a count; the
+/// rest of the export landed with nothing naming the file it lacked. Its
+/// row stands, without the file being read again, until it changes.
+#[test]
+fn a_file_that_will_not_parse_is_a_problem_until_it_does() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    fs::copy(
+        fixture_root().join("calls-2369041512000.xml"),
+        input.join("calls-2369041512000.xml"),
+    )?;
+    let broken = input.join("sms-2369040112000.xml");
+    fs::write(
+        &broken,
+        r#"<smses count="1"><sms address=+17015550101 /></smses>"#,
+    )?;
+    let cache = tmp.path().join("fpcache.sqlite");
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let unparsed = vec![(
+            "file:sms_backup_restore/xml:sms-2369040112000.xml".to_string(),
+            "error".to_string(),
+        )];
+        fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(problems(&db).await?, unparsed);
+
+        let quiet = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(
+            (quiet.files, quiet.parse_errors),
+            (0, 0),
+            "a file that will not parse is not read again until it changes"
+        );
+        assert_eq!(problems(&db).await?, unparsed);
+
+        fs::copy(fixture_root().join("sms-2369041512000.xml"), &broken)?;
+        fetch_dir(&db, &input, &cache).await?;
+        assert!(problems(&db).await?.is_empty());
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
+/// An MMS part whose base64 would not decode vanished from the message,
+/// with only a log line to say it had been there.
+#[test]
+fn an_mms_part_that_will_not_decode_is_a_problem_until_it_does() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    let mms = |data: &str| {
+        format!(
+            r#"<smses count="1">
+  <mms date="2369041512000" msg_box="1" address="+17015550101" m_id="NCC-1701-D">
+    <parts>
+      <part seq="0" ct="image/gif" cl="image000001.gif" data="{data}" />
+      <part seq="0" ct="text/plain" text="Shields up" />
+    </parts>
+  </mms>
+</smses>"#
+        )
+    };
+    let path = input.join("sms-2369041512000.xml");
+    fs::write(&path, mms("%%% not base64 %%%"))?;
+    let cache = tmp.path().join("fpcache.sqlite");
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        fetch_dir(&db, &input, &cache).await?;
+        let rows = problems(&db).await?;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(
+            rows[0].0.starts_with("sms_attachments:") && rows[0].0.ends_with("/image000001.gif"),
+            "{rows:?}"
+        );
+        assert_eq!(rows[0].1, "error");
+
+        let gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        fs::write(&path, mms(gif))?;
+        fetch_dir(&db, &input, &cache).await?;
+        assert!(problems(&db).await?.is_empty());
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
+/// A run that held deletions back stamped the rewritten file anyway, so
+/// the next run saw nothing rewritten, read only the new file, deleted
+/// nothing, and cleared the held-back row: what left the rewritten file
+/// was never deleted.
+#[test]
+fn deletions_held_back_are_made_once_every_file_reads() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    let sms = input.join("sms-2369041512000.xml");
+    fs::copy(fixture_root().join("sms-2369041512000.xml"), &sms)?;
+    let cache = tmp.path().join("fpcache.sqlite");
+    let messages = |db: &RawDb| {
+        let pool = db.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sms_messages")
+                .fetch_one(&pool)
+                .await
+        }
+    };
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(messages(&db).await?, 6);
+
+        // One message leaves the backup, and a new file will not parse.
+        let xml = fs::read_to_string(&sms)?;
+        let first = xml.find("<sms ").expect("an <sms> element");
+        let end = first + xml[first..].find("/>").expect("self-closing <sms>") + 2;
+        fs::write(&sms, format!("{}{}", &xml[..first], &xml[end..]))?;
+        let broken = input.join("sms-2369040112000.xml");
+        fs::write(&broken, r#"<smses count="1"><sms address=+1701 /></smses>"#)?;
+        let held = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(held.removed, 0);
+        assert!(problems(&db)
+            .await?
+            .iter()
+            .any(|(k, _)| k == "listing:removed_records"));
+
+        fs::write(&broken, r#"<smses count="0"></smses>"#)?;
+        let caught_up = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(caught_up.removed, 1);
+        assert_eq!(messages(&db).await?, 5);
+        assert!(problems(&db).await?.is_empty());
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
+/// A backup rewritten to nothing (0 bytes, bytes that are not XML, or a
+/// copy cut off before its end) read as a clean archive holding fewer
+/// messages, and the prune deleted every message only it held. Each is a
+/// problem on the file and deletes nothing.
+#[test]
+fn a_backup_that_is_recognizably_nothing_deletes_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    let sms = input.join("sms-2369041512000.xml");
+    fs::copy(fixture_root().join("sms-2369041512000.xml"), &sms)?;
+    let whole = fs::read_to_string(&sms)?;
+    let cut_off = whole[..whole.rfind("<sms ").expect("an <sms> element")].to_string();
+    let cache = tmp.path().join("fpcache.sqlite");
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let messages = |db: &RawDb| {
+            let pool = db.pool().clone();
+            async move {
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sms_messages")
+                    .fetch_one(&pool)
+                    .await
+            }
+        };
+        fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(messages(&db).await?, 6);
+
+        for (what, bytes) in [
+            ("an empty file", String::new()),
+            (
+                "bytes that are not XML",
+                "\u{1}\u{2} not a backup".to_string(),
+            ),
+            ("a copy cut off before its end", cut_off),
+        ] {
+            fs::write(&sms, &bytes)?;
+            let s = fetch_dir(&db, &input, &cache).await?;
+            assert_eq!(s.removed, 0, "{what} deleted messages");
+            assert_eq!(messages(&db).await?, 6, "{what} deleted messages");
+            assert!(
+                problems(&db)
+                    .await?
+                    .iter()
+                    .any(|(k, _)| k == "file:sms_backup_restore/xml:sms-2369041512000.xml"),
+                "{what} is a problem on the file"
+            );
+        }
+
+        // An empty backup that says so is a backup of nothing.
+        fs::write(&sms, r#"<?xml version='1.0' ?><smses count="0"></smses>"#)?;
+        let emptied = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(emptied.removed, 6);
+        assert_eq!(messages(&db).await?, 0);
+        assert!(problems(&db).await?.is_empty());
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
+/// The files read were stamped in one transaction and the records no file
+/// held were pruned in a later one. A run that failed between the two left
+/// the rewritten file stamped as read, so no later run read every file
+/// again and the record it dropped was never deleted.
+#[test]
+fn a_run_that_fails_before_its_prune_prunes_on_the_next() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    let sms = input.join("sms-2369041512000.xml");
+    fs::copy(fixture_root().join("sms-2369041512000.xml"), &sms)?;
+    let cache = tmp.path().join("fpcache.sqlite");
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        fetch_dir(&db, &input, &cache).await?;
+
+        let xml = fs::read_to_string(&sms)?;
+        let first = xml.find("<sms ").expect("an <sms> element");
+        let end = first + xml[first..].find("/>").expect("self-closing <sms>") + 2;
+        fs::write(&sms, format!("{}{}", &xml[..first], &xml[end..]))?;
+
+        // The run fails at its prune, the way a crash there would end it.
+        sqlx::query(
+            "CREATE TRIGGER refuse_prune BEFORE DELETE ON sms_messages \
+             BEGIN SELECT RAISE(ABORT, 'crash at the prune'); END",
+        )
+        .execute(db.pool())
+        .await?;
+        assert!(fetch_dir(&db, &input, &cache).await.is_err());
+        sqlx::query("DROP TRIGGER refuse_prune")
+            .execute(db.pool())
+            .await?;
+
+        fetch_dir(&db, &input, &cache).await?;
+        let messages: i64 = sqlx::query_scalar("SELECT count(*) FROM sms_messages")
+            .fetch_one(db.pool())
+            .await?;
+        assert_eq!(messages, 5, "the message the backup dropped is deleted");
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
+/// Reading an unchanged export again must leave the store as it was: a
+/// re-stamped sidecar is a commit, and a bigger store, on every sync.
+#[test]
+fn reading_an_unchanged_export_again_commits_nothing() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    fs::create_dir_all(&raw_dir)?;
+    let cache = tmp.path().join("fpcache.sqlite");
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let mut commits = Vec::new();
+        for _ in 0..2 {
+            fetch_dir(&db, &fixture_root(), &cache).await?;
+            commits.push(datalib_etl::doltlite_raw::commit_run(db.pool(), "test").await?);
+        }
+        db.close().await;
+        assert!(commits[0].is_some());
+        assert_eq!(
+            commits[1], None,
+            "reading an unchanged export again changes nothing in the store"
+        );
+        Ok(())
+    })
+}
+
+/// A backup that will not open may hold any message, so a run that reads
+/// every other file deletes nothing while it is unread: before, an
+/// unopenable file was a walk error, and once it was not, the prune took
+/// every record only it held.
+#[cfg(unix)]
+#[test]
+fn a_backup_that_will_not_open_holds_deletions_back() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    let sms = input.join("sms-2369041512000.xml");
+    let calls = input.join("calls-2369041512000.xml");
+    fs::copy(fixture_root().join("sms-2369041512000.xml"), &sms)?;
+    fs::copy(fixture_root().join("calls-2369041512000.xml"), &calls)?;
+    let cache = tmp.path().join("fpcache.sqlite");
+    let count = |db: &RawDb, table: &'static str| {
+        let pool = db.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+                // Audited: `table` is a literal at every call below.
+                "SELECT count(*) FROM {table}"
+            )))
+            .fetch_one(&pool)
+            .await
+        }
+    };
+    let set_mode = |mode| fs::set_permissions(&calls, fs::Permissions::from_mode(mode));
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        fetch_dir(&db, &input, &cache).await?;
+        let (messages, calls_held) = (
+            count(&db, "sms_messages").await?,
+            count(&db, "sms_calls").await?,
+        );
+        assert!(calls_held > 0);
+
+        // One message leaves the backup, and the calls backup will not open.
+        let xml = fs::read_to_string(&sms)?;
+        let first = xml.find("<sms ").expect("an <sms> element");
+        let end = first + xml[first..].find("/>").expect("self-closing <sms>") + 2;
+        fs::write(&sms, format!("{}{}", &xml[..first], &xml[end..]))?;
+        set_mode(0o000)?;
+        if fs::read(&calls).is_ok() {
+            // Root reads through any mode; CI's container runs as root.
+            set_mode(0o644)?;
+            db.close().await;
+            return Ok(());
+        }
+        let held = fetch_dir(&db, &input, &cache).await;
+        set_mode(0o644)?;
+        assert_eq!(held?.removed, 0);
+        assert_eq!(count(&db, "sms_calls").await?, calls_held);
+        let keys: Vec<String> = problems(&db).await?.into_iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            keys,
+            [
+                "listing:removed_records",
+                "record:files:calls-2369041512000.xml"
+            ]
+        );
+
+        let caught_up = fetch_dir(&db, &input, &cache).await?;
+        assert_eq!(caught_up.removed, 1);
+        assert_eq!(count(&db, "sms_messages").await?, messages - 1);
+        assert_eq!(count(&db, "sms_calls").await?, calls_held);
+        assert!(problems(&db).await?.is_empty());
         db.close().await;
         Ok::<_, anyhow::Error>(())
     })

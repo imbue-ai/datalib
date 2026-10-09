@@ -133,7 +133,7 @@ pub async fn changed_rows(
         }
         match datalib_etl::doltlite_raw::changed_keys(pool, table, from, pin.commit()).await {
             Ok(keys) => {
-                out.insert(table.to_string(), keys.into_iter().collect());
+                out.insert(table.to_string(), keys.into_iter().map(|k| k.key).collect());
             }
             Err(e) => {
                 tracing::warn!(

@@ -3,8 +3,6 @@ load("@rules_proto//proto:defs.bzl", "proto_library")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_rust_prost//:defs.bzl", "rust_prost_library")
 
-exports_files(["Cargo.toml"])
-
 # The Signal backup wire format, generated from upstream's compiled
 # descriptor rather than vendored (Signal-Android is AGPL-3.0; see
 # proto/PROTO_PROVENANCE.md). Two files because Signal splits the
@@ -34,11 +32,6 @@ rust_library(
     crate_name = "datalib_signal_backup",
     edition = "2021",
     proc_macro_deps = [],
-    # Switches `src/proto.rs` from the cargo `include!` path (driven
-    # by `build.rs` + prost-build) to the Bazel-native re-export from
-    # the `:signal_backup_rust_proto` rust_prost_library above. Under
-    # Bazel the build script is annotated off in MODULE.bazel.
-    rustc_flags = ["--cfg=bazel_prost"],
     visibility = ["//datalib:__subpackages__"],
     deps = [
         ":signal_backup_rust_proto",
@@ -64,10 +57,6 @@ rust_binary(
     name = "signal_make_fixture",
     srcs = ["src/bin/signal_make_fixture.rs"],
     edition = "2021",
-    # The bin doesn't reference signal_backup_proto directly — it goes
-    # through the library's re-exports — so it doesn't need the cfg.
-    # But add it defensively in case future bin code reaches into proto.
-    rustc_flags = ["--cfg=bazel_prost"],
     # Consumed by //tests/fixtures:ingested_tng (outside the
     # //datalib tree) so visibility is public — the binary takes a
     # spec file path + output dir, so there's no sensitive surface to
@@ -86,11 +75,6 @@ rust_test(
     size = "small",
     crate = ":datalib_signal_backup",
     edition = "2021",
-    # rust_test rebuilds the lib sources with `cfg(test)`, which means
-    # it doesn't inherit the rust_library's rustc_flags — re-state the
-    # `bazel_prost` cfg here so `src/proto.rs` picks the external-crate
-    # re-export path. Same goes for the env-gated rust_test below.
-    rustc_flags = ["--cfg=bazel_prost"],
     deps = [
         "@datalib_crates//:tempfile",
     ],

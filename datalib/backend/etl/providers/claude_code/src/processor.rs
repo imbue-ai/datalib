@@ -1,7 +1,7 @@
 //! The ingest wave for the `claude_code` source: its planner and the
 //! [`DataProcessor`] it plans.
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
@@ -11,6 +11,12 @@ use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_claude_code_config::{ClaudeCodeConfig, DEFAULT_SESSIONS_DIR};
 
 use crate::ingest;
+
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
 
 pub fn plan_ingest(
     ctx: PlanContext,
@@ -44,15 +50,17 @@ impl DataProcessor for ClaudeCodeIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
-            db,
-            input_path: self.input_path.clone(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        ctx.run_store(db.pool().clone(), None, |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
+                db,
+                input_path: self.input_path.clone(),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(s.line())
         })
-        .await?;
-        session.finish(ctx, s.line()).await
+        .await
     }
 }

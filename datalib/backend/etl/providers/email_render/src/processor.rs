@@ -82,7 +82,7 @@ impl SourceRender for EmailRender {
             Some(self.render_version()),
         )?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        let buckets = render_all(
+        let rendered = render_all(
             &parsed,
             ctx.root,
             ctx.name,
@@ -91,9 +91,10 @@ impl SourceRender for EmailRender {
             ctx.progress,
             &mut on_doc,
         )?;
-        // A thread this run looked at that no email still belongs to,
-        // or the label filter keeps out, builds no chat: declared with
-        // nothing, its documents go. The rendered ones follow and
+        // A thread this run looked at that no email still belongs to
+        // builds no chat: declared with nothing, its documents go once
+        // the diff says its emails left. One the label filter keeps out
+        // goes on the filter's word. The rendered ones follow and
         // replace that.
         for (account_id, thread_id) in parsed.scan.render.iter().flatten() {
             ctx.declare_bucket(
@@ -102,7 +103,10 @@ impl SourceRender for EmailRender {
             )?;
         }
         ctx.declare_empty(parsed.scan.gone.iter().map(String::as_str))?;
-        ctx.finish(&buckets, parsed.scan.new_head.as_deref())?;
+        for thread in &rendered.excluded {
+            ctx.exclude_bucket(thread)?;
+        }
+        ctx.finish(&rendered.buckets, parsed.scan.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

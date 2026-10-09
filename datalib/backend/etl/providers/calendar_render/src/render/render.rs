@@ -1,7 +1,7 @@
 //! The raw store's events into [`NormalizedEvent`]s, handed to the
 //! shared calendar renderer.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -18,8 +18,10 @@ use super::parse::Parsed;
 use super::{google, ics, ids};
 
 /// Bump when the rendered layout changes enough that every event needs
-/// re-rendering: 2 when a Google time started showing in its own zone.
-pub const RENDER_VERSION: u32 = 3;
+/// re-rendering: 2 when a Google time started showing in its own zone;
+/// 6 so a full walk sweeps the occurrences earlier versions kept after a
+/// "this and following" edit moved them to a new UID.
+pub const RENDER_VERSION: u32 = 6;
 
 /// A calendar as its events need it.
 #[derive(Debug, Clone)]
@@ -29,6 +31,14 @@ pub struct CalendarInfo {
     pub time_zone: Option<String>,
 }
 
+/// What a pass looked at: the buckets it built, each with its rows, and
+/// the ones it was asked for that no event in the store mints any more.
+#[derive(Debug, Default)]
+pub struct Rendered {
+    pub buckets: Buckets,
+    pub gone: Vec<String>,
+}
+
 pub fn render_all(
     parsed: &Parsed,
     out_dir: &Path,
@@ -36,7 +46,7 @@ pub fn render_all(
     progress: &Progress,
     range: RawRange<'_>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<Buckets> {
+) -> Result<Rendered> {
     let profile = CalendarRenderProfile {
         provider: Provider::Calendar,
         source_label: source_label(parsed.account.as_ref()).to_string(),
@@ -64,9 +74,11 @@ pub fn render_all(
         )
     });
     let render = range.narrow(forward.as_ref());
+    let gone = gone_keys(render.as_ref(), &events, parsed);
     let mut buckets: Buckets = render
         .iter()
         .flatten()
+        .filter(|key| gone.binary_search(key).is_err())
         .map(|key| Bucket {
             key: key.clone(),
             inputs: Vec::new(),
@@ -84,7 +96,30 @@ pub fn render_all(
         on_doc_complete,
     )?;
     buckets.extend(summary.buckets);
-    Ok(buckets)
+    Ok(Rendered { buckets, gone })
+}
+
+/// The keys asked for that no event mints. Every event row is read on
+/// every pass, so such a key is gone upstream even though its row is
+/// still there: a "this and following" edit moves an occurrence to a
+/// new UID and leaves the old series' row in place, cut short. Nothing
+/// is gone while a row would not read; it may be the missing event.
+fn gone_keys(
+    render: Option<&HashSet<String>>,
+    events: &[NormalizedEvent],
+    parsed: &Parsed,
+) -> Vec<String> {
+    let Some(render) = render.filter(|_| parsed.unparsed.is_empty()) else {
+        return Vec::new();
+    };
+    let minted: HashSet<&str> = events.iter().map(|e| e.event_uuid.as_str()).collect();
+    let mut gone: Vec<String> = render
+        .iter()
+        .filter(|key| !minted.contains(key.as_str()))
+        .cloned()
+        .collect();
+    gone.sort();
+    gone
 }
 
 /// Every event in the store, in a stable order.
@@ -157,6 +192,7 @@ mod tests {
     use datalib_etl_calendar::ical;
     use datalib_etl_calendar::ingest::db::{LoadedCalendar, LoadedIcsObject};
     use datalib_etl_calendar_common::EventShape;
+    use datalib_etl_render::processor::Unparsed;
 
     /// The checked-in TNG `.ics` files, split the way the `ics` method
     /// stores them.
@@ -225,5 +261,24 @@ mod tests {
         );
         let uuids: HashSet<&str> = events.iter().map(|e| e.event_uuid.as_str()).collect();
         assert_eq!(uuids.len(), events.len(), "every document has its own id");
+    }
+
+    /// A key asked for that no event mints is gone, unless a row would
+    /// not read: that row may be the event, and its documents stay.
+    #[test]
+    fn a_key_no_event_mints_is_gone_only_when_every_row_read() {
+        let mut parsed = tng();
+        let events = normalize_all(&parsed, "tng_calendar");
+        let asked: HashSet<String> =
+            [events[0].event_uuid.clone(), "moved-away".to_string()].into();
+        assert_eq!(gone_keys(Some(&asked), &events, &parsed), ["moved-away"]);
+        assert!(gone_keys(None, &events, &parsed).is_empty());
+
+        parsed.unparsed.push(Unparsed::new(
+            "ics_objects",
+            "Bridge#garbled",
+            "not iCalendar",
+        ));
+        assert!(gone_keys(Some(&asked), &events, &parsed).is_empty());
     }
 }

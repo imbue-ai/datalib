@@ -11,6 +11,12 @@ use datalib_etl_facebook_config::FacebookConfig;
 
 use crate::ingest;
 
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
+
 pub fn plan_ingest(
     ctx: PlanContext,
     config: FacebookConfig,
@@ -44,24 +50,28 @@ impl DataProcessor for FacebookIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(
-                db.pool().clone(),
-                db.cas().map(|cas| cas.pool().clone()),
-                entity_db,
-            )
-            .await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            input_path: self.input_path.clone(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().map(|cas| cas.pool().clone()));
+        ctx.run_store(pool, cas_pool, |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                input_path: self.input_path.clone(),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "files={} rows={} removed={} parse_errors={} media_stored={} media_known={} \
+                 media_missing={} media_edges_removed={}",
+                s.files,
+                s.rows,
+                s.removed,
+                s.parse_errors,
+                s.media_stored,
+                s.media_known,
+                s.media_missing,
+                s.media_edges_removed,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "files={} rows={} parse_errors={} media_stored={} media_known={} media_missing={}",
-            s.files, s.rows, s.parse_errors, s.media_stored, s.media_known, s.media_missing,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Render half of the `google_takeout` provider. This is the side that knows
 # `datalib_schema`; //datalib/backend/etl/providers/google_takeout is the
 # download half and deliberately does not.
@@ -15,6 +13,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/providers/google_takeout:datalib_etl_google_takeout",
         "//datalib/backend/etl/providers/google_takeout_config:datalib_etl_google_takeout_config",
@@ -25,9 +24,11 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
+        "@datalib_crates//:htmd",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:url",
     ],
 )
 

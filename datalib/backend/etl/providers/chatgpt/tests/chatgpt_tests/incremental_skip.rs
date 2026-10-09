@@ -4,11 +4,11 @@ use std::fs;
 use std::time::Duration;
 
 use chrono::DateTime;
-use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_chatgpt::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_chatgpt::synthesize::ChatgptSynth;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Value};
 use tempfile::tempdir;
 

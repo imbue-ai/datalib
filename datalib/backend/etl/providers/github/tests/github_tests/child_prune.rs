@@ -10,14 +10,14 @@ use std::path::Path;
 use std::time::Duration;
 
 use datalib_etl::event_store::{diff_and_save, make_record};
-use datalib_etl::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_github::ingest::{
     block_on_load_all, db_path_for, fetch, FetchOptions, RawDb, ENTITY_ISSUE_COMMENT, ENTITY_PR,
     ENTITY_SELF,
 };
 use datalib_etl_github::synthesize::GithubSynth;
+use datalib_etl_web::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 use tokio::sync::Mutex;
@@ -81,10 +81,13 @@ async fn run(out_db: &Path) -> usize {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), crate::tng_now())
     })
     .await;
-    db.commit_all("test").await.unwrap();
+    // As the processor does: only a run that succeeds commits.
+    if out.is_ok() {
+        db.commit_all("test").await.unwrap();
+    }
     db.close().await;
     out.unwrap().pruned
 }
@@ -143,6 +146,10 @@ async fn a_comment_dropped_from_the_listing_is_deleted() {
 ///
 /// Staged by deleting the one playback fixture for the comments endpoint,
 /// so that request — and only that request — misses and errors.
+///
+/// The failure is a warning row on the PR (a copy is stored, and stale):
+/// nothing of the fetch is stored, the PR stays owed, and the next run
+/// that lists its comments fetches it whole and clears the row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_listing_prunes_nothing() {
     let _guard = ENV_LOCK.lock().await;
@@ -178,4 +185,35 @@ async fn a_failed_listing_prunes_nothing() {
         vec![101, 102],
         "both comments must survive a listing we could not read",
     );
+    assert_eq!(
+        problems(&out_db).await,
+        [(
+            format!("pull_requests:{REPO}#{NUM}"),
+            "warning".to_string(),
+            "could not list its issue comments".to_string(),
+        )],
+        "the PR's old copy is there, the fetch is owed, and the reader is told",
+    );
+
+    // The listing answers again: the PR is fetched whole and the row goes.
+    GithubSynth::new(&api).synthesize(&pb).unwrap();
+    run(&out_db).await;
+    assert_eq!(problems(&out_db).await, []);
+}
+
+/// Each `problems` row as (key, severity, the sample's first words).
+async fn problems(out_db: &Path) -> Vec<(String, String, String)> {
+    let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT scope_key, severity, sample FROM problems ORDER BY scope_key")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    db.close().await;
+    rows.into_iter()
+        .map(|(key, severity, sample)| {
+            let head = sample.split(':').next().unwrap_or_default().to_string();
+            (key, severity, head)
+        })
+        .collect()
 }

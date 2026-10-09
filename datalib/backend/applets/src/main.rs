@@ -1,6 +1,7 @@
 //! `datalib-applet` — the applet host, one subcommand per applet.
 #![allow(clippy::disallowed_macros)]
 
+mod datalib_contacts;
 mod gate;
 mod slack;
 mod unified_index;
@@ -42,6 +43,10 @@ enum Which {
     /// document list, one document, and the files beside it.
     #[command(name = "unified_index")]
     UnifiedIndex,
+    /// The contacts app: create contacts and link handles to them, and
+    /// resolve a document's handles for its chips.
+    #[command(name = "datalib_contacts")]
+    DatalibContacts,
 }
 
 pub fn announce_port(port: u16) {
@@ -113,6 +118,11 @@ fn run() -> Result<()> {
         Which::UnifiedIndex => {
             let port = cli.port.context("-p <port> is required")?;
             unified_index::serve(port)
+        }
+        // Builtins draw its chips and popovers; nothing to write first.
+        Which::DatalibContacts => {
+            let port = cli.port.context("-p <port> is required")?;
+            datalib_contacts::serve(port)
         }
     }
 }

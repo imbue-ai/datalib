@@ -4,5 +4,13 @@
 //! process-global environment variable that each test points at its own
 //! fixture tree; one process means one such variable.
 
+mod interrupt;
 mod live;
 mod playback_roundtrip;
+mod support;
+mod upgrade;
+
+/// The fixture's pinned clock, as the pipeline's `--now` sets it.
+pub fn tng_now() -> datalib_time::IsoOffsetTimestamp {
+    datalib_time::parse_strict("2369-04-15T00:00:00+00:00").unwrap()
+}

@@ -2,8 +2,6 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 load("//tools:live.bzl", "live_run")
 
-exports_files(["Cargo.toml"])
-
 # The checked-in TNG playback fixture, an input of the Python
 # fixture-build pipeline at //tests/fixtures:ingested_tng.
 filegroup(
@@ -28,7 +26,9 @@ rust_library(
     deps = [
         "//datalib/backend/etl/forge-ingest-common:datalib_etl_forge_ingest_common",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/github_config:datalib_etl_github_config",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde",
@@ -47,6 +47,7 @@ rust_binary(
     deps = [
         ":datalib_etl_github",
         "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
         "@datalib_crates//:tokio",
@@ -78,11 +79,19 @@ rust_test(
         "INSTA_WORKSPACE_ROOT": ".",
         "RUST_TEST_THREADS": "1",
     },
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
     deps = [
+        "//datalib/backend/etl/forge-ingest-common:datalib_etl_forge_ingest_common",
         "//datalib/backend/etl/providers/github_render:datalib_etl_github_render",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         ":datalib_etl_github",
+        "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
         "@datalib_crates//:insta",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",

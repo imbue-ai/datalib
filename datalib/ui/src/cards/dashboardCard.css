@@ -1,0 +1,341 @@
+/* The Dashboard's look, shared by the whole Dashboard card and by each
+   of its sections shown as a card of its own (dashboardSections.ts). */
+.dashboard {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-size: var(--datalib-font-size);
+  color: var(--datalib-fg);
+  background: var(--datalib-surface-2);
+}
+.dashboard-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 6px var(--datalib-pad);
+  background: var(--datalib-bg);
+  border-bottom: 1px solid var(--datalib-border-soft);
+}
+.dashboard-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--datalib-gap);
+  padding: var(--datalib-pad);
+}
+/* The one next step for a library that has never synced. */
+.dashboard-head-next {
+  justify-content: space-between;
+  background: color-mix(in srgb, var(--datalib-accent) 8%, var(--datalib-bg));
+}
+.dashboard-head-next .dashboard-state {
+  font-weight: 600;
+}
+.dashboard-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dashboard-btn {
+  height: var(--datalib-control-h);
+  padding: 0 10px;
+  font: inherit;
+  font-weight: 600;
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  cursor: pointer;
+}
+.dashboard-btn:hover:not(:disabled) {
+  background: var(--datalib-hover);
+}
+.dashboard-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.dashboard-btn-strong {
+  border-color: var(--datalib-accent);
+  background: var(--datalib-accent);
+  color: var(--datalib-on-accent);
+}
+.dashboard-btn-strong:hover {
+  background: color-mix(in srgb, var(--datalib-accent) 85%, black);
+}
+.dashboard-error {
+  margin: 0;
+  color: var(--datalib-error-fg);
+}
+/* Small capitals over each panel. Declared here, not taken from the
+   app's stylesheet: document styles stop at the card's shadow root. */
+.section-title {
+  font-size: var(--datalib-font-size-small);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--datalib-muted);
+}
+/* Clipped, so a tinted header keeps the panel's rounded corners. */
+.panel {
+  flex: 0 0 auto;
+  background: var(--datalib-bg);
+  border: 1px solid var(--datalib-border-soft);
+  border-radius: var(--datalib-radius);
+  overflow: hidden;
+}
+.panel-next {
+  border-color: var(--datalib-accent);
+}
+.panel-next .panel-head {
+  background: color-mix(in srgb, var(--datalib-accent) 8%, var(--datalib-bg));
+}
+.panel-next .section-title {
+  color: var(--datalib-accent);
+}
+.add-first {
+  border-top: none;
+  padding: 8px 10px;
+}
+.panel-warn {
+  border-color: var(--datalib-warn-border);
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: calc(var(--datalib-row-h) + 2px);
+  margin: 0;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--datalib-border-soft);
+  font: inherit;
+}
+.panel-head .section-title {
+  flex: 1 1 auto;
+}
+.panel-head-warn {
+  background: var(--datalib-warn-bg);
+  border-bottom-color: var(--datalib-warn-border);
+}
+.panel-head-warn .section-title {
+  color: var(--datalib-warn-fg);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: calc(var(--datalib-row-h) + 4px);
+  padding: 0 10px;
+  border-top: 1px solid var(--datalib-border-soft);
+}
+.panel-head + .row {
+  border-top: none;
+}
+.row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tile {
+  flex: 0 0 auto;
+  width: calc(var(--datalib-icon-size) + 4px);
+  height: calc(var(--datalib-icon-size) + 4px);
+}
+.tile-small {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+}
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--datalib-accent);
+  cursor: pointer;
+}
+.link:hover {
+  text-decoration: underline;
+}
+.library {
+  display: flex;
+  flex-direction: column;
+  gap: var(--datalib-gap);
+  padding: calc(var(--datalib-pad) + 2px) 10px;
+  color: var(--datalib-muted);
+}
+.stats {
+  display: flex;
+  gap: 40px;
+}
+.stat {
+  font-size: calc(var(--datalib-title-size) + 4px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--datalib-fg);
+}
+.bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.legend > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+/* The storage segments, largest first: one hue stepped in lightness,
+   so the order reads without a legend lookup. */
+.seg-0 {
+  background: var(--datalib-accent);
+}
+.seg-1 {
+  background: color-mix(in srgb, var(--datalib-accent) 72%, var(--datalib-bg));
+}
+.seg-2 {
+  background: color-mix(in srgb, var(--datalib-accent) 52%, var(--datalib-bg));
+}
+.seg-3 {
+  background: color-mix(in srgb, var(--datalib-accent) 36%, var(--datalib-bg));
+}
+.seg-4 {
+  background: color-mix(in srgb, var(--datalib-accent) 24%, var(--datalib-bg));
+}
+.seg-rest {
+  background: var(--datalib-border);
+}
+.grid {
+  display: grid;
+  grid-template-columns:
+    calc(var(--datalib-icon-size) + 4px) minmax(0, 1.4fr) minmax(0, 1.6fr)
+    110px 80px 90px;
+  column-gap: 12px;
+  align-items: center;
+  padding: 0 10px;
+}
+.grid-head {
+  height: calc(var(--datalib-row-h) - 2px);
+  font-size: var(--datalib-font-size-small);
+  color: var(--datalib-faint);
+  border-bottom: 1px solid var(--datalib-border-soft);
+}
+.grid-row {
+  min-height: calc(var(--datalib-row-h) + 4px);
+  border-top: 1px solid var(--datalib-border-soft);
+}
+.grid-head + .grid-row {
+  border-top: none;
+}
+.name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.muted {
+  color: var(--datalib-muted);
+  white-space: nowrap;
+}
+.empty {
+  margin: 0;
+  padding: 10px;
+  color: var(--datalib-muted);
+}
+.recent {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  cursor: pointer;
+}
+.recent:hover {
+  background: var(--datalib-hover);
+}
+.recent-title {
+  flex: 0 1 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-snippet {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--datalib-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.tone-ok {
+  color: var(--datalib-ok);
+}
+.tone-ok .dot {
+  background: var(--datalib-ok-dot);
+}
+.tone-run {
+  color: var(--datalib-accent);
+}
+.tone-warn {
+  color: var(--datalib-warn-fg);
+}
+.tone-warn .dot {
+  background: var(--datalib-warn-dot);
+}
+.tone-error {
+  color: var(--datalib-error-fg);
+}
+.tone-muted {
+  color: var(--datalib-muted);
+}
+.tone-muted .dot {
+  background: var(--datalib-border);
+}
+/* A section as a card of its own, in a Page: the Page draws the ground
+   and the space below the last section; each panel the space above and
+   beside it. A section with nothing to show takes no room. */
+.dash-section {
+  font-size: var(--datalib-font-size);
+  color: var(--datalib-fg);
+}
+.dash-section > * {
+  margin: var(--datalib-gap) var(--datalib-pad) 0;
+}
+.dash-section-flush > * {
+  margin: 0;
+}

@@ -13,7 +13,7 @@ published from a local machine — the tag is the trigger.
 
 ## Versioning
 
-- Single source of truth: `[workspace.package].version` in
+- Single source of truth: `[package].version` in
   `datalib/backend/Cargo.toml`.
 - Must match the `version = "..."` fields in
   `datalib/backend/dag/BUILD.bazel`,
@@ -61,7 +61,12 @@ published from a local machine — the tag is the trigger.
    `git log --first-parent v<last>..origin/main --oneline` (find `<last>` with
    `git tag | sort -V | tail -1` — fetch tags first).
 3. Bump all four version fields: `Cargo.toml` and the three
-   `BUILD.bazel`.
+   `BUILD.bazel`. Then record the raw-store shapes this release leaves
+   behind, so later builds are tested migrating them: run
+   `bazel run //datalib/backend/datalib_step:raw_shapes.update`, and if
+   `datalib/backend/datalib_step/raw_shapes/current.json` differs from
+   the newest `<version>.json` beside it, copy it to `X.Y.Z.json`
+   (`raw_shapes/README.md`).
 4. Run `tools/repin_cargo.sh` to refresh
    `datalib/backend/Cargo.lock`. Do **not** rely on
    `CARGO_BAZEL_REPIN=1 bazel test //...` for this — when every target
@@ -122,7 +127,8 @@ published from a local machine — the tag is the trigger.
 7. Commit as `chore(release): bump version X.Y.Z → X.Y'.Z'` with a
    short summary of what the release carries (see commits `835946a9`
    and `c05fa424` for the shape). Expected files: `Cargo.toml`,
-   `Cargo.lock`, the three `BUILD.bazel`, and
+   `Cargo.lock`, the three `BUILD.bazel`, a new
+   `raw_shapes/X.Y.Z.json` when step 3 made one, and
    `MODULE.bazel.lock` (per step 6 — expect it, don't treat it as a
    surprise), plus possibly `datalib/tauri/Cargo.lock`.
    Sanity-check before pushing: re-run step 6's *second* (env-var-free)

@@ -6,8 +6,8 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use clap::Parser;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::progress::Progress;
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl_fsindex::ingest::{self, FetchOptions, RawDb};
 use datalib_obs::{init as init_obs, ObsArgs};
 use datalib_time::IsoOffsetTimestamp;
@@ -118,7 +118,8 @@ async fn main() -> Result<()> {
     // gc then reclaims the pages the per-batch transactions left behind.
     let finished_at = IsoOffsetTimestamp::now_local().to_rfc3339();
     let scan_secs = started.elapsed().as_secs_f64();
-    let commit_ms = db
+    let commit_started = Instant::now();
+    let committed = db
         .commit(&commit_message(
             &source_id,
             &args.root.display().to_string(),
@@ -127,26 +128,38 @@ async fn main() -> Result<()> {
             scan_secs,
             &summary,
         ))
-        .await?
-        .as_secs_f64()
-        * 1000.0;
+        .await?;
+    let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
     // What did this scan actually change, vs the last committed scan?
     // Read straight from the dolt diff now that the commit has landed.
     // Best-effort: the first scan has no parent to diff against.
-    if let Some(diff) = db.diff_counts_since_parent().await {
-        let unchanged = (summary.entries_scanned as u64).saturating_sub(diff.added + diff.modified);
-        info!(
+    match committed {
+        None => info!(
             event = "fsindex_diff_summary",
-            added = diff.added,
-            modified = diff.modified,
-            removed = diff.removed,
-            unchanged = unchanged,
-            "vs last scan: {} added, {} modified, {} removed, {} unchanged",
-            diff.added,
-            diff.modified,
-            diff.removed,
-            unchanged
-        );
+            added = 0,
+            modified = 0,
+            removed = 0,
+            unchanged = summary.entries_scanned,
+            "vs last scan: nothing changed, so nothing was committed"
+        ),
+        Some(_) => {
+            if let Some(diff) = db.diff_counts_since_parent().await {
+                let unchanged =
+                    (summary.entries_scanned as u64).saturating_sub(diff.added + diff.modified);
+                info!(
+                    event = "fsindex_diff_summary",
+                    added = diff.added,
+                    modified = diff.modified,
+                    removed = diff.removed,
+                    unchanged = unchanged,
+                    "vs last scan: {} added, {} modified, {} removed, {} unchanged",
+                    diff.added,
+                    diff.modified,
+                    diff.removed,
+                    unchanged
+                );
+            }
+        }
     }
 
     // gc is best-effort: a successful scan + commit is the durable

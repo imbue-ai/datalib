@@ -139,8 +139,9 @@ pub struct EmailSync {
     /// JMAP account id. Defaults to the session's mail primary account.
     #[serde(default)]
     pub account_id: Option<String>,
-    /// Force full `Email/query` enumeration even if a `changes` state token
-    /// is stored. Defaults to false (incremental).
+    /// List the account again with `Email/query` and fetch every email
+    /// again, even if a `changes` state token is stored. Defaults to
+    /// false (incremental).
     #[serde(default)]
     pub full_resync: bool,
     /// How many `.eml` blob downloads to run concurrently in the
@@ -217,8 +218,9 @@ pub struct EmailGmailApi {
     /// reported by `users.getProfile`.
     #[serde(default)]
     pub email_address: Option<String>,
-    /// Discard the stored `historyId` cursor and re-enumerate every
-    /// message. Applies to this run only.
+    /// Discard the stored `historyId` cursor and walk every configured
+    /// label again. Messages already mirrored are not fetched again.
+    /// Applies to this run only.
     #[serde(default)]
     pub full_resync: bool,
     /// How many `messages.get` requests to keep in flight. `None` uses
@@ -232,8 +234,8 @@ pub struct EmailGmailApi {
     #[serde(default)]
     pub quota_units_per_minute: Option<u32>,
     /// Stop after fetching this many message bodies in one run and exit
-    /// **successfully** with a partial result, the cursor held so the
-    /// next run resumes. For experiments and the live test; a large
+    /// **successfully** with a partial result; the rest stays owed, so
+    /// the next run goes on from there. For experiments and the live test; a large
     /// mailbox needs no budget, the run paces itself.
     #[serde(default)]
     pub message_budget: Option<usize>,

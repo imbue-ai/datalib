@@ -43,10 +43,9 @@ pub struct SlackApiSync {
     /// Trailing edit-catcher — *not* a way to say "only fetch the last N
     /// days". On a channel that already has history, re-query the last N
     /// days on top of the forward walk so edits and reactions on
-    /// already-stored messages land. It only ever *adds* work: the range
-    /// a run fetches still starts at `since`. Unset (or `0`) skips the
-    /// pass. Note the CLI's `--refresh-window-days` defaults to 30
-    /// instead; a config-driven run gets 0 unless you set it here.
+    /// already-stored messages land, and messages deleted upstream go.
+    /// It only ever *adds* work: the range a run fetches still starts at
+    /// `since`. Unset is 30 days; `0` skips the pass.
     #[serde(default)]
     pub refresh_window_days: Option<i64>,
     /// Channel names to mirror, without the `#`. Unset means every
@@ -57,7 +56,8 @@ pub struct SlackApiSync {
     /// Oldest message to fetch — `YYYY-MM-DD` or RFC 3339. This is the
     /// knob that decides how far back the mirror goes, so "just the last
     /// week" means setting this to seven days ago. Unset defaults to
-    /// 2024-01-01 (the provider's `DEFAULT_SINCE`).
+    /// 2024-01-01 (the provider's `DEFAULT_SINCE`). A date before 1970
+    /// asks for everything.
     #[serde(default)]
     pub since: Option<String>,
     /// Also mirror channels the account can see but isn't a member of.

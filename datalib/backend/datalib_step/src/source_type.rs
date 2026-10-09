@@ -113,6 +113,7 @@ impl SourceType {
                 | SourceType::Chatgpt
                 | SourceType::Claude
                 | SourceType::Email
+                | SourceType::Garmin
                 | SourceType::Github
                 | SourceType::Gitlab
                 | SourceType::Notion

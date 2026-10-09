@@ -7,6 +7,8 @@
 use datalib_query::table::{self, Column, FreeText, SearchKey, SearchTable};
 use datalib_schema::grid_rows::GridRowColumn;
 
+use crate::terms_keys::{TermsKey, TERMS_KEYS};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Field<C: 'static> {
     Before,
@@ -16,6 +18,8 @@ pub enum Field<C: 'static> {
     Is(C),
     /// A key that compares one column.
     Column(&'static SearchKey<C>),
+    /// A key that reads the search terms (`crate::terms_keys`).
+    Terms(&'static TermsKey),
 }
 
 /// Notion-style slug+UUID parser. If `value` ends with a `-`-prefixed
@@ -35,7 +39,7 @@ pub fn extract_uuid_suffix(value: &str) -> &str {
     }
 }
 
-fn is_uuid_shape(s: &str) -> bool {
+pub fn is_uuid_shape(s: &str) -> bool {
     if s.len() != 36 {
         return false;
     }
@@ -59,6 +63,8 @@ pub struct FilterTerm<C: 'static> {
     pub field: Field<C>,
     pub value: String,
     pub negate: bool,
+    /// The value was quoted: a key that matches in part matches it whole.
+    pub quoted: bool,
 }
 
 /// How free-text should be evaluated. Bare search-bar text defaults to
@@ -88,6 +94,12 @@ pub struct ParsedQuery<C: 'static = GridRowColumn> {
 
 impl<C: Column> ParsedQuery<C> {
     pub fn parse(s: &str) -> Self {
+        Self::parse_with(s, &[])
+    }
+
+    /// `parse`, reading `terms` as keys too: the grid's search, whose
+    /// reader has the search terms attached.
+    pub fn parse_with(s: &str, terms_keys: &'static [TermsKey]) -> Self {
         let qmd = matches!(<C::Table as SearchTable>::FREE_TEXT, FreeText::Qmd);
         let mut terms: Vec<FilterTerm<C>> = Vec::new();
         let mut free_terms: Vec<String> = Vec::new();
@@ -119,11 +131,12 @@ impl<C: Column> ParsedQuery<C> {
                     };
                     free_terms.push(term);
                 }
-                datalib_query::Token::Term(t) => match field::<C>(&t.key, &t.value) {
+                datalib_query::Token::Term(t) => match field::<C>(&t.key, &t.value, terms_keys) {
                     Ok(field) => terms.push(FilterTerm {
                         field,
                         value: t.value,
                         negate: t.negate,
+                        quoted: t.quoted,
                     }),
                     Err(why) => {
                         refusal.get_or_insert(why);
@@ -178,7 +191,17 @@ impl ParsedQuery<GridRowColumn> {
     }
 }
 
-fn field<C: Column>(key: &str, value: &str) -> Result<Field<C>, String> {
+fn field<C: Column>(
+    key: &str,
+    value: &str,
+    terms: &'static [TermsKey],
+) -> Result<Field<C>, String> {
+    if let Some(k) = terms
+        .iter()
+        .find(|k| k.key == key || k.aliases.contains(&key))
+    {
+        return Ok(Field::Terms(k));
+    }
     let t = || <C::Table as SearchTable>::FLAGS;
     let ranged = <C::Table as SearchTable>::RANGE.is_some();
     match key {
@@ -208,6 +231,7 @@ fn field<C: Column>(key: &str, value: &str) -> Result<Field<C>, String> {
                 if !t().is_empty() {
                     known.push("is");
                 }
+                known.extend(terms.iter().map(|k| k.key));
                 Err(format!(
                     "`{key}:` is not something the search can filter on; try one of {}",
                     known.join(", ")
@@ -230,9 +254,10 @@ fn within_vocabulary<C>(typed: &str, key: &SearchKey<C>, value: &str) -> Result<
     ))
 }
 
-/// The grid's query: `grid_rows`, its keys, and qmd for free text.
+/// The grid's query: `grid_rows`, its keys, the search terms' keys, and
+/// qmd for free text.
 pub fn parse_query(s: &str) -> ParsedQuery {
-    ParsedQuery::parse(s)
+    ParsedQuery::parse_with(s, TERMS_KEYS)
 }
 
 #[cfg(test)]
@@ -284,9 +309,9 @@ mod tests {
 
     #[test]
     fn structured_filters_collected() {
-        let q = parse_query("before:2025-01-01 author:picard hello");
+        let q = parse_query("before:2025-01-01 channel:bridge hello");
         assert_eq!(q.bound(Field::Before), Some("2025-01-01"));
-        assert_eq!(kept(&q, col("author")), ["picard"]);
+        assert_eq!(kept(&q, col("channel")), ["bridge"]);
         assert_eq!(q.free_text, "hello");
     }
 
@@ -296,18 +321,28 @@ mod tests {
         assert!(q.terms.is_empty());
         let why = q.refusal().expect("an unknown key is refused");
         assert!(why.contains("`custom:`"), "{why}");
-        assert!(why.contains("author"), "it names the keys there are: {why}");
+        assert!(
+            why.contains("channel"),
+            "it names the keys there are: {why}"
+        );
+        assert!(why.contains("from"), "the search terms' keys too: {why}");
         assert!(parse_query("-custom:foo").refusal().is_some());
         assert_eq!(parse_query("author:picard is:document").refusal(), None);
+        assert!(
+            ParsedQuery::<GridRowColumn>::parse("from:picard")
+                .refusal()
+                .is_some(),
+            "a table read without the search terms has no `from:`"
+        );
     }
 
     #[test]
     fn quoted_free_text_preserves_quotes() {
         // Quotes survive into free_text so the daemon can send qmd a
         // lex sub-query for exact-phrase matching.
-        let q = parse_query("\"hello world\" author:picard");
+        let q = parse_query("\"hello world\" channel:bridge");
         assert_eq!(q.free_text, "\"hello world\"");
-        assert_eq!(kept(&q, col("author")), ["picard"]);
+        assert_eq!(kept(&q, col("channel")), ["bridge"]);
     }
 
     #[test]
@@ -324,8 +359,8 @@ mod tests {
 
     #[test]
     fn duplicate_filters_accumulate() {
-        let q = parse_query("author:a author:b");
-        assert_eq!(kept(&q, col("author")), ["a", "b"]);
+        let q = parse_query("channel:a channel:b");
+        assert_eq!(kept(&q, col("channel")), ["a", "b"]);
         assert_eq!(q.terms.len(), 2);
         assert!(q.terms.iter().all(|t| !t.negate));
     }
@@ -364,24 +399,20 @@ mod tests {
     }
 
     #[test]
-    fn source_and_kind_keys_recognized() {
-        let q = parse_query("source:Slack kind:Chat");
-        assert_eq!(kept(&q, col("source")), ["Slack"]);
+    fn source_id_and_kind_keys_recognized() {
+        let q = parse_query("source_id:slack kind:Chat");
+        assert_eq!(kept(&q, col("source_id")), ["slack"]);
         assert_eq!(kept(&q, col("kind")), ["Chat"]);
     }
 
-    /// `source_name:` was this filter's only spelling for as long as a
-    /// source had nothing but an id, so it is in users' fingers and in
-    /// saved queries. Both spellings have to reach the same field, or
-    /// one of them silently becomes free text.
+    /// `source:` (the provider's label) and `source_name:` (the old
+    /// spelling of `source_id:`) are gone. A saved query that still names
+    /// one is refused by name, not searched as free text.
     #[test]
-    fn source_id_accepts_its_old_source_name_spelling() {
-        for q in ["source_id:slack", "source_name:slack"] {
+    fn the_retired_source_keys_are_refused() {
+        for q in ["source:Slack", "source_name:slack"] {
             let parsed = parse_query(q);
-            assert_eq!(parsed.terms.len(), 1, "{q}");
-            assert_eq!(parsed.terms[0].field, col("source_id"), "{q}");
-            assert_eq!(parsed.terms[0].value, "slack", "{q}");
-            assert!(parsed.free_text.is_empty(), "{q}: {:?}", parsed.free_text);
+            assert!(parsed.refusal().is_some(), "{q}: {parsed:?}");
         }
     }
 
@@ -436,10 +467,10 @@ mod tests {
     #[test]
     fn qmd_predicate_single_word_unquoted() {
         // Single-word qmd: value doesn't need re-quoting.
-        let q = parse_query("qmd:\"foo\" source:Slack");
+        let q = parse_query("qmd:\"foo\" source_id:slack");
         assert_eq!(q.free_text, "foo");
         assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);
-        assert_eq!(kept(&q, col("source")), ["Slack"]);
+        assert_eq!(kept(&q, col("source_id")), ["slack"]);
     }
 
     #[test]

@@ -7,6 +7,13 @@
 // opens and whether qmd ranks its free text, the server declares
 // (`RowsSpec`).
 //
+// Over the search itself the card is the Search card, with two views of
+// the one query: a list with a preview (SearchList.ce.vue) and this
+// table, picked by the tabs above them. A new search opens on the view
+// picked last (searchViewPref.ts). Both stay mounted once shown, so
+// switching keeps each one's selection and scroll. The source chips rewrite the query
+// (cards/search.ts) rather than keep state beside it.
+//
 // Selecting a row opens the row's document as a new card via
 // ctx.host.openCards — structural changes never go through the bus.
 // Double-clicking a row opens that document as a standalone
@@ -34,15 +41,51 @@ import type {
   SlickEventData,
 } from "@slickgrid-universal/common";
 import { copyText, typedColumns, groupTitle } from "./typedColumns";
+import type { Identity } from "@/api";
+import { entityFromUri, handleFromUri } from "./chipLinks";
+import {
+  browseQuery,
+  entities,
+  entityCardSource,
+  entityCopyText,
+  entityMenu,
+  type EntityMenuEntry,
+} from "./entities";
+import { personSource } from "./cardSources";
+import {
+  NOBODY,
+  canLinkHandles,
+  chipCell,
+  chipLook,
+  chipMenu,
+  handleKind,
+  searchQueryFor,
+  copyText as copyHandleText,
+  handleValue,
+  people,
+  type ChipMenuEntry,
+} from "./contacts";
 import {
   SEARCH,
   type AccountsMap,
   type ColumnSpec,
   type QmdDocState,
+  type RowGroup,
   type RowsResponse,
   type RowsSpec,
   type SearchRow,
+  type SearchTab,
 } from "@/api";
+import {
+  SEARCH_TABS,
+  isNew,
+  startTabs,
+  tabAnswered,
+  tabPicked,
+  tabRecounted,
+  type TabAnswer,
+  type TabsState,
+} from "@/grid/searchTabs";
 import { useApi } from "@/cards/cardApi";
 import { slugify } from "@/config/sourceSteps";
 import { copyToClipboard } from "@/clipboard";
@@ -50,11 +93,17 @@ import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import { filePathFromUrl, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { openExternal } from "@/externalLinks";
-import { subscribeLive } from "@/live";
+import { oneAtATime, subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { followFrame, isDarkTheme } from "@/grid/gridFrame";
-import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
+import {
+  filterToken,
+  keepExcludeEntries,
+  searchDelay,
+  withToken,
+  type FilterEntry,
+} from "@/grid/query";
 import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
@@ -87,6 +136,11 @@ import {
 } from "@/grid/serverGroups";
 import { searchFailure, type SearchFailure } from "./searchFailure";
 import { DEFAULT_QUERY, PLAIN_HINT, searchPlaceholder } from "./searchDefaults";
+import SearchList from "./SearchList.ce.vue";
+import { freeText, pickedSource, setSource } from "./search";
+import SearchField from "@/search/SearchField.vue";
+import { iconUrl } from "@/config/icons";
+import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchViewPref";
 import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
 
@@ -112,17 +166,64 @@ const props = defineProps<{
   // documents"})`). Without one the card is named for its live query.
   name?: string;
   // The table the card pages (`gridView({url: "/applet/unified_index/problems"})`);
-  // the search when absent. Its groups are at `${url}/groups`.
+  // the search when absent (`searchView()`). Its groups are at `${url}/groups`.
   url?: string;
   // What the empty search bar suggests typing.
   placeholder?: string;
+  // The view a search opens in when the card source insists on one
+  // (a Browse names columns, which only the table has). Without it the
+  // search opens on the view picked last; the persisted state's wins
+  // over both.
+  view?: SearchViewId;
 }>();
 
 const url = props.url ?? SEARCH;
+// The search itself, not another table that pages the way it does.
+const isSearch = url === SEARCH;
+
+// Each view's tab: its name and its glyph, a stroked path on a 24px grid.
+const VIEWS: { id: SearchViewId; label: string; icon: string }[] = [
+  { id: "list", label: "List and preview", icon: "M3 4h18v16H3zM10 4v16M5 8h3M5 12h3M5 16h3" },
+  { id: "table", label: "Table", icon: "M3 4h18v16H3zM3 10h18M3 15h18M9 4v16M15 4v16" },
+];
 
 const initialState = new URLSearchParams(props.ctx.initialState);
 
 const query = ref(initialState.get("q") ?? props.q ?? "");
+
+const view = ref<SearchViewId>(
+  isSearch
+    ? (VIEWS.find((v) => v.id === initialState.get("view"))?.id ?? props.view ?? lastSearchView())
+    : "table",
+);
+// Kept with the card once the person has picked one, so a change of
+// the view the next search opens on does not move this one.
+let viewPicked = initialState.has("view");
+// The list mounts the first time it is shown, and stays.
+const listSeen = ref(view.value === "list");
+// `query` once typing has paused: what the list and the chips ask for.
+const settledQuery = ref(query.value);
+// The table has not asked for the query on screen: it was hidden.
+let tableBehind = false;
+
+props.ctx.setHelp(
+  isSearch
+    ? `
+<p>Type what you are looking for. Plain words are answered three ways, a small tab each:
+<b>Fields</b> (the ids, people, titles and names a row answers to), <b>Words</b> (the
+words anywhere in a document) and <b>Meaning</b> (documents about the same thing). The
+first to find something opens; a dot on another says it has found something too. Filters narrow the
+search: <code>author:worf</code>, <code>before:2371-01-01</code>, <code>-kind:contact</code>.</p>
+<p>The chips under the box say which sources the results come from, and how many each;
+pick one to see only its results. A chip and the tick box write a filter into the search
+box, the same one you could type.</p>
+<p>The two tabs above the results are two ways to see them. <b>List and preview</b> shows
+each result with your words marked, and the picked one to read beside it. <b>Table</b>
+shows the same results with every column, sorting and grouping. A new search opens on
+the one you picked last.</p>
+`
+    : null,
+);
 
 // An unnamed card's name tracks the live query, not just the factory
 // argument — searching from inside the card renames it.
@@ -143,14 +244,22 @@ const qmd = () => rowsSpec?.free_text === "qmd";
 // (what is typed) and not `!loading` (which flips in both directions
 // within one tick, so an observer can miss the transition entirely).
 const shownQuery = ref<string | null>(null);
+/// The tab whose answer the rows on screen are, beside `shownQuery`.
+const shownTab = ref<SearchTab | null>(null);
 const total = ref(0);
 const loading = ref(false);
 const error = ref<SearchFailure | null>(null);
 // A failed search leaves the previous query's rows painted; say so, or
 // the count above them reads as the answer to what is typed.
 const showingStale = computed(
-  () => error.value !== null && rows.value.length > 0 && shownQuery.value !== query.value,
+  () =>
+    (error.value !== null || unfinished.value !== null) &&
+    rows.value.length > 0 &&
+    shownQuery.value !== query.value,
 );
+// Why the search cannot read what is typed — often a filter not
+// finished yet (`is:do`). The rows of the last query it could read stay.
+const unfinished = ref<string | null>(null);
 // A free-text search failed in qmd, and came back with no rows.
 const qmdError = ref<string | null>(null);
 // Free text asked of a root no sync has built a qmd index for yet.
@@ -196,6 +305,24 @@ function refreshQmdState() {
   refreshIndexCells();
   if (qmdColumnsVisible()) askAboutVisibleRows();
   else void askQmdState([]);
+}
+
+// Who the Author chips are comes from `people`, the one resolver every
+// document and grid asks (docs/dev/chips.md § Resolving): a
+// cell that draws a handle asks as it draws, and when an answer changes —
+// it lands, or a link made anywhere forgets it — the cells are drawn again.
+// The Source cells are group chips, answered by `entities` the same way.
+const AUTHOR_COLUMN = "author_ref";
+const SOURCE_COLUMN = "source_ref";
+const stopPeople = people.subscribe(() => refreshCells(AUTHOR_COLUMN));
+const stopEntities = entities.subscribe(() => refreshCells(SOURCE_COLUMN));
+
+function refreshCells(columnId: string) {
+  const grid = vueGrid?.slickGrid;
+  const column = grid?.getColumnIndex(columnId);
+  if (!grid || column == null || column < 0) return;
+  const { top, bottom } = grid.getRenderedRange();
+  for (let row = top; row <= bottom; row++) grid.updateCell(row, column);
 }
 
 function askAboutVisibleRows() {
@@ -368,6 +495,7 @@ function saveState() {
   if (query.value !== (props.q ?? "")) params.set("q", query.value);
   if (sel.value) params.set("sel", sel.value);
   if (colsEncoded) params.set("cols", colsEncoded);
+  if (viewPicked) params.set("view", view.value);
   props.ctx.host.setState(params.toString());
 }
 
@@ -503,13 +631,15 @@ const feedbackSurfaceLabel = ref("");
 // the search bar. Null for a column the search has no key for (Score,
 // Contents) or a row with no value in it.
 type FilterCtx = {
-  // The search bar's key for the column (`author`, `source_id`).
+  // The search bar's key for the column (`from`, `source_id`).
   key: string;
   // Human-facing column header for menu labels.
   header: string;
   // The value a term names: what the column's key compares, which for
   // an id or a uuid behind a label is the id or uuid, not the cell's text.
   value: string;
+  // Written quoted, for a key that matches a bare value in part.
+  whole?: boolean;
 };
 
 function openFeedbackForSearchBar(ev: MouseEvent) {
@@ -549,6 +679,12 @@ function copyCell(column: Column<Row>, row: Row): string {
   if (column.id === "qmd_indexed") return indexFlag(qmdDocState(row)?.indexed);
   if (column.id === "qmd_embedded") return indexFlag(qmdDocState(row)?.embedded);
   const spec = columns.value.find((c) => c.field === column.id);
+  if (spec?.type === "identity") {
+    const v = row[spec.field] as Identity | null | undefined;
+    if (v?.entity) return entityCopyText(v.entity, v.label);
+    const handle = v ? handleFromUri(v.id) : null;
+    if (handle && v) return copyHandleText(handle, v.label);
+  }
   return spec ? copyText(spec.type, row[spec.field]) : "";
 }
 
@@ -575,12 +711,18 @@ function buildFilterCtx(colId: string, data: Row): FilterCtx | null {
   // account's from the accounts map, a conversation's from its own cell.
   const shown = row[colId];
   const label =
-    colId === "author" || colId === "account"
+    colId === "author_ref" || colId === "account"
       ? (accounts.value[value]?.label ?? "")
       : spec.search.field !== colId && typeof shown === "string"
         ? shown
         : "";
-  return { key: spec.search.key, header: spec.header, value: formatSlugUuid(label, value) };
+  return {
+    key: spec.search.key,
+    header: spec.header,
+    value: formatSlugUuid(label, value),
+    // A handle is matched whole bare; a name only quoted.
+    whole: spec.search.partial === true && handleKind(value) === null,
+  };
 }
 
 function accountLabel(uuid: string): string {
@@ -598,7 +740,11 @@ let win: PagedWindow<Row, number> | null = null;
 /// order, newest first, which the grid shows the other way up: newest at
 /// the bottom, where it opens, with older rows loading above. Rows a
 /// sync adds then land below the ones on screen instead of moving them.
-let shown: { q: string; sort: string | null; tail: boolean } | null = null;
+let shown: { q: string; sort: string | null; tab: SearchTab | null; tail: boolean } | null = null;
+/// Free text's three answers, a tab each; null for a search without it,
+/// which has one answer.
+const tabs = ref<TabsState | null>(null);
+const tab = computed<SearchTab | null>(() => tabs.value?.open ?? null);
 /// A selection restored from the URL may be further down the list than
 /// the first page; the grid loads through it. Typing a new search gives
 /// up on it.
@@ -610,6 +756,7 @@ let seekingSelection = sel.value !== null;
 /// while nothing is grouped.
 let grouped: {
   q: string;
+  tab: SearchTab | null;
   sort: string | null;
   by: string[];
   groups: ServerGroup<Row>[];
@@ -648,12 +795,20 @@ function searchPage(r: RowsResponse<Row>): Page<Row, number> {
 /// screen, for every row through the last one held, so nobody scrolled
 /// along the list loses their place.
 async function runSearch(q: string, refresh = false) {
+  if (view.value === "list") {
+    tableBehind = true;
+    loading.value = false;
+    return;
+  }
+  // Free text shows nothing until a tab opens.
+  if (tabs.value && tabs.value.open === null) return;
   if (groupedBy().length > 0) return runGrouped(q, refresh);
   grouped = null;
   inflight?.abort();
   const ctrl = (inflight = new AbortController());
   const sort = currentSort();
-  const again = refresh && win !== null && shown?.q === q && shown.sort === sort;
+  const t = tab.value;
+  const again = refresh && win !== null && shown?.q === q && shown.sort === sort && shown.tab === t;
   const limit = again ? refreshLimit(win!) : PAGE;
   const through = again
     ? rowKeyOf(win!.rows[win!.rows.length - 1])
@@ -666,7 +821,16 @@ async function runSearch(q: string, refresh = false) {
   qmdIndexMissing.value = false;
   try {
     // The card shows a failure itself, beside the rows it concerns.
-    const r = await fetchRows<Row>(url, q, limit, ctrl.signal, { toast: false }, { sort, through });
+    const r = await fetchRows<Row>(
+      url,
+      q,
+      limit,
+      ctrl.signal,
+      { toast: false },
+      { sort, through, tab: t },
+    );
+    unfinished.value = r.refused?.[0] ?? null;
+    if (unfinished.value !== null) return;
     rowsSpec = { row_key: r.row_key, document: r.document, free_text: r.free_text };
     if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
       columns.value = r.columns;
@@ -674,12 +838,13 @@ async function runSearch(q: string, refresh = false) {
     win = firstWindow(searchPage(r));
     // qmd's rank is not an order in time.
     const ranked = qmd() && !!r.query_echo?.free_text;
-    if (!again) shown = { q, sort, tail: sort === null && !ranked };
+    if (!again) shown = { q, sort, tab: t, tail: sort === null && !ranked };
     rows.value = win.rows;
     total.value = r.total;
     qmdError.value = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
     qmdIndexMissing.value = r.query_echo?.qmd_index_missing === true;
     shownQuery.value = q;
+    shownTab.value = t;
     if (again) showChanged(true);
     else showNew();
   } catch (e) {
@@ -709,7 +874,7 @@ async function loadThrough(through: number, uuid: string | null = null) {
         fetch.limit,
         undefined,
         { toast: false },
-        { offset: fetch.from, sort: search.sort, through: uuid },
+        { offset: fetch.from, sort: search.sort, through: uuid, tab: search.tab },
       );
       if (search !== shown || !win) return;
       const next = withPage(win, fetch.from, searchPage(r));
@@ -766,15 +931,23 @@ async function runGrouped(q: string, refresh: boolean) {
   const ctrl = (inflight = new AbortController());
   const sort = currentSort();
   const by = groupedBy();
+  const t = tab.value;
   const was = grouped;
   const again =
-    refresh && was !== null && was.q === q && was.sort === sort && was.by.join() === by.join();
+    refresh &&
+    was !== null &&
+    was.q === q &&
+    was.tab === t &&
+    was.sort === sort &&
+    was.by.join() === by.join();
   loading.value = true;
   error.value = null;
   qmdError.value = null;
   qmdIndexMissing.value = false;
   try {
-    const r = await fetchGroups<Row>(q, by.join(","), ctrl.signal, url);
+    const r = await fetchGroups<Row>(q, by.join(","), ctrl.signal, url, t);
+    unfinished.value = r.refused?.[0] ?? null;
+    if (unfinished.value !== null) return;
     const windows = new Map(r.groups.map((g) => [groupKey(g.values), unread(g, r.at)]));
     if (again) {
       await Promise.all(
@@ -788,7 +961,7 @@ async function runGrouped(q: string, refresh: boolean) {
             refreshLimit(held!),
             ctrl.signal,
             { toast: false },
-            { sort, within: withinOf(by, g.values), through: rowKey(last) },
+            { sort, within: withinOf(by, g.values), through: rowKey(last), tab: t },
           );
           windows.set(groupKey(g.values), firstWindow(searchPage(page)));
         }),
@@ -796,17 +969,19 @@ async function runGrouped(q: string, refresh: boolean) {
     }
     grouped = {
       q,
+      tab: t,
       sort,
       by,
       groups: r.groups,
       windows,
       counts: countsByKey(r.groups, gettersOf(by)),
     };
-    shown = { q, sort, tail: false };
+    shown = { q, sort, tab: t, tail: false };
     win = null;
     qmdError.value = r.qmd_error ?? null;
     qmdIndexMissing.value = r.qmd_index_missing ?? false;
     shownQuery.value = q;
+    shownTab.value = t;
     showGroups(again ? "refresh" : "new");
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
@@ -832,7 +1007,7 @@ async function loadGroupPage(key: string) {
       fetch.limit,
       undefined,
       { toast: false },
-      { offset: fetch.from, sort: g.sort, within: withinOf(g.by, values) },
+      { offset: fetch.from, sort: g.sort, within: withinOf(g.by, values), tab: g.tab },
     );
     if (grouped !== g) return;
     const next = withPage(g.windows.get(key)!, fetch.from, searchPage(r));
@@ -899,15 +1074,132 @@ function redrawGroupRows() {
   grid.render();
 }
 
-watch(query, (q) => {
+watch(query, (q, before) => {
   if (debounceTimer) clearTimeout(debounceTimer);
   seekingSelection = false;
-  // Show the spinner immediately on input change — otherwise the 150ms
+  // Show the spinner immediately on input change — otherwise the
   // debounce leaves the user staring at the old rows with no feedback.
   loading.value = true;
-  debounceTimer = setTimeout(() => runSearch(q), 150);
+  // Before the table's first answer says so, the search is known to be ranked.
+  const ranked = rowsSpec === null ? isSearch : qmd();
+  debounceTimer = setTimeout(
+    () => {
+      settledQuery.value = q;
+      void startSearch(q);
+    },
+    searchDelay(before, q, ranked),
+  );
   saveState();
 });
+
+/// A new search: free text asks every tab, and the first to come back with
+/// rows shows; a search without it has one answer.
+function startSearch(q: string) {
+  if (!isSearch || freeText(q) === "") {
+    tabsAsked++;
+    tabs.value = null;
+    return runSearch(q);
+  }
+  return askTabs(q, false);
+}
+
+let tabsAsked = 0;
+/// Ask each tab how many rows it has. A recount, after the index moved,
+/// updates the counts and never changes the open tab.
+async function askTabs(q: string, recount: boolean) {
+  const asked = ++tabsAsked;
+  if (!recount) tabs.value = startTabs(q);
+  await Promise.all(
+    SEARCH_TABS.map(async ({ id }) => {
+      const answer = await tabAnswer(q, id);
+      if (asked !== tabsAsked || tabs.value?.q !== q) return;
+      const before = tabs.value.open;
+      tabs.value = recount
+        ? tabRecounted(tabs.value, id, answer)
+        : tabAnswered(tabs.value, id, answer);
+      if (before === null && tabs.value.open !== null) void runSearch(q);
+    }),
+  );
+}
+
+async function tabAnswer(q: string, t: SearchTab): Promise<TabAnswer> {
+  try {
+    const r = await fetchRows<Row>(url, q, 1, undefined, { toast: false }, { tab: t });
+    const failed =
+      r.refused?.[0] ??
+      (typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null) ??
+      (r.query_echo?.qmd_index_missing === true ? "No sync has built the search index yet" : null);
+    if (failed) return { status: "failed", why: failed };
+    return { status: "ready", total: r.total, seen: false };
+  } catch (e) {
+    return { status: "failed", why: searchFailure(e).message };
+  }
+}
+
+function pickTab(t: SearchTab) {
+  if (!tabs.value || tabs.value.open === t) return;
+  tabs.value = tabPicked(tabs.value, t);
+  void runSearch(tabs.value.q);
+}
+
+function tabCount(t: SearchTab): string {
+  const answer = tabs.value?.answers[t];
+  if (!answer || answer.status === "pending") return "…";
+  if (answer.status === "failed") return "!";
+  return answer.total.toLocaleString();
+}
+
+function tabTitle(t: (typeof SEARCH_TABS)[number]): string {
+  const answer = tabs.value?.answers[t.id];
+  if (answer?.status === "pending") return `${t.title}: still looking`;
+  if (answer?.status === "failed") return `${t.title}: ${answer.why}`;
+  if (tabs.value && isNew(tabs.value, t.id)) return `${t.title}: found something, not seen yet`;
+  return t.title;
+}
+
+watch(view, (v) => {
+  viewPicked = true;
+  rememberSearchView(v);
+  saveState();
+  if (v === "list") listSeen.value = true;
+  if (v === "table" && tableBehind) {
+    tableBehind = false;
+    void runSearch(query.value);
+  }
+});
+
+// --- the source chips: a view of the query ----------------------------
+
+/// The sources the search hits and how many rows each, whichever source
+/// the query is narrowed to.
+const sources = ref<RowGroup<Row>[]>([]);
+const sourcesQuery = computed(() => setSource(settledQuery.value, null));
+let sourcesAsked = 0;
+async function loadSources() {
+  if (!isSearch) return;
+  const asked = ++sourcesAsked;
+  try {
+    const r = await fetchGroups<Row>(
+      sourcesQuery.value,
+      "source_ref",
+      undefined,
+      SEARCH,
+      tab.value,
+    );
+    if (asked === sourcesAsked) sources.value = r.groups;
+  } catch {
+    /* the chips are a convenience; the search says what went wrong */
+  }
+}
+watch([sourcesQuery, tab], loadSources);
+onMounted(loadSources);
+
+const allCount = computed(() => sources.value.reduce((n, g) => n + g.count, 0));
+const source = computed(() => pickedSource(query.value));
+
+function pickSource(id: string | null) {
+  query.value = setSource(query.value, id);
+}
 
 // Restore the selected row from persisted state after rows load (or
 // after the grid is first created, whichever happens last — creation
@@ -948,7 +1240,7 @@ const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
   kind: "kind",
   channel: "channel",
   touched_at: "touched_at",
-  author: "author",
+  author_ref: "author",
   account: "account",
 };
 
@@ -1106,12 +1398,19 @@ onMounted(nameSourcesInPlaceholder);
 // download is still going.
 const cardEl = ref<HTMLElement | null>(null);
 let unsubscribeLive: (() => void) | null = null;
+const refreshRows = oneAtATime(async () => {
+  await Promise.all([
+    runSearch(query.value, true),
+    tabs.value ? askTabs(tabs.value.q, true) : undefined,
+  ]);
+});
 onMounted(() => {
   unsubscribeLive = subscribeLive(
     {
       root: (e) => {
         if (e.kind !== "index_changed") return;
-        void runSearch(query.value, true);
+        refreshRows();
+        void loadSources();
         if (!namesASource()) void nameSourcesInPlaceholder();
       },
     },
@@ -1119,6 +1418,8 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => unsubscribeLive?.());
+onBeforeUnmount(stopPeople);
+onBeforeUnmount(stopEntities);
 
 function docSource(md: string, anchor: string | null): string {
   const args = [md, anchor].map((a) => JSON.stringify(a)).join(", ");
@@ -1138,6 +1439,18 @@ function openRow(row: Row) {
 /// uuid.
 const accountFormatter: Formatter<Row> = (_r, _c, value) => {
   const v = typeof value === "string" ? value : "";
+  const label = accountLabel(v);
+  return { text: label, toolTip: v && label !== v ? v : "" };
+};
+
+/// The Author cell: a chip where the author has a handle, drawn from
+/// what `people` has answered so far; otherwise the name as shown, with
+/// an account's uuid read as the account's name.
+const authorFormatter: Formatter<Row> = (_r, _c, _v, _col, row) => {
+  const ref = row.author_ref;
+  const handle = ref ? handleFromUri(ref.id) : null;
+  if (handle && ref) return chipCell(handle, ref.label, people.lookup(handle), canLinkHandles());
+  const v = row.author ?? "";
   const label = accountLabel(v);
   return { text: label, toolTip: v && label !== v ? v : "" };
 };
@@ -1165,9 +1478,9 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
       return div;
     },
   },
-  author: {
+  author_ref: {
     width: 130,
-    formatter: accountFormatter,
+    formatter: authorFormatter,
     grouping: {
       getter: (row: Row) => accountLabel(row.author ?? ""),
       formatter: groupTitle("Author"),
@@ -1275,6 +1588,11 @@ watch(
     const typed = typedColumns<Row>(specs, {
       overrides: columnOverrides,
       groupable: true,
+      chips: {
+        who: (h) => people.lookup(h),
+        canLink: canLinkHandles,
+        entity: (uri) => entities.lookup(uri),
+      },
     });
     const at = typed.findIndex((c) => c.id === "project") + 1;
     const own = qmd() ? extraColumns : [];
@@ -1340,6 +1658,11 @@ type MenuScope = {
   filter: FilterEntry[];
   notion: FilterEntry[];
   links: { web: Row[]; local: string[] };
+  /// The chip in the cell under the click, when the cell is an Author
+  /// with a handle: the same entries a document's chip offers.
+  chip: { handle: string; name: string; entries: ChipMenuEntry[] } | null;
+  /// The group or step chip in the cell under the click: its entries.
+  entity: { uri: string; name: string; entries: EntityMenuEntry[] } | null;
 };
 
 const linkOf = (r: Row): string => r.source_url || "";
@@ -1382,11 +1705,36 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   // browser blocks it silently. Split on the URL SCHEME rather than on
   // provider, so any future local-file source inherits this.
   const linked = targets.filter((r) => linkOf(r));
+  const chipEl = el?.querySelector<HTMLElement>("a.chip[data-handle]") ?? null;
+  const chip = chipEl
+    ? (() => {
+        const handle = chipEl.dataset.handle ?? "";
+        const shownAs = chipEl.dataset.shownAs ?? "";
+        const w = people.get(handle) ?? NOBODY;
+        // No popover in a grid cell yet, so the link entry is not offered
+        // here; the document view has it.
+        return {
+          handle,
+          name: chipLook(handle, shownAs, w, false).text,
+          entries: chipMenu(handle, shownAs, w, false),
+        };
+      })()
+    : null;
+  const entityEl = el?.querySelector<HTMLElement>("a.chip[data-entity]") ?? null;
+  const entity = entityEl
+    ? (() => {
+        const uri = entityEl.dataset.entity ?? "";
+        const name = entityEl.dataset.label ?? entityEl.dataset.shownAs ?? uri;
+        return { uri, name, entries: entityMenu(uri, name) };
+      })()
+    : null;
   return {
     anchor,
     cell,
     copy,
     targets,
+    chip,
+    entity,
     filter: filterCtx ? keepExcludeEntries(filterCtx) : [],
     notion: notionCtx ? keepExcludeEntries(notionCtx) : [],
     links: {
@@ -1433,7 +1781,39 @@ function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
 // The right-click menu, ahead of the grid's own entries (the grouping
 // commands). Each entry decides for itself whether the
 // cell under the click gives it anything to do.
+const entityEntry = (id: EntityMenuEntry["id"], run: (m: MenuScope) => void) =>
+  entry(`entity-${id}`, (m) => m.entity?.entries.find((e) => e.id === id)?.label ?? null, run);
+
+/// A group's dashboard or a step's log, beside this card.
+function openEntity(uri: string) {
+  const source = entityCardSource(uri);
+  if (source) props.ctx.host.openCards(source);
+}
+
+const chipEntry = (id: ChipMenuEntry["id"], run: (m: MenuScope) => void) =>
+  entry(`chip-${id}`, (m) => m.chip?.entries.find((e) => e.id === id)?.label ?? null, run);
+
 const menuItems: (MenuCommandItem | "divider")[] = [
+  chipEntry("copy-name", (m) => void copyToClipboard(m.chip!.name)),
+  chipEntry("copy-id", (m) => void copyToClipboard(handleValue(m.chip!.handle))),
+  chipEntry("copy-both", (m) => void copyToClipboard(copyHandleText(m.chip!.handle, m.chip!.name))),
+  chipEntry("search", (m) => appendFilterToQuery(searchQueryFor(m.chip!.handle))),
+  dividerAfter((m) => m.chip !== null),
+  entityEntry("copy-name", (m) => void copyToClipboard(m.entity!.name)),
+  entityEntry(
+    "copy-id",
+    (m) => void copyToClipboard(entityFromUri(m.entity!.uri)?.id ?? m.entity!.uri),
+  ),
+  entityEntry(
+    "copy-both",
+    (m) => void copyToClipboard(entityCopyText(m.entity!.uri, m.entity!.name)),
+  ),
+  entityEntry("open", (m) => openEntity(m.entity!.uri)),
+  entityEntry("browse", (m) => {
+    const q = browseQuery(m.entity!.uri);
+    if (q) query.value = q;
+  }),
+  dividerAfter((m) => m.entity !== null),
   entry(
     "keep",
     (m) => m.filter[0]?.label ?? null,
@@ -1730,7 +2110,7 @@ function createGrid() {
 
 /// The search bar takes a column dragged from the headers, the way the
 /// grouping bar does, and adds a term keeping the rows with a value in
-/// it: `author:*`, which a person can then narrow to a value.
+/// it: `from:*`, which a person can then narrow to a value.
 const searchWrapEl = ref<HTMLDivElement | null>(null);
 type Sortable = { destroy(): void };
 type SortableClass = { create(el: HTMLElement, options: object): Sortable };
@@ -1788,7 +2168,16 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   if (doc) props.ctx.host.openCards(docSource(doc.md, doc.anchor));
 }
 
-function onClick(_e: SlickEventData, args: OnClickEventArgs) {
+/// The chip under a pointer event in a cell, if any.
+function chipAt(e: SlickEventData): HTMLElement | null {
+  const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
+  return target?.closest?.<HTMLElement>("a.chip[data-handle], a.chip[data-entity]") ?? null;
+}
+
+function onClick(e: SlickEventData, args: OnClickEventArgs) {
+  // A chip is a link; a click on it selects the row and nothing more —
+  // the mail client its href would open is not what a click here asks.
+  if (chipAt(e)) e.getNativeEvent<MouseEvent>()?.preventDefault();
   // A data row that is already the one selected selects again as far
   // as the reader is concerned, though the selection model sees no
   // change: keep the persisted selection on it.
@@ -1801,7 +2190,20 @@ function onClick(_e: SlickEventData, args: OnClickEventArgs) {
   }
 }
 
-function onDblClick(_e: SlickEventData, args: OnDblClickEventArgs) {
+function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
+  // Double-click on a chip opens its card: a person's, led by this
+  // row's source, or a group's dashboard or a step's log
+  // (docs/dev/chips.md § Clicks).
+  const chip = chipAt(e);
+  if (chip?.dataset.entity) {
+    openEntity(chip.dataset.entity);
+    return;
+  }
+  if (chip) {
+    const seenIn = rowData(args.row)?.source_id || null;
+    props.ctx.host.openCards(personSource(chip.dataset.handle ?? "", { seenIn }));
+    return;
+  }
   const data = rowData(args.row);
   if (data) openRow(data);
 }
@@ -1847,67 +2249,157 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="cardEl" class="grid-column">
-    <div ref="searchWrapEl" class="search-input-wrap">
-      <input
-        v-model="query"
-        :placeholder="hint"
-        class="search-input"
-        data-testid="search-input"
-        autofocus
-        @contextmenu="openFeedbackForSearchBar"
-      />
-      <button
-        v-if="query.length > 0"
-        type="button"
-        class="search-clear"
-        aria-label="Clear search"
-        title="Clear search"
-        data-testid="search-clear"
-        @click="query = ''"
+    <div class="search-bar">
+      <div ref="searchWrapEl" class="search-input-wrap">
+        <SearchField
+          v-model="query"
+          :base="url"
+          :placeholder="hint"
+          class="search-input"
+          testid="search-input"
+          :open-card="(source: string) => props.ctx.host.openCards(source)"
+          autofocus
+          @contextmenu="openFeedbackForSearchBar"
+        />
+        <button
+          v-if="query.length > 0"
+          type="button"
+          class="search-clear"
+          aria-label="Clear search"
+          title="Clear search"
+          data-testid="search-clear"
+          @click="query = ''"
+        >
+          ×
+        </button>
+      </div>
+    </div>
+
+    <!-- The chips change the search; the switch, at the row's end and
+         last before the results, changes only how they are shown. -->
+    <div v-if="isSearch" class="view-row">
+      <div v-if="tabs" class="answer-tabs" role="tablist" aria-label="Answers">
+        <button
+          v-for="t in SEARCH_TABS"
+          :key="t.id"
+          type="button"
+          class="answer-tab"
+          :class="{
+            'is-on': tabs.open === t.id,
+            'is-pending': tabs.answers[t.id].status === 'pending',
+            'is-failed': tabs.answers[t.id].status === 'failed',
+            'is-new': isNew(tabs, t.id),
+          }"
+          role="tab"
+          :aria-selected="tabs.open === t.id"
+          :data-tab="t.id"
+          :title="tabTitle(t)"
+          @click="pickTab(t.id)"
+        >
+          {{ t.label }} <span class="answer-count">{{ tabCount(t.id) }}</span>
+        </button>
+      </div>
+      <div v-if="sources.length > 0" class="source-chips" role="group" aria-label="Sources">
+        <button
+          type="button"
+          class="source-chip"
+          :class="{ 'is-on': source === null }"
+          :aria-pressed="source === null"
+          @click="pickSource(null)"
+        >
+          All {{ allCount.toLocaleString() }}
+        </button>
+        <button
+          v-for="g in sources"
+          :key="g.sample.source_id"
+          type="button"
+          class="source-chip"
+          :class="{ 'is-on': source === g.sample.source_id }"
+          :aria-pressed="source === g.sample.source_id"
+          @click="pickSource(g.sample.source_id ?? null)"
+        >
+          <img
+            v-if="iconUrl(g.sample.source_ref?.icon)"
+            :src="iconUrl(g.sample.source_ref?.icon)!"
+            alt=""
+          />
+          {{ g.sample.source_ref?.label ?? g.sample.source_id }} {{ g.count.toLocaleString() }}
+        </button>
+      </div>
+      <div class="view-tabs" role="tablist" aria-label="View">
+        <button
+          v-for="v in VIEWS"
+          :key="v.id"
+          type="button"
+          class="view-tab"
+          :class="{ 'is-on': view === v.id }"
+          role="tab"
+          :aria-selected="view === v.id"
+          @click="view = v.id"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="v.icon" /></svg>
+          {{ v.label }}
+        </button>
+      </div>
+    </div>
+
+    <SearchList
+      v-if="listSeen"
+      v-show="view === 'list'"
+      :ctx="ctx"
+      :query="settledQuery"
+      :active="view === 'list'"
+      :tab="tab"
+      :waiting="tabs !== null && tabs.open === null"
+    />
+
+    <!-- The table stays laid out while the list shows, so the grid
+         never measures a box of no size. -->
+    <div class="table-view" :class="{ 'is-off': view !== 'table' }">
+      <div class="status">
+        {{ rows.length }} rows (of {{ total }})
+        <span v-if="qmdCoverage" class="qmd-summary" :title="qmdCoverage.title">
+          · {{ qmdCoverage.text }}
+        </span>
+      </div>
+
+      <p v-if="qmdError" class="qmd-error" role="alert">Free-text search failed: {{ qmdError }}</p>
+      <p v-if="unfinished" class="query-unread" role="status">
+        {{ unfinished }}
+        <template v-if="showingStale">The rows below are from the previous search.</template>
+      </p>
+      <p v-if="qmdIndexMissing" class="qmd-unbuilt" role="status">
+        Free-text search starts working once the first sync builds the search index.
+      </p>
+
+      <p v-if="error" class="error" role="alert" :title="error.detail">
+        {{ error.message }}
+        <template v-if="showingStale">The rows below are from the previous search.</template>
+        <button type="button" class="error-retry" @click="runSearch(query)">Retry</button>
+      </p>
+
+      <div class="grid-wrap" :data-shown-query="shownQuery" :data-shown-tab="shownTab">
+        <!-- The grid is built into this box by `createGrid`, once the
+             applet has declared its columns. -->
+        <!-- Two elements: the grid adds classes of its own to the box it
+             is built in (its theme's dark mode among them), and a Vue
+             class binding on that same element would wipe them on every
+             change. -->
+        <div class="grid" :class="{ 'grid--loading': loading, 'grid--stale': showingStale }">
+          <div ref="boxEl" class="grid-box" />
+        </div>
+        <div v-if="loading" class="grid-spinner" aria-label="searching">
+          <div class="grid-spinner__ring" />
+          <div class="grid-spinner__label">searching…</div>
+        </div>
+      </div>
+      <p
+        v-if="!loading && rows.length === 0 && !error && !qmdError && !qmdIndexMissing"
+        class="empty"
       >
-        ×
-      </button>
+        no matches.
+      </p>
     </div>
-
-    <div class="status">
-      {{ rows.length }} rows (of {{ total }})
-      <span v-if="qmdCoverage" class="qmd-summary" :title="qmdCoverage.title">
-        · {{ qmdCoverage.text }}
-      </span>
-    </div>
-
-    <p v-if="qmdError" class="qmd-error" role="alert">Free-text search failed: {{ qmdError }}</p>
-    <p v-if="qmdIndexMissing" class="qmd-unbuilt" role="status">
-      Free-text search starts working once the first sync builds the search index.
-    </p>
-
-    <p v-if="error" class="error" role="alert" :title="error.detail">
-      {{ error.message }}
-      <template v-if="showingStale">The rows below are from the previous search.</template>
-      <button type="button" class="error-retry" @click="runSearch(query)">Retry</button>
-    </p>
-
-    <div class="grid-wrap" :data-shown-query="shownQuery">
-      <!-- The grid is built into this box by `createGrid`, once the
-           applet has declared its columns. -->
-      <!-- Two elements: the grid adds classes of its own to the box it
-           is built in (its theme's dark mode among them), and a Vue
-           class binding on that same element would wipe them on every
-           change. -->
-      <div class="grid" :class="{ 'grid--loading': loading, 'grid--stale': showingStale }">
-        <div ref="boxEl" class="grid-box" />
-      </div>
-      <div v-if="loading" class="grid-spinner" aria-label="searching">
-        <div class="grid-spinner__ring" />
-        <div class="grid-spinner__label">searching…</div>
-      </div>
-    </div>
-    <p
-      v-if="!loading && rows.length === 0 && !error && !qmdError && !qmdIndexMissing"
-      class="empty"
-    >
-      no matches.
-    </p>
 
     <FeedbackModal
       :open="feedbackOpen"
@@ -1932,9 +2424,176 @@ onBeforeUnmount(() => {
   padding: 0.5rem;
   box-sizing: border-box;
 }
+.grid-column {
+  position: relative;
+}
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
 .search-input-wrap {
   position: relative;
-  width: 100%;
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+/* The chips, then the views' tabs at the row's end. The row's rule is
+   the top edge of what the tabs switch; the tab in use is open onto it. */
+.view-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--datalib-border);
+}
+.source-chips {
+  padding-bottom: 6px;
+}
+.answer-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 6px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 999px;
+}
+.answer-tab {
+  position: relative;
+  height: calc(var(--datalib-control-h) - 6px);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 0.85em;
+  white-space: nowrap;
+  color: var(--datalib-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.answer-tab:hover {
+  color: var(--datalib-fg);
+  background: var(--datalib-hover);
+}
+.answer-tab.is-on {
+  color: var(--datalib-fg);
+  font-weight: 600;
+  background: var(--datalib-hover);
+}
+.answer-tab.is-pending,
+.answer-tab.is-failed {
+  opacity: 0.55;
+}
+.answer-count {
+  font-variant-numeric: tabular-nums;
+}
+.answer-tab.is-pending .answer-count {
+  animation: answer-pending 1.2s ease-in-out infinite;
+}
+@keyframes answer-pending {
+  50% {
+    opacity: 0.3;
+  }
+}
+.answer-tab.is-new::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--datalib-accent);
+}
+.view-tabs {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  margin-bottom: -1px;
+}
+.view-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: calc(var(--datalib-control-h) + 2px);
+  padding: 0 10px;
+  font: inherit;
+  white-space: nowrap;
+  color: var(--datalib-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom-color: var(--datalib-border);
+  border-radius: var(--datalib-radius) var(--datalib-radius) 0 0;
+  cursor: pointer;
+}
+.view-tab svg {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.view-tab:hover {
+  color: var(--datalib-fg);
+  background: var(--datalib-hover);
+}
+.view-tab.is-on {
+  color: var(--datalib-fg);
+  font-weight: 600;
+  background: var(--datalib-bg);
+  border-color: var(--datalib-border);
+  border-bottom-color: var(--datalib-bg);
+}
+.view-tab.is-on svg {
+  color: var(--datalib-accent);
+}
+.source-chips {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.source-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: calc(var(--datalib-control-h) - 2px);
+  padding: 0 10px;
+  font: inherit;
+  border: 1px solid var(--datalib-border);
+  border-radius: 999px;
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  cursor: pointer;
+}
+.source-chip img {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+}
+.source-chip:hover {
+  background: var(--datalib-hover);
+}
+.source-chip.is-on {
+  border-color: var(--datalib-fg);
+  background: var(--datalib-fg);
+  color: var(--datalib-bg);
+}
+.table-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.table-view.is-off {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 .search-input {
   width: 100%;
@@ -1945,6 +2604,9 @@ onBeforeUnmount(() => {
   color: var(--datalib-fg);
   border: 1px solid var(--datalib-border);
   border-radius: 4px;
+}
+.search-input:focus-within {
+  border-color: var(--datalib-accent);
 }
 .search-clear {
   position: absolute;
@@ -1994,6 +2656,7 @@ onBeforeUnmount(() => {
 .error-retry:hover {
   background: var(--datalib-border);
 }
+.query-unread,
 .qmd-unbuilt {
   padding: 0.4rem 0.6rem;
   border: 1px solid var(--datalib-border);

@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_fsindex::ingest::{self, FetchOptions, RawDb};
 use sqlx::Row;
 
@@ -42,7 +42,7 @@ async fn scan_and_commit(
     id: &str,
     branch: Option<&str>,
     cache: &FingerprintCache,
-) {
+) -> Option<String> {
     let db = RawDb::open(db_path).await.unwrap();
     if let Some(branch) = branch {
         db.checkout_branch(branch).await.unwrap();
@@ -51,10 +51,11 @@ async fn scan_and_commit(
     // `fetch` re-applies the checkout on the same pooled connection;
     // doing it here too matches the binary, which opens the db itself.
     ingest::fetch(o).await.unwrap();
-    db.commit(&format!("scan {id}")).await.unwrap();
+    let committed = db.commit(&format!("scan {id}")).await.unwrap();
     // Closed, not dropped: the next open of this store is a second
     // connection until this one is actually gone.
     db.close().await;
+    committed
 }
 
 async fn files_on_branch(db_path: &Path, branch: &str) -> Vec<String> {
@@ -159,12 +160,12 @@ async fn rescanning_an_existing_branch_reuses_it() {
     );
 }
 
-/// Scanning an unchanged tree again changes no content row. The scan
-/// stamps from the wall clock, so two scans are already two nows; a
-/// table named here carries a stamp the store mints, which every
-/// consumer that diffs the store reads as a change on every run.
+/// Scanning an unchanged tree again changes nothing in the store, its
+/// sidecars included. The scan stamps from the wall clock, so two scans
+/// are two nows; a commit here means a stamp the store mints moved, and
+/// the store grows on every sync.
 #[tokio::test]
-async fn rescanning_an_unchanged_tree_moves_no_content_row() {
+async fn rescanning_an_unchanged_tree_commits_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("scans.doltlite_db");
     let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
@@ -174,28 +175,12 @@ async fn rescanning_an_unchanged_tree_moves_no_content_row() {
     write(&root, "a.txt", "one\n");
     write(&root, "sub/b.txt", "two\n");
 
-    scan_and_commit(&db_path, &root, "s", None, &cache).await;
-    let db = RawDb::open(&db_path).await.unwrap();
-    let first = datalib_etl::doltlite_raw::head_commit(db.pool())
-        .await
-        .unwrap()
-        .expect("the first scan committed");
-    db.close().await;
-
-    scan_and_commit(&db_path, &root, "s", None, &cache).await;
-    let db = RawDb::open(&db_path).await.unwrap();
-    let second = datalib_etl::doltlite_raw::head_commit(db.pool())
-        .await
-        .unwrap()
-        .expect("the second scan committed");
-    let changed = datalib_etl::doltlite_raw::content_tables_changed(db.pool(), &first, &second)
-        .await
-        .unwrap();
-    db.close().await;
+    let first = scan_and_commit(&db_path, &root, "s", None, &cache).await;
+    let second = scan_and_commit(&db_path, &root, "s", None, &cache).await;
+    assert!(first.is_some());
     assert_eq!(
-        changed,
-        Vec::<String>::new(),
-        "a content table moved between two scans of the same tree"
+        second, None,
+        "scanning an unchanged tree again changes nothing in the store"
     );
 }
 

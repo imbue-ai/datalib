@@ -11,7 +11,7 @@
 /// A dataset the server serves, named by what serves it. Mirrors
 /// `watch::Table` by hand. A consumer names the ones it reads and
 /// refetches on those; a change to anything else never reaches it.
-export type LiveTable = "dag" | "manage.rows" | "runs" | "log" | "storage";
+export type LiveTable = "dag" | "manage.rows" | "runs" | "log" | "storage" | "curated";
 
 /// One `root` frame. Mirrors `watch::RootFrame`; see that module for
 /// what each kind covers and why the frame carries no payload (every
@@ -25,6 +25,7 @@ export type RootEvent = (
   | { kind: "table_changed"; table: LiveTable }
   | { kind: "frontend_changed" }
   | { kind: "index_changed" }
+  | { kind: "upgrade_changed" }
   | { kind: "heartbeat" }
 ) & { chain?: number };
 
@@ -247,5 +248,30 @@ export function subscribeLive(handlers: LiveHandlers, opts: LiveOptions = {}): U
       source?.close();
       source = null;
     }
+  };
+}
+
+/// A refetch a frame asks for, never more than one in flight: frames
+/// that arrive while it runs are answered by one more run after it. A
+/// search costs seconds and the index commits every few while a sync
+/// runs, so restarting it on each frame only queues work on the server,
+/// which finishes an aborted search anyway.
+export function oneAtATime(run: () => Promise<void>): () => void {
+  let running = false;
+  let owed = false;
+  const loop = async () => {
+    running = true;
+    try {
+      do {
+        owed = false;
+        await run().catch(() => {});
+      } while (owed);
+    } finally {
+      running = false;
+    }
+  };
+  return () => {
+    if (running) owed = true;
+    else void loop();
   };
 }

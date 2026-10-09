@@ -37,7 +37,7 @@ async fn gitlab_live_single_mr_snapshot() {
         .unwrap();
     let opts = FetchOptions {
         targets: vec![(proj.clone(), iid)],
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), datalib_time::IsoOffsetTimestamp::now_local())
     };
     let r = gitlab::fetch(opts).await;
     // Seal what `fetch` wrote before anything reads it, the way the

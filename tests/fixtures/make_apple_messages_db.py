@@ -149,14 +149,14 @@ def attributed_body(text: str) -> bytes:
 
 
 # (ROWID, id)
-HANDLES = [(1, "+14155550142"), (2, "+14155550187")]
+HANDLES = [(1, "+14155550142"), (2, "+14155550187"), (3, "+14155550199")]
 
 # (ROWID, guid, chat_identifier, display_name, style)
 CHATS = [
     (1, "iMessage;-;+14155550142", "+14155550142", None, 45),
     (2, "iMessage;+;chat240603120915", "chat240603120915", "Bridge crew", 43),
 ]
-CHAT_HANDLES = [(1, 1), (2, 1), (2, 2)]
+CHAT_HANDLES = [(1, 1), (2, 1), (2, 2), (2, 3)]
 
 GUID = {
     1: "A1B2C3D4-0001-4000-8000-000000000001",
@@ -170,6 +170,7 @@ GUID = {
     9: "A1B2C3D4-0009-4000-8000-000000000009",
     10: "A1B2C3D4-0010-4000-8000-000000000010",
     12: "A1B2C3D4-0012-4000-8000-000000000012",
+    13: "A1B2C3D4-0013-4000-8000-000000000013",
 }
 
 LONG_BODY = (
@@ -193,6 +194,9 @@ MESSAGES = [
     (7, 2, 1, 0, 32, None, "Liked a message", None, (2001, 5), None),
     (8, 2, 1, 0, 33, None, "Removed a like", None, (3001, 5), None),
     (9, 2, 0, 1, 40, None, None, None, None, "Bridge crew"),
+    # Troi, who never writes here, loves the captain's answer. Rowid 13,
+    # past the one the WAL holds and the one a test inserts.
+    (13, 2, 3, 0, 34, None, "Loved \u201cYes, Data.\u201d", None, (2000, 6), None),
     (10, 1, 0, 1, 60 * 24 * 40, None, LONG_BODY, None, None, None),
 ]
 

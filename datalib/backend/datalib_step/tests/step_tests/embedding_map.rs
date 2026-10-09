@@ -35,7 +35,7 @@ fn run(root: &Path, reset: bool) -> Value {
         .env("DATALIB_DAG_NOW", "2026-09-25T00:00:00+00:00")
         .stdin(Stdio::null());
     if reset {
-        cmd.env("DATALIB_DAG_RESET", "store");
+        cmd.args(["--reset", "store"]);
     }
     let out = cmd.output().expect("spawn datalib-step");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();

@@ -7,14 +7,15 @@
 
 use std::path::Path;
 
-use datalib_etl_slack::ingest::FetchOptions;
-use datalib_etl_slack::recorded::History;
+use datalib_etl_slack::ingest::schema_raw::slack_message_key;
+use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
+use datalib_etl_slack::recorded::{record_call, History};
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, msg, record_general, stored_ts, Tree};
 
-/// Far enough back that `refresh_window_days: 3650` covers every message
-/// here, so the window pass re-walks the whole channel.
+/// Far enough back that `refresh_window_days: WHOLE_CHANNEL_DAYS` covers
+/// every message here, so the window pass re-walks the whole channel.
 ///
 /// Deliberately in the 10-digit-epoch era. Slack timestamps are compared
 /// as *strings* throughout this provider — in the window bounds and in the
@@ -32,6 +33,55 @@ const TS_C: &str = "1700000200.000000";
 /// reaches further back than it) the window pass's `oldest` too.
 const SINCE_TS: &str = "1577836800.000000";
 
+/// The window is counted back from the wall clock, so it is set a century
+/// wide: no calendar date puts its start after `SINCE`, which is what keeps
+/// the window pass's `oldest` at `SINCE_TS` and the recorded call matching.
+const WHOLE_CHANNEL_DAYS: i64 = 36500;
+
+/// Two replies on the thread rooted at `TS_A`, both between the channel's
+/// oldest and newest top-level messages.
+const TS_REPLY_1: &str = "1700000050.000000";
+const TS_REPLY_2: &str = "1700000150.000000";
+
+fn thread_root() -> Value {
+    json!({"ts": TS_A, "user": "U1", "text": "status report", "thread_ts": TS_A,
+           "reply_count": 2, "latest_reply": TS_REPLY_2})
+}
+
+/// The cold start of a channel whose first message is a two-reply thread:
+/// history lists the root and not the replies, which only
+/// `conversations.replies` returns.
+fn write_cold_start_with_thread(api: &Path) {
+    History::from("C1", SINCE_TS)
+        .record(api, json!([thread_root(), msg(TS_B, "b"), msg(TS_C, "c")]))
+        .unwrap();
+    record_call(
+        api,
+        "conversations.replies",
+        json!({"channel": "C1", "ts": TS_A, "limit": "200"}),
+        json!({"ok": true, "has_more": false, "messages": [
+            thread_root(),
+            {"ts": TS_REPLY_1, "user": "U1", "text": "shields holding", "thread_ts": TS_A},
+            {"ts": TS_REPLY_2, "user": "U1", "text": "all nominal", "thread_ts": TS_A},
+        ]}),
+    )
+    .unwrap();
+}
+
+/// The version the `TS_A` thread is held at: the newest reply its last
+/// whole read was for, in the thread's sidecar.
+async fn recorded_latest_reply(out: &Path) -> Option<String> {
+    let db = RawDb::open(&db_path_for(out)).await.unwrap();
+    let held: Option<Option<String>> =
+        sqlx::query_scalar("SELECT held_version FROM threads_bookkeeping WHERE id = ?")
+            .bind(slack_message_key("T1", "C1", TS_A))
+            .fetch_optional(db.pool())
+            .await
+            .unwrap();
+    db.close().await;
+    held.flatten()
+}
+
 /// The cold start: all three messages from `SINCE`.
 fn write_cold_start(api: &Path) {
     History::from("C1", SINCE_TS)
@@ -39,7 +89,7 @@ fn write_cold_start(api: &Path) {
         .unwrap();
 }
 
-/// The forward walk from the watermark, which finds nothing new.
+/// The walk of what is newer than `C`, which finds nothing.
 fn write_nothing_new(api: &Path) {
     History {
         inclusive: false,
@@ -80,7 +130,7 @@ async fn a_message_missing_from_a_rewalked_window_is_deleted() {
 
     // Run 1: cold start, three messages.
     write_cold_start(&t.api);
-    // Run 2: the forward walk from the watermark finds nothing new, then
+    // Run 2: the walk of what is newer finds nothing, then
     // the refresh window re-walks `[since, C]` — and B is gone from it.
     write_nothing_new(&t.api);
     write_window(&t.api, json!([msg(TS_A, "a"), msg(TS_C, "c")]), false);
@@ -94,7 +144,7 @@ async fn a_message_missing_from_a_rewalked_window_is_deleted() {
         "run 1 mirrors all three",
     );
 
-    let pruned = run_fetch(&t.out, 3650).await;
+    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
     assert_eq!(pruned, 1, "the run must report the deletion it acted on");
     assert_eq!(
         stored_ts(&t.out),
@@ -108,10 +158,9 @@ async fn a_message_missing_from_a_rewalked_window_is_deleted() {
 /// nothing may be deleted.
 ///
 /// Without this, "prune what the walk did not return" would delete every
-/// message below the resume watermark on every run — the forward walk
-/// starts at the watermark and returns nothing older, which is
-/// indistinguishable from "everything older was deleted" to any check that
-/// does not know the walk's bounds.
+/// stored message on every run: the walk of what is newer returns nothing
+/// older, which is indistinguishable from "everything older was deleted"
+/// to any check that does not know the walk's bounds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_refresh_window_means_no_prune() {
     let t = Tree::new();
@@ -156,7 +205,7 @@ async fn a_truncated_walk_prunes_nothing() {
     t.serve();
 
     run_fetch(&t.out, 0).await;
-    let pruned = run_fetch(&t.out, 3650).await;
+    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
 
     assert_eq!(pruned, 0, "a walk that stopped short licenses no deletion");
     assert_eq!(
@@ -165,4 +214,116 @@ async fn a_truncated_walk_prunes_nothing() {
         "B and C were never reached by the walk, so their absence from it \
          says nothing about whether Slack still has them",
     );
+}
+
+/// A refresh window deleted every thread reply inside it: history lists a
+/// thread's root and never its replies, so the replies were absent from
+/// the re-walk and read as deleted — and stayed gone, because the thread's
+/// `latest_reply` had not moved and the reply pass skipped it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rewalked_window_keeps_the_replies_of_a_thread_it_lists() {
+    let t = Tree::new();
+    record_general(&t.api);
+
+    write_cold_start_with_thread(&t.api);
+    // Run 2: nothing upstream changed. The window re-serves the same three
+    // top-level messages, the root with the same `latest_reply`.
+    write_nothing_new(&t.api);
+    write_window(
+        &t.api,
+        json!([thread_root(), msg(TS_B, "b"), msg(TS_C, "c")]),
+        false,
+    );
+
+    t.serve();
+
+    let everything = vec![
+        TS_A.to_string(),
+        TS_REPLY_1.to_string(),
+        TS_B.to_string(),
+        TS_REPLY_2.to_string(),
+        TS_C.to_string(),
+    ];
+    run_fetch(&t.out, 0).await;
+    assert_eq!(stored_ts(&t.out), everything, "run 1 mirrors the thread");
+
+    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
+    assert_eq!(pruned, 0, "nothing was deleted upstream");
+    assert_eq!(
+        stored_ts(&t.out),
+        everything,
+        "history never lists a reply, so a reply's absence from it says nothing",
+    );
+    assert_eq!(
+        recorded_latest_reply(&t.out).await.as_deref(),
+        Some(TS_REPLY_2),
+        "the thread is recorded as current through a reply that is still stored",
+    );
+}
+
+/// A thread whose root is gone from the re-walked window goes whole: with
+/// the root deleted nothing would ever ask for its replies again, so
+/// leaving them would strand them, along with a held version that
+/// vouches for a thread we no longer hold.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thread_root_missing_from_a_rewalked_window_takes_its_replies() {
+    let t = Tree::new();
+    record_general(&t.api);
+
+    write_cold_start_with_thread(&t.api);
+    write_nothing_new(&t.api);
+    write_window(&t.api, json!([msg(TS_B, "b"), msg(TS_C, "c")]), false);
+
+    t.serve();
+
+    run_fetch(&t.out, 0).await;
+    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
+
+    assert_eq!(pruned, 3, "the root and its two replies");
+    assert_eq!(
+        stored_ts(&t.out),
+        vec![TS_B.to_string(), TS_C.to_string()],
+        "the replies of a deleted root go with it",
+    );
+    assert_eq!(recorded_latest_reply(&t.out).await, None);
+}
+
+/// A window that takes two pages is judged a page at a time: each page
+/// lists a stretch whole, down to its own oldest message, so what it
+/// lacks there is deleted with that page. The message the first page
+/// ends on is the first page's, and its absence from the second says
+/// nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_window_of_two_pages_deletes_page_by_page() {
+    let t = Tree::new();
+    record_general(&t.api);
+
+    write_cold_start(&t.api);
+    write_nothing_new(&t.api);
+    let window = json!({"channel": "C1", "include_all_metadata": "true", "inclusive": "true",
+                        "limit": "200", "oldest": SINCE_TS, "latest": TS_C});
+    record_call(
+        &t.api,
+        "conversations.history",
+        window.clone(),
+        json!({"ok": true, "messages": [msg(TS_C, "c")], "has_more": true,
+               "response_metadata": {"next_cursor": "page2"}}),
+    )
+    .unwrap();
+    let mut second_page = window;
+    second_page["cursor"] = json!("page2");
+    record_call(
+        &t.api,
+        "conversations.history",
+        second_page,
+        json!({"ok": true, "messages": [msg(TS_A, "a")], "has_more": false}),
+    )
+    .unwrap();
+
+    t.serve();
+
+    run_fetch(&t.out, 0).await;
+    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
+    assert_eq!(pruned, 1, "B, which the second page's stretch lacks");
+    assert_eq!(stored_ts(&t.out), vec![TS_A.to_string(), TS_C.to_string()],);
 }

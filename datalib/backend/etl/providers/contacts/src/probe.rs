@@ -1,14 +1,28 @@
-//! "Test connection" for a contacts source: do these credentials reach
-//! the account, and which address books can `addressbooks` name? The
-//! listing a download starts with and nothing more — no card is fetched.
+//! "Check connection" for a contacts source — do these credentials
+//! reach the account? — and the address books `addressbooks` can name.
+//! Finding the account is the address-book listing, so a check runs it
+//! too and keeps only the account. No card is fetched.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use datalib_etl_contacts_config::{ContactsConfig, ContactsMethod};
-use datalib_probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
+use datalib_probe::{ProbeAccount, ProbeAsk, ProbeItem, ProbeItemKind, ProbeList, ProbeReport};
 
 use crate::ingest::{self, FetchSummary};
 
-pub async fn probe(config: &ContactsConfig) -> Result<ProbeReport> {
+pub async fn probe(config: &ContactsConfig, ask: ProbeAsk) -> Result<ProbeReport> {
+    let mut report = reach(config).await?;
+    match ask {
+        ProbeAsk::Account => {
+            report.items.clear();
+            report.notes.clear();
+        }
+        ProbeAsk::List(ProbeList::Addressbooks) => {}
+        ProbeAsk::List(other) => bail!("a contacts source has no `{}` list", other.as_str()),
+    }
+    Ok(report)
+}
+
+async fn reach(config: &ContactsConfig) -> Result<ProbeReport> {
     config.validate()?;
     match config.method()? {
         ContactsMethod::Carddav { server_url, .. } => {

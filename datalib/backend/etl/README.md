@@ -3,9 +3,13 @@
 Everything a provider needs but should not re-invent: the doltlite-backed
 raw store (`doltlite_raw.rs`, `bulk.rs`), the blob CAS (`blob_cas.rs`), the
 diff scan a render cursor drives (`doltlite_raw::scan_buckets`), the
-local-tree walker and scanner (`fswalk.rs`, `fsscan.rs`), and the HTTP/auth
-plumbing (`http.rs`, `latchkey.rs`). The render side's shared code is
-`render/`.
+content-line grammar iCalendar and vCard share (`content_line.rs`:
+unfolding, quoted parameters, TEXT unescaping, splitting a structured
+value on its unescaped `;`). The render side's shared code is `render/`.
+A source that reads local files also takes `files/` (`datalib_etl_files`),
+which asks the disk what changed; one that reaches a web service takes
+`web/` (`datalib_etl_web`): every request through `latchkey curl`, HTTP
+playback, DAV, and the "listed minus held" bookkeeping.
 
 Provider-specific code does **not** belong here. A provider crate lives in
 `providers/<name>/` and describes only its own tables and its own upserts.
@@ -83,7 +87,15 @@ every render store's into the index. The
 pinned store is the complete truth about its source's problems at that
 commit, so the copy is the sweep and there is nothing to diff. Stamps
 travel with the row. The step then reports whole-store counts as
-`problems{severity=…}` metrics, which the Manage screen reads. Design
+`problems{severity=…}` metrics, which the Manage screen reads — of the
+rows it found itself: render leaves the download's copied rows out and
+`grid_index` every source's, counting only a render store it could not
+read. So a download's warning is counted on the Download row alone,
+and a group's count is the sum of its steps'. A
+download reports them at every seal as well, right after it has written
+the problems its run has found so far (`run_problems::collecting_sealed`),
+and again when it ends, failed or not: a checkpoint's rows, its
+problems and its count move together. Design
 and surfaces: `docs/dev/plans/problem_visibility.md`.
 
 A download's problem names only its raw entity (`<table>:<id>`): the
@@ -158,8 +170,9 @@ built any other way.
 
 Doltlite does not refuse a second writer; it only makes it wait its
 turn. Two writers on one branch would then commit each other's rows.
-So `open` and `open_derived` are the only ways to a handle that can
-commit, and each takes the file's writer lock — `flock(2)` on the
+So `open`, `open_derived` and `open_curated` (a store a person
+writes by hand, which refuses a schema break like a raw store) are the
+only ways to a handle that can commit, and each takes the file's writer lock — `flock(2)` on the
 sibling `<store>.doltlite_db.lock`, `datalib_flock` — and gives it to
 the connection, which holds it until it closes. A second writer on the
 same file, in another process or in this one, is refused at open with
@@ -259,6 +272,20 @@ silently start on a writer's branch.
 `a_fresh_connection_starts_on_main` asserts the default itself for that
 reason.
 
+### Drafts: a record's unsaved edits on a branch of their own
+
+A store a person edits at length (the contacts app) keeps each record's
+unsaved edits on a branch `draft/<key>`, cut from the writer's last
+seal, as uncommitted rows that outlive the connection (`draft.rs`).
+`OnDraft` moves the writer's one connection onto the draft and back;
+dropped without leaving, it closes the connection rather than return
+one to the pool still on a draft. `save` commits the draft, squashes
+it into the writer's branch with `--no-commit`, settles every conflict
+cell by cell with the draft's value winning wherever the draft changed
+it, seals with the caller's message, and deletes the branch. The
+doltlite facts it rests on are in `docs/dev/doltlite.md` § "Merging a
+branch". Nothing but the store's writer touches a draft.
+
 ### A download takes the store; it never opens one
 
 Every provider's `FetchOptions` carries `pub db: RawDb` — a live handle,
@@ -297,8 +324,18 @@ reads through `dolt_at_` modules,
 `dolt_diff_*`, `dolt_log()`, `dolt_commit_ancestors`,
 `dolt_diff_summary`, `dolt_diff_stat`, `dolt_status`, a `COUNT(*)` per
 table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
-`dolt_branches`, and a read-only open of `<file>@<hash>` with a
-`COUNT(*)` on it — and that list is the allowlist. Any other
+`dolt_branches`, a read-only open of `<file>@<hash>` with a
+`COUNT(*)` and a `_datalib_meta` read on it, and, on that open or on
+the held read transaction's connection to `main`, an `ATTACH` of a
+plain SQLite file read-only with an FTS5 `MATCH` on it and a join from
+it to the store's tables — and that list is the allowlist. The plain
+file keeps a rollback journal (dolthub/doltlite#3740), so a transaction
+that reads it holds off its writer's commits for as long as it is open:
+keep one to a request's queries. A transaction around one query waits
+a few milliseconds at most
+(`pinned_readers_with_the_terms_attached_hold_off_no_writer`); readers
+that each held one open for 20 ms of queries were measured waiting over
+a second. Any other
 statement a reader adds is presumed guilty until
 `doltlite_two_process_test` has run with it. Looking like a read is not
 enough: a read-only `dolt_status` once failed the writer's commit and
@@ -420,9 +457,23 @@ test for a rung is always the same shape: build the store at
 `app_store.rs`'s `a_store_from_before_the_utc_columns_is_migrated_on_open`
 is the template. A provider's `RawDb` takes its ladder as the third
 argument of `raw_db!` (email's `schema_raw::LADDER`); contacts, which
-opens by hand, passes it to `open_migrating`. The app stores' rungs
+opens by hand, passes it to `open_migrating`. The contacts app's store
+(`datalib_contacts::LADDER`) passes its own to `open_curated`: a rung
+there is how a change to the handle rules reaches the links a person
+made, and its test fails until one is added. The app stores' rungs
 (`core/src/app_store_migrate.rs`) are applied by `AppStore::open`
 itself rather than through `open_migrating`.
+
+**The shared ladder.** A table every store holds rather than one an
+owner declares — `problems`, in every raw and render store — climbs
+the framework's ladder, `doltlite_raw::SHARED_LADDER`, counted by
+`_datalib_meta.shared_schema_version`. Every store `doltlite_raw` opens
+climbs it, before its owner's ladder, each rung committed as
+`migrate shared v<n>: <name>`. A rung checks the shape it changes,
+since a store may not hold the table; a new store is created at the
+top. Its first rung renamed `problems.last_seen_at_utc` to
+`changed_at_utc`. The test is the owner ladder's shape, once per kind
+of store (`the_shared_ladder_carries_problems_across_its_rename`).
 
 A rung that adds a table the download fills from upstream creates the
 table itself and fills it from what the store already holds (contacts'
@@ -440,11 +491,11 @@ newly created table is empty, and a cursor that says "read through
 here" would let the next run resume past rows the table does not have,
 and the table would stay empty until upstream changed, with nothing
 saying why. So either clears every store-wide cursor
-(`sync_scope_state`, `sync_scope_config`, `ingested_files`) and logs
+(`sync_scope_state`, `ingested_files`) and logs
 that it did; the next run walks from the start, and the tables that kept
-their rows absorb it as no-op upserts. Per-row cursors — a device
-row's `last_ts_ms`, an address book's `ctag` — live on the table that
-holds them and go with it.
+their rows absorb it as no-op upserts. Per-row state — an address
+book's sync token, a sidecar's `held_version` — lives on the table that
+holds it and goes with it.
 
 Not checked: a table in the file that no DDL declares. The mirror
 engine writes exactly such tables, so "undeclared" is normal in a store
@@ -462,14 +513,20 @@ every `open` would cost bytes whether or not anything was ingested.
 
 `open` writes six rows into `_datalib_meta` before the schema commit:
 `datalib_version`, `git_hash`, `doltlite_version`, `schema_hash`
-(blake3 over the DDL it was opened with), `schema_version` (the
+(`recorded_shape`: blake3 over `_datalib_meta`'s DDL and the DDL the
+store was opened with, leaving out the lookup indexes
+`open_derived_indexed` was handed, which change no row), `schema_version` (the
 migration ladder position, `0` until there is a ladder) and
 `store_kind`. Only a row whose value moved is rewritten, so an
 unchanged store costs no commit, and a schema commit that did move
 one is titled `schema: apply DDL (datalib <version>)`. The table is in
 `SHARED_TABLES`, so it is neither mirrored nor diffed nor counted.
 `datalib_store_meta::read` is how anyone asks; `None` means the store
-predates the table. `docs/dev/plans/completed/schema_migrations.md`
+predates the table. A reader of a derived store asks it once per pass
+rather than probing for each table: `grid_index` compares a render
+store's `schema_hash` with `indexed_markdown::schema_hash`, the same
+value the scheduler fingerprints, and leaves a store in any other shape
+as the index had it, with a warning. `docs/dev/plans/completed/schema_migrations.md`
 is the record of the program this was the first step of.
 
 ## Writes: one UPSERT shape, everywhere
@@ -483,6 +540,19 @@ A provider declares its row struct and its `BulkUpsertable` impl next to the
 DDL in `schema_raw.rs`, then calls `bulk_upsert_in_tx`, which chunks the rows,
 emits one multi-row statement per chunk, and stamps `<table>_bookkeeping` for
 every id in the same transaction. The caller commits.
+
+A source that reads its whole input every run (a local file or folder)
+calls `bulk_upsert_first_seen_in_tx` instead: a row's sidecar is stamped
+the first time it is written, or when it so far records only a failure,
+and left alone after. Re-stamping every row would make every run a
+commit, and the store grow, with nothing changed. The CAS-edge flush
+(`flush_cas_edges`, `CasEdgeAccumulator::flush`) always works this way,
+since every caller reads local files, and records a failure through
+`record_not_fetched_first_seen`, which leaves a sidecar alone when the
+same failure comes again. A `problems` row recorded again unchanged keeps
+its stamps everywhere (`ProblemRow::stamped`). Each such source has a
+test that reads an unchanged input twice and asserts the second
+`commit_run` returns `None`.
 
 `insert_sql` exists for the one path where upserting would be wrong. In
 `grid_index`, a primary-key collision is a *finding* — two sources minting
@@ -504,6 +574,13 @@ hash and stored exactly once in `cas_objects`; each provider declares its
 own edge table, `(id, <owning>, <ref>, blake3)`, with `#[derive(CasEdgeRow)]`
 ([`macros/README.md`](macros/README.md)).
 
+**The CAS names bytes itself.** `BlobCas::put_many` takes bytes and the
+caller's own id for them (`CasInsert`), hashes each, and answers each id
+with the key its bytes went in under; an edge takes its hash from that
+answer. No caller hands the CAS a key, so no key can name other bytes. A
+hash a caller already had (a scan's, a stored edge's) only decides what
+to skip reading, never what read bytes are called.
+
 The bundle is the common vocabulary at both ends. Download adds bytes as they
 arrive and drains the bundle at end of bucket; parse loads every document's
 bundle at once with `BlobBundle::load_many`; render then consumes an
@@ -521,22 +598,31 @@ two real stores a doltlite CAS was 2.1× and 4.7× its payload
 lock, the writer branch, the seal and the pin do not apply here.
 
 **Bytes commit before the rows that name them, by construction.**
-`BlobCas::put_many` commits its own transaction, and `flush_cas_edges`
-calls it before it writes the edge rows. A reader pinned at any entities
+`BlobCas::put_many` commits its own transaction, and the edge rows are
+built from the keys it returns, so they are written after it
+(`CasEdgeAccumulator::flush` does both; `flush_cas_edges` writes only the
+edges). A reader pinned at any entities
 commit therefore finds every blob that commit names, and a reader of the
 CAS sees committed transactions only, so there is nothing to pin. The
 connection runs `synchronous=FULL` so that order survives a power cut.
-`RunCtx::open_store_with_blobs` hands the CAS to the session only so
-`finish` closes it.
+`RunCtx::run_store` is handed the CAS only so the session closes it,
+whichever way the run ends.
 
 **Nothing resets the CAS.** Delete `blobs.sqlite` and reset the ingest
 step together; deleting the file alone leaves edge rows naming bytes
-that are gone, and the download will not refetch them. For the same
-reason `BlobCas::open` converts a `blobs.doltlite_db` an older build
-left: it copies every blob into a temporary plain file, checks the row
-count and byte total, renames it into place and deletes the old store.
-A crash part-way leaves the old store whole and the next open starts
-over.
+that are gone, and the download will not refetch them. A render reports
+each such attachment as a `blob_missing` problem on its message rather
+than calling it unfetched. For the same reason `BlobCas::open` converts
+a `blobs.doltlite_db` an older build left: it copies every blob into a
+temporary plain file, checks the row count and byte total, renames it
+into place and deletes the old store. A crash part-way leaves the old
+store whole and the next open starts over.
+
+**A render opens the CAS through `open_cas_for_render`**, never by
+testing for `blobs.sqlite` itself. Until the source's next download
+converts it, that reads an older build's `blobs.doltlite_db` in place,
+read-only: a render may not write the raw directory, and a page
+rendered without its attachments stays that way until the page changes.
 
 **Filenames dedupe on the content hash, not on the derived name.** A blob's
 rendered filename has a content-addressed stem and an extension derived from
@@ -549,44 +635,6 @@ on the derived name does not: an `application/octet-stream` ref paired with a
 the candidate names (prefer one with an extension, then lexicographically
 smallest), never by `HashMap` iteration order, which would make the rendered
 tree nondeterministic.
-
-## The fingerprint cache is host state, and deliberately not versioned
-
-Every tree-scanning provider keeps a Unison-style cursor so a rescan can skip
-hashing a file whose `(mtime, size, inode, dev)` has not moved. It lives in a
-host-local cache rather than in the provider's versioned store:
-
-- **It is host state.** An inode number means nothing on another machine, so
-  a branch fetched from elsewhere carries a cursor that cannot match — and
-  nothing records which host a cursor came from, so you cannot detect it.
-- **Branching it is a category error.** The cursor describes the live
-  filesystem, which has no history; rolling a branch back does not un-modify
-  the files on disk.
-- **It was half the store.** Measured at 100k entries on doltlite 0.50.13,
-  `files` + `file_stats` in one store is 322 B/row against 171 B/row for
-  `files` alone,
-  because the cursor re-stores the full path as its own primary key
-  (`providers/fsindex/src/ingest/STORAGE_NOTES.md` has the table).
-
-It is plain SQLite (via the `doltlite_engine=sqlite` URI parameter, the same
-door `datalib_runs::store` uses), because losing a cache costs a rehash
-rather than correctness, and it needs no commits, no history and no prolly
-tree.
-
-Keys are **absolute paths**, so one chain per host rather than per root. This
-is the part Unison gets wrong: its `fpcache` is per replica *pair*, so
-syncing one tree against two peers hashes the same bytes twice, and scanning
-a directory tells you nothing about its parent.
-
-It lives at `$DATALIB_CACHE_DIR/fingerprints.sqlite`, else under
-`$XDG_CACHE_HOME/datalib`, else `~/Library/Caches/datalib` (macOS) or
-`~/.cache/datalib`. **A test names its own `DATALIB_CACHE_DIR`**, and under
-a bazel test (`TEST_TMPDIR` set, which the processes a test spawns inherit)
-`default_cache_path` refuses to fall through to the host's. A test scans a
-sandbox path that is gone by the next run, so in the host cache every one
-stays as a dead row: one mac measured 191k of them, 94% of its cache. The
-fixture pipeline (`tests/fixtures/run_sync_pipeline.py`) keeps its cache
-inside the data root it builds.
 
 ## Event store: order is part of the contract
 
@@ -610,90 +658,3 @@ unkeyable record collapses onto one entry, and callers then skip the empty
 key, so a whole entity stream reads as "no records". A fixture that spells a
 field the old way (`project_path` for gitlab's `project_full_path`) would
 otherwise contribute zero rows with no failing test.
-
-## Answering "did it change?" for a file-backed source
-
-`fsscan` walks a tree and hashes only what the host cache cannot vouch for;
-`file_checkpoint` stores what one feed already ingested. The split is the
-point:
-
-- the **fingerprint cache** is host-wide, shared and unversioned — expensive
-  to compute, identical for every consumer, and a description of a machine
-  rather than of a history;
-- the **cursor** is what *this* source already ingested, and lives in that
-  source's own store.
-
-The cache cannot answer "since I last looked" alone, and that is not a gap to
-close: it is shared, so another consumer's scan moves it. The question is only
-well-posed relative to a particular looker.
-
-```text
-let scan    = fsscan::scan(cache, root, opts, accept).await?;
-let changes = scan.changes_since(&load_cursor(pool, SCOPE).await?);
-for f in changes.needs_reading() { …; record_file(&mut tx, SCOPE, f).await?; }
-```
-
-A scope namespaces cursor rows per `(provider, feed)`, so two feeds can claim
-the same file without colliding. Stamping is per file and inside the caller's
-transaction, so a crash partway through keeps what landed and re-reads only
-the rest.
-
-**A file that is gone takes its records with it.** `changes.removed` names
-every path the cursor has and the scan does not. A source whose rows are keyed
-by path (a `.vcf` file is one address book, an `.ics` file one calendar) reads
-`needs_reading_by_path()`, which counts a moved file as new at its new path,
-then deletes the rows of each path in `gone_by_path(&read)` and calls
-`forget_file` in the same transaction. The path is removed from the cursor
-only then, so a crash in between just retries. `gone_by_path` is empty
-whenever the walk reported an error, because a folder that failed to list
-looks the same as one whose files were deleted. Report `scan.walk_problems()`
-through `download_problems::report_run`, so the skipped deletions show on
-the Manage row. Key rows against `scan.given_resolved`, not the configured
-path: the scan's paths are resolved, and stripping an unresolved prefix
-fails whenever a symlink is in the way.
-
-A source keyed by *content* (mbox, SMS backups, Takeout Voice) cannot map
-a path to rows, and its files overlap: two exports hold one message. When
-`changes.may_have_dropped_records()` (a file removed or rewritten, after a
-clean walk) it reads every file, and a run that read every file without a
-failure prunes what it did not see (`prune::prune_scope`, then
-`prune::delete_owned` for CAS edges) and `forget_files` the removed paths.
-A failed read holds the prune back and reports
-`Scan::deletions_held_back`. The read costs a pass over every file, but only
-on the run where the input shrank.
-
-A feed whose one file is its whole table (Takeout's Maps reviews, YouTube
-subscriptions, …) goes through `file_checkpoint::ingest_snapshot`: a
-changed file is upserted and the table pruned to what it lists, in one
-transaction. A parser that finds no list at all returns `None` and deletes
-nothing. A file missing from the scan deletes nothing either: for an export,
-a product left out of the request looks exactly like that. Takeout's
-folder feeds hold to the same rule one level up (`product_exported`).
-
-**A file as the root is that file.** `scan` of a file walks only that
-file's folder, one level deep, and keeps that one name: its `rel` is the
-bare file name and its cache key is the one a scan of the folder would
-use. A caller that wants a few files side by side — a SQLite file and its
-`-wal` — scans the folder with `max_depth: Some(1)` and names them in
-`accept`; no folder beside them is opened. The cache read is not
-depth-limited: `load_under` still fetches every cached entry under the
-folder, which is a database read, not a walk.
-
-**Why content and not `(size, mtime)`.** A cursor on the stat pair
-re-ingests a file that was only *touched* (`rsync` without `-t`, a restore
-from backup, re-downloading the same export), re-reading and re-parsing the
-whole thing though not one byte moved. The cache makes hashing cheap enough
-that the cursor can be the content.
-
-**What it does not fix**, because "content hash" invites the wrong assumption:
-the cache still decides whether to re-hash from Unison's
-`(mtime, size, inode, dev)` cursor, so an edit preserving all four is still
-invisible — in one place rather than once per provider.
-`an_edit_preserving_the_whole_stat_is_still_invisible` pins it.
-
-**Some files must not be read at all.** A macOS file evicted to iCloud is
-"dataless": it has a size and an mtime, and reading one byte silently pulls
-the whole thing back over the network. Only the stat can see that, so
-`scan_with` takes a veto consulted after the stat and before any read. A
-refused file is absent from the results and leaves the cache untouched, so
-nothing later mistakes "we declined to look" for "we looked and it was empty".

@@ -3,9 +3,9 @@
 //! hold.
 
 use datalib_runs::{
-    log_after, log_query, process_log_after, processes, runs, snapshot, versions, LogCursor,
-    LogQuery, LogRow, MetricRow, Process, ProcessLogWriter, Retention, RunWriter, StepRunRow,
-    StorePart,
+    log_after, log_query, log_values, process_log_after, processes, runs, snapshot, versions,
+    LogCursor, LogQuery, LogRow, MetricRow, Process, ProcessLogWriter, Retention, RunWriter,
+    StepRunRow, StorePart,
 };
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
@@ -70,7 +70,14 @@ async fn what_is_published_is_readable() {
         "stamps are stored in UTC: {:?}",
         snap.finished_at_utc
     );
-    assert_eq!(snap.steps.len(), 2, "{snap:?}");
+    assert_eq!(
+        snap.steps
+            .iter()
+            .map(|r| r.step.as_str())
+            .collect::<Vec<_>>(),
+        ["slack/raw"],
+        "a step that never started goes with the run: {snap:?}"
+    );
     let fetch = snap.steps.iter().find(|r| r.step == "slack/raw").unwrap();
     assert_eq!(fetch.state, "running");
     assert_eq!(fetch.msg.as_deref(), Some("conversations.list"));
@@ -325,6 +332,46 @@ async fn log_query_spans_runs_and_reads_terms() {
     )
     .await;
     assert!(refused.is_err());
+}
+
+/// What the log's search bar suggests for a key: the values holding what
+/// was typed, among the lines the rest of the query keeps, most lines
+/// first; for `min_level:`, the levels.
+#[tokio::test]
+async fn a_key_suggests_its_values_most_lines_first() {
+    let td = tempfile::tempdir().unwrap();
+    {
+        let w = start(td.path(), "run-1");
+        w.log(line("slack/ingest", "info", "a"));
+        w.log(line("slack/ingest", "warn", "b"));
+        w.log(line("slack/render_markdown", "info", "c"));
+        w.log(line("mail/ingest", "info", "d"));
+    }
+    let values = |q: &'static str, key: &'static str, typed: &'static str| {
+        let root = td.path().to_path_buf();
+        async move { log_values(&root, q, key, typed).await.unwrap() }
+    };
+    let counted = |v: &[(&str, u64)]| -> Vec<(String, Option<u64>)> {
+        v.iter().map(|(s, n)| (s.to_string(), Some(*n))).collect()
+    };
+    assert_eq!(
+        values("", "step", "SLACK").await,
+        counted(&[("slack/ingest", 2), ("slack/render_markdown", 1)])
+    );
+    assert_eq!(
+        values("level:warn", "step", "").await,
+        counted(&[("slack/ingest", 1)]),
+        "the rest of the query narrows the values"
+    );
+    assert_eq!(
+        values("", "min_level", "r").await,
+        ["trace", "warn", "error"].map(|l| (l.to_string(), None)),
+        "in level order"
+    );
+    assert!(values("", "no_such_key", "").await.is_empty());
+    assert!(log_values(td.path(), "author:thad", "step", "")
+        .await
+        .is_err());
 }
 
 /// A terminal state latches. A progress tick that was already in flight

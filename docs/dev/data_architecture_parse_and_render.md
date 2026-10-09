@@ -73,6 +73,18 @@ database per source, at
     an identical row.
   - `grid_rows` — the document's projected rows.
   - `edges` — its outgoing links.
+  - `source_contacts` and `source_contact_handles` — the people it
+    describes or mentions, each as its source describes them (a
+    `NormalizedContact`, `contact_schema/`), and the handles that reach
+    them. chat-common adds one per author handle with no provider code;
+    contact-common adds a card's own. Like edges they belong to the
+    document, and the index answers "who is this handle" from them
+    (`unified_index`'s `POST /people`).
+  - `supplied_search_terms` — what its rows answer to in search beyond
+    their own columns: an email's To, Cc and Bcc by handle, the people
+    a message mentions, and an email's labels.
+    chat-common supplies them; the index copies them into the search
+    terms file (`etl/render/src/search_terms.rs`).
   - `problems` — what render could not do getting there (§4).
   - `render_inputs` and `render_cursor` — what each bucket was rendered
     from, and how far into the raw store the last run got (§5).
@@ -156,6 +168,53 @@ Whatever the medium, the *contract* holds: render emits a human
 artifact and a separate machine-readable projection, and the index
 reads the projection — **it never re-parses markdown** (AGENTS.md's
 "QMDs are write-only"), whatever database the markdown sits in.
+
+### Upstream text is escaped where it becomes markup
+
+The UI renders every document with markdown-it and `html: true`
+(`ui/src/cards/renderDocument.ts`), because the section wrappers are
+HTML. So a name, a subject or a text message written into the markdown
+as it is would be read as HTML and markdown: `Bob <bob@x>` loses its
+address, and a sender can restyle or fake parts of the page. Scripts
+cannot run — the sanitizer drops them and the frame has no
+`allow-scripts` — but markup still can.
+
+The rule: **a string that is plain text upstream is escaped at the
+point it becomes markup**, by the helper for where it lands —
+`datalib_etl_render::html` lists them (between tags, in an attribute,
+on one markdown line, a multi-line body, a link target, a code span or
+block). A string the source itself authored as markup goes in as it
+is: a Notion page's markdown, a GitHub PR's description, an email's
+HTML part after htmd, an assistant's reply. Escaping never drops a
+character; the grid's search text keeps the text as typed, and
+`plain_text` (the Contents cell) reads the escapes back. A renderer's
+test of this feeds a field `<script>x</script> & co` and checks it
+renders escaped.
+
+The trap is text between tags on a markdown line — the message
+header's `## <span class="msg-author">…</span>`: markdown-it parses it
+as markdown, so it needs `escape_md_inline`, not the HTML-only
+`escape_text`. `escape_text` is for text inside an HTML block, and it
+writes a line break as `&#10;`, since a blank line would end the block.
+
+`datalib/ui/tests/hostile_text.test.ts` is the check across renderers.
+`//datalib/backend/etl/hostile_samples` puts a string of HTML and
+markdown (a tag, a link, an image, a `|`, a code span, an entity, a
+blank line, a `---` line) into every plain-text field the shared
+renderers take — chat-common, calendar-common, contact-common,
+forge-render-common, Slack's mrkdwn, `MessageHeader`, `Title` — and
+the test renders each document through the app's own markdown-it and
+sanitizer and asserts every field reads exactly as typed and makes no
+element of its own. It runs the escape helpers the same way over a few
+hundred generated strings. A provider's private text paths (Facebook
+posts, Claude's tool results, the time-series facts) are not reached
+by it and keep their own tests.
+
+Front matter is YAML, and a value from upstream goes through
+`datalib_etl_render::front_matter::yaml_scalar`, which JSON-quotes it,
+so a line break, a quote or a `---` inside cannot end the line or the
+block. The applet strips front matter at the first line that is `---`
+by itself.
 
 ## 3. The projection
 
@@ -437,8 +496,8 @@ document. How it is wired at each stage:
 | stage | how a problem gets in | swept by |
 | --- | --- | --- |
 | fetch, one record | `record_object_attempt`'s failure arm (`record_object_error`), in the raw store, `Reason::FetchFailed` | the next attempt on that record, success or failure |
-| fetch, a configured entry upstream does not have | `download_problems::report`, in the raw store, keyed `config:<setting>:<value>` | the next run's report, which replaces the last one's whole |
-| fetch, a listing or phase the run could not do | `download_problems::report_run`, in the raw store, keyed `listing:<name>` / `phase:<name>` | likewise, every run |
+| fetch, a configured entry upstream does not have | `RunProblems::config`, in the raw store, keyed `config:<setting>:<value>` | the next run that looked every entry up, whose set replaces the last one's whole |
+| fetch, a listing or phase the run could not do | `RunProblems::listing` / `phase`, in the raw store, keyed `listing:<name>` / `phase:<name>` | the next run that reached every listing and phase; one that was stopped or cut short clears none (`data_architecture_ingestion.md` §"Error handling") |
 | fetch, carried into render | the render step reads the raw store's rows at the commit it rendered from and replaces its own fetch-stage rows with them, re-minted under the source's id, with `item_uuid` set where the provider's `item_of_entity` names a row the store holds (`render.rs`, `carry_fetch_problems`) | every render |
 | grid row | `GridRowBuilder::build_or_record` | the document, when re-rendered |
 | parse, in a document | `NormalizedChatItem::problems` (`own_stamp_ms` for a stamp) | the document |
@@ -609,9 +668,13 @@ Two tables in the render store, both written by the driver
 - **`render_cursor`** — one row: the raw store's commit the last run
   consumed, and the render params (a period, a label filter — whatever
   each processor declares through `RenderProcessor::render_params`)
-  the documents were rendered with. The driver writes it in the same
-  transaction as the run's last work, so it can never claim a range the
-  store's rows do not reflect, and rewrites it only when it moves.
+  the documents were rendered with. Beside the processors' own, the
+  driver adds two of every source's: the render store's DDL hash and
+  `datalib_handle::RULES_VERSION`, so a new `grid_rows` column or a
+  change to what a handle normalizes to renders every source again
+  without anyone bumping a `RENDER_VERSION`. The driver writes it in the
+  same transaction as the run's last work, so it can never claim a range
+  the store's rows do not reflect, and rewrites it only when it moves.
 - **`render_inputs`** — `(bucket_key, input_table, input_id)`, one row
   per raw row a bucket's render **asked for, found or not**. A thread
   rendered while its author's `users` row had not been fetched yet
@@ -692,22 +755,45 @@ Deletion happens at the end of a run that got through every processor,
 in the same transaction as the storage report and the cursor
 (`seal_run`), and it has two halves:
 
-- **Per bucket, every run.** A bucket the run declared produces exactly
-  what it emitted; any document the store still holds under that
-  `bucket_key` is removed — rows and the `.md` file. A bucket declared
-  with nothing is a bucket whose entity is gone; a periodized bucket
-  that re-rendered to fewer documents drops the extra ones. Positive
-  evidence only: a bucket the run never looked at says nothing about
-  its documents, so a narrowed run cannot delete its own steady state.
+- **Per bucket, every run.** A processor ends each bucket it looked at
+  one of three ways (`RenderCtx`, `etl/render/src/processor.rs`), and
+  the driver decides what that does to the documents the store holds
+  under its `bucket_key` (`fate` in `datalib_step/src/render.rs`):
+
+  | the processor said | the bucket's documents |
+  |---|---|
+  | `declare_bucket` with the rows it read | replaced by what it emitted; any other document under the key is removed, rows and `.md` file (a periodized bucket that re-rendered to fewer documents drops the extra ones) |
+  | `declare_bucket` with no rows, and emitted nothing | removed **only when its rows left it**: the raw diff reports `removed` for a row the bucket was last built from (its `render_inputs` as they stood before the run), or every one of those rows is now read by a bucket that is new this run (it had no `render_inputs` before) — the key the bucket is minted from changed (a renamed address book re-keys its cards), and its rows build that bucket instead. A bucket that already read those rows is no evidence: a calendar series reads every row of its changed occurrences, and a Claude project page's rows are all read by its conversations. Otherwise they stay as they were, each with a `no_document` warning, and the bucket keeps its old `render_inputs` |
+  | `exclude_bucket` — left out on purpose (email's label filter), or known gone (a calendar reads every event row each run, so a key no event mints is gone though its row is still there: a "this and following" edit moves an occurrence to a new UID) | removed, on the renderer's word |
+  | `fail_bucket(why)` — its build failed | kept, each with a `render_failed` error carrying `why`, even on a full walk |
+
+  The warning and the error are scoped to the document, so they show
+  on its banner, and they clear when the bucket next renders it or
+  removes it. A whole-table input is never the evidence: one row of a
+  table leaving, or another bucket reading it, says nothing about a
+  bucket that read all of it. The diff runs from the stored cursor on
+  every run, a full walk included, so a version bump keeps an
+  unexplained bucket's documents too. A run with no diff to read — no
+  cursor yet, or a range the store cannot resolve — has no evidence,
+  so it removes nothing this way. And a
+  bucket the run never looked at says nothing about its documents, so
+  a narrowed run cannot delete its own steady state.
 - **Whole store, on a full walk only.** A *full walk* is a run that
   rendered everything (version or params changed) **and** in which
   every processor reported the raw commit it read
   (`RenderCtx::consumed`). Then a document the walk did not produce —
   a chat re-bucketed under a different period, a uuid minted by the old
-  recipe — is gone. A first run with no cursor is not a full walk, and
+  recipe — is gone, except the documents of a bucket the table above
+  keeps. A first run with no cursor is not a full walk, and
   neither is one in which a processor read no store (none on disk,
   nothing committed): it said nothing about what should exist, and
   nothing is swept.
+
+A kept document still carries the render version that last built it.
+The version checks (`IndexedMarkdownStore::render_versions`) leave out
+a document with a render-stage `render_failed` or `no_document`
+problem, so one bucket that will not build neither fails the step nor
+makes every later run a full walk.
 
 The `.md` file matters as much as the rows: `md_path` is what
 `/applet/unified_index/chat/{uuid}` serves and what qmd indexed, so a
@@ -726,7 +812,7 @@ removes.
 ### Edge cases
 
 1. **First run, no cursor.** The provider reads its whole store at
-   HEAD; nothing is swept except through the buckets it declared; the
+   HEAD; nothing is swept except under the buckets it built; the
    cursor is recorded at the end.
 
 2. **A reset of the raw store.** `datalib-dag --reset` empties the

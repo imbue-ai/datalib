@@ -29,11 +29,9 @@ use serde::{Deserialize, Serialize};
     // for nothing: `every_filter_key_is_served_by_an_index` names both.
     index = "grid_rows_by_touched:touched_at_utc,is_document,uuid",
     index = "grid_rows_by_source_id:source_id,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_source_label:source_label,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_kind:kind,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_channel:channel,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_conversation:conversation_uuid,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_author:author,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_account:account,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
@@ -60,7 +58,7 @@ pub struct GridRow {
     #[col(sql = "VARCHAR(32)", search)]
     pub kind: String,
     /// Human-friendly provider name for the Source column.
-    #[col(sql = "VARCHAR(32)", search = "source")]
+    #[col(sql = "VARCHAR(32)")]
     pub source_label: String,
     /// When the thing this row describes came into being, as the source
     /// wrote it: ISO-8601 with explicit offset. A message's own stamp; for
@@ -118,9 +116,16 @@ pub struct GridRow {
     #[col(sql = "INTEGER", is = "document")]
     pub is_document: bool,
     /// Display name of the author: the model slug for LLM responses, the
-    /// account for user input, the real name for Slack.
-    #[col(sql = "VARCHAR(255)", search, uuid)]
+    /// account for user input, the real name for Slack. Searched through
+    /// the search terms (`from:`, an `author` term), not by its own key.
+    #[col(sql = "VARCHAR(255)")]
     pub author: Option<String>,
+    /// The author as an identifier (`datalib_handle`: `email:…`, `tel:…`,
+    /// `slack:T/U`) where the source has one; `author` stays the name it
+    /// showed. What the grid's Author chip resolves to a contact; `from:`
+    /// finds it through the search terms (a `from` term).
+    #[col(sql = "VARCHAR(255)")]
+    pub author_handle: Option<String>,
     /// Whose mirror this row came from — the login's email where the
     /// source stores one, else its name, else the provider's own id.
     /// Null for a source with no login (a PDF folder, an address book).
@@ -188,7 +193,7 @@ pub struct GridRow {
     /// filed under, which the `source_id:` filter matches
     /// (`GridRow::derived_source_id`).
     #[col(sql = "VARCHAR(512)")]
-    #[derived(name = "source_id", sql = "VARCHAR(96)", search, alias = "source_name")]
+    #[derived(name = "source_id", sql = "VARCHAR(96)", search)]
     pub qmd_path: Option<String>,
     /// Canonical link back to the provider's own web UI. Null for providers
     /// with no stable public link.

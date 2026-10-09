@@ -1,23 +1,24 @@
 //! Garmin Connect API transport: every request goes through
-//! [`datalib_etl::http::latchkey_curl`] for its retry policy and
-//! playback, but bypasses the latchkey shim — the bearer comes from
-//! [`crate::auth::Credentials`] and rides on [`HttpRequest::bearer`].
+//! [`datalib_etl_web::http::latchkey_curl`]. latchkey's Garmin plugin holds
+//! the credential and mints the hourly bearer from it.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
 use datalib_etl::events;
-use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService};
-
-use crate::auth::Credentials;
+use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 pub const TIMEOUT: Duration = Duration::from_secs(120);
 
 /// What the phone app sends; also what every playback fixture is keyed
 /// under, so a synthesizer must build its requests with [`req_get`].
 pub const USER_AGENT: &str = "GCM-iOS-5.22.1.4";
+
+/// The one Garmin the plugin reaches; garmin.cn is a separate service.
+pub const DOMAIN: &str = "garmin.com";
 
 pub fn base_url(domain: &str) -> String {
     format!("https://connectapi.{domain}")
@@ -28,7 +29,6 @@ pub fn req_get(url: &str) -> HttpRequest {
     HttpRequest::get(HttpService::Garmin, url)
         .header("User-Agent", USER_AGENT)
         .header("Accept", "application/json")
-        .plain()
         .timeout(TIMEOUT)
 }
 
@@ -36,13 +36,13 @@ pub fn req_get(url: &str) -> HttpRequest {
 pub fn req_get_bytes(url: &str) -> HttpRequest {
     HttpRequest::get(HttpService::Garmin, url)
         .header("User-Agent", USER_AGENT)
-        .plain()
         .timeout(TIMEOUT)
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum GarminError {
-    /// 401/403: the bearer was refused even after one refresh.
+    /// 401/403: Garmin refused the credential latchkey sent; or latchkey
+    /// would not send one at all, which every later request would share.
     #[error("unauthorized: {0}")]
     Auth(String),
     #[error("{0}")]
@@ -55,21 +55,19 @@ pub enum Fetched<T> {
     Nothing,
 }
 
+/// Shared by every loop of a run, so a request takes `&self`.
 pub struct GarminClient {
-    creds: Credentials,
+    latchkey: LatchkeySettings,
     base: String,
-    pub requests: u64,
-    pub network_seconds: f64,
+    requests: AtomicU64,
 }
 
 impl GarminClient {
-    pub fn new(creds: Credentials) -> Self {
-        let base = base_url(creds.domain());
+    pub fn new(latchkey: LatchkeySettings) -> Self {
         Self {
-            creds,
-            base,
-            requests: 0,
-            network_seconds: 0.0,
+            latchkey,
+            base: base_url(DOMAIN),
+            requests: AtomicU64::new(0),
         }
     }
 
@@ -77,34 +75,25 @@ impl GarminClient {
         format!("{}{path}", self.base)
     }
 
-    async fn send(&mut self, build: fn(&str) -> HttpRequest, path: &str) -> Result<(u16, Vec<u8>)> {
+    pub fn requests(&self) -> u64 {
+        self.requests.load(Ordering::Relaxed)
+    }
+
+    async fn send(&self, build: fn(&str) -> HttpRequest, path: &str) -> Result<(u16, Vec<u8>)> {
         let url = self.url(path);
-        let mut refreshed = false;
-        loop {
-            let bearer = self.creds.bearer().await?;
-            let req = build(&url).bearer(bearer);
-            let resp = latchkey_curl(&req)
-                .await
-                .map_err(|e| GarminError::Permanent(e.to_string()))?;
-            self.network_seconds += (resp.duration_ms as f64) / 1000.0;
-            self.requests += 1;
-            if resp.status == 401 && !refreshed {
-                // The cached bearer can be revoked before its stated
-                // expiry; one forced refresh settles whether it is the
-                // token or the account.
-                self.creds.force_refresh();
-                refreshed = true;
-                continue;
-            }
-            events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
-            return Ok((resp.status, resp.body));
-        }
+        let req = build(&url).latchkey(self.latchkey.clone());
+        let resp = latchkey_curl(&req)
+            .await
+            .map_err(|e| transport_error(e, path))?;
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
+        Ok((resp.status, resp.body))
     }
 
     /// `GET` a JSON endpoint. A 204, a 404 or an empty body is
     /// [`Fetched::Nothing`] — Garmin answers all three for a day that
     /// has no data, depending on the service.
-    pub async fn get_json(&mut self, path: &str) -> Result<Fetched<Value>> {
+    pub async fn get_json(&self, path: &str) -> Result<Fetched<Value>> {
         let (status, body) = self.send(req_get, path).await?;
         match status {
             200 if body.is_empty() => Ok(Fetched::Nothing),
@@ -128,7 +117,7 @@ impl GarminClient {
 
     /// `GET` a binary endpoint. 404 is [`Fetched::Nothing`]: an activity
     /// created by hand on the website has no FIT file.
-    pub async fn get_bytes(&mut self, path: &str) -> Result<Fetched<Vec<u8>>> {
+    pub async fn get_bytes(&self, path: &str) -> Result<Fetched<Vec<u8>>> {
         let (status, body) = self.send(req_get_bytes, path).await?;
         match status {
             200 => Ok(Fetched::Some(body)),
@@ -143,6 +132,47 @@ impl GarminClient {
     }
 }
 
+/// latchkey exits 1 when it will not send the request at all: no
+/// credential, or the plugin could not mint a bearer. curl's own failures
+/// (DNS, a refused connection, a timeout) have codes of their own.
+fn transport_error(e: HttpError, path: &str) -> GarminError {
+    match e {
+        HttpError::Curl { exit: 1, .. } | HttpError::Spawn { .. } => {
+            GarminError::Auth(format!("GET {path}: {e}"))
+        }
+        other => GarminError::Permanent(other.to_string()),
+    }
+}
+
 fn preview(body: &[u8]) -> String {
     String::from_utf8_lossy(body).chars().take(300).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn curl_exit(exit: i32) -> HttpError {
+        HttpError::Curl {
+            service: HttpService::Garmin,
+            url: "https://connectapi.garmin.com/hrv-service/hrv/2369-04-14".into(),
+            exit,
+            stderr: "Error: No credentials found for garmin.".into(),
+        }
+    }
+
+    /// A request latchkey would not send (no credential, or the bearer
+    /// exchange failed) must end the run, not record every day of every
+    /// metric as failed before giving up.
+    #[test]
+    fn a_request_latchkey_will_not_send_is_an_auth_failure() {
+        let e = transport_error(curl_exit(1), "/hrv-service/hrv/2369-04-14");
+        assert!(matches!(e, GarminError::Auth(_)), "{e}");
+    }
+
+    #[test]
+    fn a_network_failure_is_not_an_auth_failure() {
+        let e = transport_error(curl_exit(7), "/hrv-service/hrv/2369-04-14");
+        assert!(matches!(e, GarminError::Permanent(_)), "{e}");
+    }
 }

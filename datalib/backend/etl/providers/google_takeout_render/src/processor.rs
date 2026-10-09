@@ -34,9 +34,45 @@ impl SourceRender for GoogleTakeoutRender {
         datalib_etl_chat_common::render::layout_params()
     }
 
+    /// A message or activity row is its own row; an attachment is its
+    /// message's or prompt's. Looked up rather than minted: an item's
+    /// uuid carries its date, which the raw key does not.
+    fn upstream_of_entity(&self, table: &str, id: &str) -> Option<(&'static str, String)> {
+        use crate::ids::*;
+        use datalib_etl::blob_cas::CasEdgeRow;
+        use datalib_etl::bulk::BulkUpsertable;
+        use datalib_etl_google_takeout::ingest::google_voice::schema_raw::{
+            VoiceAttachmentRow, VoiceMessageRow,
+        };
+        use datalib_etl_google_takeout::ingest::schema_raw::{
+            ChatAttachmentRow, ChatMessageRow, GeminiActivityRow, GeminiAttachmentRow,
+            MapsPhotoRow, MapsReviewRow, MapsSavedPlaceRow, YoutubeSubscriptionRow,
+            YoutubeWatchRow,
+        };
+        let (kind, message) = match table {
+            t if t == ChatMessageRow::TABLE => (KIND_MESSAGE, id),
+            t if t == ChatAttachmentRow::TABLE => {
+                (KIND_MESSAGE, ChatAttachmentRow::owning_id_of(id)?)
+            }
+            t if t == VoiceMessageRow::TABLE => (KIND_VOICE_MESSAGE, id),
+            t if t == VoiceAttachmentRow::TABLE => {
+                (KIND_VOICE_MESSAGE, VoiceAttachmentRow::owning_id_of(id)?)
+            }
+            t if t == GeminiActivityRow::TABLE => (KIND_GEMINI_PROMPT, id),
+            t if t == GeminiAttachmentRow::TABLE => {
+                (KIND_GEMINI_PROMPT, GeminiAttachmentRow::owning_id_of(id)?)
+            }
+            t if t == YoutubeWatchRow::TABLE => (KIND_YOUTUBE_WATCH, id),
+            t if t == YoutubeSubscriptionRow::TABLE => (KIND_YOUTUBE_SUBSCRIPTION, id),
+            t if t == MapsReviewRow::TABLE => (KIND_MAPS_REVIEW, id),
+            t if t == MapsSavedPlaceRow::TABLE => (KIND_MAPS_SAVED_PLACE, id),
+            t if t == MapsPhotoRow::TABLE => (KIND_MAPS_PHOTO, id),
+            _ => return None,
+        };
+        Some((kind, message.to_string()))
+    }
+
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
-        // Only the chat-shaped feeds (Google Chat / Google Voice) render; the
-        // other feeds stay queryable in the raw store.
         let mut on_doc = |md| ctx.emit_doc(md);
         let outcome = crate::render::render(
             raw_path,

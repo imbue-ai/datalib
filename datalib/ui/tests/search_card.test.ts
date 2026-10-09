@@ -1,53 +1,26 @@
 import { describe, expect, it } from "vitest";
-import {
-  decodeSearchState,
-  encodeSearchState,
-  freeText,
-  markWords,
-  searchQuery,
-} from "../src/cards/search";
+import { freeText, markWords, pickedSource, setSource } from "../src/cards/search";
 
-const input = (text: string, meaningOnly = false, sourceId: string | null = null) => ({
-  text,
-  meaningOnly,
-  sourceId,
-});
-
-describe("searchQuery", () => {
-  it("browses every document when nothing is typed", () => {
-    expect(searchQuery(input(""))).toBe("is:document");
+describe("the picked source, as the query says it", () => {
+  it("is the one source_id filter, typed or clicked", () => {
+    expect(pickedSource("risa source_id:slack")).toBe("slack");
+    expect(pickedSource('source_id:"tng email"')).toBe("tng email");
+    expect(pickedSource("risa")).toBeNull();
   });
 
-  it("sends typed text as it is", () => {
-    expect(searchQuery(input("risa trip"))).toBe("risa trip");
+  it("is none when the query names several, or only excludes one", () => {
+    expect(pickedSource("source_id:slack source_id:tng_email")).toBeNull();
+    expect(pickedSource("-source_id:slack")).toBeNull();
   });
 
-  /** "Meaning only" must move only the free text; a filter inside the predicate would be searched as words. */
-  it("moves only the free text into a meaning-only predicate", () => {
-    expect(searchQuery(input("author:worf risa trip", true))).toBe(
-      'author:worf qmd_vsearch:"risa trip"',
+  it("replaces every source filter and leaves the rest of the query", () => {
+    expect(setSource("source_id:slack risa source_id:tng_email", "notion")).toBe(
+      "risa source_id:notion",
     );
-  });
-
-  it("keeps a query of filters alone, with no default added", () => {
-    expect(searchQuery(input("-kind:contact before:2371-01-01"))).toBe(
-      "-kind:contact before:2371-01-01",
+    expect(setSource("risa source_id:slack -source_id:garmin", null)).toBe(
+      "risa -source_id:garmin",
     );
-  });
-
-  it("adds the picked source, and leaves it out when asked", () => {
-    expect(searchQuery(input("risa", false, "slack"))).toBe("risa source_id:slack");
-    expect(searchQuery(input("risa", false, "slack"), false)).toBe("risa");
-  });
-});
-
-describe("the search state string", () => {
-  it("round-trips", () => {
-    const s = input("warp core", true, "tng_email");
-    expect(decodeSearchState(encodeSearchState(s), "")).toEqual(s);
-  });
-  it("starts from the source's own query when it has none", () => {
-    expect(decodeSearchState("", "kraken")).toEqual(input("kraken"));
+    expect(setSource("", "slack")).toBe("source_id:slack");
   });
 });
 
@@ -61,6 +34,9 @@ describe("markWords", () => {
   });
   it("marks nothing when only filters were typed", () => {
     expect(markWords("anything", "kind:chat")).toEqual([{ text: "anything", hit: false }]);
+  });
+  it("marks the words a meaning-only predicate carries", () => {
+    expect(markWords("warp core", 'qmd_vsearch:"warp core"').filter((p) => p.hit)).toHaveLength(2);
   });
   it("finds free text among filter words", () => {
     expect(freeText("kind:chat  warp   -author:q core")).toBe("warp core");

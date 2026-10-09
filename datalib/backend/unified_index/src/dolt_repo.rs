@@ -3,7 +3,7 @@
 //! reads inside one read transaction: one commit, and the plain tables'
 //! indexes (`docs/dev/plans/paged_grids.md`, "Pinned and indexed").
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -11,13 +11,17 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::db::{build_where, ChatMeta};
-use crate::group::{group_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS};
+use crate::group::{
+    group_sql, like_pattern, values_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS,
+    MAX_VALUES,
+};
 use crate::problems::ProblemsQuery;
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::repo::{DocRow, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow};
 use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
+use crate::terms_keys::ATTACHED_AS;
 use datalib_core::repo::RepoError;
 use datalib_pin::{is_missing_table, open_reader};
 use datalib_query::table::{Column, SearchTable};
@@ -33,9 +37,17 @@ pub struct DoltRepo {
     /// exists — a root that has never synced has none, and a reader must
     /// not be the thing that creates it. Filled on first use and kept: a
     /// table the step commits later is there in the next transaction.
-    pool: tokio::sync::Mutex<Option<SqlitePool>>,
+    pool: tokio::sync::Mutex<Option<Reader>>,
     db_path: PathBuf,
     root: Arc<PathBuf>,
+}
+
+/// The one read-only connection, and the search terms file attached to
+/// it, by inode: a file rebuilt under a new shape is a new file, and the
+/// old one stays attached until it is noticed.
+struct Reader {
+    pool: SqlitePool,
+    terms: Option<u64>,
 }
 
 /// One request's read of the index: a transaction on the read-only
@@ -44,6 +56,8 @@ pub struct DoltRepo {
 struct At {
     tx: sqlx::Transaction<'static, sqlx::Sqlite>,
     commit: String,
+    /// The search terms file is attached under [`ATTACHED_AS`].
+    terms: bool,
     grid_rows: &'static str,
     markdowns: &'static str,
     edges: &'static str,
@@ -95,6 +109,7 @@ const SEARCH_ROW_COLUMNS: &[GridRowColumn] = {
         G::TouchedAt,
         G::IsDocument,
         G::Author,
+        G::AuthorHandle,
         G::Account,
         G::Project,
         G::OrgUuid,
@@ -191,6 +206,12 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .unwrap_or_default(),
         kind,
         author,
+        author_handle: r
+            .try_get::<Option<String>, _>(G::AuthorHandle.as_str())
+            .ok()
+            .flatten(),
+        author_ref: None,
+        author_term: None,
         channel: r.try_get(G::Channel.as_str()).unwrap_or_default(),
         source_url: r.try_get(G::SourceUrl.as_str()).unwrap_or_default(),
         notion_page_uuid: r.try_get(G::NotionPageUuid.as_str()).unwrap_or_default(),
@@ -242,18 +263,19 @@ impl DoltRepo {
         if !self.db_path.is_file() {
             return Ok(None);
         }
-        let pool = {
+        let (pool, terms) = {
             let mut slot = self.pool.lock().await;
-            match slot.as_ref() {
-                Some(pool) => pool.clone(),
-                None => {
-                    let pool = open_reader(&self.db_path)
-                        .await
-                        .map_err(|e| internal("open the grid index read-only", e))?;
-                    *slot = Some(pool.clone());
-                    pool
-                }
+            if slot.is_none() {
+                let pool = open_reader(&self.db_path)
+                    .await
+                    .map_err(|e| internal("open the grid index read-only", e))?;
+                *slot = Some(Reader { pool, terms: None });
             }
+            let reader = slot.as_mut().expect("opened above");
+            attach_terms(reader, &self.root)
+                .await
+                .map_err(|e| internal("attach the search terms", e))?;
+            (reader.pool.clone(), reader.terms.is_some())
         };
         let mut tx = pool
             .begin()
@@ -276,12 +298,74 @@ impl DoltRepo {
         Ok(Some(At {
             tx,
             commit,
+            terms,
             grid_rows: "grid_rows",
             markdowns: "markdowns",
             edges: "edges",
             problems: "problems",
         }))
     }
+}
+
+/// The values the search terms of `kinds` hold, holding one bound `LIKE`
+/// pattern, among the rows `where_sql` keeps in `grid_rows` (its values
+/// bound after the pattern): each with how many rows hold it, most first.
+pub fn term_values_sql(grid_rows: &str, where_sql: &str, kinds: &[u8]) -> String {
+    let s = ATTACHED_AS;
+    let codes: Vec<String> = kinds.iter().map(u8::to_string).collect();
+    let among = if where_sql.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " AND t.row_id IN (SELECT r.row_id FROM {s}.rows r \
+             WHERE r.uuid IN (SELECT uuid FROM {grid_rows}{where_sql}))"
+        )
+    };
+    format!(
+        "SELECT v.value, count(DISTINCT t.row_id) FROM {s}.terms t \
+         JOIN {s}.vals v ON v.val_id = t.val_id \
+         WHERE t.kind IN ({}) AND LOWER(v.value) LIKE ? ESCAPE '\\'{among} \
+         GROUP BY v.val_id ORDER BY 2 DESC, 1 LIMIT {MAX_VALUES}",
+        codes.join(", ")
+    )
+}
+
+/// Attaches the root's search terms file read-only under
+/// [`ATTACHED_AS`], so a term on a terms key is a clause of the grid's own
+/// query (`crate::terms_keys`). Outside any transaction, as SQLite
+/// requires; the file has no WAL through doltlite (dolthub/doltlite#3740),
+/// so a reader in a transaction holds off the terms writer for as long as
+/// it reads, which each request's transaction keeps short.
+async fn attach_terms(reader: &mut Reader, root: &Path) -> Result<(), sqlx::Error> {
+    use std::os::unix::fs::MetadataExt;
+    let path = datalib_runtime::layout::search_terms_db(root);
+    let now = std::fs::metadata(&path).ok().map(|m| m.ino());
+    if now == reader.terms {
+        return Ok(());
+    }
+    let mut conn = reader.pool.acquire().await?;
+    if reader.terms.is_some() {
+        // Audited: a fixed schema name.
+        let detach = format!("DETACH DATABASE {ATTACHED_AS}");
+        sqlx::query(sqlx::AssertSqlSafe(detach))
+            .execute(&mut *conn)
+            .await?;
+        reader.terms = None;
+    }
+    if now.is_some() {
+        let uri = format!("{}&mode=ro", datalib_runtime::plain_sqlite::uri(&path));
+        // Audited: the path comes from the data root's layout, escaped for
+        // a URI, and any quote in it doubled for the SQL string.
+        let attach = format!(
+            "ATTACH DATABASE '{}' AS {ATTACHED_AS}",
+            uri.replace('\'', "''")
+        );
+        sqlx::query(sqlx::AssertSqlSafe(attach))
+            .execute(&mut *conn)
+            .await?;
+        reader.terms = now;
+    }
+    Ok(())
 }
 
 /// One group as `group_sql` counts it: its values, its count, and its
@@ -370,6 +454,37 @@ impl At {
         Ok((groups, truncated))
     }
 
+    /// The values `column` takes among the rows `where_sql` keeps in
+    /// `table` that hold `typed`, most rows first.
+    async fn value_counts<C: Column>(
+        &mut self,
+        table: &str,
+        where_sql: &str,
+        params: &[String],
+        column: C,
+        typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        let sql = values_sql(table, where_sql, column);
+        // Audited: as `ordered_keys`; the column is a `&'static str`.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for p in params {
+            query = query.bind(p);
+        }
+        let rows = match query
+            .bind(like_pattern(typed))
+            .fetch_all(&mut *self.tx)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Vec::new(),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        Ok(rows
+            .iter()
+            .map(|r| (r.get::<String, _>(0), r.get::<i64, _>(1) as u64))
+            .collect())
+    }
+
     /// The problems `keys` name, in that order; one the snapshot lacks is
     /// left out.
     async fn problems_in(&mut self, keys: &[String]) -> Result<Vec<ProblemRow>, RepoError> {
@@ -447,7 +562,7 @@ impl At {
         limit: usize,
     ) -> Result<Vec<ProblemRow>, RepoError> {
         let sql = format!(
-            "SELECT * FROM {}{where_sql} ORDER BY last_seen_at_utc DESC, problem_uuid LIMIT ?",
+            "SELECT * FROM {}{where_sql} ORDER BY changed_at_utc DESC, problem_uuid LIMIT ?",
             self.problems
         );
         // Audited: the table name is a literal; `where_sql` splices only
@@ -582,6 +697,64 @@ impl IndexRepo for DoltRepo {
         // is there and the samples line up with the groups one for one.
         let samples = rows_in(&mut at, &sample_uuids).await?;
         Ok(grouping(keys, samples, truncated, at.commit))
+    }
+
+    async fn value_counts(
+        &self,
+        q: &ParsedQuery,
+        column: GridRowColumn,
+        typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        let (where_sql, params) = where_within(q, &[]);
+        at.value_counts(at.grid_rows, &where_sql, &params, column, typed)
+            .await
+    }
+
+    async fn term_value_counts(
+        &self,
+        q: &ParsedQuery,
+        kinds: &[u8],
+        typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        if !at.terms || kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (where_sql, params) = where_within(q, &[]);
+        let sql = term_values_sql(at.grid_rows, &where_sql, kinds);
+        // Audited: the kinds are the enum's codes, the table names are
+        // `&'static str`, and every value is bound.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(like_pattern(typed));
+        for p in &params {
+            query = query.bind(p);
+        }
+        let rows = query
+            .fetch_all(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
+        Ok(rows
+            .iter()
+            .map(|r| (r.get::<String, _>(0), r.get::<i64, _>(1) as u64))
+            .collect())
+    }
+
+    async fn problem_value_counts(
+        &self,
+        q: &ProblemsQuery,
+        column: ProblemRowColumn,
+        typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        let (where_sql, params) = where_within(q, &[]);
+        at.value_counts(at.problems, &where_sql, &params, column, typed)
+            .await
     }
 
     async fn rows_by_uuids(&self, uuids: &[String]) -> Result<Vec<SearchRow>, RepoError> {
@@ -814,16 +987,60 @@ impl IndexRepo for DoltRepo {
             .collect())
     }
 
-    async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError> {
+    async fn matching_qmd_paths(
+        &self,
+        q: &ParsedQuery,
+    ) -> Result<std::collections::HashSet<String>, RepoError> {
+        let (where_sql, params) = build_where(q);
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Default::default());
+        };
+        let clause = if where_sql.is_empty() {
+            " WHERE qmd_path IS NOT NULL".to_string()
+        } else {
+            format!("{where_sql} AND qmd_path IS NOT NULL")
+        };
+        // Audited: as `matching_documents`.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT DISTINCT qmd_path FROM {}{clause}",
+            at.grid_rows
+        )));
+        for p in &params {
+            query = query.bind(p);
+        }
+        let rows = match query.fetch_all(&mut *at.tx).await {
+            Ok(rows) => rows,
+            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Default::default()),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| r.try_get::<String, _>("qmd_path").ok())
+            .map(|p| crate::qmd::mapping::norm_path(&p))
+            .collect())
+    }
+
+    async fn grid_row_refs_for_hits(
+        &self,
+        hit_paths: &[String],
+    ) -> Result<Vec<GridRowRef>, RepoError> {
+        use datalib_schema::grid_rows::{qmd_path_key, QMD_PATH_KEY_SQL};
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        // Audited: `at.grid_rows` is a literal; no values.
+        let mut keys: Vec<String> = hit_paths.iter().map(|p| qmd_path_key(p)).collect();
+        keys.sort();
+        keys.dedup();
+        let wanted = serde_json::to_string(&keys)
+            .map_err(|e| RepoError::Internal(format!("encode hit paths: {e}")))?;
+        // Audited: `at.grid_rows` and the key expression are literals; the
+        // keys are bound.
         let rows = match sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT uuid, kind, COALESCE(qmd_path, '') AS qmd_path, provider, is_document \
-             FROM {}",
-            at.grid_rows
+             FROM {} WHERE {} IN (SELECT value FROM json_each(?))",
+            at.grid_rows, QMD_PATH_KEY_SQL
         )))
+        .bind(wanted)
         .fetch_all(&mut *at.tx)
         .await
         {
@@ -841,7 +1058,44 @@ impl IndexRepo for DoltRepo {
                 is_document: r.try_get("is_document").unwrap_or(false),
             });
         }
+        // The key finds every row a hit could name and a few more; the
+        // exact path keeps the right ones.
+        let named: std::collections::HashSet<String> = hit_paths
+            .iter()
+            .map(|p| crate::qmd::mapping::norm_path(p))
+            .collect();
+        out.retain(|r| named.contains(&crate::qmd::mapping::norm_path(&r.qmd_path)));
         Ok(out)
+    }
+
+    async fn people_for_handles(
+        &self,
+        handles: &[String],
+    ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        let wanted = serde_json::to_string(handles)
+            .map_err(|e| RepoError::Internal(format!("encode handles: {e}")))?;
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT h.handle, c.contact_json \
+               FROM source_contact_handles h \
+               JOIN source_contacts c \
+                 ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key \
+              WHERE h.handle IN (SELECT value FROM json_each(?))",
+        )
+        .bind(wanted)
+        .fetch_all(&mut *at.tx)
+        .await
+        .map_err(|e| RepoError::Internal(format!("read people by handle: {e}")))?;
+        rows.into_iter()
+            .map(|(handle, json)| {
+                let contact = serde_json::from_str(&json).map_err(|e| {
+                    RepoError::Internal(format!("a source contact for {handle} will not read: {e}"))
+                })?;
+                Ok(crate::people::HandleRow { handle, contact })
+            })
+            .collect()
     }
 
     async fn outgoing_edges(&self, markdown_uuid: &str) -> Result<Vec<EdgeRowOut>, RepoError> {

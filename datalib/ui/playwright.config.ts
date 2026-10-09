@@ -1,6 +1,7 @@
 import { defineConfig } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
+  appendFileSync,
   closeSync,
   copyFileSync,
   mkdirSync,
@@ -158,9 +159,25 @@ command = "'${APPLET_BIN}' unified_index"
   );
   return root;
 }
+// The fixture root with the contacts app beside the search applet, for
+// the spec that links handles to contacts. Its own root, because a link
+// is a write: on the shared root every other spec's chips would resolve.
+function contactsRoot(prefix: string): string {
+  const root = materializeRoot(prefix);
+  appendFileSync(
+    path.join(root, "config.toml"),
+    `
+[[applets]]
+id = "datalib_contacts"
+command = "'${APPLET_BIN}' datalib_contacts"
+`,
+  );
+  return root;
+}
 const ROOT_OF: Record<string, (prefix: string) => string> = {
   "data-sources-streaming": bareRoot,
   "data-sources-control": bareRoot,
+  contacts: contactsRoot,
 };
 
 // What a sandbox's backend gets in its environment beyond the common
@@ -450,14 +467,21 @@ export default defineConfig({
   snapshotPathTemplate: "{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{ext}",
   use: {
     baseURL: BACKEND_URL,
-    // The specs drive the columns layout (`.miller-col-*`, a URL of
-    // several columns); the app opens on tabs. A spec about another
-    // layout picks it with an init script (tabs-rename.spec.ts).
+    // Specs running side by side share a library, so the layout is
+    // neither read from nor written to it (ContainersView's UNSAVED_KEY):
+    // every page starts on the Dashboard plus what its URL names.
+    // containers.spec.ts, about keeping the layout, clears this and has a
+    // library of its own.
     storageState: {
       cookies: [],
       origins: SERVERS.map((s) => ({
         origin: s.url,
-        localStorage: [{ name: "datalib-layout", value: "columns" }],
+        localStorage: [
+          { name: "datalib-layout-unsaved", value: "1" },
+          // A search opens on the view picked last (searchViewPref.ts);
+          // most specs are about the table, so that is the one picked.
+          { name: "datalib-search-view", value: "table" },
+        ],
       })),
     },
     headless: true,
@@ -515,12 +539,16 @@ export default defineConfig({
         /score-sort-order\.spec\.ts/,
         /selected-message-outline\.spec\.ts/,
         /qmd-index-columns\.spec\.ts/,
-        /miller-reveal\.spec\.ts/,
+        // The search field, a CodeMirror editor: the desktop app's typing.
+        /search-field\.spec\.ts/,
+        /column-reveal\.spec\.ts/,
         /yolink-plots\.spec\.ts/,
         /gallery\.spec\.ts/,
         // The sandboxed DACTAL iframe: an opaque origin loading module
         // scripts, which WebKit and Chromium have disagreed about.
         /dactal-sandbox\.spec\.ts/,
+        // The document frame that runs no script; the desktop app is WebKit.
+        /document-sandbox\.spec\.ts/,
         // /data_sources — the sources card's Pipeline table, and the
         // commit-history grid it opens in a modal.
         /data-sources-grid\.spec\.ts/,

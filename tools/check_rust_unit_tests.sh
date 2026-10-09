@@ -5,7 +5,7 @@
 #
 # Why this exists: a `rust_test` with a `crate = ":<lib>"` attribute is
 # what compiles the library in test mode and runs its inline unit tests.
-# WITHOUT such a target, the inline tests compile only under `cargo test`
+# WITHOUT such a target, the inline tests never compile
 # and are SILENTLY SKIPPED by the supported `bazel test //...` path —
 # i.e. they look like they pass while never running. We hit exactly this:
 # `datalib_etl_fsindex` shipped with inline tests in stamp.rs/hash.rs

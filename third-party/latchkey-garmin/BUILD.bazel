@@ -1,0 +1,27 @@
+# The latchkey Garmin plugin's built files, embedded by datalib-http.
+# README.md says where they come from.
+
+filegroup(
+    name = "plugin",
+    srcs = [
+        "dist/garmin.js",
+        "dist/index.js",
+        "dist/oauth1.js",
+        "package.json",
+    ],
+    visibility = [
+        "//datalib/backend/http:__pkg__",
+        # The sign-in suite installs it as a person's own copy would be.
+        "//datalib/ui:__pkg__",
+    ],
+)
+
+exports_files(
+    ["LICENSE"],
+    visibility = ["//third-party:__pkg__"],
+)
+
+exports_files(
+    ["package.json"],
+    visibility = ["//datalib/ui:__pkg__"],
+)

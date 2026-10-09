@@ -423,6 +423,7 @@ onUnmounted(() => {
           :step="null"
           :initial-query="`group:${group}`"
           @line-selected="(seq: number) => ctx.host.openCards(logLineSource(seq))"
+          @open-card="(source: string) => ctx.host.openCards(source)"
         />
       </div>
     </details>

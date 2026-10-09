@@ -14,7 +14,7 @@ test("dragging across a field's help keeps the selection", async ({ page }) => {
   await page.getByRole("button", { name: /Apple Messages/ }).click();
 
   const wizard = page.getByRole("dialog");
-  const help = wizard.locator(".wiz-help", { hasText: "Choose it with the picker" });
+  const help = wizard.locator(".wiz-help", { hasText: "A copied chat.db file" });
   await expect(help).toBeVisible();
 
   // The folder the picker opens at is named in the help, copyable.

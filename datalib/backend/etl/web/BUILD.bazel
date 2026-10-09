@@ -1,0 +1,48 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# What a source that reaches a web service shares. Its own crate so that
+# only those sources relink when it changes; a source that reads local
+# files does not link it.
+rust_library(
+    name = "datalib_etl_web",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_web",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    # The router curl and the impersonator it fronts travel with the
+    # library, so any binary that can sign in gets both in runfiles, side
+    # by side (the router finds the impersonator as a sibling);
+    # `latchkey::ensure_curl_router` resolves the router through them.
+    data = ["//third-party/latchkey-curl-shims"],
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:futures",
+        "@datalib_crates//:quick-xml",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "web_unittests",
+    size = "small",
+    crate = ":datalib_etl_web",
+    edition = "2021",
+)

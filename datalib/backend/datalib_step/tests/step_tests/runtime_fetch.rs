@@ -9,13 +9,14 @@
 //! path a sync takes, so what it reports is what a sync would run.
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use datalib_runtime::node_runtime::{
     AssetKind, Manifest, RuntimeAsset, LATCHKEY_ENTRY_REL, LATCHKEY_VERSION, MANIFEST_FILE,
@@ -30,10 +31,36 @@ use sha2::{Digest, Sha256};
 /// it execs, and an exec of the copy in that window fails with ETXTBSY
 /// on Linux. `Command::spawn` returns only once the child has exec'd,
 /// so releasing the lock there leaves no descriptor at large.
+///
+/// This covers the spawns in this file. The other files of this test
+/// binary spawn `datalib-step` too, on their own threads and without
+/// this lock, so `spawn_once_free` covers what it cannot.
 static COPY_OR_SPAWN: Mutex<()> = Mutex::new(());
 
 fn copy_or_spawn() -> MutexGuard<'static, ()> {
     COPY_OR_SPAWN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// How long a spawn waits for a copied binary to stop being busy. A
+/// child some other test forked holds the copy's write descriptor only
+/// from its fork to its exec, which is milliseconds; this is the
+/// deadline for a machine too loaded to say so.
+const BUSY_DEADLINE: Duration = Duration::from_secs(20);
+
+/// Spawn `cmd`, waiting out ETXTBSY: the binary was just written, and a
+/// child forked elsewhere in this process while it was being written
+/// still holds it open for writing until that child execs.
+fn spawn_once_free(cmd: &mut Command) -> Child {
+    let deadline = Instant::now() + BUSY_DEADLINE;
+    loop {
+        match cmd.spawn() {
+            Ok(child) => return child,
+            Err(e) if e.kind() == ErrorKind::ExecutableFileBusy && Instant::now() < deadline => {
+                std::thread::yield_now();
+            }
+            Err(e) => panic!("spawn {:?}: {e}", cmd.get_program()),
+        }
+    }
 }
 
 /// A tarball-shaped install: the binary copied (not linked — the
@@ -64,15 +91,15 @@ impl Install {
     fn pull_runtime(&self, cache_home: &Path) -> std::process::Output {
         let child = {
             let _spawning = copy_or_spawn();
-            Command::new(self.dir.join("datalib-step"))
-                .arg("pull-runtime")
-                .env("XDG_CACHE_HOME", cache_home)
-                .env_remove("DATALIB_RUNTIME_DIR")
-                .env_remove("DATALIB_ALLOW_NPX")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap()
+            spawn_once_free(
+                Command::new(self.dir.join("datalib-step"))
+                    .arg("pull-runtime")
+                    .env("XDG_CACHE_HOME", cache_home)
+                    .env_remove("DATALIB_RUNTIME_DIR")
+                    .env_remove("DATALIB_ALLOW_NPX")
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped()),
+            )
         };
         child.wait_with_output().unwrap()
     }

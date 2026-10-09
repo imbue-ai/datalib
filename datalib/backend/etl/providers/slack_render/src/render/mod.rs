@@ -12,6 +12,8 @@ pub mod parse;
 #[allow(clippy::module_inception)]
 pub mod render;
 
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Photo};
+use datalib_handle::Handle;
 use serde_json::Value;
 
 pub use parse::{parse, ParsedSlack, ScanResult, SlackThreadBucket};
@@ -29,6 +31,10 @@ pub struct User {
     /// `profile.email`. Slack only serves it with the `users:read.email`
     /// scope, so it is often absent for everyone but the account itself.
     pub email: Option<String>,
+    /// `profile.title`: what they do, as their workspace shows it.
+    pub title: Option<String>,
+    /// `profile.image_192`: their avatar, where Slack serves it.
+    pub avatar_url: Option<String>,
 }
 
 impl User {
@@ -38,6 +44,34 @@ impl User {
             self.name.as_deref(),
             &self.user_id,
         )
+    }
+
+    /// The person as Slack's profile describes them: every name it
+    /// shows, their Slack user and, where the scope served it, their
+    /// email — the one place Slack ties a person to anything else.
+    pub fn contact(&self, source_id: &str) -> Option<NormalizedContact> {
+        let handle = Handle::slack(&self.team_id, &self.user_id)?;
+        let mut c = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
+        for name in [
+            Some(self.label()),
+            self.real_name.clone(),
+            self.display_name.clone(),
+            self.name.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !name.trim().is_empty() && !c.names.contains(&name) {
+                c.names.push(name);
+            }
+        }
+        c.handles.push(ContactHandle::of(handle));
+        if let Some(email) = &self.email {
+            c.handles.push(ContactHandle::email(None, email.clone()));
+        }
+        c.title = self.title.clone();
+        c.photo = self.avatar_url.clone().map(Photo::Url);
+        Some(c)
     }
 }
 

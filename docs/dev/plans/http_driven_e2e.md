@@ -168,6 +168,14 @@ A red first run is a finding. Named in advance:
    step deaths. Next: server death, which needs a second server on the
    same root after the first is killed.
 3. **Upstream faults as events**, sharing #644's hostile playback.
+   Playback answers inside `datalib_etl::http`, before latchkey is
+   spawned, so a fault injected there never crosses the credential
+   path. The sign-in suite (`datalib/ui/tests/e2e_auth/`, 2026-10-05)
+   has the other door: a fake internet behind the real `latchkey curl`
+   and router (`fake_sites.mjs`). A fault that matters to the person —
+   an expired credential, a 401 mid-walk, a Cloudflare 403 — belongs
+   there; one about our own resume logic (a truncated page, a 429)
+   is fine on playback.
 4. **The live config**: the same driver pointed at the private config
    (`manual_e2e_live_sync_golden.rs` today), with a short fuzz before
    its first sync. Retire that golden's run 1 and run 3 once it has

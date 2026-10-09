@@ -292,11 +292,11 @@ async fn parse_async(
     .fetch_all(&pool)
     .await
     .context("read beeper_media_attachments")?;
-    let cas_path = datalib_etl::blob_cas::cas_path_for(db_path);
-    let cas_meta: HashMap<String, (Option<String>, Option<i64>)> = if cas_path.is_file() {
-        let cas_pool = datalib_etl::blob_cas::open_cas_reader(&cas_path)
-            .await
-            .with_context(|| format!("open CAS for render at {}", cas_path.display()))?;
+    let cas_pool = datalib_etl::blob_cas::open_cas_for_render(db_path)
+        .await
+        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
+    let cas_meta: HashMap<String, (Option<String>, Option<i64>)> = if let Some(cas_pool) = cas_pool
+    {
         let rows = sqlx::query("SELECT blake3, content_type, byte_len FROM cas_objects")
             .fetch_all(&cas_pool)
             .await

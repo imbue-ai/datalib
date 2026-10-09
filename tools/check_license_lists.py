@@ -8,7 +8,7 @@ is what `cargo about` accepts when it writes the release's
 its `accepted`. A license added to the gate and not to the notices
 config passes every PR and breaks the next release, so `accepted` must
 be a superset of `allow`. The tauri shell's deny.toml is held to the
-same list, since the notices script covers only the backend workspace
+same list, since the notices script covers only the backend's crates
 and the shell links a subset of the same crates.
 """
 

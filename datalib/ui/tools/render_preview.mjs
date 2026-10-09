@@ -7,8 +7,9 @@
 // The fidelity comes from reading the app's own sources rather than
 // re-stating them: markdown-it with the same options as
 // `src/cards/renderDocument.ts`, the CSS variables lifted out of
-// `src/theme.css`, every `<style>` block of the two card components
-// verbatim, and `src/cards/chatSections.js` — the very module the
+// `src/theme.css`, the document body's own `src/cards/documentBody.css`
+// and every `<style>` block of the two card components verbatim, and
+// `src/cards/chatSections.js` — the very module the
 // component imports — inlined into the page. Nothing about the layout
 // is re-implemented here; only the preview's own chrome (the toolbar,
 // and the light/dark switch below) is new.
@@ -17,6 +18,7 @@
 
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 
@@ -65,6 +67,8 @@ const css = [
     join(pkgRoot, "node_modules/highlight.js/styles/github-dark.css"),
     "utf8",
   ),
+  readFileSync(join(uiRoot, "src/cards/documentBody.css"), "utf8"),
+  readFileSync(join(uiRoot, "src/cards/chip.css"), "utf8"),
   vueStyles("src/cards/DocCard.ce.vue"),
   vueStyles("src/cards/ChatBody.ce.vue"),
   // Preview-only chrome. The real pane is a resizable Miller column;
@@ -139,6 +143,11 @@ document.getElementById("expand").addEventListener("click", () => {
 });
 `;
 
+// The app's own chip plugin, so a `[Name](mailto:…)` the renderers write
+// is an `a.chip` here as in the app. Nothing resolves it in the preview,
+// so it draws in the unresolved look.
+const { chipLinks } = await import(pathToFileURL(join(uiRoot, "src/cards/chipLinks.js")));
+
 const md = new MarkdownIt({
   html: true,
   linkify: true,
@@ -157,6 +166,7 @@ const md = new MarkdownIt({
       .replace(/>/g, "&gt;");
   },
 });
+md.use(chipLinks);
 
 /** Drop the YAML frontmatter the backend strips before serving. */
 function stripFrontmatter(text) {

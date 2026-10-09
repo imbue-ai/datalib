@@ -4,8 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_etl::http::{HttpRequest, HttpService};
-use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
 /// Matches `ingest::PAGE_SIZE`. Hard-coded rather than imported so the
@@ -107,16 +107,66 @@ impl Synthesizer for ChatgptSynth {
             }
         }
 
+        count += synthesize_files(&self.api_dir.join("files"), out_root)?;
+
         Ok(SynthesizeReport {
             fixtures_written: count,
         })
     }
 }
 
+/// `files/<file_id>.<ext>`: the metadata call naming a signed URL, and
+/// the bytes behind it, the two requests a download makes per file.
+fn synthesize_files(files_dir: &Path, out_root: &Path) -> Result<usize> {
+    if !files_dir.is_dir() {
+        return Ok(0);
+    }
+    let mut count = 0;
+    let mut entries: Vec<PathBuf> = fs::read_dir(files_dir)
+        .with_context(|| format!("read {}", files_dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    entries.sort();
+    for path in entries {
+        let (Some(id), Some(ext)) = (
+            path.file_stem().and_then(|s| s.to_str()),
+            path.extension().and_then(|s| s.to_str()),
+        ) else {
+            continue;
+        };
+        let signed = format!("https://files.chatgpt.test/{id}");
+        let meta = req_get(&format!("{BASE}/backend-api/files/{id}/download"));
+        write_fixture(
+            out_root,
+            &meta,
+            &json_response(&json!({"download_url": signed})),
+        )?;
+        let mime = match ext {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "pdf" => "application/pdf",
+            _ => "application/octet-stream",
+        };
+        let bytes = HttpResponse {
+            status: 200,
+            headers: [("content-type".to_string(), mime.to_string())].into(),
+            body: fs::read(&path).with_context(|| format!("read {}", path.display()))?,
+            duration_ms: 0,
+        };
+        write_fixture(
+            out_root,
+            &HttpRequest::get(HttpService::Chatgpt, &signed),
+            &bytes,
+        )?;
+        count += 2;
+    }
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl::http::{fixture_key, HttpResponse};
+    use datalib_etl_web::http::{fixture_key, HttpResponse};
     use serde_json::Map;
     use tempfile::tempdir;
 

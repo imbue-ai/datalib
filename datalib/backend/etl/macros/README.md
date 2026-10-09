@@ -134,6 +134,8 @@ as the single source of truth the same way `schema_raw.rs` is.
 - `#[col(sql = "VARCHAR(96)")]` — required on every field. Nullability is
   inferred from the Rust type: `Option<T>` is nullable, anything else gets
   `NOT NULL`.
+- A field binds as `String`, `i64`, `f64`, `bool`, an `Option` of the
+  first three, or `Vec<u8>` (bytes, for a `BLOB` column).
 - `#[col(sql = "VARCHAR(16)", enum)]` — the field is a `Copy` enum (or
   `Option` of one) with `as_str(self) -> &'static str`, the strum shape
   AGENTS.md prescribes for a closed set of strings. It is bound as that

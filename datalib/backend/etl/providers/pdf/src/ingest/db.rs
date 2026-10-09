@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use sqlx::Row;
 
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::bulk_upsert_first_seen_in_tx;
 use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{full_ddl, PdfDocumentRow, PdfPathRow, PdfScanMetaRow, DATA_TABLES};
@@ -32,12 +32,12 @@ datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
 impl RawDb {
     /// What this source already ingested. Must run **before**
-    /// [`Self::reset`].
+    /// [`Self::reset_paths`].
     ///
     /// Only the caller's half: which path held which content. The stat
     /// cursor is host state and lives in the shared
-    /// [`datalib_etl::fingerprint_cache`], which
-    /// [`datalib_etl::fsscan`] consults on our behalf.
+    /// [`datalib_etl_files::fingerprint_cache`], which
+    /// [`datalib_etl_files::fsscan`] consults on our behalf.
     pub async fn load_prev(&self) -> Result<PrevCache> {
         let mut cache = PrevCache::default();
 
@@ -63,18 +63,11 @@ impl RawDb {
 
     /// Truncate the **path** table so deletions fall out naturally: a
     /// path present last scan and absent now is simply not re-inserted.
+    /// Its sidecar stays, so a path written again keeps the stamp from
+    /// when it was first seen; [`Self::prune_unnamed`] drops the rest.
     pub async fn reset_paths(&self) -> Result<()> {
         let mut tx = self.pool().begin().await.context("begin truncate tx")?;
-        // A path's bookkeeping goes with the path.
-        let sidecars: Vec<String> = DATA_TABLES
-            .iter()
-            .map(|t| format!("{t}_bookkeeping"))
-            .collect();
-        for table in DATA_TABLES
-            .iter()
-            .copied()
-            .chain(sidecars.iter().map(String::as_str))
-        {
+        for table in DATA_TABLES {
             // Audited: `table` iterates a `&'static str` const array of our own table
             // names; no runtime data reaches the statement.
             sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
@@ -86,6 +79,31 @@ impl RawDb {
         Ok(())
     }
 
+    /// Delete the path sidecars and the documents no `pdf_paths` row
+    /// names, with the documents' bookkeeping. Returns how many documents
+    /// went.
+    pub async fn prune_unnamed(&self) -> Result<u64> {
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin document prune tx")?;
+        let mut removed = 0;
+        for sql in [
+            "DELETE FROM pdf_paths_bookkeeping WHERE id NOT IN (SELECT id FROM pdf_paths)",
+            "DELETE FROM pdf_documents_bookkeeping WHERE id NOT IN (SELECT blake3 FROM pdf_paths)",
+            "DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)",
+        ] {
+            removed = sqlx::query(sql)
+                .execute(&mut *tx)
+                .await
+                .context("prune unnamed documents")?
+                .rows_affected();
+        }
+        tx.commit().await.context("commit document prune tx")?;
+        Ok(removed)
+    }
+
     /// Record where this scan ran, so the render step does not have to
     /// be told again. See [`super::schema_raw::PDF_SCAN_META_DDL`].
     pub async fn write_scan_meta(
@@ -94,7 +112,7 @@ impl RawDb {
         now: &IsoOffsetTimestamp,
     ) -> Result<()> {
         let mut tx = self.pool().begin().await.context("begin scan_meta tx")?;
-        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), now)
+        bulk_upsert_first_seen_in_tx(&mut tx, std::slice::from_ref(row), now)
             .await
             .context("upsert pdf_scan_meta")?;
         tx.commit().await.context("commit scan_meta tx")?;
@@ -124,10 +142,10 @@ impl RawDb {
         now: &IsoOffsetTimestamp,
     ) -> Result<()> {
         let mut tx = self.pool().begin().await.context("begin write tx")?;
-        bulk_upsert_in_tx(&mut tx, docs, now)
+        bulk_upsert_first_seen_in_tx(&mut tx, docs, now)
             .await
             .context("upsert pdf_documents")?;
-        bulk_upsert_in_tx(&mut tx, paths, now)
+        bulk_upsert_first_seen_in_tx(&mut tx, paths, now)
             .await
             .context("upsert pdf_paths")?;
         tx.commit().await.context("commit write tx")?;

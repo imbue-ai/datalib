@@ -32,7 +32,7 @@ right platform flags.
 
 ```sh
 # 1. Build for both arches against the LATEST published GitHub Release.
-#    Default version comes from datalib/backend/Cargo.toml workspace
+#    Default version comes from datalib/backend/Cargo.toml
 #    version. Builds into the buildx cache only (no push, no load) — fast
 #    "does it still build?" smoke.
 scripts/build_docker.sh

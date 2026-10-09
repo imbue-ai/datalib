@@ -93,7 +93,8 @@ The whole run is one snapshot in one transaction: every row is upserted,
 then every row of each table the export no longer holds is deleted. A
 commit landing at any point therefore sees last run's table or this
 run's, never an emptied one — the rule in `docs/dev/plans/one_mode.md`.
-There is no cursor for a reset to clear.
+What holds the deletions back is under "When part of a run fails"
+below.
 
 After the rows are committed, every `uri` in every record is read off
 disk once and stored in the sibling `blobs.sqlite`, with one
@@ -101,13 +102,52 @@ disk once and stored in the sibling `blobs.sqlite`, with one
 reference is stored once and reached twice. Bytes already in the CAS are
 found through the edge table's `blake3` and not re-read; a `uri` no file
 answers to (the export left it out, as it does for some videos) is a
-warning and a `media_missing` count, never a failed run. The bytes are
-held in memory only up to 32 MB between flushes, since a real export's
-media runs to gigabytes.
+`not_found` warning on its edge, `media_blobs:<record>#<uri>`, and a
+`media_missing` count, never a failed run. A file that is there and
+will not read is an error on its edge instead. Either clears the run
+the file reads. The bytes are held in memory only up to 32 MB between
+flushes, since a real export's media runs to gigabytes.
+
+Every run reads the whole export, so an edge's `_bookkeeping` sidecar
+is stamped the first time it lands and left alone after, and a chunk
+read again with the same bytes keeps its `ingested_files` stamp. A
+`uri` with no file is tried again every run, and the same warning
+recorded again changes nothing either. Reading an unchanged export
+again commits nothing (`reading_an_unchanged_export_again_commits_nothing`).
+
+An edge follows its record. In the transaction that prunes the records,
+a deleted record's edges go, and so do those of a record read this run,
+in a table that pruned, to a `uri` it no longer names
+(`media_edges_removed` in the step summary). A record in a table held
+back this run (below) keeps its edges, as it keeps its row.
 
 Files nothing renders — ad preferences, login history, search history,
 notification settings — are mirrored all the same. They are the record
 of what Facebook holds about the account, and a table is cheap.
+
+## When part of a run fails
+
+Every run reads the whole export, so each of these is a `problems` row
+that the next run which reads the thing clears:
+
+- **A file that will not read or parse** is a `listing:file <path>` row.
+  Its table is upserted but not pruned this run: chunks of one table
+  (`album/0.json`, `album/1.json`) share it, and the rows of the chunk
+  that failed are missing from this run's set without having gone.
+- **A chunk missing from a table the export has the rest of** — an
+  export unpacked only in part — is a `listing:file <path>` row, and the
+  table is upserted but not pruned. Each run records in `ingested_files`
+  (scope `facebook/<table>`) the chunk files it read a table from, and a
+  table prunes only while every one of them is there. A table none of
+  whose files is in the export was left out of it, and keeps its rows.
+  An export that really has fewer parts of a table than the last one
+  looks the same as a partial unpack; resetting the source clears the
+  record.
+- **A directory the walk could not list** (or an entry it could not
+  stat) is a `listing:files` row, and no table is pruned that run.
+- **An export path with nothing at it** fails the run: there is nothing
+  to mirror, and an empty walk would read as an export that holds
+  nothing.
 
 ## What render does
 
@@ -118,11 +158,11 @@ them against the render cursor, then five feeds:
 |---|---|---|
 | posts | `…posts_your_posts_check_ins_photos_and_videos` + `…posts_on_other_pages_and_profiles` | post: the text, its media as attachments, a `📍 Place — address` line per check-in (the export lists a place twice, with and without its page URL; the one with the URL wins), a life event as a bold title and description, and `— with A, B` for tags |
 | albums | `…posts_album` | album: the description first, then every photo in creation order, captioned where the photo has one of its own |
-| comments | `…comments_and_reactions_comments` | month: the comment, with Facebook's sentence about it in italics beneath, and any photo attached |
-| reactions | `…comments_and_reactions_likes_and_reactions` | month: `👍 X liked Y's post.`, the URL as the header's `↗` |
+| comments | `…comments_and_reactions_comments` | year: the comment, with Facebook's sentence about it in italics beneath, and any photo attached |
+| reactions | `…comments_and_reactions_likes_and_reactions` | year: `👍 X liked Y's post.`, the URL as the header's `↗` |
 | friends | `connections_friends_your_friends` | friend, as a contact in one "Friends" group with a "Friends since" field |
 
-Comments and reactions are bucketed by month because the export does not
+Comments and reactions are bucketed by year because the export does not
 say which post they were left on in any form we can resolve: a comment
 record has a `title` sentence and no link, a reaction has a URL to a post
 that is usually somebody else's. LinkedIn's export names the post, so it

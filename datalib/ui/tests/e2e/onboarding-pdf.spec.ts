@@ -4,26 +4,28 @@
 // the second sync picks it up.
 
 import { test, expect, type Page } from "@playwright/test";
+import { reviewToml } from "./wizard-helpers";
 import { copyFileSync } from "node:fs";
 import {
-  GRID,
-  nameCell,
+  cardOf,
   expandGroup,
   expectGridPainted,
+  GRID,
+  type GridApi,
   LAST_UPDATE_AT,
-  readRow,
+  nameCell,
   pipelineRow as row,
+  readRow,
   rowMenuEntry,
+  SEARCH_ROWS,
   searchAndSettle,
+  searchGrid,
   settle,
   settleRows,
   stampOf,
   stampsBefore,
   statusOf,
-  SEARCH_ROWS,
   TABLE_ROWS,
-  searchGrid,
-  type GridApi,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -120,12 +122,12 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     ).toBe(false);
 
     await page.goto(`${BASE}/`);
-    await expect(page.getByRole("heading", { name: "Set up a data library" })).toBeVisible();
-    await page.getByRole("button", { name: "Initialize empty data library" }).click();
+    await expect(page.getByRole("heading", { name: "Initialize data library" })).toBeVisible();
+    await page.getByRole("button", { name: "Initialize data library" }).click();
 
     // ── 3. landing on the sources card ───────────────────────────────
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-    expect(decodeURIComponent(new URL(page.url()).pathname)).toContain("sourcesView()");
+    await expect(cardOf(page, "sourcesView(")).toHaveCount(1);
     // The scaffold's one group, and the System group every root has,
     // are the table's whole content; the scaffold's three entries are
     // under it.
@@ -174,7 +176,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // What the two steps will be, named from the catalog's default id,
     // shown before anything is written.
-    await wizard.getByText("Review the TOML this writes").click();
+    await reviewToml(page);
     const toml = wizard.locator("pre");
     await expect(toml).toContainText('id = "pdfs"');
     await expect(toml).toContainText('type = "pdf"');
@@ -228,7 +230,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
     expect(
       Math.abs(Date.now() - Date.parse(stamp!)),
-      `Last update claims ${stamp}, which is not a moment ago`,
+      `Status claims ${stamp}, which is not a moment ago`,
     ).toBeLessThan(5 * 60_000);
 
     const rawBytes = await bytesOf(page, "pdfs/ingest");
@@ -325,7 +327,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await page.getByRole("button", { name: "Add source" }).click();
     await wizard.getByRole("searchbox").fill("signal");
     await wizard
-      .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })
+      .locator(".wiz-tile", { hasText: "Decrypt and copy an Android Signal backup" })
       .click();
     await wizard.locator("input.wiz-path").fill(SIGNAL_BACKUP_DIR!);
 
@@ -396,7 +398,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 6. and the Signal messages are searchable ────────────────────
     await openExplore(page);
-    await searchAndSettle(page, "source:Signal");
+    await searchAndSettle(page, "source_id:signal");
     const signalRows = await gridRows(page);
     expect(signalRows.length, "the Signal messages should be indexed").toBeGreaterThan(0);
     expect(

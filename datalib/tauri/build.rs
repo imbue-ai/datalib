@@ -79,17 +79,25 @@ fn main() {
     // backend's localhost URL): Tauri refuses a remote page any app
     // command no capability names. Once declared, every app command is
     // checked, so each one here must be granted somewhere
-    // (`capabilities/default.json`, `capabilities/open-raw-stores.json`).
-    tauri_build::try_build(
-        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
+    // (`capabilities/default.json`, `capabilities/open-raw-stores.json`,
+    // `capabilities/switch-libraries.json`).
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
+        tauri_build::AppManifest::new().commands(&[
             "version",
             "launcher_state",
+            "launcher_resolve",
+            "launcher_create",
+            "launcher_choose_folder",
             "launcher_open",
             "launcher_pick",
-            "launcher_create",
-            "launcher_quit",
+            "launcher_forget",
+            "launcher_open_folder",
+            "launcher_move_from_documents",
+            "library_menu",
+            "library_switch",
+            "libraries_show",
             "open_raw_store",
-        ])),
-    )
+        ]),
+    ))
     .expect("failed to run tauri-build")
 }

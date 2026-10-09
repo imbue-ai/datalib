@@ -183,19 +183,23 @@ async function untilClosed(
   timeout = 45_000,
 ): Promise<SyncRequest> {
   let seen: SyncRequest | undefined;
-  await expect
-    .poll(
-      async () => {
-        seen = await requestFor(request, s);
-        return seen?.state ?? "(no request)";
-      },
-      {
-        timeout,
-        intervals: [200],
-        message: `the request for ${s.id} never closed as ${states.join("/")}`,
-      },
-    )
-    .toMatch(new RegExp(`^(${states.join("|")})$`));
+  const message = `the request for ${s.id} never closed as ${states.join("/")}`;
+  try {
+    await expect
+      .poll(
+        async () => {
+          seen = await requestFor(request, s);
+          return seen?.state ?? "(no request)";
+        },
+        { timeout, intervals: [200], message },
+      )
+      .toMatch(new RegExp(`^(${states.join("|")})$`));
+  } catch (e) {
+    // A request that closed some other way names the step it failed at,
+    // and why that step failed is in the backend's log and nowhere else.
+    await dumpStopEvidence(request, message);
+    throw e;
+  }
   return seen!;
 }
 

@@ -3,24 +3,25 @@
 //! to the DAV root, every value is CDATA, and the home lists scheduling
 //! boxes beside the calendars.
 
+use datalib_probe::{ProbeAsk, ProbeList};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use datalib_etl::http::{HttpMethod, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::write_fixture;
 use datalib_etl_calendar::ingest::caldav::{self, dav};
 use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb};
+use datalib_etl_web::http::{HttpMethod, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::write_fixture;
 
-const HOST: &str = "https://caldav.enterprise.test";
-const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";
-const HOME: &str = "/dav/calendars/user/picard@enterprise.test/";
-const BRIDGE: &str = "/dav/calendars/user/picard@enterprise.test/2c1f4e0a-bridge/";
+pub(crate) const HOST: &str = "https://caldav.enterprise.test";
+pub(crate) const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";
+pub(crate) const HOME: &str = "/dav/calendars/user/picard@enterprise.test/";
+pub(crate) const BRIDGE: &str = "/dav/calendars/user/picard@enterprise.test/2c1f4e0a-bridge/";
 
-const STAFF: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Fastmail/2020.5/EN\r\nBEGIN:VEVENT\r\nUID:tng-staff@enterprise.test\r\nSUMMARY:Senior staff briefing\r\nDTSTART;TZID=America/Los_Angeles:20260105T090000\r\nDTEND;TZID=America/Los_Angeles:20260105T100000\r\nRRULE:FREQ=WEEKLY;BYDAY=MO,TH\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
-const RECEPTION: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Fastmail/2020.5/EN\r\nBEGIN:VEVENT\r\nUID:tng-reception@enterprise.test\r\nSUMMARY:Reception for the Klingon delegation\r\nDTSTART;TZID=America/Los_Angeles:20260918T190000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+pub(crate) const STAFF: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Fastmail/2020.5/EN\r\nBEGIN:VEVENT\r\nUID:tng-staff@enterprise.test\r\nSUMMARY:Senior staff briefing\r\nDTSTART;TZID=America/Los_Angeles:20260105T090000\r\nDTEND;TZID=America/Los_Angeles:20260105T100000\r\nRRULE:FREQ=WEEKLY;BYDAY=MO,TH\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+pub(crate) const RECEPTION: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Fastmail/2020.5/EN\r\nBEGIN:VEVENT\r\nUID:tng-reception@enterprise.test\r\nSUMMARY:Reception for the Klingon delegation\r\nDTSTART;TZID=America/Los_Angeles:20260918T190000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
 
-fn xml(status: u16, body: &str) -> HttpResponse {
+pub(crate) fn xml(status: u16, body: &str) -> HttpResponse {
     let mut headers = BTreeMap::new();
     headers.insert(
         "content-type".into(),
@@ -34,7 +35,7 @@ fn xml(status: u16, body: &str) -> HttpResponse {
     }
 }
 
-fn fixture(
+pub(crate) fn fixture(
     root: &Path,
     method: HttpMethod,
     url: &str,
@@ -46,7 +47,7 @@ fn fixture(
     write_fixture(root, &req, &resp).expect("write fixture");
 }
 
-fn resource(href: &str, etag: &str, ics: &str) -> String {
+pub(crate) fn resource(href: &str, etag: &str, ics: &str) -> String {
     format!(
         "<response><href>{href}</href><propstat><prop><getetag><![CDATA[{etag}]]></getetag>\
          <C:calendar-data><![CDATA[{ics}]]></C:calendar-data></prop>\
@@ -54,14 +55,19 @@ fn resource(href: &str, etag: &str, ics: &str) -> String {
     )
 }
 
-fn multistatus(inner: &str) -> String {
+pub(crate) fn multistatus(inner: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?><multistatus xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:A="http://apple.com/ns/ical/">{inner}</multistatus>"#
     )
 }
 
 /// Discovery and the calendar listing, shared by both runs.
-fn account_fixtures(root: &Path) {
+pub(crate) fn account_fixtures(root: &Path) {
+    account_fixtures_listing(root, true);
+}
+
+/// The same with the home listing holding only the scheduling boxes.
+fn account_fixtures_listing(root: &Path, with_bridge: bool) {
     let find_principal = dav::BODY_CURRENT_USER_PRINCIPAL;
     fixture(
         root,
@@ -97,16 +103,19 @@ fn account_fixtures(root: &Path) {
              <C:calendar-user-address-set><href>mailto:picard@enterprise.test</href></C:calendar-user-address-set>\
              </prop><status>HTTP/1.1 200 OK</status></propstat></response>"
         ))));
+    let bridge = format!(
+        "<response><href>{BRIDGE}</href><propstat><prop><resourcetype><collection/><C:calendar/></resourcetype>\
+         <displayname><![CDATA[Bridge Duty]]></displayname>\
+         <C:supported-calendar-component-set><C:comp name=\"VEVENT\"/></C:supported-calendar-component-set>\
+         <C:calendar-timezone><![CDATA[BEGIN:VCALENDAR\r\nBEGIN:VTIMEZONE\r\nTZID:America/Los_Angeles\r\nEND:VTIMEZONE\r\nEND:VCALENDAR\r\n]]></C:calendar-timezone>\
+         </prop><status>HTTP/1.1 200 OK</status></propstat></response>"
+    );
     fixture(root, HttpMethod::Propfind, &format!("{HOST}{HOME}"), "1", dav::BODY_LIST_CALENDARS,
         xml(207, &multistatus(&format!(
-            "<response><href>{HOME}</href><propstat><prop><resourcetype><collection/></resourcetype><displayname><![CDATA[Jean-Luc Picard]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat></response>\
-             <response><href>{BRIDGE}</href><propstat><prop><resourcetype><collection/><C:calendar/></resourcetype>\
-             <displayname><![CDATA[Bridge Duty]]></displayname>\
-             <C:supported-calendar-component-set><C:comp name=\"VEVENT\"/></C:supported-calendar-component-set>\
-             <C:calendar-timezone><![CDATA[BEGIN:VCALENDAR\r\nBEGIN:VTIMEZONE\r\nTZID:America/Los_Angeles\r\nEND:VTIMEZONE\r\nEND:VCALENDAR\r\n]]></C:calendar-timezone>\
-             </prop><status>HTTP/1.1 200 OK</status></propstat></response>\
+            "<response><href>{HOME}</href><propstat><prop><resourcetype><collection/></resourcetype><displayname><![CDATA[Jean-Luc Picard]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat></response>{}\
              <response><href>{HOME}Inbox/</href><propstat><prop><resourcetype><collection/><C:schedule-inbox/></resourcetype><displayname><![CDATA[Inbox]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat></response>\
-             <response><href>{HOME}Outbox/</href><propstat><prop><resourcetype><collection/><C:schedule-outbox/></resourcetype><displayname><![CDATA[Outbox]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat></response>"
+             <response><href>{HOME}Outbox/</href><propstat><prop><resourcetype><collection/><C:schedule-outbox/></resourcetype><displayname><![CDATA[Outbox]]></displayname></prop><status>HTTP/1.1 200 OK</status></propstat></response>",
+            if with_bridge { bridge.as_str() } else { "" }
         ))));
 }
 
@@ -119,6 +128,22 @@ async fn run_in(
     store: &Path,
     window: Option<datalib_etl_calendar::ingest::Window>,
 ) -> FetchSummary {
+    run_with(playback, store, window, Default::default()).await
+}
+
+/// A run asked to stop before it syncs any calendar.
+async fn run_stopped(playback: &Path, store: &Path) -> FetchSummary {
+    let control = datalib_etl::control::DownloadControl::default();
+    control.stop.request();
+    run_with(playback, store, None, control).await
+}
+
+async fn run_with(
+    playback: &Path,
+    store: &Path,
+    window: Option<datalib_etl_calendar::ingest::Window>,
+    control: datalib_etl::control::DownloadControl,
+) -> FetchSummary {
     std::env::set_var(PLAYBACK_ENV, playback);
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
     let summary = caldav::fetch(caldav::FetchOptions {
@@ -128,10 +153,13 @@ async fn run_in(
         window,
         latchkey: LatchkeySettings::default(),
         progress: Default::default(),
-        control: Default::default(),
+        control,
+        sealer: None,
     })
     .await;
-    db.commit_all("test").await.expect("commit");
+    if summary.is_ok() {
+        db.commit_all("test").await.expect("commit");
+    }
     db.close().await;
     std::env::remove_var(PLAYBACK_ENV);
     summary.expect("caldav fetch under playback")
@@ -170,7 +198,7 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
         &one,
         HttpMethod::Report,
         &bridge,
-        "1",
+        "0",
         &dav::body_sync_collection(""),
         xml(
             207,
@@ -182,7 +210,7 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
         ),
     );
     let staff_v2 = STAFF.replace("Senior staff briefing", "Senior staff briefing (Deck 8)");
-    fixture(&two, HttpMethod::Report, &bridge, "1", &dav::body_sync_collection("data:,100"),
+    fixture(&two, HttpMethod::Report, &bridge, "0", &dav::body_sync_collection("data:,100"),
         xml(207, &multistatus(&format!(
             "{}<response><href>{BRIDGE}reception.ics</href><status>HTTP/1.1 404 Not Found</status></response><sync-token>data:,101</sync-token>",
             resource(&format!("{BRIDGE}staff.ics"), "\"s2\"", &staff_v2),
@@ -194,7 +222,8 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
     let config: datalib_etl_calendar_config::CalendarConfig =
         serde_json::from_value(serde_json::json!({"caldav": {"server_url": format!("{HOST}/")}}))
             .unwrap();
-    let report = datalib_etl_calendar::probe::probe(&config).await;
+    let report =
+        datalib_etl_calendar::probe::probe(&config, ProbeAsk::List(ProbeList::Calendars)).await;
     std::env::remove_var(PLAYBACK_ENV);
     let report = report.expect("probe under playback");
     assert_eq!(
@@ -323,4 +352,383 @@ async fn a_window_queries_the_time_range_and_keeps_no_token() {
             .as_deref(),
         Some("tng-reception@enterprise.test")
     );
+}
+
+/// The `<response>` RFC 6578 §3.6 has a server send for the collection
+/// itself when it stops a listing short.
+fn cut_short() -> String {
+    format!(
+        "<response><href>{BRIDGE}</href><status>HTTP/1.1 507 Insufficient Storage</status>\
+         <error><number-of-matches-within-limits/></error></response>"
+    )
+}
+
+async fn problem_keys(store: &Path) -> Vec<String> {
+    let db = RawDb::open(&db_path_for(store))
+        .await
+        .expect("reopen store");
+    let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+        .fetch_all(db.pool())
+        .await
+        .expect("query problems");
+    db.close().await;
+    keys
+}
+
+async fn stored_uids(store: &Path) -> Option<String> {
+    scalar(
+        store,
+        "SELECT group_concat(uid, ',') FROM (SELECT uid FROM ics_objects ORDER BY uid)",
+    )
+    .await
+}
+
+/// Both events stored by a whole listing that came back complete.
+fn first_listing(root: &Path) {
+    fixture(
+        root,
+        HttpMethod::Report,
+        &format!("{HOST}{BRIDGE}"),
+        "0",
+        &dav::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}{}<sync-token>data:,100</sync-token>",
+                resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF),
+                resource(&format!("{BRIDGE}reception.ics"), "\"r1\"", RECEPTION),
+            )),
+        ),
+    );
+}
+
+/// The stored token has expired, so the calendar is listed whole again;
+/// the server stops that listing short and then will not move past the
+/// point it stopped. Absence from a listing that never finished says
+/// nothing, so the reception it never reached stays (audit 2026-10-02
+/// §4). The next run carries on from the token the cut-short one kept;
+/// when that listing reaches its end, the reception it never named is
+/// gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_whole_listing_cut_short_prunes_only_once_a_later_run_finishes_it() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, three, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("three"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let bridge = format!("{HOST}{BRIDGE}");
+    account_fixtures(&one);
+    first_listing(&one);
+    account_fixtures(&two);
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &dav::body_sync_collection("data:,100"),
+        xml(
+            403,
+            r#"<?xml version="1.0"?><error xmlns="DAV:"><valid-sync-token/></error>"#,
+        ),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &dav::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}{}<sync-token>data:,200</sync-token>",
+                resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF),
+                cut_short(),
+            )),
+        ),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &dav::body_sync_collection("data:,200"),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}<sync-token>data:,200</sync-token>",
+                cut_short()
+            )),
+        ),
+    );
+
+    account_fixtures(&three);
+    let ops = RECEPTION
+        .replace("tng-reception", "tng-ops")
+        .replace("Reception for the Klingon delegation", "Operations review");
+    fixture(
+        &three,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &dav::body_sync_collection("data:,200"),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}<sync-token>data:,201</sync-token>",
+                resource(&format!("{BRIDGE}ops.ics"), "\"o1\"", &ops),
+            )),
+        ),
+    );
+
+    run(&one, &store).await;
+    let second = run(&two, &store).await;
+    assert_eq!(second.events_deleted, 0, "{second:?}");
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-reception@enterprise.test,tng-staff@enterprise.test")
+    );
+    assert_eq!(
+        problem_keys(&store).await,
+        vec!["listing:calendar Bridge Duty".to_string()]
+    );
+
+    // A run that stopped before the calendar has not listed it again.
+    run_stopped(&two, &store).await;
+    assert_eq!(
+        problem_keys(&store).await,
+        vec!["listing:calendar Bridge Duty".to_string()]
+    );
+
+    let third = run(&three, &store).await;
+    assert_eq!(
+        (third.events_new, third.events_deleted),
+        (1, 1),
+        "{third:?}"
+    );
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-ops@enterprise.test,tng-staff@enterprise.test")
+    );
+    assert_eq!(problem_keys(&store).await, Vec::<String>::new());
+}
+
+/// A windowed calendar is listed whole with `calendar-query` every run.
+/// A reply the server cut short prunes nothing; the next complete one
+/// drops what it does not name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_window_listing_cut_short_deletes_nothing_until_one_completes() {
+    let window = datalib_etl_calendar::ingest::Window {
+        start: chrono::NaiveDate::from_ymd_opt(2026, 1, 1),
+        end: None,
+    };
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, three, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("three"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let staff = resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF);
+    let reception = resource(&format!("{BRIDGE}reception.ics"), "\"r1\"", RECEPTION);
+    for (root, listed) in [
+        (&one, format!("{staff}{reception}")),
+        (&two, format!("{staff}{}", cut_short())),
+        (&three, staff.clone()),
+    ] {
+        account_fixtures(root);
+        fixture(
+            root,
+            HttpMethod::Report,
+            &format!("{HOST}{BRIDGE}"),
+            "1",
+            &dav::body_query_window(&window),
+            xml(207, &multistatus(&listed)),
+        );
+    }
+
+    let first = run_in(&one, &store, Some(window)).await;
+    assert_eq!(first.events_new, 2, "{first:?}");
+    let second = run_in(&two, &store, Some(window)).await;
+    assert_eq!(second.events_deleted, 0, "{second:?}");
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-reception@enterprise.test,tng-staff@enterprise.test")
+    );
+    assert_eq!(
+        problem_keys(&store).await,
+        vec!["listing:calendar Bridge Duty".to_string()]
+    );
+    let third = run_in(&three, &store, Some(window)).await;
+    assert_eq!(third.events_deleted, 1, "{third:?}");
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-staff@enterprise.test")
+    );
+    assert_eq!(problem_keys(&store).await, Vec::<String>::new());
+}
+
+/// sync-collection is the one way a calendar is listed. A server that
+/// does not support it fails the calendar where a person sees it, rather
+/// than being listed some other way.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_without_sync_collection_fails_the_calendar() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, store) = (d.path().join("one"), d.path().join("store"));
+    std::fs::create_dir_all(&store).unwrap();
+    account_fixtures(&one);
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &format!("{HOST}{BRIDGE}"),
+        "0",
+        &dav::body_sync_collection(""),
+        xml(
+            403,
+            r#"<?xml version="1.0"?><error xmlns="DAV:"><supported-report/></error>"#,
+        ),
+    );
+    let first = run(&one, &store).await;
+    assert_eq!((first.events_new, first.errors), (0, 1), "{first:?}");
+    assert_eq!(
+        problem_keys(&store).await,
+        vec!["listing:calendar Bridge Duty".to_string()]
+    );
+    let detail = scalar(&store, "SELECT sample FROM problems")
+        .await
+        .unwrap_or_default();
+    assert!(
+        detail.contains("http 403") && detail.contains("supported-report"),
+        "{detail}"
+    );
+}
+
+/// An object the listing named without its data and the `multiget` did
+/// not return was noted as "could not store" while the token advanced,
+/// so in token mode no later run asked for it: the listing never named
+/// it again. It is owed until it is held at the etag it was listed at,
+/// so the next run asks for it although its listing says nothing
+/// changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_object_the_multiget_did_not_return_is_asked_for_again_next_run() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let bridge = format!("{HOST}{BRIDGE}");
+    for root in [&one, &two] {
+        account_fixtures(root);
+    }
+    let reception_href = format!("{BRIDGE}reception.ics");
+    let listed_without_data = format!(
+        "<response><href>{reception_href}</href><propstat><prop><getetag>\"r1\"</getetag></prop>\
+         <status>HTTP/1.1 200 OK</status></propstat></response>"
+    );
+    let multiget = dav::KIND.body_multiget(std::slice::from_ref(&reception_href));
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &dav::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}{listed_without_data}<sync-token>data:,100</sync-token>",
+                resource(&format!("{BRIDGE}staff.ics"), "\"s1\"", STAFF),
+            )),
+        ),
+    );
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &multiget,
+        xml(207, &multistatus("")),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &dav::body_sync_collection("data:,100"),
+        xml(207, &multistatus("<sync-token>data:,101</sync-token>")),
+    );
+    fixture(
+        &two,
+        HttpMethod::Report,
+        &bridge,
+        "0",
+        &multiget,
+        xml(
+            207,
+            &multistatus(&resource(&reception_href, "\"r1\"", RECEPTION)),
+        ),
+    );
+
+    let first = run(&one, &store).await;
+    assert_eq!(
+        (first.events_new, first.errors, first.requests),
+        (1, 1, 6),
+        "{first:?}"
+    );
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-staff@enterprise.test")
+    );
+    assert_eq!(
+        problem_keys(&store).await.len(),
+        1,
+        "the object that did not come is a row"
+    );
+
+    let second = run(&two, &store).await;
+    assert_eq!(
+        stored_uids(&store).await.as_deref(),
+        Some("tng-reception@enterprise.test,tng-staff@enterprise.test"),
+        "the object the listing no longer names is asked for again: {second:?}"
+    );
+    assert_eq!((second.events_new, second.errors), (1, 0), "{second:?}");
+    assert_eq!(problem_keys(&store).await, Vec::<String>::new());
+}
+
+/// A calendar the home listing no longer names goes with its events
+/// and everything it listed: the listing is one PROPFIND, whole by
+/// nature, so absence from it is deletion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_calendar_the_server_no_longer_lists_goes_with_its_events() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    account_fixtures(&one);
+    first_listing(&one);
+    account_fixtures_listing(&two, false);
+
+    let first = run(&one, &store).await;
+    assert_eq!(first.events_new, 2, "{first:?}");
+    let second = run(&two, &store).await;
+    assert_eq!(
+        (second.calendars, second.events_deleted),
+        (0, 2),
+        "{second:?}"
+    );
+    assert_eq!(stored_uids(&store).await, None);
+    for sql in [
+        "SELECT CAST(count(*) AS TEXT) FROM calendars",
+        "SELECT CAST(count(*) AS TEXT) FROM dav_resources",
+        "SELECT CAST(count(*) AS TEXT) FROM dav_resources_bookkeeping",
+    ] {
+        assert_eq!(scalar(&store, sql).await.as_deref(), Some("0"), "{sql}");
+    }
 }

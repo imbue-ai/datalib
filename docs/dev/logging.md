@@ -18,7 +18,7 @@ for the life of the server. The tables:
 |---|---|
 | `processes` | a process that took part (below) |
 | `runs` | a run of the runner |
-| `step_runs` | a step in a run: state, attempt, error, message |
+| `step_runs` | a step in a run: state, attempt, error, message. While a run is live every step of the config is here, `pending` until reached; when it ends, the ones no request reached go, so a closed run holds the steps it ran. A run whose runner died keeps them, as `stopped`: nothing settled them, so any might have been about to run |
 | `log` | a line |
 | `metrics`, `metric_samples` | a step's numbers — the newest value, and a sparse timeseries |
 | `store_changes` | a part of the store a reader can depend on (`runs`, `step_runs`, `metrics`, a run's lines, the server's lines), with a counter each write bumps |
@@ -119,8 +119,9 @@ has the server's, since the bundle is embedded in the binary.
 | the UI | `track("name", { …fields }, { level, msg })` from [`ui/src/telemetry.ts`](../../datalib/ui/src/telemetry.ts) | `target:ui.name` under the page's own process, with the page's clock; batched, `keepalive`, never throws |
 
 Adding a UI event is one word in the `PageEventName` union and the
-call; the server files any word. Uncaught exceptions and route changes
-are already tracked — see the union for what is.
+call; the server files any word. Uncaught exceptions, route changes
+and every toast shown (`target:ui.toast`, its text as the line, at its
+level) are already tracked — see the union for what is.
 
 Levels are `trace` … `error`. The level a root logs at is
 `log_level` at the top of its `config.toml` — `trace` when it does
@@ -148,10 +149,18 @@ on screen.
   could not project a field — goes through `problems`
   ([`plans/problem_visibility.md`](plans/problem_visibility.md)), which
   travels with the data and reaches the Manage counts and the document
-  banner. A `warn!` reaches nobody who is not reading the log.
+  banner. A `warn!` reaches nobody who is not reading the log, so do
+  not write one beside a problem: the step logs what it stored, once,
+  at its end — one `problems_recorded` line per kind of problem (stage,
+  reason, rule, field) with its `count`, at its loudest row's severity
+  (`error`, `warn`, or `debug` for a finding), and never a row's
+  `sample` or key, which hold the record's own contents. A writer that
+  stores a row it made calls `datalib_problems::note_recorded`; one that
+  copies another step's rows does not. `ingested_tng_test` checks the
+  counts against the rows.
 - **A number** — rows written, requests made, queue depth — is a
   `metric` event, not a sentence with a number in it. The Manage
-  screen's Queue and ETA and the sync dashboard's charts come from
+  screen's queue and ETA (in its Status column) and the sync dashboard's charts come from
   `metric_samples`.
 - **A secret.** The request log drops `?token=`; a line you write must
   not carry a credential either.

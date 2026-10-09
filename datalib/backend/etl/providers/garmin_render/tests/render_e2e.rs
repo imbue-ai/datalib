@@ -5,10 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
-use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_garmin::auth::Credentials;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::GarminApi;
@@ -16,6 +13,8 @@ use datalib_etl_garmin_render::render::parse::parse;
 use datalib_etl_garmin_render::render::render::{document_uuid, render_all};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 
 const SOURCE: &str = "garmin";
 
@@ -33,7 +32,7 @@ async fn ingest(raw: &Path, playback: &Path) {
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
     let s = fetch(FetchOptions {
         db: db.clone(),
-        creds: Credentials::fixed("playback"),
+        latchkey: Default::default(),
         api: GarminApi {
             since: Some("2369-04-01".into()),
             ..Default::default()

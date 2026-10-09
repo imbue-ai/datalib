@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use chrono::{NaiveDateTime, TimeZone};
 use sqlx::sqlite::SqlitePool;
 
-use datalib_etl::fsscan::{self, ScannedFile};
+use datalib_etl_files::fsscan::{self, ScannedFile};
 
 use super::unpack::{is_catalog, is_zip};
 
@@ -112,10 +112,6 @@ pub fn plan(entries: Vec<Entry>, ledger: &[Held]) -> Plan {
         .cloned()
         .collect();
     out
-}
-
-pub fn newest(ledger: &[Held]) -> Option<&Held> {
-    ledger.iter().max_by_key(|h| h.taken_at)
 }
 
 /// `Ok(None)` for an entry with no catalog in it, which is not a backup.

@@ -4,7 +4,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
+
+use datalib_etl::run_problems::RunProblems;
+use serde_json::Value;
 
 use super::db::RawDb;
 use super::index_db::query_json;
@@ -42,28 +45,35 @@ pub struct EnrichSummary {
     pub events_orphaned: usize,
 }
 
+/// A bridge database that will not read, or a data directory that will
+/// not list, is reported to `found`: its events keep whatever
+/// `external_event_id` an earlier run gave them.
 pub async fn enrich(
     beeper_data_dir: &Path,
     dst: &RawDb,
     networks: &[String],
     summary: &mut FetchSummary,
+    found: &RunProblems,
 ) -> Result<EnrichSummary> {
     let mut enrich = EnrichSummary::default();
 
     let mut entries = match tokio::fs::read_dir(beeper_data_dir).await {
         Ok(e) => e,
         Err(e) => {
-            warn!(
-                event = "beeper_megabridge_dir_read_failed",
-                dir = %beeper_data_dir.display(),
-                error = %e,
-                "a megabridge directory could not be listed"
-            );
+            found.phase("megabridge", format!("{}: {e}", beeper_data_dir.display()));
             return Ok(enrich);
         }
     };
 
-    while let Some(entry) = entries.next_entry().await.context("read_dir next")? {
+    loop {
+        let entry = match entries.next_entry().await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(e) => {
+                found.phase("megabridge", format!("{}: {e}", beeper_data_dir.display()));
+                break;
+            }
+        };
         let name = entry.file_name();
         let name_str = name.to_string_lossy().to_string();
         let Some(suffix) = name_str.strip_prefix("local-") else {
@@ -89,48 +99,65 @@ pub async fn enrich(
             continue;
         }
 
-        match enrich_one(&mb_path, dst, network).await {
-            Ok(per_bridge) => {
-                info!(
-                    event = "beeper_megabridge_enriched",
-                    network = network,
-                    enriched = per_bridge.events_enriched,
-                    orphaned = per_bridge.events_orphaned,
-                    "enriched events from a bridge database"
-                );
-                enrich.events_enriched += per_bridge.events_enriched;
-                enrich.events_orphaned += per_bridge.events_orphaned;
-            }
+        let rows = match read_bridge(&mb_path).await {
+            Ok(rows) => rows,
             Err(e) => {
-                warn!(
-                    event = "beeper_megabridge_failed",
-                    network = network,
-                    db = %mb_path.display(),
-                    error = %format!("{e:#}"),
-                    "a bridge database could not be read"
-                );
+                found.phase(&format!("megabridge {network}"), format!("{e:#}"));
+                continue;
             }
-        }
+        };
+        let per_bridge = apply_bridge(&rows, dst, network).await?;
+        info!(
+            event = "beeper_megabridge_enriched",
+            network = network,
+            enriched = per_bridge.events_enriched,
+            orphaned = per_bridge.events_orphaned,
+            "enriched events from a bridge database"
+        );
+        enrich.events_enriched += per_bridge.events_enriched;
+        enrich.events_orphaned += per_bridge.events_orphaned;
     }
     summary.events_enriched = enrich.events_enriched;
     summary.events_orphaned = enrich.events_orphaned;
     Ok(enrich)
 }
 
-async fn enrich_one(mb_path: &Path, dst: &RawDb, network: &str) -> Result<EnrichSummary> {
+/// What one bridge database holds that the store wants: read whole
+/// before anything is written, so a bridge that fails to read leaves
+/// the store as it was.
+struct BridgeRows {
+    messages: Vec<Value>,
+    reactions: Vec<Value>,
+}
+
+async fn read_bridge(mb_path: &Path) -> Result<BridgeRows> {
+    // The UNIQUE (bridge_id, mxid) constraint on the message table
+    // guarantees no fan-out.
+    let messages = query_json(mb_path, "SELECT mxid, id, part_id FROM message;")
+        .await
+        .context("query megabridge.message")?;
+    let reactions = query_json(
+        mb_path,
+        "SELECT mxid, message_id, message_part_id, emoji, emoji_id
+         FROM reaction;",
+    )
+    .await
+    .context("query megabridge.reaction")?;
+    Ok(BridgeRows {
+        messages,
+        reactions,
+    })
+}
+
+async fn apply_bridge(rows: &BridgeRows, dst: &RawDb, network: &str) -> Result<EnrichSummary> {
     let mut out = EnrichSummary::default();
 
     // ── messages ────────────────────────────────────────────────
     // For each message in the bridge's local store: pair its
     // bridge-native id (`id`, plus `:part_id` for multi-part) with
-    // the Matrix event id (`mxid`). The UNIQUE (bridge_id, mxid)
-    // constraint on the message table guarantees no fan-out.
-    let rows = query_json(mb_path, "SELECT mxid, id, part_id FROM message;")
-        .await
-        .context("query megabridge.message")?;
-
+    // the Matrix event id (`mxid`).
     let pool = dst.pool();
-    for r in &rows {
+    for r in &rows.messages {
         let mxid = r
             .get("mxid")
             .and_then(|v| v.as_str())
@@ -191,14 +218,7 @@ async fn enrich_one(mb_path: &Path, dst: &RawDb, network: &str) -> Result<Enrich
     // (sender, target message, emoji). Pack those as the
     // external_event_id so reactions are non-NULL on the same
     // column as messages.
-    let rows = query_json(
-        mb_path,
-        "SELECT mxid, message_id, message_part_id, emoji, emoji_id
-         FROM reaction;",
-    )
-    .await
-    .context("query megabridge.reaction")?;
-    for r in &rows {
+    for r in &rows.reactions {
         let mxid = r
             .get("mxid")
             .and_then(|v| v.as_str())

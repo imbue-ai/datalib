@@ -3,13 +3,13 @@
 use std::fs;
 use std::time::Duration;
 
-use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_claude::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_claude::synthesize::ClaudeSynth;
 use datalib_etl_claude_render::render::parse::parse;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Value};
 use tempfile::tempdir;
 

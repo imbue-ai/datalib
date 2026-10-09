@@ -11,7 +11,7 @@ use std::path::Path;
 /// v5: ids are minted through `datalib_id` under `Content`, and carry
 ///     the document's own date in their leading bits (`datalib_id`'s
 ///     v8 layout). Every uuid moved; the bucket key is now the blake3.
-pub const RENDER_VERSION: u32 = 6;
+pub const RENDER_VERSION: u32 = 8;
 
 /// One page of converted text.
 pub struct Page {
@@ -42,7 +42,8 @@ pub fn note_for_page(number: u32) -> String {
     )
 }
 
-pub fn convert(path: &Path) -> Result<Vec<Page>> {
+/// `bytes` are the PDF; `path` is where they were read, for messages.
+pub fn convert(bytes: &[u8], path: &Path) -> Result<Vec<Page>> {
     let md = pdf_inspector::MarkdownOptions {
         // We split on these markers to build per-page sections, so they
         // are required, not cosmetic.
@@ -60,7 +61,7 @@ pub fn convert(path: &Path) -> Result<Vec<Page>> {
         markdown: md,
         ..pdf_inspector::PdfOptions::new()
     };
-    let res = pdf_inspector::process_pdf_with_options(path, opts)
+    let res = pdf_inspector::process_pdf_mem_with_options(bytes, opts)
         .map_err(|e| anyhow::anyhow!("convert {}: {e}", path.display()))?;
     let raw = res
         .markdown

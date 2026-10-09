@@ -3,11 +3,9 @@
 // of layout: the agent hand-off button (🤖, only on cards backed by a
 // user component), the help popup (?), a link to open the card alone
 // (↗), and the close button (✕). All are pure functions of the card's
-// source and its CardCtx, so the layouts (miller, tiling, tree) all
-// render this same component instead of duplicating the markup and
-// CSS. Close goes through ctx.host.close() — the host command built
-// for exactly this — so nothing here knows the layout. There is no
-// back or forward here: a card's steps are the browser's history.
+// source and its CardCtx. Close goes through ctx.host.close() — the
+// host command built for exactly this — so nothing here knows the
+// layout.
 import { computed, ref, watch } from "vue";
 import { encodeColumns } from "@/router/columns";
 import { modifyComponentWithAgent } from "@/handoff";
@@ -42,8 +40,8 @@ function handOff() {
   modifyComponentWithAgent(aliasName.value, props.source, props.ctx.initialState);
 }
 
-// Standalone view: a miller URL containing just this card, at its
-// current state (initialState is a live getter in every layout).
+// Standalone view: a URL naming just this card at its current state,
+// which a new window opens as a tab of its own.
 const aloneHref = computed(() =>
   encodeColumns([{ code: props.source, state: props.ctx.initialState }]),
 );

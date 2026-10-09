@@ -71,6 +71,20 @@ pub async fn run(
         "the index is built"
     );
 
+    // After the pass has sealed: the terms follow the grid, never lead it.
+    let terms = datalib_etl_render::search_terms::sync(
+        &pool,
+        &datalib_core::layout::search_terms_db(data_root),
+    )
+    .await
+    .context("bring the search terms file to the index's head")?;
+    tracing::info!(
+        plan = terms.plan,
+        rows = terms.rows,
+        terms = terms.terms,
+        "the search terms file is current"
+    );
+
     // What this pass did, not a running total: the next pass reports
     // its own, so each is a gauge, and its name says which pass.
     for (name, n) in [
@@ -79,12 +93,13 @@ pub async fn run(
         ("last_pass_markdowns_removed", summary.markdowns_removed),
         ("last_pass_rows_inserted", summary.rows_inserted),
         ("last_pass_problems_copied", summary.problems_copied),
+        ("last_pass_search_terms_written", terms.terms),
     ] {
         progress.metric(name, &[], n as i64);
     }
-    // The index's whole-store counts, the way every render step reports
-    // its own: what the Manage row for the index shows.
-    let counts = datalib_etl_render::grid_index::problem_counts(&pool).await?;
+    // The problems the index recorded itself, the way every step reports
+    // what it found: what the Manage row for the index shows.
+    let counts = datalib_etl_render::grid_index::own_problem_counts(&pool).await?;
     for severity in [Severity::Error, Severity::Warning] {
         progress.metric(
             METRIC,
@@ -102,6 +117,21 @@ pub async fn run(
         .await
         .context("grid_index head")?;
     pool.close().await;
+
+    // Every other source is sealed by now; this one is still a failure,
+    // and the Manage row should say so.
+    if !summary.sources_failed.is_empty() {
+        let failed: Vec<String> = summary
+            .sources_failed
+            .iter()
+            .map(|(source, why)| format!("{source}: {why}"))
+            .collect();
+        anyhow::bail!(
+            "indexed every other source, but could not read {}:\n{}",
+            summary.sources_failed.len(),
+            failed.join("\n")
+        );
+    }
 
     // The dolt commit hash is a faithful content version: HEAD only
     // advances when rows actually changed. Without doltlite

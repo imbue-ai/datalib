@@ -162,6 +162,7 @@ pub fn rows_for_document(
         // The builder's rule, by hand: this file builds its rows directly.
         touched_at: meta.modified_at.or(when).map(str::to_string),
         author: meta.author.map(str::to_string),
+        author_handle: None,
         account: None,
         project: None,
         org_uuid: None,
@@ -207,6 +208,7 @@ pub fn rows_for_document(
             // chat provider stamps the author on each message row so
             // the grid can filter without a join.
             author: author.clone(),
+            author_handle: None,
             account: None,
             project: None,
             org_uuid: None,

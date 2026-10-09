@@ -5,8 +5,12 @@
 //! by a process-global environment variable that each test points
 //! at its own fixture tree; one process means one such variable.
 
+mod branched_chat;
 mod chatgpt_render;
 mod chatgpt_translate;
 mod incremental_skip;
+mod interrupt;
 mod live;
 mod playback_roundtrip;
+mod run_problems;
+mod upgrade;

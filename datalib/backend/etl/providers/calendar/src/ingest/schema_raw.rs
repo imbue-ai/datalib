@@ -3,7 +3,7 @@
 //! CalDAV and `.ics` files, Google's JSON per event for Google.
 
 use datalib_etl::bulk::BulkUpsertable;
-use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
+use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl_macros::WirePayloadRow;
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
@@ -86,8 +86,8 @@ pub struct CalendarRow {
 
 impl BulkUpsertable for CalendarRow {
     const TABLE: &'static str = "calendars";
-    // `sync_token` moves only after a calendar's changes are all stored
-    // (`RawDb::set_sync_token`), so the upsert leaves it alone.
+    // `sync_token` is the listing's (`RawDb::set_sync_token`), so the
+    // upsert leaves it alone.
     const TYPED_COLUMNS: &'static [&'static str] = &[
         "account_id",
         "href",
@@ -179,10 +179,30 @@ impl GoogleEventRow {
     }
 }
 
+/// Google bumps an event's `etag` and `updated` without changing
+/// anything else, hundreds of events at a time, so they live in the
+/// sidecar where the diff does not see them. Render still reads
+/// `updated` as the event's `modified_at`.
+pub const GOOGLE_EVENT_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["etag"], &["updated"]];
+
 /// An event row's key: `"{calendar_id}#{uid or Google event id}"`.
 pub fn event_pk(calendar_id: &str, event_key: &str) -> String {
     format!("{calendar_id}#{event_key}")
 }
+
+/// The raw store's migration ladder (etl/README.md §"The migration
+/// ladder").
+pub const LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "dav_resources lists what each CalDAV calendar holds",
+    apply: |conn| {
+        Box::pin(datalib_etl_web::dav::state::adopt(
+            conn,
+            "ics_objects",
+            "calendar_id",
+        ))
+    },
+}];
 
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
@@ -198,8 +218,9 @@ pub fn full_ddl() -> Vec<String> {
             .to_string(),
         // The `.ics` method's resume cursor: a file whose size and mtime
         // have not moved is not read again.
-        datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
+        datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
+    out.extend(datalib_etl_web::dav::state::ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

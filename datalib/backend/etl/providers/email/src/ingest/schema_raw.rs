@@ -17,8 +17,16 @@ use serde_json::Value;
 /// here too: the shared CAS-edge flush
 /// ([`datalib_etl::blob_cas::flush_cas_edges`]) stamps
 /// `email_blobs_bookkeeping` for error tracking, so the sidecar must
-/// exist.
-pub const DATA_TABLES: &[&str] = &["accounts", "mailboxes", "threads", "emails", "email_blobs"];
+/// exist. So is the listing, whose sidecar counts the attempts to fetch
+/// a listed message and holds the version its email satisfies.
+pub const DATA_TABLES: &[&str] = &[
+    "accounts",
+    "mailboxes",
+    "threads",
+    "emails",
+    "email_blobs",
+    super::listed::LISTED,
+];
 
 /// Many-to-many join tables. Not in [`DATA_TABLES`] because they're
 /// refreshed delete-then-insert per parent email upsert; per-row
@@ -385,40 +393,37 @@ impl EmlBlobRow {
     }
 }
 
-// ── cursor table ────────────────────────────────────────────────────
-
-/// `gmail_messages` — Gmail's own message id → the row it produced.
-#[derive(Debug, Clone, RawTable)]
-#[raw_table(
-    table = "gmail_messages",
-    primary_key = "gmail_id",
-    index = "gmail_messages_by_email:email_id"
-)]
-pub struct GmailMessageRow {
-    pub gmail_id: String,
-    pub email_id: String,
-    pub thread_id: String,
-}
-
 /// The raw store's migration ladder (etl/README.md §"The migration
 /// ladder").
-pub const LADDER: &[Migration] = &[Migration {
-    version: 1,
-    name: "mailbox counts leave the content row",
-    apply: |conn| {
-        Box::pin(async move {
-            for sql in [
-                "ALTER TABLE mailboxes DROP COLUMN total_emails",
-                "ALTER TABLE mailboxes DROP COLUMN unread_emails",
-                "UPDATE mailboxes SET payload = jsonb_remove(payload, \
-                 '$.totalEmails', '$.unreadEmails', '$.totalThreads', '$.unreadThreads')",
-            ] {
-                sqlx::query(sql).execute(&mut *conn).await?;
-            }
-            Ok(())
-        })
+pub const LADDER: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "mailbox counts leave the content row",
+        apply: |conn| {
+            Box::pin(async move {
+                for sql in [
+                    "ALTER TABLE mailboxes DROP COLUMN total_emails",
+                    "ALTER TABLE mailboxes DROP COLUMN unread_emails",
+                    "UPDATE mailboxes SET payload = jsonb_remove(payload, \
+                     '$.totalEmails', '$.unreadEmails', '$.totalThreads', '$.unreadThreads')",
+                ] {
+                    sqlx::query(sql).execute(&mut *conn).await?;
+                }
+                Ok(())
+            })
+        },
     },
-}];
+    Migration {
+        version: 2,
+        name: "what upstream listed is stored apart from what is held",
+        apply: |conn| Box::pin(super::listed::migrate_from_cursors(conn)),
+    },
+    Migration {
+        version: 3,
+        name: "what is held is the listing sidecar's held_version",
+        apply: |conn| Box::pin(super::listed::migrate_held_into_the_sidecar(conn)),
+    },
+];
 
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -429,8 +434,8 @@ pub fn full_ddl() -> Vec<String> {
     out.extend(EmailMailboxRow::all_ddl());
     out.extend(EmailKeywordRow::all_ddl());
     out.extend(EmlBlobRow::all_ddl());
-    out.push(datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string());
-    out.extend(GmailMessageRow::all_ddl());
+    out.push(datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string());
+    out.extend(super::listed::DDL.iter().map(|ddl| ddl.to_string()));
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

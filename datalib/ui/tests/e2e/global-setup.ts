@@ -50,15 +50,17 @@ async function awaitHealthy(servers: Server[], token: string): Promise<void> {
     const ctx = await request.newContext({ baseURL: server.url });
     try {
       for (;;) {
+        // Listening is not enough: the first boot of a build asks every
+        // step to migrate before it syncs, behind a blocking screen.
         const ok = await ctx
-          .get(`/api/health?token=${token}`)
-          .then((res) => res.ok())
+          .get(`/api/config`, { headers: { authorization: `Bearer ${token}` } })
+          .then(async (res) => res.ok() && (await res.json()).upgrade?.settled === true)
           .catch(() => false);
         if (ok) break;
         if (Date.now() >= deadline) {
           throw new Error(
             `backend ${server.name} (${server.url}) never answered ` +
-              `/api/health — its output is in ${server.log}`,
+              `/api/config with its launch pass settled — its output is in ${server.log}`,
           );
         }
         await new Promise((resolve) => setTimeout(resolve, 100));

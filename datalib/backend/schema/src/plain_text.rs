@@ -17,6 +17,7 @@ pub fn plain_text(markdown: &str, limit: usize) -> String {
     let mut summaries = Words::default();
     let mut first_body: Option<Words> = None;
     let mut blocks = 0;
+    let mut fence: Option<Fence> = None;
     let mut fold = |block: Folded| {
         summaries.push(&block.summary);
         first_body.get_or_insert(block.body);
@@ -28,7 +29,7 @@ pub fn plain_text(markdown: &str, limit: usize) -> String {
         let mut rest = line.trim_start();
         if folded.is_none() {
             let Some(opened) = rest.strip_prefix("<details>") else {
-                if let Some(text) = line_text(line) {
+                if let Some(text) = line_text(line, &mut fence) {
                     out.push(&text);
                 }
                 continue;
@@ -36,7 +37,7 @@ pub fn plain_text(markdown: &str, limit: usize) -> String {
             blocks += 1;
             let (summary, after) = summary_of(opened);
             folded = Some(Folded {
-                summary: line_text(summary).unwrap_or_default(),
+                summary: line_text(summary, &mut None).unwrap_or_default(),
                 body: Words::default(),
             });
             rest = after;
@@ -47,11 +48,12 @@ pub fn plain_text(markdown: &str, limit: usize) -> String {
             None => (rest, false),
         };
         if blocks == 1 && block.body.chars <= limit {
-            if let Some(text) = line_text(inside) {
+            if let Some(text) = line_text(inside, &mut fence) {
                 block.body.push(&text);
             }
         }
         if closed {
+            fence = None;
             fold(folded.take().unwrap());
         }
     }
@@ -109,9 +111,39 @@ impl Words {
     }
 }
 
-fn line_text(line: &str) -> Option<String> {
+/// A code fence's mark and how many of it opened the fence.
+#[derive(Clone, Copy)]
+struct Fence {
+    mark: char,
+    len: usize,
+}
+
+impl Fence {
+    fn of(line: &str) -> Option<Self> {
+        let mark = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+        let len = line.chars().take_while(|&c| c == mark).count();
+        (len >= 3).then_some(Self { mark, len })
+    }
+
+    fn is_closed_by(self, line: &str) -> bool {
+        Self::of(line).is_some_and(|f| f.mark == self.mark && f.len >= self.len)
+            && line.trim_start_matches(self.mark).trim().is_empty()
+    }
+}
+
+/// One line's words. Inside a code fence the text is literal — a
+/// backslash or a `*` there is what was typed — so it is kept as is.
+fn line_text(line: &str, fence: &mut Option<Fence>) -> Option<String> {
     let line = line.trim();
-    if line.starts_with("```") || line.starts_with("~~~") {
+    if let Some(open) = *fence {
+        if open.is_closed_by(line) {
+            *fence = None;
+            return None;
+        }
+        return Some(line.to_string());
+    }
+    if let Some(open) = Fence::of(line) {
+        *fence = Some(open);
         return None;
     }
     if is_rule(line) {
@@ -147,14 +179,20 @@ fn without_block_marks(line: &str) -> &str {
 }
 
 /// The rendered bodies carry escaped HTML (`&lt;br&gt;`) as well as real
-/// tags; unescaping first lets one pass strip both. `&amp;` goes last so
-/// `&amp;lt;` stays the text `&lt;`.
+/// tags, and the line breaks and indents an escape writes as references;
+/// decoding first lets one pass strip both. `&amp;` goes last so
+/// `&amp;lt;` stays the text `&lt;`. Backslash escapes wait for
+/// [`without_emphasis`], so an escaped `*` is not read as emphasis.
 fn unescaped(line: &str) -> String {
     line.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&nbsp;", " ")
+        .replace("&#10;", " ")
+        .replace("&#13;", " ")
+        .replace("&#32;", " ")
+        .replace("&#9;", " ")
         .replace("&amp;", "&")
 }
 
@@ -275,18 +313,38 @@ fn tag_name(after_lt: &str) -> Option<&str> {
 /// `**strong**`, `__strong__`, `` `code` `` and `*emphasis*`, and a
 /// backslash escape. A lone `*` with space both sides is arithmetic and
 /// stays; `_emphasis_` is left alone, since snake_case is far commoner.
+/// A code span's text is literal, backslashes and all.
 fn without_emphasis(line: &str) -> String {
-    let line = line.replace("**", "").replace("__", "").replace('`', "");
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(line.len());
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        let before = i.checked_sub(1).map(|j| chars[j]);
+        let before = out.chars().next_back();
         let after = chars.get(i + 1).copied();
         match c {
             '\\' if after.is_some_and(|a| a.is_ascii_punctuation()) => {
                 out.push(after.unwrap());
+                i += 2;
+                continue;
+            }
+            '`' => {
+                let ticks = chars[i..].iter().take_while(|&&t| t == '`').count();
+                let body = i + ticks;
+                let close = (body..chars.len()).find(|&j| {
+                    chars[j..].iter().take_while(|&&t| t == '`').count() == ticks
+                        && chars.get(j.wrapping_sub(1)) != Some(&'`')
+                });
+                match close {
+                    Some(end) => {
+                        out.extend(&chars[body..end]);
+                        i = end + ticks;
+                    }
+                    None => i = body,
+                }
+                continue;
+            }
+            '*' | '_' if after == Some(c) => {
                 i += 2;
                 continue;
             }
@@ -324,6 +382,35 @@ mod tests {
                  Report to [Transporter Room 3](https://sf.test/tr3?a=1&amp;b=2) at **0900**."
             ),
             "Your shore leave is approved Report to Transporter Room 3 at 0900."
+        );
+    }
+
+    /// Plain text a renderer escaped reads as it was typed.
+    #[test]
+    fn an_escaped_character_reads_as_itself() {
+        assert_eq!(
+            text("\\# Ops \\[1\\] snake\\_case C:\\Users &lt;b&gt;"),
+            "# Ops [1] snake_case C:\\Users"
+        );
+    }
+
+    /// Inside a code fence the text is what was typed: a shell command's
+    /// `\(` and `'*.rs'` read as themselves.
+    #[test]
+    fn a_fenced_line_reads_literally() {
+        assert_eq!(
+            text("```\nfind . \\( -name '*.rs' \\) -o -name \"a\\|b\"\n```\nDone *now*."),
+            "find . \\( -name '*.rs' \\) -o -name \"a\\|b\" Done now."
+        );
+    }
+
+    /// An escaped backslash is one backslash, and an escaped `*` is not
+    /// emphasis.
+    #[test]
+    fn an_escape_is_read_once() {
+        assert_eq!(
+            text("x \\\\( y \\*really\\* ***both*** `a\\|b`"),
+            "x \\( y *really* both a\\|b"
         );
     }
 
@@ -394,6 +481,17 @@ mod tests {
         assert_eq!(
             text("Join the briefing\n* * *\n-::~:~::~:~:~::-\nBridge, 0900 -- sharp..."),
             "Join the briefing Bridge, 0900 -- sharp..."
+        );
+    }
+
+    /// A line break inside an HTML block, or an indent that would open a
+    /// code block, is written as a character reference and reads as a
+    /// space; a typed reference stays as typed.
+    #[test]
+    fn a_whitespace_reference_is_a_space() {
+        assert_eq!(
+            text("<summary>Tool use: a&#10;&#10;b</summary>\n&#32;   code &amp;#10;"),
+            "Tool use: a b code &#10;"
         );
     }
 

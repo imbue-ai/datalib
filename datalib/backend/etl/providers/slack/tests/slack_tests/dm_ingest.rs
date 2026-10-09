@@ -202,7 +202,7 @@ async fn turning_dms_off_stops_walking_them_without_deleting() {
     record_conversations(&t.api, DM_TYPES, all_conversations()).unwrap();
     write_channels_only(&t.api);
     write_all_histories(&t.api);
-    // Run 2 resumes C1 at its resume cursor (exclusive), which is a
+    // Run 2 asks C1 for what is newer than its newest message, which is a
     // different param set and so needs its own fixture.
     History {
         inclusive: false,

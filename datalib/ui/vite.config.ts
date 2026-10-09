@@ -94,9 +94,11 @@ export default defineConfig(({ command }) => ({
   test: {
     environment: "jsdom",
     globals: true,
-    // Playwright owns tests/e2e/*.spec.ts; without this exclusion vitest
-    // grabs them via its default `**/*.spec.ts` glob and crashes on
-    // Playwright's `test.describe` (different test runner).
-    exclude: ["**/node_modules/**", "**/dist/**", "tests/e2e/**"],
+    // Playwright owns tests/e2e/ and tests/e2e_auth/; without this
+    // exclusion vitest grabs their specs via its default `**/*.spec.ts`
+    // glob and crashes on Playwright's `test()` (different test runner).
+    exclude: ["**/node_modules/**", "**/dist/**", "tests/e2e/**", "tests/e2e_auth/**"],
+    // A stylesheet imports as "" in a test unless named here.
+    css: { include: [/chip\.css/] },
   },
 }));

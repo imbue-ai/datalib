@@ -6,7 +6,7 @@
 #
 # VERSION
 #     Release tag to bake into the image, without the leading `v`. Defaults
-#     to the workspace version from datalib/backend/Cargo.toml. The
+#     to the version from datalib/backend/Cargo.toml. The
 #     script downloads the matching per-arch tarballs from the GitHub
 #     Release `v$VERSION` of $REPO (default imbue-ai/datalib).
 #
@@ -69,7 +69,7 @@ fi
 if [[ -z "${VERSION}" ]]; then
     VERSION="$(grep -E '^version = "[^"]+"$' datalib/backend/Cargo.toml \
                | head -n1 | sed -E 's/^version = "([^"]+)"$/\1/')"
-    echo "build_docker: VERSION not given, defaulting to Cargo.toml workspace version ${VERSION}"
+    echo "build_docker: VERSION not given, defaulting to Cargo.toml version ${VERSION}"
 fi
 
 ctx="$(mktemp -d -t datalib-docker-XXXXXX)"

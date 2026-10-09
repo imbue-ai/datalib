@@ -74,9 +74,7 @@ nothing — the same call `airvisual` and `fsindex` made):
 The bookkeeping lines fold into the transcript row and are not rows of
 their own; `attachment` records are counted and dropped. A content
 record with no `uuid` cannot be keyed and is counted as `unkeyed`. A
-line that is not JSON is counted as `malformed` and stepped over — a
-transcript is only ever appended to, so a torn last line is the
-ordinary case for a session that is open right now.
+line that is not JSON is counted as `malformed` and stepped over.
 
 ## Incrementality
 
@@ -93,6 +91,37 @@ cache can vouch for costs a `stat`.
 sessions on its own schedule (`cleanupPeriodDays`), and outliving that
 is half the point of a mirror. A reset (`datalib-dag --reset`) is the
 way to drop them.
+
+## When part of a read fails
+
+What a sync could not read is a `problems` row, and the rest of the
+sync goes on (the shared walk in `datalib_etl_agent_sessions`, which
+`codex` uses too):
+
+- **Lines stepped over inside a file** — not JSON, no `type`, a
+  content record with no `uuid` — are one row for the file, keyed
+  `file:claude_code/sessions:<path>`, saying how many and which came
+  first. The file is stamped, so the row stands until the file changes
+  and is read again, or is gone from a walk that read the whole tree
+  (its stamp goes then too; the rows read from it stay). **The last line is never counted**: a transcript is
+  only ever appended to, so a torn last line is the ordinary case for a
+  session that is open right now, and the read after it is finished
+  keeps it. Bytes that are not UTF-8 are read as U+FFFD and said in the
+  same row, so one stray byte does not cost the whole file.
+- **A file that could not be opened** is
+  `record:claude_code/sessions:<path>` when the walk could not open it
+  to hash it, and `record:transcripts:<path>` when the walk could and the
+  read after it failed.
+  It is left unstamped, so every sync tries it again and the row goes
+  when one reads it. A sync that cannot see the file at all — it is under
+  an entry the walk could not read, or the root is missing — keeps the
+  row, since nothing tried it.
+- **An entry the walk could not read** (a folder it may not list, a
+  dangling link) is `listing:claude_code/sessions`. The walk is
+  repeated every sync, so the row goes with the first clean one.
+- **The root is not a directory**: the sync fails if nothing was ever
+  read from it; otherwise what is stored stands and the root is
+  `listing:claude_code/sessions`.
 
 ## Render
 

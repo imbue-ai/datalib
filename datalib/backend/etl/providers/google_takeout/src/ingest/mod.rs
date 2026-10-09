@@ -16,14 +16,15 @@ pub mod youtube_watch_history;
 
 pub use db::{db_path_for, RawDb};
 
-use datalib_etl::download_problems;
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
+use datalib_etl::download_problems::RunProblemKind;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -105,7 +106,8 @@ pub struct FetchSummary {
     pub voice_greetings: usize,
     pub voice_attachments: usize,
     pub blobs_stored: usize,
-    pub parse_errors: usize,
+    /// Feeds that failed as a whole, each a `phase:<feed>` problem row.
+    pub feeds_failed: usize,
     /// Records deleted because the export no longer holds them.
     pub removed: usize,
     /// Export files that are gone since the last run, in the feeds read.
@@ -122,6 +124,11 @@ pub(crate) fn product_exported(scan: &fsscan::Scan, product_dir: &str) -> bool {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_export(opts, found)).await
+}
+
+async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
@@ -136,120 +143,142 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         warn!(event = "takeout_walk_error", path = %e.path.display(), error = %e.error, "an entry of the export could not be walked");
     }
     let scan = &scan;
-    let mut problems = scan.walk_problems();
+    scan.report_problems(&found, "files");
 
     if opts.sync.maps_reviews {
-        match maps_reviews::ingest(&db, scan, progress).await {
-            Ok(n) => {
-                summary.maps_reviews = n.written;
-                summary.removed += n.removed;
-            }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "maps_reviews", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+        if let Some(n) = found
+            .run_phase(
+                "maps_reviews",
+                maps_reviews::ingest(&db, scan, progress, &found),
+            )
+            .await
+        {
+            summary.maps_reviews = n.written;
+            summary.removed += n.removed;
         }
     }
     if opts.sync.maps_saved_places {
-        match maps_saved_places::ingest(&db, scan, progress).await {
-            Ok(n) => {
-                summary.maps_saved_places = n.written;
-                summary.removed += n.removed;
-            }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "maps_saved_places", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+        if let Some(n) = found
+            .run_phase(
+                "maps_saved_places",
+                maps_saved_places::ingest(&db, scan, progress, &found),
+            )
+            .await
+        {
+            summary.maps_saved_places = n.written;
+            summary.removed += n.removed;
         }
     }
     if opts.sync.maps_photos {
-        match maps_photos::ingest(&db, scan, progress).await {
-            Ok(s) => {
-                summary.maps_photos = s.rows;
-                summary.blobs_stored += s.blobs;
-                summary.removed += s.removed;
-                summary.files_removed += s.files_removed;
-            }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "maps_photos", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+        if let Some(s) = found
+            .run_phase(
+                "maps_photos",
+                maps_photos::ingest(&db, scan, progress, &found),
+            )
+            .await
+        {
+            summary.maps_photos = s.rows;
+            summary.blobs_stored += s.blobs;
+            summary.removed += s.removed;
+            summary.files_removed += s.files_removed;
         }
     }
     if opts.sync.youtube_watch_history {
-        match youtube_watch_history::ingest(&db, scan, progress).await {
-            Ok(n) => {
-                summary.youtube_watch_history = n.written;
-                summary.removed += n.removed;
-            }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "youtube_watch_history", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+        if let Some(n) = found
+            .run_phase(
+                "youtube_watch_history",
+                youtube_watch_history::ingest(&db, scan, progress, &found),
+            )
+            .await
+        {
+            summary.youtube_watch_history = n.written;
+            summary.removed += n.removed;
         }
     }
     if opts.sync.youtube_subscriptions {
-        match youtube_subscriptions::ingest(&db, scan, progress).await {
-            Ok(n) => {
-                summary.youtube_subscriptions = n.written;
-                summary.removed += n.removed;
-            }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "youtube_subscriptions", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+        if let Some(n) = found
+            .run_phase(
+                "youtube_subscriptions",
+                youtube_subscriptions::ingest(&db, scan, progress, &found),
+            )
+            .await
+        {
+            summary.youtube_subscriptions = n.written;
+            summary.removed += n.removed;
         }
     }
     if opts.sync.google_chat {
-        match google_chat::ingest(&db, scan, progress).await {
-            Ok(s) => {
-                summary.chat_groups += s.groups;
-                summary.chat_users += s.users;
-                summary.chat_messages += s.messages;
-                summary.chat_attachments += s.attachments;
-                summary.blobs_stored += s.blobs_stored;
-                summary.removed += s.removed;
-                summary.files_removed += s.files_removed;
-            }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "google_chat", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+        if let Some(s) = found
+            .run_phase(
+                "google_chat",
+                google_chat::ingest(&db, scan, progress, &found),
+            )
+            .await
+        {
+            summary.chat_groups += s.groups;
+            summary.chat_users += s.users;
+            summary.chat_messages += s.messages;
+            summary.chat_attachments += s.attachments;
+            summary.blobs_stored += s.blobs_stored;
+            summary.removed += s.removed;
+            summary.files_removed += s.files_removed;
         }
     }
     if opts.sync.gemini_apps {
-        match gemini_apps::ingest(&db, scan, progress).await {
-            Ok(s) => {
-                summary.gemini_activity += s.activity;
-                summary.gemini_attachments += s.attachments;
-                summary.blobs_stored += s.blobs_stored;
-                summary.removed += s.removed;
-            }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "gemini_apps", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+        if let Some(s) = found
+            .run_phase(
+                "gemini_apps",
+                gemini_apps::ingest(&db, scan, progress, &found),
+            )
+            .await
+        {
+            summary.gemini_activity += s.activity;
+            summary.gemini_attachments += s.attachments;
+            summary.blobs_stored += s.blobs_stored;
+            summary.removed += s.removed;
         }
     }
     if opts.sync.google_voice {
-        match google_voice::ingest(&db, scan, opts.sync.google_voice_include_spam, progress).await {
-            Ok(s) => {
-                summary.voice_messages += s.messages;
-                summary.voice_bills += s.bills;
-                summary.voice_greetings += s.greetings;
-                summary.voice_attachments += s.attachments;
-                summary.blobs_stored += s.blobs_stored;
-                summary.removed += s.removed;
-                summary.files_removed += s.files_removed;
-                problems.extend(s.held_back);
-            }
-            Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "google_voice", error = %e, "a feed of the export could not be ingested; continuing with the rest");
-                summary.parse_errors += 1;
-            }
+        let voice = google_voice::ingest(
+            &db,
+            scan,
+            opts.sync.google_voice_include_spam,
+            progress,
+            &found,
+        );
+        if let Some(s) = found.run_phase("google_voice", voice).await {
+            summary.voice_messages += s.messages;
+            summary.voice_bills += s.bills;
+            summary.voice_greetings += s.greetings;
+            summary.voice_attachments += s.attachments;
+            summary.blobs_stored += s.blobs_stored;
+            summary.removed += s.removed;
+            summary.files_removed += s.files_removed;
+            found.extend(s.held_back);
         }
     }
-    download_problems::report_run(db.pool(), &problems).await;
+    summary.feeds_failed = found.count(RunProblemKind::Phase);
 
     Ok(summary)
+}
+
+/// A file that is not in the layout its reader knows: `what` says how.
+/// Nothing is stored or deleted on its word, and the feed fails where a
+/// person sees it, so a newer export Google reshaped cannot empty a table.
+pub(crate) fn unknown_layout(file: &str, what: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{file} {what}, so it is not in a layout this reader knows; nothing was stored or deleted"
+    )
+}
+
+/// A file that lists entries none of which could be read is a layout
+/// that moved, not a product emptied upstream.
+pub(crate) fn require_some_read(file: &str, listed: usize, read: usize) -> Result<()> {
+    if listed > 0 && read == 0 {
+        return Err(unknown_layout(
+            file,
+            &format!("lists {listed} entries and none could be read"),
+        ));
+    }
+    Ok(())
 }

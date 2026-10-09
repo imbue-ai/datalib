@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the datalib HTTP backend and open a browser at it.
+# Launch the datalib HTTP backend and, from a terminal, open a browser at it.
 # Invoked via `bazelisk run //datalib:serve`.
 set -eo pipefail
 
@@ -17,6 +17,8 @@ set -u
 # The Node + qmd + latchkey trees a sync spawns (see dev_runtime.sh).
 # shellcheck disable=SC1090
 source "$(rlocation _main/datalib/dev_runtime.sh)"
+# shellcheck disable=SC1090
+source "$(rlocation _main/datalib/dev_lib.sh)"
 
 BIN="$(rlocation _main/datalib/backend/http/datalib_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
@@ -34,15 +36,9 @@ fi
 
 # Default to an ephemeral port so concurrent `serve_dev.sh` runs (e.g. one
 # agent per checkout) don't fight over a hardcoded 8731. Honor a caller-
-# supplied DATALIB_BIND verbatim. Bind :0, read the port back, close — a
-# race with the binary's own listen(), good enough for a local run you
-# can restart. A run that cannot afford to lose it takes the port from
-# the server's `--url-file` (datalib/ui/playwright.config.ts).
-free_port() {
-  python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'
-}
+# supplied DATALIB_BIND verbatim.
 if [[ -z "${DATALIB_BIND:-}" ]]; then
-  DATALIB_BIND="127.0.0.1:$(free_port)"
+  DATALIB_BIND="127.0.0.1:$(dev_free_port)"
 fi
 export DATALIB_BIND
 
@@ -66,21 +62,9 @@ HEALTH_URL="$BASE_URL/api/health?token=$DATALIB_TOKEN"
 # is redirected to the clean URL; every later request rides the cookie.
 OPEN_URL="$BASE_URL/?token=$DATALIB_TOKEN"
 
-# Positional data-root arg required by the binary; default to
-# ~/Documents/datalib if not supplied (legacy default).
-if [[ $# -ge 1 && -n "$1" ]]; then
-  ROOT_ARG="$1"
-  case "$ROOT_ARG" in
-    "~")     ROOT_ARG="$HOME" ;;
-    "~/"*)   ROOT_ARG="$HOME/${ROOT_ARG#\~/}" ;;
-  esac
-else
-  ROOT_ARG="$HOME/Documents/datalib"
-fi
+ROOT_ARG="$(dev_library_root "${1:-}")"
 echo "data root: $ROOT_ARG"
 
-# `--no-open` because this wrapper opens the URL itself (below) after
-# waiting for the health endpoint to come up.
 "$BIN" "$ROOT_ARG" --no-open &
 BIN_PID=$!
 trap 'kill "$BIN_PID" 2>/dev/null || true' EXIT INT TERM
@@ -90,17 +74,6 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.2
 done
 
-# `DATALIB_NO_OPEN=1` keeps the URL on the terminal instead: a tool that
-# opens the page in its own pane does not want the OS browser stealing
-# the focus every time it restarts the server.
-if [[ -n "${DATALIB_NO_OPEN:-}" ]]; then
-  echo "open $OPEN_URL in your browser"
-else
-  case "$(uname -s)" in
-    Darwin) open "$OPEN_URL" ;;
-    Linux)  xdg-open "$OPEN_URL" >/dev/null 2>&1 || true ;;
-    *)      echo "open $OPEN_URL in your browser" ;;
-  esac
-fi
+dev_open_browser "$OPEN_URL"
 
 wait "$BIN_PID"

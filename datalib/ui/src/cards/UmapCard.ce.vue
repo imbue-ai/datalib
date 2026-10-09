@@ -259,7 +259,7 @@ function addStep() {
 }
 
 function openInGrid() {
-  props.ctx.host.openCards(`gridView(${JSON.stringify({ q: applied.value })})`);
+  props.ctx.host.openCards(`searchView(${JSON.stringify({ q: applied.value })})`);
 }
 
 // --- drawing -------------------------------------------------------------

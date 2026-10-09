@@ -30,7 +30,7 @@ pub fn upgrade(root: &Path) -> Option<PathBuf> {
     };
     let bak = path.with_extension("toml.bak");
     let written = datalib_dag::config::write_owner_only(&bak, text.as_bytes())
-        .and_then(|()| datalib_dag::config::replace_config(&path, &upgraded));
+        .and_then(|()| datalib_runtime::atomic::write_owner_only(&path, upgraded.as_bytes()));
     if let Err(e) = written {
         tracing::error!("config: could not migrate {}: {e}", path.display());
         return None;

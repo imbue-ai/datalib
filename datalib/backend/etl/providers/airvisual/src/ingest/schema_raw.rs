@@ -171,7 +171,7 @@ pub fn full_ddl() -> Vec<String> {
         AirvisualDeviceRow::ddl(),
         AIRVISUAL_SAMPLES_DDL.to_string(),
         AirvisualUnplacedSampleRow::ddl(),
-        datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
+        datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ]
 }
 

@@ -3,7 +3,7 @@
 pub mod parse;
 pub mod schema_raw;
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -12,14 +12,17 @@ use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_problems;
-use datalib_etl::file_checkpoint;
-use datalib_etl::fsscan;
+use datalib_etl::download_problems::RunProblem;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fsscan;
+use datalib_problems::{Outcome, Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::json;
+use sqlx::{Sqlite, Transaction};
 use tracing::warn;
 
 use self::parse::{CallRecord, MmsRecord, RootKind, SmsRecord};
@@ -64,6 +67,11 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_backups(opts, found)).await
+}
+
+async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     // One scan answers what `.xml` files are there and which have
@@ -93,19 +101,29 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut acc = CasEdgeAccumulator::new();
     let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
     let mut summary = FetchSummary::default();
+    // Files that would not open. They are left unstamped, so the next run
+    // reads them again.
+    let mut unread: Vec<RunProblem> = Vec::new();
+    // Files that opened and would not parse. Reading them again gets the
+    // same answer, so they are stamped with their problem and read again
+    // only once they change.
+    let mut unparsed: Vec<(&fsscan::ScannedFile, String)> = Vec::new();
 
     for f in to_read {
         let path = &f.path;
         let xml = match std::fs::read_to_string(path) {
             Ok(x) => x,
             Err(e) => {
-                warn!(event = "sms_file_unreadable", path = %path.display(), error = %e, "a backup file could not be read");
+                unread.push(RunProblem::listing(
+                    &format!("file {}", f.rel),
+                    e.to_string(),
+                ));
                 summary.parse_errors += 1;
                 continue;
             }
         };
         match parse::detect_root(&xml) {
-            Some(RootKind::Smses) => match parse::parse_smses(&xml) {
+            Ok(RootKind::Smses) => match parse::parse_smses(&xml) {
                 Ok((smses, mmses)) => {
                     for s in smses {
                         ingest_sms(&s, &mut message_rows);
@@ -119,11 +137,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     summary.files += 1;
                 }
                 Err(e) => {
-                    warn!(event = "sms_parse_failed", path = %path.display(), error = %e, "a backup file did not parse");
+                    unparsed.push((f, format!("{e:#}")));
                     summary.parse_errors += 1;
                 }
             },
-            Some(RootKind::Calls) => match parse::parse_calls(&xml) {
+            Ok(RootKind::Calls) => match parse::parse_calls(&xml) {
                 Ok(calls) => {
                     for c in calls {
                         ingest_call(&c, &mut call_rows);
@@ -133,13 +151,19 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     summary.files += 1;
                 }
                 Err(e) => {
-                    warn!(event = "sms_calls_parse_failed", path = %path.display(), error = %e, "a calls file did not parse");
+                    unparsed.push((f, format!("{e:#}")));
                     summary.parse_errors += 1;
                 }
             },
-            None => {
+            // Stamped, so it is not read again until it changes.
+            Ok(RootKind::Other) => {
                 warn!(event = "sms_unknown_xml", path = %path.display(),
                       "not an <smses>/<calls> export; skipping");
+                done.push(f);
+            }
+            Err(e) => {
+                unparsed.push((f, format!("{e:#}")));
+                summary.parse_errors += 1;
             }
         }
         opts.progress.set_message(&format!(
@@ -148,21 +172,21 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         ));
     }
 
-    summary.blobs_stored = acc.bundle_mut().cas_inserts().len();
+    summary.blobs_stored = acc.fetched_len();
 
-    let now = IsoOffsetTimestamp::now_local();
-    let mut tx = db
-        .pool()
-        .begin()
-        .await
-        .context("begin sms_backup_restore tx")?;
-    bulk_upsert_in_tx(&mut tx, &message_rows, &now).await?;
-    bulk_upsert_in_tx(&mut tx, &call_rows, &now).await?;
-    for f in &done {
-        file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
-    }
-    tx.commit().await.context("commit sms_backup_restore tx")?;
+    // Whether this run may delete what no file holds: only right after
+    // reading every one of them. A file there and unread may hold any of
+    // them.
+    let deletes = read_all
+        && changes.walk_errors == 0
+        && summary.parse_errors == 0
+        && scan.present_unread.is_empty();
+    // A rewritten file keeps its old stamp on a run that deleted nothing,
+    // so the next run still sees it rewritten and reads every file again.
+    let rewritten: HashSet<&str> = changes.modified.iter().map(|f| f.rel.as_str()).collect();
 
+    // The attachments land before the files that name them are stamped:
+    // a flush that fails leaves the files to be read again.
     acc.flush(db.pool(), db.cas(), |owning, ref_id, blake3| {
         SmsAttachmentRow {
             id: SmsAttachmentRow::pk_recipe(owning, ref_id),
@@ -173,18 +197,53 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     })
     .await?;
 
-    let mut problems = scan.walk_problems();
-    if read_all && changes.walk_errors == 0 {
-        if summary.parse_errors == 0 {
-            summary.removed = prune_unseen(&db, &message_rows, &call_rows).await?;
-            let gone = changes.gone();
-            summary.files_removed = gone.len();
-            file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
-        } else if changes.may_have_dropped_records() {
-            problems.push(fsscan::Scan::deletions_held_back(summary.parse_errors));
+    // The prune lands with the stamps: a stamp that committed without it
+    // would tell the next run the rewritten file was already dealt with.
+    let now = IsoOffsetTimestamp::now_local();
+    let mut tx = db
+        .pool()
+        .begin()
+        .await
+        .context("begin sms_backup_restore tx")?;
+    bulk_upsert_in_tx(&mut tx, &message_rows, &now).await?;
+    bulk_upsert_in_tx(&mut tx, &call_rows, &now).await?;
+    for f in done
+        .iter()
+        .filter(|f| deletes || !rewritten.contains(f.rel.as_str()))
+    {
+        file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
+    }
+    for (f, why) in &unparsed {
+        let problem = Problem::record(
+            Reason::Undeserializable,
+            &format!("the file did not parse, so none of its records were read: {why}"),
+        );
+        file_checkpoint::record_file_with_problem(
+            &mut tx,
+            SCOPE,
+            f,
+            Some((Outcome::Dropped, problem)),
+        )
+        .await?;
+    }
+    if deletes {
+        summary.removed = prune_unseen(&mut tx, &message_rows, &call_rows).await?;
+        let gone = changes.gone();
+        summary.files_removed = gone.len();
+        for rel in gone {
+            file_checkpoint::forget_file(&mut tx, SCOPE, rel).await?;
         }
     }
-    download_problems::report_run(db.pool(), &problems).await;
+    tx.commit().await.context("commit sms_backup_restore tx")?;
+
+    scan.report_problems(&found, "files");
+    let mut problems = unread;
+    if !deletes && read_all && changes.walk_errors == 0 && changes.may_have_dropped_records() {
+        problems.push(fsscan::Scan::deletions_held_back(
+            summary.parse_errors + scan.present_unread.len(),
+        ));
+    }
+    found.extend(problems);
 
     Ok(summary)
 }
@@ -193,7 +252,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 /// edges. Only right after reading every file. Returns how
 /// many records went.
 async fn prune_unseen(
-    db: &RawDb,
+    tx: &mut Transaction<'_, Sqlite>,
     messages: &[SmsMessageRow],
     calls: &[SmsCallRow],
 ) -> Result<usize> {
@@ -202,9 +261,9 @@ async fn prune_unseen(
         .map(|r| r.id_and_payload.id.clone())
         .collect();
     let keep_calls: HashSet<String> = calls.iter().map(|r| r.id_and_payload.id.clone()).collect();
-    let gone_messages = prune::prune_scope(db.pool(), "sms_messages", &[], &keep_messages).await?;
-    prune::delete_owned(db.pool(), "sms_attachments", "message_id", &gone_messages).await?;
-    let gone_calls = prune::prune_scope(db.pool(), "sms_calls", &[], &keep_calls).await?;
+    let gone_messages = prune::prune_scope_in_tx(tx, "sms_messages", &[], &keep_messages).await?;
+    prune::delete_owned_in_tx(tx, "sms_attachments", "message_id", &gone_messages).await?;
+    let gone_calls = prune::prune_scope_in_tx(tx, "sms_calls", &[], &keep_calls).await?;
     prune::record(
         "sms_messages",
         keep_messages.len() + gone_messages.len(),
@@ -291,9 +350,18 @@ fn ingest_mms(
             &ref_name,
             blob.bytes.clone(),
             Some(blob.content_type.clone()),
-            Some(blob.name.clone()),
         );
         *n_attachments += 1;
+        attachment_refs.push(ref_name);
+    }
+    // Listed with the rest, so render draws the gap where the part was.
+    for (name, why) in &m.failed_blobs {
+        let ref_name = format!("{id}/{name}");
+        acc.add_failed(
+            &id,
+            &ref_name,
+            format!("the part's base64 did not decode: {why}"),
+        );
         attachment_refs.push(ref_name);
     }
 

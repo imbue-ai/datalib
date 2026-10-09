@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use datalib_etl_agent_sessions::SkippedLines;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -19,6 +20,8 @@ pub struct ParsedRollout {
     pub meta: RolloutMeta,
     pub records: Vec<ParsedLine>,
     pub stats: ParseStats,
+    /// The lines that could not be used, for the file's problem row.
+    pub skipped: Option<String>,
 }
 
 /// The `records.id` for a line: Codex gives a line no id of its own,
@@ -88,21 +91,26 @@ pub fn parse_rollout(text: &str, rel_path: &str) -> Option<ParsedRollout> {
     let mut records = Vec::new();
     let mut stats = ParseStats::default();
     let mut thread_id: Option<String> = None;
+    let mut skipped = SkippedLines::default();
+    let mut last_line_no = 0;
 
     for (i, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
+        last_line_no = i + 1;
         stats.lines += 1;
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => {
                 stats.malformed += 1;
+                skipped.skip(last_line_no, "not JSON");
                 continue;
             }
         };
         let Some(record_type) = v.get("type").and_then(Value::as_str) else {
             stats.malformed += 1;
+            skipped.skip(last_line_no, "no type");
             continue;
         };
         *meta
@@ -168,6 +176,7 @@ pub fn parse_rollout(text: &str, rel_path: &str) -> Option<ParsedRollout> {
         meta,
         records,
         stats,
+        skipped: skipped.summary(last_line_no),
     })
 }
 
@@ -332,6 +341,32 @@ mod tests {
         assert_eq!(r.meta.record_counts["event_msg"], 2);
         assert_eq!(r.meta.item_counts["message"], 2);
         assert_eq!(record_id("t1", 7), "t1#7");
+        assert_eq!(
+            r.skipped.as_deref(),
+            Some("1 line could not be used; first: line 6, not JSON")
+        );
+    }
+
+    /// A half-written last line is what an open thread looks like, so it
+    /// is not a problem; the same line anywhere else is.
+    #[test]
+    fn only_an_interior_bad_line_is_a_problem() {
+        let meta = line(
+            "2364-04-11T10:00:01.000Z",
+            "session_meta",
+            session_meta("t1", json!({})),
+        );
+        let torn = format!("{meta}\n{{\"timestamp\": \"2364-04");
+        assert_eq!(parse_rollout(&torn, "x.jsonl").unwrap().skipped, None);
+
+        let interior = format!("{meta}\n{{\"payload\": {{}}}}\nnot json\n{meta}\n{{\"timest");
+        assert_eq!(
+            parse_rollout(&interior, "x.jsonl")
+                .unwrap()
+                .skipped
+                .as_deref(),
+            Some("2 lines could not be used; first: line 2, no type")
+        );
     }
 
     /// A sub-agent thread names its parent either as its own field or

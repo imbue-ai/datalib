@@ -20,9 +20,13 @@ type CardComponent = Component & { styles?: string[] };
 // against flex-sized boxes as `auto`, collapsing every card to its
 // content height. Absolute positioning against the host sidesteps
 // percentage resolution entirely; Chromium renders both forms the same.
+// A host marked `data-natural` (a card in a Page container) is the one
+// exception: there the card is as tall as its content.
 const BASE_CSS = `
 :host { display: block; height: 100%; position: relative; }
 .card-app-root { position: absolute; inset: 0; overflow: hidden; }
+:host([data-natural]) { height: auto; }
+:host([data-natural]) .card-app-root { position: static; }
 `;
 
 export function vueCard(

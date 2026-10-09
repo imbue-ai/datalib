@@ -96,6 +96,7 @@ async fn main() -> Result<()> {
         fetched = summary.fetched,
         skipped = summary.skipped,
         out_of_scope = summary.out_of_scope,
+        non_chat_orgs = summary.non_chat_orgs,
         forbidden_orgs = summary.forbidden_orgs,
         projects = summary.projects_fetched,
         project_docs = summary.project_docs_fetched,

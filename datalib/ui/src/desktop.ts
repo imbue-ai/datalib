@@ -85,6 +85,56 @@ export async function revealInFileManager(path: string): Promise<boolean> {
   }
 }
 
+/** The open library and the others the top bar's menu offers. */
+export interface LibraryMenu {
+  current: string | null;
+  others: { name: string; path: string; found: boolean }[];
+}
+
+/**
+ * What the library menu lists (`library_menu` in
+ * `datalib/tauri/src/main.rs`). Null outside the app, or when the
+ * capability (`capabilities/switch-libraries.json`) does not reach this
+ * page.
+ */
+export async function libraryMenu(): Promise<LibraryMenu | null> {
+  const t = internals();
+  if (!t) return null;
+  try {
+    return (await t.invoke("library_menu")) as LibraryMenu;
+  } catch (e) {
+    console.warn("library_menu failed", e);
+    return null;
+  }
+}
+
+/**
+ * Close this library and open another. The window this runs in closes
+ * with it, so on success nothing comes back; a refusal (the folder is
+ * no longer a library) comes back as its message.
+ */
+export async function switchLibrary(path: string): Promise<string | null> {
+  const t = internals();
+  if (!t) return "only the desktop app can switch libraries";
+  try {
+    await t.invoke("library_switch", { path });
+    return null;
+  } catch (e) {
+    return String(e);
+  }
+}
+
+/** Close this library and go back to the libraries screen. */
+export async function showLibraries(): Promise<void> {
+  const t = internals();
+  if (!t) return;
+  try {
+    await t.invoke("libraries_show");
+  } catch (e) {
+    console.warn("libraries_show failed", e);
+  }
+}
+
 /**
  * Open a download step's raw store, read-only: in DB Browser for SQLite
  * when that is what opens `.doltlite_db` files here, otherwise in the

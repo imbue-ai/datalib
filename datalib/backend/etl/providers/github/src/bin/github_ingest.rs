@@ -27,11 +27,12 @@ struct Args {
     #[arg(long = "scope")]
     scope: Vec<String>,
 
-    /// Only refetch PRs updated in the last N days. 0 = unbounded.
+    /// On a store with data, search only for PRs updated in the last N
+    /// days. 0 = unbounded.
     #[arg(long, default_value_t = 30)]
     refresh_window_days: u32,
 
-    /// Safety cap on PR count.
+    /// Most PRs to fetch this run; the rest are left to later runs.
     #[arg(long)]
     max_prs: Option<usize>,
 
@@ -41,7 +42,7 @@ struct Args {
     #[arg(long = "pull-request", value_name = "REF")]
     pull_request: Vec<String>,
 
-    /// Ignore sync_state.json and walk the full refresh window.
+    /// Search everything and fetch everything listed.
     #[arg(long)]
     full: bool,
 
@@ -79,7 +80,7 @@ async fn main() -> Result<()> {
         targets,
         full_sync: args.full,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), datalib_time::IsoOffsetTimestamp::now_local())
     };
 
     let span = info_span!("github_ingest", out = %args.out.display());

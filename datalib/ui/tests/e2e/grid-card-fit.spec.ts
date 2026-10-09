@@ -8,7 +8,14 @@
 // growing worked even then.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, gridSettled, SEARCH_ROWS, searchGrid, type GridApi } from "./grid-helpers";
+import {
+  GRID,
+  type GridApi,
+  gridSettled,
+  SEARCH_ROWS,
+  searchGrid,
+  shownCards,
+} from "./grid-helpers";
 
 async function openGrid(page: Page) {
   await page.goto(GRID);
@@ -18,7 +25,7 @@ async function openGrid(page: Page) {
 /// Drag the first card's right edge by `dx` pixels, the way a person
 /// does.
 async function dragCardEdge(page: Page, dx: number) {
-  const handle = page.locator(".miller-col-resize").first();
+  const handle = page.locator(".ct-main .ct-handle").first();
   const box = (await handle.boundingBox())!;
   const x = box.x + box.width / 2;
   const y = box.y + box.height / 2;
@@ -69,5 +76,5 @@ test("clicking a group header folds the group and opens nothing", async ({ page 
   await group.locator(".slick-group-toggle").click();
   await expect(group.locator(".slick-group-toggle")).toHaveAttribute("aria-expanded", "false");
   // No document card came of it.
-  await expect(page.locator(".miller-col")).toHaveCount(1);
+  await expect(shownCards(page)).toHaveCount(1);
 });

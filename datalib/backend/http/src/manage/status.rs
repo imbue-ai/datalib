@@ -22,6 +22,7 @@ pub const STATUS_LABELS: &[(&str, &str)] = &[
     ("config_rejected", "Not loaded"),
     ("config_blocked", "Can\u{2019}t run"),
     ("running", "Running"),
+    ("waiting", "Waiting"),
     ("queued", "Queued"),
     ("off", "Off"),
     ("succeeded", "Succeeded"),
@@ -139,8 +140,12 @@ pub fn step_status(
     // it, and otherwise waiting, since what it reads may still move.
     let ran_this_run =
         last.is_some_and(|l| l.finished_at.is_some() && Some(l.run_id.as_str()) == run);
+    // Waiting with an invocation open is between passes: it has done the
+    // work it had and waits for what it reads to move again.
+    let between_passes = last.is_some_and(|l| l.finished_at.is_none());
     let now = match step.and_then(|s| s.state) {
         Some(StateKind::Running) => view("running", last.map(|l| l.started_at.clone()), detail),
+        Some(StateKind::Waiting) if between_passes => view("waiting", ended, detail),
         Some(StateKind::Waiting) => view("queued", ended, detail),
         Some(StateKind::Fresh) if !ran_this_run => view(
             "queued",
@@ -256,6 +261,24 @@ mod tests {
         );
         assert_eq!(turned_off.label, "Off");
         assert_eq!(turned_off.detail.as_deref(), Some("turned off by claude"));
+    }
+
+    /// A streaming consumer that has read every seal so far waits for the
+    /// next one with its invocation still open. It reads Waiting, not
+    /// Running (no process is working) and not Queued (it has started).
+    #[test]
+    fn a_step_between_passes_reads_waiting() {
+        let mut rec = at(StateKind::Waiting, Some("waiting for a/ingest"));
+        let last = rec.last_run.as_mut().unwrap();
+        last.started_at = STARTED.into();
+        last.finished_at = None;
+        last.status = String::new();
+        let v = step_status(Some(&rec), Some("r0"), None);
+        assert_eq!(
+            (v.key.as_str(), v.label.as_str(), v.at.as_deref()),
+            ("waiting", "Waiting", Some(STARTED))
+        );
+        assert_eq!(v.detail.as_deref(), Some("waiting for a/ingest"));
     }
 
     /// At rest — idle, stale, failed — the row is the last outcome and

@@ -7,8 +7,9 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_timeseries_render::page::{Device, Page, PageProfile};
-use datalib_etl_timeseries_render::text::{iso, pretty_json, thousands};
+use datalib_etl_timeseries_render::text::{iso, thousands};
 use datalib_id::IdNamespace;
 use datalib_schema::providers::Provider;
 
@@ -86,10 +87,10 @@ pub fn render_all(
 fn device(dev: &super::parse::DeviceRow) -> Device {
     let facts = format!(
         "{} · configured from {}{}",
-        dev.kind,
+        escape_md_inline(&dev.kind),
         iso(dev.start_ms).unwrap_or_else(|| dev.start_ms.to_string()),
         match dev.last_ts_ms.and_then(iso) {
-            Some(t) => format!(" · cursor at {t}"),
+            Some(t) => format!(" · last reading {t}"),
             None => " · no readings fetched yet".to_string(),
         },
     );
@@ -115,22 +116,31 @@ fn store_section(parsed: &ParsedYolink) -> String {
         thousands(parsed.reading_errors)
     );
     out.push('\n');
-
-    for scope in &parsed.scope_config {
-        let _ = writeln!(
-            out,
-            "### Configured scope — `{}`\n\n*Recorded {}.*\n\n```json\n{}\n```\n",
-            scope.scope,
-            scope.updated_at,
-            pretty_json(&scope.config),
-        );
-    }
     out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A device's kind is the config's words; on the page it is text.
+    #[test]
+    fn a_device_in_markup_renders_escaped() {
+        let dev = super::super::parse::DeviceRow {
+            name: "porch".into(),
+            kind: "<script>x</script> & co".into(),
+            start_ms: 0,
+            last_ts_ms: None,
+            family_device_id: "secret".into(),
+        };
+        assert!(
+            device(&dev)
+                .facts
+                .starts_with("&lt;script&gt;x&lt;/script&gt; &amp; co · "),
+            "{}",
+            device(&dev).facts
+        );
+    }
 
     #[test]
     fn uuids_are_stable_and_stanza_scoped() {

@@ -1,30 +1,35 @@
-// How much the app fits on screen: compact (the default) or
-// comfortable. Only sizes change — theme.css keys every size off the
-// `data-density` attribute this sets on <html>. Persisted per browser.
+// How tightly the app packs things, as a step on densityScale.ts's
+// scale. theme.css sets spacing from `--datalib-density`, which this sets
+// on <html> before the first paint. Persisted per browser.
 import { ref, watch } from "vue";
-
-export const DENSITIES = ["compact", "comfortable"] as const;
-export type Density = (typeof DENSITIES)[number];
+import { MAX_STEP, MIN_STEP, STEP, onScale } from "./densityScale";
 
 const STORAGE_KEY = "datalib-density";
 
-function stored(): Density {
+function stored(): number {
   try {
-    const s = localStorage.getItem(STORAGE_KEY);
-    return DENSITIES.find((d) => d === s) ?? "compact";
+    return onScale(localStorage.getItem(STORAGE_KEY));
   } catch {
-    return "compact";
+    return MIN_STEP;
   }
 }
 
-export const density = ref<Density>(stored());
+export const density = ref<number>(stored());
+
+export function larger() {
+  density.value = onScale(Math.min(MAX_STEP, density.value + STEP));
+}
+
+export function smaller() {
+  density.value = onScale(Math.max(MIN_STEP, density.value - STEP));
+}
 
 watch(
   density,
-  (d) => {
-    document.documentElement.dataset.density = d;
+  (step) => {
+    document.documentElement.style.setProperty("--datalib-density", String(step));
     try {
-      localStorage.setItem(STORAGE_KEY, d);
+      localStorage.setItem(STORAGE_KEY, String(step));
     } catch {
       // Blocked storage: the choice lasts as long as the page.
     }

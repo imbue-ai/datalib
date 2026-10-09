@@ -1,16 +1,17 @@
 //! Doltlite-backed raw store for the `calendar` provider.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
-use sqlx::Row;
+use datalib_etl::doltlite_raw as dr;
+use sqlx::{Row, Sqlite, Transaction};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-use super::schema_raw::{full_ddl, AccountRow, CalendarRow, GoogleEventRow, IcsObjectRow};
+use super::schema_raw::{full_ddl, AccountRow, CalendarRow, GoogleEventRow, IcsObjectRow, LADDER};
 
-datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl(), LADDER);
 
 /// The account row, for render.
 #[derive(Debug, Clone, Default)]
@@ -46,6 +47,13 @@ pub struct LoadedGoogleEvent {
     pub event: serde_json::Value,
 }
 
+/// A row render could not read, and what it held instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadableRow {
+    pub id: String,
+    pub sample: String,
+}
+
 impl RawDb {
     async fn upsert<T: BulkUpsertable>(&self, rows: &[T], what: &str) -> Result<()> {
         if rows.is_empty() {
@@ -74,8 +82,8 @@ impl RawDb {
         self.upsert(rows, "calendars").await
     }
 
-    /// The position the last completed sync of this calendar left; `None`
-    /// when it has never finished one, so the next is a full listing.
+    /// The token the last listing page of this calendar left; `None`
+    /// lists it whole.
     pub async fn sync_token(&self, calendar_id: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT sync_token FROM calendars WHERE id = ?")
             .bind(calendar_id)
@@ -87,13 +95,16 @@ impl RawDb {
             .filter(|t| !t.is_empty()))
     }
 
-    /// Called only once every change the token covers is stored, so an
-    /// interrupted sync resumes from the previous one.
-    pub async fn set_sync_token(&self, calendar_id: &str, token: Option<&str>) -> Result<()> {
+    /// In the transaction that stores what the token covers.
+    pub async fn set_sync_token(
+        tx: &mut Transaction<'_, Sqlite>,
+        calendar_id: &str,
+        token: Option<&str>,
+    ) -> Result<()> {
         sqlx::query("UPDATE calendars SET sync_token = ? WHERE id = ?")
             .bind(token)
             .bind(calendar_id)
-            .execute(self.pool())
+            .execute(&mut **tx)
             .await
             .context("update sync_token")?;
         Ok(())
@@ -105,19 +116,13 @@ impl RawDb {
         self.upsert(rows, "ics_objects").await
     }
 
-    /// Every stored object of a calendar, by CalDAV href, with its uid.
-    pub async fn ics_hrefs(&self, calendar_id: &str) -> Result<HashMap<String, String>> {
-        let rows = sqlx::query(
-            "SELECT href, uid FROM ics_objects WHERE calendar_id = ? AND href IS NOT NULL",
-        )
-        .bind(calendar_id)
-        .fetch_all(self.pool())
-        .await
-        .context("select ics hrefs")?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| Some((r.try_get("href").ok()?, r.try_get("uid").ok()?)))
-            .collect())
+    pub async fn upsert_ics_objects_in_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[&IcsObjectRow],
+    ) -> Result<()> {
+        let owned: Vec<IcsObjectRow> = rows.iter().map(|r| (*r).clone()).collect();
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        bulk_upsert_in_tx(tx, &owned, &now).await
     }
 
     pub async fn ics_uids(&self, calendar_id: &str) -> Result<HashSet<String>> {
@@ -137,7 +142,27 @@ impl RawDb {
             .iter()
             .map(|u| super::schema_raw::event_pk(calendar_id, u))
             .collect();
-        self.delete_ids("ics_objects", &ids).await
+        let mut tx = self.pool().begin().await.context("begin delete tx")?;
+        Self::delete_ids_in_tx(&mut tx, "ics_objects", &ids).await?;
+        tx.commit().await.context("commit delete tx")
+    }
+
+    /// Drop the object at a CalDAV `href`, with its sidecar row. Returns
+    /// how many went. Idempotent.
+    pub async fn delete_ics_href(
+        tx: &mut Transaction<'_, Sqlite>,
+        calendar_id: &str,
+        href: &str,
+    ) -> Result<u64> {
+        let ids: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM ics_objects WHERE calendar_id = ? AND href = ?")
+                .bind(calendar_id)
+                .bind(href)
+                .fetch_all(&mut **tx)
+                .await
+                .context("select ics object for delete")?;
+        Self::delete_ids_in_tx(tx, "ics_objects", &ids).await?;
+        Ok(ids.len() as u64)
     }
 
     /// Drop the calendar an `.ics` file was, with its events and sidecar
@@ -155,39 +180,96 @@ impl RawDb {
             .begin()
             .await
             .context("begin delete calendar tx")?;
-        sqlx::query(
-            "DELETE FROM ics_objects_bookkeeping WHERE id IN \
-             (SELECT id FROM ics_objects WHERE calendar_id = ?)",
-        )
-        .bind(calendar_id)
-        .execute(&mut *tx)
-        .await
-        .context("delete the calendar's event sidecars")?;
-        let events = sqlx::query("DELETE FROM ics_objects WHERE calendar_id = ?")
+        let events = Self::delete_calendar(&mut tx, calendar_id).await?;
+        datalib_etl_files::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
+        tx.commit().await.context("commit delete calendar tx")?;
+        Ok(events)
+    }
+
+    /// The calendars of `account_id` upstream no longer lists, with
+    /// everything stored for them: a calendar listing is whole by
+    /// nature, so absence from it is deletion. Returns how many events
+    /// went.
+    pub async fn delete_calendars_not_in(
+        &self,
+        account_id: &str,
+        listed: &[String],
+    ) -> Result<usize> {
+        let stored: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM calendars WHERE account_id = ?")
+                .bind(account_id)
+                .fetch_all(self.pool())
+                .await
+                .context("select calendars")?;
+        let gone: Vec<&String> = stored.iter().filter(|id| !listed.contains(id)).collect();
+        if gone.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin delete calendars tx")?;
+        let mut events = 0;
+        for id in gone {
+            events += Self::delete_calendar(&mut tx, id).await?;
+            datalib_etl_web::dav::state::forget_collection(&mut tx, id).await?;
+        }
+        tx.commit().await.context("commit delete calendars tx")?;
+        Ok(events)
+    }
+
+    /// The calendar, its events of either shape and their sidecars.
+    /// Returns how many events went.
+    async fn delete_calendar(tx: &mut Transaction<'_, Sqlite>, calendar_id: &str) -> Result<usize> {
+        let mut events = 0;
+        for table in ["ics_objects", "google_events"] {
+            // Audited: `table` is one of the two literals above.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {table}_bookkeeping WHERE id IN \
+                 (SELECT id FROM {table} WHERE calendar_id = ?)"
+            )))
             .bind(calendar_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
+            .await
+            .context("delete the calendar's event sidecars")?;
+            events += sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {table} WHERE calendar_id = ?"
+            )))
+            .bind(calendar_id)
+            .execute(&mut **tx)
             .await
             .context("delete the calendar's events")?
             .rows_affected();
+        }
         for sql in [
             "DELETE FROM calendars WHERE id = ?",
             "DELETE FROM calendars_bookkeeping WHERE id = ?",
         ] {
             sqlx::query(sql)
                 .bind(calendar_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .context("delete calendar")?;
         }
-        datalib_etl::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
-        tx.commit().await.context("commit delete calendar tx")?;
         Ok(events as usize)
     }
 
     // ── google_events ───────────────────────────────────────────────
 
-    pub async fn upsert_google_events(&self, rows: &[GoogleEventRow]) -> Result<()> {
-        self.upsert(rows, "google_events").await
+    pub async fn upsert_google_events_in_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[GoogleEventRow],
+        volatile: &[Option<serde_json::Value>],
+    ) -> Result<()> {
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        bulk_upsert_in_tx(tx, rows, &now).await?;
+        let volatile: Vec<(&str, &serde_json::Value)> = rows
+            .iter()
+            .zip(volatile)
+            .filter_map(|(row, v)| Some((row.id_and_payload.id.as_str(), v.as_ref()?)))
+            .collect();
+        dr::set_volatile_payloads_in_tx(tx, "google_events", &volatile).await
     }
 
     pub async fn google_event_ids(&self, calendar_id: &str) -> Result<HashSet<String>> {
@@ -202,7 +284,7 @@ impl RawDb {
 
     /// The stored occurrences of these series.
     pub async fn google_occurrences_of(
-        &self,
+        tx: &mut Transaction<'_, Sqlite>,
         calendar_id: &str,
         series_ids: &[String],
     ) -> Result<Vec<String>> {
@@ -214,7 +296,7 @@ impl RawDb {
             )
             .bind(calendar_id)
             .bind(series)
-            .fetch_all(self.pool())
+            .fetch_all(&mut **tx)
             .await
             .context("select google occurrences")?;
             out.extend(ids);
@@ -223,7 +305,7 @@ impl RawDb {
     }
 
     pub async fn delete_google_events(
-        &self,
+        tx: &mut Transaction<'_, Sqlite>,
         calendar_id: &str,
         event_ids: &[String],
     ) -> Result<()> {
@@ -231,32 +313,31 @@ impl RawDb {
             .iter()
             .map(|e| super::schema_raw::event_pk(calendar_id, e))
             .collect();
-        self.delete_ids("google_events", &ids).await
+        Self::delete_ids_in_tx(tx, "google_events", &ids).await
     }
 
-    async fn delete_ids(&self, table: &'static str, ids: &[String]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool().begin().await.context("begin delete tx")?;
+    async fn delete_ids_in_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        table: &'static str,
+        ids: &[String],
+    ) -> Result<()> {
         for id in ids {
             // Audited: `table` is a `&'static str` at every callsite.
             sqlx::query(sqlx::AssertSqlSafe(format!(
                 "DELETE FROM {table} WHERE id = ?"
             )))
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .with_context(|| format!("delete {table} {id}"))?;
             sqlx::query(sqlx::AssertSqlSafe(format!(
                 "DELETE FROM {table}_bookkeeping WHERE id = ?"
             )))
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .with_context(|| format!("delete {table}_bookkeeping {id}"))?;
         }
-        tx.commit().await.context("commit delete tx")?;
         Ok(())
     }
 
@@ -294,7 +375,7 @@ impl RawDb {
             .collect())
     }
 
-    pub async fn load_ics_objects(&self) -> Result<Vec<LoadedIcsObject>> {
+    pub async fn load_ics_objects(&self) -> Result<(Vec<LoadedIcsObject>, Vec<UnreadableRow>)> {
         let rows = sqlx::query(
             "SELECT id, calendar_id, uid, json_extract(payload, '$.ics') AS ics
              FROM ics_objects ORDER BY id",
@@ -302,32 +383,63 @@ impl RawDb {
         .fetch_all(self.pool())
         .await
         .context("select ics_objects")?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| {
-                Some(LoadedIcsObject {
-                    id: r.try_get("id").ok()?,
-                    calendar_id: r.try_get("calendar_id").ok()?,
-                    uid: r.try_get("uid").ok()?,
-                    ics: r.try_get::<Option<String>, _>("ics").ok().flatten()?,
-                })
-            })
-            .collect())
+        let mut out = Vec::with_capacity(rows.len());
+        let mut unreadable = Vec::new();
+        for r in rows {
+            let id: String = r.try_get("id").unwrap_or_default();
+            let ics: Option<String> = r.try_get::<Option<String>, _>("ics").ok().flatten();
+            let Some(ics) = ics else {
+                unreadable.push(UnreadableRow {
+                    id,
+                    sample: "the payload holds no `ics` text".into(),
+                });
+                continue;
+            };
+            out.push(LoadedIcsObject {
+                id,
+                calendar_id: r.try_get("calendar_id").unwrap_or_default(),
+                uid: r.try_get("uid").unwrap_or_default(),
+                ics,
+            });
+        }
+        Ok((out, unreadable))
     }
 
-    pub async fn load_google_events(&self) -> Result<Vec<LoadedGoogleEvent>> {
+    pub async fn load_google_events(&self) -> Result<(Vec<LoadedGoogleEvent>, Vec<UnreadableRow>)> {
+        // A row written before `etag` and `updated` moved to the sidecar
+        // still has them in its payload; the overlay reads either.
         let rows = sqlx::query(
-            "SELECT id, calendar_id, json(payload) AS payload FROM google_events ORDER BY id",
+            "SELECT e.id, e.calendar_id, json(e.payload) AS payload,
+                    json(b.volatile_payload) AS volatile
+               FROM google_events e
+               LEFT JOIN google_events_bookkeeping b ON b.id = e.id
+              ORDER BY e.id",
         )
         .fetch_all(self.pool())
         .await
         .context("select google_events")?;
         let mut out = Vec::with_capacity(rows.len());
+        let mut unreadable = Vec::new();
         for r in rows {
             let id: String = r.try_get("id").unwrap_or_default();
             let payload: Option<String> = r.try_get("payload").ok().flatten();
-            let Some(event) = payload.and_then(|p| serde_json::from_str(&p).ok()) else {
-                tracing::warn!(event = "calendar_google_payload_unreadable", id = %id, "a stored Google event is not JSON; skipped it");
+            let volatile: Option<serde_json::Value> = r
+                .try_get::<Option<String>, _>("volatile")
+                .ok()
+                .flatten()
+                .and_then(|v| serde_json::from_str(&v).ok());
+            let Some(event) = payload
+                .as_deref()
+                .and_then(|p| serde_json::from_str(p).ok())
+                .map(|p| match &volatile {
+                    Some(v) => dr::overlay(&p, v),
+                    None => p,
+                })
+            else {
+                unreadable.push(UnreadableRow {
+                    id,
+                    sample: payload.unwrap_or_else(|| "the payload is not JSON".into()),
+                });
                 continue;
             };
             out.push(LoadedGoogleEvent {
@@ -336,7 +448,7 @@ impl RawDb {
                 event,
             });
         }
-        Ok(out)
+        Ok((out, unreadable))
     }
 }
 
@@ -381,7 +493,11 @@ mod tests {
         db.upsert_calendars(std::slice::from_ref(&cal))
             .await
             .unwrap();
-        db.set_sync_token("bridge", Some("tok-1")).await.unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        RawDb::set_sync_token(&mut tx, "bridge", Some("tok-1"))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
         db.upsert_calendars(&[cal]).await.unwrap();
         assert_eq!(
             db.sync_token("bridge").await.unwrap().as_deref(),
@@ -396,17 +512,20 @@ mod tests {
             "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",
         );
         db.upsert_ics_objects(&[row]).await.unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
         assert_eq!(
-            db.ics_hrefs("bridge")
+            RawDb::delete_ics_href(&mut tx, "bridge", "/c/staff.ics")
                 .await
-                .unwrap()
-                .get("/c/staff.ics")
-                .map(String::as_str),
-            Some("staff")
+                .unwrap(),
+            1
         );
-        db.delete_ics_uids("bridge", &["staff".into()])
-            .await
-            .unwrap();
+        assert_eq!(
+            RawDb::delete_ics_href(&mut tx, "bridge", "/c/staff.ics")
+                .await
+                .unwrap(),
+            0
+        );
+        tx.commit().await.unwrap();
         db.delete_ics_uids("bridge", &["staff".into()])
             .await
             .unwrap();

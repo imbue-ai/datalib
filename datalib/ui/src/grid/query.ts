@@ -6,14 +6,20 @@
 /// `value` as one token: bare when it can be, double-quoted otherwise.
 /// Mirrors `datalib_query::quote` (`\"` and `\\` escape inside quotes).
 export function quoteValue(v: string): string {
-  const needsQuotes = v === "" || /[\s:"]/.test(v) || v.startsWith("-");
-  if (!needsQuotes) return v;
-  const escaped = v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return `"${escaped}"`;
+  return /[\s:"]/.test(v) || v === "" || v.startsWith("-") ? quoted(v) : v;
 }
 
-export function filterToken(key: string, value: string, exclude: boolean): string {
-  return `${exclude ? "-" : ""}${key}:${quoteValue(value)}`;
+/// A term's value may hold a colon, since a term splits at its first one
+/// (`from:email:a@b.c`). Mirrors `datalib_query::term`, and with `whole`,
+/// `datalib_query::exact_term`: always quoted, which a key that matches
+/// a bare value in part reads as the whole value.
+export function filterToken(key: string, value: string, exclude: boolean, whole = false): string {
+  const bare = !whole && !(/[\s"]/.test(value) || value === "" || value.startsWith("-"));
+  return `${exclude ? "-" : ""}${key}:${bare ? value : quoted(value)}`;
+}
+
+function quoted(v: string): string {
+  return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 /// `query` with `token` appended as its own word — unless that exact
@@ -59,6 +65,42 @@ export function tokenValue(query: string, key: string): string | null {
   return word == null ? null : word.slice(prefix.length);
 }
 
+/// A query's words: a quoted phrase is one, and so is a `key:"…"` filter.
+const WORD = /-?[A-Za-z_][\w.]*:"(?:[^"\\]|\\.)*"?|"(?:[^"\\]|\\.)*"?|\S+/g;
+const FILTER = /^-?[A-Za-z_][\w.]*:/;
+
+/// `query` as its words, each as typed.
+export function queryWords(query: string): string[] {
+  return query.match(WORD) ?? [];
+}
+
+export function isFilterWord(word: string): boolean {
+  return FILTER.test(word);
+}
+
+/// What a word says once its quotes are off: `"earl grey"` is earl grey.
+export function unquoteValue(v: string): string {
+  if (!v.startsWith('"')) return v;
+  const inner = v.endsWith('"') && v.length > 1 ? v.slice(1, -1) : v.slice(1);
+  return inner.replace(/\\(["\\])/g, "$1");
+}
+
+/// The words of `query` that are not `key:value` filters, in order: what
+/// a search ranks as free text. The grammar itself is the backend's; this
+/// only times a search, never decides one.
+export function plainWords(query: string): string {
+  return (query.match(WORD) ?? []).filter((w) => !FILTER.test(w)).join(" ");
+}
+
+/// How long to wait after a keystroke before searching. A change to the
+/// free text is a qmd search when `ranked`: seconds long, one at a time,
+/// and finished by the server even once the page has moved on. So it
+/// waits for a real pause; a filter is a quick read and keeps up.
+export function searchDelay(before: string, after: string, ranked: boolean): number {
+  const words = plainWords(after);
+  return ranked && words !== "" && words !== plainWords(before) ? 600 : 150;
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -74,13 +116,13 @@ export function keepExcludeEntries(opts: {
   key: string;
   value: string;
   shown?: string;
+  /// The key matches a bare value in part: the value is written whole.
+  whole?: boolean;
 }): FilterEntry[] {
   const shown = opts.shown ?? opts.value;
+  const token = (exclude: boolean) => filterToken(opts.key, opts.value, exclude, opts.whole);
   return [
-    { label: `Keep only ${opts.header}=${shown}`, token: filterToken(opts.key, opts.value, false) },
-    {
-      label: `Exclude all ${opts.header}=${shown}`,
-      token: filterToken(opts.key, opts.value, true),
-    },
+    { label: `Keep only ${opts.header}=${shown}`, token: token(false) },
+    { label: `Exclude all ${opts.header}=${shown}`, token: token(true) },
   ];
 }

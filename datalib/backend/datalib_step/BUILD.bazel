@@ -21,7 +21,10 @@ rust_binary(
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/embedding_map:datalib_embedding_map",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/columns:datalib_columns",
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/id:datalib_id",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/schema:datalib_schema",
@@ -107,10 +110,12 @@ rust_binary(
         "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/parent_watch:datalib_parent_watch",
+        "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/qmd_models:datalib_qmd_models",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/unified_index:datalib_unified_index",
@@ -147,15 +152,23 @@ rust_test(
         # The UI's copy of the ingest-method declarations, which
         # `methods.rs` checks is generated from the config crates.
         "//datalib/ui:src/config/ingestMethods.json",
-    ],
+    ] + glob(["raw_shapes/*.json"]),
     edition = "2021",
     # Stub `DataProcessor`s for the render-version staleness tests.
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
-        "//datalib/backend/store_meta:datalib_store_meta",
         "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde",
         "@datalib_crates//:tempfile",
     ],
+)
+
+# Rewrites raw_shapes/current.json: the raw-store shape every source type
+# has in this tree, which `migrate.rs` checks and a release copies forward.
+insta_update(
+    name = "raw_shapes.update",
+    test = ":datalib_step_unittests",
+    test_args = ["the_current_raw_shapes_are_recorded"],
 )
 
 # Regenerates datalib/ui/src/config/ingestMethods.json from the provider
@@ -175,18 +188,23 @@ rust_test(
     crate_root = "tests/step_tests/main.rs",
     data = [
         ":datalib_step",
+        "//datalib/backend/etl/providers/calendar:split_fixture",
+        "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
         "//tests/fixtures:ingested/qmd-index.tar",
         "//third-party/doltlite:doltlite",
     ],
     edition = "2021",
     env = {
+        "CALENDAR_SPLIT_FIXTURE_DIR": "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_split_tng",
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
         "QMD_INDEX_TAR": "$(rootpath //tests/fixtures:ingested/qmd-index.tar)",
+        "SMS_FIXTURE_DIR": "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
     },
     deps = [
         "//datalib/backend/etl/providers/slack:datalib_etl_slack",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:flate2",
         "@datalib_crates//:libc",

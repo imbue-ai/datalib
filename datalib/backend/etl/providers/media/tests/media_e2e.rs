@@ -1,12 +1,12 @@
 //! End-to-end over the fixture corpus: scan → store.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use sqlx::Row;
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_media::ingest::{self, RawDb};
 
 const NOW: &str = "2364-04-13T08:45:00-07:00";
@@ -67,6 +67,15 @@ impl Harness {
             db,
             _tmp: tmp,
         })
+    }
+
+    /// Have the host cache vouch for `path` as it is now, so the next
+    /// scan does not open it (`FingerprintCache::restamp_for_test`).
+    async fn restamp(&self, path: &Path) -> Result<()> {
+        let cache = FingerprintCache::open(&self.raw_dir.join("fingerprints.sqlite")).await?;
+        cache.restamp_for_test(path).await?;
+        cache.pool().close().await;
+        Ok(())
     }
 
     async fn scan(&self) -> Result<ingest::FetchSummary> {
@@ -161,35 +170,26 @@ async fn assert_metadata_only_variant(db: &RawDb, a: &str, b: &str, scheme: &str
     Ok(())
 }
 
-/// Scanning an unchanged tree again, five minutes later, changes no
-/// content row. Under one `now` this holds trivially — the same stamp
-/// is written twice — so the second scan gets a later one. A table
-/// named here carries a stamp the store mints, which every consumer
-/// that diffs the store reads as a change on every run.
+/// Scanning an unchanged tree again, five minutes later, changes
+/// nothing in the store, its sidecars included. Under one `now` a
+/// re-stamped sidecar would hide — the same stamp is written twice — so
+/// the second scan gets a later one. A commit here means a stamp moved,
+/// and the store grows on every sync.
 #[tokio::test]
-async fn a_second_scan_of_an_unchanged_tree_moves_no_content_row() -> Result<()> {
+async fn a_second_scan_of_an_unchanged_tree_commits_nothing() -> Result<()> {
     let h = Harness::new().await?;
     h.scan().await?;
-    datalib_etl::doltlite_raw::commit_run(h.db.pool(), "test: first scan").await?;
-    let first = datalib_etl::doltlite_raw::head_commit(h.db.pool())
-        .await?
-        .expect("the first scan committed");
-
+    let first = datalib_etl::doltlite_raw::commit_run(h.db.pool(), "test: first scan").await?;
     h.scan_with(|o| ingest::FetchOptions {
         now: "2364-04-13T08:50:00-07:00".to_string(),
         ..o
     })
     .await?;
-    datalib_etl::doltlite_raw::commit_run(h.db.pool(), "test: second scan").await?;
-    let second = datalib_etl::doltlite_raw::head_commit(h.db.pool())
-        .await?
-        .expect("the second scan committed");
-    let changed =
-        datalib_etl::doltlite_raw::content_tables_changed(h.db.pool(), &first, &second).await?;
+    let second = datalib_etl::doltlite_raw::commit_run(h.db.pool(), "test: second scan").await?;
+    assert!(first.is_some());
     assert_eq!(
-        changed,
-        Vec::<String>::new(),
-        "a content table moved between two scans of the same tree"
+        second, None,
+        "scanning an unchanged tree again changes nothing in the store"
     );
     Ok(())
 }
@@ -948,27 +948,39 @@ async fn a_shortened_playlist_loses_its_trailing_entries() -> Result<()> {
     Ok(())
 }
 
+/// The last copy of an item gone, its `media_items` row and its class
+/// row stayed for good. After a clean walk they go; a file moved within
+/// the tree keeps its item and is not identified again.
 #[tokio::test]
-async fn a_deleted_file_disappears_from_the_path_table_but_the_item_remains() -> Result<()> {
-    // Scan a copy of the corpus so a file can be removed.
+async fn an_item_no_path_names_goes_and_a_moved_one_stays() -> Result<()> {
     let h = Harness::on_a_copy().await?;
     let db = &h.db;
     h.scan().await?;
     let hash = files(db).await?["music/untagged_hum.mp3"].clone();
+    let audio_rows = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM media_audio WHERE blake3 = ?")
+            .bind(&hash)
+            .fetch_one(db.pool())
+            .await
+    };
+    assert_eq!(audio_rows().await?, 1);
 
     std::fs::remove_file(h.root.join("music/untagged_hum.mp3"))?;
-    h.scan().await?;
+    std::fs::rename(
+        h.root.join("photos/bridge.jpg"),
+        h.root.join("archive/bridge.jpg"),
+    )?;
+    let s = h.scan().await?;
 
+    assert!(!files(db).await?.contains_key("music/untagged_hum.mp3"));
     assert!(
-        !files(db).await?.contains_key("music/untagged_hum.mp3"),
-        "the path row should fall out with the truncate"
+        !items(db).await?.contains_key(&hash),
+        "no path names the item any more"
     );
-    // The item survives: it is keyed on content, which has no notion of
-    // "no longer present", and keeping it keeps when it was first seen.
-    assert!(
-        items(db).await?.contains_key(&hash),
-        "the item row should remain (see INGEST.md §Orphaned items)"
-    );
+    assert_eq!(audio_rows().await?, 0);
+    assert_eq!(s.items, 0, "the moved photo is not identified again");
+    let moved = files(db).await?["archive/bridge.jpg"].clone();
+    assert!(items(db).await?.contains_key(&moved));
     Ok(())
 }
 
@@ -1099,16 +1111,14 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
         "a changed sample is a different recording"
     );
 
-    // (5) Deleted: the path is gone; the item is not.
+    // (5) Deleted: the path is gone, and the item no path names with it.
     assert!(!files_after.contains_key("music/corrupt.mp3"));
-    assert!(
-        items_after.contains_key(&files_before["music/corrupt.mp3"]),
-        "content-keyed rows survive their last path (see INGEST.md)"
-    );
+    assert!(!items_after.contains_key(&files_before["music/corrupt.mp3"]));
 
-    // Items only ever grow: two added, none removed — including the
-    // now-orphaned pre-retag version of the MP3.
-    assert_eq!(items_after.len(), items_before.len() + 2);
+    // Two items added; two no path names any more go: the deleted file's
+    // and the pre-retag version of the MP3.
+    assert!(!items_after.contains_key(&files_before["music/untagged_hum.mp3"]));
+    assert_eq!(items_after.len(), items_before.len() + 2 - 2);
 
     // (6) Playlist: rewritten, not merged. The old positions are gone.
     let n: i64 = sqlx::query(
@@ -1126,6 +1136,132 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     assert_eq!(third.items, 0);
     assert_eq!(third.removed, 0);
     assert_eq!(files(db).await?, files_after, "a settled tree is stable");
+    Ok(())
+}
+
+async fn problem_keys(db: &RawDb) -> Result<Vec<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+            .fetch_all(db.pool())
+            .await?,
+    )
+}
+
+fn set_mode(path: &std::path::Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    Ok(())
+}
+
+/// A walk that could not read part of the tree deletes nothing: a file
+/// it did not see may be one it could not see. The run says so in a
+/// `listing:` row, and the next clean walk deletes what is really gone.
+#[tokio::test]
+async fn a_walk_with_errors_deletes_nothing() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    std::fs::remove_file(h.root.join("music/untagged_hum.mp3"))?;
+    std::fs::remove_file(h.root.join("playlists/bridge_ambience.m3u"))?;
+    let dead = h.root.join("music/dead_air.mp3");
+    std::os::unix::fs::symlink(h.root.join("nowhere.mp3"), &dead)?;
+
+    let s = h.scan().await?;
+    assert_eq!(s.removed, 0, "{s:?}");
+    assert!(files(&h.db).await?.contains_key("music/untagged_hum.mp3"));
+    assert_eq!(problem_keys(&h.db).await?, ["listing:files"]);
+
+    std::fs::remove_file(&dead)?;
+    let s = h.scan().await?;
+    assert_eq!(s.removed, 2, "{s:?}");
+    assert_eq!(problem_keys(&h.db).await?, Vec::<String>::new());
+    Ok(())
+}
+
+/// A file evicted to the cloud since the last scan is not read, and not
+/// taken for deleted either: its row stays as the last read left it.
+#[tokio::test]
+async fn a_dataless_file_keeps_its_row() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    let path = h.root.join("music/untagged_hum.mp3");
+    let before = files(&h.db).await?["music/untagged_hum.mp3"].clone();
+
+    // A sparse file: a size and no blocks, which is what an evicted one
+    // looks like from a stat.
+    let len = std::fs::metadata(&path)?.len().max(1 << 20);
+    let f = std::fs::File::create(&path)?;
+    f.set_len(len)?;
+    drop(f);
+    let s = h.scan().await?;
+    if s.dataless_skipped == 0 {
+        // A filesystem that allocates blocks for a sparse file.
+        return Ok(());
+    }
+    assert_eq!(s.removed, 0, "{s:?}");
+    assert_eq!(files(&h.db).await?["music/untagged_hum.mp3"], before);
+    Ok(())
+}
+
+/// A media file or a playlist that would not open is a row, its stored
+/// rows are kept, and the next scan that opens it clears the row.
+#[tokio::test]
+async fn a_file_that_would_not_open_is_a_row_until_it_does() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    let media = h.root.join("music/untagged_hum.mp3");
+    let playlist = h.root.join("playlists/bridge_ambience.m3u");
+    // Forget the item, so the next scan must open the file again; the
+    // walk itself does not, once the cache vouches for the new mode.
+    let hash = files(&h.db).await?["music/untagged_hum.mp3"].clone();
+    sqlx::query("DELETE FROM media_items WHERE blake3 = ?")
+        .bind(&hash)
+        .execute(h.db.pool())
+        .await?;
+    set_mode(&media, 0o000)?;
+    set_mode(&playlist, 0o000)?;
+    if std::fs::read(&media).is_ok() {
+        // Root reads through any mode; CI's container runs as root.
+        set_mode(&media, 0o644)?;
+        set_mode(&playlist, 0o644)?;
+        return Ok(());
+    }
+    h.restamp(&media).await?;
+    h.restamp(&playlist).await?;
+    let s = h.scan().await;
+    set_mode(&media, 0o644)?;
+    set_mode(&playlist, 0o644)?;
+    let s = s?;
+    assert_eq!((s.errors, s.removed), (2, 0), "{s:?}");
+    assert_eq!(
+        problem_keys(&h.db).await?,
+        [
+            "record:media_files:music/untagged_hum.mp3",
+            "record:media_playlists:playlists/bridge_ambience.m3u",
+        ]
+    );
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM media_playlists WHERE id = 'playlists/bridge_ambience.m3u'",
+    )
+    .fetch_one(h.db.pool())
+    .await?;
+    assert_eq!(n, 1, "the playlist that would not read keeps its row");
+
+    // A scan that cannot see the file at all does not try it, so its row
+    // stands; the playlist, read again, clears.
+    let aside = h.root.join("untagged_hum.mp3.aside");
+    std::fs::rename(&media, &aside)?;
+    std::os::unix::fs::symlink(h.root.join("nowhere.mp3"), &media)?;
+    h.scan().await?;
+    assert_eq!(
+        problem_keys(&h.db).await?,
+        ["listing:files", "record:media_files:music/untagged_hum.mp3"]
+    );
+    std::fs::remove_file(&media)?;
+    std::fs::rename(&aside, &media)?;
+
+    let s = h.scan().await?;
+    assert_eq!((s.errors, s.items), (0, 1), "{s:?}");
+    assert_eq!(problem_keys(&h.db).await?, Vec::<String>::new());
     Ok(())
 }
 
@@ -1165,5 +1301,85 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
             std::fs::copy(entry.path(), &dst)?;
         }
     }
+    Ok(())
+}
+
+/// A path the scan did not read is not a path that is gone (audit
+/// 2026-10-02 §4). A file now over `max_bytes`, a file evicted to the
+/// cloud (a size and no blocks, which the scan must not read), and a
+/// removed file seen through a walk that reported an error each used to
+/// lose its row.
+#[tokio::test]
+async fn a_path_the_scan_passed_over_keeps_its_row() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    let before = files(&h.db).await?;
+
+    let over = h
+        .scan_with(|o| ingest::FetchOptions {
+            max_bytes: Some(1),
+            ..o
+        })
+        .await?;
+    assert_eq!(over.removed, 0, "{over:?}");
+    assert_eq!(
+        files(&h.db).await?,
+        before,
+        "every file is over max_bytes, none is gone"
+    );
+
+    let evicted = h.root.join("music/ode_to_spot.mp3");
+    let size = std::fs::metadata(&evicted)?.len();
+    std::fs::remove_file(&evicted)?;
+    std::fs::File::create(&evicted)?.set_len(size)?;
+    let dataless = h.scan().await?;
+    assert_eq!(dataless.dataless_skipped, 1, "{dataless:?}");
+    assert_eq!(dataless.removed, 0, "{dataless:?}");
+    assert_eq!(
+        files(&h.db).await?,
+        before,
+        "the evicted file is still there"
+    );
+
+    std::fs::remove_file(h.root.join("music/untagged_hum.mp3"))?;
+    std::os::unix::fs::symlink(h.root.join("nowhere"), h.root.join("music/dangling.mp3"))?;
+    let walked = h.scan().await?;
+    assert_eq!(walked.removed, 0, "{walked:?}");
+    assert!(files(&h.db).await?.contains_key("music/untagged_hum.mp3"));
+    let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+        .fetch_all(h.db.pool())
+        .await?;
+    assert_eq!(problems, vec!["listing:files".to_string()]);
+    Ok(())
+}
+
+/// A file that will not open was a walk error, so one unreadable file
+/// held back every deletion under the root. It is a row of its own now:
+/// its stored rows stay, a file deleted beside it goes, and the row
+/// clears once the file opens.
+#[tokio::test]
+async fn a_file_that_will_not_open_is_its_own_row_and_deletes_go_on() -> Result<()> {
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    let locked = h.root.join("music/untagged_hum.mp3");
+    std::fs::remove_file(h.root.join("playlists/bridge_ambience.m3u"))?;
+    set_mode(&locked, 0o000)?;
+    if std::fs::read(&locked).is_ok() {
+        // Root reads through any mode; CI's container runs as root.
+        set_mode(&locked, 0o644)?;
+        return Ok(());
+    }
+    let s = h.scan().await;
+    set_mode(&locked, 0o644)?;
+    let s = s?;
+    assert_eq!(s.removed, 1, "the deleted playlist goes: {s:?}");
+    assert!(files(&h.db).await?.contains_key("music/untagged_hum.mp3"));
+    assert_eq!(
+        problem_keys(&h.db).await?,
+        ["record:files:music/untagged_hum.mp3"]
+    );
+
+    h.scan().await?;
+    assert_eq!(problem_keys(&h.db).await?, Vec::<String>::new());
     Ok(())
 }

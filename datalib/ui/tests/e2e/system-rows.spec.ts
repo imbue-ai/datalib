@@ -4,7 +4,14 @@
 // or removes.
 
 import { test, expect } from "@playwright/test";
-import { expandRow, menuEntry, nameCell, pipelineRow, rowMenuEntry } from "./grid-helpers";
+import {
+  expandRow,
+  menuEntry,
+  nameCell,
+  pipelineRow,
+  rowMenuEntry,
+  shownCards,
+} from "./grid-helpers";
 
 test("System and its Logs child: sizes, a Browse that opens the log, no Sync", async ({ page }) => {
   await page.goto("/data_sources");
@@ -28,7 +35,7 @@ test("System and its Logs child: sizes, a Browse that opens the log, no Sync", a
   await page.keyboard.press("Escape");
 
   await logs.getByRole("button", { name: "Browse the log" }).click();
-  const col = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+  const col = shownCards(page).filter({ has: page.locator(".rl-panel") });
   await expect(col).toBeVisible({ timeout: 10_000 });
-  await expect(col.locator(".miller-col-title")).toHaveText("Log · everything");
+  await expect(col.locator(".ct-card-title")).toHaveText("Log · everything");
 });

@@ -5,12 +5,12 @@
 use std::path::PathBuf;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
 use datalib_etl_airvisual::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_airvisual_config::AirvisualDevice;
 use datalib_etl_airvisual_render::render::parse::{inputs, parse};
 use datalib_etl_airvisual_render::render::render::render_all;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 

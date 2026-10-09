@@ -4,12 +4,22 @@
 <data_root>/<group>/ingest/entities.doltlite_db   per-source entities + sync bookkeeping
 <data_root>/<group>/ingest/blobs.sqlite           content-addressed blobs (plain SQLite)
 <data_root>/<group>/render_markdown/…             the rendered tree + its render store
-<data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems
+<data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems /
+                                                  source_contacts (who each handle is, per source)
+<data_root>/unified_index/grid_index/search_terms.sqlite every id, handle, title, label and name each
+                                                  grid row answers to, full-text indexed (plain SQLite;
+                                                  `grid_index` rewrites it after each pass,
+                                                  `etl/render/src/search_terms.rs`)
 <data_root>/unified_index/qmd_aggregator/           the qmd index (plain SQLite inside)
 <data_root>/unified_index/embedding_map/embedding_map.json
                                                   every embedded document's place on
                                                   the map card; replaced whole by
                                                   each run, deleted by a reset
+<data_root>/datalib_curated/datalib_contacts/contacts.doltlite_db
+                                                  contacts a person made, the handles
+                                                  linked to them and the photo they put
+                                                  on one; written only by the
+                                                  `datalib_contacts` applet
 <data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/usage.doltlite_db              bytes-on-disk over time
 <data_root>/system/remote_media.doltlite_db       what remote media a person let a document
@@ -41,9 +51,19 @@
                                                   (`dag/README.md` § What wakes the loop)
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
                                                   (the server holds both while it is up)
+<data_root>/system/ui-state/<name>.json            JSON the UI keeps in the library: the
+                                                  containers layout's open tree
+                                                  (`layout`) and saved composites
+                                                  (`composites`); opaque to the server
+                                                  (`http/src/ui_state.rs`)
+<data_root>/system/library-summary.json           source count, bytes on disk and the last
+                                                  sync's end, for the desktop app's list of
+                                                  libraries; datalib-http rewrites it when
+                                                  it answers the manage rows and a figure
+                                                  moved (`http/src/manage/summary.rs`)
 ```
 
-Every store above but qmd's index and the map's JSON carries a
+Every store above but qmd's index and the JSON files carries a
 `_datalib_meta` table — which datalib and
 git commit wrote it, the doltlite it was written with, a hash of the
 DDL it was opened with, and its kind — written by the owner on open
@@ -53,6 +73,13 @@ know what it is looking at reads that before its first query — and
 every owner does, refusing a store a newer `major.minor` of datalib
 wrote (`datalib_store_meta::guard`; the app server then boots only to
 show the screen that says so, and `datalib-dag` refuses the root).
+
+`datalib_curated/` holds what a person curates by hand, one directory
+per app, so each can be managed or deleted on its own. Nothing can
+rebuild it: no reset or source deletion touches it, and its store
+refuses a schema it cannot reach rather than rebuilding
+(`doltlite_raw::open_curated`). No group or step may claim the name
+(`datalib_dag::config::CURATED_DIR`).
 
 One writer per file ([`etl/README.md`](../../datalib/backend/etl/README.md)
 § "Connection pools" has the rule and why). The `ingest` step owns its group's

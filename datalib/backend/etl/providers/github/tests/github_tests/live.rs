@@ -37,7 +37,7 @@ async fn github_live_single_pr_snapshot() {
         .unwrap();
     let opts = FetchOptions {
         targets: vec![(repo.clone(), num)],
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), datalib_time::IsoOffsetTimestamp::now_local())
     };
     let r = github::fetch(opts).await;
     // Seal what `fetch` wrote before anything reads it, the way the

@@ -66,7 +66,22 @@ pub struct SearchRow {
     /// resolves *from*, and what a `source_id:` filter matches.
     pub source_id: String,
     pub kind: String,
+    /// The author as the source showed them.
     pub author: String,
+    /// The author's handle where the source has one; what the Author
+    /// cell resolves. Beside `author` rather than instead of it, as
+    /// `source_ref` sits beside `source`.
+    pub author_handle: Option<String>,
+    /// The Author cell: the handle as a URI for its id, `author` for its
+    /// label, the handle kind's mark. Resolved by the applet from the two
+    /// fields above; never read from the index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_ref: Option<datalib_columns::Identity>,
+    /// What a `from:` term names this row's author by: the handle where
+    /// there is one, else the name shown. What the Author cell's Keep
+    /// only writes. Resolved by the applet; never read from the index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_term: Option<String>,
     /// Slack channel display name for Slack rows; empty otherwise.
     pub channel: String,
     /// Public URL for the row's source artifact (Slack permalink,

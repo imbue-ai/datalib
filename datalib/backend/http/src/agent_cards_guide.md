@@ -101,7 +101,7 @@ export default (args) => (root, ctx) => {
 - **Return a teardown.** Remove listeners/intervals you added globally.
 - **Set a title.** Call `ctx.setTitle("…")` first thing in your render
   (and again if a better title emerges later, e.g. after a fetch) —
-  it's what the card's chrome bar shows outside dev mode. Skipping it
+  it's what the card's chrome bar shows outside edit mode. Skipping it
   falls back to one derived from the card source.
 - **Offer help.** `ctx.setHelp("<p>…</p>")` puts a "?" on the card
   that opens what this card shows and how to work it.

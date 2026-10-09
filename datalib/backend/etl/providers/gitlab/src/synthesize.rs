@@ -5,12 +5,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use datalib_etl::event_store::load_latest_by_key;
-use datalib_etl::http::{HttpRequest, HttpService};
-use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
+use datalib_etl_web::http::{HttpRequest, HttpService};
+use datalib_etl_web::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::Value;
 
+use datalib_etl_forge_ingest_common::{covered_hi, Bounds};
+
 use crate::ingest::schema_raw::{discussion_pk_recipe, mr_pk_recipe};
-use crate::ingest::{BASE, DEFAULT_SCOPES, ENTITY_DISCUSSION, ENTITY_MR, ENTITY_SELF, PER_PAGE};
+use crate::ingest::{
+    search_url, stamp, BASE, DEFAULT_SCOPES, ENTITY_DISCUSSION, ENTITY_MR, ENTITY_SELF, PER_PAGE,
+};
 
 pub struct GitlabSynth {
     pub api_dir: PathBuf,
@@ -34,6 +38,17 @@ fn mr_proj_iid(rec: &Value) -> Option<(String, u64)> {
     Some((p, n))
 }
 
+/// Where a run after one pinned at `at`, which listed MRs updated at
+/// `newest` at the latest, starts its listing: the top of what that run
+/// covered, by the policy the download itself runs.
+fn resumed_from(at: &str, newest: Option<&str>) -> Option<Bounds> {
+    let at = datalib_time::parse_strict(at).ok()?;
+    Some(Bounds {
+        lo: Some(covered_hi(&stamp(&at), newest).to_string()),
+        hi: None,
+    })
+}
+
 impl Synthesizer for GitlabSynth {
     fn name(&self) -> &'static str {
         "gitlab"
@@ -45,6 +60,7 @@ impl Synthesizer for GitlabSynth {
         }
         let mut count = 0usize;
         let mut user_id: i64 = 0;
+        let mut captured_at: Option<String> = None;
 
         // /user from latest self_identity.
         let selves = load_latest_by_key(&self.api_dir, ENTITY_SELF, |r| {
@@ -60,6 +76,10 @@ impl Synthesizer for GitlabSynth {
                 .and_then(|v| v.as_i64())
                 .or_else(|| latest.get("user_id").and_then(|v| v.as_i64()))
                 .unwrap_or(0);
+            captured_at = latest
+                .get("_recorded_at")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let raw = latest.get("raw").cloned().unwrap_or(Value::Null);
             write_fixture(
                 out_root,
@@ -84,8 +104,9 @@ impl Synthesizer for GitlabSynth {
             }
         }
 
-        // Discovery search fixtures per default scope. Minimal item shape:
-        // `web_url` (download derives proj from it) + `iid`.
+        // Discovery listing fixtures per default scope. Minimal item
+        // shape: `web_url` (download derives proj from it), `iid`, and
+        // the `updated_at` it lists the MR at.
         let items: Vec<Value> = mr_by_key
             .iter()
             .map(|((proj, iid), raw)| {
@@ -95,22 +116,37 @@ impl Synthesizer for GitlabSynth {
                 let mut obj = serde_json::Map::new();
                 obj.insert("web_url".into(), web_url);
                 obj.insert("iid".into(), Value::from(*iid));
+                if let Some(updated_at) = raw.get("updated_at") {
+                    obj.insert("updated_at".into(), updated_at.clone());
+                }
                 Value::Object(obj)
             })
             .collect();
+        let newest = mr_by_key
+            .values()
+            .filter_map(|raw| raw.get("updated_at").and_then(Value::as_str))
+            .max();
         for scope in DEFAULT_SCOPES {
-            let scope_param = if *scope == "reviewer" {
-                format!("reviewer_id={user_id}")
-            } else {
-                format!("scope={scope}")
-            };
-            let url = format!(
-                "{BASE}/merge_requests?{scope_param}&state=all&per_page={PER_PAGE}&order_by=updated_at&sort=desc"
-            );
             write_fixture(
                 out_root,
-                &req_get(&url),
+                &req_get(&search_url(scope, user_id, &Bounds::default())),
                 &json_response(&Value::Array(items.clone())),
+            )?;
+            count += 1;
+        }
+        // A sync after one pinned at the capture's own moment asks each
+        // scope what changed since; nothing had.
+        for scope in DEFAULT_SCOPES {
+            let Some(bounds) = captured_at
+                .as_deref()
+                .and_then(|at| resumed_from(at, newest))
+            else {
+                break;
+            };
+            write_fixture(
+                out_root,
+                &req_get(&search_url(scope, user_id, &bounds)),
+                &json_response(&Value::Array(Vec::new())),
             )?;
             count += 1;
         }
@@ -177,7 +213,7 @@ impl Synthesizer for GitlabSynth {
 mod tests {
     use super::*;
     use datalib_etl::event_store::{diff_and_save, make_record};
-    use datalib_etl::http::{fixture_key, HttpResponse};
+    use datalib_etl_web::http::{fixture_key, HttpResponse};
     use serde_json::{json, Map};
     use std::collections::HashMap;
     use std::fs;
@@ -196,7 +232,12 @@ mod tests {
 
         let mut k = Map::new();
         k.insert("user_id".into(), json!(7));
-        write_event(&api, ENTITY_SELF, k, json!({"id": 7, "username": "tt"}));
+        let mut rec = make_record(k, json!({"id": 7, "username": "tt"}));
+        rec["_recorded_at"] = json!("2369-04-15T00:00:00+00:00");
+        diff_and_save(&api, ENTITY_SELF, &[rec], &HashMap::new(), |r| {
+            r.to_string()
+        })
+        .unwrap();
 
         let proj = "ns/proj";
         let iid: u64 = 12;
@@ -227,8 +268,20 @@ mod tests {
 
         let out = d.path().join("playback");
         let report = GitlabSynth::new(&api).synthesize(&out).unwrap();
-        // 1 user + 3 scopes + 1 MR detail + 1 discussions = 6
-        assert_eq!(report.fixtures_written, 6);
+        // 1 user + 3 scopes + 3 resumed ones + 1 MR detail + 1
+        // discussions = 9
+        assert_eq!(report.fixtures_written, 9);
+
+        // a listing resumed from the capture's moment finds nothing new
+        let resumed = Bounds {
+            lo: Some("2369-04-15T00:00:00.000Z".to_string()),
+            hi: None,
+        };
+        let req = req_get(&search_url("reviewer", 7, &resumed));
+        let p = out.join("gitlab").join(fixture_key(&req));
+        let resp: HttpResponse = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
+        let body: Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(body, json!([]));
 
         let req = req_get(&format!("{BASE}/user"));
         let p = out.join("gitlab").join(fixture_key(&req));

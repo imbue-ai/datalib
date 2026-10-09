@@ -8,11 +8,13 @@ use std::process::Stdio;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use tokio::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::db::{BeeperMediaAttachmentRow, EventRow, RawDb, RoomRow, UserRow};
 use super::FetchSummary;
-use datalib_etl::blob_cas::CasEdgeRow as _;
+use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
+use datalib_etl::download_problems::DownloadProblem;
+use datalib_etl::run_problems::RunProblems;
 
 /// In-memory accumulator the per-thread walkers push into; flushed
 /// once in three chunked multi-row INSERTs at the end of [`ingest`].
@@ -21,6 +23,17 @@ struct PendingBatch {
     rooms: Vec<RoomRow>,
     users: Vec<UserRow>,
     events: Vec<EventRow>,
+    /// Events whose attachment carried no `id`, so it has no edge.
+    attachments_without_id: Vec<String>,
+}
+
+/// One thread's attachments, landed after its walk so a query that
+/// fails part-way never leaves a store write half-done.
+#[derive(Default)]
+struct ThreadMedia {
+    acc: CasEdgeAccumulator,
+    /// Edges recorded with no bytes because `media` is off.
+    not_copied: Vec<BeeperMediaAttachmentRow>,
 }
 
 /// `source` tag stamped on every row this module emits. Distinguishes
@@ -114,6 +127,11 @@ pub(super) async fn query_json(db_path: &Path, sql: &str) -> Result<Vec<Value>> 
 /// configured networks. Walks threads → rooms → (participants →
 /// users, messages → events, reactions → events, attachments →
 /// blobs).
+///
+/// A thread whose rows will not read is reported to `found` and
+/// stepped over; only the thread listing itself fails the run. Returns
+/// the configured networks no thread belongs to.
+#[allow(clippy::too_many_arguments)]
 pub async fn ingest(
     db_path: &Path,
     dst: &RawDb,
@@ -122,13 +140,15 @@ pub async fn ingest(
     download_media: bool,
     summary: &mut FetchSummary,
     progress: &datalib_etl::progress::Progress,
-) -> Result<()> {
+    found: &RunProblems,
+) -> Result<Vec<DownloadProblem>> {
     // ── threads → rooms ──────────────────────────────────────────────
     let thread_rows = query_json(db_path, "SELECT threadID, accountID, thread FROM threads;")
         .await
         .context("query threads")?;
 
     let mut target_rooms: Vec<(String, String, Value)> = Vec::new();
+    let mut matched_networks: HashSet<&str> = HashSet::new();
     for row in &thread_rows {
         let thread_id = row
             .get("threadID")
@@ -150,6 +170,7 @@ pub async fn ingest(
             debug!(event = "beeper_thread_skip", account_id = %account_id, "skipping a thread of an account not in scope");
             continue;
         };
+        matched_networks.insert(network.as_str());
         // sqlite3 -json gives us `thread` as either a JSON value (if
         // it round-tripped through JSON1) or a string. Handle both.
         let thread_json = match row.get("thread") {
@@ -178,27 +199,36 @@ pub async fn ingest(
         batch.rooms.push(room_row);
         summary.rooms += 1;
 
-        ingest_participants(
-            db_path,
-            thread_id,
-            network,
-            &mut seen_users,
-            &mut batch,
-            summary,
-        )
-        .await?;
-        ingest_messages(
-            db_path,
-            dst,
-            media_root,
-            thread_id,
-            network,
-            download_media,
-            &mut batch,
-            summary,
-        )
-        .await?;
-        ingest_reactions(db_path, thread_id, network, &mut batch, summary).await?;
+        let mut media = ThreadMedia::default();
+        let walked = async {
+            ingest_participants(
+                db_path,
+                thread_id,
+                network,
+                &mut seen_users,
+                &mut batch,
+                summary,
+            )
+            .await?;
+            ingest_messages(
+                db_path,
+                media_root,
+                thread_id,
+                network,
+                download_media,
+                &mut batch,
+                &mut media,
+                summary,
+            )
+            .await?;
+            ingest_reactions(db_path, thread_id, network, &mut batch, summary).await
+        }
+        .await;
+        if let Err(e) = walked {
+            found.listing(&format!("messages {thread_id}"), format!("{e:#}"));
+        }
+        dst.flush_media_attachments(&media.acc).await?;
+        dst.bulk_upsert_media_attachments(&media.not_copied).await?;
 
         progress.inc(1);
         progress.set_message(&format!(
@@ -215,7 +245,27 @@ pub async fn ingest(
     dst.bulk_upsert_rooms(&batch.rooms).await?;
     dst.bulk_upsert_users(&batch.users).await?;
     dst.bulk_upsert_events(&batch.events).await?;
-    Ok(())
+    if let Some(first) = batch.attachments_without_id.first() {
+        found.phase(
+            "attachments",
+            format!(
+                "{} attachment(s) carry no `id`, so they have no file to copy; first on event {first}",
+                batch.attachments_without_id.len()
+            ),
+        );
+    }
+    Ok(networks
+        .iter()
+        .filter(|n| !matched_networks.contains(n.as_str()))
+        .map(|n| {
+            let detail = if account_patterns_for(n).is_empty() {
+                "this build knows no network by that name"
+            } else {
+                "index.db has no chats from an account on this network"
+            };
+            DownloadProblem::not_found("sources", n, detail)
+        })
+        .collect())
 }
 
 fn build_room_row(
@@ -330,12 +380,12 @@ async fn ingest_participants(
 #[allow(clippy::too_many_arguments)]
 async fn ingest_messages(
     db_path: &Path,
-    dst: &RawDb,
     media_root: &Path,
     thread_id: &str,
     network: &str,
     download_media: bool,
     batch: &mut PendingBatch,
+    media: &mut ThreadMedia,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let sql = format!(
@@ -439,25 +489,21 @@ async fn ingest_messages(
             .and_then(|v| v.as_array())
         {
             for (i, att) in attachments.iter().enumerate() {
-                if let Err(e) = ingest_attachment(
-                    dst,
+                let Some(att_id) = att.get("id").and_then(|v| v.as_str()) else {
+                    batch.attachments_without_id.push(event_id.clone());
+                    continue;
+                };
+                ingest_attachment(
                     media_root,
                     &event_uuid,
                     i,
+                    att_id,
                     att,
                     download_media,
+                    media,
                     summary,
                 )
-                .await
-                {
-                    warn!(
-                        event = "beeper_attachment_failed",
-                        event_id = %event_id,
-                        slot = i,
-                        error = %e,
-                        "an attachment could not be stored"
-                    );
-                }
+                .await;
             }
         }
     }
@@ -534,19 +580,17 @@ fn parse_attachment_id(att_id: &str) -> Option<(&'static str, &str, &str, String
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ingest_attachment(
-    dst: &RawDb,
     media_root: &Path,
     owning_event_uuid: &str,
     slot: usize,
+    att_id: &str,
     att: &Value,
     download_media: bool,
+    media: &mut ThreadMedia,
     summary: &mut FetchSummary,
-) -> Result<()> {
-    let att_id = att
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("attachment without `id`"))?;
+) {
     let mime = att
         .get("mimeType")
         .and_then(|v| v.as_str())
@@ -555,25 +599,22 @@ async fn ingest_attachment(
         .get("fileName")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let src_url = att
-        .get("srcURL")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| att_id.to_string());
-    let slot_str = file_name
-        .clone()
-        .unwrap_or_else(|| format!("attachment_{slot}"));
+    let slot_str = file_name.unwrap_or_else(|| format!("attachment_{slot}"));
     // `ref_id` encodes both the per-event slot ordering and the
     // display filename. The `|` separator lets parse split them
     // back out — render uses the filename as the markdown link's
     // alt text. Mirrors how WhatsApp's wa_media_files.relative_path
     // doubles as a display label.
     let blob_id = format!("{slot}|{slot_str}");
-    let _ = (&src_url,);
 
     let Some((_scheme, _server, media_id, dir_name)) = parse_attachment_id(att_id) else {
-        debug!(event = "beeper_attachment_unknown_scheme", id = %att_id, "an attachment's URL has a scheme this build does not fetch");
-        return Ok(());
+        media.acc.add_skipped(
+            owning_event_uuid,
+            &blob_id,
+            datalib_problems::Reason::UncoveredType,
+            format!("the attachment's URL {att_id:?} has a scheme this build does not read"),
+        );
+        return;
     };
     let path: PathBuf = media_root.join(&dir_name).join(media_id);
 
@@ -582,52 +623,33 @@ async fn ingest_attachment(
         // attachment but haven't fetched bytes yet." Render will emit
         // the "(not yet fetched)" placeholder for any ref_id whose
         // bundle entry is missing bytes.
-        let edge = BeeperMediaAttachmentRow {
+        media.not_copied.push(BeeperMediaAttachmentRow {
             id: BeeperMediaAttachmentRow::pk_recipe(owning_event_uuid, &blob_id),
             event_uuid: owning_event_uuid.to_string(),
             ref_id: blob_id,
             blake3: None,
-        };
-        dst.bulk_upsert_media_attachments(std::slice::from_ref(&edge))
-            .await?;
-        return Ok(());
+        });
+        return;
     }
 
-    let bytes = match tokio::fs::read(&path).await {
-        Ok(b) => b,
-        Err(e) => {
-            warn!(
-                event = "beeper_attachment_read_failed",
-                event_uuid = %owning_event_uuid,
-                path = %path.display(),
-                error = %e,
-                "an attachment file could not be read"
-            );
-            // Still record the edge so a future re-run (with the
-            // file present) can spot the gap and re-ingest.
-            let edge = BeeperMediaAttachmentRow {
-                id: BeeperMediaAttachmentRow::pk_recipe(owning_event_uuid, &blob_id),
-                event_uuid: owning_event_uuid.to_string(),
-                ref_id: blob_id,
-                blake3: None,
-            };
-            dst.bulk_upsert_media_attachments(std::slice::from_ref(&edge))
-                .await?;
-            summary.blob_errors += 1;
-            return Ok(());
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => {
+            media
+                .acc
+                .add_fetched(owning_event_uuid, &blob_id, bytes, mime);
+            summary.blobs += 1;
         }
-    };
-    let blake3 = dst.cas().put(&bytes, mime.as_deref()).await?;
-    let edge = BeeperMediaAttachmentRow {
-        id: BeeperMediaAttachmentRow::pk_recipe(owning_event_uuid, &blob_id),
-        event_uuid: owning_event_uuid.to_string(),
-        ref_id: blob_id,
-        blake3: Some(blake3),
-    };
-    dst.bulk_upsert_media_attachments(std::slice::from_ref(&edge))
-        .await?;
-    summary.blobs += 1;
-    Ok(())
+        // Not cached by the desktop app, most often: a later run with the
+        // file present fills the edge in and clears its row.
+        Err(e) => {
+            media.acc.add_failed(
+                owning_event_uuid,
+                &blob_id,
+                format!("{}: {e}", path.display()),
+            );
+            summary.blob_errors += 1;
+        }
+    }
 }
 
 #[cfg(test)]

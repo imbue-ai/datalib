@@ -5,7 +5,7 @@
 // 502: {"error":"read response: Resource temporarily unavailable (os
 // error 35)"}" above rows that answered a different query.
 import { test, expect } from "@playwright/test";
-import { EVERY_ROW, SEARCH_ROWS } from "./grid-helpers";
+import { EVERY_ROW, SEARCH_ROWS, typeInto } from "./grid-helpers";
 
 test("a timed-out search says so, marks the old rows, and retries", async ({ page }) => {
   await page.goto(EVERY_ROW);
@@ -21,7 +21,7 @@ test("a timed-out search says so, marks the old rows, and retries", async ({ pag
         })
       : route.fallback(),
   );
-  await page.getByTestId("search-input").fill("is:document");
+  await typeInto(page.getByTestId("search-input"), "is:document");
 
   const banner = page.getByRole("alert").filter({ hasText: "Search timed out" });
   await expect(banner).toContainText(

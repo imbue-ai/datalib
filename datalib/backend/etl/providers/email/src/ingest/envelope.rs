@@ -96,7 +96,7 @@ impl GmailId {
     }
 
     /// Zero-padded, so the text sorts as the number does.
-    fn key(self) -> String {
+    pub(crate) fn key(self) -> String {
         format!("{:016x}", self.0)
     }
 }

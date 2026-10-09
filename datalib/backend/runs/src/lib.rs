@@ -16,7 +16,7 @@ pub use app_schema::runs::{
 pub use datalib_runtime::build_id::{
     git_hash, git_hash_and_origin, GitHashOrigin, GIT_HASH_ENV, NO_GIT_HASH_ADVICE,
 };
-pub use query::{log_query, LogCursor, LogQuery, QueryError};
+pub use query::{key_names, log_query, log_values, LogCursor, LogQuery, QueryError};
 pub use store::{
     canonical_labels, close_abandoned_run, last_log_seq, latest_metric, latest_metrics, log_after,
     log_line, metric_history, new_process_id, open_or_create, process, process_log_after,

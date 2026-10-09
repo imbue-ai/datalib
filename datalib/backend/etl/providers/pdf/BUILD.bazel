@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Tiny synthetic PDF corpus. Generated rather than checked in as
 # binaries so the inputs are readable in review and reproducible: see
 # //tests/fixtures/make_pdf_fixtures.py for what each one is testing.
@@ -25,6 +23,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/pdf_config:datalib_etl_pdf_config",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -32,7 +31,6 @@ rust_library(
         "@datalib_crates//:lopdf",
         "@datalib_crates//:pdf-inspector",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:tracing",
     ],
 )
 
@@ -60,6 +58,7 @@ rust_test(
         ":datalib_etl_pdf",
         "//datalib/backend/etl/providers/pdf_render:datalib_etl_pdf_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",

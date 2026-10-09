@@ -5,6 +5,8 @@ use std::path::Path;
 
 use app_schema::runs::LogLevel;
 use datalib_query::Token;
+use sqlx::Row;
+use strum::VariantArray;
 
 use crate::runs_path;
 use crate::store::{log_line_from, open_existing, LogLine, LOG_LINE_COLUMNS};
@@ -71,6 +73,14 @@ const COMMIT_KEY: &str = "commit";
 /// know ranks above every known one, so a line from a newer build is
 /// shown rather than hidden.
 const MIN_LEVEL_KEY: &str = "min_level";
+
+/// Every key a log query reads, for the search bar to offer.
+pub fn key_names() -> Vec<&'static str> {
+    KEYS.iter()
+        .map(|(k, _)| *k)
+        .chain([COMMIT_KEY, MIN_LEVEL_KEY])
+        .collect()
+}
 const LEVEL_RANK: &str = "CASE l.level WHEN 'trace' THEN 0 WHEN 'debug' THEN 1 WHEN 'info' THEN 2 \
      WHEN 'warn' THEN 3 WHEN 'error' THEN 4 ELSE 5 END";
 
@@ -240,6 +250,78 @@ pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogLine
         lines.reverse();
     }
     Ok(lines)
+}
+
+/// The most values one suggestion answer carries.
+const MAX_VALUES: i64 = 20;
+
+/// What the search bar suggests for `key`'s value: the values holding
+/// `typed` (case-blind) among the lines the rest of the query `q` keeps,
+/// most lines first, each with its count; for `min_level:`, the levels.
+/// Empty for a key with nothing to offer, or before the store exists.
+pub async fn log_values(
+    data_root: &Path,
+    q: &str,
+    key: &str,
+    typed: &str,
+) -> Result<Vec<(String, Option<u64>)>, QueryError> {
+    if key == MIN_LEVEL_KEY {
+        let typed = typed.to_lowercase();
+        return Ok(LogLevel::VARIANTS
+            .iter()
+            .map(|l| l.as_str())
+            .filter(|l| l.contains(&typed))
+            .map(|l| (l.to_string(), None))
+            .collect());
+    }
+    let col = if key == COMMIT_KEY {
+        "p.git_hash"
+    } else {
+        match KEYS.iter().find(|(k, _)| *k == key) {
+            Some((_, col)) => *col,
+            None => return Ok(Vec::new()),
+        }
+    };
+    let mut compiled = compile(&LogQuery {
+        q,
+        cursor: LogCursor::Newest,
+        limit: 0,
+    })?;
+    compiled
+        .clauses
+        .push(format!("LOWER(CAST({col} AS TEXT)) LIKE ? ESCAPE '\\'"));
+    compiled.binds.push(Bound::Text(format!(
+        "%{}%",
+        escape_like(&typed.to_lowercase())
+    )));
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Ok(Vec::new());
+    };
+    let sql = format!(
+        "SELECT CAST({col} AS TEXT), count(*) FROM log l LEFT JOIN processes p USING (process_id) \
+         WHERE {col} IS NOT NULL AND {col} != '' AND {} GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT ?",
+        compiled.clauses.join(" AND ")
+    );
+    // Audited: as `log_query`; `col` is one of the `&'static str` names
+    // in KEYS.
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+    for b in &compiled.binds {
+        query = match b {
+            Bound::Text(s) => query.bind(s),
+            Bound::Int(n) => query.bind(*n),
+        };
+    }
+    let rows = query.bind(MAX_VALUES).fetch_all(&pool).await;
+    pool.close().await;
+    let rows = rows.map_err(|e| QueryError(format!("suggest values: {e}")))?;
+    Ok(rows
+        .iter()
+        .map(|r| (r.get::<String, _>(0), Some(r.get::<i64, _>(1) as u64)))
+        .collect())
 }
 
 #[cfg(test)]

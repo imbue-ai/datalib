@@ -5,10 +5,10 @@
 // published edition/translation (`grc2`, `eng1`, `eng6`, `fre1`,
 // `ger2`, …) — and a collapsible hierarchy of locators (book → chapter
 // → section). Clicking any locator opens one reader panel per enabled
-// version via `ctx.host.openCards(…)` — in the miller layout that lands
-// the panels as columns to the right of this one (and re-clicking swaps
-// them out), which is the scaife "open the same passage side-by-side in
-// every version" gesture.
+// version via `ctx.host.openCards(…)` — in a Columns container that
+// lands the panels as columns to the right of this one (and re-clicking
+// swaps them out), which is the scaife "open the same passage
+// side-by-side in every version" gesture.
 import { cardApi } from "../cardApi";
 import type { CardRender } from "../types";
 
@@ -90,7 +90,7 @@ function docSource(md: string, anchor: string | null): string {
 
 export function perseusView(): CardRender {
   return (root, ctx) => {
-    const { fetchSearch } = cardApi(ctx);
+    const { fetchManageRows, fetchSearch } = cardApi(ctx);
     ctx.setTitle("Perseus reader");
     const style = document.createElement("style");
     style.textContent = `
@@ -402,19 +402,27 @@ export function perseusView(): CardRender {
 
     paint();
 
-    // One structured search returns every Perseus row; limit is set
-    // high enough for the full Histories across all editions (8 books ×
-    // chapters × sections × ~13 editions). The free-text portion is
-    // empty, so this routes through the SQL filter path, not qmd ranking.
+    // One structured search per Perseus source returns its every row;
+    // limit is set high enough for the full Histories across all editions
+    // (8 books × chapters × sections × ~13 editions). The free-text
+    // portion is empty, so this routes through the SQL filter path, not
+    // qmd ranking.
     const ac = new AbortController();
-    void fetchSearch("source:Perseus", 200000, ac.signal)
-      .then((resp) => {
-        ingest(resp.rows);
+    void fetchManageRows(false, ac.signal)
+      .then(({ rows }) =>
+        Promise.all(
+          rows
+            .filter((r) => r.kind === "group" && r.type?.id === "perseus")
+            .map((g) => fetchSearch(`source_id:${g.id}`, 200000, ac.signal)),
+        ),
+      )
+      .then((found) => {
+        for (const resp of found) ingest(resp.rows);
         loading = false;
         paint();
       })
       .catch(() => {
-        // fetchSearch already surfaces a toast; just drop the spinner.
+        // Both fetches already surface a toast; just drop the spinner.
         loading = false;
         paint();
       });

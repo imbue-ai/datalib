@@ -13,7 +13,7 @@ pub mod store;
 /// link them without this one. Re-exported here so every
 /// `datalib_core::layout::…` / `datalib_core::node_runtime::…` call site
 /// resolves.
-pub use datalib_runtime::{layout, node_runtime};
+pub use datalib_runtime::{layout, node_runtime, plain_sqlite};
 
 #[cfg(test)]
 mod tests {

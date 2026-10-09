@@ -4,14 +4,13 @@ import App from "./App.vue";
 import router from "./router";
 import { fetchHealth } from "./api";
 import { installExternalLinkHandler } from "./externalLinks";
-import { installHistoryKeys } from "./historyKeys";
 import { installTelemetry } from "./telemetry";
 // The grid theme, for every grid that is not inside a card's shadow
 // root, and for the menus the grid appends to <body> from those that
 // are — a card imports it a second time, inline, for its own root.
 import "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css";
 import "./theme.css";
-// Sets <html data-density> before the first paint.
+// Sets the size step on <html> before the first paint.
 import "./density";
 
 function applyThemeMode(mode: "light" | "dark") {
@@ -34,7 +33,6 @@ setupSystemThemeSync();
 // source content) go to the OS browser rather than replacing the app.
 // Installed at boot, before any card can render one.
 installExternalLinkHandler();
-installHistoryKeys();
 
 // Warm the health snapshot at boot: the agent hand-off (handoff.ts) needs
 // the API token's path out of it and builds its text inside a synchronous

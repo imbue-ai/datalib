@@ -16,7 +16,7 @@ use anyhow::Result;
 /// The commit a store is read at. The type lives in `datalib_pin`, with
 /// its reasons, so the search applet and the app server pin the same way
 /// without linking this crate.
-pub use datalib_pin::{is_missing_table, Pin};
+pub use datalib_pin::{is_missing_table, missing_schema, Missing, Pin};
 
 /// The commit this store is at now, or `None` when there is nothing
 /// readable to pin: no commit, or none that holds a table.

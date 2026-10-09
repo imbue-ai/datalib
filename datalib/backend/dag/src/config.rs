@@ -468,25 +468,6 @@ pub fn owner_only_options() -> std::fs::OpenOptions {
     opts
 }
 
-/// Replace the config in one rename, so no reader sees half a file.
-pub fn replace_config(path: &Path, text: &str) -> std::io::Result<()> {
-    // One temp name per write, or two writes landing together write one
-    // file and the second rename finds it gone. The `.tmp` suffix is what
-    // the root watcher ignores, so it stays.
-    let tmp = path.with_file_name(format!(
-        "config.{}.{}.tmp",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    write_owner_only(&tmp, text.as_bytes())?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
-}
-
 /// Create (or truncate) `path` owner-only and write `bytes` to it. A
 /// file that already exists keeps its mode: `mode` applies at creation.
 pub fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -555,11 +536,29 @@ fn data_root_of(path: &Path, cfg: &DagConfig) -> PathBuf {
     }
 }
 
-/// The one reserved top-level directory: the runner's and the server's own
-/// state. A step writing there would put the scheduler's own bookkeeping
-/// under its change detection. This is the policy; the path constants live in
-/// `datalib_core::layout`, which this crate deliberately doesn't depend on.
+/// The runner's and the server's own state. A step writing there would put
+/// the scheduler's own bookkeeping under its change detection. This is the
+/// policy; the path constants live in `datalib_core::layout`, which this
+/// crate deliberately doesn't depend on.
 pub const SYSTEM_DIR: &str = "system";
+
+/// State a person curates by hand, one directory per app
+/// (`datalib_contacts::CURATED_DIR`). Nothing can rebuild it, so no step
+/// may write there.
+pub const CURATED_DIR: &str = "datalib_curated";
+
+/// Each top-level directory no group or step may claim, and what it holds.
+const RESERVED_DIRS: &[(&str, &str)] = &[
+    (SYSTEM_DIR, "the runner's and the server's own state"),
+    (
+        CURATED_DIR,
+        "state a person curates by hand, which nothing can rebuild",
+    ),
+];
+
+fn reserved_dir(top: &str) -> Option<(&'static str, &'static str)> {
+    RESERVED_DIRS.iter().copied().find(|(dir, _)| *dir == top)
+}
 
 /// One id segment: what a directory name may contain. Deliberately narrower
 /// than the filesystem allows — an id is a path component on every platform
@@ -576,9 +575,9 @@ fn valid_id_segment(seg: &str) -> bool {
 }
 
 /// Whether `id` is a group id a config may name: one id segment, never
-/// the reserved `system`. What makes `<root>/<id>` that group's tree.
+/// a reserved directory. What makes `<root>/<id>` that group's tree.
 pub fn usable_group_id(id: &str) -> bool {
-    valid_id_segment(id) && id != SYSTEM_DIR
+    valid_id_segment(id) && reserved_dir(id).is_none()
 }
 
 const SEGMENT_RULE: &str = "letters, digits, `.`, `_`, `-`, not starting with `-`, and \
@@ -976,14 +975,14 @@ fn accept_groups(
             ));
             continue;
         }
-        if id == SYSTEM_DIR {
+        if let Some((dir, holds)) = reserved_dir(&id) {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
                 Some("id"),
                 format!(
-                    "group id {SYSTEM_DIR:?} is reserved for the runner's and the server's \
-                     own state; every step under it would write there."
+                    "group id {dir:?} is reserved for {holds}; every step under it would \
+                     write there."
                 ),
             ));
             continue;
@@ -1302,15 +1301,13 @@ fn accept_steps(
         } else {
             Some("id")
         };
-        if id == SYSTEM_DIR || id.starts_with(&format!("{SYSTEM_DIR}/")) {
+        let top = id.split('/').next().unwrap_or_default();
+        if let Some((dir, holds)) = reserved_dir(top) {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
                 id_key,
-                format!(
-                    "id {id:?} writes under {SYSTEM_DIR:?}, which is reserved for the \
-                     runner's and the server's own state."
-                ),
+                format!("id {id:?} writes under {dir:?}, which is reserved for {holds}."),
             ));
             continue;
         }
@@ -1397,6 +1394,22 @@ fn accept_steps(
                 .with_help("name the group instead, in its `[[groups]]` entry"),
             );
         }
+        if c.entry.command.is_none() {
+            for (key, why) in INERT_COMMON_KEYS {
+                if inert_key_is_written(c.entry.params.as_ref(), key) {
+                    let d = Diagnostic::new(Severity::Warning, format!("`common.{key}` {why}"))
+                        .at_entry(c.reference.clone())
+                        .with_help("delete this line");
+                    diags.push(match (text, &c.span) {
+                        (Some(t), Some(sp)) => {
+                            let at = params_key_span(t, sp.clone(), key);
+                            d.at_span(t, at)
+                        }
+                        _ => d,
+                    });
+                }
+            }
+        }
 
         let spec = match spec_of(&c.entry, group_type, source_group) {
             Ok(spec) => spec,
@@ -1453,6 +1466,53 @@ fn retired_subcommand(command: &str) -> Option<&str> {
     words
         .next()
         .filter(|w| matches!(*w, "download" | "render" | "grid_index" | "qmd_index"))
+}
+
+/// Keys a built-in step's `common` may still carry that no longer do
+/// anything, with why. `datalib-step` drops them before it parses, so a
+/// config that writes one loads; this check is what tells the person.
+const INERT_COMMON_KEYS: &[(&str, &str)] = &[(
+    "always_clear_before_ingest",
+    "has no effect: a local source decides what its input's absence means",
+)];
+
+fn inert_key_is_written(params: Option<&toml::Value>, key: &str) -> bool {
+    params
+        .and_then(|p| p.get("common"))
+        .and_then(|c| c.get(key))
+        .is_some()
+}
+
+/// Where `key = …` sits in this entry's body, its `[steps.params…]`
+/// sub-tables included, for a key nested in `params` that
+/// [`key_span`] stops short of. The entry's header when it is not found.
+fn params_key_span(
+    text: &str,
+    header: std::ops::Range<usize>,
+    key: &str,
+) -> std::ops::Range<usize> {
+    let mut at = header.end;
+    for line in text[header.end..].split_inclusive('\n') {
+        let line_start = at;
+        at += line.len();
+        if line.trim_start().starts_with("[[") {
+            break;
+        }
+        let mut from = 0;
+        while let Some(i) = line[from..].find(key) {
+            let start = from + i;
+            let end = start + key.len();
+            let word_before = line[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            if !word_before && line[end..].trim_start().starts_with('=') {
+                return line_start + start..line_start + end;
+            }
+            from = end;
+        }
+    }
+    header
 }
 
 fn is_builtin(e: &StepEntry, function: &str) -> bool {
@@ -1521,29 +1581,6 @@ fn builtin_lock(function: Option<&str>) -> Option<&'static str> {
         .map(|&(_, lock)| lock)
 }
 
-/// The shape of the store each built-in function writes: the hash of its
-/// DDL, as `datalib_store_meta::schema_hash` takes it. A build that moves
-/// one re-runs the steps that write that store (`StepSpec::store_shape`).
-/// `datalib_step`'s `builtin_store_shapes_are_the_ddl_the_step_writes`
-/// fails until these match the real DDL, and prints the new hash.
-pub const BUILTIN_STORE_SHAPES: &[(&str, &str)] = &[
-    (
-        "render_markdown",
-        "ab274403f2cdfd2f0fc3233f47deb3f02cbd0b03a2ba9e4cd63a263b2d912c13",
-    ),
-    (
-        "grid_index",
-        "65d172a1090a352d7566cbd9ad7d315e2c2e90336fad29f5bb62b973f904bc3f",
-    ),
-];
-
-pub fn builtin_store_shape(function: &str) -> Option<&'static str> {
-    BUILTIN_STORE_SHAPES
-        .iter()
-        .find(|&&(f, _)| f == function)
-        .map(|&(_, shape)| shape)
-}
-
 fn reads_unpinned(group_type: Option<&str>, function: Option<&str>) -> bool {
     UNPINNED_BUILTINS
         .iter()
@@ -1599,13 +1636,7 @@ fn spec_of(
     }
     let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env, params });
     spec.code_version = e.code_version.clone();
-    if e.command.is_none() {
-        spec.store_shape = e
-            .function
-            .as_deref()
-            .and_then(builtin_store_shape)
-            .map(str::to_string);
-    }
+    spec.migrates = e.command.is_none();
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);
     spec.function = e.function.clone();
@@ -2097,36 +2128,19 @@ mod tests {
         assert_ne!(none.fingerprint_material(), v1.fingerprint_material());
     }
 
-    /// A derived store rebuilds to a new shape only when its writer runs,
-    /// and a render step with nothing new upstream never runs: after a
-    /// `grid_rows` change the grid index found six render stores still in
-    /// the old shape and failed. The shape of the store a built-in step
-    /// writes is part of what the step is, so a build that moves it makes
-    /// the step due once.
+    /// Only `datalib-step`'s own steps take the `--migrate` verb: a custom
+    /// command that has never heard of it would run as if synced.
     #[test]
-    fn a_builtin_steps_fingerprint_carries_the_shape_of_the_store_it_writes() {
+    fn only_builtin_steps_are_asked_to_migrate() {
         let cfg: DagConfig = toml::from_str(
             r#"
             [[groups]]
             id = "mail"
             type = "email"
 
-            [[groups]]
-            id = "unified_index"
-
             [[steps]]
             group = "mail"
             function = "ingest"
-
-            [[steps]]
-            group = "mail"
-            function = "render_markdown"
-            inputs = ["mail/ingest"]
-
-            [[steps]]
-            group = "unified_index"
-            function = "grid_index"
-            inputs = ["mail/render_markdown"]
 
             [[steps]]
             id = "custom/render"
@@ -2137,29 +2151,8 @@ mod tests {
         .expect("parse");
         let specs = to_specs(&cfg).expect("to_specs");
         let spec = |id: &str| specs.iter().find(|s| s.id == id).unwrap().clone();
-
-        for (id, function) in [
-            ("mail/render_markdown", "render_markdown"),
-            ("unified_index/grid_index", "grid_index"),
-        ] {
-            let loaded = spec(id);
-            let shape = builtin_store_shape(function).expect("a built-in store shape");
-            assert!(
-                loaded.fingerprint_material().contains(shape),
-                "{id}'s fingerprint must carry its store's shape"
-            );
-            let mut older = loaded.clone();
-            older.store_shape = Some("an older shape".to_string());
-            assert_ne!(
-                loaded.fingerprint_material(),
-                older.fingerprint_material(),
-                "{id}: a store written in another shape must make the step due"
-            );
-        }
-        // A step with no store of ours keeps the fingerprint it had, so the
-        // fix re-runs only the steps whose store has a shape.
-        assert_eq!(spec("mail/ingest").store_shape, None);
-        assert_eq!(spec("custom/render").store_shape, None);
+        assert!(spec("mail/ingest").migrates);
+        assert!(!spec("custom/render").migrates);
     }
 
     /// Editing `params` changes the argv the runner executes, which is
@@ -2685,8 +2678,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ids_under_system() {
-        for id in ["system", "system/state", "system/a/b"] {
+    fn rejects_ids_under_a_reserved_dir() {
+        for id in [
+            "system",
+            "system/state",
+            "system/a/b",
+            "datalib_curated",
+            "datalib_curated/datalib_contacts",
+        ] {
             let cfg: DagConfig =
                 toml::from_str(&format!(r#"steps = [{{id = "{id}", command = "a"}}]"#)).unwrap();
             let err = to_specs(&cfg).unwrap_err().to_string();
@@ -3525,7 +3524,7 @@ command = "datalib-applet unified_index"
 
     #[test]
     fn a_group_id_is_one_segment_and_never_system() {
-        for bad in ["", "a/b", "..", "-x", "a b", "system"] {
+        for bad in ["", "a/b", "..", "-x", "a b", "system", "datalib_curated"] {
             let check = check_text(&format!("[[groups]]\nid = \"{bad}\"\n"));
             assert_eq!(check.cfg.groups.len(), 0, "{bad:?} should be rejected");
             assert_eq!(check.diagnostics[0].severity, Severity::Rejected);
@@ -3621,6 +3620,40 @@ command = "datalib-applet unified_index"
             .unwrap();
         assert_eq!(named.severity, Severity::Warning);
         assert_eq!(named.line, Some(10), "the `name =` line");
+    }
+
+    /// `always_clear_before_ingest` went, but a file still naming it has to
+    /// load: the step is kept and the warning points at the line to delete,
+    /// in a `[steps.params.common]` table and inline alike.
+    #[test]
+    fn a_retired_clear_before_ingest_key_only_warns_at_its_line() {
+        let check = check_text(
+            "[[groups]]\nid = \"phone\"\ntype = \"sms_backup_restore\"\n\n\
+             [[steps]]\ngroup = \"phone\"\nfunction = \"ingest\"\n\
+             [steps.params.backup]\npath = \"/b\"\n\
+             [steps.params.common]\nalways_clear_before_ingest = true\n\n\
+             [[groups]]\nid = \"li\"\ntype = \"linkedin\"\n\n\
+             [[steps]]\ngroup = \"li\"\nfunction = \"ingest\"\n\
+             params = { export = { path = \"/e\" }, common = { always_clear_before_ingest = false } }\n",
+        );
+        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
+        assert_eq!(check.cfg.steps.len(), 2);
+        let warned: Vec<_> = check
+            .diagnostics
+            .iter()
+            .map(|d| (d.severity, d.id(), d.line))
+            .collect();
+        assert_eq!(
+            warned,
+            vec![
+                (Severity::Warning, Some("phone/ingest"), Some(11)),
+                (Severity::Warning, Some("li/ingest"), Some(20)),
+            ]
+        );
+        let d = &check.diagnostics[0];
+        assert!(d.message.contains("has no effect"), "{d:?}");
+        assert_eq!(d.help.as_deref(), Some("delete this line"));
+        assert_eq!(d.column, Some(1), "{d:?}");
     }
 
     /// A group whose only step was rejected is not empty — somebody filled

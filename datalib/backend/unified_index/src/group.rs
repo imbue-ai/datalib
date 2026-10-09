@@ -102,6 +102,37 @@ pub fn group_sql<C: Column>(table: &str, where_sql: &str, by: &[C]) -> String {
     )
 }
 
+/// The most values one suggestion answer carries.
+pub const MAX_VALUES: usize = 20;
+
+/// The values `column` takes among the rows `where_sql` keeps in `table`,
+/// those holding one bound `LIKE` pattern ([`like_pattern`]), most rows
+/// first: each as text, with its count.
+pub fn values_sql<C: Column>(table: &str, where_sql: &str, column: C) -> String {
+    let col = column.as_str();
+    let joiner = if where_sql.is_empty() {
+        " WHERE"
+    } else {
+        " AND"
+    };
+    format!(
+        "SELECT CAST({col} AS TEXT), count(*) FROM {table}{where_sql}{joiner} \
+         {col} IS NOT NULL AND {col} != '' AND LOWER(CAST({col} AS TEXT)) LIKE ? ESCAPE '\\' \
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_VALUES}"
+    )
+}
+
+/// `typed` as a case-blind `LIKE` pattern for a value holding it, its own
+/// `%`, `_` and `\` matched as themselves.
+pub fn like_pattern(typed: &str) -> String {
+    let escaped = typed
+        .to_lowercase()
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,6 +161,23 @@ mod tests {
         let (sql, params) = where_within(&parse_query("channel:bridge"), &[]);
         assert_eq!(sql, " WHERE channel = ?");
         assert_eq!(params, ["bridge"]);
+    }
+
+    #[test]
+    fn values_hold_what_was_typed_most_rows_first() {
+        assert_eq!(
+            values_sql("grid_rows", " WHERE kind = ?", GridRowColumn::Channel),
+            format!(
+                "SELECT CAST(channel AS TEXT), count(*) FROM grid_rows WHERE kind = ? AND \
+                 channel IS NOT NULL AND channel != '' AND LOWER(CAST(channel AS TEXT)) LIKE ? \
+                 ESCAPE '\\' GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_VALUES}"
+            )
+        );
+        assert!(
+            values_sql("grid_rows", "", GridRowColumn::Channel).contains("grid_rows WHERE channel")
+        );
+        assert_eq!(like_pattern("Eng_50%"), "%eng\\_50\\%%");
+        assert_eq!(like_pattern(""), "%%");
     }
 
     #[test]

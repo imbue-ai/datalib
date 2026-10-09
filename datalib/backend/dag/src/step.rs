@@ -35,11 +35,11 @@ pub struct StepSpec {
     /// Most steps leave this `None`: `params` is already in the
     /// fingerprint.
     pub code_version: Option<String>,
-    /// The hash of the DDL of the store this step writes, for a built-in
-    /// step that writes one of ours (`config::BUILTIN_STORE_SHAPES`). A
-    /// derived store takes a new shape only when its writer runs, so the
-    /// shape is part of what the step is.
-    pub store_shape: Option<String>,
+    /// Whether the step takes the `--migrate` verb a launch asks after an
+    /// upgrade (`docs/dev/step_protocol.md` § Migrate). The loader sets it
+    /// for `datalib-step`'s own steps. Not in the fingerprint: it says what
+    /// the step can be asked, not what it makes.
+    pub migrates: bool,
     /// Whether a consumer may read this step's output *while it is still
     /// being written* — P2 in
     /// `datalib/backend/dag/README.md` § "What a sink owes its consumers".
@@ -96,12 +96,6 @@ impl StepSpec {
         m.push('\u{1}');
         m.push_str(self.code_version.as_deref().unwrap_or(""));
         m.push('\u{1}');
-        // Only where there is one, so a step without a store of ours keeps
-        // the fingerprint it had and is not re-run by this field existing.
-        if let Some(shape) = &self.store_shape {
-            m.push_str(shape);
-            m.push('\u{1}');
-        }
         match &self.run {
             StepRun::InProcess(_) => m.push_str("in-process"),
             StepRun::Subprocess { argv, env, params } => {
@@ -129,7 +123,7 @@ impl StepSpec {
             inputs: Vec::new(),
             run,
             code_version: None,
-            store_shape: None,
+            migrates: false,
             streams_output: false,
             reads_pinned: true,
             locks: None,
@@ -432,6 +426,11 @@ impl ArtifactState {
 pub struct StepOutcome {
     #[serde(default)]
     pub outputs: Vec<ArtifactState>,
+    /// Its answer to `--migrate`: what it wrote is in a shape it cannot
+    /// reach in place, so it has to run again (`step_protocol.md`
+    /// § Migrate). Always false for a run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_rerun: bool,
     /// How the step's process ended, when it was one (an in-process
     /// step has no exit).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -509,8 +508,8 @@ impl FailureKind {
 
 /// A step failure. Because steps are incremental, a failed step may
 /// still have committed partial output — `outputs` reports that, so
-/// the scheduler records the new versions even though the step failed
-/// (dependents stay blocked this run; next run sees changed inputs).
+/// the scheduler records the new versions even though the step failed,
+/// and its dependents read them this run.
 #[derive(Debug)]
 pub struct StepError {
     pub kind: FailureKind,

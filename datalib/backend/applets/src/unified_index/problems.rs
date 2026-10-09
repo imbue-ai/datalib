@@ -6,9 +6,12 @@
 //! grouped on the server (`/problems/groups`).
 
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::Json;
-use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, DocumentLink, Identity, RowsSpec};
-use datalib_problems::{Outcome, ProblemRow, ProblemRowColumn, Severity};
+use datalib_columns::{
+    Chip, ChipKind, ColumnSpec, ColumnType, DocumentLink, Identity, RowsSpec, ValueSuggestion,
+};
+use datalib_problems::{Outcome, ProblemRow, ProblemRowColumn, ScopeKind, Severity};
 use datalib_unified_index::group::Within;
 use datalib_unified_index::problems::{ProblemColumn, ProblemsQuery};
 use datalib_unified_index::repo::LocatedProblem;
@@ -16,7 +19,10 @@ use datalib_unified_index::sort::Sort;
 use datalib_unified_index::view;
 use serde::{Deserialize, Serialize};
 
-use super::columns::{free_text_of, searchable, Sources};
+use super::columns::{
+    counted, free_text_of, keys_of, searchable, value_source, words_holding, Sources, ValueSource,
+    ValuesParams,
+};
 use super::{grouping, results, Index};
 
 /// As `/search` takes them.
@@ -25,7 +31,7 @@ pub struct Params {
     pub q: Option<String>,
     pub offset: Option<usize>,
     pub limit: Option<usize>,
-    /// `last_seen_at_utc:desc,severity_chip`, by the columns' ids.
+    /// `changed_at_utc:desc,severity_chip`, by the columns' ids.
     pub sort: Option<String>,
     /// Stretch the page to reach this problem.
     pub through: Option<String>,
@@ -48,6 +54,9 @@ pub struct ProblemView {
     pub stage: &'static str,
     pub outcome: &'static str,
     pub reason: &'static str,
+    /// What a problem with no document is about, in words: the listing,
+    /// configured entry or raw record its scope key names.
+    pub about: Option<String>,
     pub field: Option<String>,
     pub rule: Option<String>,
     pub sample: String,
@@ -59,7 +68,7 @@ pub struct ProblemView {
     pub scope_key: String,
     pub path: Option<String>,
     pub first_seen_at_utc: String,
-    pub last_seen_at_utc: String,
+    pub changed_at_utc: String,
     pub render_version: Option<i64>,
 }
 
@@ -74,13 +83,21 @@ impl ProblemView {
             },
             text: row.severity.as_str().to_string(),
             title: format!(
-                "{}: the record was {}",
+                "{}: {}",
                 row.severity.as_str(),
                 match row.outcome {
-                    Outcome::Dropped => "dropped",
-                    Outcome::Nulled => "kept with a field nulled",
-                    Outcome::Ok => "kept intact",
+                    Outcome::Dropped => "it is not in the mirror, or what is there is stale",
+                    Outcome::Nulled => "it is in the mirror with a field left empty",
+                    Outcome::Ok => "nothing was lost",
                 }
+            ),
+        };
+        let about = match row.scope_kind {
+            ScopeKind::Markdown => None,
+            ScopeKind::Entity => Some(
+                datalib_etl::download_problems::about(&row.scope_key)
+                    .or_else(|| datalib_etl_render::grid_index::about(&row.scope_key))
+                    .unwrap_or_else(|| row.scope_key.clone()),
             ),
         };
         ProblemView {
@@ -92,6 +109,7 @@ impl ProblemView {
             stage: row.stage.as_str(),
             outcome: row.outcome.as_str(),
             reason: row.reason.as_str(),
+            about,
             field: row.field,
             rule: row.rule,
             sample: row.sample,
@@ -101,7 +119,7 @@ impl ProblemView {
             scope_key: row.scope_key,
             path: row.path,
             first_seen_at_utc: row.first_seen_at_utc,
-            last_seen_at_utc: row.last_seen_at_utc,
+            changed_at_utc: row.changed_at_utc,
             render_version: row.render_version,
         }
     }
@@ -170,8 +188,9 @@ pub fn rows_spec() -> RowsSpec {
 pub fn columns() -> Vec<ColumnSpec> {
     searchable::<ProblemColumn>(vec![
         ColumnSpec::new("severity_chip", "Severity", ColumnType::Chips).describe(
-            "error: the record was dropped. warning: it was kept with something lost. \
-             info: a finding, nothing lost.",
+            "error: something failed. warning: something is missing or degraded for a reason \
+             you can act on — access, a configured entry, a limit. info: a finding, nothing \
+             lost. Hover a chip for what became of the data.",
         ),
         ColumnSpec::new("source_ref", "Source", ColumnType::Identity),
         ColumnSpec::new("stage", "Stage", ColumnType::Text).describe(
@@ -180,11 +199,20 @@ pub fn columns() -> Vec<ColumnSpec> {
              different place for each.",
         ),
         ColumnSpec::new("reason", "Reason", ColumnType::Text),
+        ColumnSpec::new("about", "About", ColumnType::Text).describe(
+            "What a problem with no document is about: a listing or phase the download \
+             could not do, a configured entry, a raw record, a render store the index could \
+             not read.",
+        ),
         ColumnSpec::new("field", "Field", ColumnType::Text),
-        ColumnSpec::new("sample", "Sample", ColumnType::Text)
-            .describe("The first 80 characters of the offending value."),
-        ColumnSpec::new("markdown_uuid", "Document", ColumnType::MarkdownUuid)
-            .describe("The document the record belongs to. Empty when it has no row there."),
+        ColumnSpec::new("sample", "Detail", ColumnType::Text).describe(
+            "What went wrong: the first 80 characters of the offending value, or, for a \
+             listing, phase or configured entry, the download's explanation whole.",
+        ),
+        ColumnSpec::new("markdown_uuid", "Document", ColumnType::MarkdownUuid).describe(
+            "The document the record belongs to. Empty when there is none: a listing, a \
+             configured entry, or a record that never reached the mirror — About says which.",
+        ),
         ColumnSpec::new("outcome", "Outcome", ColumnType::Text).hidden(),
         ColumnSpec::new("rule", "Rule", ColumnType::Text)
             .describe("The deliberate lossy rule that fired, when one did.")
@@ -193,7 +221,7 @@ pub fn columns() -> Vec<ColumnSpec> {
             .describe("The grid row the record has, or would have had.")
             .hidden(),
         ColumnSpec::new("first_seen_at_utc", "First seen", ColumnType::Timestamp),
-        ColumnSpec::new("last_seen_at_utc", "Last seen", ColumnType::Timestamp),
+        ColumnSpec::new("changed_at_utc", "Last changed", ColumnType::Timestamp),
         ColumnSpec::new("scope_kind", "Scope", ColumnType::Text)
             .describe("What clears this row when reprocessed: the document, or the raw entity.")
             .hidden(),
@@ -364,6 +392,34 @@ pub struct GroupOut {
     pub sample: ProblemView,
 }
 
+/// The keys the problems grid's search bar offers as a person types.
+pub async fn keys_handler() -> Json<Vec<datalib_columns::SearchKeySpec>> {
+    Json(keys_of::<ProblemRow>())
+}
+
+/// `GET /problems/values?key=…&typed=…&q=…`: what the search bar
+/// suggests for one key's value.
+pub async fn values_handler(
+    State(s): State<Index>,
+    Query(p): Query<ValuesParams>,
+) -> Result<Json<Vec<ValueSuggestion>>, (StatusCode, String)> {
+    let suggested = match value_source::<ProblemRow>(&p.key) {
+        ValueSource::Words(words) => Ok(words_holding(&words, &p.typed)),
+        ValueSource::Column(column) => s
+            .repo
+            .problem_value_counts(&ProblemsQuery::parse(&p.q), column, &p.typed)
+            .await
+            .map(counted),
+        ValueSource::Nothing => Ok(Vec::new()),
+    };
+    suggested.map(Json).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("suggest values: {e}"),
+        )
+    })
+}
+
 /// `GET /problems/groups?q=…&by=…` — the groups the problems fall into,
 /// each with its count, in no order: the grid orders them.
 pub async fn groups_handler(
@@ -442,11 +498,11 @@ mod tests {
 
     fn seen(mut row: ProblemRow, at: &str) -> ProblemRow {
         row.first_seen_at_utc = at.to_string();
-        row.last_seen_at_utc = at.to_string();
+        row.changed_at_utc = at.to_string();
         row
     }
 
-    /// Three problems, last seen newest first in this order: a warning
+    /// Three problems, last changed newest first in this order: a warning
     /// on the Enterprise's log, and two dropped records, one each.
     fn three() -> [ProblemRow; 3] {
         let problem = |source: &str, stage, doc, outcome, p| {
@@ -552,7 +608,7 @@ mod tests {
         assert_eq!(
             ids(&first),
             [warning.problem_uuid.as_str()],
-            "last seen first"
+            "last changed first"
         );
         assert_eq!((first.total, first.next_offset), (3, Some(1)));
         assert!(first.at.is_some());

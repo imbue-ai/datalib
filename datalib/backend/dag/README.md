@@ -125,13 +125,14 @@ starts** in a tick, visited in topological order, iff:
    failure nor a run: turned on while a request wants it, the step runs
    again. One that says it failed has failed, whatever it was asked;
 5. **it is due**: it is **stale** (it has never succeeded, an input's
-   version differs from the one it read at its last success, or its
-   fingerprint — its id, group type, argv, params, env, declared inputs,
-   `code_version` and, for a built-in step, the shape of the store it
-   writes — differs from the one recorded then), or it declares no inputs and has not run since the
+   version differs from the one it read at its last success, its
+   fingerprint — its id, group type, argv, params, env, declared inputs
+   and `code_version` — differs from the one recorded then, or it
+   answered a launch's `--migrate` with `needs_rerun` and has not
+   succeeded since), or it declares no inputs and has not run since the
    request opened, since a source's real input is outside the graph;
 6. **no producer it reads holds it**: none is running without streaming
-   (or with this step reading its files, below), and none is about to
+   (or with this step reading its files), and none is about to
    run, held only by a lock or a reader, since that one would
    rewrite what this step reads. A producer waiting on its own upstream
    holds nobody back, so a fan-in never waits for its slowest source;
@@ -139,25 +140,20 @@ starts** in a tick, visited in topological order, iff:
    producers ever published is `blocked`, or waits if one is about to run;
 8. **every lock it would take is free** (below, "What keeps steps apart").
 
-The store shape is in the fingerprint because a derived store takes a
-new shape only when its writer runs. Without it, a build that adds a
-`grid_rows` column leaves every source with nothing new upstream holding
-a render store in the old shape, and the grid index cannot read it.
-`BUILTIN_STORE_SHAPES` in `src/config.rs` names the shape of each
-built-in function's store; a test in `datalib_step` keeps it equal to the
-real DDL.
-
 A step that waits says why, in its row's `state_detail`: `waiting for
 a`, `waiting for c, which reads what this writes`, `waiting for lock
 gpu, held by trainer`. Each step writes only the tree its id names, so
 no two steps ever wait on each other as writers of one sink.
 
-Until everything a step reads has settled, its row reads Running between
-passes: the step is not finished, it is waiting for the next seal. A
-producer that is itself between passes has not settled, so the index
-behind a render reads Running for as long as the download does. Each
-pass's process is closed with a `PassEnd`; the `StepFinish` comes once
-its producers are done.
+A step that has read every seal so far is between passes: no process is
+running, but the step is not finished either, because what it reads is
+still being written. The record says it is `waiting` on the first
+producer it reads that has not settled (`waiting for garmin/ingest`),
+and the Manage row reads Waiting rather than Queued, since it has
+already started. A producer that is itself between passes has not
+settled, so the index behind a render waits for as long as the download
+runs. Each pass's process is closed with a `PassEnd`; the `StepFinish`
+comes once its producers are done.
 
 A failed step does not stop its dependents. Whatever it committed and
 reported is a version like any other, and a dependent reads it; a fan-in
@@ -202,8 +198,35 @@ empties what a step wrote and records the tree's new version, forgetting
 that the step ever succeeded. The app then opens a request: a reset
 step that reads something is rebuilt at once, and a reset download is
 not refilled — what reads it runs instead, so its documents leave the
-grid, and its next Sync downloads everything again. The design is
+grid, and its next Sync downloads everything again. The app's reset
+does not wait for a sync to end (§"Resets and purges"). The design is
 [`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
+
+## Upgrading a root
+
+A new build can change the shape of what a step wrote: a raw store's
+tables, a render store's, the grid index's. The runner does not know
+any of those shapes; each step answers for its own. The first time a
+build runs on a root — the record's `launch_passes` table says which
+builds have — the process that holds `runner-lock` (the http server when
+it starts, `datalib-dag` when it runs on its own) asks every step that
+takes the verb (`StepSpec::migrates`), producers first, before the loop
+takes any request: `Runner::migrate` invokes each once with `--migrate`
+appended (`docs/dev/step_protocol.md` § Migrate). A raw store is
+migrated in place, and the step reports its new head, which the record
+takes as its version while keeping the step's last success. A render
+store or the index in another shape is rebuilt by running the step, so
+that step answers `needs_rerun`: the record keeps the flag
+(`steps.needs_rerun`), the tick holds the step due until it next
+succeeds (rule 5), and `round::rerun_offer` lists it for the app, which
+asks whether to re-render now and opens one request rooted at the list
+if so. A sync that does not reach such a step leaves it alone; the grid
+index reads a render store in another shape as the index had it, with a
+warning. A step that fails to answer costs that source only. The app
+shows a blocking screen while the pass runs.
+`datalib/backend/datalib_step/raw_shapes/` holds the raw shape every
+release left, and a test migrates each one
+([`raw_shapes/README.md`](../datalib_step/raw_shapes/README.md)).
 
 ## What keeps steps apart: locks
 
@@ -363,10 +386,14 @@ them would be the cheaper code and the worse error message.
 
 A group whose id is bad costs the group *and* every step under it, and
 those steps are `Blocked`, not `Rejected`: nothing is wrong with them,
-and the fix is on the group's line. The four warnings: a group nothing
+and the fix is on the group's line. The five warnings: a group nothing
 is filed under; a `name` written on a grouped step, whose label comes
-from the group; an applet filed under a group that does not exist; and
-a `keyword_index` that `qmd_aggregator` does not read. The retired
+from the group; an applet filed under a group that does not exist; a
+`keyword_index` that `qmd_aggregator` does not read; and a built-in
+step's `common.always_clear_before_ingest`, which no longer does
+anything (`datalib-step` drops it before parsing, so the step still
+runs). The Manage screen's System row counts the warnings and shows
+their words on hover. The retired
 shapes — `datalib-step download|render|grid_index|qmd_index` on a
 command line, and a built-in `qmd_index` step — are `Rejected`, because
 they no longer run, and the diagnostic names `datalib-migrate-config`.
@@ -402,7 +429,8 @@ naming no step) looks exactly like one it did.
   anything is announced, its release included, in case that loop ends
   first (`docs/dev/plans/supervisor.md` §2.8). Only `--reset`, which empties
   stores, needs the root to itself and is refused while a loop runs —
-  always, with the app up; the app runs its own resets between syncs.
+  always, with the app up; the app's resets are rows the loop carries out
+  (§"Resets and purges").
 - **One server per data root** (`system/lock`), which `datalib-http`
   takes for its own reasons (the API token, the feedback, usage and
   remote-media stores).
@@ -415,9 +443,10 @@ takes the loop over when it ends.
 Whoever runs the loop owns its steps' processes. Each step holds a pipe
 from that process (`DATALIB_PARENT_PIPE`) and stops itself when the pipe
 closes, however the process died. A step the loop stops gets SIGINT on
-its process group and SIGKILL on it fifteen seconds later if it is still
-there (`subprocess::stop_ladder`, `step::STOP_GRACE`), so one that
-ignores its SIGINT cannot hold its store for good. A loop that died
+its process group and SIGKILL on it fifteen seconds later if it, or
+anything it left in the group, is still there (`subprocess::stop_ladder`,
+`step::STOP_GRACE`), so one that ignores its SIGINT cannot hold its
+store for good, and a child it left behind cannot hold the run open. A loop that died
 holding the lock leaves its run and its invocations open in the record
 and the run store; the next process to take the lock closes them
 (`supervisor::host::take_over`). Its requests are still open rows, and
@@ -525,10 +554,39 @@ A `datalib-dag` running the loop with no server up has nobody watching
 the config, so it takes an edit on at its next busy period, not mid-sync.
 
 The loop's idle side lives once, in `supervisor::host::run_idle`: a busy
-period whenever a request is open, requests asked to stop before any
-period took them closed as `stopped`, the record settled when the
-switches or the config move, then a wait for an announcement, a nudge (in-memory work such as a
-reset) or the host's stop. The server's host and the tests both run it.
+period whenever a request or a wipe is open, requests asked to stop
+before any period took them closed as `stopped`, the record settled when
+the switches or the config move, then a wait for an announcement or the
+host's stop. The server's host and the tests both run it.
+
+## Resets and purges
+
+A **wipe** is a row in the mailbox's `wipes` table: a reset (empty what
+these steps wrote) or a purge (delete the trees of groups the config no
+longer names, and forget their steps ran). The loop carries one out as
+soon as the steps it touches have stopped, whatever else is syncing; it
+does not wait for the sync to end. What it decides is in
+`supervisor/wipe.rs`, and the loop does it (`round.rs`,
+`carry_out_wipes`):
+
+- **It holds its steps.** A step being wiped is treated as turned off for
+  as long as the wipe is open: stopped if it runs, not started, and its
+  row says `being reset` or `being deleted`. It leaves the requests that
+  named it as a root, so a reset does not refill a download, and a purged
+  group's config change is not waited on; a request left with nothing is
+  stopped.
+- **Then it does it, in the loop.** A reset invokes each step with
+  `--reset store` and records it emptied in the loop's own record, then
+  opens a request for what reads it (`wipe::after_reset`). A purge waits
+  until the loop has taken on the config without the group, then deletes
+  `<root>/<group>/` and forgets the group's steps.
+- **Refused, with why**, against the config on disk: a reset of a step it
+  lacks, a purge of a group it still has or of anything that is not a
+  group id. The row closes with the reason in `error`.
+
+The server's `POST /api/reset` and `POST /api/purge` write the row and
+wait up to ten seconds for it to close: 204 once done, 202 when its steps
+have not stopped yet, 409 with the reason when refused.
 
 ## The record
 
@@ -536,8 +594,9 @@ The loop's memory is its **record**, in `system/supervisor.sqlite`
 (`supervisor/record.rs`), beside the mailbox anyone writes
 (`supervisor/store.rs`): `requests` (its `roots`, `opened_by`, a
 `stop_requested_by`, and once closed its `outcome` — `done`, `failed`
-or `stopped` — and `failed_step`) and `turned_off` (`step`,
-`turned_off_by`). It is plain SQLite in
+or `stopped` — and `failed_step`), `turned_off` (`step`,
+`turned_off_by`) and `wipes` (`kind`, `targets`, `opened_by`, and once
+closed the `error` that stopped it, if any). It is plain SQLite in
 rollback-journal mode, so any `sqlite3` reads it, and only the holder of
 `runner-lock` writes it. `supervisor_contention_test` runs seven
 processes on one store (people opening requests, the loop saving, the

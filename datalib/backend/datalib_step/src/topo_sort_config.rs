@@ -4,8 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
-use datalib_dag::config::{replace_config, write_owner_only};
+use datalib_dag::config::write_owner_only;
 use datalib_obs::status_line;
+use datalib_runtime::atomic;
 
 /// The exit code: 0 when the file is in order (now, or already); 1 when
 /// it is not and `check` only asked, or when anything failed.
@@ -38,7 +39,9 @@ pub fn run_cli(path: &Path, check: bool) -> i32 {
     let mut bak = path.as_os_str().to_owned();
     bak.push(".bak");
     let bak = PathBuf::from(bak);
-    match write_owner_only(&bak, text.as_bytes()).and_then(|()| replace_config(path, &sorted)) {
+    match write_owner_only(&bak, text.as_bytes())
+        .and_then(|()| atomic::write_owner_only(path, sorted.as_bytes()))
+    {
         Ok(()) => {
             status_line!(
                 "Sorted {shown} into data-flow order. The previous file is {}.",

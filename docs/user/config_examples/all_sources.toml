@@ -332,7 +332,7 @@ dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12D
                             # already have history, to pick up edits and
                             # reactions. NOT a range bound — it only adds
                             # work on top of the walk from `since`. Unset
-                            # here means no refresh pass.
+                            # is 30; 0 turns the pass off.
                             #
                             # It is also the only way we notice a DELETED
                             # message: Slack has no tombstones, so a
@@ -859,8 +859,7 @@ inputs = ["ics-calendar/keyword_index"]
 # Beeper Texts mirror. The `texts` table reads the desktop app's own
 # data dir; pick the chat networks to ingest (at least one required).
 # Poorly supported — nobody is using it, so expect rough edges. It never
-# notices a deletion, and `always_clear_before_ingest` is the wrong fix
-# here (see the provider's INGEST.md).
+# notices a deletion (see the provider's INGEST.md).
 [[groups]]
 id = "beeper"
 type = "beeper"
@@ -986,10 +985,10 @@ inputs = ["yolink/keyword_index"]
 # scores), weigh-ins, activities with their original FIT files, devices,
 # personal records, gear, badges, workouts and goals.
 #
-# Not a latchkey service. Sign in once with `datalib-step login garmin`
-# (email, password, emailed MFA code); it writes an OAuth1 token that
-# lasts about a year under `token_dir`, and the ingest step mints the
-# hourly bearer from it on its own. A token from garth works too.
+# Through latchkey's Garmin plugin, which the Add a source dialog installs
+# on the first sign-in. From a terminal, with the plugin in place:
+# `latchkey auth browser garmin`, or `latchkey auth set-nocurl garmin
+# ~/.garth` to import a token garth wrote. The sign-in lasts about a year.
 [[groups]]
 id = "garmin"
 type = "garmin"
@@ -1001,7 +1000,6 @@ function = "ingest"
 [steps.params.api]
 since = "2024-01-01"       # earliest day to mirror; default a year back. Quote it:
                            # a bare date is a TOML date, not the string validated here
-# token_dir = "~/.garth"   # where the login put oauth1_token.json (default)
 # refresh_days = 7         # trailing days re-fetched every run (late syncs, recomputed sleep)
 # metrics = ["daily_summary", "sleep", "hrv"]  # a subset of the per-day metrics
 # activity_files = true    # each activity's original FIT file, into the blob store
@@ -1087,10 +1085,6 @@ function = "ingest"
 [steps.params.backup]
 path = "~/backups/SignalBackups"
 aep_env_var = "SIGNAL_BACKUP_PASSPHRASE"   # default if omitted
-[steps.params.common]
-# Each backup is a full snapshot of the phone, so a message missing from
-# the newest one was deleted there.
-always_clear_before_ingest = true
 
 [[steps]]
 group = "signal"
@@ -1205,10 +1199,6 @@ function = "ingest"
 path = "~/backups/LinkedInDataExport"
 fetch_photos = true
 
-[steps.params.common]
-# Each export is complete. Without this a CSV that LinkedIn stopped
-# including keeps its whole table from the previous export forever.
-always_clear_before_ingest = true
 [steps.params.common.download_params]
 maximum_sequential_failed_requests = 20
 

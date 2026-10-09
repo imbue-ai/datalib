@@ -25,9 +25,10 @@
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 
+import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
 import { catalogForStep } from "./catalog";
-import type { CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
+import type { Answer, CatalogEntry, Field, FieldPhase, Preset } from "./catalog";
 import { editStringArray, quote } from "./tomlText";
 
 /// Which wave a step belongs to, for display and for picking the right
@@ -351,9 +352,14 @@ export function paramsAreRepresentable(
     ...fieldsFor(entry, phase).map((f) => f.target),
     ...presetsFor(entry, phase).map((p) => p.target),
   ]);
-  const unknown = leafPaths(step.params).filter((path) => !known.has(path));
+  const unknown = leafPaths(step.params).filter((path) => !known.has(path) && !INERT.has(path));
   return unknown.length === 0 ? { ok: true } : { ok: false, unknown };
 }
+
+/// Keys a hand-written config may still carry that no longer do anything
+/// (`datalib-dag --check` warns at each). Saving the form drops them,
+/// which is what the warning asks for, so they do not block an edit.
+const INERT = new Set(["common.always_clear_before_ingest"]);
 
 /// A descriptor's presets for one phase. Same default as a field's:
 /// absent means `download`.
@@ -412,8 +418,27 @@ export function fieldPhaseOf(step: ConfiguredStep): FieldPhase {
 /// and defaults to `download`, which is where all but one sit — only
 /// `signal` declares a render knob today, so a render step's form is
 /// usually a name and nothing else.
+///
+/// Every source that signs in through latchkey gets an account field,
+/// whether or not its descriptor declares one: picking a stored login,
+/// or naming a new one, is the same for every service. A descriptor
+/// declares its own only to word it (Gmail's is "Google account").
 export function fieldsFor(entry: CatalogEntry, phase: FieldPhase): Field[] {
-  return (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
+  const fields = (entry.fields ?? []).filter((f) => (f.phase ?? "download") === phase);
+  const declaresAccount = fields.some((f) => f.kind === "text" && f.latchkey);
+  if (phase !== "download" || !entry.credentialService || declaresAccount) return fields;
+  return [accountFieldFor(entry), ...fields];
+}
+
+/// The account field a latchkey source gets when it declares none.
+export function accountFieldFor(entry: CatalogEntry): Field {
+  return {
+    kind: "text",
+    latchkey: true,
+    target: "latchkey_settings.account",
+    label: `${entry.label} account`,
+    help: NAME_IT_HELP,
+  };
 }
 
 export type FieldValues = Record<string, unknown>;
@@ -576,6 +601,96 @@ function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase)
     .sort(([a], [b]) => a.split(".").length - b.split(".").length || a.localeCompare(b))
     .map(([table, lines]) => `[steps.params${table ? `.${table}` : ""}]\n${lines.join("\n")}`)
     .join("\n\n");
+}
+
+// Laying the form out
+
+/// One heading of the form and what is drawn under it: a question's
+/// answers, each with the fields it shows while chosen, or fields as
+/// they are. `solo` is an advanced field no section names, whose own
+/// label is the heading.
+export type Row = {
+  heading: string;
+  help?: string;
+  answers?: { answer: Answer; fields: Field[] }[];
+  fields: Field[];
+  solo?: boolean;
+};
+
+export type Layout = { basic: Row[]; advanced: Row[] };
+
+/// The form for one source: its sections in order, split into the
+/// basic part and Advanced options, with every field no section names
+/// appended to the advanced part. The latchkey account of a source that
+/// signs in is drawn with the sign-in, so it is left out here.
+export function layoutOf(entry: CatalogEntry, renders: boolean): Layout {
+  const fields = [
+    ...fieldsFor(entry, "download").filter(
+      (f) => !(entry.credentialService && f.kind === "text" && f.latchkey),
+    ),
+    ...(renders ? fieldsFor(entry, "render") : []),
+  ];
+  const at = (targets: string[] | undefined) =>
+    (targets ?? []).flatMap((t) => fields.filter((f) => f.target === t));
+  const placed = new Set<string>();
+  const layout: Layout = { basic: [], advanced: [] };
+  for (const section of entry.sections ?? []) {
+    const row: Row = {
+      heading: section.heading,
+      help: section.help,
+      answers: section.answers?.map((answer) => ({ answer, fields: at(answer.fields) })),
+      fields: at(section.fields),
+    };
+    for (const f of row.fields) placed.add(f.target);
+    for (const a of section.answers ?? []) {
+      for (const t of [...(a.fields ?? []), ...Object.keys(a.sets ?? {})]) placed.add(t);
+    }
+    if (row.fields.length || row.answers) layout[section.advanced ? "advanced" : "basic"].push(row);
+  }
+  for (const f of fields) {
+    if (!placed.has(f.target)) layout.advanced.push({ heading: f.label, fields: [f], solo: true });
+  }
+  return layout;
+}
+
+/// Which answer the values amount to. An answer that shows fields is
+/// the one only while one of them holds something; otherwise the first
+/// plain answer whose `sets` agree, and the first answer when none do.
+export function chosenAnswer(
+  answers: { answer: Answer; fields: Field[] }[],
+  values: FieldValues,
+): number {
+  const agrees = (a: Answer) => Object.entries(a.sets ?? {}).every(([t, v]) => !!values[t] === v);
+  const filled = answers.findIndex(
+    ({ answer, fields }) =>
+      fields.length > 0 && agrees(answer) && fields.some((f) => isSet(f, values[f.target])),
+  );
+  if (filled >= 0) return filled;
+  const plain = answers.findIndex(({ answer, fields }) => fields.length === 0 && agrees(answer));
+  return Math.max(plain, 0);
+}
+
+/// The values after choosing one answer: what it sets, and the fields
+/// of every other answer emptied, so no setting outlives the answer
+/// that showed it.
+export function applyAnswer(
+  answers: { answer: Answer; fields: Field[] }[],
+  index: number,
+  values: FieldValues,
+): FieldValues {
+  const next = { ...values };
+  answers.forEach(({ fields }, i) => {
+    if (i === index) return;
+    for (const f of fields) next[f.target] = f.kind === "string_list" ? [] : "";
+  });
+  Object.assign(next, answers[index]?.answer.sets ?? {});
+  return next;
+}
+
+/// Is every field of this answer still empty? A chosen answer that
+/// shows fields is not answered until one of them is filled.
+export function answerIsEmpty(fields: Field[], values: FieldValues): boolean {
+  return fields.length > 0 && !fields.some((f) => isSet(f, values[f.target]));
 }
 
 /// Is this field's gate open? A field with no `requires` always is.
@@ -1081,6 +1196,85 @@ function extendOverComments(text: string, start: number): number {
     if (prevStart === 0) break;
   }
   return at;
+}
+
+/// Move a group's `[[groups]]` entry and every step and applet filed
+/// under it to just above `before`'s entries, or below the last group's
+/// when `before` is null — which is how the Sources card's order
+/// changes, since it lists groups in the order their `[[groups]]`
+/// entries are written. The moved entries land together, in the order
+/// they were written, each with its banner: the block the server's
+/// sorter (`datalib_dag::config_order`) moves a group as. Nothing else
+/// changes — the runner follows `inputs`, not the file — and a result
+/// that would parse to different entries is refused (throws), as the
+/// sorter refuses one.
+export function moveGroup(text: string, groupId: string, before: string | null): string {
+  const groups = listGroups(text).filter((g) => g.end > 0);
+  const filed = listSteps(text).filter((s) => s.end > 0);
+  const entriesOf = (id: string) => [
+    ...groups.filter((g) => g.id === id),
+    ...filed.filter((s) => s.group === id),
+  ];
+  const moving = spans(text, entriesOf(groupId));
+  const others = groups.filter((g) => g.id !== groupId);
+  if (moving.length === 0 || before === groupId) return text;
+  let at: number;
+  if (before === null) {
+    const last = others.at(-1);
+    if (!last) return text;
+    at = Math.max(...spans(text, entriesOf(last.id)).map(([, end]) => end));
+  } else {
+    const target = spans(text, entriesOf(before));
+    if (target.length === 0) return text;
+    at = Math.min(...target.map(([start]) => start));
+  }
+  const body = moving.map(([start, end]) => text.slice(start, end).trim()).join("\n\n");
+  const shift = moving
+    .filter(([, end]) => end <= at)
+    .reduce((sum, [start, end]) => sum + (end - start), 0);
+  const placed = at - shift;
+  const next = tidy(splice(cut(text, moving), placed, placed, body));
+  if (declaredEntries(next) !== declaredEntries(text)) {
+    throw new Error("Moving the group would change what the config says; it was left as it is.");
+  }
+  return next;
+}
+
+/// Every entry a config declares, order aside, as one comparable string.
+function declaredEntries(text: string): string {
+  const parsed = parseConfig(text).root;
+  const sorted = (v: unknown) => (Array.isArray(v) ? v : []).map((e) => JSON.stringify(e)).sort();
+  return JSON.stringify([parsed.groups, parsed.steps, parsed.applets].map(sorted));
+}
+
+/// The group a move would put on the wrong side of it, when it would:
+/// above a group whose steps it reads, or below one that reads it. The
+/// file reads in the order data flows (`datalib_dag::config_order`, which
+/// `datalib-step topo-sort-config` restores), and a drag keeps it so.
+export function moveAgainstDataFlow(
+  text: string,
+  groupId: string,
+  before: string | null,
+): { reads: string } | { readBy: string } | null {
+  const steps = listSteps(text).filter((s) => s.kind === "step");
+  const groupOfStep = new Map(steps.map((s) => [s.id, s.group]));
+  const reads = (id: string) =>
+    new Set(
+      steps
+        .filter((s) => s.group === id)
+        .flatMap((s) => s.inputs.map((i) => groupOfStep.get(i)))
+        .filter((g): g is string => !!g && g !== id),
+    );
+  const order = listGroups(text)
+    .map((g) => g.id)
+    .filter((id) => id !== groupId);
+  const at = before === null ? order.length : order.indexOf(before);
+  if (at < 0) return null;
+  const mine = reads(groupId);
+  const below = order.slice(at).find((id) => mine.has(id));
+  if (below) return { reads: below };
+  const above = order.slice(0, at).find((id) => reads(id).has(groupId));
+  return above ? { readBy: above } : null;
 }
 
 /// Replace a source's steps with freshly generated ones, where the first

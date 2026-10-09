@@ -78,7 +78,7 @@ pub async fn build_state(
     // `crate::watch`. Started before the loop so a sync that begins
     // during startup is already being reported on.
     let (root_tx, _) = tokio::sync::broadcast::channel(64);
-    crate::watch::spawn((*root).clone(), root_tx.clone());
+    let nudge = crate::watch::spawn((*root).clone(), root_tx.clone());
 
     // Before the loop, so its first read is of the current shape.
     let data_root = (*root).clone();
@@ -90,6 +90,7 @@ pub async fn build_state(
         control: sync.clone(),
         binary_dir: binary_dir.clone(),
         now,
+        announce: Some(root_tx.clone()),
     }));
 
     // Bytes on disk, over time: a walk of the root folded into a
@@ -124,6 +125,7 @@ pub async fn build_state(
     // Hand edits reach the registry from here; saves reach it from the
     // handlers that make them. Requests only read it.
     crate::applets::watch_config(applets.clone(), root_tx.subscribe());
+    applets.nudge_after_writes(nudge);
 
     Ok(AppState {
         root,

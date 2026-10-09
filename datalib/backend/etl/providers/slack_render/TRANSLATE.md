@@ -29,11 +29,26 @@ is `{channel_id}#{thread_ts}` and its link is the thread's permalink.
 - `*bold*` → `**bold**` and `~strike~` → `~~strike~~`, with Slack's
   word-boundary rules; a `>` quote is ended with a blank line. `_italic_`
   and backticks are already CommonMark;
-- `<@U…>`, `<#C…|name>`, `<!subteam^…>`, `<!here>` / `<!channel>` /
+- `<@U…>` is a chip link to the user, `[@Name](slack://user?team=T&id=U
+  "@Name (slack:T/U)")`, through `chip_link`, so datalib draws who that
+  is; inside code it is plain `@Name`, which code shows literally, and a
+  thread's title, plain text, keeps `@Name` too;
+- `<#C…|name>`, `<!subteam^…>`, `<!here>` / `<!channel>` /
   `<!everyone>`, resolved against the workspace's users and channels;
+- a `!` typed straight before any of these, or before a labelled link,
+  is escaped, so markdown does not read the link after it as an image;
 - `<https://…|label>` → `[label](url)`;
 - `:shortcode:` → unicode, through the `emojis` crate;
-- the three entities Slack escapes (`&amp;`, `&lt;`, `&gt;`).
+- the three entities Slack escapes (`&amp;`, `&lt;`, `&gt;`) stay
+  entities in running text, so a `<b>` someone typed shows as typed;
+  they are decoded inside code, which markdown shows literally, and in
+  the `&gt;` that opens a Slack quote. A thread's title decodes them all:
+  it is plain text, and `Title` escapes it;
+- markdown's own syntax, which Slack shows as typed, is escaped outside
+  code and outside the `<…>` constructs: `[`, `]`, `|`, a backslash
+  before punctuation, and a line's opening `#`, `- `, `1. `, `---` or
+  four-space indent. A name from the users or channels table, or a
+  mention's own label, is escaped as text on a markdown line.
 
 ## Unread messages
 

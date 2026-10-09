@@ -1,24 +1,25 @@
 //! Doltlite-backed raw store for the GitLab provider.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
-use sqlx::Row;
+use sqlx::{Row, Sqlite, Transaction};
 
-use datalib_etl::bulk::bulk_upsert;
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr};
 use datalib_etl_forge_ingest_common::{load_self_identity, prune_children, row_payload};
 
 use super::canonicalize::canonicalize_payload;
 use super::schema_raw::{
-    full_ddl, DiscussionRow, MergeRequestRow, SelfIdentityRow, SELF_IDENTITY_VOLATILE_PATHS,
+    full_ddl, DiscussionRow, MergeRequestRow, SelfIdentityRow, LADDER, SELF_IDENTITY_VOLATILE_PATHS,
 };
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl(), LADDER);
 
 impl RawDb {
     // ── self_identity ───────────────────────────────────────────────
@@ -50,23 +51,35 @@ impl RawDb {
 
     // ── merge_requests ──────────────────────────────────────────────
 
-    pub async fn upsert_merge_request(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
+    /// The record alone: its sidecar is written by the fetch loop, in
+    /// the same transaction, with the version it is held at.
+    pub async fn store_merge_request(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        proj: &str,
+        iid: u32,
+        payload: &Value,
+    ) -> Result<()> {
         let row = MergeRequestRow::from_payload(proj, iid, &canonicalize_payload(payload))?;
-        bulk_upsert(self.pool(), &[row]).await
+        bulk_upsert_entity_in_tx(tx, &[row]).await
     }
 
     // ── discussions ─────────────────────────────────────────────────
 
-    /// Upsert every discussion of one MR in a single transaction. The
-    /// natural commit boundary here is "all discussions for one MR" —
-    /// the caller's outer loop is per-MR, and a partial set would just
-    /// be re-fetched on the next sync.
-    pub async fn upsert_discussions(&self, proj: &str, iid: u32, payloads: &[Value]) -> Result<()> {
+    /// Every discussion of one MR.
+    pub async fn store_discussions(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        proj: &str,
+        iid: u32,
+        payloads: &[Value],
+        now: &IsoOffsetTimestamp,
+    ) -> Result<()> {
         let rows: Vec<DiscussionRow> = payloads
             .iter()
             .map(|p| DiscussionRow::from_payload(proj, iid, &canonicalize_payload(p)))
             .collect::<Result<Vec<_>>>()?;
-        bulk_upsert(self.pool(), &rows).await
+        bulk_upsert_in_tx(tx, &rows, now).await
     }
 
     // ── loads ───────────────────────────────────────────────────────
@@ -121,6 +134,7 @@ impl RawDb {
     /// Drop this MR's discussion rows that the fresh listing did not name.
     pub async fn prune_mr_discussions(
         &self,
+        tx: &mut Transaction<'_, Sqlite>,
         proj: &str,
         iid: u32,
         listed: &[Value],
@@ -132,7 +146,7 @@ impl RawDb {
             .collect();
         let iid = iid.to_string();
         prune_children(
-            self.pool(),
+            tx,
             "discussions",
             &[("project_full_path", proj), ("mr_iid", &iid)],
             &keep,
@@ -146,25 +160,6 @@ impl RawDb {
             .await
             .context("any_merge_requests")?;
         Ok(row.is_some())
-    }
-
-    pub async fn merge_request_updated_ats(&self) -> Result<HashMap<(String, u32), String>> {
-        let rows = sqlx::query(
-            "SELECT project_full_path, mr_iid, updated_at
-             FROM merge_requests
-             WHERE payload IS NOT NULL AND updated_at IS NOT NULL",
-        )
-        .fetch_all(self.pool())
-        .await
-        .context("merge_request_updated_ats")?;
-        let mut out: HashMap<(String, u32), String> = HashMap::with_capacity(rows.len());
-        for r in rows {
-            let proj: String = r.get("project_full_path");
-            let iid_i64: i64 = r.get("mr_iid");
-            let updated_at: String = r.get("updated_at");
-            out.insert((proj, iid_i64 as u32), updated_at);
-        }
-        Ok(out)
     }
 }
 
@@ -229,7 +224,9 @@ mod tests {
     async fn mr_and_discussion_round_trip() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("g.doltlite_db")).await.unwrap();
-        db.upsert_merge_request(
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_merge_request(
+            &mut tx,
             "ns/proj",
             12,
             &json!({
@@ -242,13 +239,16 @@ mod tests {
         )
         .await
         .unwrap();
-        db.upsert_discussions(
+        db.store_discussions(
+            &mut tx,
             "ns/proj",
             12,
             &[json!({"id": "abc", "individual_note": false, "notes": [{"updated_at": "2025-01-01T00:00:00Z"}]})],
+            &IsoOffsetTimestamp::now_local(),
         )
         .await
         .unwrap();
+        tx.commit().await.unwrap();
         let mrs = db.load_merge_requests().await.unwrap();
         assert_eq!(mrs.len(), 1);
         assert_eq!(mrs[0].mr_iid, 12);
@@ -261,9 +261,16 @@ mod tests {
     async fn payload_stored_as_jsonb_blob() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("g.doltlite_db")).await.unwrap();
-        db.upsert_merge_request("ns/proj", 12, &json!({"iid": 12, "state": "opened"}))
-            .await
-            .unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_merge_request(
+            &mut tx,
+            "ns/proj",
+            12,
+            &json!({"iid": 12, "state": "opened"}),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
         let row =
             sqlx::query("SELECT typeof(payload) AS t FROM merge_requests WHERE id='ns/proj!12'")
                 .fetch_one(db.pool())

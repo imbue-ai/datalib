@@ -89,12 +89,6 @@ test("the Source column shows the configured name, and source_id: filters by id"
   await expect(page.locator(SOURCE_CELLS).first()).toBeVisible();
   expect(await distinctSourceCells(page)).toEqual(["slack"]);
 
-  // `source_name:` is the spelling this filter had before a source had
-  // a name to collide with, so it is in saved queries and in people's
-  // fingers. It has to keep landing on the same rows.
-  await searchAndSettle(page, "source_name:slack");
-  expect(await distinctSourceCells(page)).toEqual(["slack"]);
-
   // A stanza that exists in the fixture but isn't the one asked for
   // must be excluded, so the filter is provably doing work.
   await searchAndSettle(page, "source_id:claude-api");

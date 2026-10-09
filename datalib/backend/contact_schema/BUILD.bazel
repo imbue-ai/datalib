@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# `NormalizedContact`: a person as one source describes them. Only the
+# shape, so render crates, the contacts app and the applets can all take
+# it; contact-common is the one place it is rendered. Bazel-only.
+rust_library(
+    name = "datalib_contact_schema",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_contact_schema",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/handle:datalib_handle",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:strum",
+    ],
+)
+
+rust_test(
+    name = "contact_schema_unittests",
+    size = "small",
+    crate = ":datalib_contact_schema",
+    edition = "2021",
+    deps = ["@datalib_crates//:serde_json"],
+)

@@ -7,6 +7,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_timeseries_render::page::{Device, Page, PageProfile};
 use datalib_etl_timeseries_render::text::{iso, thousands};
 use datalib_id::IdNamespace;
@@ -76,15 +77,19 @@ pub fn render_all(
 }
 
 fn device(dev: &super::parse::DeviceRow) -> Device {
-    let mut facts: Vec<String> = vec![format!("serial `{}`", dev.id)];
+    let mut facts: Vec<String> = vec![format!("serial {}", md_code_span(&dev.id))];
     if let Some(m) = &dev.model {
-        facts.push(format!("model {m}"));
+        facts.push(format!("model {}", escape_md_inline(m)));
     }
     if let (Some(a), Some(sv)) = (&dev.app_version, &dev.system_version) {
-        facts.push(format!("firmware {a} / {sv}"));
+        facts.push(format!(
+            "firmware {} / {}",
+            escape_md_inline(a),
+            escape_md_inline(sv)
+        ));
     }
     if let Some(tz) = &dev.timezone {
-        facts.push(format!("clock in {tz}"));
+        facts.push(format!("clock in {}", escape_md_inline(tz)));
     }
     facts.push(match dev.last_ts_ms.and_then(iso) {
         Some(t) => format!("last sample {t}"),
@@ -119,7 +124,12 @@ fn store_section(parsed: &ParsedAirvisual) -> String {
     if !parsed.files.is_empty() {
         out.push_str("| File | Bytes |\n| --- | ---: |\n");
         for f in &parsed.files {
-            let _ = writeln!(out, "| `{}` | {} |", f.rel_path, thousands(f.size_bytes));
+            let _ = writeln!(
+                out,
+                "| {} | {} |",
+                md_code_span(&f.rel_path).replace('|', "\\|"),
+                thousands(f.size_bytes)
+            );
         }
         out.push('\n');
     }
@@ -129,6 +139,26 @@ fn store_section(parsed: &ParsedAirvisual) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the device reports about itself is text on the page.
+    #[test]
+    fn a_device_in_markup_renders_escaped() {
+        let dev = super::super::parse::DeviceRow {
+            id: "a`b".into(),
+            name: "porch".into(),
+            model: Some("<script>x</script> & co".into()),
+            mac_address: None,
+            app_version: None,
+            system_version: None,
+            timezone: Some("<i>UTC</i>".into()),
+            last_ts_ms: None,
+        };
+        assert_eq!(
+            device(&dev).facts,
+            "serial `` a`b `` · model &lt;script&gt;x&lt;/script&gt; &amp; co · \
+             clock in &lt;i&gt;UTC&lt;/i&gt; · no samples yet"
+        );
+    }
 
     #[test]
     fn uuids_are_stable_and_source_scoped() {

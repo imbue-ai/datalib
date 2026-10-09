@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_etl::http::HttpResponse;
-use datalib_etl::synthesize::{write_fixture, SynthesizeReport, Synthesizer};
+use datalib_etl_web::http::HttpResponse;
+use datalib_etl_web::synthesize::{write_fixture, SynthesizeReport, Synthesizer};
 
 use crate::ingest::photos::photo_request;
 use crate::ingest::{csv_reader, strip_notes_preamble};

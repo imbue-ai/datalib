@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Framework crate. Provider-specific Extract/Translate code lives in
 # sibling crates under providers/<name>/ (see providers/slack/BUILD.bazel).
 rust_library(
@@ -10,12 +8,6 @@ rust_library(
     crate_name = "datalib_etl",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
-    # The router curl + the impersonator it fronts travel with the
-    # library so any binary that links `datalib_etl` gets both in
-    # runfiles, side by side (the router finds the impersonator as a
-    # sibling); `latchkey::ensure_curl_router` resolves the router via
-    # the bazel runfiles lookup in `resolve()`.
-    data = ["//third-party/latchkey-curl-shims"],
     proc_macro_deps = [
         "//datalib/backend/etl/macros:datalib_etl_macros",
         "@datalib_crates//:async-trait",
@@ -30,22 +22,16 @@ rust_library(
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/table:datalib_table",
-        "//datalib/backend/source_common:datalib_source_common",
 
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:chrono",
-        "@datalib_crates//:ignore",
         "@datalib_crates//:indicatif",
         "@datalib_crates//:quick-xml",
-        "@datalib_crates//:runfiles",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:thiserror",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",    ],
 )
@@ -57,6 +43,7 @@ rust_test(
     edition = "2021",
     deps = [
         "@datalib_crates//:tempfile",
+        "@datalib_crates//:tracing-subscriber",
     ],
 )
 
@@ -76,6 +63,7 @@ rust_binary(
         ":datalib_etl",
         "//datalib/backend/history:datalib_history",
         "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",

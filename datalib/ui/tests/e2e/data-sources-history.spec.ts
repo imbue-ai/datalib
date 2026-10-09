@@ -9,10 +9,11 @@ import {
   expandGroup,
   expectGridPainted,
   groupRow,
-  TABLE_ROWS,
   menuEntry,
   nameCell,
   pipelineRow,
+  shownCards,
+  TABLE_ROWS,
 } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
@@ -26,9 +27,9 @@ test("a group's commit history opens from the context menu as a card", async ({ 
   await row.click({ button: "right" });
   await page.getByText("Show commit history").click();
 
-  const card = page.locator(".miller-col").filter({ has: page.locator(".hc") });
+  const card = shownCards(page).filter({ has: page.locator(".hc") });
   await expect(card).toBeVisible({ timeout: 10_000 });
-  await expect(card.locator(".miller-col-title")).toHaveText("History · Unified Index");
+  await expect(card.locator(".ct-card-title")).toHaveText("History · Unified Index");
   // Not a source, so nothing here to compare.
   await expect(card.getByText(/right-click to compare/)).toHaveCount(0);
 
@@ -71,7 +72,7 @@ test("a group's commit history opens from the context menu as a card", async ({ 
   // depends on whether the run store knows the fixture's run, so only
   // the card is pinned.
   await commit.locator(".hc-run").click();
-  await expect(page.locator(".miller-col-title").last()).toHaveText(/^Log/);
+  await expect(page.locator(".ct-main .ct-card-title").last()).toHaveText(/^Log/);
 });
 
 test("an applet row leaves out what an applet cannot do", async ({ page }) => {
@@ -101,7 +102,7 @@ test("Compare two versions opens the history ready to compare", async ({ page })
   await row.click({ button: "right" });
   await menuEntry(page, "Compare two versions…").click();
 
-  const card = page.locator(".miller-col").filter({ has: page.locator(".hc") });
+  const card = shownCards(page).filter({ has: page.locator(".hc") });
   await expect(card).toBeVisible({ timeout: 10_000 });
   await expect(card.locator(".hc-compare")).toContainText("This source has no synced data yet.");
   await card.getByRole("button", { name: "Cancel" }).click();

@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Asserts that every workspace-local crate in
+# Asserts that the `datalib-crates` entry in
 # `datalib/backend/Cargo.lock` is pinned to the same version
-# declared by `[workspace.package].version` in
+# declared by `[package].version` in
 # `datalib/backend/Cargo.toml`.
 #
 # Why this exists: rules_rust's `crate.from_cargo` reads BOTH
 # Cargo.toml manifests AND Cargo.lock, but only validates the
 # external-dep section against the lockfile at build time. The
-# workspace-crate version markers in Cargo.lock can silently drift
+# `datalib-crates` version marker in Cargo.lock can silently drift
 # from Cargo.toml without rules_rust complaining, and the release
 # tarballs ship just fine because rustc reads `version =` from
 # Cargo.toml — but a fresh checkout where someone runs `cargo
-# build` would see the wrong version on the workspace crates, and a
+# build` would see the wrong version, and a
 # `bazel sync --only=datalib_crates` could re-resolve in
 # surprising ways.
 #
-# Common cause of the drift: bumping `[workspace.package].version`
+# Common cause of the drift: bumping `[package].version`
 # in Cargo.toml without then running a real Cargo.lock refresh.
 # `CARGO_BAZEL_REPIN=1 bazel test //...` only repins if some test
 # action actually re-runs — when targets cache-hit, the lockfile
@@ -41,12 +41,11 @@ cargo_lock="$(rlocation _main/datalib/backend/Cargo.lock)"
 
 canonical="$(grep -E '^version = "[^"]+"$' "$cargo_toml" | head -n1 | sed -E 's/^version = "([^"]+)"$/\1/')"
 if [[ -z "$canonical" ]]; then
-    echo "ERROR: could not find a [workspace.package].version line in $cargo_toml" >&2
+    echo "ERROR: could not find a [package].version line in $cargo_toml" >&2
     exit 1
 fi
 
-# Pull every workspace-local crate's recorded version from Cargo.lock.
-# Workspace crates are the ones whose `name = "datalib-*"`. Cargo
+# Pull every `datalib-*` package's recorded version from Cargo.lock. Cargo
 # writes `[[package]]` blocks with `name` and `version` on adjacent
 # lines, so an awk pass tracks the most recent `name` and emits the
 # `version` when name matches our prefix.
@@ -71,8 +70,8 @@ done < <(awk '
 
 if [[ ${#mismatches[@]} -ne 0 ]]; then
     cat >&2 <<EOF
-Cargo.lock has workspace-local crates pinned to versions that disagree
-with [workspace.package].version in Cargo.toml.
+Cargo.lock has datalib crates pinned to versions that disagree
+with [package].version in Cargo.toml.
 
   Canonical (datalib/backend/Cargo.toml): ${canonical}
   Mismatched entries in datalib/backend/Cargo.lock:
@@ -92,4 +91,4 @@ EOF
     exit 1
 fi
 
-echo "OK: ${canonical} matches every workspace crate in Cargo.lock"
+echo "OK: ${canonical} matches every datalib crate in Cargo.lock"

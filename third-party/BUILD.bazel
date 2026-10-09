@@ -20,6 +20,7 @@ genrule(
     srcs = [
         "//third-party/latchkey-curl-shims:licenses",
         "//third-party/doltlite:licenses",
+        "//third-party/latchkey-garmin:LICENSE",
         # The whole Node distribution: its BUILD exports the binaries and
         # nothing else, so LICENSE is only reachable through this
         # filegroup. Inputs are hashed, not copied; the cost is one pass.
@@ -28,11 +29,13 @@ genrule(
     outs = ["bundled_licenses/curl-impersonate/" + f for f in CURL_IMPERSONATE_NOTICES] + [
         "bundled_licenses/doltlite/APACHE_LICENSE",
         "bundled_licenses/doltlite/LICENSE.md",
+        "bundled_licenses/latchkey-garmin/LICENSE",
         "bundled_licenses/node/LICENSE",
     ],
     cmd = """
         out=$(RULEDIR)/bundled_licenses
-        mkdir -p $$out/curl-impersonate $$out/doltlite $$out/node
+        mkdir -p $$out/curl-impersonate $$out/doltlite $$out/latchkey-garmin $$out/node
+        cp $(location //third-party/latchkey-garmin:LICENSE) $$out/latchkey-garmin/LICENSE
         for f in $(locations //third-party/latchkey-curl-shims:licenses); do
             cp $$f $$out/curl-impersonate/$$(basename $$f)
         done

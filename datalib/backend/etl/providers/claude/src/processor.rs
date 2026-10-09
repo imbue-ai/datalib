@@ -7,11 +7,17 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_claude_config::{ClaudeApiSync, ClaudeConfig};
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
+
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
 
 /// Ingest wave: `api` walks claude.ai, `export` ingests an unpacked
 /// bulk export from its `path`. `validate` has already refused both.
@@ -51,8 +57,8 @@ impl DataProcessor for ClaudeIngest {
         &self.id
     }
 
-    /// Seals after each conversation and the blobs it names, and prunes
-    /// only what the listing walk said is gone. So between checkpoints the
+    /// Seals after each flush of conversations or files, and prunes only
+    /// what the listing walk said is gone. So between checkpoints the
     /// store is the previous snapshot plus whatever this run has fetched --
     /// a superset, never a gap. A reset is its own committed step, not a
     /// truncate inside a run.
@@ -66,53 +72,52 @@ impl DataProcessor for ClaudeIngest {
         // The CAS goes in too. claude stores attachment bytes in a sibling
         // file, so a checkpoint that sealed only the entities store would
         // publish a message naming blobs no reader can resolve yet.
-        let session = datalib_etl::raw_store::RawStoreSession::open_with_blobs(
-            db.pool().clone(),
-            Some(db.cas().pool().clone()),
-            entity_db,
-            ctx,
-        )
-        .await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            latchkey: self.latchkey.clone(),
-            // users.json is expected alongside the raw store (playback seeds it).
-            export_dir: Some(self.raw_path.clone()),
-            overlap: self
-                .sync
-                .refresh_most_recent_n_chat_count
-                .map(|v| v as usize)
-                .unwrap_or(0),
-            sleep_between: Duration::ZERO,
-            since: self.sync.since.clone(),
-            conv_uuids: self.sync.conv_uuids.clone(),
-            projects: self.sync.projects,
-            project_uuids: self.sync.project_uuids.clone(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
-            sealer: Some(session.sealer()),
-        })
-        .await?;
-        let summary = format!(
-            "fetched={} skipped={} out_of_scope={} errors={} forbidden_orgs={} pruned={} \
-             total={} projects={} projects_skipped={} project_docs={} project_docs_skipped={} \
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |sealer| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                latchkey: self.latchkey.clone(),
+                // users.json is expected alongside the raw store (playback seeds it).
+                export_dir: Some(self.raw_path.clone()),
+                overlap: self
+                    .sync
+                    .refresh_most_recent_n_chat_count
+                    .map(|v| v as usize)
+                    .unwrap_or(0),
+                sleep_between: Duration::ZERO,
+                since: self.sync.since.clone(),
+                conv_uuids: self.sync.conv_uuids.clone(),
+                projects: self.sync.projects,
+                project_uuids: self.sync.project_uuids.clone(),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+                sealer: Some(sealer),
+                now: Some(ctx.now.to_string()),
+            })
+            .await?;
+            Ok(format!(
+                "fetched={} skipped={} out_of_scope={} errors={} non_chat_orgs={} forbidden_orgs={} \
+             pruned={} total={} projects={} projects_skipped={} project_docs={} \
+             project_docs_skipped={} \
              requests={} forbidden_retry_attempts={} forbidden_retry_recoveries={}",
-            s.fetched,
-            s.skipped,
-            s.out_of_scope,
-            s.errors,
-            s.forbidden_orgs,
-            s.pruned,
-            s.total,
-            s.projects_fetched,
-            s.projects_skipped,
-            s.project_docs_fetched,
-            s.project_docs_skipped,
-            s.requests,
-            s.forbidden_retry_attempts,
-            s.forbidden_retry_recoveries,
-        );
-        session.finish(ctx, summary).await
+                s.fetched,
+                s.skipped,
+                s.out_of_scope,
+                s.errors,
+                s.non_chat_orgs,
+                s.forbidden_orgs,
+                s.pruned,
+                s.total,
+                s.projects_fetched,
+                s.projects_skipped,
+                s.project_docs_fetched,
+                s.project_docs_skipped,
+                s.requests,
+                s.forbidden_retry_attempts,
+                s.forbidden_retry_recoveries,
+            ))
+        })
+        .await
     }
 }
 
@@ -133,23 +138,23 @@ impl DataProcessor for ClaudeExportIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
-            .await;
-        let s = ingest::export::ingest(ingest::export::IngestOptions {
-            db,
-            input_path: self.input_path.clone(),
-            // The run-pinned `now`, so every bookkeeping stamp this
-            // ingest writes agrees with the rest of the run.
-            now: ctx.now.to_string(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |_| async {
+            let s = ingest::export::ingest(ingest::export::IngestOptions {
+                db,
+                input_path: self.input_path.clone(),
+                // The run-pinned `now`, so every bookkeeping stamp this
+                // ingest writes agrees with the rest of the run.
+                now: ctx.now.to_string(),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "users={} conversations={} projects={} project_docs={} pruned={}",
+                s.users, s.conversations, s.projects, s.project_docs, s.pruned,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "users={} conversations={} projects={} project_docs={} pruned={}",
-            s.users, s.conversations, s.projects, s.project_docs, s.pruned,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

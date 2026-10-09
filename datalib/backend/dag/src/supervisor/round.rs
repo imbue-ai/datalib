@@ -10,11 +10,12 @@ use tokio::task::JoinSet;
 
 use super::announce::{Listener, CONFIG_CHANGED};
 use super::record::{InvocationEnd, InvocationRow};
-use super::store::{RequestOutcome, Store};
+use super::store::{RequestOutcome, Store, WipeKind, WipeRow};
 use super::tick::{
     tick, Attempt, Consumed, Facts, Intent, LockShape, Outcome, Request, Running, Seq, Shape,
     StepFacts, StepShape, StepState as Row, Tick, Wait,
 };
+use super::wipe;
 use crate::artifact::ArtifactPath;
 use crate::events::{Event, PlannedStep, StepProgress};
 use crate::graph::Graph;
@@ -22,7 +23,7 @@ use crate::scheduler::{
     fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp, reported_version,
     step_summary, QueueLedger, RunReport, Runner, StepReport, StepStatus,
 };
-use crate::step::{Exit, FailureKind, StepCtx, StepError, StepOutcome, StopSignal};
+use crate::step::{Exit, FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
 use crate::supervisor::record::{CurrentRun, Record};
 use crate::version::UNKNOWN;
 
@@ -168,12 +169,11 @@ struct Mailbox<'a> {
     stopped: Vec<String>,
 }
 
-/// An open request as the loop holds it: its row's id, the tick's view
-/// of it, and the steps it wants.
+/// An open request as the loop holds it: its row's id and the tick's
+/// view of it.
 struct Open {
     id: String,
     request: Request,
-    scope: Vec<bool>,
 }
 
 /// A request for every source, served until it closes: what a test that
@@ -248,9 +248,16 @@ impl Runner {
         let mut facts = facts_of(graph, &state);
         let mut open: Vec<Open> = Vec::new();
         let mut turned_off: BTreeMap<usize, String> = BTreeMap::new();
+        let mut wipes: Vec<WipeRow> = Vec::new();
         let mut seq = 0u64;
         let mut slots: Vec<Slot> = graph.steps.iter().map(|_| Slot::default()).collect();
-        let mut changed_now: HashMap<String, bool> = HashMap::new();
+        // A step may seal and end several passes in one round; the summary
+        // says whether the round as a whole moved its output.
+        let at_start: HashMap<String, Option<String>> = state
+            .steps
+            .iter()
+            .map(|(id, s)| (id.clone(), s.version.clone()))
+            .collect();
         let mut queue = QueueLedger::new(graph.steps.len());
         let mut cancelled = false;
         let mut stop_rx = self.stop.clone();
@@ -260,6 +267,7 @@ impl Runner {
             &mut mailbox,
             &mut open,
             &mut turned_off,
+            &mut wipes,
             &mut seq,
             &mut slots,
         )
@@ -364,8 +372,8 @@ impl Runner {
                         for r in o.request.roots.iter_mut() {
                             *r = to_new[r];
                         }
-                        o.scope = downstream_of(graph, &o.request.roots);
-                        for (slot, &s) in slots.iter_mut().zip(&o.scope) {
+                        let reached = downstream_of(graph, &o.request.roots);
+                        for (slot, s) in slots.iter_mut().zip(reached) {
                             slot.ever_in_scope |= s;
                         }
                     }
@@ -399,16 +407,61 @@ impl Runner {
                     &mut mailbox,
                     &mut open,
                     &mut turned_off,
+                    &mut wipes,
                     &mut seq,
                     &mut slots,
                 )
                 .await?;
+                let opened = self
+                    .carry_out_wipes(
+                        graph,
+                        next_graph.as_ref(),
+                        store,
+                        &mut record,
+                        &mut state,
+                        &mut wipes,
+                        &mut facts,
+                        &mut slots,
+                    )
+                    .await?;
+                if opened {
+                    // The loop's own write does not move what `refresh`
+                    // watches.
+                    mailbox.seen = None;
+                    self.refresh(
+                        graph,
+                        &mut mailbox,
+                        &mut open,
+                        &mut turned_off,
+                        &mut wipes,
+                        &mut seq,
+                        &mut slots,
+                    )
+                    .await?;
+                }
             }
+            let wiping = wiping(graph, &wipes);
+            // A step being wiped leaves the requests that named it: a reset
+            // does not refill a download, and the config that drops a
+            // purged group is not waited on. A request left with nothing is
+            // stopped.
+            open.retain_mut(|o| {
+                o.request.roots.retain(|r| !wiping.contains_key(r));
+                if o.request.roots.is_empty() {
+                    mailbox.stopped.push(o.id.clone());
+                }
+                !o.request.roots.is_empty()
+            });
             let intent = Intent {
                 requests: open.iter().map(|o| o.request.clone()).collect(),
-                turned_off: turned_off.keys().copied().collect(),
+                turned_off: turned_off.keys().chain(wiping.keys()).copied().collect(),
             };
             let t = tick(&shape, &intent, &facts);
+            for scope in &t.scopes {
+                for (slot, &wanted) in slots.iter_mut().zip(scope) {
+                    slot.ever_in_scope |= wanted;
+                }
+            }
             for (slot, &st) in slots.iter_mut().zip(&t.states) {
                 match LastWanted::of(graph, st) {
                     LastWanted::Unwanted => {}
@@ -481,13 +534,23 @@ impl Runner {
             // A request closing now, or stopped, is closed after the save
             // below: a reader that sees it closed finds no step serving it.
             let closing: BTreeSet<usize> = t.closed.iter().map(|&(r, _)| r).collect();
-            let held: Vec<bool> = slots.iter().map(|s| s.ended.is_some()).collect();
+            // A step between passes waits on the first producer it reads
+            // that has not settled.
+            let held: Vec<Option<usize>> = slots
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    s.ended
+                        .as_ref()
+                        .and_then(|_| graph.deps_in_order(i).find(|&p| unsettled[p]))
+                })
+                .collect();
             // A step serves a request only while it has work left in it,
             // so a source whose part is done offers Sync again while the
             // index its request also reaches is still running.
             let working: Vec<bool> = (0..slots.len())
                 .map(|i| {
-                    held[i]
+                    held[i].is_some()
                         || match t.states[i] {
                             Row::Running | Row::Waiting(_) => true,
                             Row::Fresh => above_unsettled[i],
@@ -501,10 +564,11 @@ impl Runner {
                 }
                 open.iter()
                     .enumerate()
-                    .filter(|(r, o)| !closing.contains(r) && o.scope[i])
+                    .filter(|(r, _)| !closing.contains(r) && t.scopes[*r][i])
                     .map(|(_, o)| o.id.clone())
                     .collect()
             });
+            say_wiping(graph, &mut state, &t, &wiping);
             record_deferred(graph, &mut state, &mailbox.deferred);
 
             for start in t.starts {
@@ -566,11 +630,14 @@ impl Runner {
             }
             if open.is_empty() && set.is_empty() {
                 // A config waiting on what just ended may bring requests
-                // of its own, which this loop takes on rather than the next.
+                // of its own, which this loop takes on rather than the next;
+                // and a purge waits for the config that lets its groups go.
                 if next_graph.is_some() {
                     continue;
                 }
-                break;
+                if wipes.is_empty() {
+                    break;
+                }
             }
             let listening = !cancelled;
             anyhow::ensure!(
@@ -579,25 +646,37 @@ impl Runner {
                 t.states
             );
 
-            // Seals before joins: a step sends its seal before its task can
-            // finish, so a queued seal predates a queued join.
+            // Not `biased`: a producer re-announces its seal until its
+            // consumer has run, so a loop slower than that cadence always
+            // has a seal waiting, and a seal-first select never reaches the
+            // join that would run the consumer.
             tokio::select! {
-                biased;
                 Some(signal) = checkpoints.recv() => {
-                    self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
-                        &mut queue, &mut slots).await;
+                    // Every one queued in one turn, so repeats cost one tick.
+                    for signal in std::iter::once(signal).chain(queued(&mut checkpoints)) {
+                        self.on_signal(graph, signal, &mut facts, &mut state, &mut queue,
+                            &mut slots).await;
+                    }
                 }
                 Some(()) = wait_for_stop(&mut stop_rx), if !cancelled => {
                     // The host is going: stop what runs and take nothing
-                    // new. The store's requests stay open, for whoever runs
-                    // the loop next.
+                    // new. The store's requests and wipes stay open, for
+                    // whoever runs the loop next.
                     cancelled = true;
                     open.clear();
+                    wipes.clear();
                 }
                 heard = listener.next(), if listening => {
                     config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
                 }
                 joined = set.join_next() => {
+                    // Seals before joins: a step sends its seal before its
+                    // task can finish, so every seal this join follows is
+                    // queued by now.
+                    for signal in queued(&mut checkpoints) {
+                        self.on_signal(graph, signal, &mut facts, &mut state, &mut queue,
+                            &mut slots).await;
+                    }
                     let (id, attempts, res) = joined
                         .expect("a live task implies a joinable one")
                         .context("step task panicked")?;
@@ -606,7 +685,7 @@ impl Runner {
                     let live = slots[i].live.take().expect("a joined step was started");
                     let started = facts.steps[i].running.take().map(|r| r.started).unwrap_or(Seq(0));
                     let e = self.on_ended(graph, i, attempts, res, &live, &mut facts,
-                        &mut state, &mut changed_now, &mut queue).await;
+                        &mut state, &mut queue).await;
                     facts.steps[i].last_attempt = Some(Attempt {
                         started,
                         failed: !matches!(e.status, StepStatus::Succeeded { .. }),
@@ -651,7 +730,7 @@ impl Runner {
             &shape,
             &mut state,
             &t,
-            &vec![false; slots.len()],
+            &vec![None; slots.len()],
             &turned_off,
             |_| Vec::new(),
         );
@@ -670,7 +749,8 @@ impl Runner {
                 let now = facts.sinks[i]
                     .clone()
                     .unwrap_or_else(|| UNKNOWN.to_string());
-                let changed = changed_now.get(&path).copied().unwrap_or(false);
+                let before = at_start.get(&graph.steps[i].id).cloned().flatten();
+                let changed = facts.sinks[i].is_some() && facts.sinks[i] != before;
                 Some(StepReport {
                     id: graph.steps[i].id.clone(),
                     status: slots[i].status.clone()?,
@@ -687,9 +767,9 @@ impl Runner {
         Ok(report)
     }
 
-    /// Bring `open` and `turned_off` up to what the mailbox says. A request
-    /// the loop has not seen before is opened now, so only an invocation
-    /// started after this counts as serving it.
+    /// Bring `open`, `turned_off` and `wipes` up to what the mailbox says.
+    /// A request the loop has not seen before is opened now, so only an
+    /// invocation started after this counts as serving it.
     #[allow(clippy::too_many_arguments)]
     async fn refresh(
         &self,
@@ -697,12 +777,12 @@ impl Runner {
         mailbox: &mut Mailbox<'_>,
         open: &mut Vec<Open>,
         turned_off: &mut BTreeMap<usize, String>,
+        wipes: &mut Vec<WipeRow>,
         seq: &mut u64,
         slots: &mut [Slot],
     ) -> Result<()> {
         let mut admit = |id: String, roots: Vec<usize>, open: &mut Vec<Open>| {
-            let scope = downstream_of(graph, &roots);
-            for (slot, &reached) in slots.iter_mut().zip(&scope) {
+            for (slot, reached) in slots.iter_mut().zip(downstream_of(graph, &roots)) {
                 slot.ever_in_scope |= reached;
             }
             *seq += 1;
@@ -712,7 +792,6 @@ impl Runner {
                     roots,
                     opened: Seq(*seq),
                 },
-                scope,
             });
         };
         let Mailbox {
@@ -804,7 +883,120 @@ impl Runner {
                     admit(row.id, roots, open);
                 }
                 *turned_off = turned_off_of(graph, &all_turned_off);
+                *wipes = store.open_wipes().await?;
             }
+        }
+        Ok(())
+    }
+
+    /// Each wipe whose steps have stopped, done; each that cannot be done,
+    /// closed with why. The rest wait, their steps held. Whether a reset
+    /// opened a request for what reads what it emptied.
+    #[allow(clippy::too_many_arguments)]
+    async fn carry_out_wipes(
+        &self,
+        graph: &Graph,
+        next_graph: Option<&Graph>,
+        store: &Store,
+        record: &mut Recorded<'_>,
+        state: &mut Record,
+        wipes: &mut Vec<WipeRow>,
+        facts: &mut Facts,
+        slots: &mut [Slot],
+    ) -> Result<bool> {
+        if wipes.is_empty() {
+            return Ok(false);
+        }
+        // Read now rather than when announced: the config that drops a
+        // purged group is written just before the purge is asked for.
+        let fresh = self.reload.as_ref().and_then(|s| s.load().ok());
+        let latest = fresh.as_ref().or(next_graph).unwrap_or(graph);
+        let mut opened = false;
+        for w in std::mem::take(wipes) {
+            let Some(kind) = w.kind else {
+                store
+                    .close_wipe(&w.id, Some("a kind of wipe this build does not know"))
+                    .await?;
+                continue;
+            };
+            if let Some(why) = wipe::refusal(latest, kind, &w.targets) {
+                store.close_wipe(&w.id, Some(&why)).await?;
+                continue;
+            }
+            let held = wipe::held(graph, kind, &w.targets);
+            let stopped = held
+                .iter()
+                .all(|&i| facts.steps[i].running.is_none() && slots[i].live.is_none());
+            // A purge waits for the config swap too: a step the graph
+            // still has would be written back into the record.
+            let ready = match kind {
+                WipeKind::Reset => stopped,
+                WipeKind::Purge => held.is_empty(),
+            };
+            if !ready {
+                wipes.push(w);
+                continue;
+            }
+            for &i in &held {
+                if let Some(e) = slots[i].ended.take() {
+                    let s = &mut slots[i];
+                    self.finish(
+                        graph,
+                        state,
+                        &mut s.status,
+                        i,
+                        e.status,
+                        e.error,
+                        e.exit,
+                        e.attempts,
+                    );
+                }
+            }
+            let done = match kind {
+                WipeKind::Reset => self.reset_in_loop(graph, &w.targets, state, facts).await,
+                WipeKind::Purge => delete_trees(&self.data_root, &w.targets)
+                    .await
+                    .map(|()| wipe::forget_groups(state, &w.targets)),
+            };
+            record.save(state).await?;
+            match done {
+                Ok(()) => {
+                    let roots = match kind {
+                        WipeKind::Reset => wipe::after_reset(graph, &w.targets),
+                        WipeKind::Purge => Vec::new(),
+                    };
+                    if !roots.is_empty() {
+                        store.open_request(&roots, &w.opened_by).await?;
+                        opened = true;
+                    }
+                    store.close_wipe(&w.id, None).await?;
+                }
+                Err(e) => store.close_wipe(&w.id, Some(&format!("{e:#}"))).await?,
+            }
+        }
+        Ok(opened)
+    }
+
+    /// Each target invoked with `--reset store` and recorded emptied, so
+    /// what reads it sees a new version.
+    async fn reset_in_loop(
+        &self,
+        graph: &Graph,
+        targets: &[String],
+        state: &mut Record,
+        facts: &mut Facts,
+    ) -> Result<()> {
+        for step in targets {
+            let (i, version) = self.reset_one(graph, step).await?;
+            state.steps.insert(
+                step.clone(),
+                wipe::emptied(state.steps.get(step), version.clone()),
+            );
+            facts.sinks[i] = Some(version);
+            facts.steps[i] = StepFacts {
+                streams_output: graph.steps[i].streams_output,
+                ..Default::default()
+            };
         }
         Ok(())
     }
@@ -825,7 +1017,7 @@ impl Runner {
         };
         let shape = shape_of(graph, &self.lock_slots);
         let t = tick(&shape, &intent, &facts_of(graph, &state));
-        let held = vec![false; graph.steps.len()];
+        let held = vec![None; graph.steps.len()];
         record_states(graph, &shape, &mut state, &t, &held, &turned_off, |_| {
             Vec::new()
         });
@@ -930,7 +1122,6 @@ impl Runner {
         signal: crate::step::StepSignal,
         facts: &mut Facts,
         state: &mut Record,
-        changed_now: &mut HashMap<String, bool>,
         queue: &mut QueueLedger,
         slots: &mut [Slot],
     ) {
@@ -964,11 +1155,9 @@ impl Runner {
             .as_ref()
             .map_or(&graph.fingerprints[p], |l| &l.consumed.fingerprint);
         let qualified = format!("{fingerprint}:{version}");
-        let out = graph.steps[p].output().as_str().to_string();
         let moved = facts.sinks[p].as_deref() != Some(qualified.as_str());
         facts.sinks[p] = Some(qualified.clone());
         state.steps.entry(step.clone()).or_default().version = Some(qualified.clone());
-        changed_now.insert(out, moved);
         queue.sealed(graph, p, &qualified, rows, &*self.sink);
         if moved {
             self.sink.emit(&Event::Checkpoint {
@@ -1004,7 +1193,6 @@ impl Runner {
         live: &Live,
         facts: &mut Facts,
         state: &mut Record,
-        changed_now: &mut HashMap<String, bool>,
         queue: &mut QueueLedger,
     ) -> Ended {
         let spec = &graph.steps[i];
@@ -1022,7 +1210,6 @@ impl Runner {
             attempts,
             pass_ended: false,
         };
-        let path = spec.output().as_str().to_string();
         match res {
             Ok(outcome) => {
                 let v = match reported_version(spec, fingerprint, &outcome.outputs) {
@@ -1035,7 +1222,6 @@ impl Runner {
                 };
                 let moved = prior.as_ref() != Some(&v);
                 facts.sinks[i] = Some(v.clone());
-                changed_now.insert(path, moved);
                 let rows = outcome.outputs.first().and_then(|o| o.rows);
                 queue.sealed(graph, i, &v, rows, &*self.sink);
                 let consumed_paths = paths_of(graph, consumed);
@@ -1051,7 +1237,9 @@ impl Runner {
                 entry.version = Some(v);
                 entry.succeeded = true;
                 entry.fingerprint = fingerprint.clone();
+                entry.needs_rerun = false;
                 facts.steps[i].last_success = Some(consumed.clone());
+                facts.steps[i].needs_rerun = false;
                 Ended {
                     status: StepStatus::Succeeded {
                         changed: moved as usize,
@@ -1067,7 +1255,6 @@ impl Runner {
                 // consumers read (plans/supervisor.md §2.5). One that reports
                 // nothing moves nothing: its tree may be mid-write.
                 if let Ok(Some(v)) = reported_version(spec, fingerprint, &step_err.outputs) {
-                    changed_now.insert(path, prior.as_ref() != Some(&v));
                     facts.sinks[i] = Some(v.clone());
                     state.steps.entry(spec.id.clone()).or_default().version = Some(v);
                 }
@@ -1075,6 +1262,52 @@ impl Runner {
             }
         }
     }
+}
+
+/// Step index → the wipe holding it, for the steps this graph has.
+fn wiping(graph: &Graph, wipes: &[WipeRow]) -> BTreeMap<usize, WipeKind> {
+    wipes
+        .iter()
+        .filter_map(|w| Some((w.kind?, w)))
+        .flat_map(|(kind, w)| {
+            wipe::held(graph, kind, &w.targets)
+                .into_iter()
+                .map(move |i| (i, kind))
+        })
+        .collect()
+}
+
+/// A held step reads as off, which is not what a person did: say why.
+fn say_wiping(graph: &Graph, state: &mut Record, t: &Tick, wiping: &BTreeMap<usize, WipeKind>) {
+    for (&i, kind) in wiping {
+        let why = match kind {
+            WipeKind::Reset => "being reset",
+            WipeKind::Purge => "being deleted",
+        };
+        if let Some(entry) = state.steps.get_mut(&graph.steps[i].id) {
+            entry.state_detail = Some(match t.states[i] {
+                Row::Running => format!("stopping: {why}"),
+                _ => why.to_string(),
+            });
+        }
+    }
+}
+
+/// The trees of `groups` under the data root. One already gone is not an
+/// error: the record still needs forgetting.
+async fn delete_trees(root: &std::path::Path, groups: &[String]) -> Result<()> {
+    for group in groups {
+        let tree = root.join(group);
+        let removed = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(tree))
+            .await
+            .context("the delete panicked")?;
+        match removed {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => anyhow::bail!("delete {group}/: {e}"),
+        }
+    }
+    Ok(())
 }
 
 /// Step index → who turned it off, for the steps this graph has.
@@ -1090,20 +1323,23 @@ fn turned_off_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usiz
 
 /// Write what the tick made of each step into its record. A step between
 /// passes (`held`: its invocation ended, and what it reads has not
-/// settled) is still running. `serving` names the open requests a step
+/// settled) waits for the producer named there. `serving` names the open requests a step
 /// has work left in, oldest first.
 fn record_states(
     graph: &Graph,
     shape: &Shape,
     state: &mut Record,
     t: &Tick,
-    held: &[bool],
+    held: &[Option<usize>],
     turned_off: &BTreeMap<usize, String>,
     serving: impl Fn(usize) -> Vec<String>,
 ) {
     let id = |j: usize| graph.steps[j].id.as_str();
     for (i, &st) in t.states.iter().enumerate() {
-        let st = if held[i] { Row::Running } else { st };
+        let st = match held[i] {
+            Some(p) => Row::Waiting(Wait::Upstream(p)),
+            None => st,
+        };
         let turned_off_by = turned_off.get(&i).cloned();
         let detail = match st {
             Row::Running if t.stops.contains(&i) => Some(match &turned_off_by {
@@ -1178,6 +1414,11 @@ async fn wait_for_stop(rx: &mut Option<watch::Receiver<bool>>) -> Option<()> {
         std::future::pending::<()>().await;
     }
     Some(())
+}
+
+/// What is waiting on the channel now, without waiting for more.
+fn queued<T>(rx: &mut tokio::sync::mpsc::UnboundedReceiver<T>) -> Vec<T> {
+    std::iter::from_fn(|| rx.try_recv().ok()).collect()
 }
 
 /// `v` over a new graph: `from_old[i]` is where step `i` of the new graph
@@ -1288,9 +1529,23 @@ fn facts_of(graph: &Graph, state: &Record) -> Facts {
             last_attempt: None,
             running: None,
             streams_output: graph.steps[i].streams_output,
+            needs_rerun: recorded(i).is_some_and(|s| s.needs_rerun),
         })
         .collect();
     Facts { sinks, steps }
+}
+
+/// The steps that answered a launch's `--migrate` with `needs_rerun` and
+/// have not succeeded since, turned-off ones aside: what the app offers to
+/// run after an upgrade.
+pub fn rerun_offer(graph: &Graph, state: &Record) -> Vec<StepId> {
+    graph
+        .steps
+        .iter()
+        .filter_map(|spec| state.steps.get(&spec.id).map(|st| (spec, st)))
+        .filter(|(_, st)| st.needs_rerun && st.turned_off_by.is_none())
+        .map(|(spec, _)| spec.id.clone())
+        .collect()
 }
 
 /// The versions an invocation was started against, keyed the way the
@@ -1760,6 +2015,85 @@ mod tests {
         assert_eq!(record.steps["a/raw"].fingerprint, edited);
     }
 
+    /// A step that counts its runs and writes its tree.
+    fn counted(id: &str, inputs: &[&str], runs: Arc<AtomicU32>) -> StepSpec {
+        let mut spec = StepSpec::new(
+            id,
+            StepRun::in_process(move |ctx: StepCtx| {
+                let runs = runs.clone();
+                async move {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    let dir = ctx.path_str(&ctx.step_id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("f"), "x").unwrap();
+                    Ok(StepOutcome::default())
+                }
+            }),
+        );
+        for i in inputs {
+            spec = spec.input(i);
+        }
+        spec
+    }
+
+    /// After an upgrade `b`'s render answered `--migrate` with
+    /// `needs_rerun`. A sync of `a` leaves it alone; the offer names it; a
+    /// request rooted at the offer runs it without `b`'s download, and its
+    /// success takes it off the offer.
+    #[tokio::test]
+    async fn a_render_that_needs_a_rerun_waits_for_the_offer() {
+        let root = tempfile::tempdir().unwrap();
+        let b_raw = Arc::new(AtomicU32::new(0));
+        let b_render = Arc::new(AtomicU32::new(0));
+        let graph = Graph::build(vec![
+            counted("a/raw", &[], Arc::default()),
+            counted("a/render", &["a/raw"], Arc::default()),
+            counted("b/raw", &[], b_raw.clone()),
+            counted("b/render", &["b/raw"], b_render.clone()),
+            counted("index/grid", &["a/render", "b/render"], Arc::default()),
+        ])
+        .unwrap();
+        Runner::new(root.path())
+            .run_roots(&graph, &["a/raw", "b/raw"])
+            .await
+            .unwrap();
+        assert_eq!(b_render.load(Ordering::SeqCst), 1);
+        let store = Store::open(root.path()).await.unwrap();
+        let saved = store.load_record().await.unwrap();
+        let mut marked = saved.clone();
+        marked.steps.get_mut("b/render").unwrap().needs_rerun = true;
+        store.save_record(&saved, &marked).await.unwrap();
+        store.close().await;
+
+        Runner::new(root.path())
+            .run_roots(&graph, &["a/raw"])
+            .await
+            .unwrap();
+        assert_eq!(
+            b_render.load(Ordering::SeqCst),
+            1,
+            "not pulled into a's sync"
+        );
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        let offer = rerun_offer(&graph, &record);
+        assert_eq!(offer, ["b/render"]);
+
+        let roots: Vec<&str> = offer.iter().map(String::as_str).collect();
+        Runner::new(root.path())
+            .run_roots(&graph, &roots)
+            .await
+            .unwrap();
+        assert_eq!(b_render.load(Ordering::SeqCst), 2);
+        assert_eq!(b_raw.load(Ordering::SeqCst), 1, "its download did not run");
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        assert!(rerun_offer(&graph, &record).is_empty());
+        assert_eq!(
+            record.steps["index/grid"].reads.get("b/render"),
+            record.steps["b/render"].version.as_ref(),
+            "the index read b's render after it ran"
+        );
+    }
+
     /// A step's record as the loop last saved it, once `ready` holds.
     async fn until_recorded(
         root: &std::path::Path,
@@ -1922,10 +2256,17 @@ mod tests {
             a.state_detail.as_deref(),
             Some("stopping: no open request wants it")
         );
-        assert_eq!(
-            outcome(&other, &id).await,
-            Some(Some(RequestOutcome::Stopped))
-        );
+        // The loop saves the row before it closes the request, so a closed
+        // request has no step serving it; the reverse order is not promised.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while outcome(&other, &id).await != Some(Some(RequestOutcome::Stopped)) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for the request to close as stopped: {:?}",
+                outcome(&other, &id).await
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
 
         let_go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
@@ -2099,12 +2440,17 @@ mod tests {
         assert_eq!(outcome, "succeeded");
     }
 
+    /// With nothing asked of it the loop returns rather than waiting for a
+    /// request, and starts no step.
     #[tokio::test]
     async fn a_loop_with_no_open_request_ends_at_once() {
         let f = fixture();
-        tokio::time::timeout(Duration::from_secs(5), serve(&f))
+        // A loop that waited for a request would never return; the deadline
+        // only tells that from slow store I/O on a loaded runner, and stays
+        // under the `small` test timeout so a hang fails here by name.
+        tokio::time::timeout(Duration::from_secs(30), serve(&f))
             .await
-            .expect("returns")
+            .expect("the loop to return with no request open")
             .unwrap()
             .unwrap();
         assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);

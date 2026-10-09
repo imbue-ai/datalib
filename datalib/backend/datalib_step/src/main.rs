@@ -15,8 +15,8 @@ mod grid_index;
 mod hints;
 mod ingest;
 mod introspect;
-mod login;
 mod methods;
+mod migrate;
 mod probe;
 mod published;
 mod qmd_index;
@@ -37,9 +37,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use datalib_dag::subprocess::{
-    ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_NOW, ENV_RESET, ENV_STEP,
-};
+use datalib_dag::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_NOW, ENV_STEP};
 use datalib_dag::FailureKind;
 
 use crate::events::Emitter;
@@ -83,34 +81,32 @@ struct Cli {
     /// `embed` only: directory where qmd caches its embedding model.
     #[arg(long)]
     models_dir: Option<PathBuf>,
+    /// Appended by `datalib-dag --reset`: empty this part of what the step
+    /// wrote (`store`) and do nothing else (`step_protocol.md` § Reset).
+    #[arg(long, value_name = "PART", conflicts_with = "migrate")]
+    reset: Option<String>,
+    /// Appended by a launch after an upgrade: bring what the step wrote to
+    /// this build's shape where that can be done in place, fetch nothing,
+    /// and say when it cannot (`step_protocol.md` § Migrate).
+    #[arg(long)]
+    migrate: bool,
     #[command(flatten)]
     obs: datalib_obs::ObsArgs,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Utility (not a pipeline step): ask a provider what these
-    /// credentials can reach, and print one JSON object on stdout.
-    /// Writes nothing and needs no data root.
+    /// Utility (not a pipeline step): ask a provider which account
+    /// these credentials reach — and, with `--list`, one list a picker
+    /// offers — and print one JSON object on stdout. Progress goes to
+    /// stderr while a list pages. Writes nothing and needs no data root.
     Probe {
         /// Source type (`slack`, `claude`, …): the provider to ask.
         source_type: String,
-    },
-    /// Utility (not a pipeline step): sign in to a service that holds
-    /// its own credential rather than a latchkey one, and store it
-    /// where that source's ingest step reads it. Interactive.
-    Login {
-        /// Source type; only `garmin` has a login of its own.
-        source_type: String,
-        /// Where to write the token files (garmin: `~/.garth`).
+        /// The list to load as well: `channels`, `conversations`,
+        /// `labels`, `mailboxes`, `calendars` or `addressbooks`.
         #[arg(long)]
-        token_dir: Option<String>,
-        /// Account email, else prompted for.
-        #[arg(long)]
-        email: Option<String>,
-        /// `garmin.com`, or `garmin.cn` for a China-region account.
-        #[arg(long, default_value = "garmin.com")]
-        domain: String,
+        list: Option<String>,
     },
     /// Utility (not a pipeline step): put qmd's pinned GGUF models in
     /// place, sha256-verified — what an `embed` step does before
@@ -207,8 +203,8 @@ async fn main() {
     // owns no tree, claims no outputs and must leave stdout holding
     // exactly one JSON object, so an `outcome` event line after it
     // would corrupt the only thing its caller reads.
-    if let Some(Cmd::Probe { source_type }) = &cli.cmd {
-        probe::run_cli(source_type, cli.params_file.as_deref()).await;
+    if let Some(Cmd::Probe { source_type, list }) = &cli.cmd {
+        probe::run_cli(source_type, list.as_deref(), cli.params_file.as_deref()).await;
     }
     // `pull-models` likewise: nothing here is a step.
     if let Some(Cmd::PullModels { models_dir }) = &cli.cmd {
@@ -270,16 +266,6 @@ async fn main() {
     if let Some(Cmd::TopoSortConfig { path, check }) = &cli.cmd {
         std::process::exit(topo_sort_config::run_cli(path, *check));
     }
-    // `login` likewise: it talks to a terminal, not to the runner.
-    if let Some(Cmd::Login {
-        source_type,
-        token_dir,
-        email,
-        domain,
-    }) = &cli.cmd
-    {
-        login::run_cli(source_type, token_dir.as_deref(), email.as_deref(), domain).await;
-    }
 
     let step_id = std::env::var(ENV_STEP).unwrap_or_else(|_| "step".to_string());
     let data_root = std::env::var_os(ENV_DATA_ROOT)
@@ -340,7 +326,13 @@ async fn main() {
         stop: stop.clone(),
     };
 
-    match run(cli, &data_root, &now, &control, &emitter).await {
+    let result = {
+        // Dropped on a panic's unwind too, so a step that dies still says
+        // what it recorded.
+        let _log = LogRecordedProblems;
+        run(cli, &data_root, &now, &control, &emitter).await
+    };
+    match result {
         // A run that ended because it was asked to is not a success, even
         // though it committed: it did not finish, and saying so is how the
         // runner knows not to mark it done. What it committed stands, and
@@ -386,6 +378,16 @@ async fn main() {
     }
 }
 
+/// Every problem this step stored, logged once at its end at the row's
+/// severity (`datalib_problems::log_recorded`).
+struct LogRecordedProblems;
+
+impl Drop for LogRecordedProblems {
+    fn drop(&mut self) {
+        datalib_schema::problems::log_recorded();
+    }
+}
+
 async fn run(
     cli: Cli,
     data_root: &Path,
@@ -403,7 +405,6 @@ async fn run(
         // Handled in `main` before the step machinery starts; see
         // there for why it cannot come through the outcome path.
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
-        Some(Cmd::Login { .. }) => unreachable!("login is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
         Some(Cmd::PullRuntime) => unreachable!("pull-runtime is answered in main"),
         Some(Cmd::TopoSortConfig { .. }) => {
@@ -411,8 +412,11 @@ async fn run(
         }
         None => {
             let env = StepEnv::from_env()?;
-            if let Ok(part) = std::env::var(ENV_RESET) {
-                return reset::run(&env, data_root, &part, emitter).await;
+            if let Some(part) = &cli.reset {
+                return reset::run(&env, data_root, part, emitter).await;
+            }
+            if cli.migrate {
+                return migrate::run(&env, data_root, emitter).await;
             }
             run_function(
                 env,
@@ -444,7 +448,7 @@ async fn run_function(
         Function::Ingest => {
             if let Some(pb) = playback_root {
                 let pb = pb.canonicalize().context("playback root")?;
-                std::env::set_var(datalib_etl::http::PLAYBACK_ENV, pb);
+                std::env::set_var(datalib_etl_web::http::PLAYBACK_ENV, pb);
             }
             let planned = dispatch::plan(
                 env.source_type()?,
@@ -489,10 +493,14 @@ async fn run_function(
         }
         Function::QmdAggregator => {
             writes_the_index_tree(&env, &qmd_index::aggregator_rel())?;
-            qmd_index::run_aggregator(data_root, &env, emitter).await
+            qmd_index::run_aggregator(data_root, &env, emitter, &control.stop).await
         }
-        Function::KeywordIndex => qmd_index::run_keyword(data_root, &env, emitter).await,
-        Function::Embed => qmd_index::run_embed(data_root, &env, models_dir, emitter).await,
+        Function::KeywordIndex => {
+            qmd_index::run_keyword(data_root, &env, emitter, &control.stop).await
+        }
+        Function::Embed => {
+            qmd_index::run_embed(data_root, &env, models_dir, emitter, &control.stop).await
+        }
         Function::EmbeddingMap => {
             writes_the_index_tree(&env, &embedding_map::out_rel())?;
             embedding_map::run(data_root, now, emitter).await

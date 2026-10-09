@@ -5,6 +5,7 @@
 import { ref } from "vue";
 import router, { MANAGE_STACK } from "@/router";
 import { encodeColumns } from "@/router/columns";
+import { searchSource } from "@/cards/cardSources";
 
 export const SOURCES_CARD = "sourcesView()";
 export const LOG_CARD = "logView()";
@@ -26,7 +27,7 @@ export function showDataSources() {
 /// The toolbar's search box: a search card on `q`, beside whatever is
 /// showing.
 export function searchFor(q: string) {
-  const source = `searchView(${JSON.stringify({ q })})`;
+  const source = searchSource(q);
   if (surface.value) surface.value.showCard(source);
   else void router.push(encodeColumns([{ code: source, size: null, state: "" }]));
 }

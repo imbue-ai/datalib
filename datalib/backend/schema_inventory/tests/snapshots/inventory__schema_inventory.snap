@@ -25,7 +25,7 @@ problems
     rule
     sample
     first_seen_at_utc
-    last_seen_at_utc
+    changed_at_utc
     tz_offset
     render_version
 sync_runs
@@ -36,11 +36,6 @@ sync_runs
     config
     status
     summary
-sync_scope_config
-    scope
-    config
-    updated_at_utc
-    tz_offset
 sync_scope_state
     scope
     last_seen_at_utc
@@ -60,6 +55,7 @@ beeper_media_attachments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 events
     id
     source
@@ -83,6 +79,7 @@ events_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 rooms
     id
     source
@@ -104,6 +101,7 @@ rooms_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 users
     id
     source
@@ -121,6 +119,7 @@ users_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == chatgpt/raw ==
 chatgpt_attachments
@@ -136,6 +135,7 @@ chatgpt_attachments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 conversations
     id
     payload
@@ -149,6 +149,7 @@ conversations_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 me
     id
     payload
@@ -162,6 +163,7 @@ me_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == claude/raw ==
 claude_attachments
@@ -177,6 +179,7 @@ claude_attachments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 conversations
     id
     payload
@@ -192,6 +195,7 @@ conversations_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 orgs
     id
     payload
@@ -204,6 +208,7 @@ orgs_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 project_docs
     id
     payload
@@ -218,6 +223,18 @@ project_docs_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
+project_docs_listings
+    id
+project_docs_listings_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 projects
     id
     payload
@@ -233,6 +250,7 @@ projects_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 users
     id
     payload
@@ -246,6 +264,7 @@ users_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == calendar/raw ==
 accounts
@@ -262,6 +281,7 @@ accounts_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 calendars
     id
     account_id
@@ -279,6 +299,24 @@ calendars_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
+dav_resources
+    id
+    collection
+    href
+    etag
+dav_resources_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+dav_unconfirmed
+    collection
+    href
 google_events
     id
     payload
@@ -294,6 +332,7 @@ google_events_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 ics_objects
     id
     payload
@@ -309,6 +348,7 @@ ics_objects_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 ingested_files
     scope
     rel_path
@@ -331,6 +371,7 @@ accounts_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 addressbooks
     id
     account_id
@@ -347,6 +388,7 @@ addressbooks_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 contact_categories
     id
     contact_id
@@ -375,6 +417,24 @@ contacts_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
+dav_resources
+    id
+    collection
+    href
+    etag
+dav_resources_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+dav_unconfirmed
+    collection
+    href
 ingested_files
     scope
     rel_path
@@ -399,6 +459,7 @@ accounts_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 email_blobs
     id
     email_id
@@ -412,6 +473,7 @@ email_blobs_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 email_keywords
     id
     email_id
@@ -445,10 +507,7 @@ emails_bookkeeping
     last_error
     volatile_payload
     tz_offset
-gmail_messages
-    gmail_id
-    email_id
-    thread_id
+    held_version
 ingested_files
     scope
     rel_path
@@ -456,6 +515,20 @@ ingested_files
     size_bytes
     last_finished_at_utc
     tz_offset
+listed_messages
+    id
+    stamp
+listed_messages_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+listed_whole
+    scope
 mailboxes
     id
     payload
@@ -472,6 +545,7 @@ mailboxes_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 threads
     id
     payload
@@ -485,6 +559,7 @@ threads_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == fsindex/raw ==
 dirs
@@ -515,8 +590,13 @@ scan_meta_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == github/raw ==
+coverage
+    scope
+    lo
+    hi
 issue_comments
     id
     payload
@@ -534,6 +614,10 @@ issue_comments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
+listed_change_requests
+    id
+    updated_at
 pr_review_comments
     id
     payload
@@ -558,6 +642,7 @@ pr_review_comments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 pr_reviews
     id
     payload
@@ -576,6 +661,7 @@ pr_reviews_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 pull_requests
     id
     payload
@@ -597,6 +683,7 @@ pull_requests_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 self_identity
     id
     payload
@@ -610,8 +697,13 @@ self_identity_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == gitlab/raw ==
+coverage
+    scope
+    lo
+    hi
 discussions
     id
     payload
@@ -628,6 +720,10 @@ discussions_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
+listed_change_requests
+    id
+    updated_at
 merge_requests
     id
     payload
@@ -650,6 +746,7 @@ merge_requests_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 self_identity
     id
     payload
@@ -663,6 +760,7 @@ self_identity_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == google_takeout/raw ==
 chat_attachments
@@ -678,6 +776,7 @@ chat_attachments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 chat_groups
     id
     payload
@@ -689,6 +788,7 @@ chat_groups_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 chat_messages
     id
     payload
@@ -703,6 +803,7 @@ chat_messages_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 chat_users
     id
     payload
@@ -714,6 +815,7 @@ chat_users_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 gemini_activity
     id
     payload
@@ -726,6 +828,7 @@ gemini_activity_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 gemini_attachments
     id
     activity_id
@@ -739,6 +842,7 @@ gemini_attachments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 ingested_files
     scope
     rel_path
@@ -759,6 +863,7 @@ maps_photos_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 maps_reviews
     id
     payload
@@ -771,6 +876,7 @@ maps_reviews_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 maps_saved_places
     id
     payload
@@ -783,6 +889,7 @@ maps_saved_places_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 voice_attachments
     id
     message_id
@@ -796,6 +903,7 @@ voice_attachments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 voice_bills
     id
     payload
@@ -807,6 +915,7 @@ voice_bills_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 voice_greetings
     id
     payload
@@ -819,6 +928,7 @@ voice_greetings_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 voice_messages
     id
     payload
@@ -834,6 +944,7 @@ voice_messages_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 youtube_subscriptions
     id
     payload
@@ -846,6 +957,7 @@ youtube_subscriptions_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 youtube_watch_history
     id
     payload
@@ -860,6 +972,7 @@ youtube_watch_history_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == media/raw ==
 media_audio
@@ -890,6 +1003,7 @@ media_files_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 media_items
     blake3
     size
@@ -907,6 +1021,7 @@ media_items_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 media_playlist_entries
     id
     playlist_id
@@ -930,6 +1045,7 @@ media_playlists_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 media_scan_meta
     id
     abs_root
@@ -941,6 +1057,7 @@ media_scan_meta_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 media_visual
     blake3
     width
@@ -977,6 +1094,7 @@ comment_anchors_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 comments
     id
     discussion_id
@@ -994,6 +1112,11 @@ comments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
+coverage
+    scope
+    lo
+    hi
 notion_attachments
     id
     page_id
@@ -1007,12 +1130,23 @@ notion_attachments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
+page_comments
+    id
+page_comments_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 page_markdown
     id
     markdown
     truncated
     unresolved_block_ids
-    source_last_edited_time
 page_markdown_bookkeeping
     id
     fetched_at_utc
@@ -1021,6 +1155,7 @@ page_markdown_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 pages
     id
     parent_type
@@ -1038,6 +1173,7 @@ pages_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 users
     id
     name
@@ -1050,6 +1186,7 @@ users_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == pdf/raw ==
 pdf_documents
@@ -1078,6 +1215,7 @@ pdf_documents_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 pdf_paths
     id
     blake3
@@ -1089,6 +1227,7 @@ pdf_paths_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 pdf_scan_meta
     id
     abs_root
@@ -1100,6 +1239,7 @@ pdf_scan_meta_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == signal/raw ==
 account
@@ -1113,6 +1253,7 @@ account_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 chat_item_attachments
     id
     chat_item_id
@@ -1126,6 +1267,7 @@ chat_item_attachments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 chat_items
     id
     payload
@@ -1140,6 +1282,7 @@ chat_items_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 chats
     id
     payload
@@ -1152,6 +1295,7 @@ chats_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 ingested_backups
     fingerprint
     blake3
@@ -1172,6 +1316,7 @@ recipients_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == airvisual/raw ==
 airvisual_devices
@@ -1226,6 +1371,7 @@ bookmarks_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 channel_read_states
     id
     payload
@@ -1237,6 +1383,7 @@ channel_read_states_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 channels
     id
     payload
@@ -1253,6 +1400,11 @@ channels_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
+coverage
+    scope
+    lo
+    hi
 messages
     id
     payload
@@ -1271,19 +1423,7 @@ messages_bookkeeping
     last_error
     volatile_payload
     tz_offset
-replies_pages
-    id
-    channel_id
-    thread_ts
-    latest_reply
-replies_pages_bookkeeping
-    id
-    fetched_at_utc
-    attempt_count
-    last_attempt_at_utc
-    last_error
-    volatile_payload
-    tz_offset
+    held_version
 saved_items
     id
     payload
@@ -1298,6 +1438,7 @@ saved_items_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 slack_attachments
     id
     message_uuid
@@ -1311,6 +1452,18 @@ slack_attachments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
+threads
+    id
+threads_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 users
     id
     payload
@@ -1326,6 +1479,7 @@ users_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 workspaces
     id
     payload
@@ -1340,6 +1494,7 @@ workspaces_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == sms_backup_restore/raw ==
 ingested_files
@@ -1362,6 +1517,7 @@ sms_attachments_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 sms_calls
     id
     payload
@@ -1376,6 +1532,7 @@ sms_calls_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 sms_messages
     id
     payload
@@ -1391,6 +1548,7 @@ sms_messages_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == claude_code/raw ==
 ingested_files
@@ -1451,12 +1609,15 @@ wa_media_files
     mime_type
 
 == yolink/raw ==
+coverage
+    scope
+    lo
+    hi
 yolink_devices
     id
     family_device_id
     kind
     start_ms
-    last_ts_ms
 yolink_devices_bookkeeping
     id
     fetched_at_utc
@@ -1465,6 +1626,7 @@ yolink_devices_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 yolink_readings
     id
     payload
@@ -1480,8 +1642,13 @@ yolink_readings_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == garmin/raw ==
+coverage
+    scope
+    lo
+    hi
 garmin_account
     id
     payload
@@ -1494,12 +1661,14 @@ garmin_account_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 garmin_activities
     id
     payload
     start_time_gmt
     activity_type
     name
+    listing_hash
 garmin_activities_bookkeeping
     id
     fetched_at_utc
@@ -1508,6 +1677,7 @@ garmin_activities_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 garmin_activity_details
     id
     payload
@@ -1519,6 +1689,7 @@ garmin_activity_details_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 garmin_activity_files
     id
     activity_id
@@ -1532,6 +1703,7 @@ garmin_activity_files_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 garmin_daily
     id
     payload
@@ -1545,6 +1717,7 @@ garmin_daily_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 garmin_devices
     id
     payload
@@ -1557,6 +1730,7 @@ garmin_devices_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 garmin_items
     id
     payload
@@ -1570,6 +1744,7 @@ garmin_items_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 garmin_weigh_ins
     id
     payload
@@ -1585,6 +1760,7 @@ garmin_weigh_ins_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 garmin_wellness_files
     id
     calendar_date
@@ -1598,8 +1774,16 @@ garmin_wellness_files_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == facebook/raw ==
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at_utc
+    tz_offset
 media_blobs
     id
     owner_id
@@ -1613,6 +1797,7 @@ media_blobs_bookkeeping
     last_error
     volatile_payload
     tz_offset
+    held_version
 
 == unified_index/grid ==
 edges
@@ -1638,6 +1823,7 @@ grid_rows
     touched_offset
     is_document
     author
+    author_handle
     account
     project
     org_uuid
@@ -1691,7 +1877,7 @@ problems
     rule
     sample
     first_seen_at_utc
-    last_seen_at_utc
+    changed_at_utc
     tz_offset
     render_version
 render_cursor
@@ -1735,3 +1921,42 @@ feedback
     context_json
     fixed_in_git_hash
     notes
+
+== datalib_curated/contacts ==
+contacts
+    contact_id
+    kind
+    name
+    note
+    merged_into
+    created_at_utc
+    updated_at_utc
+    tz_offset
+fields
+    field_id
+    contact_id
+    kind
+    label
+    value
+    handle
+    position
+    copied_from_source
+    copied_from_key
+handles
+    handle
+    contact_id
+    linked_how
+    linked_at_utc
+    tz_offset
+    stopped_working_by
+members
+    group_id
+    member_id
+    added_at_utc
+    tz_offset
+photos
+    contact_id
+    content_type
+    bytes
+    set_at_utc
+    tz_offset

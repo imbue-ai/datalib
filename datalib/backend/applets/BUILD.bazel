@@ -1,7 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 load("//datalib/backend/unified_index:qmd_fixture.bzl", "QMD_FIXTURE_DATA", "QMD_FIXTURE_ENV")
-
-exports_files(["Cargo.toml"])
+load("//tools:insta.bzl", "insta_update")
 
 # `datalib-applet` — the applet host (see docs/dev/applets.md), one
 # subcommand per applet, the same shape as `datalib-step`.
@@ -19,8 +18,10 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//datalib/backend/columns:datalib_columns",
+        "//datalib/backend/contacts:datalib_contacts",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/fetch:datalib_fetch",
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/problems:datalib_problems",
@@ -39,6 +40,7 @@ rust_binary(
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:strum",
         "@datalib_crates//:sha2",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
@@ -53,10 +55,12 @@ rust_test(
     name = "applet_unittests",
     size = "medium",
     crate = ":datalib_applet",
-    data = QMD_FIXTURE_DATA + [":datalib_applet"],
+    data = glob(["src/unified_index/snapshots/*.snap"], allow_empty = True) +
+           QMD_FIXTURE_DATA + [":datalib_applet"],
     edition = "2021",
     env = QMD_FIXTURE_ENV | {
         "APPLET_BIN": "$(rootpath :datalib_applet)",
+        "INSTA_WORKSPACE_ROOT": ".",
         # The qmd tests share `DATALIB_RUNTIME_DIR` (qmd_search_tests.rs).
         "RUST_TEST_THREADS": "1",
     },
@@ -66,6 +70,18 @@ rust_test(
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",
         "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:insta",
         "@datalib_crates//:tempfile",
+        "@datalib_crates//:tower",
     ],
+)
+
+insta_update(
+    name = "applet_unittests.update",
+    extra_data = QMD_FIXTURE_DATA + [":datalib_applet"],
+    extra_env = QMD_FIXTURE_ENV | {
+        "APPLET_BIN": "$(rootpath :datalib_applet)",
+        "RUST_TEST_THREADS": "1",
+    },
+    test = ":applet_unittests",
 )

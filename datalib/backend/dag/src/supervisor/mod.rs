@@ -11,3 +11,5 @@ pub mod reload;
 pub mod round;
 pub mod store;
 pub mod tick;
+pub mod upgrade;
+pub mod wipe;

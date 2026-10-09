@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Render half of the `garmin` provider: the side that knows
 # `datalib_schema`. //datalib/backend/etl/providers/garmin is the ingest
 # half and deliberately does not.
@@ -49,6 +47,7 @@ rust_test(
     deps = [
         ":datalib_etl_garmin_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/garmin:datalib_etl_garmin",
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "//datalib/backend/etl/render:datalib_etl_render",

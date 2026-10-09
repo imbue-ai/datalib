@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Render half of the `contacts` provider. This is the side that knows
 # `datalib_schema`; //datalib/backend/etl/providers/contacts is the
 # download half and deliberately does not.
@@ -15,6 +13,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
         "//datalib/backend/etl/providers/contacts_config:datalib_etl_contacts_config",
         "//datalib/backend/etl/providers/contacts:datalib_etl_contacts",
@@ -26,7 +25,6 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:base64",
         "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
     ],
 )
 

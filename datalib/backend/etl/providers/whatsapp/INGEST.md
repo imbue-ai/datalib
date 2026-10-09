@@ -96,7 +96,10 @@ leaves the stored contacts as they were, as a missing `Media/` does.
 Render names a jid by the first of: its address-book name, its
 `lid_display_name`, the name the person set, its phone number, the raw
 jid — each looked up under the jid and, for a linked id, under the phone
-number `jid_map` gives it.
+number `jid_map` gives it. The same rows are each author's account of
+the person in the chat's contacts (`NormalizedChat::contacts`): every
+name the entries give, the name they set, company and title, keyed by
+the number.
 
 Profile photos are not in any backup: `wa_contacts` has only their
 timestamps (`photo_ts`, `thumb_ts`), and the images stay in the app's
@@ -142,6 +145,24 @@ A backup pulled without `Media/` mirrors fine and renders every
 attachment as a placeholder; copying `Media/` in later and re-running
 fills them in — render's diff scan follows a changed registry row back
 to its message.
+
+## When part of a backup will not read
+
+msgstore is the backup: if it will not decrypt or mirror, the step
+fails. The things beside it cost only themselves, as `problems` rows,
+and every run tries them again:
+
+| what failed | its row | what is kept |
+| --- | --- | --- |
+| msgstore decrypts to a database with no table in it | `phase:source` | every mirrored table, which a refill from nothing would have emptied (the engine's refusal: [lightroom/INGEST.md](../lightroom/INGEST.md#a-source-with-nothing-in-it-is-refused)) |
+| `wa.db` will not decrypt or read | `phase:wa.db contacts` | the stored `wa_db_contacts` |
+| part of `Media/` will not list | `listing:media` | the whole registry: the drop-and-refill is held back, since a file the walk could not see is not gone |
+| a media file will not open to be hashed | `record:media:<path under Media/>` | its registry row; the refill goes on for every other file |
+| a media file's bytes will not read | `record:wa_media_files:<relative_path>` | its registry row, so the message names the file and says it is not fetched |
+
+A run reads again every file whose bytes the CAS lacks, so the
+`record:` rows are replaced whole each run that walks `Media/`; a run
+without `Media/` leaves them as they were.
 
 ## What render does with it
 

@@ -85,15 +85,14 @@ pub fn render_all(
 /// `ref_id`: it is what the normalized attachment carries, and what the
 /// bundle is keyed on.
 fn load_blobs(parsed: &ParsedBeeper, raw_db_path: &Path) -> Result<HashMap<String, BlobBundle>> {
-    let cas_path = blob_cas::cas_path_for(raw_db_path);
-    if !cas_path.is_file() {
-        return Ok(HashMap::new());
-    }
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let cas = blob_cas::BlobCas::open_reader(&cas_path)
+            let Some(cas) = blob_cas::BlobCas::open_for_render(raw_db_path)
                 .await
-                .with_context(|| format!("open CAS at {}", cas_path.display()))?;
+                .with_context(|| format!("open the blob store beside {}", raw_db_path.display()))?
+            else {
+                return Ok(HashMap::new());
+            };
             let result = async {
                 let mut out: HashMap<String, BlobBundle> = HashMap::new();
                 for doc in &parsed.docs {
@@ -104,6 +103,7 @@ fn load_blobs(parsed: &ParsedBeeper, raw_db_path: &Path) -> Result<HashMap<Strin
                                 continue;
                             };
                             let Some(obj) = cas.get(hash).await? else {
+                                bundle.mark_missing(hash);
                                 continue;
                             };
                             bundle.add(
@@ -114,7 +114,7 @@ fn load_blobs(parsed: &ParsedBeeper, raw_db_path: &Path) -> Result<HashMap<Strin
                             );
                         }
                     }
-                    if !bundle.is_empty() {
+                    if !bundle.is_empty() || bundle.has_missing() {
                         out.insert(bundle_key(doc), bundle);
                     }
                 }

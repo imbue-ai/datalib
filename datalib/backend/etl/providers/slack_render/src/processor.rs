@@ -36,12 +36,16 @@ impl SourceRender for SlackRender {
         datalib_etl_chat_common::render::layout_params()
     }
 
-    /// A message is its own row; an attachment is its message's.
+    /// A message is its own row; an attachment is its message's; a
+    /// thread's replies are its root's, whose key the thread's own row
+    /// shares.
     fn item_of_entity(&self, source_id: &str, table: &str, id: &str) -> Option<String> {
         use datalib_etl::blob_cas::CasEdgeRow;
         use datalib_etl::bulk::BulkUpsertable;
-        use datalib_etl_slack::ingest::schema_raw::{split_key, MessageRow, SlackAttachmentRow};
-        let message_key = if table == MessageRow::TABLE {
+        use datalib_etl_slack::ingest::schema_raw::{
+            split_key, MessageRow, SlackAttachmentRow, THREADS,
+        };
+        let message_key = if table == MessageRow::TABLE || table == THREADS {
             id
         } else if table == SlackAttachmentRow::TABLE {
             SlackAttachmentRow::owning_id_of(id)?
@@ -104,7 +108,9 @@ mod tests {
             item("slack_attachments", &attachment),
             Some(message.clone())
         );
-        assert_eq!(item("messages", &message_key), Some(message));
+        assert_eq!(item("messages", &message_key), Some(message.clone()));
+        // A thread whose replies could not be read is its root's row.
+        assert_eq!(item("threads", &message_key), Some(message));
         assert_eq!(item("users", "U1"), None);
         assert_eq!(item("slack_attachments", "no-separator"), None);
     }

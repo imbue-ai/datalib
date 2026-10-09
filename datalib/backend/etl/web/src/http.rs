@@ -1,0 +1,1361 @@
+//! Shared HTTP transport for every provider's Download step.
+//!
+//! One entry point, [`latchkey_curl`], in two modes that produce the same
+//! `HttpResponse` so callers cannot tell them apart: **live**, which shells
+//! out to `latchkey curl`, and **playback** (`DATALIB_HTTP_PLAYBACK=<dir>`),
+//! which reads a fixture and never touches the network. We never record live
+//! traffic into the repo.
+//!
+//! It is also the single place rate-limit handling lives.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
+
+/// Re-exported so providers can name the settings they forward without
+/// taking a direct dependency on the schema crate — they all already
+/// depend on this one.
+pub use datalib_source_common::LatchkeySettings;
+
+/// HTTP method. We only model the methods any provider currently issues;
+/// extend as needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HttpMethod {
+    Get,
+    Post,
+    Propfind,
+    Report,
+}
+
+impl HttpMethod {
+    fn as_str(self) -> &'static str {
+        match self {
+            HttpMethod::Get => "GET",
+            HttpMethod::Post => "POST",
+            HttpMethod::Propfind => "PROPFIND",
+            HttpMethod::Report => "REPORT",
+        }
+    }
+
+    fn needs_x_flag(self) -> bool {
+        !matches!(self, HttpMethod::Get)
+    }
+}
+
+/// Which upstream service a request goes to.
+///
+/// **Not the same vocabulary as `grid_rows.provider`**, and the two must
+/// not be merged. One provider can speak to two services (`email` uses
+/// both [`HttpService::Jmap`] and [`HttpService::Gmail`]; Notion has an
+/// official API and an unofficial one), one service can be reached by
+/// providers that share no code, and plenty of providers — anything
+/// file-backed — never make a request at all. This names the *service*:
+/// which latchkey credential applies, which playback-fixture directory
+/// the response is stored under, and whether the request needs Chrome
+/// impersonation to get past a JA3 wall.
+///
+/// The strings are directory names under a playback root, so changing
+/// one orphans every fixture recorded under the old spelling.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+    strum::Display,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum HttpService {
+    /// Calendars over CalDAV (Fastmail, iCloud, Nextcloud, …).
+    Caldav,
+    /// Contacts over CardDAV. Named for the protocol because that is
+    /// what latchkey registers.
+    Carddav,
+    Chatgpt,
+    Claude,
+    /// Garmin Connect (`connectapi.garmin.com`), a latchkey service by
+    /// way of its Garmin plugin.
+    Garmin,
+    Github,
+    Gitlab,
+    /// The Gmail API, one of the `email` source's three download modes.
+    Gmail,
+    /// The Google Calendar API, one of the `calendar` source's modes.
+    GoogleCalendar,
+    /// A JMAP server (Fastmail and friends), another `email` mode.
+    Jmap,
+    Linkedin,
+    /// The official `api.notion.com` REST API. Does **not** impersonate:
+    /// the Cloudflare-fronted host was `www.notion.so`, reached only by
+    /// the retired unofficial client. `api.notion.com` accepts a vanilla
+    /// curl TLS fingerprint, confirmed against a live workspace.
+    Notion,
+    Slack,
+    /// YoLink's signed-URL CSV downloads (`us.yosmart.com/download/…`):
+    /// no credential, the URL itself is signed, so every request goes
+    /// out plain.
+    Yolink,
+    /// Fixture-synthesis tests only.
+    #[strum(serialize = "test_provider")]
+    Test,
+}
+
+impl HttpService {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// Whether this service's requests must carry the
+    /// Chrome-impersonation marker, so the router curl hands them to
+    /// the impersonating curl: these hosts reject a vanilla curl TLS
+    /// fingerprint. Services that return false still go through the
+    /// router curl, unmarked, and so use the system curl.
+    ///
+    /// The single source of truth for which services impersonate.
+    pub const fn impersonates(self) -> bool {
+        matches!(
+            self,
+            HttpService::Claude
+                | HttpService::Chatgpt
+                | HttpService::Slack
+                | HttpService::Github
+                | HttpService::Gitlab
+        )
+    }
+}
+
+/// A single outbound HTTP request. Do **not** include the Authorization
+/// header — that is injected by `latchkey` based on the URL host.
+#[derive(Debug, Clone)]
+pub struct HttpRequest {
+    pub service: HttpService,
+    pub method: HttpMethod,
+    pub url: String,
+    pub headers: BTreeMap<String, String>,
+    pub body: Option<Vec<u8>>,
+    pub timeout: Duration,
+    /// Skip the `latchkey` credential-injecting shim and shell out to plain
+    /// `curl`, for publicly reachable resources with no auth, which have no
+    /// latchkey service registered and would fail the host allowlist. Not part
+    /// of [`fixture_key`], so a synthesizer's fixtures match either way.
+    pub bypass_latchkey: bool,
+    /// The source's latchkey knobs, forwarded whole from its config's
+    /// `latchkey_settings:` block (see
+    /// [`datalib_source_common::LatchkeySettings`]) — today just which
+    /// stored account to run as, but providers pass the struct rather
+    /// than the field so a new knob reaches all of them at once.
+    pub latchkey: LatchkeySettings,
+}
+
+impl HttpRequest {
+    pub fn get(service: HttpService, url: impl Into<String>) -> Self {
+        Self {
+            service,
+            method: HttpMethod::Get,
+            url: url.into(),
+            headers: BTreeMap::new(),
+            body: None,
+            timeout: Duration::from_secs(60),
+            bypass_latchkey: false,
+            latchkey: LatchkeySettings::default(),
+        }
+    }
+
+    pub fn post_json(service: HttpService, url: impl Into<String>, body: Vec<u8>) -> Self {
+        let mut headers = BTreeMap::new();
+        headers.insert("Content-Type".into(), "application/json".into());
+        Self {
+            service,
+            method: HttpMethod::Post,
+            url: url.into(),
+            headers,
+            body: Some(body),
+            timeout: Duration::from_secs(60),
+            bypass_latchkey: false,
+            latchkey: LatchkeySettings::default(),
+        }
+    }
+
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.insert(name.into(), value.into());
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    pub fn plain(mut self) -> Self {
+        self.bypass_latchkey = true;
+        self
+    }
+
+    pub fn latchkey(mut self, settings: LatchkeySettings) -> Self {
+        self.latchkey = settings;
+        self
+    }
+}
+
+/// A fully-captured HTTP response. Header names are normalized to
+/// lower-case so callers can probe `response.header("link")` regardless
+/// of how the upstream server cased them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub headers: BTreeMap<String, String>,
+    /// Body bytes. Use [`HttpResponse::body_str`] for textual responses.
+    pub body: Vec<u8>,
+    /// Wall-clock duration of the underlying network exchange. Zero in
+    /// playback mode.
+    #[serde(default)]
+    pub duration_ms: u64,
+}
+
+impl HttpResponse {
+    pub fn body_str(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.body)
+    }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .get(&name.to_ascii_lowercase())
+            .map(|s| s.as_str())
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum HttpError {
+    #[error("{service}: spawn latchkey failed: {message}")]
+    Spawn {
+        service: HttpService,
+        message: String,
+    },
+    #[error("{service}: latchkey curl timed out after {timeout_ms}ms ({url})")]
+    Timeout {
+        service: HttpService,
+        url: String,
+        timeout_ms: u64,
+    },
+    /// `latchkey curl` exited non-zero. This is a transport-level failure
+    /// (DNS, TLS, allowlist) — *not* a non-2xx HTTP status. For HTTP
+    /// errors, inspect `HttpResponse::status` on the Ok path.
+    #[error("{service}: latchkey curl exit {exit} ({url}): {stderr}")]
+    Curl {
+        service: HttpService,
+        url: String,
+        exit: i32,
+        stderr: String,
+    },
+    #[error("{service}: malformed response from latchkey curl ({url}): {message}")]
+    Malformed {
+        service: HttpService,
+        url: String,
+        message: String,
+    },
+    #[error("playback miss: {0}")]
+    PlaybackMiss(String),
+    #[error("playback fixture invalid: {0}")]
+    PlaybackInvalid(String),
+    /// The shared retry loop respected rate limits / backed off but the
+    /// orchestrator's give-up policy ([`crate::retry::RetryGuard`]) tripped
+    /// before the request ever succeeded. Terminal — the caller should
+    /// surface it as a hard error for this source.
+    #[error("{service}: gave up retrying ({url}): {reason}")]
+    GaveUp {
+        service: HttpService,
+        url: String,
+        reason: String,
+    },
+    /// The step was asked to stop while this request waited to retry.
+    /// Terminal for the unit of work that made the request, the same as
+    /// `GaveUp`; the fetch loop's next check of the stop flag ends the run.
+    #[error("{service}: interrupted while waiting to retry ({url})")]
+    Interrupted { service: HttpService, url: String },
+}
+
+/// Environment variable a caller (genrule, hermetic test, dev loop) can
+/// set to switch every provider into fixture playback. Value is a
+/// directory; per-request fixtures live at `<dir>/<provider>/<key>.json`.
+pub const PLAYBACK_ENV: &str = "DATALIB_HTTP_PLAYBACK";
+
+/// Milliseconds to wait before answering each replayed request. Playback
+/// only: a fixture answers instantly, which hides everything that depends
+/// on a download taking time — checkpoints sealing mid-run, a consumer
+/// starting on a partial store, the Manage screen showing a step in
+/// flight. The streaming e2e suite sets it to make a replayed download
+/// last long enough to watch.
+pub const PLAYBACK_DELAY_ENV: &str = "DATALIB_HTTP_PLAYBACK_DELAY_MS";
+
+/// A file whose presence holds every replayed request: while it exists
+/// the request waits, and the moment it is gone the request is answered.
+/// Playback only. A test that has to act on a download in flight — add a
+/// source beside it, stop it — holds the tape, acts, and releases it,
+/// instead of picking a delay and hoping the window is wide enough on a
+/// slow runner. A stop ends the wait as `Interrupted`, like a backoff.
+pub const PLAYBACK_HOLD_ENV: &str = "DATALIB_HTTP_PLAYBACK_HOLD";
+
+/// Like [`PLAYBACK_HOLD_ENV`], but a request waits only once its process
+/// has sealed a checkpoint. A download runs freely to its first seal and
+/// then parks, so a test sees it in flight with something already
+/// published downstream, for as long as the file exists.
+pub const PLAYBACK_HOLD_SEALED_ENV: &str = "DATALIB_HTTP_PLAYBACK_HOLD_SEALED";
+
+const HOLD_POLL: Duration = Duration::from_millis(50);
+
+enum Mode {
+    Live,
+    Playback {
+        root: PathBuf,
+        delay: Duration,
+        hold: Option<PathBuf>,
+        hold_sealed: Option<PathBuf>,
+    },
+}
+
+impl Mode {
+    fn current() -> Self {
+        let path_in = |name: &str| {
+            std::env::var_os(name)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        };
+        match std::env::var_os(PLAYBACK_ENV) {
+            Some(v) if !v.is_empty() => Mode::Playback {
+                root: PathBuf::from(v),
+                delay: playback_delay(),
+                hold: path_in(PLAYBACK_HOLD_ENV),
+                hold_sealed: path_in(PLAYBACK_HOLD_SEALED_ENV),
+            },
+            _ => Mode::Live,
+        }
+    }
+}
+
+/// Waits while `hold` exists; `true` when a stop ended the wait instead.
+async fn held(stop: &datalib_etl::stop::StopFlag, hold: &Path) -> bool {
+    while hold.exists() {
+        if stop.requested() {
+            return true;
+        }
+        tokio::time::sleep(HOLD_POLL).await;
+    }
+    false
+}
+
+fn playback_delay() -> Duration {
+    let Some(raw) = std::env::var_os(PLAYBACK_DELAY_ENV) else {
+        return Duration::ZERO;
+    };
+    match raw.to_str().and_then(|s| s.trim().parse::<u64>().ok()) {
+        Some(ms) => Duration::from_millis(ms),
+        None => {
+            tracing::warn!(
+                value = %raw.to_string_lossy(),
+                "{PLAYBACK_DELAY_ENV} is not a whole number of milliseconds; replaying with no delay"
+            );
+            Duration::ZERO
+        }
+    }
+}
+
+/// A single `Retry-After` wait is capped here so one pathological header
+/// (or a far-future `x-ratelimit-reset`) can't park a source for hours. The
+/// give-up policy ([`crate::retry::RetryGuard`]) still bounds total effort;
+/// this just keeps any *single* sleep sane. Realistic values (seconds to a
+/// few minutes) are respected exactly.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(600);
+
+/// What the retry loop should do with one completed attempt's response.
+/// Returned by the response classifier passed to [`latchkey_curl_classified`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Retryability {
+    /// Definitive — hand the response back to the caller unchanged (any 2xx,
+    /// and 4xx the caller wants to inspect like 401/404).
+    Accept,
+    /// Rate-limited / transient — back off and retry, honoring `retry_after`
+    /// (from `Retry-After` or a provider-specific reset header) when known.
+    Retry { retry_after: Option<Duration> },
+}
+
+/// Default response classifier: HTTP 429 and 502–504 are retryable (honoring
+/// `Retry-After`); everything else is accepted. Providers whose rate-limit
+/// signal isn't visible by status code — Slack's HTTP-200
+/// `error:"ratelimited"`, GitHub's `403 + x-ratelimit-remaining:0` — wrap this
+/// and call [`latchkey_curl_classified`].
+pub fn default_retryability(resp: &HttpResponse) -> Retryability {
+    match resp.status {
+        429 | 502 | 503 | 504 => Retryability::Retry {
+            retry_after: parse_retry_after(resp.header("retry-after")),
+        },
+        _ => Retryability::Accept,
+    }
+}
+
+/// Parse a `Retry-After` header value into a wait duration. Supports the
+/// delta-seconds form (`"120"`) and the HTTP-date form
+/// (`"Wed, 21 Oct 2015 07:28:00 GMT"`). Capped at [`MAX_RETRY_AFTER`].
+/// Returns `None` when absent or unparseable (the loop then backs off).
+pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
+    let v = value?.trim();
+    if let Ok(secs) = v.parse::<u64>() {
+        return Some(Duration::from_secs(secs).min(MAX_RETRY_AFTER));
+    }
+    if let Ok(when) = chrono::DateTime::parse_from_rfc2822(v) {
+        let delta = when.with_timezone(&chrono::Utc) - chrono::Utc::now();
+        let secs = delta.num_seconds().max(0) as u64;
+        return Some(Duration::from_secs(secs).min(MAX_RETRY_AFTER));
+    }
+    None
+}
+
+/// The marker header the router curl routes on (`latchkey-curl-router`
+/// in github.com/imbue-ai/latchkey-curl-shims matches it by name and
+/// ignores the value).
+pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
+
+/// URL prefix that makes a request leave from the user's own machine rather
+/// than from the workspace's own egress. Kept so that workspaces created by
+/// a minds that still publishes it keep working; a current minds decides
+/// this inside the gateway instead, by the router curl's
+/// `LATCHKEY_DESKTOP_PROXY_CONFIG` file, with no help from datalib. Remove
+/// this once no supported minds publishes the prefix.
+///
+/// Only the impersonating providers ask for it: a remote workspace runs on a
+/// VPS and reaches third parties through a gateway on that same VPS, so its
+/// requests carry a datacenter IP — and the providers that need TLS
+/// impersonation are the same ones that block those ranges outright, where a
+/// fingerprint fix does not help.
+pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "MINDS_VIA_DESKTOP_URL_PREFIX";
+
+fn maybe_via_desktop_url(url: &str, service: HttpService, bypass_latchkey: bool) -> String {
+    if bypass_latchkey || !service.impersonates() {
+        return url.to_string();
+    }
+    match std::env::var(VIA_DESKTOP_URL_PREFIX_ENV) {
+        Ok(prefix) if !prefix.is_empty() => format!("{prefix}/{url}"),
+        _ => url.to_string(),
+    }
+}
+
+/// Issue an HTTP request and return the full response, with the shared retry
+/// policy applied — 429, 5xx and transient transport failures, honoring
+/// `Retry-After` else backing off exponentially, bounded by the ambient
+/// [`crate::retry::RetryGuard`].
+///
+/// The entry point for every provider whose rate-limit signal is expressible
+/// by status code; the rest wrap [`default_retryability`] and call
+/// [`latchkey_curl_classified`].
+pub async fn latchkey_curl(req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+    latchkey_curl_classified(req, default_retryability).await
+}
+
+/// Like [`latchkey_curl`], but the caller supplies a response classifier so
+/// a provider can mark responses the status code alone can't (e.g. Slack's
+/// HTTP-200 `ratelimited` body) as retryable. Transport-level transients
+/// (curl exit 7/28/35/56, timeouts) are always retried regardless of the
+/// classifier, since there is no response to classify.
+pub async fn latchkey_curl_classified<F>(
+    req: &HttpRequest,
+    classify: F,
+) -> Result<HttpResponse, HttpError>
+where
+    F: Fn(&HttpResponse) -> Retryability,
+{
+    // Resolve the current source's give-up guard (or a default-bounded
+    // throwaway outside any download scope). It owns both the give-up limits
+    // and the backoff schedule.
+    let guard = crate::retry::current_or_default();
+    let mut backoff = guard.initial_backoff();
+    loop {
+        // Once the step is asked to stop, no new request leaves. Every
+        // page loop in every API provider funnels through here, so this
+        // is what ends a half-walked channel or thread without each loop
+        // carrying the flag; the unit fails as `Interrupted`, the loop
+        // above it sees the flag, and the run ends at the last unit that
+        // completed.
+        if guard.stop().requested() {
+            return Err(HttpError::Interrupted {
+                service: req.service,
+                url: req.url.clone(),
+            });
+        }
+        // Count every outbound *attempt* against the current source's
+        // download metrics (no-op outside an download scope). This is the
+        // single transport chokepoint every provider's API call funnels
+        // through, so the per-source API-call total is captured here with
+        // zero provider-side code. File-based ingestion never reaches this
+        // path, so it correctly reports zero requests.
+        datalib_etl::download_metrics::record_api_request();
+        let outcome = match Mode::current() {
+            Mode::Live => live::send(req).await,
+            Mode::Playback {
+                root,
+                delay,
+                hold,
+                hold_sealed,
+            } => {
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
+                let hold = hold
+                    .or(hold_sealed.filter(|_| datalib_etl::raw_store::has_sealed_a_checkpoint()));
+                if let Some(hold) = hold {
+                    if held(guard.stop(), &hold).await {
+                        return Err(HttpError::Interrupted {
+                            service: req.service,
+                            url: req.url.clone(),
+                        });
+                    }
+                }
+                match crate::interrupt::before_request().await {
+                    Some(crate::interrupt::Strike::Interrupted) => {
+                        return Err(HttpError::Interrupted {
+                            service: req.service,
+                            url: req.url.clone(),
+                        });
+                    }
+                    None => playback::lookup(req, &root).await,
+                }
+            }
+        };
+
+        // Decide whether this attempt is retryable. `None` = accept (success
+        // or a definitive response/error → hand back to the caller as-is);
+        // `Some(retry_after)` = retryable failure.
+        let retry: Option<Option<Duration>> = match &outcome {
+            Ok(resp) => match classify(resp) {
+                Retryability::Accept => None,
+                Retryability::Retry { retry_after } => Some(retry_after),
+            },
+            // Transient transport failures: retry without a server-specified
+            // delay. (7 couldn't connect, 28 timeout, 35 TLS, 56 recv error.)
+            Err(HttpError::Timeout { .. }) => Some(None),
+            Err(HttpError::Curl { exit, .. }) if matches!(*exit, 7 | 28 | 35 | 56) => Some(None),
+            // Spawn / Malformed / Playback* / GaveUp: terminal, return as-is.
+            Err(_) => None,
+        };
+
+        let Some(retry_after) = retry else {
+            // Accepted — record forward progress and hand the response (or
+            // terminal error) back to the caller untouched.
+            guard.on_progress();
+            return outcome;
+        };
+
+        // Retryable failure: consult the give-up guard before sleeping.
+        if let crate::retry::GuardVerdict::GiveUp(reason) = guard.on_failure() {
+            let detail = match &outcome {
+                Ok(resp) => format!("HTTP {}", resp.status),
+                Err(e) => e.to_string(),
+            };
+            return Err(HttpError::GaveUp {
+                service: req.service,
+                url: req.url.clone(),
+                reason: format!("{reason}; last attempt: {detail}"),
+            });
+        }
+
+        let wait = retry_after
+            .map(|d| d.min(MAX_RETRY_AFTER))
+            .unwrap_or(backoff);
+        let next_backoff = std::cmp::min(backoff * 2, guard.max_backoff());
+        // Only the retryable shapes reach here: a classified response, a
+        // timeout, or one of the transient curl exits.
+        let what = match &outcome {
+            Ok(resp) => format!("HTTP {}", resp.status),
+            Err(HttpError::Timeout { timeout_ms, .. }) => format!("timeout after {timeout_ms}ms"),
+            Err(HttpError::Curl { exit, .. }) => format!("curl exit {exit}"),
+            Err(e) => e.to_string(),
+        };
+        let wait_from = match retry_after {
+            Some(_) => "the server's Retry-After",
+            None => "our backoff",
+        };
+        let budget = guard.budget();
+        tracing::warn!(
+            service = %req.service,
+            url = %req.url,
+            status = %what,
+            wait_ms = wait.as_millis() as u64,
+            retry_after_ms = retry_after.map(|d| d.as_millis() as u64),
+            backoff_ms = backoff.as_millis() as u64,
+            next_backoff_ms = next_backoff.as_millis() as u64,
+            max_backoff_ms = guard.max_backoff().as_millis() as u64,
+            sequential_failures = budget.sequential_failures,
+            max_sequential_failures = budget.max_sequential_failures,
+            time_without_progress_s = budget.time_without_progress.as_secs(),
+            max_time_without_progress_s = budget.max_time_without_progress.as_secs(),
+            "{what} from {}: waiting {:.1}s ({wait_from}; backoff {:.1}s, next {:.1}s, max {}s) \
+             before retrying; {} of {} sequential failures, {}s of {}s without progress",
+            req.service,
+            wait.as_secs_f64(),
+            backoff.as_secs_f64(),
+            next_backoff.as_secs_f64(),
+            guard.max_backoff().as_secs(),
+            budget.sequential_failures,
+            budget.max_sequential_failures,
+            budget.time_without_progress.as_secs(),
+            budget.max_time_without_progress.as_secs(),
+        );
+        if guard.stop().sleep_unless_stopped(wait).await {
+            return Err(HttpError::Interrupted {
+                service: req.service,
+                url: req.url.clone(),
+            });
+        }
+        backoff = next_backoff;
+    }
+}
+
+// Live mode: shell out to `latchkey curl`.
+
+mod live {
+    use super::*;
+
+    pub(super) async fn send(req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        let body_file = tempfile::NamedTempFile::new().map_err(|e| HttpError::Spawn {
+            service: req.service,
+            message: format!("tempfile: {e}"),
+        })?;
+        let body_path = body_file.path().to_path_buf();
+
+        // `latchkey curl …` for the credential-injecting shim, or plain
+        // `curl …` when the caller opted out (public, auth-free fetch).
+        let mut cmd = if req.bypass_latchkey {
+            tokio::process::Command::new("curl")
+        } else {
+            // `latchkey [--account <acct>] curl` — the account selector is a
+            // latchkey *global* option and so must precede the subcommand;
+            // `latchkey_curl_command` is the one place that knows that.
+            crate::latchkey::latchkey_curl_command(&req.latchkey).map_err(|e| HttpError::Spawn {
+                service: req.service,
+                message: format!("{e:#}"),
+            })?
+        };
+        cmd.arg("-sS");
+        // -D - dumps the response header block to stdout so we can
+        // parse every header. -o <path> writes the body to a tempfile
+        // so headers and body are cleanly separated (no need to split
+        // on a CRLFCRLF boundary).
+        cmd.args(["-D", "-", "-o"]).arg(&body_path);
+        if req.method.needs_x_flag() {
+            cmd.args(["-X", req.method.as_str()]);
+        }
+        for (k, v) in &req.headers {
+            cmd.arg("-H").arg(format!("{}: {}", k, v));
+        }
+        // Route CF-fronted providers to the impersonating curl via the
+        // router curl's marker header. Only on the latchkey path -- a
+        // bypass_latchkey request uses plain curl, which has no router
+        // curl to act on the marker and would just send it upstream.
+        if !req.bypass_latchkey && req.service.impersonates() {
+            cmd.arg("-H").arg(IMPERSONATE_MARKER_HEADER);
+        }
+        let writes_body_to_stdin = req.body.is_some();
+        if writes_body_to_stdin {
+            // `@-` reads the request body from stdin so we don't smuggle
+            // it through argv (avoids ARG_MAX and lets binary payloads
+            // round-trip cleanly).
+            cmd.arg("--data-binary").arg("@-");
+            cmd.stdin(Stdio::piped());
+        }
+        cmd.arg(maybe_via_desktop_url(
+            &req.url,
+            req.service,
+            req.bypass_latchkey,
+        ));
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let timeout_ms = req.timeout.as_millis() as u64;
+        let t0 = std::time::Instant::now();
+        let proc_result = tokio::time::timeout(req.timeout, async {
+            let mut child = cmd.spawn().map_err(|e| HttpError::Spawn {
+                service: req.service,
+                message: e.to_string(),
+            })?;
+            if writes_body_to_stdin {
+                if let (Some(mut stdin), Some(payload)) = (child.stdin.take(), req.body.as_ref()) {
+                    stdin
+                        .write_all(payload)
+                        .await
+                        .map_err(|e| HttpError::Spawn {
+                            service: req.service,
+                            message: format!("write stdin: {e}"),
+                        })?;
+                    stdin.shutdown().await.map_err(|e| HttpError::Spawn {
+                        service: req.service,
+                        message: format!("close stdin: {e}"),
+                    })?;
+                }
+            }
+            child
+                .wait_with_output()
+                .await
+                .map_err(|e| HttpError::Spawn {
+                    service: req.service,
+                    message: e.to_string(),
+                })
+        })
+        .await
+        .map_err(|_| HttpError::Timeout {
+            service: req.service,
+            url: req.url.clone(),
+            timeout_ms,
+        })?;
+        let proc = proc_result?;
+        let duration_ms = t0.elapsed().as_millis() as u64;
+
+        if !proc.status.success() {
+            let stderr = String::from_utf8_lossy(&proc.stderr);
+            return Err(HttpError::Curl {
+                service: req.service,
+                url: req.url.clone(),
+                exit: proc.status.code().unwrap_or(-1),
+                stderr: stderr.chars().take(400).collect(),
+            });
+        }
+
+        let header_dump = String::from_utf8_lossy(&proc.stdout).into_owned();
+        let (status, headers) =
+            parse_header_block(&header_dump).ok_or_else(|| HttpError::Malformed {
+                service: req.service,
+                url: req.url.clone(),
+                message: format!(
+                    "no HTTP status line in header dump: {:?}",
+                    header_dump.chars().take(120).collect::<String>()
+                ),
+            })?;
+        let body = std::fs::read(&body_path).map_err(|e| HttpError::Malformed {
+            service: req.service,
+            url: req.url.clone(),
+            message: format!("read body tempfile: {e}"),
+        })?;
+
+        Ok(HttpResponse {
+            status,
+            headers,
+            body,
+            duration_ms,
+        })
+    }
+
+    fn parse_header_block(dump: &str) -> Option<(u16, BTreeMap<String, String>)> {
+        let normalized = dump.replace("\r\n", "\n");
+        let blocks: Vec<&str> = normalized
+            .split("\n\n")
+            .filter(|b| !b.trim().is_empty())
+            .collect();
+        let last = blocks.last()?;
+        let mut lines = last.lines();
+        let status_line = lines.next()?;
+        let parts: Vec<&str> = status_line.split_whitespace().collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        let status: u16 = parts[1].parse().ok()?;
+        let mut headers = BTreeMap::new();
+        for line in lines {
+            if let Some((k, v)) = line.split_once(':') {
+                headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+            }
+        }
+        Some((status, headers))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_simple_header_block() {
+            let dump = "HTTP/2 200\r\ncontent-type: application/json\r\nx-ratelimit-remaining: 4999\r\n\r\n";
+            let (status, headers) = parse_header_block(dump).unwrap();
+            assert_eq!(status, 200);
+            assert_eq!(headers.get("content-type").unwrap(), "application/json");
+            assert_eq!(headers.get("x-ratelimit-remaining").unwrap(), "4999");
+        }
+
+        #[test]
+        fn keeps_last_block_after_continue() {
+            let dump = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nlink: <next>; rel=\"next\"\r\n\r\n";
+            let (status, headers) = parse_header_block(dump).unwrap();
+            assert_eq!(status, 200);
+            assert!(headers.get("link").unwrap().contains("rel=\"next\""));
+        }
+    }
+}
+
+// Playback mode: read pre-recorded fixtures from disk.
+
+mod playback {
+    use super::*;
+
+    pub(super) async fn lookup(req: &HttpRequest, root: &Path) -> Result<HttpResponse, HttpError> {
+        let key = fixture_key(req);
+        let path = root.join(req.service.as_str()).join(&key);
+        let bytes = tokio::fs::read(&path).await.map_err(|_| {
+            HttpError::PlaybackMiss(format!(
+                "{}: no fixture for {} {} (key={})",
+                path.display(),
+                req.method.as_str(),
+                req.url,
+                key
+            ))
+        })?;
+        let resp: HttpResponse = serde_json::from_slice(&bytes)
+            .map_err(|e| HttpError::PlaybackInvalid(format!("{}: {e}", path.display())))?;
+        Ok(resp)
+    }
+}
+
+/// Stable filename a request maps to in the playback root. Used both by
+/// `latchkey_curl` (to look up fixtures) and by per-provider synthesizers
+/// (to write them). Format: `<METHOD>-<sha256-prefix>.json`. The sha256
+/// digest folds in the canonicalized URL, the headers (other than ones
+/// latchkey injects), and the body — so two POSTs to the same endpoint
+/// with different payloads land in different files.
+pub fn fixture_key(req: &HttpRequest) -> String {
+    let mut h = Sha256::new();
+    h.update(req.method.as_str().as_bytes());
+    h.update(b"\n");
+    h.update(canonical_url(&req.url).as_bytes());
+    h.update(b"\n");
+    for (k, v) in &req.headers {
+        h.update(k.to_ascii_lowercase().as_bytes());
+        h.update(b": ");
+        h.update(v.as_bytes());
+        h.update(b"\n");
+    }
+    h.update(b"\n");
+    if let Some(body) = &req.body {
+        h.update(body);
+    }
+    let digest = h.finalize();
+    // 32 hex chars (128 bits) — plenty to avoid collisions in any
+    // realistic fixture set, short enough to read in a directory listing.
+    let hex: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
+    format!("{}-{hex}.json", req.method.as_str())
+}
+
+/// Percent-encode a path segment or query value: every byte but RFC
+/// 3986's unreserved ones, as `%XX`.
+pub fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Canonicalize a URL for fixture-key hashing: sort query parameters by
+/// key. Order shouldn't change a server's response, but client code may
+/// emit params in different orders across versions; canonicalizing keeps
+/// fixtures stable.
+fn canonical_url(url: &str) -> String {
+    let Some((base, query)) = url.split_once('?') else {
+        return url.to_string();
+    };
+    if query.is_empty() {
+        return base.to_string();
+    }
+    let mut params: Vec<(&str, &str)> = query
+        .split('&')
+        .map(|p| p.split_once('=').unwrap_or((p, "")))
+        .collect();
+    params.sort_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(b.1)));
+    let rebuilt = params
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{base}?{rebuilt}")
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    /// Serializes the tests that point `PLAYBACK_ENV` at a fixture dir.
+    /// Rust runs unit tests on parallel threads within one process and
+    /// `PLAYBACK_ENV` is process-global, so without this one test's
+    /// `remove_var` can clear the playback root mid-request in another and
+    /// flip it into live mode — the cause of the intermittent
+    /// `retries_429_then_gives_up_per_guard` failures in CI.
+    #[allow(clippy::await_holding_lock)]
+    pub(crate) async fn with_playback<T>(
+        root: &std::path::Path,
+        body: impl std::future::Future<Output = T>,
+    ) -> T {
+        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _lock = GUARD.lock().unwrap_or_else(|poison| poison.into_inner());
+        std::env::set_var(PLAYBACK_ENV, root);
+        let out = body.await;
+        std::env::remove_var(PLAYBACK_ENV);
+        out
+    }
+
+    fn with_via_desktop_prefix<T>(prefix: Option<&str>, body: impl FnOnce() -> T) -> T {
+        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _lock = GUARD.lock().unwrap_or_else(|poison| poison.into_inner());
+        match prefix {
+            Some(value) => std::env::set_var(VIA_DESKTOP_URL_PREFIX_ENV, value),
+            None => std::env::remove_var(VIA_DESKTOP_URL_PREFIX_ENV),
+        }
+        let out = body();
+        std::env::remove_var(VIA_DESKTOP_URL_PREFIX_ENV);
+        out
+    }
+
+    const TEST_VIA_DESKTOP_PREFIX: &str = "https://latchkey-self.invalid/via-desktop";
+
+    #[test]
+    fn via_desktop_prefix_wraps_impersonating_providers_when_minds_sets_one() {
+        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
+            assert_eq!(
+                maybe_via_desktop_url("https://slack.com/api/auth.test", HttpService::Slack, false),
+                "https://latchkey-self.invalid/via-desktop/https://slack.com/api/auth.test",
+            );
+        });
+    }
+
+    #[test]
+    fn via_desktop_prefix_leaves_the_url_alone_when_it_would_change_nothing() {
+        // A local workspace gets an empty prefix, and outside minds the variable
+        // is unset. Both must leave the URL byte-identical rather than
+        // producing a bare "/".
+        for prefix in [Some(""), None] {
+            with_via_desktop_prefix(prefix, || {
+                assert_eq!(
+                    maybe_via_desktop_url(
+                        "https://slack.com/api/auth.test",
+                        HttpService::Slack,
+                        false
+                    ),
+                    "https://slack.com/api/auth.test",
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn via_desktop_prefix_is_scoped_to_impersonating_latchkey_requests() {
+        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
+            assert_eq!(
+                maybe_via_desktop_url("https://example.com/x", HttpService::Linkedin, false),
+                "https://example.com/x",
+            );
+            assert_eq!(
+                maybe_via_desktop_url("https://slack.com/api/auth.test", HttpService::Slack, true),
+                "https://slack.com/api/auth.test",
+            );
+        });
+    }
+
+    #[test]
+    fn via_desktop_prefix_preserves_the_target_url_verbatim() {
+        // The gateway slices the prefix back off the raw path, so anything that
+        // re-encoded or normalized the target here would change the request the
+        // provider actually receives.
+        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
+            for url in [
+                "https://slack.com/api/conversations.history?channel=C1&limit=100",
+                "https://slack.com/files/a%20b?u=x%2Fy",
+            ] {
+                let wrapped = maybe_via_desktop_url(url, HttpService::Slack, false);
+                assert_eq!(
+                    wrapped.strip_prefix(&format!("{TEST_VIA_DESKTOP_PREFIX}/")),
+                    Some(url),
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn fixture_key_is_stable_under_query_param_order() {
+        let a = HttpRequest::get(
+            HttpService::Slack,
+            "https://slack.com/api/conversations.history?channel=C1&limit=100",
+        );
+        let b = HttpRequest::get(
+            HttpService::Slack,
+            "https://slack.com/api/conversations.history?limit=100&channel=C1",
+        );
+        assert_eq!(fixture_key(&a), fixture_key(&b));
+    }
+
+    #[test]
+    fn fixture_key_distinguishes_methods() {
+        let g = HttpRequest::get(HttpService::Notion, "https://api.notion.com/v1/search");
+        let p = HttpRequest::post_json(
+            HttpService::Notion,
+            "https://api.notion.com/v1/search",
+            b"{}".to_vec(),
+        );
+        assert_ne!(fixture_key(&g), fixture_key(&p));
+    }
+
+    #[test]
+    fn fixture_key_distinguishes_post_bodies() {
+        let a = HttpRequest::post_json(
+            HttpService::Notion,
+            "https://api.notion.com/v1/search",
+            b"{\"q\":\"a\"}".to_vec(),
+        );
+        let b = HttpRequest::post_json(
+            HttpService::Notion,
+            "https://api.notion.com/v1/search",
+            b"{\"q\":\"b\"}".to_vec(),
+        );
+        assert_ne!(fixture_key(&a), fixture_key(&b));
+    }
+
+    #[tokio::test]
+    async fn playback_miss_returns_named_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        let err = with_playback(dir.path(), latchkey_curl(&req))
+            .await
+            .unwrap_err();
+        match err {
+            HttpError::PlaybackMiss(msg) => assert!(msg.contains("auth.test"), "{msg}"),
+            other => panic!("expected PlaybackMiss, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn playback_round_trips_a_synthetic_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        let key = fixture_key(&req);
+        let provider_dir = dir.path().join("slack");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        let response = HttpResponse {
+            status: 200,
+            headers: {
+                let mut h = BTreeMap::new();
+                h.insert("content-type".into(), "application/json".into());
+                h
+            },
+            body: br#"{"ok":true,"team":"Test"}"#.to_vec(),
+            duration_ms: 0,
+        };
+        std::fs::write(
+            provider_dir.join(&key),
+            serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap();
+        let got = with_playback(dir.path(), latchkey_curl(&req))
+            .await
+            .unwrap();
+        assert_eq!(got.status, 200);
+        assert_eq!(got.header("content-type"), Some("application/json"));
+        assert_eq!(got.body_str(), r#"{"ok":true,"team":"Test"}"#);
+    }
+
+    #[test]
+    fn parse_retry_after_handles_seconds_and_garbage() {
+        assert_eq!(parse_retry_after(Some("7")), Some(Duration::from_secs(7)));
+        assert_eq!(
+            parse_retry_after(Some("  12 ")),
+            Some(Duration::from_secs(12))
+        );
+        // Capped at MAX_RETRY_AFTER.
+        assert_eq!(parse_retry_after(Some("100000")), Some(MAX_RETRY_AFTER));
+        assert_eq!(parse_retry_after(None), None);
+        assert_eq!(parse_retry_after(Some("soon")), None);
+    }
+
+    #[test]
+    fn default_retryability_classifies_status() {
+        let mk = |status: u16, ra: Option<&str>| {
+            let mut headers = BTreeMap::new();
+            if let Some(v) = ra {
+                headers.insert("retry-after".to_string(), v.to_string());
+            }
+            HttpResponse {
+                status,
+                headers,
+                body: Vec::new(),
+                duration_ms: 0,
+            }
+        };
+        assert_eq!(default_retryability(&mk(200, None)), Retryability::Accept);
+        assert_eq!(default_retryability(&mk(404, None)), Retryability::Accept);
+        assert_eq!(
+            default_retryability(&mk(429, Some("5"))),
+            Retryability::Retry {
+                retry_after: Some(Duration::from_secs(5))
+            }
+        );
+        assert_eq!(
+            default_retryability(&mk(503, None)),
+            Retryability::Retry { retry_after: None }
+        );
+    }
+
+    /// A playback fixture that always returns 429 should be retried until
+    /// the ambient guard's sequential-failure limit trips, then surface as
+    /// `GaveUp`. Uses near-zero backoff so the test is fast.
+    #[tokio::test]
+    async fn retries_429_then_gives_up_per_guard() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        let key = fixture_key(&req);
+        let provider_dir = dir.path().join("slack");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        let response = HttpResponse {
+            status: 429,
+            headers: BTreeMap::new(),
+            body: b"slow down".to_vec(),
+            duration_ms: 0,
+        };
+        std::fs::write(
+            provider_dir.join(&key),
+            serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap();
+
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new(
+            Duration::from_secs(3600),
+            3,
+            fast,
+            fast,
+            datalib_etl::stop::StopFlag::default(),
+        );
+        let err = with_playback(
+            dir.path(),
+            crate::retry::scope(guard, async { latchkey_curl(&req).await }),
+        )
+        .await
+        .unwrap_err();
+        match err {
+            HttpError::GaveUp { reason, .. } => {
+                assert!(reason.contains("sequential failed requests"), "{reason}");
+                assert!(reason.contains("HTTP 429"), "{reason}");
+            }
+            other => panic!("expected GaveUp, got {other:?}"),
+        }
+    }
+
+    fn always_429(dir: &std::path::Path, req: &HttpRequest) {
+        let provider_dir = dir.join("slack");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        let response = HttpResponse {
+            status: 429,
+            headers: BTreeMap::new(),
+            body: b"slow down".to_vec(),
+            duration_ms: 0,
+        };
+        std::fs::write(
+            provider_dir.join(fixture_key(req)),
+            serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// A stop requested while a request sits in its backoff ends the wait
+    /// at once, as `Interrupted` — a rate-limited provider's minute-long
+    /// backoff is otherwise exactly what eats the step's grace.
+    #[tokio::test]
+    async fn a_stop_cuts_a_backoff_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        always_429(dir.path(), &req);
+
+        let stop = datalib_etl::stop::StopFlag::new();
+        // A backoff long enough that only the stop can end this test in time.
+        let long = Duration::from_secs(600);
+        let guard =
+            crate::retry::RetryGuard::new(Duration::from_secs(3600), 100, long, long, stop.clone());
+        let stopper = stop.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            stopper.request();
+        });
+        let started = std::time::Instant::now();
+        let err = with_playback(
+            dir.path(),
+            crate::retry::scope(guard, async { latchkey_curl(&req).await }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, HttpError::Interrupted { .. }), "got {err:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the backoff must end on the stop, not run its course"
+        );
+    }
+
+    fn ok_fixture(dir: &std::path::Path, req: &HttpRequest) {
+        let provider_dir = dir.join("slack");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        let response = HttpResponse {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: b"{}".to_vec(),
+            duration_ms: 0,
+        };
+        std::fs::write(
+            provider_dir.join(fixture_key(req)),
+            serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// A held tape answers nothing until the hold file is gone, then
+    /// answers at once.
+    #[tokio::test]
+    async fn a_hold_file_parks_a_replayed_request_until_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        ok_fixture(dir.path(), &req);
+        let hold = dir.path().join("hold");
+        std::fs::write(&hold, b"").unwrap();
+
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new(
+            Duration::from_secs(3600),
+            3,
+            fast,
+            fast,
+            datalib_etl::stop::StopFlag::default(),
+        );
+        let releaser = hold.clone();
+        let released_at = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let stamp = released_at.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            *stamp.lock().unwrap() = Some(std::time::Instant::now());
+            std::fs::remove_file(&releaser).unwrap();
+        });
+        let resp = with_playback(dir.path(), async {
+            std::env::set_var(PLAYBACK_HOLD_ENV, &hold);
+            let out = crate::retry::scope(guard, async { latchkey_curl(&req).await }).await;
+            std::env::remove_var(PLAYBACK_HOLD_ENV);
+            out
+        })
+        .await
+        .unwrap();
+        assert_eq!(resp.status, 200);
+        let released = released_at.lock().unwrap().expect("the release ran first");
+        assert!(
+            released.elapsed() < Duration::from_secs(5),
+            "the answer must follow the release, not a timer"
+        );
+    }
+
+    /// A stop while the tape is held ends the wait as `Interrupted`, so a
+    /// held step still stops in its grace.
+    #[tokio::test]
+    async fn a_stop_ends_a_hold() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        ok_fixture(dir.path(), &req);
+        let hold = dir.path().join("hold");
+        std::fs::write(&hold, b"").unwrap();
+
+        let stop = datalib_etl::stop::StopFlag::new();
+        let fast = Duration::from_millis(1);
+        let guard =
+            crate::retry::RetryGuard::new(Duration::from_secs(3600), 3, fast, fast, stop.clone());
+        let stopper = stop.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            stopper.request();
+        });
+        let err = with_playback(dir.path(), async {
+            std::env::set_var(PLAYBACK_HOLD_ENV, &hold);
+            let out = crate::retry::scope(guard, async { latchkey_curl(&req).await }).await;
+            std::env::remove_var(PLAYBACK_HOLD_ENV);
+            out
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(err, HttpError::Interrupted { .. }), "got {err:?}");
+        assert!(
+            hold.exists(),
+            "the hold was never released; only the stop ended the wait"
+        );
+    }
+
+    /// Once the process has sealed, the after-seal hold parks a request
+    /// exactly like the plain one. The streaming e2e relies on it to keep
+    /// a download in flight after its first checkpoint.
+    #[tokio::test]
+    async fn a_sealed_hold_parks_a_request_once_a_checkpoint_has_landed() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        ok_fixture(dir.path(), &req);
+        let hold = dir.path().join("hold");
+        std::fs::write(&hold, b"").unwrap();
+        datalib_etl::raw_store::record_seal();
+
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new(
+            Duration::from_secs(3600),
+            3,
+            fast,
+            fast,
+            datalib_etl::stop::StopFlag::default(),
+        );
+        let releaser = hold.clone();
+        let released_at = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let stamp = released_at.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            *stamp.lock().unwrap() = Some(std::time::Instant::now());
+            std::fs::remove_file(&releaser).unwrap();
+        });
+        let resp = with_playback(dir.path(), async {
+            std::env::set_var(PLAYBACK_HOLD_SEALED_ENV, &hold);
+            let out = crate::retry::scope(guard, async { latchkey_curl(&req).await }).await;
+            std::env::remove_var(PLAYBACK_HOLD_SEALED_ENV);
+            out
+        })
+        .await
+        .unwrap();
+        assert_eq!(resp.status, 200);
+        assert!(
+            released_at.lock().unwrap().is_some(),
+            "answered while the hold file was still there"
+        );
+    }
+
+    /// Once stopping, no new request leaves: a page loop that does not
+    /// read the flag ends at its next request instead of walking on.
+    #[tokio::test]
+    async fn no_request_leaves_after_a_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        // No fixture written: a request that left would fail as a playback
+        // miss, not as Interrupted.
+        let stop = datalib_etl::stop::StopFlag::new();
+        stop.request();
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new(Duration::from_secs(3600), 3, fast, fast, stop);
+        let err = with_playback(
+            dir.path(),
+            crate::retry::scope(guard, async { latchkey_curl(&req).await }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, HttpError::Interrupted { .. }), "got {err:?}");
+    }
+}

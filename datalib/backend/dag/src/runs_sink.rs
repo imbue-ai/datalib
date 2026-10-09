@@ -923,19 +923,35 @@ mod tests {
         );
     }
 
+    fn plan(steps: &[&str]) -> Event {
+        Event::RunPlan {
+            steps: steps
+                .iter()
+                .map(|step| PlannedStep {
+                    step: (*step).into(),
+                    group: Some("slack".into()),
+                })
+                .collect(),
+        }
+    }
+
     /// A reader must be able to draw the whole table before the first
     /// step starts, which is what makes the plan event worth publishing.
     #[tokio::test]
     async fn the_plan_lands_before_anything_runs() {
-        let (_td, snap) = run(&[Event::RunPlan {
-            steps: ["slack/raw", "slack/rendered_md"]
-                .map(|step| PlannedStep {
-                    step: step.into(),
-                    group: Some("slack".into()),
-                })
-                .into(),
-        }])
-        .await;
+        let td = tempfile::tempdir().unwrap();
+        let sink = RunStoreSink::start(
+            td.path(),
+            "run-1",
+            "2026-09-11T10:00:00+01:00",
+            None,
+            Retention::default(),
+        )
+        .expect("start the store");
+        sink.emit(&plan(&["slack/raw", "slack/rendered_md"]));
+        sink.writer.flush().await;
+        let snap = snapshot(td.path()).await;
+        drop(sink);
 
         assert_eq!(snap.steps.len(), 2);
         assert!(snap
@@ -946,6 +962,36 @@ mod tests {
             snap.metrics.is_empty(),
             "a step that has reported nothing has no numbers"
         );
+    }
+
+    /// A run planned every step of the config and served a request for
+    /// one source, so most of its rows read `pending` long after it
+    /// ended. A step the run never started was not part of it.
+    #[tokio::test]
+    async fn a_step_the_run_never_started_goes_when_the_run_ends() {
+        let (_td, snap) = run(&[
+            plan(&["slack/raw", "slack/rendered_md", "gmail/raw"]),
+            Event::StepStart {
+                step: "slack/raw".into(),
+                attempt: 1,
+                builtin: true,
+            },
+            Event::StepFinish {
+                step: "slack/raw".into(),
+                status: RunState::Succeeded,
+                error: None,
+                exit_code: Some(0),
+                signal: None,
+            },
+        ])
+        .await;
+
+        let states: Vec<(&str, &str)> = snap
+            .steps
+            .iter()
+            .map(|r| (r.step.as_str(), r.state.as_str()))
+            .collect();
+        assert_eq!(states, [("slack/raw", "succeeded")]);
     }
 
     /// The step's own words reach the store, and the terminal state

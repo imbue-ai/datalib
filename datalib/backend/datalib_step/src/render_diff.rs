@@ -14,7 +14,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::diff::{diff_document, Counts};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{BucketEnd, Input, RenderCtx, RenderProcessor};
 use datalib_etl_render::section::{join, Section};
 use datalib_schema::render_cursor::RenderCursorRow;
 
@@ -22,7 +22,7 @@ use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
 use crate::render::{
     declared_render_params, declared_render_versions, every_stored_version_must_be_declared,
-    seal_run, RenderReport, RenderSource, RunEnd,
+    seal_run, Ending, Fate, RenderReport, RenderSource, RunEnd,
 };
 use crate::source::StepEnv;
 
@@ -312,7 +312,10 @@ pub fn render_diff_source(
                 render_version: base.md.render_version,
                 rows: diff.rows,
                 sections: diff.sections,
+                search_terms: Vec::new(),
                 edges: base.md.edges.clone(),
+                // The people are the source's; a diff row only compares.
+                contacts: Vec::new(),
                 problems: base.md.problems.clone(),
             };
             fs::write(&doc.md_path, join(&doc.sections))
@@ -345,11 +348,20 @@ pub fn render_diff_source(
     }
     store.commit_batch()?;
 
-    let buckets: BTreeSet<String> = to_side
+    // Every run is a full walk, so the per-bucket sweep has nothing to
+    // weigh: what a side declared goes the way it always has.
+    let buckets: BTreeMap<String, Ending> = to_side
         .buckets
         .keys()
         .chain(from_side.buckets.keys())
-        .cloned()
+        .map(|bucket| {
+            let ending = Ending {
+                fate: Fate::Swept,
+                inputs_unwritten: false,
+                render_version: None,
+            };
+            (bucket.clone(), ending)
+        })
         .collect();
     let stored_cursor = store.cursor()?;
     let declared_params_text = declared_params.to_string();
@@ -359,9 +371,10 @@ pub fn render_diff_source(
         &store,
         &data_root,
         RunEnd {
+            source_id: &name,
             sweep: true,
             keep: &emitted,
-            declared: &buckets,
+            buckets: &buckets,
             storage: None,
             cursor: Some(&pair.to)
                 .filter(|to| {
@@ -400,7 +413,7 @@ pub fn render_diff_source(
         .commit(&msg)
         .with_context(|| format!("commit diff render store for {}", name))?;
     let versions = store.render_versions()?;
-    let problems = store.problem_counts()?;
+    let problems = store.own_problem_counts()?;
     // No storage report in a diff store (`RunEnd::storage` is `None`
     // above), so nothing is excluded from the count.
     let holdings = store.holdings(None)?;
@@ -460,8 +473,18 @@ fn collect(
             .insert(md.markdown_uuid.clone(), Collected { md, sections });
         Ok(())
     };
-    let mut on_declare = |bucket: &str, inputs: &[Input]| -> Result<()> {
-        side.buckets.insert(bucket.to_string(), inputs.to_vec());
+    // A side that could not build a bucket has no document for it, and
+    // the diff shows it gone on that side.
+    let mut on_declare = |bucket: &str, end: BucketEnd<'_>| -> Result<()> {
+        match end {
+            BucketEnd::Read(inputs) => {
+                side.buckets.insert(bucket.to_string(), inputs.to_vec());
+            }
+            BucketEnd::Excluded => {
+                side.buckets.insert(bucket.to_string(), Vec::new());
+            }
+            BucketEnd::Failed(_) => {}
+        }
         Ok(())
     };
     // A diff compares documents; what a side could not parse is not
@@ -582,7 +605,9 @@ mod tests {
                         render_version: 1,
                         rows: vec![],
                         sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],
+                        search_terms: Vec::new(),
                         edges: vec![],
+                        contacts: Vec::new(),
                         problems: vec![],
                     });
                     // `true`: swallow the sink's answer, as a provider that
@@ -660,7 +685,9 @@ mod tests {
             render_version: 1,
             rows: vec![],
             sections: vec![],
+            search_terms: Vec::new(),
             edges: vec![],
+            contacts: Vec::new(),
             problems: vec![],
         };
         let sections = whole_document_sections(&md).unwrap();

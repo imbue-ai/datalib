@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use crate::doltlite_raw::Migration;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datalib_etl_macros::RawStoreHandle;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
@@ -56,9 +56,9 @@ impl EntityStore {
     ///
     /// No DDL, and no write of any kind: an ordinary [`Self::open`] would
     /// discard the downloader's in-flight rows, reconcile the schema and
-    /// commit on the way in. So a store the current downloader has not
-    /// touched keeps whatever columns it has; probe with `column_exists`
-    /// and fall back where that matters. See [`dr::open_reader`].
+    /// commit on the way in. The store is in this build's shape because a
+    /// launch migrates every raw store before any render runs
+    /// (`docs/dev/plans/upgrade_on_launch.md`). See [`dr::open_reader`].
     pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
         let Some(reader) = dr::open_reader(db_path, commit).await? else {
             return Ok(None);
@@ -123,7 +123,9 @@ impl CasEntityStore {
         let Some(entities) = EntityStore::open_reader(db_path, commit).await? else {
             return Ok(None);
         };
-        let cas = BlobCas::open_reader(&blob_cas::cas_path_for(db_path)).await?;
+        let cas = BlobCas::open_for_render(db_path)
+            .await?
+            .with_context(|| format!("no blob store beside {}", db_path.display()))?;
         Ok(Some(Self { entities, cas }))
     }
 

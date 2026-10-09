@@ -5,9 +5,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::bulk_upsert_first_seen_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_run::DownloadRun;
+use datalib_etl::run_problems::{self, RunProblems};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
@@ -46,24 +46,33 @@ pub struct IngestSummary {
     pub project_docs: usize,
     /// Rows dropped because the export no longer mentions them.
     pub pruned: usize,
+    /// Conversations and projects the export holds with no `uuid`, so
+    /// with nothing to store them under.
+    pub without_uuid: usize,
 }
 
 #[instrument(skip_all, fields(export = %opts.input_path.display()))]
 pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_export(opts, found)).await
+}
+
+async fn read_export(opts: IngestOptions, found: RunProblems) -> Result<IngestSummary> {
     let db = opts.db.clone();
 
-    let run_config = serde_json::json!({ "input_path": opts.input_path });
-    let run = DownloadRun::start(db.pool(), &run_config).await?;
     let mut summary = IngestSummary::default();
-    let result = ingest_all(&db, &opts, &mut summary).await;
-    run.finish(&result, &summary).await;
-    result?;
+    ingest_all(&db, &opts, &mut summary, &found).await?;
     Ok(summary)
 }
 
 /// The whole snapshot in one transaction: a half-written export is
 /// never what render sees.
-async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummary) -> Result<()> {
+async fn ingest_all(
+    db: &RawDb,
+    opts: &IngestOptions,
+    summary: &mut IngestSummary,
+    found: &RunProblems,
+) -> Result<()> {
     let dir = &opts.input_path;
     // Read every file before opening the transaction, so a malformed
     // one fails the run without having touched the store.
@@ -82,7 +91,9 @@ async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummar
 
     if let Some(users) = users.as_ref() {
         summary.users = upsert_users(&mut tx, users, &now).await?;
-        summary.pruned += prune_to(&mut tx, "users", &ids_of(users, "uuid")).await?;
+        if names_its_entries(found, "users.json", users) {
+            summary.pruned += prune_to(&mut tx, "users", &ids_of(users, "uuid")).await?;
+        }
     } else {
         // Not fatal: every export conversation already names its own
         // `account`, so the only thing a missing users.json costs is
@@ -98,19 +109,35 @@ async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummar
         let (n_projects, n_docs) = upsert_projects(&mut tx, projects, &now).await?;
         summary.projects = n_projects;
         summary.project_docs = n_docs;
-        let project_ids = ids_of(projects, "uuid");
-        summary.pruned += prune_to(&mut tx, "projects", &project_ids).await?;
-        summary.pruned += prune_to(&mut tx, "project_docs", &project_doc_ids(projects)).await?;
+        if names_its_entries(found, "projects", projects) {
+            let project_ids = ids_of(projects, "uuid");
+            summary.pruned += prune_to(&mut tx, "projects", &project_ids).await?;
+            summary.pruned += prune_to(&mut tx, "project_docs", &project_doc_ids(projects)).await?;
+        }
     }
 
     summary.conversations = upsert_conversations(&mut tx, &conversations, &now).await?;
-    summary.pruned += prune_to(&mut tx, "conversations", &ids_of(&conversations, "uuid")).await?;
+    summary.without_uuid = conversations.len() - summary.conversations
+        + projects.as_ref().map_or(0, |p| p.len() - summary.projects);
+    if names_its_entries(found, "conversations.json", &conversations) {
+        summary.pruned +=
+            prune_to(&mut tx, "conversations", &ids_of(&conversations, "uuid")).await?;
+    }
     opts.progress.set_message(&format!(
         "{} conversations, {} projects, {} knowledge docs",
         summary.conversations, summary.projects, summary.project_docs,
     ));
 
     tx.commit().await.context("commit export ingest tx")?;
+    if summary.without_uuid > 0 {
+        found.phase(
+            "export",
+            format!(
+                "{} conversations or projects in the export have no uuid; they were not stored",
+                summary.without_uuid
+            ),
+        );
+    }
     if summary.pruned > 0 {
         // Loud on purpose: this is the one path that removes stored
         // rows, and "the export got smaller" is worth seeing.
@@ -165,6 +192,25 @@ fn read_project_files(dir: &Path) -> Result<Option<Vec<Value>>> {
     Ok(Some(out))
 }
 
+/// Whether `items`, one part of the export read whole, may prune its
+/// table. Entries none of which has a uuid are not an export that emptied
+/// the table but one in a shape this reader does not know, so they delete
+/// nothing and are a problem; an empty list is a part that holds nothing.
+fn names_its_entries(found: &RunProblems, part: &str, items: &[Value]) -> bool {
+    if items.is_empty() || items.iter().any(|v| str_field(v, "uuid").is_some()) {
+        return true;
+    }
+    found.phase(
+        part,
+        format!(
+            "none of its {} entries has a uuid, a shape this reader does not know, \
+             so nothing stored was deleted",
+            items.len()
+        ),
+    );
+    false
+}
+
 fn ids_of(items: &[Value], key: &str) -> HashSet<String> {
     items
         .iter()
@@ -216,7 +262,7 @@ async fn upsert_users(
             full_name: str_field(u, "full_name"),
         });
     }
-    bulk_upsert_in_tx(tx, &rows, now).await?;
+    bulk_upsert_first_seen_in_tx(tx, &rows, now).await?;
     Ok(rows.len())
 }
 
@@ -231,10 +277,6 @@ async fn upsert_conversations(
     let mut rows = Vec::with_capacity(convs.len());
     for c in convs {
         let Some(id) = str_field(c, "uuid") else {
-            warn!(
-                event = "claude_export_conversation_without_uuid",
-                "a conversation in the export has no uuid; skipped it"
-            );
             continue;
         };
         rows.push(ConversationRowSchema {
@@ -248,7 +290,18 @@ async fn upsert_conversations(
             updated_at: str_field(c, "updated_at"),
         });
     }
-    bulk_upsert_in_tx(tx, &rows, now).await?;
+    bulk_upsert_first_seen_in_tx(tx, &rows, now).await?;
+    // Held at the `updated_at` the export carries, so an API walk over
+    // an export-seeded store fetches only what moved since.
+    for r in &rows {
+        datalib_etl_web::owed::set_held_version(
+            tx,
+            super::schema_raw::CONVERSATIONS,
+            &r.id_and_payload.id,
+            r.updated_at.as_deref(),
+        )
+        .await?;
+    }
     Ok(rows.len())
 }
 
@@ -265,10 +318,6 @@ async fn upsert_projects(
     let mut doc_rows: Vec<ProjectDocRow> = Vec::new();
     for p in projects {
         let Some(project_uuid) = str_field(p, "uuid") else {
-            warn!(
-                event = "claude_export_project_without_uuid",
-                "a project in the export has no uuid; skipped it"
-            );
             continue;
         };
         for d in docs_of(p) {
@@ -307,8 +356,8 @@ async fn upsert_projects(
             updated_at: str_field(p, "updated_at"),
         });
     }
-    bulk_upsert_in_tx(tx, &project_rows, now).await?;
-    bulk_upsert_in_tx(tx, &doc_rows, now).await?;
+    bulk_upsert_first_seen_in_tx(tx, &project_rows, now).await?;
+    bulk_upsert_first_seen_in_tx(tx, &doc_rows, now).await?;
     Ok((project_rows.len(), doc_rows.len()))
 }
 
@@ -472,6 +521,55 @@ mod tests {
         db.close().await;
     }
 
+    /// Every run reads the whole export, so reading an unchanged one
+    /// again, later, must leave the store as it was: a re-stamped
+    /// sidecar is a commit, and a bigger store, on every sync.
+    #[tokio::test]
+    async fn reading_an_unchanged_export_again_commits_nothing() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        write(
+            ex.path(),
+            "users.json",
+            &json!([{"uuid": "acct-1", "email_address": "picard@enterprise", "full_name": "JLP"}]),
+        );
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First"), conv("c2", "Second")]),
+        );
+        write(
+            ex.path(),
+            "projects/bridge.json",
+            &json!({
+                "uuid": "p1",
+                "name": "Bridge Ops",
+                "docs": [{"uuid": "d1", "file_name": "notes.md", "content": "hello"}],
+            }),
+        );
+        let db = open_raw(raw.path()).await;
+        let mut commits = Vec::new();
+        for now in [NOW, "2026-09-04T00:05:00-07:00"] {
+            ingest(IngestOptions {
+                now: now.to_string(),
+                ..opts(&db, ex.path())
+            })
+            .await
+            .unwrap();
+            commits.push(
+                datalib_etl::doltlite_raw::commit_run(db.pool(), "test")
+                    .await
+                    .unwrap(),
+            );
+        }
+        db.close().await;
+        assert!(commits[0].is_some());
+        assert_eq!(
+            commits[1], None,
+            "reading an unchanged export again changes nothing in the store"
+        );
+    }
+
     /// A bulk export is a complete snapshot, so an id it stops
     /// mentioning is a deletion. This is the signal reading the export
     /// tree in place could never produce.
@@ -554,6 +652,100 @@ mod tests {
         let err = format!("{err:#}");
         assert!(err.contains("conversations.json"), "{err}");
         assert!(err.contains("input_path"), "{err}");
+        db.close().await;
+    }
+
+    /// A conversation the export holds with no uuid was a `warn!` and
+    /// nothing on the Manage row.
+    #[tokio::test]
+    async fn records_without_a_uuid_are_a_phase_row() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        let mut nameless = conv("c2", "Second");
+        nameless.as_object_mut().unwrap().remove("uuid");
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First"), nameless]),
+        );
+        let db = open_raw(raw.path()).await;
+        let s = ingest(opts(&db, ex.path())).await.unwrap();
+        assert_eq!((s.conversations, s.without_uuid), (1, 1));
+        let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(keys, ["phase:export"]);
+
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First")]),
+        );
+        ingest(opts(&db, ex.path())).await.unwrap();
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM problems")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(left, 0, "a clean export clears it");
+        db.close().await;
+    }
+
+    /// A `conversations.json` none of whose entries has a uuid is not an
+    /// export that deleted every conversation: it is one in a shape this
+    /// reader does not know, and it pruned the whole table.
+    #[tokio::test]
+    async fn an_export_with_no_uuid_anywhere_deletes_nothing() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First"), conv("c2", "Second")]),
+        );
+        write(
+            ex.path(),
+            "projects/bridge.json",
+            &json!({"uuid": "p1", "name": "Bridge Ops",
+                    "docs": [{"uuid": "d1", "file_name": "notes.md"}]}),
+        );
+        let db = open_raw(raw.path()).await;
+        ingest(opts(&db, ex.path())).await.unwrap();
+
+        let unkeyed = |v: Value| {
+            let mut v = v;
+            v.as_object_mut().unwrap().remove("uuid");
+            v
+        };
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([unkeyed(conv("c1", "First")), unkeyed(conv("c3", "Third"))]),
+        );
+        write(
+            ex.path(),
+            "projects/bridge.json",
+            &unkeyed(json!({"name": "Bridge Ops", "docs": []})),
+        );
+        let s = ingest(opts(&db, ex.path())).await.unwrap();
+        assert_eq!(dump(db.pool(), "conversations").await.len(), 2);
+        assert_eq!(dump(db.pool(), "projects").await.len(), 1);
+        assert_eq!(dump(db.pool(), "project_docs").await.len(), 1);
+        assert_eq!(s.pruned, 0);
+        let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY 1")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            keys,
+            ["phase:conversations.json", "phase:export", "phase:projects"]
+        );
+
+        // A well-formed export that lists nothing does empty the table.
+        write(ex.path(), "conversations.json", &json!([]));
+        std::fs::remove_dir_all(ex.path().join("projects")).unwrap();
+        ingest(opts(&db, ex.path())).await.unwrap();
+        assert!(dump(db.pool(), "conversations").await.is_empty());
         db.close().await;
     }
 }

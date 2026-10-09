@@ -111,13 +111,21 @@ MAX_STAMP_MS = (1 << 48) - 1
 # reason, rule) and nothing else, which is why they can be written down.
 # The columns are `_problems()`'s, `|`-joined by the doltlite shell.
 #
-# Two are what the fixture's own gaps look like once a download records
+# Most are what the fixture's own gaps look like once a download records
 # what it could not fetch instead of only logging it: an attachment
-# whose bytes the claude fixture never had, and the facebook video that
-# is deliberately absent from the export. The third is the one record
-# built to fail: conversation `c0000006`'s reply carries
-# `created_at = "stardate 47988.1"`, which the claude renderer records as
-# a nulled `created_at` on that message.
+# whose bytes the claude fixture never had, the facebook video that is
+# deliberately absent from the export, the PDF built to be corrupt.
+# One is the record built to fail: conversation `c0000006`'s reply
+# carries `created_at = "stardate 47988.1"`, which the claude renderer
+# records as a nulled `created_at` on that message. Google Takeout's
+# three are entries shaped like a real export's: an attachment its
+# message names and the export lacks, a watch-history entry that is not
+# a video, a saved place with no date.
+#
+# A fetch row about an attachment names the grid row of what owns it,
+# so the screen can open it: the conversation for claude (minted from
+# the raw key), the message for Takeout (looked up by its upstream id,
+# since the message's uuid carries a date the raw key does not).
 POISONED_PROBLEM = (
     "6df47df9-b6ad-5372-942e-5db5e4d068bb"  # problem_uuid
     "|warning|parse|markdown"
@@ -133,18 +141,50 @@ CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "|error|fetch|entity"
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
-    "|||fetch_failed|no bytes"
+    "|00000000-0000-89b3-8bed-0eecc97d45ce"  # conversation c0000004's row
+    "||fetch_failed|no recorded response: GET https://claude.ai/api/organizations/0aa00000-1701-4d00…"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
-    "22997b9d-2f29-5ffc-a555-7ab9b876a337"
-    "|error|fetch|entity"
+    "1c9f7753-ba2d-5a9e-8fbb-b9b6a0d5ad13"
+    "|warning|fetch|entity"
     "|media_blobs:459de207-00ca-5ade-a05e-095a6835da4d"
     "#your_facebook_activity/posts/media/videos/600000000000001.mp4"
-    "|||fetch_failed|media file not in the export"
+    "|||not_found|media file not in the export: No such file or directory (os error 2)"
+)
+PDF_THAT_WILL_NOT_IDENTIFY = (
+    "7b765789-41e7-536c-9392-2facf510901a"
+    "|error|fetch|entity"
+    "|record:pdf_paths:holodeck/corrupt.pdf"
+    "|||fetch_failed|classify: Invalid PDF structure"
+)
+TAKEOUT_POST_NOT_A_VIDEO = (
+    "50d82e65-dc5d-522f-afdd-0ded04b3d8f0"
+    "|warning|fetch|entity"
+    "|skipped:youtube_watch_history:e81888464c90ec04"
+    "||videoUrl|deliberate_loss|https://www.youtube.com/post/UgkxTenForward"
+)
+TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT = (
+    "c662c0a8-aa0a-5a9c-a618-a9f36e2d47d5"
+    "|warning|fetch|entity"
+    "|chat_attachments:TNG-BRIDGE/T2/T2#risa-shore-leave.png"
+    "|0195683a-d140-87f9-bdf6-234da6d6880c"  # Riker's message
+    "||not_found|risa-shore-leave.png is not in the export"
+)
+TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
+    "5e4f794e-967e-5d6e-ac01-3e5031ebe907"
+    "|error|fetch|entity"
+    "|skipped:maps_saved_places:17f4280e0ea1d5c3"
+    "||date|no_identity|"
 )
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
     "facebook": [FACEBOOK_VIDEO_NOT_IN_EXPORT],
+    "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
+    "google-takeout": [
+        TAKEOUT_POST_NOT_A_VIDEO,
+        TAKEOUT_SAVED_PLACE_WITHOUT_KEY,
+        TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT,
+    ],
 }
 
 
@@ -947,6 +987,200 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [],
             "every source that rendered must also have measured itself",
         )
+        # Who a handle is, as each source that mentions it says: the
+        # rows a chip reads. One address, three sources, one name — Slack's
+        # through its profile, which ties his Slack user to the address.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.source_id || '|' || c.name "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "WHERE h.handle = 'email:picard@enterprise.starfleet' ORDER BY 1;",
+            ),
+            [
+                "google-takeout|Jean-Luc Picard",
+                "slack|Jean-Luc Picard",
+                "tng_email|Jean-Luc Picard",
+            ],
+            "the people the index knows by Picard's address",
+        )
+        # One number written two ways — the address book's vCard 4 `tel:`
+        # URI with dashes, the SMS backup's and Google Voice's bare digits
+        # — is one handle, so a link made through either reaches both.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.source_id || '|' || c.name || '|' "
+                "|| json_extract(j.value, '$.value') "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key, "
+                "json_each(c.contact_json, '$.handles') j "
+                "WHERE h.handle = 'tel:+12025550101' "
+                "AND json_extract(j.value, '$.handle') = h.handle ORDER BY 1;",
+            ),
+            [
+                "google-takeout|Jean-Luc Picard|+12025550101",
+                "sms-backup-restore|Jean-Luc Picard|+12025550101",
+                "tng_contacts|Jean-Luc Picard|tel:+1-202-555-0101",
+            ],
+            "the people the index knows by Picard's number, as each wrote it",
+        )
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.source_id FROM source_contacts c ORDER BY 1;",
+            ),
+            [
+                "facebook",
+                "google-takeout",
+                "linkedin",
+                "signal",
+                "slack",
+                "sms-backup-restore",
+                "tng_contacts",
+                "tng_email",
+                "whatsapp",
+            ],
+            "every source that knows people put them in the index",
+        )
+        # WhatsApp's account of a person is the phone's address book:
+        # every name its entries give, then the name they gave
+        # themselves, keyed by the number — reached through a linked id
+        # (Data writes as `…@lid`, mapped to his number) as well as the
+        # number itself. Geordi has only a `wa_name`, and it still counts.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT h.handle || '|' || json_extract(c.contact_json, '$.names') "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'whatsapp' AND h.handle IN "
+                "('tel:+17015550102', 'tel:+17015550103', 'tel:+17015550104') "
+                "GROUP BY 1 ORDER BY 1;",
+            ),
+            [
+                'tel:+17015550102|["William Riker","Will Riker (Starfleet)","Number One"]',
+                'tel:+17015550103|["Data"]',
+                'tel:+17015550104|["Geordi La Forge"]',
+            ],
+            "WhatsApp's address book, as each chat's contacts",
+        )
+        # What only the provider's account says: an address-book entry's
+        # company and title (the baseline has names and counts alone),
+        # and a name from given and family name. Troi only reacts, so she
+        # reaches the index as a reactor (no items written) under the
+        # account her entry gives.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT h.handle || '|' "
+                "|| coalesce(json_extract(c.contact_json, '$.org'), '') || '|' "
+                "|| coalesce(json_extract(c.contact_json, '$.title'), '') "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550103';",
+            ),
+            ["tel:+17015550103|Starfleet|Second Officer"],
+            "Data's company and title, from the address book alone",
+        )
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT h.handle || '|' || json_extract(c.contact_json, '$.names') || '|' "
+                "|| json_extract(c.contact_json, '$.org') || '|' "
+                "|| json_extract(c.contact_json, '$.title') || '|' || c.seen_items "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550106';",
+            ),
+            ['tel:+17015550106|["Deanna Troi"]|Starfleet|Counselor|0'],
+            "a WhatsApp reactor who writes nothing, under her address-book entry",
+        )
+        # A 1:1 chat leaves an incoming reaction's sender empty, as it does
+        # a message's: the chat's person reacted. The account's own
+        # reaction names nobody.
+        riker_chat = self._markdown("whatsapp", "private word about Commander Data")
+        self.assertIn(
+            '🖖 [William Riker](tel:+17015550102 "William Riker (+17015550102)")',
+            riker_chat,
+            "a 1:1 reaction is the chat's person, as a chip",
+        )
+        self.assertIn("👍 Me</span>", riker_chat, "the account's own reaction is Me")
+        # A Slack reactor with no profile and no message: in the document
+        # all the same, under the id Slack gave, having written nothing.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT c.name || '|' || c.seen_items "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "WHERE h.handle = 'slack:T_NCC1701D/U_TROI';",
+            ),
+            ["U_TROI|0"],
+            "a Slack reactor who writes nothing",
+        )
+        # A card's photo is written beside its page and the index holds
+        # where the app serves it from, so a chip can draw it; a card
+        # without one carries no URL. Only `Bridge.vcf`'s two cards have one.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url') "
+                "  = '/applet/unified_index/asset/' || c.markdown_uuid || '/blobs/' "
+                "    || c.markdown_uuid || '.png', 'none') "
+                "FROM source_contacts c JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'tng_contacts' "
+                "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Worf') ORDER BY 1;",
+            ),
+            ["Jean-Luc Picard|1", "William T. Riker|1", "Worf|none"],
+            "a card's photo, as the URL the index serves it at",
+        )
+        # Signal ties a number to an ACI: Riker's account carries both,
+        # so a link made through either finds the other; Q, whom the
+        # backup knows by ACI alone, has the ACI as his handle; Guinan,
+        # known by PNI alone, has none and is not a person the index
+        # knows.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT h.handle || '|' || c.name || '|' "
+                "|| (SELECT group_concat(json_extract(j.value, '$.handle'), ' ') "
+                "    FROM json_each(c.contact_json, '$.handles') j) "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'signal' AND (c.name IN ('Will Riker', 'Q', 'Guinan') "
+                "OR h.handle LIKE 'signal_aci:%') GROUP BY 1 ORDER BY 1;",
+            ),
+            [
+                (
+                    "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c|Will Riker|"
+                    "tel:+17015550101 signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+                (
+                    "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f|Q|"
+                    "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f"
+                ),
+                (
+                    "tel:+17015550101|Will Riker|"
+                    "tel:+17015550101 signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+            ],
+            "Signal's account of a person: number and ACI together",
+        )
+        # A Slack mention is a chip link: the viewer resolves the href to
+        # the person, and any other markdown viewer shows a link whose
+        # title says who it names (docs/dev/plans/chips.md).
+        self.assertIn(
+            "[@Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "
+            '"@Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)"), I must object',
+            self._markdown("slack", "beaming down unarmed"),
+            "a <@U…> mention in a Slack body renders as a chip link",
+        )
         self.assertEqual(
             self._diff_shape(CONTACTS_DIFF_GROUP),
             {
@@ -1049,7 +1283,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             worf,
             "a word edit inside a chat message",
         )
-        self.assertIn("<ins>🛡️ Jean-Luc Picard</ins>", worf, "the reaction added")
+        # The reactor is a chip link (docs/dev/plans/chips.md), so the
+        # added reaction carries Picard's Slack handle.
+        self.assertIn(
+            "<ins>🛡️ [Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "
+            '"Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)")</ins>',
+            worf,
+            "the reaction added",
+        )
 
         # PDFs specifically: 4 renderable documents, 5 pages between
         # them (the scanned blueprints are recorded but not rendered,
@@ -1158,15 +1399,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
             f"a placeholder; got {placeholders}",
         )
 
-        # Exactly three records in the TNG fixture may land in the problem
-        # sink: the one built to, and the two its downloads cannot fetch
-        # (`EXPECTED_PROBLEMS`). Every renderer drops-and-records a row
+        # Only the records in `EXPECTED_PROBLEMS` may land in the problem
+        # sink: the one built to fail, and the ones its downloads cannot
+        # fetch or skip. Every renderer drops-and-records a row
         # it cannot build instead of failing the step, which is what
         # stops one bad record from poisoning `grid_index` for every
         # other source — but the same change means a projection that
         # quietly started dropping rows would no longer show up as a
         # failure anywhere. Here it does: any row outside the expected
-        # three is a regression and the message names it. The poisoned
+        # rows is a regression and the message names it. The poisoned
         # row is what proves the sink works end to end — through the
         # real render, into the source's store, and copied into the
         # index — and every id is pinned so a later run mints the same
@@ -1176,7 +1417,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             problems1,
             EXPECTED_PROBLEMS,
             "the TNG fixture renders clean apart from its poisoned reply "
-            "and the two things its downloads cannot fetch; any other row "
+            "and the entries its downloads cannot fetch or skip; any other row "
             "here means a projection started dropping or nulling data",
         )
         self.assertEqual(
@@ -1184,6 +1425,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             sorted(row for rows in EXPECTED_PROBLEMS.values() for row in rows),
             "grid_index copies every source's problems into the index",
         )
+        self._assert_problems_reach_the_log(EXPECTED_PROBLEMS)
 
         # ── id-space guardrails ─────────────────────────────────
         # Every row uuid is unique. The PK makes this true by
@@ -1703,6 +1945,47 @@ class IngestedTngPipelineTest(unittest.TestCase):
             if docs:
                 rendered[step] = rendered.get(step, 0) + docs
         return rendered
+
+    def _assert_problems_reach_the_log(self, expected: dict[str, list[str]]) -> None:
+        """Every problem a step stores reaches its log at the row's level.
+
+        Once, most writers stored a row and logged nothing, and the rest
+        logged every row as a `warn!`. Each step now logs one
+        `problems_recorded` line per kind of problem with its `count`, at
+        its loudest row's level, and never a row's sample. So in run 1,
+        where every row is new, a source's counts at `error` and at
+        `warn` add up to its error and warning rows: a writer that skips
+        `datalib_problems::note_recorded`, or a level that drifts, fails
+        here by name.
+        """
+        store = self.workspace / "system" / "runs" / "runs.sqlite"
+        con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        try:
+            lines = con.execute(
+                "SELECT group_id, level, fields FROM log "
+                "WHERE run_id = (SELECT run_id FROM runs ORDER BY rowid LIMIT 1) "
+                "AND json_extract(fields, '$.event') = 'problems_recorded'"
+            ).fetchall()
+        finally:
+            con.close()
+        logged: dict[tuple[str, str], int] = {}
+        for group, level, fields in lines:
+            key = (group, level)
+            logged[key] = logged.get(key, 0) + json.loads(fields)["count"]
+            self.assertNotIn(
+                "sample", json.loads(fields), "a log line carries a sample"
+            )
+        stored: dict[tuple[str, str], int] = {}
+        for source, rows in expected.items():
+            for row in rows:
+                level = {"error": "error", "warning": "warn"}[row.split("|")[1]]
+                stored[(source, level)] = stored.get((source, level), 0) + 1
+        self.assertEqual(
+            logged,
+            stored,
+            "problems_recorded counts in run 1, per (source, level), against "
+            "the rows each source stored",
+        )
 
     # How often one message may repeat within one step attempt at `info`
     # or above before it counts as spam. The number is a policy, not a

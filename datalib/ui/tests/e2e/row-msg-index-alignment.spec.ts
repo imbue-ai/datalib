@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { EVERY_ROW, clickRowByUuid } from "./grid-helpers";
+import { EVERY_ROW, selectRowByUuid, docBody } from "./grid-helpers";
 
 // Regression test for the off-by-one bug: clicking a grid row in the
 // message list highlighted a *different* message in the document pane
@@ -88,7 +88,7 @@ test("clicked grid row highlights the section with the matching uuid", async ({
   const mismatches: Mismatch[] = [];
 
   for (const pick of candidates) {
-    await clickRowByUuid(page, pick.uuid);
+    await selectRowByUuid(page, pick.uuid);
 
     // Each click opens a fresh documentView card; gate on the card
     // for the clicked row's markdown being in place before reading
@@ -98,26 +98,39 @@ test("clicked grid row highlights the section with the matching uuid", async ({
     );
     await card.waitFor({ timeout: 10_000 });
 
-    // Wait for `applySelection`'s nextTick + scrollTop write, but only
-    // as long as it actually takes. This cannot be a plain `waitFor`:
-    // a row whose section uuid resolves to nothing in the body leaves
-    // nothing selected, and "nothing selected" is a misalignment this
-    // test exists to *report*, not to time out on. So the wait is
-    // swallowed, and a card that never gets a selection falls through
-    // to the null case below.
-    await card
+    // The card is there before its document is: the body is fetched
+    // after the card mounts, and the selection is applied a tick after
+    // the body is drawn. So this waits for the two things in turn — the
+    // clicked row's own section in this card's body (it exists: the
+    // candidates were filtered on it above), then a selection — rather
+    // than giving both one short allowance, which a busy runner
+    // overran and read as "nothing selected".
+    //
+    // Neither can be a plain `waitFor`: a row that leaves nothing
+    // selected is a misalignment this test exists to *report*, not to
+    // time out on. So each wait is swallowed, and a card that never
+    // gets a selection falls through to the null case below.
+    const body = docBody(card);
+    await body
+      .locator(`[data-section-uuid="${pick.uuid}"]`)
+      .first()
+      .waitFor({ state: "attached", timeout: 15_000 })
+      .catch(() => {});
+    await body
       .locator(".msg.selected")
       .first()
-      .waitFor({ timeout: 2_000 })
+      .waitFor({ timeout: 10_000 })
       .catch(() => {});
 
     // Scoped to *this* card, not to `.chat-preview` at large. The
     // previous pick's card can still be in the DOM, and an unscoped
     // lookup would happily read its selection and call it this row's.
-    const selectedSectionUuid = await card
+    // Bounded: with nothing selected, an unbounded read would wait out
+    // the whole test instead of reporting the mismatch.
+    const selectedSectionUuid = await body
       .locator(".msg.selected")
       .first()
-      .getAttribute("data-section-uuid")
+      .getAttribute("data-section-uuid", { timeout: 1_000 })
       .catch(() => null);
     if (selectedSectionUuid !== pick.uuid) {
       mismatches.push({

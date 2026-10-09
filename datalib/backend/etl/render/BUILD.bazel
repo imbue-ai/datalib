@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # The render half of the framework: the per-source render store, the
 # unified-index load, and the render run context.
 #
@@ -21,8 +19,10 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",

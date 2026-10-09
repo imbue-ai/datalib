@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_dag::events::{Event, LogLevel};
-use datalib_etl::synthesize::Synthesizer;
+use datalib_etl_web::synthesize::Synthesizer;
 
 use crate::events::{Emitter, OutputClaim};
 use crate::source_type::SourceType;

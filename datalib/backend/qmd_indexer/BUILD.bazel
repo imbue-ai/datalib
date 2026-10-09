@@ -1,10 +1,11 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 rust_library(
     name = "datalib_qmd_indexer",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/lib.rs",
+        "src/query_embedder.rs",
+    ],
     # `include_str!`'d into the crate: the script that drives qmd's
     # SDK. Not a `srcs` entry — it is data the compiler reads,
     # not Rust to compile.
@@ -34,9 +35,13 @@ rust_test(
 # node, and the embedding model — on a few small documents per test.
 rust_test(
     name = "qmd_indexer_tests",
-    size = "small",
+    # Two model loads, which CI's CPU-only runners take far longer over
+    # than a mac's GPU; at `small` it timed out at 60 s beside
+    # qmd_facts_test, the other test that loads the model.
+    size = "medium",
     srcs = ["tests/qmd_indexer_tests.rs"],
     data = [
+        "src/js/qmd_sdk.mjs",
         "@nodejs_host//:node_bin",
         "//third-party/qmd/runtime:qmd_package_dir",
         "//third-party/qmd/runtime:qmd_tree",
@@ -47,10 +52,12 @@ rust_test(
         "QMD_TEST_EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
         "QMD_TEST_NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
         "QMD_TEST_PACKAGE_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
+        "QMD_TEST_SDK_RLOC": "$(rlocationpath src/js/qmd_sdk.mjs)",
     },
     deps = [
         ":datalib_qmd_indexer",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:tempfile",
     ],
+    tags = ["cpu:2"],
 )

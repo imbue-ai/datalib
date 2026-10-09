@@ -1,7 +1,8 @@
 //! One side of a two-process doltlite concurrency test: a writer that
 //! commits, a reader that pins, a reader that keeps re-opening and pinning
 //! the way `grid_index` does, a reader that holds a transaction as its
-//! snapshot, or a probe that reports a store's committed state. Driven by
+//! snapshot, a reader that matches a plain SQLite terms file attached to
+//! the commit it reads, or a probe that reports a store's committed state. Driven by
 //! `tests/doltlite_two_process.rs`, which is where the scenarios and the
 //! assertions live; `seal-existing` also drives a full-size measurement
 //! (`hack/read_transaction_at_scale/`).
@@ -61,6 +62,7 @@ async fn main() -> Result<()> {
         "branch-read" => branch_read(&args).await,
         "rev-probe" => rev_probe(&args).await,
         "rev-read" => rev_read(&args).await,
+        "terms-read" => terms_read(&args).await,
         "seal-existing" => seal_existing(&args).await,
         other => bail!("unknown role {other:?}"),
     }?;
@@ -89,6 +91,11 @@ async fn write(args: &Args) -> Result<Value> {
     }
 
     let mut errors: Vec<String> = Vec::new();
+    let terms = match args.opt_path("terms") {
+        Some(path) => Some(terms_pool(&path).await?),
+        None => None,
+    };
+    let mut terms_ms: Vec<u64> = Vec::new();
     let mut seed_pin = Value::Null;
     if args.flag("seed") {
         for i in 0..SEED_ROWS {
@@ -97,6 +104,10 @@ async fn write(args: &Args) -> Result<Value> {
         let hash = doltlite_raw::commit_run(&pool, "seed")
             .await?
             .ok_or_else(|| anyhow!("the seed commit committed nothing"))?;
+        if let Some(terms) = &terms {
+            let ids: Vec<String> = (0..SEED_ROWS).map(|i| format!("seed-{i}")).collect();
+            write_terms(terms, &ids, None).await?;
+        }
         seed_pin = json!(hash);
         // Only now, so a reader that sees the pin file sees a real commit.
         write_atomic(&args.path("pin-out")?, hash.as_bytes())?;
@@ -136,7 +147,21 @@ async fn write(args: &Args) -> Result<Value> {
             })),
             Err(e) => errors.push(format!("{e:#}")),
         }
+        // The terms follow the seal, as `grid_index` would write them: the
+        // chunk's new rows, and the previous chunk's first row replaced.
+        if let Some(terms) = &terms {
+            let started = Instant::now();
+            let ids: Vec<String> = (0..2).map(|row| format!("chunk-{i}-{row}")).collect();
+            let replaced = i.checked_sub(1).map(|p| format!("chunk-{p}-0"));
+            match write_terms(terms, &ids, replaced.as_deref()).await {
+                Ok(()) => terms_ms.push(started.elapsed().as_millis() as u64),
+                Err(e) => errors.push(format!("terms for chunk {i}: {e:#}")),
+            }
+        }
         tokio::time::sleep(interval).await;
+    }
+    if let Some(terms) = terms {
+        terms.close().await;
     }
 
     let committed = committed_rows(&pool).await;
@@ -148,6 +173,7 @@ async fn write(args: &Args) -> Result<Value> {
         "seed_pin": seed_pin,
         "commits": commits,
         "committed_rows": committed,
+        "terms_ms": terms_ms,
         "errors": errors,
         "size_after": file_size(&db),
     }))
@@ -288,6 +314,12 @@ async fn history(args: &Args) -> Result<Value> {
 async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) -> Result<String> {
     let pool = reader.pool();
     let pin = reader.pin();
+    // `grid_index` asks a render store's shape before it reads anything.
+    anyhow::ensure!(
+        datalib_store_meta::read(pool).await?.is_some(),
+        "no _datalib_meta at {}",
+        pin.commit()
+    );
     let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entities")
         .fetch_one(pool)
         .await?;
@@ -365,8 +397,10 @@ async fn double_open(args: &Args) -> Result<Value> {
 /// Seed and commit, then open a SQL transaction, insert into it, announce
 /// readiness and wait to be killed. With `--commit` the transaction is
 /// committed at the SQL level first, so the rows sit in the working set —
-/// uncommitted to doltlite — when the kill lands. Never returns on its own:
-/// the test's `kill -9` is the whole point.
+/// uncommitted to doltlite — when the kill lands. With `--dolt-commit` as
+/// well, they are then `dolt_commit`ted on the writer's branch and never
+/// published: the state between `commit_run`'s two halves. Never returns
+/// on its own: the test's `kill -9` is the whole point.
 async fn hang(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let pool = doltlite_raw::open(&db, &[TABLE_DDL])
@@ -404,6 +438,12 @@ async fn hang(args: &Args) -> Result<Value> {
             .execute(&mut *conn)
             .await
             .context("COMMIT")?;
+    }
+    if args.flag("dolt-commit") {
+        sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', 'stranded')")
+            .fetch_one(&mut *conn)
+            .await
+            .context("dolt_commit on the writer's branch")?;
     }
     write_atomic(&args.path("ready-out")?, b"ready")?;
     std::future::pending::<()>().await;
@@ -972,6 +1012,141 @@ async fn rev_read(args: &Args) -> Result<Value> {
     Ok(json!({ "role": "rev-read", "samples": samples, "opens": opens, "errors": errors }))
 }
 
+/// `rev-read` with the terms file attached: each window opens `main`'s tip
+/// detached, attaches the plain SQLite terms file read-only, and samples
+/// one statement that counts the full-text index, the terms table, and
+/// the terms whose row is in the commit. With `--pinned`, it reads as the
+/// search applet does (`DoltRepo::pinned`): one read-only connection on
+/// `main`, the file attached once outside any transaction, and each
+/// window a transaction that holds one commit while it samples.
+async fn terms_read(args: &Args) -> Result<Value> {
+    if args.flag("pinned") {
+        return pinned_terms_read(args).await;
+    }
+    let db = args.path("db")?;
+    let terms = args.path("terms")?;
+    let until = args.path("until")?;
+    let hold = Duration::from_millis(args.num("hold-ms", 100));
+    let interval = Duration::from_millis(args.num("interval-ms", 5));
+    write_atomic(&args.path("ready-out")?, b"ready")?;
+    // Audited: the path is this test's own tempdir, and has no quote in it.
+    let attach = format!(
+        "ATTACH 'file:{}?doltlite_engine=sqlite&mode=ro' AS t",
+        terms.display()
+    );
+    let sample_sql = "SELECT \
+        (SELECT COUNT(*) FROM t.terms_fts WHERE terms_fts MATCH 'email*'), \
+        (SELECT COUNT(*) FROM t.terms), \
+        (SELECT COUNT(*) FROM t.terms x JOIN entities g ON g.id = x.uuid), \
+        (SELECT COUNT(*) FROM entities)";
+    let mut samples: Vec<Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut txn = 0u64;
+    while !until.exists() {
+        let window = async {
+            let tip = main_tip(&db).await.context("read main's tip")?;
+            let pool = open_revision(&db, &tip).await?;
+            let mut conn = pool.acquire().await.context("acquire")?;
+            sqlx::query(sqlx::AssertSqlSafe(attach.clone()))
+                .execute(&mut *conn)
+                .await
+                .context("attach the terms file")?;
+            let opened = Instant::now();
+            while opened.elapsed() < hold && !until.exists() {
+                let started = Instant::now();
+                let row: (i64, i64, i64, i64) = sqlx::query_as(sample_sql)
+                    .fetch_one(&mut *conn)
+                    .await
+                    .context("sample")?;
+                samples.push(json!({
+                    "txn": txn, "at_ms": now_ms(), "head": tip,
+                    "ms": started.elapsed().as_millis() as u64,
+                    "fts": row.0, "terms": row.1, "joined": row.2, "rows": row.3,
+                }));
+                tokio::time::sleep(interval).await;
+            }
+            drop(conn);
+            pool.close().await;
+            anyhow::Ok(())
+        };
+        if let Err(e) = window.await {
+            errors.push(format!("window {txn}: {e:#}"));
+        }
+        txn += 1;
+    }
+    Ok(json!({ "role": "terms-read", "samples": samples, "errors": errors }))
+}
+
+async fn pinned_terms_read(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let terms = args.path("terms")?;
+    let until = args.path("until")?;
+    let hold = Duration::from_millis(args.num("hold-ms", 100));
+    let interval = Duration::from_millis(args.num("interval-ms", 5));
+    let pool = datalib_pin::open_reader(&db)
+        .await
+        .context("open main read-only")?;
+    // Audited: the path is this test's own tempdir, and has no quote in it.
+    let attach = format!(
+        "ATTACH 'file:{}?doltlite_engine=sqlite&mode=ro' AS t",
+        terms.display()
+    );
+    sqlx::query(sqlx::AssertSqlSafe(attach))
+        .execute(&pool)
+        .await
+        .context("attach the terms file")?;
+    write_atomic(&args.path("ready-out")?, b"ready")?;
+    let sample_sql = "SELECT \
+        (SELECT COUNT(*) FROM t.terms_fts WHERE terms_fts MATCH 'email*'), \
+        (SELECT COUNT(*) FROM t.terms), \
+        (SELECT COUNT(*) FROM t.terms x JOIN entities g ON g.id = x.uuid), \
+        (SELECT COUNT(*) FROM entities)";
+    let mut samples: Vec<Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut txn = 0u64;
+    while !until.exists() {
+        let window = async {
+            let mut tx = pool.begin().await.context("begin")?;
+            let _: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master")
+                .fetch_one(&mut *tx)
+                .await
+                .context("load the commit")?;
+            let head: String = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
+                .fetch_one(&mut *tx)
+                .await
+                .context("read the commit")?;
+            // At least one sample: a request is a transaction around one
+            // query, which `--hold-ms 0` reads as.
+            let opened = Instant::now();
+            loop {
+                let started = Instant::now();
+                let row: (i64, i64, i64, i64) = sqlx::query_as(sample_sql)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .context("sample")?;
+                samples.push(json!({
+                    "txn": txn, "at_ms": now_ms(), "head": head,
+                    "ms": started.elapsed().as_millis() as u64,
+                    "fts": row.0, "terms": row.1, "joined": row.2, "rows": row.3,
+                }));
+                if opened.elapsed() >= hold || until.exists() {
+                    break;
+                }
+                tokio::time::sleep(interval).await;
+            }
+            tx.commit().await.context("end the read")?;
+            tokio::time::sleep(interval).await;
+            anyhow::Ok(())
+        };
+        if let Err(e) = window.await {
+            errors.push(format!("window {txn}: {e:#}"));
+        }
+        txn += 1;
+    }
+    pool.close().await;
+    Ok(json!({ "role": "terms-read", "samples": samples, "errors": errors }))
+}
+
 async fn main_tip(db: &Path) -> Result<String> {
     let pool = datalib_pin::open_reader(db).await?;
     let tip = sqlx::query_scalar::<_, String>("SELECT hash FROM dolt_branches WHERE name = 'main'")
@@ -1083,6 +1258,68 @@ async fn commit_a_chunk_in_a_held_transaction(
     doltlite_raw::commit_run(pool, &format!("chunk {chunk}"))
         .await?
         .ok_or_else(|| anyhow!("chunk {chunk} committed nothing"))
+}
+
+/// The plain SQLite terms file, laid out as `docs/dev/doltlite.md`
+/// § "Full-text search (FTS5)" has it.
+async fn terms_pool(path: &Path) -> Result<SqlitePool> {
+    let opts = SqliteConnectOptions::new()
+        .filename(format!("file:{}?doltlite_engine=sqlite", path.display()))
+        .create_if_missing(true)
+        .busy_timeout(Duration::from_secs(5));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(opts)
+        .await
+        .with_context(|| format!("open {}", path.display()))?;
+    for ddl in [
+        "CREATE TABLE IF NOT EXISTS terms (term_id INTEGER PRIMARY KEY, uuid TEXT, value TEXT)",
+        "CREATE INDEX IF NOT EXISTS terms_by_uuid ON terms (uuid)",
+        "CREATE VIRTUAL TABLE IF NOT EXISTS terms_fts USING fts5(value, content='', \
+         contentless_delete=1, tokenize=\"unicode61 tokenchars '@.-_+:'\")",
+    ] {
+        sqlx::query(ddl).execute(&pool).await.context(ddl)?;
+    }
+    Ok(pool)
+}
+
+/// One transaction: a term for each of `ids`, and `replace`'s terms
+/// deleted and written again.
+async fn write_terms(pool: &SqlitePool, ids: &[String], replace: Option<&str>) -> Result<()> {
+    let mut conn = pool.acquire().await.context("acquire")?;
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+    let mut all: Vec<&str> = ids.iter().map(String::as_str).collect();
+    if let Some(old) = replace {
+        sqlx::query(
+            "DELETE FROM terms_fts WHERE rowid IN (SELECT term_id FROM terms WHERE uuid = ?)",
+        )
+        .bind(old)
+        .execute(&mut *conn)
+        .await?;
+        sqlx::query("DELETE FROM terms WHERE uuid = ?")
+            .bind(old)
+            .execute(&mut *conn)
+            .await?;
+        all.push(old);
+    }
+    for id in all {
+        let value = format!("email:{id}@example.com");
+        let term_id: i64 =
+            sqlx::query_scalar("INSERT INTO terms (uuid, value) VALUES (?, ?) RETURNING term_id")
+                .bind(id)
+                .bind(&value)
+                .fetch_one(&mut *conn)
+                .await?;
+        sqlx::query("INSERT INTO terms_fts (rowid, value) VALUES (?, ?)")
+            .bind(term_id)
+            .bind(&value)
+            .execute(&mut *conn)
+            .await?;
+    }
+    sqlx::query("COMMIT").execute(&mut *conn).await?;
+    Ok(())
 }
 
 /// Rows at HEAD, read through a pinned view rather than a plain `SELECT`, so

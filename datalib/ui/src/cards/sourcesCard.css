@@ -160,6 +160,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* What is queued and when it is done, after the status of a row at work. */
+.sx-queue,
+.sx-eta {
+  flex: 0 0 auto;
+  color: var(--datalib-muted);
+}
+.sx-queue::before,
+.sx-eta::before {
+  content: "· ";
+  color: var(--datalib-faint);
+}
 .sx-tone-ok {
   color: var(--datalib-ok);
 }

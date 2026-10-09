@@ -19,4 +19,4 @@ pub mod units;
 /// `datalib_id` under the configured source, every row carries its
 /// backpointer, and a device's `upstream_id` is its name rather than
 /// its kind. Every uuid moved.
-pub const RENDER_VERSION: u32 = 5;
+pub const RENDER_VERSION: u32 = 7;

@@ -1,7 +1,6 @@
 //! The reset verb: empty what this step wrote, so the next run does its
-//! work from the start. The runner invokes the step with
-//! `DATALIB_DAG_RESET` naming the part to empty (`docs/dev/step_protocol.md`
-//! § Reset); the store's history keeps every row. It then reports the
+//! work from the start. The runner invokes the step with `--reset`
+//! naming the part to empty (`docs/dev/step_protocol.md` § Reset); the store's history keeps every row. It then reports the
 //! counts a run reports, taken off the emptied store, because the Manage
 //! row shows a step's newest count and the one from before the reset
 //! would otherwise stand until the step next runs.

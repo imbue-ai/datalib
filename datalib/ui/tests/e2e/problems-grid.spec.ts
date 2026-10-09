@@ -72,7 +72,10 @@ test("a source's problems open in the grid, its filter in the search bar", async
   await expect(counts(page, source).locator(".tg-badge")).toHaveText(["2", "5"]);
   await counts(page, source).locator(".tg-chip-warning").dblclick();
 
-  await expect(page.getByTestId("search-input")).toHaveValue(`source_id:${source}`);
+  await expect(page.getByTestId("search-input")).toHaveAttribute(
+    "data-query",
+    `source_id:${source}`,
+  );
   // The badges are inside the Name cell, which a double-click would
   // otherwise open for renaming.
   await expect(nameCell(page, `group:${source}`).locator("input")).toHaveCount(0);
@@ -101,7 +104,8 @@ test("a severity cell's right-click keeps only its severity", async ({ page, req
     "severity_chip",
   );
   await searchMenuItem(page, new RegExp(`Keep only Severity=${target.severity}`)).click();
-  await expect(page.getByTestId("search-input")).toHaveValue(
+  await expect(page.getByTestId("search-input")).toHaveAttribute(
+    "data-query",
     `source_id:${source} severity:${target.severity}`,
   );
   await gridSettled(page);

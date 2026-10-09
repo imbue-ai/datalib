@@ -4,9 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_linkedin::ingest::photos::load_photo_blobs;
 use datalib_etl_linkedin::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_linkedin::synthesize::LinkedinSynth;
@@ -16,6 +14,8 @@ use datalib_etl_linkedin_render::processor::Source;
 use datalib_etl_linkedin_render::render;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 
 fn build_export(root: &Path) -> Result<()> {
     // Who the export belongs to. The primary address is deliberately not
@@ -102,6 +102,13 @@ fn build_export(root: &Path) -> Result<()> {
         "<html><body><h1>Treemaps</h1></body></html>",
     )?;
     Ok(())
+}
+
+async fn problems(db: &RawDb) -> Vec<(String, String)> {
+    sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+        .fetch_all(db.pool())
+        .await
+        .unwrap()
 }
 
 async fn rows(db: &RawDb, table: &str) -> Vec<serde_json::Value> {
@@ -509,6 +516,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             &db2,
             db2.cas().expect("the download handle has a CAS"),
             &Progress::noop(),
+            &Default::default(),
             50,
         )
         .await?;
@@ -526,6 +534,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             &db2,
             db2.cas().expect("the download handle has a CAS"),
             &Progress::noop(),
+            &Default::default(),
             50,
         )
         .await?;
@@ -563,6 +572,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             &db3,
             db3.cas().expect("the download handle has a CAS"),
             &Progress::noop(),
+            &Default::default(),
             1, // give up after a single consecutive failure
         )
         .await?;
@@ -570,8 +580,318 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         assert!(g.gave_up, "should give up at the limit, got {g:?}");
         assert_eq!(g.attempted, 1, "stopped after the first failure, got {g:?}");
 
+        // ── photos it could not fetch are a problem until they fetch ──
+        let with_photos = |db: &RawDb| FetchOptions {
+            db: db.clone(),
+            input_path: export.clone(),
+            fetch_photos: true,
+            photo_max_consecutive_failures: 1,
+            progress: Progress::noop(),
+            control: Default::default(),
+        };
+        std::env::set_var(PLAYBACK_ENV, &empty_pb);
+        ingest::fetch(with_photos(&db3)).await?;
+        std::env::remove_var(PLAYBACK_ENV);
+        let rows = problems(&db3).await;
+        assert_eq!(
+            rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+            ["phase:photos"],
+            "{rows:?}"
+        );
+        std::env::set_var(PLAYBACK_ENV, &playback);
+        ingest::fetch(with_photos(&db3)).await?;
+        std::env::remove_var(PLAYBACK_ENV);
+        assert_eq!(problems(&db3).await, [], "they fetched, so the row is gone");
+
+        // ── a photo is fetched once ────────────────────────────────
+        // The export read again, with every fetch bound to miss: a
+        // connection whose photo the store holds asks for nothing, so
+        // nothing misses and the photo stays.
+        std::env::set_var(PLAYBACK_ENV, &empty_pb);
+        let again = ingest::fetch(with_photos(&db)).await;
+        std::env::remove_var(PLAYBACK_ENV);
+        again?;
+        assert_eq!(problems(&db).await, [], "no connection was asked for again");
+        assert!(load_photo_blobs(&db)
+            .await?
+            .contains_key("https://www.linkedin.com/in/jlp"));
+
         Ok::<_, anyhow::Error>(())
     })?;
 
+    Ok(())
+}
+
+/// A CSV or an article that will not read is a `listing:` row naming the
+/// file, the rows an earlier read stored stay, and the next read that
+/// works clears the row.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_that_will_not_read_keeps_its_rows_and_is_a_problem_until_it_reads() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let export = tmp.path().join("export");
+    fs::create_dir_all(&export)?;
+    build_export(&export)?;
+    let articles = export.join("Articles").join("Articles");
+    fs::write(
+        articles.join("away-team.html"),
+        "<html><body><h1>Away team</h1></body></html>",
+    )?;
+    let raw_dir = tmp.path().join("raw");
+    fs::create_dir_all(&raw_dir)?;
+    let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+    let fetch = || {
+        ingest::fetch(FetchOptions {
+            db: db.clone(),
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+    };
+    fetch().await?;
+    assert_eq!(rows(&db, "connections").await.len(), 2);
+    assert_eq!(rows(&db, "articles").await.len(), 2);
+
+    // Not UTF-8: neither file can be read as text.
+    let good_connections = fs::read(export.join("Connections.csv"))?;
+    fs::write(export.join("Connections.csv"), b"First Name\n\xff\xfe\n")?;
+    fs::write(articles.join("away-team.html"), b"<h1>\xff</h1>")?;
+    let s = fetch().await?;
+    assert_eq!(s.parse_errors, 2, "{s:?}");
+    assert_eq!(
+        rows(&db, "connections").await.len(),
+        2,
+        "the last read's rows stay"
+    );
+    assert_eq!(
+        rows(&db, "articles").await.len(),
+        2,
+        "the article that would not read keeps its row, the other is still there"
+    );
+    let keys: Vec<String> = problems(&db).await.into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        [
+            "listing:articles Articles/Articles/away-team.html",
+            "listing:csv Connections.csv",
+        ]
+    );
+
+    fs::write(export.join("Connections.csv"), good_connections)?;
+    fs::write(articles.join("away-team.html"), "<h1>Away team, again</h1>")?;
+    fetch().await?;
+    assert_eq!(
+        problems(&db).await,
+        [],
+        "both read, so neither is a problem"
+    );
+    db.close().await;
+    Ok(())
+}
+
+/// An export path with nothing at it is not an empty export: the run
+/// fails rather than reporting success with nothing read.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_export_path_that_is_not_there_fails_the_run() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let db = RawDb::open(&db_path_for(tmp.path())).await?;
+    let got = ingest::fetch(FetchOptions {
+        db: db.clone(),
+        input_path: tmp.path().join("not-unpacked-yet"),
+        fetch_photos: false,
+        photo_max_consecutive_failures: 50,
+        progress: Progress::noop(),
+        control: Default::default(),
+    })
+    .await;
+    assert!(got.is_err(), "{got:?}");
+    db.close().await;
+    Ok(())
+}
+
+/// An article directory the walk could not read deletes no article.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_walk_error_deletes_no_article() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let export = tmp.path().join("export");
+    fs::create_dir_all(&export)?;
+    build_export(&export)?;
+    let db = RawDb::open(&db_path_for(tmp.path())).await?;
+    let fetch = || {
+        ingest::fetch(FetchOptions {
+            db: db.clone(),
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+    };
+    fetch().await?;
+    assert_eq!(rows(&db, "articles").await.len(), 1);
+
+    fs::create_dir_all(export.join("Articles/Drafts"))?;
+    fs::write(
+        export.join("Articles/Drafts/log.html"),
+        "<h1>Captain's log</h1>",
+    )?;
+    fs::remove_file(export.join("Articles/Articles/my-post.html"))?;
+    std::os::unix::fs::symlink(
+        export.join("nowhere"),
+        export.join("Articles/Articles/lost"),
+    )?;
+    fetch().await?;
+    assert_eq!(
+        rows(&db, "articles").await.len(),
+        2,
+        "the new one lands and the one the walk did not see stays"
+    );
+    let keys: Vec<String> = problems(&db).await.into_iter().map(|r| r.0).collect();
+    assert_eq!(keys, ["listing:files"]);
+    db.close().await;
+    Ok(())
+}
+
+/// A CSV that is nothing (0 bytes, or the Notes preamble and no header)
+/// read as one listing no rows and emptied its table. A CSV the export
+/// left out keeps its table: the export form offers a subset. Only a
+/// well-formed CSV with a header and no rows empties it.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_a_well_formed_csv_empties_its_table() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let export = tmp.path().join("export");
+    fs::create_dir_all(&export)?;
+    build_export(&export)?;
+    let db = RawDb::open(&db_path_for(tmp.path())).await?;
+    let fetch = || {
+        ingest::fetch(FetchOptions {
+            db: db.clone(),
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+    };
+    fetch().await?;
+    assert_eq!(rows(&db, "connections").await.len(), 2);
+    assert_eq!(rows(&db, "messages").await.len(), 3);
+    assert_eq!(rows(&db, "email_addresses").await.len(), 2);
+
+    fs::write(export.join("Connections.csv"), b"")?;
+    fs::write(
+        export.join("Email Addresses.csv"),
+        "Notes:\n\"Some preamble text about email visibility.\"\n",
+    )?;
+    fs::remove_file(export.join("messages.csv"))?;
+    let s = fetch().await?;
+    assert_eq!(
+        rows(&db, "connections").await.len(),
+        2,
+        "a 0-byte Connections.csv is not an empty network"
+    );
+    assert_eq!(rows(&db, "email_addresses").await.len(), 2);
+    assert_eq!(
+        rows(&db, "messages").await.len(),
+        3,
+        "left out, not emptied"
+    );
+    assert_eq!(s.parse_errors, 2, "{s:?}");
+    let keys: Vec<String> = problems(&db).await.into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        [
+            "listing:csv Connections.csv",
+            "listing:csv Email Addresses.csv"
+        ]
+    );
+
+    fs::write(
+        export.join("Connections.csv"),
+        "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n",
+    )?;
+    fetch().await?;
+    assert!(rows(&db, "connections").await.is_empty());
+    db.close().await;
+    Ok(())
+}
+
+/// A connection a newer Connections.csv no longer lists kept its photo
+/// edge, so the photo outlived the contact. An export without the CSV, or
+/// with one that will not read, says nothing about who is connected, and
+/// keeps every edge.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_dropped_from_the_export_loses_its_photo_edge() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let export = tmp.path().join("export");
+    fs::create_dir_all(&export)?;
+    build_export(&export)?;
+    let db = RawDb::open(&db_path_for(tmp.path())).await?;
+    let fetch = || {
+        ingest::fetch(FetchOptions {
+            db: db.clone(),
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+    };
+    let owners = || async {
+        sqlx::query_scalar::<_, String>("SELECT owner_id FROM contact_photos ORDER BY owner_id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+    };
+    fetch().await?;
+    // What the photo sweep records for both connections.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS contact_photos (id TEXT PRIMARY KEY, \
+         owner_id TEXT NOT NULL, source_url TEXT NOT NULL, blake3 TEXT NULL)",
+    )
+    .execute(db.pool())
+    .await?;
+    for owner in [
+        "https://www.linkedin.com/in/bev",
+        "https://www.linkedin.com/in/jlp",
+    ] {
+        sqlx::query("INSERT INTO contact_photos VALUES (?, ?, ?, NULL)")
+            .bind(format!("{owner}#{owner}"))
+            .bind(owner)
+            .bind(owner)
+            .execute(db.pool())
+            .await?;
+    }
+
+    let both = fs::read(export.join("Connections.csv"))?;
+    fs::write(export.join("Connections.csv"), b"")?;
+    fetch().await?;
+    assert_eq!(
+        owners().await.len(),
+        2,
+        "a CSV that will not read keeps both"
+    );
+
+    fs::remove_file(export.join("Connections.csv"))?;
+    fetch().await?;
+    assert_eq!(owners().await.len(), 2, "a CSV left out keeps both");
+
+    fs::write(export.join("Connections.csv"), both)?;
+    assert_eq!(fetch().await?.photos_removed, 0);
+    fs::write(
+        export.join("Connections.csv"),
+        "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n\
+         Jean-Luc,Picard,https://www.linkedin.com/in/jlp,,Starfleet,Captain,16 Jun 2026\n",
+    )?;
+    let s = fetch().await?;
+    assert_eq!(
+        owners().await,
+        ["https://www.linkedin.com/in/jlp"],
+        "Crusher is no longer a connection"
+    );
+    assert_eq!(s.photos_removed, 1);
+    db.close().await;
     Ok(())
 }

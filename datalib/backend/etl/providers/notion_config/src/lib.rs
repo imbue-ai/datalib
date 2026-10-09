@@ -44,13 +44,15 @@ impl NotionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct NotionSync {
-    /// Re-examine anything edited within this many days even when the
-    /// stored resume cursor is newer. Zero (or absent) means no floor.
+    /// In the whole-workspace mirror, list this many days of edits below
+    /// the newest the store has looked at, so a page shared late is
+    /// listed once more. Zero (or absent) lists only what is newer.
     #[serde(default)]
     pub refresh_window_days: Option<u32>,
     /// Optional allowlist. Each entry is a page id or a paste-able
-    /// browser URL; the mirror is then that page plus everything under
-    /// it (child pages, and the rows of databases embedded in it).
+    /// browser URL; the mirror is then that page plus every page its
+    /// body links, and theirs. A database embedded in a page is not
+    /// walked: its rows are mirrored only by the whole-workspace search.
     /// Empty means the whole workspace.
     #[serde(default)]
     pub roots: Vec<String>,
@@ -62,9 +64,6 @@ pub struct NotionSync {
     pub comments: bool,
     #[serde(default = "default_true")]
     pub attachments: bool,
-    /// Walk databases found under a root and mirror their rows.
-    #[serde(default = "default_true")]
-    pub databases: bool,
 }
 
 impl NotionSync {
@@ -125,12 +124,12 @@ mod tests {
         assert_eq!(cfg.api.unwrap().roots.len(), 1);
     }
 
-    /// The three include-toggles default ON, so a bare `api = {}`
+    /// The two include-toggles default ON, so a bare `api = {}`
     /// mirrors everything rather than quietly mirroring only bodies.
     #[test]
     fn include_toggles_default_on() {
         let s: NotionSync = serde_json::from_str("{}").unwrap();
-        assert!(s.comments && s.attachments && s.databases);
+        assert!(s.comments && s.attachments);
     }
 
     #[test]

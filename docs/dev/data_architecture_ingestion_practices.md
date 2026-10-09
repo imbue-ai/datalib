@@ -70,11 +70,9 @@ Reach for the simplest existing provider that's shaped like yours,
    `_render` and `_config` siblings), then strip out the
    provider-specific code.
 2. Rename the targets in each `BUILD.bazel`: `datalib_etl_<name>`,
-   `datalib_etl_<name>_render`, `datalib_etl_<name>_config`. A crate
-   needs a `Cargo.toml` (and a line in `datalib/backend/Cargo.toml`'s
-   `members`) only if something outside bazel has to see it —
-   AGENTS.md §"Git: prefer merges over rebases" says why;
-   `calendar` and `calendar_render` have none.
+   `datalib_etl_<name>_render`, `datalib_etl_<name>_config`. There is no
+   `Cargo.toml` to write; a third-party crate the provider needs that
+   nothing else uses yet goes in `datalib/backend/Cargo.toml`.
 3. Implement `ingest::fetch(...)` and the render side. The render side
    hands each finished document to `ctx.emit_doc` as a
    [`RenderedMarkdown`](../../datalib/backend/etl/render/src/grid_index.rs);
@@ -355,6 +353,6 @@ statement.
 
   - **Hand-rolled `BulkUpsertable` impls.** The `RawTable` derive
     covers payload-less tables ([`etl/macros/README.md`](../../datalib/backend/etl/macros/README.md)),
-    but 22 provider tables still hand-roll the impl (fsindex's, media's,
-    yolink's devices, slack's `RepliesPagesRow`, …). Moving each to the
+    but about 20 provider tables still hand-roll the impl (fsindex's,
+    media's, yolink's devices, …). Moving each to the
     derive collapses it to the struct definition.

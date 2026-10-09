@@ -1,0 +1,33 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# What changed on disk, for a source that reads local files. Its own crate
+# so that only those sources relink when it changes (README.md).
+rust_library(
+    name = "datalib_etl_files",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_files",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:ignore",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "files_unittests",
+    size = "small",
+    crate = ":datalib_etl_files",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

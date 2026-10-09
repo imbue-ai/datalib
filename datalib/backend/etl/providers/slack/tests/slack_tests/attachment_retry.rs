@@ -1,15 +1,15 @@
-//! Two-run tests for the attachment retry pass: a file that did not land
-//! on one run is tried again on the next from the stored message, which
-//! the second run never lists again.
+//! Two-run tests for owed files: a file is an edge without bytes from the
+//! moment its message is stored, and every run fetches the edges without
+//! bytes from the stored message, which the second run never lists again.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use datalib_etl::blob_cas::blake3_hex;
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService};
-use datalib_etl::synthesize::write_fixture;
 use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
 use datalib_etl_slack::recorded::{record_call, History};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::synthesize::write_fixture;
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, record_general, Tree};
@@ -157,7 +157,7 @@ async fn run(out: &Path, limit: Option<u64>) -> usize {
 }
 
 /// A file whose download failed is fetched on the next run, although
-/// the resume cursor has passed its message.
+/// no walk lists its message again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_download_is_retried_without_relisting_its_message() {
     let t = first_world(500);
@@ -219,10 +219,35 @@ async fn a_failed_file_over_todays_limit_is_reclassified_as_a_skip() {
     );
 }
 
-/// A channel whose walk fails partway still writes the attachments of
-/// the messages it stored, so the retry pass can find them. It used to
-/// return before its flush: the messages were stored, their files had
-/// no row, and the resume cursor had passed them for good.
+/// An older build stamped a failed file fetch as fetched, so its edge
+/// read as held and was never asked for again: its `fetch_failed` row
+/// stayed for good. An edge with no bytes is owed whatever its sidecar
+/// says.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_stamped_fetched_without_bytes_is_still_owed() {
+    let t = first_world(500);
+    run(&t.out, None).await;
+    let db = RawDb::open(&db_path_for(&t.out)).await.unwrap();
+    sqlx::query("UPDATE slack_attachments_bookkeeping SET fetched_at_utc = last_attempt_at_utc")
+        .execute(db.pool())
+        .await
+        .unwrap();
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "an older build's stamp")
+        .await
+        .unwrap();
+    db.close().await;
+
+    let _second = second_world();
+    run(&t.out, Some(4)).await;
+    assert_eq!(
+        attachment(&t.out).await.problem,
+        Some(("warning".to_string(), "over_size_limit".to_string()))
+    );
+}
+
+/// A channel whose walk fails partway still fetches the files of the
+/// messages it stored, on that run and on the next, whose walk of what
+/// is under the first page fails too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_channel_that_fails_partway_still_records_its_attachments() {
     let t = first_world_failing_after_the_first_page(500);
@@ -236,4 +261,131 @@ async fn a_channel_that_fails_partway_still_records_its_attachments() {
     let _second = second_world();
     run(&t.out, None).await;
     assert_eq!(attachment(&t.out).await, landed());
+}
+
+async fn history_problems(out: &Path) -> i64 {
+    let db = RawDb::open(&db_path_for(out)).await.unwrap();
+    let n = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM problems WHERE scope_key LIKE 'listing:%history%'",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    db.close().await;
+    n
+}
+
+/// Turning `media` on fetches the files of the messages already stored,
+/// from the store: no channel is walked again. It used to take a walk of
+/// every channel from `since`, repeated on every run until one had no
+/// failed channel. The second world serves no such walk, so one would be
+/// a `listing:` row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turning_media_on_fetches_the_files_of_stored_messages_without_a_rewalk() {
+    let t = first_world(200);
+    fetch_into(&t.out, |o| o).await.unwrap();
+    assert_eq!(
+        attachment(&t.out).await,
+        Attachment {
+            blake3: None,
+            problem: None,
+            bytes: None,
+        },
+        "with media off the file is listed, not fetched, and that is no problem"
+    );
+
+    let _second = second_world();
+    assert_eq!(run(&t.out, None).await, 0);
+    assert_eq!(attachment(&t.out).await, landed());
+    assert_eq!(history_problems(&t.out).await, 0);
+}
+
+const LATER_TS: &str = "1735689700.000200";
+
+fn later_message_with_the_same_file() -> Value {
+    let mut m = message_with_file();
+    m["ts"] = json!(LATER_TS);
+    m["text"] = json!("The same insignia, posted again");
+    m
+}
+
+/// Every edge to the file, with its hash.
+async fn edges(out: &Path) -> Vec<(String, Option<String>)> {
+    let db = RawDb::open(&db_path_for(out)).await.unwrap();
+    let rows =
+        sqlx::query_as("SELECT id, blake3 FROM slack_attachments WHERE file_id = ? ORDER BY id")
+            .bind(FILE_ID)
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    db.close().await;
+    rows
+}
+
+/// One file on two messages in one batch is fetched once, and both edges
+/// take the key the CAS stored its bytes under: the second edge has no
+/// bytes of its own to be named by.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_file_on_two_messages_in_a_batch_is_fetched_once_for_both() {
+    let t = Tree::new();
+    record_general(&t.api);
+    History::cold("C1")
+        .record(
+            &t.api,
+            json!([later_message_with_the_same_file(), message_with_file()]),
+        )
+        .unwrap();
+    t.serve();
+    serve_file(&t.playback, 200, BYTES);
+
+    let summary = fetch_into(&t.out, |o| FetchOptions { media: true, ..o })
+        .await
+        .unwrap();
+    assert_eq!(
+        summary.media.get("downloaded"),
+        Some(&1),
+        "{:?}",
+        summary.media
+    );
+    let edges = edges(&t.out).await;
+    assert_eq!(edges.len(), 2);
+    for (id, blake3) in &edges {
+        assert_eq!(blake3.as_deref(), Some(blake3_hex(BYTES).as_str()), "{id}");
+    }
+}
+
+/// A file a later run meets on a new message is not fetched again: its
+/// bytes are held, under the key an earlier run's edge records. Nothing
+/// serves the file in the later world, so a fetch would fail the edge.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_already_held_is_not_fetched_for_a_new_message() {
+    let t = first_world(200);
+    run(&t.out, None).await;
+    assert_eq!(attachment(&t.out).await, landed());
+
+    let later = Tree::new();
+    record_general(&later.api);
+    History {
+        inclusive: false,
+        ..History::from("C1", TS)
+    }
+    .record(&later.api, json!([later_message_with_the_same_file()]))
+    .unwrap();
+    later.serve();
+
+    let summary = fetch_into(&t.out, |o| FetchOptions { media: true, ..o })
+        .await
+        .unwrap();
+    // Counts of zero are left out: nothing downloaded, one edge held.
+    assert_eq!(
+        summary.media,
+        [("skipped".to_string(), 1)].into_iter().collect(),
+        "{:?}",
+        summary.media
+    );
+    let edges = edges(&t.out).await;
+    assert_eq!(edges.len(), 2);
+    for (id, blake3) in &edges {
+        assert_eq!(blake3.as_deref(), Some(blake3_hex(BYTES).as_str()), "{id}");
+    }
 }

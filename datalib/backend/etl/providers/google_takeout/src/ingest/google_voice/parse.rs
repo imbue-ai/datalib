@@ -382,14 +382,14 @@ mod tests {
     use super::*;
 
     const TEXT: &str = r#"<html><body><div class="hChatLog hfeed">
-<div class="message"><abbr class="dt" title="2019-08-01T14:49:00.742-07:00">Aug 1</abbr>:
-<cite class="sender vcard"><a class="tel" href="tel:+14102127741"><span class="fn">Wes Blackwell</span></a></cite>:
-<q>Hope you&#39;re well brother</q></div>
-<div class="message"><abbr class="dt" title="2019-08-01T15:03:59.672-07:00">Aug 1</abbr>:
-<cite class="sender vcard"><a class="tel" href="tel:+16506463903"><abbr class="fn" title="">Me</abbr></a></cite>:
-<q>Wow!<br>Multi-line</q></div>
-<div class="message"><abbr class="dt" title="2024-02-02T09:06:01.024-08:00">x</abbr>:
-<cite class="sender vcard"><a class="tel" href="tel:+12027687727"><span class="fn"></span></a></cite>:
+<div class="message"><abbr class="dt" title="2364-03-01T09:00:00.742-08:00">Mar 1</abbr>:
+<cite class="sender vcard"><a class="tel" href="tel:+12025550102"><span class="fn">William Riker</span></a></cite>:
+<q>Ready when you are, Captain&#39;s orders</q></div>
+<div class="message"><abbr class="dt" title="2364-03-01T09:14:59.672-08:00">Mar 1</abbr>:
+<cite class="sender vcard"><a class="tel" href="tel:+12025550100"><abbr class="fn" title="">Me</abbr></a></cite>:
+<q>Engage!<br>Multi-line</q></div>
+<div class="message"><abbr class="dt" title="2364-03-02T09:06:01.024-08:00">x</abbr>:
+<cite class="sender vcard"><a class="tel" href="tel:+12025550199"><span class="fn"></span></a></cite>:
 <q>MMS Received</q>
 <div><img src="img-ref-no-ext" alt="Image MMS Attachment" /></div></div>
 </div></body></html>"#;
@@ -398,14 +398,14 @@ mod tests {
     fn parses_text_thread() {
         let m = parse_chat_log(TEXT);
         assert_eq!(m.len(), 3);
-        assert_eq!(m[0].sender.tel.as_deref(), Some("+14102127741"));
-        assert_eq!(m[0].sender.name.as_deref(), Some("Wes Blackwell"));
+        assert_eq!(m[0].sender.tel.as_deref(), Some("+12025550102"));
+        assert_eq!(m[0].sender.name.as_deref(), Some("William Riker"));
         assert!(!m[0].is_me);
-        assert_eq!(m[0].body, "Hope you're well brother");
+        assert_eq!(m[0].body, "Ready when you are, Captain's orders");
         // sent-by-me + <br> → newline
         assert!(m[1].is_me);
-        assert_eq!(m[1].sender.tel.as_deref(), Some("+16506463903"));
-        assert_eq!(m[1].body, "Wow!\nMulti-line");
+        assert_eq!(m[1].sender.tel.as_deref(), Some("+12025550100"));
+        assert_eq!(m[1].body, "Engage!\nMulti-line");
         // attachment ref captured
         assert_eq!(m[2].attachments, vec!["img-ref-no-ext".to_string()]);
         assert_eq!(m[2].body, "MMS Received");
@@ -415,7 +415,7 @@ mod tests {
 </span>
 <div class="contributor vcard">Voicemail from
 <a class="tel" href="tel:+15551234567"><span class="fn">Jean-Luc Picard</span></a></div>
-<abbr class="published" title="2010-02-18T16:10:05.000-08:00">Feb 18</abbr>
+<abbr class="published" title="2364-02-18T16:10:05.000-08:00">Feb 18</abbr>
 Transcript:
 <span class="description"><span class="full-text">Make it so.</span></span>
 <audio controls="controls" src="vm.mp3"><a rel="enclosure" href="vm.mp3">Audio</a></audio>
@@ -427,7 +427,7 @@ Transcript:
         let e = parse_haudio(VM);
         assert_eq!(e.party.tel.as_deref(), Some("+15551234567"));
         assert_eq!(e.party.name.as_deref(), Some("Jean-Luc Picard"));
-        assert_eq!(e.published, "2010-02-18T16:10:05.000-08:00");
+        assert_eq!(e.published, "2364-02-18T16:10:05.000-08:00");
         assert_eq!(e.transcript.as_deref(), Some("Make it so."));
         assert_eq!(e.audio_src.as_deref(), Some("vm.mp3"));
         assert_eq!(e.duration.as_deref(), Some("PT13S"));
@@ -437,7 +437,7 @@ Transcript:
 </span>
 <div class="contributor vcard">Missed call from
 <a class="tel" href="tel:+15559998888"><span class="fn">Spammer</span></a></div>
-<abbr class="published" title="2009-03-06T09:50:34.000-08:00">Mar 6</abbr>
+<abbr class="published" title="2364-03-06T09:50:34.000-08:00">Mar 6</abbr>
 </div></body></html>"#;
 
     #[test]
@@ -445,7 +445,7 @@ Transcript:
         let e = parse_haudio(MISSED);
         assert_eq!(e.party.tel.as_deref(), Some("+15559998888"));
         assert_eq!(e.party.name.as_deref(), Some("Spammer"));
-        assert_eq!(e.published, "2009-03-06T09:50:34.000-08:00");
+        assert_eq!(e.published, "2364-03-06T09:50:34.000-08:00");
         assert!(e.transcript.is_none());
         assert!(e.audio_src.is_none());
     }

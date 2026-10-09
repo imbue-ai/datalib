@@ -58,7 +58,7 @@ describe("browseColumns", () => {
   /// than the unified default — the adaptive rule trims whichever of
   /// these the source leaves empty.
   it("falls back to a generic set for an unknown type", () => {
-    expect(browseColumns("brand_new_provider")).toContain("author");
+    expect(browseColumns("brand_new_provider")).toContain("author_ref");
   });
 
   /// Per-source columns that are only ever set on the handful of

@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 rust_library(
     name = "datalib_etl_chat_common",
     srcs = glob(
@@ -12,8 +10,10 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -28,6 +28,7 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_chat_common",
     edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
 )
 
 # Renders the `samples` corpus to `.md` for `//datalib/ui:chat_preview`

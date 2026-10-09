@@ -36,6 +36,7 @@ use datalib_dag::config::AppletEntry;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::embed::DocumentKind;
 use crate::watch::{RootEvent, RootFrame};
 
 /// The applet's own id, as the gateway knows it. The reference applet
@@ -56,6 +57,13 @@ pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
 /// process and to a web page that resolves its own hostname to 127.0.0.1.
 pub const ENV_APPLET_SECRET: &str = "DATALIB_APPLET_SECRET";
 pub const APPLET_SECRET_HEADER: &str = "X-Datalib-Applet-Secret";
+
+/// What an applet calls a document it serves, when it is one of the
+/// kinds [`crate::embed::DocumentKind`] names: the applet knows which of
+/// its files it wrote itself. A document without it is data and runs
+/// nothing. `datalib_applet::gate::DOCUMENT_HEADER` is the other
+/// spelling.
+pub const APPLET_DOCUMENT_HEADER: &str = "X-Datalib-Document";
 
 /// The prefix of the one line an applet prints to **stdout** once it
 /// has written its components and bound its port: the readiness
@@ -222,6 +230,8 @@ pub struct AppletRegistry {
     /// See [`ENV_APPLET_SECRET`]. One per registry, so every applet this
     /// process starts answers to the same one.
     secret: String,
+    /// Told after every write this gateway forwards: see [`crate::watch::Nudge`].
+    after_writes: std::sync::OnceLock<crate::watch::Nudge>,
 }
 
 fn mint_secret() -> String {
@@ -318,7 +328,13 @@ impl AppletRegistry {
             }),
             supervisor,
             secret,
+            after_writes: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Nudge the watch after every write forwarded from now on.
+    pub fn nudge_after_writes(&self, nudge: crate::watch::Nudge) {
+        let _ = self.after_writes.set(nudge);
     }
 
     pub fn from_data_root(data_root: &Path, binary_dir: Option<PathBuf>) -> Self {
@@ -481,19 +497,29 @@ impl AppletRegistry {
                 ))
             }
         };
-        forward(
+        let answer = forward(
             port,
             method,
             path_and_query,
             content_type,
             body,
             Some(&self.secret),
-        )
-        .map_err(|e| match e {
+        );
+        if answer.is_ok() && is_write(method) {
+            if let Some(nudge) = self.after_writes.get() {
+                nudge.an_applet_wrote();
+            }
+        }
+        answer.map_err(|e| match e {
             ProxyError::TimedOut(why) => ProxyError::TimedOut(format!("applet {id:?} {why}")),
             other => other,
         })
     }
+}
+
+/// Whether a request can have changed what an applet holds.
+fn is_write(method: &str) -> bool {
+    !matches!(method, "GET" | "HEAD" | "OPTIONS")
 }
 
 /// The whole frontend, as one document.
@@ -899,6 +925,9 @@ impl Drop for Supervisor {
 pub struct ProxyResponse {
     pub status: u16,
     pub content_type: String,
+    /// Read from [`APPLET_DOCUMENT_HEADER`]; a value this build does not
+    /// know reads as [`DocumentKind::Data`], the stricter policy.
+    pub document: DocumentKind,
     pub body: Vec<u8>,
 }
 
@@ -1074,16 +1103,21 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| format!("applet response has no status: {status_line:?}"))?;
     let mut content_type = "application/octet-stream".to_string();
+    let mut document = DocumentKind::Data;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-type") {
+            let k = k.trim();
+            if k.eq_ignore_ascii_case("content-type") {
                 content_type = v.trim().to_string();
+            } else if k.eq_ignore_ascii_case(APPLET_DOCUMENT_HEADER) {
+                document = DocumentKind::parse(v.trim()).unwrap_or_default();
             }
         }
     }
     Ok(ProxyResponse {
         status,
         content_type,
+        document,
         body,
     })
 }
@@ -1265,6 +1299,20 @@ mod tests {
             ProxyError::TimedOut("sent 17 bytes and then nothing for 0.2s".into())
         );
         applet.join().unwrap();
+    }
+
+    /// The applet names a plot page; a name this build does not know,
+    /// or none, leaves it data.
+    #[test]
+    fn the_document_kind_is_read_from_its_header() {
+        let plot =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nx-datalib-document: plot\r\n\r\n<p>";
+        assert_eq!(parse_response(plot).unwrap().document, DocumentKind::Plot);
+        let odd =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nX-Datalib-Document: trusted\r\n\r\n<p>";
+        assert_eq!(parse_response(odd).unwrap().document, DocumentKind::Data);
+        let none = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<p>";
+        assert_eq!(parse_response(none).unwrap().document, DocumentKind::Data);
     }
 
     #[test]

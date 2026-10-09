@@ -3,13 +3,14 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, keys_reading, Bucket, Input, Inputs, RawRange};
 use serde_json::Value;
@@ -29,7 +30,14 @@ use datalib_schema::providers::Provider;
 ///     bits (`datalib_id`'s v8 layout). The raw `connections` key is the
 ///     profile URL now, so an existing root resets and downloads again;
 ///     every uuid moved.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: a connection's page uses the shared contact labels — Org, Title,
+///     Email — rather than the export's column names.
+/// v7: a post of several lines loses the quotes the export puts around
+///     each line.
+/// v8: a connection's photo reaches the index as the URL the app serves
+///     it at.
+/// v9: a photo no browser draws (the SVG ghost avatar) has no URL.
+pub const RENDER_VERSION: u32 = 9;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -41,6 +49,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "LinkedIn Reaction".to_string(),
         chat_entity_kind: ids::KIND_CONVERSATION,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Plain,
     }
 }
 
@@ -79,13 +88,11 @@ pub fn render(
             let pin = db.pin().expect("a reader is pinned at open").clone();
             let mut loaded = Vec::new();
             for table in message_tables() {
-                // A feed the user didn't export has no table; treat a
-                // load error as "absent" rather than failing the render.
                 loaded.push((
                     table,
-                    datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), table)
+                    datalib_etl::doltlite_raw::load_payloads_with_id_if_present(db.pool(), table)
                         .await
-                        .unwrap_or_default(),
+                        .with_context(|| format!("load {table}"))?,
                 ));
             }
             let changed = changed_rows(db.pool(), range, &pin, &message_tables()).await?;
@@ -190,9 +197,7 @@ fn build_chats(
                 let id = ids::message(source_id, table, row_id, date_ms);
                 NormalizedChatItem {
                     message_uuid: id.uuid,
-                    author_id: nonempty(field(p, "SENDER PROFILE URL"))
-                        .unwrap_or(from)
-                        .to_string(),
+                    author_handle: None,
                     author_display: nonempty(from).unwrap_or("Unknown").to_string(),
                     date_ms,
                     text: nonempty(content).map(str::to_string),
@@ -205,7 +210,10 @@ fn build_chats(
                     kind_label: None,
                     source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                     is_aside: false,
+                    branch: Vec::new(),
                     unread: false,
+                    recipients: Vec::new(),
+                    mentions: Vec::new(),
                     problems,
                 }
             })
@@ -219,6 +227,7 @@ fn build_chats(
 
         let conversation = ids::conversation(source_id, table, &conv);
         chats.push(NormalizedChat {
+            contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
             id: format!("{table}:{conv}"),

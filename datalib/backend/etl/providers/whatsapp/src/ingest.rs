@@ -10,7 +10,7 @@
 //! `NamedTempFile` dropped at the end, and media are read in place from
 //! `backup_dir/Media/`, which WhatsApp already stores in the clear.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -20,9 +20,12 @@ use std::str::FromStr;
 
 use datalib_etl::blob_cas::{BlobCas, CasInsert};
 use datalib_etl::doltlite_raw;
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
+use datalib_etl::download_problems::RecordProblem;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 use datalib_whatsapp_backup::decrypt_file;
 
@@ -118,6 +121,23 @@ pub async fn fetch(
     knobs: &MirrorKnobs,
     progress: &Progress,
 ) -> Result<IngestSummary> {
+    // The mirror has no stop to honour, so it always reads the whole backup.
+    let never_stops = StopFlag::new();
+    run_problems::collecting(db.pool(), &never_stops, |found| {
+        read_backup(backup_dir, root_key, db, cache, knobs, progress, found)
+    })
+    .await
+}
+
+async fn read_backup(
+    backup_dir: &Path,
+    root_key: &[u8; 32],
+    db: &RawDb,
+    cache: &FingerprintCache,
+    knobs: &MirrorKnobs,
+    progress: &Progress,
+    found: RunProblems,
+) -> Result<IngestSummary> {
     let crypt_path = backup_dir.join("Databases").join("msgstore.db.crypt15");
     tracing::info!(crypt_path = %crypt_path.display(), "whatsapp::ingest start");
 
@@ -145,15 +165,36 @@ pub async fn fetch(
         ..MirrorOptions::new(tmp.path())
     };
     let mut summary = IngestSummary {
-        mirror: mirror::run(db.pool(), &options, progress).await?,
+        mirror: mirror::run_or_report(db.pool(), &options, progress, &found)
+            .await?
+            .unwrap_or_default(),
         media_files: 0,
         contacts: None,
     };
     drop(tmp);
 
+    mirror_beside_msgstore(backup_dir, root_key, db, cache, &mut summary, &found).await?;
+    tracing::info!(summary = %summary.summary(), "whatsapp::ingest done");
+    Ok(summary)
+}
+
+/// What the backup holds beside msgstore: `wa.db`'s contacts and `Media/`.
+/// One that will not read is a `problems` row, and what an earlier run
+/// stored of it stays; msgstore itself is mirrored by then.
+async fn mirror_beside_msgstore(
+    backup_dir: &Path,
+    root_key: &[u8; 32],
+    db: &RawDb,
+    cache: &FingerprintCache,
+    summary: &mut IngestSummary,
+    found: &RunProblems,
+) -> Result<()> {
     let wa_db = backup_dir.join(WA_DB_BACKUP);
     if wa_db.is_file() {
-        summary.contacts = Some(copy_contacts(db.pool(), &wa_db, root_key).await?);
+        match read_wa_db_contacts(&wa_db, root_key).await {
+            Ok(rows) => summary.contacts = Some(store_contacts(db.pool(), &rows).await?),
+            Err(e) => found.phase("wa.db contacts", format!("{e:#}")),
+        }
     } else {
         // Like a missing `Media/`: a copy of the backup made without
         // `Backups/` says nothing about the contacts, so the ones stored
@@ -166,23 +207,23 @@ pub async fn fetch(
 
     let media_root = backup_dir.join(MEDIA_DIR);
     if media_root.is_dir() {
-        mirror_media_files(db.pool(), db.cas(), &media_root, cache, &mut summary).await?;
+        mirror_media_files(db.pool(), db.cas(), &media_root, cache, summary, found).await?;
     } else {
         tracing::info!(
             media_root = %media_root.display(),
             "whatsapp::ingest: no Media/ dir; skipping media-file registry"
         );
     }
-
-    tracing::info!(summary = %summary.summary(), "whatsapp::ingest done");
-    Ok(summary)
+    Ok(())
 }
 
-/// Decrypt `wa.db` to a tempfile and drop-and-refill `wa_db_contacts` from
-/// its `wa_contacts`, every column as JSON (see
-/// [`crate::schema_raw::WA_DB_CONTACTS_DDL`]). Read through one plain
-/// connection, closed before returning. Returns the rows copied.
-async fn copy_contacts(dst: &SqlitePool, crypt_path: &Path, root_key: &[u8; 32]) -> Result<u64> {
+/// Decrypt `wa.db` to a tempfile and read its `wa_contacts`, every column
+/// as JSON (see [`crate::schema_raw::WA_DB_CONTACTS_DDL`]), through one
+/// plain connection closed before returning.
+async fn read_wa_db_contacts(
+    crypt_path: &Path,
+    root_key: &[u8; 32],
+) -> Result<Vec<(String, String)>> {
     let plaintext = decrypt_file(crypt_path, root_key)
         .with_context(|| format!("decrypt {}", crypt_path.display()))?;
     let tmp = tempfile::Builder::new()
@@ -202,14 +243,17 @@ async fn copy_contacts(dst: &SqlitePool, crypt_path: &Path, root_key: &[u8; 32])
         .context("open decrypted wa.db")?;
     let rows = read_contacts(&mut src).await;
     let _ = src.close().await;
-    let rows = rows?;
+    rows
+}
 
+/// Drop-and-refill `wa_db_contacts`. Returns the rows copied.
+async fn store_contacts(dst: &SqlitePool, rows: &[(String, String)]) -> Result<u64> {
     let mut tx = dst.begin().await.context("begin wa_db_contacts tx")?;
     sqlx::query("DELETE FROM wa_db_contacts")
         .execute(&mut *tx)
         .await
         .context("clear wa_db_contacts")?;
-    for (jid, contact_rows) in &rows {
+    for (jid, contact_rows) in rows {
         sqlx::query("INSERT INTO wa_db_contacts (jid, rows) VALUES (?, ?)")
             .bind(jid)
             .bind(contact_rows)
@@ -272,7 +316,10 @@ async fn read_contacts(src: &mut SqliteConnection) -> Result<Vec<(String, String
 /// One scan of `Media/` produces path, size and hash without opening a file,
 /// because the host fingerprint cache vouches for anything whose stat has not
 /// moved; bytes are read only for hashes the CAS lacks, in bounded batches.
-/// A real `Media/` folder is gigabytes.
+/// A real `Media/` folder is gigabytes. The scan's hash only decides what to
+/// skip: a file it misjudged, rewritten with its mtime put back or changed
+/// after the scan read it, is registered under the key the CAS gave the
+/// bytes actually read.
 ///
 /// Dot-prefixed entries (`.Thumbs`, `.Shared`, `.trash`, `.wamocache`) are
 /// WhatsApp's own scratch state, not message media.
@@ -282,6 +329,7 @@ async fn mirror_media_files(
     media_root: &Path,
     cache: &FingerprintCache,
     summary: &mut IngestSummary,
+    found: &RunProblems,
 ) -> Result<()> {
     let scan = fsscan::scan(
         cache,
@@ -293,31 +341,122 @@ async fn mirror_media_files(
         |_| true,
     )
     .await?;
-    for e in &scan.errors {
+    scan.report_problems(found, "media");
+
+    // Bytes first, only for hashes the CAS does not already hold, so the
+    // registry below can name each file by the key its bytes went in
+    // under. Through the caller's handle: opening one here would be a
+    // second opener for a store the handle already owns.
+    let known: HashSet<String> = sqlx::query_scalar("SELECT blake3 FROM cas_objects")
+        .fetch_all(cas.pool())
+        .await
+        .context("read cas_objects blake3s")?
+        .into_iter()
+        .collect();
+
+    // `(hash, problem)`: a copy of the same bytes elsewhere may still read.
+    let mut unreadable: Vec<(String, RecordProblem)> = Vec::new();
+    // Scan hash → the file read for it, whose key its copies take.
+    let mut staged: HashMap<String, String> = HashMap::new();
+    // `rel → (key, size)` for every file this run read.
+    let mut stored: HashMap<String, (String, i64)> = HashMap::new();
+    let mut pending: Vec<(String, Vec<u8>, Option<String>)> = Vec::new();
+    let mut pending_bytes: u64 = 0;
+    for f in &scan.files {
+        let hex = fsscan::hex(&f.blake3);
+        if known.contains(&hex) || staged.contains_key(&hex) {
+            continue;
+        }
+        let bytes = match std::fs::read(&f.path) {
+            Ok(b) => b,
+            Err(e) => {
+                let problem = RecordProblem::new(
+                    WA_MEDIA_FILES,
+                    &format!("{MEDIA_DIR}/{}", f.rel),
+                    e.to_string(),
+                );
+                unreadable.push((hex, problem));
+                continue;
+            }
+        };
+        staged.insert(hex, f.rel.clone());
+        pending_bytes += bytes.len() as u64;
+        pending.push((f.rel.clone(), bytes, mime_from_ext(&f.path)));
+        if pending_bytes >= PUT_BATCH_BYTES {
+            stored.extend(put_media_batch(cas, &pending).await?);
+            pending.clear();
+            pending_bytes = 0;
+        }
+    }
+    stored.extend(put_media_batch(cas, &pending).await?);
+    let misjudged = scan
+        .files
+        .iter()
+        .filter(|f| {
+            stored
+                .get(&f.rel)
+                .is_some_and(|(key, _)| *key != fsscan::hex(&f.blake3))
+        })
+        .count();
+    if misjudged > 0 {
         tracing::warn!(
-            event = "wa_media_walk_error",
-            path = %e.path.display(),
-            error = %e.error,
-            "an entry of the media directory could not be walked"
+            files = misjudged,
+            "media bytes read differ from the scan's hash; registered under the hash of what was read"
         );
     }
 
     // Drop-and-refill, like the mirrored tables: a byte-identical refill
     // is not a change to doltlite, and a file gone from `Media/` goes
-    // from the registry.
+    // from the registry. Not after a walk that could not read part of the
+    // tree: the files under it are not gone. A file there and unread
+    // keeps the row it had.
     let mut tx = dst.begin().await.context("begin wa_media_files tx")?;
-    sqlx::query("DELETE FROM wa_media_files")
-        .execute(&mut *tx)
-        .await
-        .context("clear wa_media_files")?;
-    for f in &scan.files {
+    let mut kept: Vec<(String, String, i64, Option<String>)> = Vec::new();
+    for rel in &scan.present_unread {
+        kept.extend(
+            sqlx::query_as(
+                "SELECT blake3, relative_path, size_bytes, mime_type \
+                 FROM wa_media_files WHERE relative_path = ?",
+            )
+            .bind(format!("{MEDIA_DIR}/{rel}"))
+            .fetch_optional(&mut *tx)
+            .await
+            .context("read the row of an unread media file")?,
+        );
+    }
+    if scan.errors.is_empty() {
+        sqlx::query("DELETE FROM wa_media_files")
+            .execute(&mut *tx)
+            .await
+            .context("clear wa_media_files")?;
+    }
+    for (blake3, relative_path, size, mime_type) in &kept {
         sqlx::query(
             "INSERT OR IGNORE INTO wa_media_files \
                 (blake3, relative_path, size_bytes, mime_type) VALUES (?, ?, ?, ?)",
         )
-        .bind(fsscan::hex(&f.blake3))
+        .bind(blake3)
+        .bind(relative_path)
+        .bind(size)
+        .bind(mime_type)
+        .execute(&mut *tx)
+        .await
+        .context("keep the row of an unread media file")?;
+    }
+    for f in &scan.files {
+        let hex = fsscan::hex(&f.blake3);
+        let read_as = staged.get(&hex).unwrap_or(&f.rel);
+        let (blake3, size) = match stored.get(read_as) {
+            Some((key, size)) => (key.clone(), *size),
+            None => (hex, f.size),
+        };
+        sqlx::query(
+            "INSERT OR IGNORE INTO wa_media_files \
+                (blake3, relative_path, size_bytes, mime_type) VALUES (?, ?, ?, ?)",
+        )
+        .bind(blake3)
         .bind(format!("{MEDIA_DIR}/{}", f.rel))
-        .bind(f.size)
+        .bind(size)
         .bind(mime_from_ext(&f.path))
         .execute(&mut *tx)
         .await
@@ -326,64 +465,44 @@ async fn mirror_media_files(
     tx.commit().await.context("commit wa_media_files tx")?;
     summary.media_files = scan.files.len() as u64;
 
-    // Bytes: only for hashes the CAS does not already hold. Through the
-    // caller's handle: opening one here would be a second opener for a
-    // store the handle already owns.
-    let known: HashSet<String> = sqlx::query_scalar("SELECT blake3 FROM cas_objects")
-        .fetch_all(cas.pool())
-        .await
-        .context("read cas_objects blake3s")?
-        .into_iter()
-        .collect();
-
-    let mut staged: HashSet<String> = HashSet::new();
-    let mut pending: Vec<(String, Vec<u8>, Option<String>)> = Vec::new();
-    let mut pending_bytes: u64 = 0;
-    for f in &scan.files {
-        let hex = fsscan::hex(&f.blake3);
-        if known.contains(&hex) || !staged.insert(hex.clone()) {
-            continue;
-        }
-        let bytes = match std::fs::read(&f.path) {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!(
-                    event = "wa_media_unreadable",
-                    path = %f.path.display(),
-                    error = %e,
-                    "a media file could not be read"
-                );
-                continue;
-            }
-        };
-        pending_bytes += bytes.len() as u64;
-        pending.push((hex, bytes, mime_from_ext(&f.path)));
-        if pending_bytes >= PUT_BATCH_BYTES {
-            put_media_batch(cas, &pending).await?;
-            pending.clear();
-            pending_bytes = 0;
-        }
-    }
-    put_media_batch(cas, &pending).await?;
-
+    found.records_failed(
+        unreadable
+            .into_iter()
+            .filter(|(hex, _)| !staged.contains_key(hex))
+            .map(|(_, problem)| problem),
+    );
+    // Every run reads again whatever the CAS still lacks, so a row stands
+    // only on a file under a folder this walk could not list.
+    let unseen = scan.unseen();
+    found.records_tried_all_but(WA_MEDIA_FILES, move |id| {
+        id.strip_prefix(MEDIA_DIR)
+            .and_then(|rel| rel.strip_prefix('/'))
+            .is_some_and(&unseen)
+    });
     Ok(())
 }
 
-async fn put_media_batch(cas: &BlobCas, items: &[(String, Vec<u8>, Option<String>)]) -> Result<()> {
-    if items.is_empty() {
-        return Ok(());
-    }
-    let inserts: Vec<CasInsert<'_>> = items
+/// `rel → (key, size)` for each `(rel, bytes, content type)` stored.
+async fn put_media_batch(
+    cas: &BlobCas,
+    items: &[(String, Vec<u8>, Option<String>)],
+) -> Result<HashMap<String, (String, i64)>> {
+    let inserts: Vec<CasInsert<'_, &str>> = items
         .iter()
-        .map(|(h, b, ct)| CasInsert {
-            blake3: h.as_str(),
+        .map(|(rel, b, ct)| CasInsert {
+            id: rel.as_str(),
             bytes: b.as_slice(),
             content_type: ct.as_deref(),
         })
         .collect();
-    cas.put_many(&inserts)
+    let keys = cas
+        .put_many(inserts)
         .await
-        .context("blob_cas put_many wa_media_files")
+        .context("blob_cas put_many wa_media_files")?;
+    Ok(items
+        .iter()
+        .map(|(rel, b, _)| (rel.clone(), (keys[rel.as_str()].clone(), b.len() as i64)))
+        .collect())
 }
 
 fn mime_from_ext(path: &Path) -> Option<String> {
@@ -434,9 +553,17 @@ mod tests {
             .await
             .expect("open fingerprint cache");
         let mut summary = IngestSummary::default();
-        mirror_media_files(db.pool(), db.cas(), &media_root, &cache, &mut summary)
-            .await
-            .expect("mirror media");
+        let found = RunProblems::unwritten();
+        mirror_media_files(
+            db.pool(),
+            db.cas(),
+            &media_root,
+            &cache,
+            &mut summary,
+            &found,
+        )
+        .await
+        .expect("mirror media");
 
         let paths: Vec<String> =
             sqlx::query_scalar("SELECT relative_path FROM wa_media_files ORDER BY relative_path")
@@ -448,6 +575,396 @@ mod tests {
         // Exactly the string msgstore stores in `message_media.file_path`.
         assert_eq!(paths, vec!["Media/WhatsApp Images/IMG-0001.jpg"]);
         assert_eq!(summary.media_files, 1);
+    }
+
+    /// The half of a fetch after msgstore, its problems written as a
+    /// fetch writes them.
+    async fn mirror_beside_msgstore(
+        backup_dir: &Path,
+        root_key: &[u8; 32],
+        db: &RawDb,
+        cache: &FingerprintCache,
+        summary: &mut IngestSummary,
+    ) -> Result<()> {
+        run_problems::collecting(db.pool(), &StopFlag::new(), |found| async move {
+            super::mirror_beside_msgstore(backup_dir, root_key, db, cache, summary, &found).await
+        })
+        .await
+    }
+
+    async fn problems(db: &RawDb) -> Vec<(String, String)> {
+        sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+            .fetch_all(db.pool())
+            .await
+            .expect("read problems")
+    }
+
+    async fn registry(db: &RawDb) -> Vec<String> {
+        sqlx::query_scalar("SELECT relative_path FROM wa_media_files ORDER BY relative_path")
+            .fetch_all(db.pool())
+            .await
+            .expect("read wa_media_files")
+    }
+
+    /// `path` set to `mode`; `false` when that left it readable, as it does
+    /// for root in a container.
+    #[cfg(unix)]
+    fn set_mode(path: &Path, mode: u32) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+        std::fs::read_dir(path).is_err() && std::fs::read(path).is_err()
+    }
+
+    fn write_media(backup_dir: &Path, rel: &str, bytes: &[u8]) {
+        let path = backup_dir.join(MEDIA_DIR).join(rel);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(path, bytes).expect("write media file");
+    }
+
+    /// A walk that could not list part of `Media/` still dropped the whole
+    /// registry and refilled it from what it saw, so every file under the
+    /// unreadable folder left the registry, and only a log line said why.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_media_folder_that_will_not_list_deletes_nothing() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        write_media(&backup_dir, "WhatsApp Images/IMG-1701.jpg", b"enterprise");
+        write_media(
+            &backup_dir,
+            "WhatsApp Video/VID-1701.mp4",
+            b"saucer separation",
+        );
+        let db = RawDb::open(&tmp.path().join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+        let run = || async {
+            mirror_beside_msgstore(
+                &backup_dir,
+                &[0u8; 32],
+                &db,
+                &cache,
+                &mut Default::default(),
+            )
+            .await
+            .expect("ingest beside msgstore");
+        };
+        run().await;
+        let both = registry(&db).await;
+        assert_eq!(both.len(), 2);
+
+        let video = backup_dir.join(MEDIA_DIR).join("WhatsApp Video");
+        if set_mode(&video, 0o000) {
+            run().await;
+            assert_eq!(
+                registry(&db).await,
+                both,
+                "a file it could not see is not gone"
+            );
+            assert_eq!(
+                problems(&db).await,
+                vec![("listing:media".into(), "error".into())]
+            );
+        }
+        set_mode(&video, 0o755);
+        run().await;
+        assert!(problems(&db).await.is_empty());
+        db.close().await;
+    }
+
+    /// A media file that will not open keeps its registry row while one
+    /// deleted beside it loses its own. It was a walk error, which kept
+    /// every row; then, once it was not, the refill dropped its row too.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_media_file_that_will_not_open_keeps_its_registry_row() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        write_media(&backup_dir, "WhatsApp Images/IMG-0010.jpg", b"phaser");
+        write_media(&backup_dir, "WhatsApp Images/IMG-0011.jpg", b"tricorder");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+        let db = RawDb::open(&tmp.path().join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &db,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+
+        let images = backup_dir.join(MEDIA_DIR).join("WhatsApp Images");
+        std::fs::remove_file(images.join("IMG-0011.jpg")).expect("rm");
+        let locked = images.join("IMG-0010.jpg");
+        if set_mode(&locked, 0o000) {
+            mirror_beside_msgstore(
+                &backup_dir,
+                &[0u8; 32],
+                &db,
+                &cache,
+                &mut Default::default(),
+            )
+            .await
+            .expect("ingest beside msgstore");
+            let paths: Vec<String> = sqlx::query_scalar(
+                "SELECT relative_path FROM wa_media_files ORDER BY relative_path",
+            )
+            .fetch_all(db.pool())
+            .await
+            .expect("read registry");
+            assert_eq!(paths, ["Media/WhatsApp Images/IMG-0010.jpg"]);
+            assert_eq!(
+                problems(&db).await,
+                vec![(
+                    "record:media:WhatsApp Images/IMG-0010.jpg".into(),
+                    "error".into()
+                )]
+            );
+        }
+        set_mode(&locked, 0o644);
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &db,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+        assert!(problems(&db).await.is_empty());
+        db.close().await;
+    }
+
+    /// A media file whose bytes would not read was a log line, and the
+    /// message that names it rendered as "not yet fetched" with nothing
+    /// to say why.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_media_file_that_will_not_read_is_a_problem_until_it_does() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        write_media(&backup_dir, "WhatsApp Images/IMG-1701.jpg", b"enterprise");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+        // A first store, so the host cache vouches for the file's hash and
+        // the next walk does not open it.
+        // Its own folder: a store's blob CAS is the folder's.
+        let first = RawDb::open(&tmp.path().join("first").join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &first,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+        first.close().await;
+
+        let db = RawDb::open(&tmp.path().join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        let file = backup_dir
+            .join(MEDIA_DIR)
+            .join("WhatsApp Images/IMG-1701.jpg");
+        if set_mode(&file, 0o000) {
+            cache.restamp_for_test(&file).await.expect("restamp");
+            mirror_beside_msgstore(
+                &backup_dir,
+                &[0u8; 32],
+                &db,
+                &cache,
+                &mut Default::default(),
+            )
+            .await
+            .expect("ingest beside msgstore");
+            assert_eq!(
+                problems(&db).await,
+                vec![(
+                    "record:wa_media_files:Media/WhatsApp Images/IMG-1701.jpg".into(),
+                    "error".into()
+                )]
+            );
+        }
+        set_mode(&file, 0o644);
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &db,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+        assert!(problems(&db).await.is_empty());
+        db.close().await;
+    }
+
+    /// A media file rewritten under a hash the host cache still vouched for
+    /// went into the CAS under the old bytes' hash: a key naming other
+    /// bytes, kept for good by `INSERT OR IGNORE`. It goes in, and into the
+    /// registry, under the hash of what was read.
+    #[tokio::test]
+    async fn bytes_the_scan_misjudged_are_stored_under_their_own_hash() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        write_media(&backup_dir, "WhatsApp Images/IMG-0047.jpg", b"AAAA");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+        let first = RawDb::open(&tmp.path().join("first").join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &first,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+        first.close().await;
+
+        let file = backup_dir
+            .join(MEDIA_DIR)
+            .join("WhatsApp Images/IMG-0047.jpg");
+        std::fs::write(&file, b"BBBB").expect("rewrite");
+        cache.restamp_for_test(&file).await.expect("restamp");
+
+        let db = RawDb::open(&tmp.path().join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &db,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+        let stored: Vec<(String, Vec<u8>)> =
+            sqlx::query_as("SELECT blake3, bytes FROM cas_objects")
+                .fetch_all(db.cas().pool())
+                .await
+                .expect("read cas");
+        let bbbb = datalib_etl::blob_cas::blake3_hex(b"BBBB");
+        assert_eq!(stored, [(bbbb.clone(), b"BBBB".to_vec())]);
+        let registered: String = sqlx::query_scalar("SELECT blake3 FROM wa_media_files")
+            .fetch_one(db.pool())
+            .await
+            .expect("read registry");
+        assert_eq!(registered, bbbb);
+        db.close().await;
+    }
+
+    /// One unreadable copy of a file kept a readable copy of the same bytes
+    /// from being read, so the bytes never reached the CAS.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unreadable_copy_does_not_block_a_readable_one() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        write_media(&backup_dir, "WhatsApp Images/IMG-0001.jpg", b"tribble");
+        write_media(&backup_dir, "WhatsApp Images/IMG-0002.jpg", b"tribble");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+        // A first store, so the host cache vouches for both hashes.
+        let first = RawDb::open(&tmp.path().join("first").join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &first,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+        first.close().await;
+
+        let db = RawDb::open(&tmp.path().join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        let file = backup_dir
+            .join(MEDIA_DIR)
+            .join("WhatsApp Images/IMG-0001.jpg");
+        if set_mode(&file, 0o000) {
+            cache.restamp_for_test(&file).await.expect("restamp");
+            mirror_beside_msgstore(
+                &backup_dir,
+                &[0u8; 32],
+                &db,
+                &cache,
+                &mut Default::default(),
+            )
+            .await
+            .expect("ingest beside msgstore");
+            assert!(problems(&db).await.is_empty());
+            let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM cas_objects")
+                .fetch_one(db.cas().pool())
+                .await
+                .expect("count cas");
+            assert_eq!(stored, 1);
+        }
+        set_mode(&file, 0o644);
+        db.close().await;
+    }
+
+    /// A `wa.db` that would not decrypt failed the step after msgstore
+    /// had been mirrored. It is a row now, and the stored names stay.
+    #[tokio::test]
+    async fn a_wa_db_that_will_not_read_keeps_the_stored_contacts() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        let crypt = backup_dir.join(WA_DB_BACKUP);
+        std::fs::create_dir_all(crypt.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&crypt, b"not a crypt15 file, Captain").expect("write wa.db");
+        let db = RawDb::open(&tmp.path().join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        store_contacts(
+            db.pool(),
+            &[(
+                "1701@s.whatsapp.net".into(),
+                "[{\"display_name\":\"Data\"}]".into(),
+            )],
+        )
+        .await
+        .expect("store a contact");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+
+        let mut summary = IngestSummary::default();
+        mirror_beside_msgstore(&backup_dir, &[0u8; 32], &db, &cache, &mut summary)
+            .await
+            .expect("a wa.db that will not read does not fail the run");
+        assert_eq!(summary.contacts, None);
+        let kept: Vec<String> = sqlx::query_scalar("SELECT jid FROM wa_db_contacts")
+            .fetch_all(db.pool())
+            .await
+            .expect("read contacts");
+        assert_eq!(kept, vec!["1701@s.whatsapp.net".to_string()]);
+        assert_eq!(
+            problems(&db).await,
+            vec![("phase:wa.db contacts".into(), "error".into())]
+        );
+        db.close().await;
     }
 
     /// End-to-end against the developer's real WhatsApp backup.

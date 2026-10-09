@@ -4,7 +4,7 @@
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::BulkUpsertable as _;
-use datalib_etl_chat_common::render::RenderProfile;
+use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChatItem, UpstreamRef,
 };
@@ -18,7 +18,8 @@ use serde_json::Value;
 /// v2: ids are minted through `datalib_id`, every row carries its
 ///     backpointer, and an item's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved.
-pub const RENDER_VERSION: u32 = 3;
+/// v4: the comments and reactions feeds are one document per year.
+pub const RENDER_VERSION: u32 = 4;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
@@ -28,6 +29,7 @@ pub fn profile(
     chat_kind: &str,
     message_kind: &str,
     chat_entity_kind: &'static str,
+    text_format: TextFormat,
 ) -> RenderProfile {
     RenderProfile {
         stamp_precision: crate::ids::STAMP_PRECISION,
@@ -38,6 +40,7 @@ pub fn profile(
         reaction_kind: "Facebook Reaction".to_string(),
         chat_entity_kind,
         render_version: RENDER_VERSION,
+        text_format,
     }
 }
 
@@ -56,13 +59,6 @@ pub fn ts_ms(v: &Value, key: &str) -> Option<i64> {
         .and_then(Value::as_i64)
         .filter(|s| *s > 0)
         .map(|s| s * 1000)
-}
-
-pub fn month_of(ms: Option<i64>) -> String {
-    use chrono::TimeZone;
-    ms.and_then(|ms| chrono::Utc.timestamp_millis_opt(ms).single())
-        .map(|d| d.format("%Y-%m").to_string())
-        .unwrap_or_else(|| "undated".to_string())
 }
 
 /// `data[]` entries are one-key objects; this is every entry's `key`.
@@ -150,11 +146,10 @@ pub fn media_caption(media: &Value, album_name: Option<&str>) -> Option<String> 
         .map(strip_mentions)
 }
 
-/// One item of a feed, as `author_id` wrote it: an attachment item when
-/// it carries any, else a text one.
+/// One item of a feed: an attachment item when it carries any, else a
+/// text one.
 pub fn chat_item(
     item_id: Identity,
-    author_id: String,
     author_display: String,
     date_ms: Option<i64>,
     text: Option<String>,
@@ -162,7 +157,7 @@ pub fn chat_item(
 ) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: item_id.uuid,
-        author_id,
+        author_handle: None,
         author_display,
         date_ms,
         text,
@@ -179,7 +174,10 @@ pub fn chat_item(
         kind_label: None,
         source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
         is_aside: false,
+        branch: Vec::new(),
         unread: false,
+        recipients: Vec::new(),
+        mentions: Vec::new(),
         problems: Vec::new(),
     }
 }
@@ -246,7 +244,6 @@ mod tests {
         assert_eq!(ts_ms(&json!({"timestamp": 0}), "timestamp"), None);
         assert_eq!(ts_ms(&json!({"timestamp": 12}), "timestamp"), Some(12_000));
         assert_eq!(ts_ms(&json!({}), "timestamp"), None);
-        assert_eq!(month_of(None), "undated");
     }
 
     #[test]

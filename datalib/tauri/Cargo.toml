@@ -6,9 +6,9 @@ rust-version = "1.83"
 publish = false
 license = "MIT"
 
-# Standalone workspace, deliberately NOT a member of datalib/backend's
-# workspace: Bazel's crate_universe (`crate.from_cargo` in MODULE.bazel)
-# ingests that workspace, and the tauri dependency tree is cargo-only.
+# Standalone workspace, deliberately apart from datalib/backend/Cargo.toml:
+# Bazel's crate_universe (`crate.from_cargo` in MODULE.bazel) resolves
+# that one, and the tauri dependency tree is cargo-only.
 # This crate is driven by `cargo tauri` / `pnpm dlx @tauri-apps/cli`, not
 # Bazel — see README.md.
 #
@@ -35,6 +35,8 @@ anyhow = "1.0"
 # lock as a transitive tauri dep; named directly here because the
 # launcher reads and writes that file itself.
 serde_json = "1.0"
+# Reopens the main window at its last size.
+tauri-plugin-window-state = "2"
 
 # Which app the OS would open a raw store with (`src/raw_store.rs`).
 # Both are already in the lock under tauri-plugin-opener, which turns on

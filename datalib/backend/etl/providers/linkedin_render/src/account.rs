@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datalib_etl_render::inputs::{Input, RawRange};
 use serde_json::Value;
 
@@ -33,15 +33,16 @@ pub fn load_account(raw_dir: &Path, range: RawRange<'_>) -> Result<Account> {
             let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
                 return Ok(Account::default());
             };
-            // Either file can be absent from an export; a missing table
-            // is "unknown", not a failed render.
-            let emails =
-                datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "email_addresses")
+            let emails = datalib_etl::doltlite_raw::load_payloads_with_id_if_present(
+                db.pool(),
+                "email_addresses",
+            )
+            .await
+            .context("load email_addresses")?;
+            let profile =
+                datalib_etl::doltlite_raw::load_payloads_with_id_if_present(db.pool(), "profile")
                     .await
-                    .unwrap_or_default();
-            let profile = datalib_etl::doltlite_raw::load_payloads_with_id(db.pool(), "profile")
-                .await
-                .unwrap_or_default();
+                    .context("load profile")?;
             db.close().await;
             let inputs = emails
                 .iter()

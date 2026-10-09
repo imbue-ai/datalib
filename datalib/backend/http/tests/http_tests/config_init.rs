@@ -140,3 +140,24 @@ async fn put_writes_the_config_owner_only() {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_owner_only(&tmp.path().join("config.toml"));
 }
+
+/// `datalib-http --init`, for a library the desktop app just created:
+/// the starter config goes into a root that does not exist yet, once,
+/// and a config already there is left alone.
+#[test]
+fn write_starter_config_writes_once_and_keeps_an_existing_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("Datalib").join("Default");
+
+    assert!(datalib_http::write_starter_config(&root).unwrap());
+    let written = std::fs::read_to_string(root.join("config.toml")).unwrap();
+    assert!(written.contains("unified_index"), "{written}");
+    assert_owner_only(&root.join("config.toml"));
+
+    std::fs::write(root.join("config.toml"), "steps = []\n").unwrap();
+    assert!(!datalib_http::write_starter_config(&root).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(root.join("config.toml")).unwrap(),
+        "steps = []\n"
+    );
+}

@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Render half of the `linkedin` provider. This is the side that knows
 # `datalib_schema`; //datalib/backend/etl/providers/linkedin is the
 # download half and deliberately does not.
@@ -16,6 +14,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
         "//datalib/backend/etl/providers/linkedin:datalib_etl_linkedin",
         "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",
@@ -37,5 +36,7 @@ rust_test(
     crate = ":datalib_etl_linkedin_render",
     edition = "2021",
     deps = [
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
     ],
 )

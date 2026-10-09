@@ -25,8 +25,53 @@ fingerprint cache spares re-hashing it. Pinned by
 `rescan_reuses_hashes_and_is_idempotent` in `tests/pdf_e2e.rs`: a
 rescan hashes nothing and still retries the corrupt fixture.
 
-A scan truncates `pdf_paths` up front and rebuilds it, so deletions fall
-out; content already in `pdf_documents` is not identified again.
+A scan truncates `pdf_paths` once the walk is done and rebuilds it, so
+deletions fall out; content already in `pdf_documents` is not
+identified again. A file over `max_bytes` is there and not read, so it
+keeps the path row the last scan wrote. Once the paths are rebuilt
+after a clean walk, a document no path names goes with its bookkeeping
+(`documents_removed`); a file moved within the tree is named at its new
+path by then and keeps its document.
+
+A row's `_bookkeeping` sidecar is stamped the first time a scan writes
+the row and left alone after; a path's survives the truncate and goes
+when the path does (`RawDb::prune_unnamed`). So scanning an unchanged
+tree again commits nothing
+(`a_second_scan_of_an_unchanged_tree_commits_nothing`), the corrupt
+fixture's `problems` row included: a problem recorded again unchanged
+keeps its stamps.
+
+## When part of a scan fails
+
+The scan goes on, and what it could not do is a `problems` row:
+
+- **An entry the walk could not read** (a folder it may not list, a
+  dangling link) means a path the walk did
+  not see may only be one it could not see, so **that scan does not
+  truncate `pdf_paths`**: what it saw is upserted over what was there
+  and nothing falls out. It leaves a `listing:files` row; the next
+  clean walk truncates as usual and clears it
+  (`a_walk_with_errors_drops_no_path`).
+- **A file that would not open** is `record:files:<path>`. It is
+  there, so it keeps its path row and holds back no other deletion; the
+  row goes the scan it opens.
+- **A document that would not identify** is
+  `record:pdf_paths:<path>`, with what the parser said. It is retried
+  every scan (above), and the scan that identifies it clears the row; a
+  scan that cannot see it (under an entry its walk could not read) keeps
+  it.
+  The fixture's `holodeck/corrupt.pdf` is one, on purpose. No grid row
+  carries it: a document that never identified never renders.
+- **A file that changed after its hash was taken.** The scan's hash only
+  decides whether to look; a document read is named by the hash of the
+  bytes it was classified from
+  (`a_document_the_scan_misjudged_is_named_by_what_was_read`). Render
+  converts only bytes that hash to the document. A file that no longer
+  does renders as a stand-in: its document row, a page saying its pages
+  are missing, and a `problems` row, until the next sync reads it
+  (`a_document_whose_file_changed_since_the_download_is_a_stand_in`).
+  A cold render produces the same stand-in, so nothing depends on what
+  an earlier run left behind.
 
 ## Why no OCR yet
 
@@ -195,19 +240,17 @@ The same property makes the rows differ between machines, which is why
 
 ## Orphaned documents
 
-`pdf_paths` is truncated and rebuilt every scan, so a deleted file
-disappears on its own. `pdf_documents` is **not** truncated — it is
+`pdf_paths` is truncated and rebuilt every scan whose walk read the
+whole tree, so a deleted file disappears on its own. `pdf_documents` is **not** truncated — it is
 keyed on content, which has no notion of "no longer present," and
 dropping it would lose when the document was first seen
 (`pdf_documents_bookkeeping.fetched_at_utc`) and force a re-convert of
 every document whose path merely moved.
 
-The consequence is that deleting the last copy of a document leaves an
-unreferenced `pdf_documents` row, deliberately: the row is cheap, it preserves the record that the document was once here, and the
-render side ignores it (its join against `pdf_paths` finds nothing).
-Reaping them is a `DELETE … WHERE blake3 NOT IN (SELECT blake3 FROM
-pdf_paths)` whenever we decide we want it. The rows stay in earlier
-commits, but HEAD stops recording that the document was once here.
+Instead, after a clean walk, a document no `pdf_paths` row names is
+deleted with its bookkeeping (`RawDb::prune_unnamed`,
+`a_document_no_path_names_goes`). The rows stay in earlier commits, but
+HEAD stops recording that the document was once here.
 
 ## Inspecting a scan
 

@@ -5,23 +5,64 @@ from `us.yosmart.com/download/...` into a doltlite raw store:
 
 ```
 <data_root>/<group>/ingest/entities.doltlite_db
-  yolink_devices    one row per configured device + its resume cursor (last_ts_ms)
+  yolink_devices    one row per configured device: its kind, its `start`, half of its credential
   yolink_readings   one row per sample, keyed device#ts_ms#metric
+  coverage          which stretches of each device's history have been looked at, scope `device:<name>`
 ```
 
-Each device is walked forward from its configured `start` date in
-`window_days` strides (default 7). Each request asks for one stride plus
-`overlap_minutes` (default 5), and a later run resumes from the device's
-newest stored reading less that overlap. Each window is a signed-URL CSV
-fetched with `curl`; the signing scheme is in `src/ingest/mod.rs`
-(`build_signed_url`), reverse-engineered from YoLink's Android client,
-since the public API exposes no historical CSVs. A failed window is
-skipped and the walk goes on; thirty failures in a row abandon the
-device for the run.
+Each run wants, per device, the stretch from its configured `start`
+date to the run's pinned now (`DATALIB_DAG_NOW`, not the clock), cut
+down at the bottom to the ~66 days YoLink still serves (below). What
+is owed is the gaps between that and the `coverage` spans the device
+holds, walked oldest first in `window_days` strides (default 7). Each
+window is a signed-URL CSV fetched through the shared HTTP layer; the
+signing scheme is in `src/ingest/mod.rs` (`window_request`),
+reverse-engineered from YoLink's Android client, since the public API
+exposes no historical CSVs. A window's readings and the record that
+the window was looked at land in one transaction, a window with no
+readings included, so a device that has gone quiet is not asked for
+its silence again. Each window's request begins `overlap_minutes`
+(default 5) before the window, so the newest few minutes of the last
+run, which a sensor may not have reported yet, are asked for again;
+re-fetched samples upsert over themselves. The walk stops at the next
+window when the step is told to stop, and the store is sealed after
+each device.
 
-Moving a device's `start` earlier re-walks it from the new start (the
-starts are recorded in `sync_scope_config`); moving it later than the
-stored cursor skips the gap, with a warning.
+Moving a device's `start` earlier is a gap below what it holds, walked
+on the next run; moving it later leaves what was fetched in place and
+asks for nothing below the new start.
+
+## When part of a sync fails
+
+Only the store failing fails the step. Everything else costs the thing
+that failed, as a row in the store's `problems` table:
+
+| what | key | when it clears |
+| --- | --- | --- |
+| a device with a window that could not be fetched or parsed (the row names the first); one that cannot be walked (a `start` that is not a date); one abandoned after thirty failed windows in a row; or one with no reading at all whose windows YoLink refused (most likely a wrong id) | `listing:<device>` | the next run that walks it clean, or for the refusals, the first run that gets it a reading |
+| a device with no reading in the last day | `silent:<device>` | it reports again |
+
+A failed window is a gap: nothing is written for it, so the next run
+asks for it again, before the stretch since the last run. The walk goes
+on past it, up to thirty failures in a row per device per run, after
+which the device is left for the next run. A window asked for again
+after YoLink has expired it answers empty and is covered; the readings
+it held are gone, so retry within the retention window.
+
+Some failures of a device that has readings have nothing a retry could
+fetch, and are covered as if the window had answered empty: a 404 or
+410, and a client error (not a timeout or a rate limit) on a window
+ending before the device's first reading, which is a `start` that
+predates the device. A device with no reading at all cannot tell a
+window from before it was deployed from an id YoLink does not know, so
+its refused windows stay gaps and count toward the budget, and if the
+walk still has no reading at its end the device gets the `listing:`
+row above. Once a run gets a reading, the windows refused before it are
+the time before the device was deployed and are covered then.
+
+The `listing:` and `silent:` rows are replaced whole at the end of each
+run. A run told to stop keeps the `listing:` rows it found before the
+stop, clears none, and leaves the `silent:` rows as the last run did.
 
 ## Upstream history expires. The mirror is the only durable copy.
 
@@ -163,10 +204,10 @@ Notes on the shape of that statement:
   commit count unchanged; the second run exits non-zero with
   `nothing to commit, working tree clean`, which is `dolt_commit`
   reporting that nothing changed rather than a failure.
-- **`yolink_devices` is deliberately untouched.** The imported rows are
-  older than the existing resume cursor, so `last_ts_ms` stays at the tip
-  and the next sync resumes there instead of re-walking from the
-  backfilled start.
+- **`yolink_devices` and `coverage` are deliberately untouched.** The
+  next sync still owes only the gaps in what this store had looked at;
+  the imported readings sit below what YoLink still serves, so nothing
+  would ask for them anyway.
 - `dolt_log` is the undo — the whole import is one commit.
 
 The next render sees `yolink_readings` changed and re-renders; the plots
@@ -211,8 +252,9 @@ and the data is more valuable than the tidiness.
    — so a THSensor line is stored twice over, four rows in all. The
    same data as one row per (device, ts) with a `REAL` column per
    metric measured at about a tenth of the size on airvisual's data.
-2. **One transaction per device**, not per fetched window. A full
-   re-walk here is cheap and idempotent, and every SQL transaction
+2. **One transaction per device**, not per fetched window. Here a
+   window's readings and its coverage have to land together, which is
+   what makes a cut-off run resumable, and every SQL transaction
    rewrites the pages it touches
    ([doltlite.md § What a write costs](/docs/dev/doltlite.md#what-a-write-costs)).
 3. **A device has an `id` and a `name`.** `devices[].name` here is

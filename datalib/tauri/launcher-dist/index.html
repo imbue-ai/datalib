@@ -1,227 +1,736 @@
 <!doctype html>
 <!--
-  The launcher: what the desktop app shows when it was opened without a
-  data root.
+  The libraries screen: what the desktop app shows when no library is
+  open — at launch without a data root, and from the app's top bar
+  ("Data Liberation ✊", or the library menu's "All libraries").
 
-  It used to show a bare native folder picker — a "choose a folder"
-  sheet with no window behind it and nothing saying what the folder was
-  for, which is an impossible first screen for someone who has never
-  seen the app. This page explains what a data library is, offers the
-  roots already opened before, and names the exact folder the "create"
-  button would make.
+  It lists the libraries, each with what the server last wrote down
+  about it (sources, size, last sync), and makes a new one from a name
+  or a folder. A plain name is a library in ~/Datalib, and the first
+  one's name is filled in for you.
 
-  This is the ONLY page the shell bundles. Once a root is chosen the
-  window is replaced by one pointing at the spawned `datalib-http`,
-  which serves the real (rust-embed'd Vue) UI — see src/main.rs.
+  This is the ONLY page the shell bundles. Once a library is chosen the
+  same window loads the spawned `datalib-http`'s page, which serves the
+  real (rust-embed'd Vue) UI, and closing the library brings the window
+  back here — see src/main.rs.
 
-  Every decision here is in `src/launcher.rs` (recents, whether a
-  folder is a data library, where a new one goes), which is unit-tested
-  by //datalib/tauri:launcher_test. This file is presentation: it asks
-  for state, renders it, and invokes one command per button.
+  Every decision here is in `src/launcher.rs` (which libraries are
+  listed, where a new one goes, what is already at that folder), which
+  is unit-tested by //datalib/tauri:launcher_test. This file is
+  presentation: it asks for state, renders it, and invokes one command
+  per action. Its colours are the app's (`ui/src/theme.css`).
 -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Datalib</title>
+    <title>Data Liberation</title>
     <style>
       :root {
         color-scheme: light dark;
-        --bg: #ffffff;
-        --fg: #1a1a1a;
-        --muted: #6b6b6b;
-        --border: #d8d8d8;
-        --card: #fafafa;
-        --accent: #2563eb;
+        --ground: #ececee;
+        --surface: #ffffff;
+        --fg: #1d1d1f;
+        --muted: #55555a;
+        --faint: #6e6e73;
+        --border: #d0d0d5;
+        --border-soft: #e3e3e6;
+        --row-line: #ededf0;
+        --hover: #f2f2f5;
+        --accent: #1f5fd1;
+        --on-accent: #ffffff;
+        --accent-soft: #e8effb;
+        --warn-fg: #8a4a00;
+        --on-warn: #ffffff;
+        --warn-soft: #fdf0dc;
+        --warn-border: #e0b877;
+        --error-fg: #b42318;
+        --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        --mono: ui-monospace, "SF Mono", Menlo, monospace;
       }
       @media (prefers-color-scheme: dark) {
         :root {
-          --bg: #1a1b1e;
-          --fg: #e6e6e6;
-          --muted: #9aa0a6;
-          --border: #2f3136;
-          --card: #232428;
-          --accent: #6ea8fe;
+          --ground: #1c1c1e;
+          --surface: #2a2a2d;
+          --fg: #ececf0;
+          --muted: #b0b0b8;
+          --faint: #9a9aa2;
+          --border: #45454b;
+          --border-soft: #3a3a3f;
+          --row-line: #36363b;
+          --hover: #333337;
+          --accent: #6ea0f5;
+          --on-accent: #0d1b33;
+          --accent-soft: #233552;
+          --warn-fg: #f0b366;
+          --on-warn: #2b1a00;
+          --warn-soft: #3d2c14;
+          --warn-border: #7a5a2a;
+          --error-fg: #ff8a80;
         }
+      }
+      /* The rules below set `display`, which would otherwise win over
+         the `hidden` attribute the script toggles. */
+      [hidden] {
+        display: none !important;
       }
       html,
       body {
         margin: 0;
-        background: var(--bg);
+        height: 100%;
+        background: var(--ground);
         color: var(--fg);
-        font-family: system-ui, sans-serif;
+        font-family: var(--font);
+        font-size: 14px;
+      }
+      .bar {
+        height: 40px;
+        display: flex;
+        align-items: center;
+        padding: 0 16px 0 92px;
+        font-weight: 600;
+        font-size: 13px;
+        -webkit-user-select: none;
+        user-select: none;
       }
       main {
-        max-width: 34rem;
-        margin: 0 auto;
-        padding: 2.25rem 1.5rem 2rem;
+        display: flex;
+        justify-content: center;
+        padding: 48px 24px;
+      }
+      .page {
+        width: 680px;
+        max-width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+      }
+      .head {
+        position: relative;
+        display: flex;
+        align-items: flex-end;
+        gap: 12px;
+      }
+      .head .titles {
+        flex: 1 1 auto;
       }
       h1 {
-        margin: 0 0 0.35rem;
-        font-size: 1.4rem;
-      }
-      p {
-        line-height: 1.5;
-        margin: 0.55rem 0;
-      }
-      .lede {
-        color: var(--muted);
-      }
-      h2 {
-        margin: 1.6rem 0 0.5rem;
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--muted);
+        margin: 0;
+        font-size: 28px;
       }
       button {
         font: inherit;
-        color: var(--fg);
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 0.6rem 0.8rem;
         cursor: pointer;
-        text-align: left;
-        width: 100%;
-        display: block;
-        margin: 0.4rem 0;
       }
-      button:hover {
-        border-color: var(--accent);
+      .btn {
+        height: 36px;
+        padding: 0 16px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--fg);
+        white-space: nowrap;
       }
-      button:disabled {
+      .btn:hover:not(:disabled) {
+        background: var(--hover);
+      }
+      .btn:disabled {
+        opacity: 0.5;
         cursor: default;
-        opacity: 0.6;
       }
-      button .title {
-        display: block;
+      .primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
         font-weight: 600;
       }
-      button .sub {
-        display: block;
-        color: var(--muted);
-        font-size: 0.85rem;
-        margin-top: 0.15rem;
-        overflow-wrap: anywhere;
+      .primary:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--accent) 85%, black);
       }
-      .quit {
-        width: auto;
+      .small {
+        height: 30px;
+        padding: 0 12px;
+        font-size: 13px;
+      }
+      .link {
+        border: none;
         background: none;
-        border: none;
-        color: var(--muted);
-        padding: 0.4rem 0;
-        margin-top: 1.2rem;
+        padding: 0;
+        color: var(--accent);
+        font-size: inherit;
       }
-      .quit:hover {
-        color: var(--fg);
-        border: none;
+      .link:hover {
+        text-decoration: underline;
+      }
+      code {
+        font-family: var(--mono);
+        font-size: 12px;
       }
       .error {
-        color: #b91c1c;
+        margin: 0;
+        color: var(--error-fg);
       }
-      @media (prefers-color-scheme: dark) {
-        .error {
-          color: #f87171;
-        }
+
+      /* The list. */
+      .list {
+        background: var(--surface);
+        border: 1px solid var(--border-soft);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      /* A row is the library (a button that opens it, or the same
+         content when its folder is gone) and, for a library outside the
+         libraries folder, a Forget button beside it: two controls side by
+         side, since a button cannot hold another. */
+      .lib {
+        display: flex;
+        align-items: center;
+        border-bottom: 1px solid var(--row-line);
+      }
+      .lib:last-child {
+        border-bottom: none;
+      }
+      .lib:not(.missing):hover {
+        background: var(--hover);
+      }
+      .lib-open {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 16px;
+        border: none;
+        background: none;
+        color: inherit;
+        text-align: left;
+      }
+      .forget,
+      .folder {
+        flex: 0 0 auto;
+        width: 30px;
+        height: 30px;
+        border: none;
+        border-radius: 6px;
+        background: none;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      /* Every row has the slot, so the folder icons line up; a library
+         in the libraries folder leaves it empty. */
+      .forget {
+        margin-right: 2px;
+      }
+      button.forget:hover,
+      .folder:hover:not(:disabled) {
+        background: var(--border-soft);
+        color: var(--fg);
+      }
+      .folder {
+        margin-right: 12px;
+      }
+      .folder:disabled {
+        visibility: hidden;
+      }
+      .icon {
+        flex: 0 0 auto;
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .lib .name {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .lib .name strong {
+        font-size: 15px;
+      }
+      .lib .name code {
+        color: var(--faint);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .lib .facts {
+        font-size: 12px;
+        color: var(--muted);
+        text-align: right;
+        line-height: 1.5;
+        white-space: nowrap;
+      }
+      .lib.missing .icon {
+        background: var(--hover);
+        color: var(--faint);
+      }
+      .lib.missing strong {
+        color: var(--faint);
+      }
+      .lib.missing .facts {
+        color: var(--warn-fg);
+      }
+      .lib .name .title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .tag {
+        padding: 1px 7px;
+        border-radius: 999px;
+        background: var(--warn-soft);
+        color: var(--warn-fg);
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .moved {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 14px 16px;
+        border-radius: 10px;
+        border: 1px solid var(--warn-border);
+        background: var(--warn-soft);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .moved svg {
+        flex: 0 0 auto;
+        margin-top: 1px;
+        color: var(--warn-fg);
+      }
+      .moved .what {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .moved .what strong {
+        display: block;
+        font-size: 14px;
+        color: var(--warn-fg);
+      }
+      .moved .btn {
+        flex: 0 0 auto;
+        align-self: center;
+        background: var(--warn-fg);
+        border-color: var(--warn-fg);
+        color: var(--on-warn);
+        font-weight: 600;
+      }
+      .moved .btn:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--warn-fg) 85%, black);
+      }
+      .empty {
+        height: 120px;
+        border: 1.5px dashed var(--border);
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--faint);
+        font-size: 13px;
+      }
+
+      /* The new-library popover, under its button. */
+      .pop {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 8px);
+        width: 400px;
+        z-index: 2;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .pop label {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .pop input {
+        height: 32px;
+        box-sizing: border-box;
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0 10px;
+        font: inherit;
+        background: var(--surface);
+        color: var(--fg);
+      }
+      .pop input:focus {
+        outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+        outline-offset: -1px;
+      }
+      .where {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .where .what {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .where .link {
+        white-space: nowrap;
+      }
+      .where .what code {
+        color: var(--fg);
+      }
+      .where.bad .what {
+        color: var(--warn-fg);
+      }
+      .pop .primary {
+        height: 32px;
+        font-size: 13px;
       }
     </style>
   </head>
   <body>
+    <div class="bar" data-tauri-drag-region>Data Liberation ✊</div>
     <main>
-      <h1>Datalib</h1>
-      <p class="lede">
-        Datalib keeps a searchable mirror of your own data — chats, mail,
-        documents — in one folder on this machine. That folder is called a
-        data library, and everything the app shows comes out of it. Nothing
-        is uploaded anywhere.
-      </p>
-
-      <p id="error" class="error" role="alert" hidden></p>
-
-      <section id="recents" hidden>
-        <h2>Recent</h2>
-        <div id="recents-list"></div>
-      </section>
-
-      <h2>Open a data library</h2>
-      <button id="pick">
-        <span class="title">Open an existing data library…</span>
-        <span class="sub">Choose a folder you have already set up.</span>
-      </button>
-
-      <h2>Start fresh</h2>
-      <button id="create">
-        <span class="title">Create an empty data library</span>
-        <span class="sub" id="create-path"></span>
-      </button>
-
-      <button class="quit" id="quit">Quit</button>
+      <div class="page">
+        <div class="head">
+          <div class="titles">
+            <h1>Your libraries</h1>
+          </div>
+          <button class="btn" id="pick">Open a folder…</button>
+          <button class="btn primary" id="new" aria-expanded="false" aria-controls="pop">
+            New library
+          </button>
+          <div class="pop" id="pop" role="dialog" aria-label="New library" hidden>
+            <label for="name">Name or path of folder</label>
+            <input id="name" autocomplete="off" spellcheck="false" />
+            <div class="where" id="where">
+              <span class="what" id="what"></span>
+              <button class="link" id="choose">Create elsewhere…</button>
+            </div>
+            <button class="btn primary" id="create">Create and open</button>
+          </div>
+        </div>
+        <p class="error" id="error" role="alert" hidden></p>
+        <div class="list" id="list" hidden></div>
+        <div class="empty" id="empty" hidden>Your libraries will be listed here.</div>
+        <!-- TODO(after 2026-12-09): remove with launcher::move_from_documents. -->
+        <div class="moved" id="moved" hidden>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 4l9 15.5H3z" />
+            <path d="M12 10v4.5" />
+            <path d="M12 17v.5" />
+          </svg>
+          <div class="what" id="moved-what"></div>
+          <button class="btn small" id="moved-move"></button>
+        </div>
+      </div>
     </main>
 
     <script>
       // `withGlobalTauri` (tauri.conf.json) is what puts this here; the
       // launcher has no bundler and no module graph.
       const invoke = window.__TAURI__.core.invoke;
+      const $ = (id) => document.getElementById(id);
 
-      const errorEl = document.getElementById("error");
+      const BOOK =
+        '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/></svg>';
+
+      const CROSS =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      const FOLDER =
+        '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+
       function fail(e) {
-        errorEl.textContent = String((e && e.message) || e);
-        errorEl.hidden = false;
+        $("error").textContent = String((e && e.message) || e);
+        $("error").hidden = false;
         setBusy(false);
       }
 
-      // Every button starts a backend and swaps this window out, so a
-      // second click while that is in flight would start a second one.
+      // Every way out of this screen starts a server and loads it in
+      // this window, so a second click while that is in flight would
+      // start a second one.
+      let busy = false;
       function setBusy(on) {
+        busy = on;
         for (const b of document.querySelectorAll("button")) b.disabled = on;
+        if (!on) void resolveField();
       }
 
-      async function open(command, args) {
+      async function run(command, args) {
         setBusy(true);
-        errorEl.hidden = true;
+        $("error").hidden = true;
         try {
-          await invoke(command, args);
-          // On success the shell replaces this window; nothing to do.
+          // On success the shell loads the library here; nothing to do.
+          // `false` means nothing is opening: a canceled picker.
+          if ((await invoke(command, args)) === false) setBusy(false);
         } catch (e) {
           fail(e);
         }
       }
 
-      function recentButton(root) {
-        const b = document.createElement("button");
-        const name = document.createElement("span");
-        name.className = "title";
-        // Shown as the folder's own name, with the full path under it —
-        // several libraries can share a leaf name.
-        name.textContent = root.name;
-        const path = document.createElement("span");
-        path.className = "sub";
-        path.textContent = root.path;
-        b.append(name, path);
-        b.addEventListener("click", () => open("launcher_open", { path: root.path }));
-        return b;
+      function formatBytes(n) {
+        const units = ["B", "KB", "MB", "GB", "TB"];
+        let i = 0;
+        while (n >= 1000 && i < units.length - 1) {
+          n /= 1000;
+          i++;
+        }
+        return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
       }
 
-      async function render() {
-        const state = await invoke("launcher_state");
-        document.getElementById("create-path").textContent =
-          "A new, empty folder at " + state.default_new_root + ".";
-        if (state.recents.length > 0) {
-          const list = document.getElementById("recents-list");
-          for (const r of state.recents) list.append(recentButton(r));
-          document.getElementById("recents").hidden = false;
+      function ago(iso) {
+        const t = Date.parse(iso);
+        if (!Number.isFinite(t)) return "";
+        const s = Math.max(0, (Date.now() - t) / 1000);
+        if (s < 90) return "just now";
+        const m = s / 60;
+        if (m < 60) return `${Math.round(m)} minutes ago`;
+        const h = m / 60;
+        if (h < 36) return `${Math.round(h)} hour${Math.round(h) === 1 ? "" : "s"} ago`;
+        const d = h / 24;
+        return `${Math.round(d)} days ago`;
+      }
+
+      function facts(summary) {
+        if (!summary) return [];
+        const n = summary.sources;
+        const lines = [`${n} source${n === 1 ? "" : "s"} · ${formatBytes(summary.bytes)}`];
+        lines.push(summary.last_synced_at ? `synced ${ago(summary.last_synced_at)}` : "never synced");
+        return lines;
+      }
+
+      function libraryRow(lib) {
+        const row = document.createElement("div");
+        row.className = "lib" + (lib.found ? "" : " missing");
+        const open = document.createElement(lib.found ? "button" : "div");
+        open.className = "lib-open";
+        const icon = document.createElement("span");
+        icon.className = "icon";
+        icon.innerHTML = BOOK;
+        const name = document.createElement("span");
+        name.className = "name";
+        const strong = document.createElement("strong");
+        strong.textContent = lib.name;
+        if (lib.legacy) {
+          const title = document.createElement("span");
+          title.className = "title";
+          const tag = document.createElement("span");
+          tag.className = "tag";
+          tag.textContent = "Legacy location";
+          title.append(strong, tag);
+          name.append(title);
+        } else {
+          name.append(strong);
+        }
+        if (lib.shown_path) {
+          const path = document.createElement("code");
+          path.textContent = lib.shown_path;
+          name.append(path);
+        }
+        const right = document.createElement("span");
+        right.className = "facts";
+        const lines = lib.found ? facts(lib.summary) : ["Not found.", "Is its drive connected?"];
+        lines.forEach((l, i) => {
+          if (i) right.append(document.createElement("br"));
+          right.append(l);
+        });
+        open.append(icon, name, right);
+        if (lib.found) {
+          open.addEventListener("click", () => run("launcher_open", { path: lib.path }));
+        }
+        row.append(open);
+        if (lib.forgettable) {
+          const forget = document.createElement("button");
+          forget.className = "forget";
+          forget.innerHTML = CROSS;
+          forget.title = "Forget (the folder stays)";
+          forget.setAttribute("aria-label", `Forget ${lib.name}`);
+          forget.addEventListener("click", async () => {
+            try {
+              await invoke("launcher_forget", { path: lib.path });
+              await render();
+            } catch (e) {
+              fail(e);
+            }
+          });
+          row.append(forget);
+        } else {
+          const slot = document.createElement("span");
+          slot.className = "forget";
+          slot.setAttribute("aria-hidden", "true");
+          row.append(slot);
+        }
+        const folder = document.createElement("button");
+        folder.className = "folder";
+        folder.innerHTML = FOLDER;
+        folder.title = "Open the folder in Finder";
+        folder.setAttribute("aria-label", `Open ${lib.name}'s folder`);
+        // A folder that is gone has nothing to open; the button keeps its
+        // place so the columns line up.
+        folder.disabled = !lib.found;
+        folder.addEventListener("click", async () => {
+          try {
+            await invoke("launcher_open_folder", { path: lib.path });
+          } catch (e) {
+            fail(e);
+          }
+        });
+        row.append(folder);
+        return row;
+      }
+
+      // ---- the new-library popover ----
+
+      let resolved = null;
+      async function resolveField() {
+        const input = $("name").value;
+        let r = null;
+        try {
+          r = await invoke("launcher_resolve", { input });
+        } catch (e) {
+          fail(e);
+          return;
+        }
+        if ($("name").value !== input) return; // typed on since
+        resolved = r;
+        const what = $("what");
+        const where = $("where");
+        what.textContent = "";
+        where.classList.remove("bad");
+        const code = (t) => {
+          const c = document.createElement("code");
+          c.textContent = t;
+          return c;
+        };
+        let ok = false;
+        if (!r) {
+          what.append("Type a name, or a folder.");
+        } else if (r.target === "new") {
+          what.append("Creates ", code(r.shown_path));
+          ok = true;
+        } else if (r.target === "library") {
+          what.append(code(r.shown_path), " is already a library. ");
+          const open = document.createElement("button");
+          open.className = "link";
+          open.textContent = "Open it";
+          open.addEventListener("click", () => run("launcher_open", { path: r.path }));
+          what.append(open);
+          where.classList.add("bad");
+        } else if (r.target === "occupied") {
+          what.append(code(r.shown_path), " has other files in it.");
+          where.classList.add("bad");
+        } else {
+          what.append(code(r.shown_path), " is a file, not a folder.");
+          where.classList.add("bad");
+        }
+        $("create").disabled = busy || !ok;
+      }
+
+      function setPopover(open) {
+        $("pop").hidden = !open;
+        $("new").setAttribute("aria-expanded", String(open));
+        if (open) {
+          void resolveField();
+          $("name").focus();
+          $("name").select();
         }
       }
 
-      document
-        .getElementById("pick")
-        .addEventListener("click", () => open("launcher_pick"));
-      document
-        .getElementById("create")
-        .addEventListener("click", () => open("launcher_create"));
-      document
-        .getElementById("quit")
-        .addEventListener("click", () => invoke("launcher_quit"));
+      $("new").addEventListener("click", () => setPopover($("pop").hidden));
+      $("name").addEventListener("input", () => void resolveField());
+      $("name").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !$("create").disabled) $("create").click();
+        if (e.key === "Escape") setPopover(false);
+      });
+      $("choose").addEventListener("click", async () => {
+        try {
+          const chosen = await invoke("launcher_choose_folder");
+          if (chosen) {
+            $("name").value = chosen;
+            await resolveField();
+          }
+        } catch (e) {
+          fail(e);
+        }
+      });
+      $("create").addEventListener("click", () =>
+        run("launcher_create", { input: $("name").value }),
+      );
+      document.addEventListener("mousedown", (e) => {
+        if ($("pop").hidden) return;
+        if (!$("pop").contains(e.target) && e.target !== $("new")) setPopover(false);
+      });
+      $("pick").addEventListener("click", () => run("launcher_pick"));
+      $("moved-move").addEventListener("click", async () => {
+        setBusy(true);
+        $("error").hidden = true;
+        try {
+          const n = await invoke("launcher_move_from_documents");
+          if (n === 0) {
+            fail("Nothing moved: a library with the same name is already in the new location.");
+            return;
+          }
+          await render();
+        } catch (e) {
+          fail(e);
+          return;
+        }
+        setBusy(false);
+      });
+
+      let suggested = "";
+      async function render() {
+        const state = await invoke("launcher_state");
+        const list = $("list");
+        list.replaceChildren(...state.libraries.map(libraryRow));
+        const none = state.libraries.length === 0;
+        list.hidden = none;
+        $("empty").hidden = !none;
+        // A suggestion the person left alone follows the state: once
+        // Default exists it is no longer the name to offer.
+        const name = $("name");
+        if (!name.value || name.value === suggested) name.value = state.suggested_name;
+        suggested = state.suggested_name;
+        const move = state.move_from_documents;
+        $("moved").hidden = !move;
+        if (move) {
+          const code = (t) => {
+            const c = document.createElement("code");
+            c.textContent = t;
+            return c;
+          };
+          const one = move.count === 1;
+          const heading = document.createElement("strong");
+          heading.textContent = one
+            ? "1 library is in a legacy location"
+            : `${move.count} libraries are in a legacy location`;
+          const body = document.createElement("span");
+          body.append(
+            "macOS asks for permission before the app can read ",
+            code(move.from),
+            one ? ". Move your library" : ". Move your libraries",
+            " to the new preferred location, ",
+            code(move.to),
+            ".",
+          );
+          $("moved-what").replaceChildren(heading, body);
+          $("moved-move").textContent = one ? "Move it" : "Move them";
+        }
+        // The first time, the one thing to do is make a library.
+        if (none) setPopover(true);
+      }
 
       render().catch(fail);
     </script>

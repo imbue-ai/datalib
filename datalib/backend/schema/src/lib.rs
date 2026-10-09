@@ -19,6 +19,14 @@ pub mod edges {
     include!("edges.rs");
 }
 
+pub mod search_terms {
+    include!("search_terms.rs");
+}
+
+pub mod supplied_search_terms {
+    include!("supplied_search_terms.rs");
+}
+
 pub mod markdowns {
     include!("markdowns.rs");
 }
@@ -47,6 +55,14 @@ pub mod measurements {
 
 pub mod diff_status {
     include!("diff_status.rs");
+}
+
+pub mod source_contacts {
+    include!("source_contacts.rs");
+}
+
+pub mod source_contact_handles {
+    include!("source_contact_handles.rs");
 }
 
 #[cfg(test)]

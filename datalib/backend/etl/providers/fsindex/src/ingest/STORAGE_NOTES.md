@@ -57,9 +57,9 @@ There is no app-level path compression.
 
 ## 3. Why the cursor is not in the store
 
-The Unison cursor `(mtime, size, inode, dev)` lives in a host-local
-plain-SQLite cache (`datalib_etl::fingerprint_cache`); why it is host
-state is in [`etl/README.md`](../../../../README.md) §"The fingerprint
+The Unison cursor `(mtime, size, ctime, inode, dev)` lives in a host-local
+plain-SQLite cache (`datalib_etl_files::fingerprint_cache`); why it is host
+state is in [`etl/files/README.md`](../../../../files/README.md) §"The fingerprint
 cache is host state, and deliberately not versioned". Two measurements:
 
 | 100k entries, doltlite 0.50.13 | size | per row |

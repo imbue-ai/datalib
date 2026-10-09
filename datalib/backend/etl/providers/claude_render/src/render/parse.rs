@@ -193,6 +193,8 @@ pub struct ParsedExport {
     /// pass where its project didn't change.
     pub project_name_by_uuid: std::collections::HashMap<String, String>,
     pub conversations: Vec<ClaudeConversation>,
+    /// Conversations whose rows would not build, by raw id, and why.
+    pub failed: Vec<(String, String)>,
     /// Count of docs (conversations + projects) `dolt_diff` reported as
     /// unchanged.
     pub docs_skipped: usize,
@@ -259,16 +261,9 @@ async fn parse_doltlite_async(
     let pool = reader.pool().clone();
     let pin = reader.pin().clone();
 
-    let cas_path = blob_cas::cas_path_for(db_path);
-    let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
-        Some(
-            datalib_etl::blob_cas::open_cas_reader(&cas_path)
-                .await
-                .with_context(|| format!("open claude CAS for render {}", cas_path.display()))?,
-        )
-    } else {
-        None
-    };
+    let cas_pool = blob_cas::open_cas_for_render(db_path)
+        .await
+        .with_context(|| format!("open the blob store beside {}", db_path.display()))?;
 
     // Open at one commit before anything reads this store: the diff below
     // and the rows behind it have to name that commit.
@@ -346,18 +341,20 @@ async fn parse_doltlite_async(
             );
         }
     }
-    if let Some(cas_pool) = cas_pool.as_ref() {
-        let mut blobs = BlobBundle::load_many(
-            &pool,
-            cas_pool,
-            ATTACHMENTS_PROJECTION_SQL,
-            refs_by_conv.into_iter().enumerate(),
-        )
-        .await?;
-        for (i, conv) in parsed.conversations.iter_mut().enumerate() {
-            if let Some(b) = blobs.remove(&i) {
-                conv.blobs = b;
-            }
+    let loaded = BlobBundle::load_many(
+        &pool,
+        cas_pool.as_ref(),
+        ATTACHMENTS_PROJECTION_SQL,
+        refs_by_conv.into_iter().enumerate(),
+    )
+    .await;
+    if let Some(cas) = cas_pool {
+        cas.close().await;
+    }
+    let mut blobs = loaded?;
+    for (i, conv) in parsed.conversations.iter_mut().enumerate() {
+        if let Some(b) = blobs.remove(&i) {
+            conv.blobs = b;
         }
     }
 
@@ -587,9 +584,7 @@ pub fn parse_loaded(raw: datalib_etl_claude::ingest::db::LoadedRaw) -> ParsedExp
                 inputs,
             }),
             Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(event = "claude_build_conv_failed", error = %e, "a conversation could not be built from its rows");
-            }
+            Err(e) => out.failed.push((id, format!("{e:#}"))),
         }
     }
     out
@@ -728,6 +723,32 @@ pub fn shred(c: &ClaudeConversation) -> ShreddedConversation {
         messages,
         content_blocks,
         attachments,
+    }
+}
+
+#[cfg(test)]
+mod failed_tests {
+    use super::*;
+    use datalib_etl_claude::ingest::db::{LoadedConversation, LoadedRaw};
+
+    /// A conversation that will not build is named with why, not
+    /// dropped with only a log line.
+    #[test]
+    fn a_conversation_that_will_not_build_is_named() {
+        let parsed = parse_loaded(LoadedRaw {
+            conversations: vec![LoadedConversation {
+                id: "c1".into(),
+                org_uuid: None,
+                org_name: None,
+                payload: serde_json::json!({"name": "Holodeck"}),
+            }],
+            ..LoadedRaw::default()
+        });
+        assert!(parsed.conversations.is_empty());
+        assert_eq!(
+            parsed.failed,
+            vec![("c1".to_string(), "conversation missing uuid".to_string())]
+        );
     }
 }
 

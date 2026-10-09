@@ -10,6 +10,9 @@
 //! differ, and which of its operations may overlap — is
 //! `docs/dev/qmd_behaviour.md`. Read it before changing how qmd is driven.
 
+mod query_embedder;
+pub use query_embedder::{QueryEmbedder, QueryEmbedding};
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -270,6 +273,18 @@ pub struct Index {
     cache_home: PathBuf,
     qmd_dir: PathBuf,
     qmd: Qmd,
+    stop: StopWhen,
+}
+
+/// Whether the caller has been asked to stop; a pass under way ends
+/// when it says so.
+#[derive(Clone)]
+struct StopWhen(Arc<dyn Fn() -> bool + Send + Sync>);
+
+impl std::fmt::Debug for StopWhen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StopWhen")
+    }
 }
 
 impl Index {
@@ -287,7 +302,16 @@ impl Index {
             qmd_dir,
             root,
             qmd,
+            stop: StopWhen(Arc::new(|| false)),
         })
+    }
+
+    /// End any pass under way, as a failure, once `stopped` says so.
+    pub fn stop_when(self, stopped: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            stop: StopWhen(Arc::new(stopped)),
+            ..self
+        }
     }
 
     /// Point the index's `models` at `models_dir`, where qmd then finds
@@ -425,7 +449,7 @@ impl Index {
         cmd.env("NO_COLOR", "1");
         cmd.stdout(std::process::Stdio::piped());
         status_line!("[qmd-indexer] qmd {verb} {args}");
-        read_events(&mut cmd, on_progress).with_context(|| format!("qmd {verb}"))
+        read_events(&mut cmd, on_progress, &*self.stop.0).with_context(|| format!("qmd {verb}"))
     }
 }
 
@@ -496,7 +520,8 @@ impl Drop for SdkScript {
 }
 
 /// Spawn the script and drain its NDJSON until it exits; its `done` line
-/// is the answer.
+/// is the answer. Once `stopped` says so, the script is killed and the
+/// pass fails as stopped.
 ///
 /// stderr is left inherited — it is the step's log, and node's own
 /// diagnostics belong there rather than in this parser. No
@@ -505,42 +530,63 @@ impl Drop for SdkScript {
 fn read_events(
     cmd: &mut std::process::Command,
     on_progress: &mut dyn FnMut(&Value),
+    stopped: &(dyn Fn() -> bool + Sync),
 ) -> Result<Value> {
     use std::io::BufRead;
+    use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 
     let mut child = cmd
         .spawn()
         .with_context(|| "failed to spawn node; is the runtime staged?")?;
     let stdout = child.stdout.take().expect("stdout piped");
+    let child = std::sync::Mutex::new(child);
+    let drained = AtomicBool::new(false);
+    let killed = AtomicBool::new(false);
 
     let mut failure: Option<String> = None;
     let mut done: Option<Value> = None;
-    for line in std::io::BufReader::new(stdout).lines() {
-        let line = line.context("read from qmd")?;
-        match parse_event(&line) {
-            Some(SdkEvent::Progress(v)) => on_progress(&v),
-            Some(SdkEvent::Done(v)) => done = Some(v),
-            // The CLI prints "Skipping." here and exits 0, which leaves
-            // a half-embedded index looking like a finished one. The
-            // runner keeps embeds apart, so a second one means something
-            // outside it is writing this index: say so and fail.
-            Some(SdkEvent::Busy) => {
-                failure = Some(
-                    "another process holds qmd's embed lock \
-                     (.qmd-embed.lock beside the index); nothing else should be \
-                     writing this index"
-                        .to_string(),
-                )
+    let read = std::thread::scope(|s| {
+        s.spawn(|| kill_on_stop(&child, stopped, &drained, &killed));
+        let read = (|| -> Result<()> {
+            for line in std::io::BufReader::new(stdout).lines() {
+                let line = line.context("read from qmd")?;
+                match parse_event(&line) {
+                    Some(SdkEvent::Progress(v)) => on_progress(&v),
+                    Some(SdkEvent::Done(v)) => done = Some(v),
+                    // The CLI prints "Skipping." here and exits 0, which leaves
+                    // a half-embedded index looking like a finished one. The
+                    // runner keeps embeds apart, so a second one means something
+                    // outside it is writing this index: say so and fail.
+                    Some(SdkEvent::Busy) => {
+                        failure = Some(
+                            "another process holds qmd's embed lock \
+                             (.qmd-embed.lock beside the index); nothing else should be \
+                             writing this index"
+                                .to_string(),
+                        )
+                    }
+                    Some(SdkEvent::Error(msg)) => failure = Some(msg),
+                    // Not ours: a dependency wrote to stdout. Say so rather than
+                    // dropping it, and don't let it fail the pass.
+                    None if !line.trim().is_empty() => status_line!("[qmd-indexer] qmd: {line}"),
+                    None => {}
+                }
             }
-            Some(SdkEvent::Error(msg)) => failure = Some(msg),
-            // Not ours: a dependency wrote to stdout. Say so rather than
-            // dropping it, and don't let it fail the pass.
-            None if !line.trim().is_empty() => status_line!("[qmd-indexer] qmd: {line}"),
-            None => {}
-        }
-    }
+            Ok(())
+        })();
+        drained.store(true, SeqCst);
+        read
+    });
+    read?;
 
-    let status = child.wait().context("wait for qmd")?;
+    let status = child
+        .into_inner()
+        .unwrap_or_else(|e| e.into_inner())
+        .wait()
+        .context("wait for qmd")?;
+    if killed.load(SeqCst) {
+        bail!("stopped when asked to");
+    }
     if let Some(msg) = failure {
         bail!("{msg}");
     }
@@ -554,6 +600,33 @@ fn read_events(
     // events, so a clean exit with none of them means the script did
     // not run — a broken invocation, which exits 0 and does nothing.
     done.context("exited cleanly without reporting what it did")
+}
+
+/// Kill the script once `stopped` says so, until its output is drained.
+///
+/// A kill, because the SIGINT the step's group gets is not enough: node
+/// runs a signal handler only between turns of its event loop, and qmd's
+/// keyword update takes none until it is done. Killing loses nothing the
+/// next pass needs: the index is SQLite, which rolls back an unfinished
+/// write, and qmd takes over a dead process's embed lock
+/// (`docs/dev/qmd_behaviour.md`, finding 5). The child is reaped only
+/// after this returns, so its pid cannot have been reused.
+fn kill_on_stop(
+    child: &std::sync::Mutex<std::process::Child>,
+    stopped: &(dyn Fn() -> bool + Sync),
+    drained: &std::sync::atomic::AtomicBool,
+    killed: &std::sync::atomic::AtomicBool,
+) {
+    use std::sync::atomic::Ordering::SeqCst;
+    const POLL: std::time::Duration = std::time::Duration::from_millis(50);
+    while !drained.load(SeqCst) {
+        if stopped() {
+            let _ = child.lock().unwrap_or_else(|e| e.into_inner()).kill();
+            killed.store(true, SeqCst);
+            return;
+        }
+        std::thread::sleep(POLL);
+    }
 }
 
 #[cfg(test)]
@@ -759,9 +832,11 @@ mod tests {
     /// Collects the `bytesProcessed` of each progress line, in order.
     fn drain(lines: &str, code: i32) -> (Result<Value>, Vec<u64>) {
         let mut seen = Vec::new();
-        let out = read_events(&mut fake_script(lines, code), &mut |v| {
-            seen.push(n(v, "bytesProcessed"))
-        });
+        let out = read_events(
+            &mut fake_script(lines, code),
+            &mut |v| seen.push(n(v, "bytesProcessed")),
+            &|| false,
+        );
         (out, seen)
     }
 
@@ -834,6 +909,34 @@ mod tests {
             0,
         );
         assert!(result.is_ok(), "{result:?}");
+    }
+
+    /// The regression: a stopped `gmail/keyword_index` ran on for 16s.
+    /// node runs its SIGINT handler only between turns of its event loop,
+    /// and qmd's keyword update takes none until it is done, so the
+    /// script never heard the stop. The stand-in hears nothing either.
+    #[test]
+    fn a_stop_ends_a_pass_whose_script_does_not_answer_it() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg("echo '{\"event\":\"progress\",\"current\":1,\"total\":9}'; exec sleep 120")
+            .stdout(std::process::Stdio::piped());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let stop = AtomicBool::new(false);
+            // Raised once the script is surely running.
+            let out = read_events(&mut cmd, &mut |_| stop.store(true, SeqCst), &|| {
+                stop.load(SeqCst)
+            });
+            let _ = tx.send(out);
+        });
+        let out = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the pass was still running 10s after the stop");
+        let err = format!("{:#}", out.unwrap_err());
+        assert!(err.contains("stopped"), "unexpected error: {err}");
     }
 
     #[test]

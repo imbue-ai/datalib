@@ -43,6 +43,11 @@ export const STATUS_GLYPHS: Record<string, string> = {
   // toggle/toggle_off — turned off by a person or an agent, the same
   // mark as the row's switch in that position.
   off: "M17 7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h10c2.76 0 5-2.24 5-5s-2.24-5-5-5zM7 15c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z",
+  // av/pause_circle_outline — started in this sync and caught up with
+  // what it reads, which is still being written; it runs again when that
+  // moves.
+  waiting:
+    "M9 16h2V8H9v8zm3-14C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm1-4h2V8h-2v8z",
   // action/hourglass_empty — due to run, and not started.
   queued:
     "M6 2v6h.01L6 8.01 10 12l-4 4 .01.01H6V22h12v-5.99h-.01L18 16l-4-4 4-3.99-.01-.01H18V2H6zm10 14.5V20H8v-3.5l4-4 4 4zm-4-5l-4-4V4h8v3.5l-4 4z",

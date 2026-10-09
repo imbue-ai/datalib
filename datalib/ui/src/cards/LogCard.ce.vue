@@ -70,6 +70,7 @@ function onSelected(seq: number) {
     :jump-to-end="opts.jumpToEnd"
     @scope-changed="onScope"
     @line-selected="onSelected"
+    @open-card="(source: string) => props.ctx.host.openCards(source)"
   />
 </template>
 

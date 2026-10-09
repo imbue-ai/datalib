@@ -65,7 +65,9 @@ fn write_two_runs(root: &Path) {
         });
         w.step(StepRunRow {
             step: "slack/render_markdown".into(),
-            state: "pending".into(),
+            // Not `pending`: a step a closed run never started is not
+            // one of its steps.
+            state: "blocked".into(),
             updated_at_utc: t.into(),
             ..Default::default()
         });

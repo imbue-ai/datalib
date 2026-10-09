@@ -1,8 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 
-exports_files(["Cargo.toml"])
-
 # TNG-themed synthetic directory tree used as a scan root by the fsindex
 # e2e test and dropped into the dev/e2e data root (as `fsindex_scan/`) by
 # `//tests/fixtures:materialize_tng_root`. The leading-dot `.fsindex.yaml`
@@ -34,7 +32,9 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/fsindex_config:datalib_etl_fsindex_config",
+        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
@@ -57,6 +57,7 @@ rust_binary(
     deps = [
         ":datalib_etl_fsindex",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -98,6 +99,7 @@ rust_test(
     },
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         ":datalib_etl_fsindex",
         "@datalib_crates//:insta",
         "@datalib_crates//:sqlx",

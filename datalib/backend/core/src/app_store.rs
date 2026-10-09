@@ -93,7 +93,7 @@ impl AppStore {
             }
             for rung in datalib_store_meta::ladder::pending(ladder, stored).map_err(internal)? {
                 sqlx::query(datalib_store_meta::DDL).execute(pool).await?;
-                datalib_store_meta::ladder::apply(pool, rung)
+                datalib_store_meta::ladder::apply(pool, rung, datalib_store_meta::Ladder::Own)
                     .await
                     .map_err(internal)?;
                 if commits {
@@ -139,7 +139,11 @@ impl AppStore {
         ] {
             let hash = datalib_store_meta::schema_hash(ddl.iter().map(|(_t, d)| *d));
             let top = datalib_store_meta::ladder::top(ladder);
-            let changed = datalib_store_meta::write(pool, kind, &hash, top)
+            let versions = datalib_store_meta::Versions {
+                schema: top,
+                shared: 0,
+            };
+            let changed = datalib_store_meta::write(pool, kind, &hash, versions)
                 .await
                 .map_err(internal)?;
             let committed = matches!(kind, StoreKind::Feedback | StoreKind::RemoteMedia);

@@ -20,7 +20,7 @@ pub use parse::parse_api_dir;
 ///     every row carries its backpointer, and an id carries the
 ///     record's `created_at` in its leading bits (`datalib_id`'s v8
 ///     layout). Every uuid moved.
-pub const RENDER_VERSION: u32 = 3;
+pub const RENDER_VERSION: u32 = 5;
 
 pub const PROFILE: ForgeProfile = ForgeProfile {
     provider: Provider::Github,

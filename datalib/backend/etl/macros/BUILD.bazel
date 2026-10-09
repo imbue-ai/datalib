@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_proc_macro", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 rust_proc_macro(
     name = "datalib_etl_macros",
     srcs = glob(["src/**/*.rs"]),

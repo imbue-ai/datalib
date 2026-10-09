@@ -47,13 +47,36 @@ the write, because the API returns them in a different order on every
 fetch and an unchanged conversation has to serialize identically to
 itself (`canonicalize_conversation_payload`). Every other array keeps
 the order the API sent — `mapping.*.children` is branch order,
-`content.parts` reading order. Stock `sqlite3` cannot open the store;
+`content.parts` reading order. A message id is unique within its
+conversation, not across them: a conversation branched into a new chat
+repeats the original's (`../chatgpt_render/TRANSLATE.md` §"A message id
+is not unique across conversations"). Stock `sqlite3` cannot open the store;
 `docs/dev/doltlite.md` has the one-pipe export.
 
 The `_bookkeeping` sidecars (`fetched_at_utc`, `attempt_count`,
-`last_error`, …) are per-fetch state, kept out of the data tables so
-that a doltlite diff between two syncs shows only what changed
-upstream. `datalib/backend/etl/README.md` explains the split.
+`last_error`, `held_version`, …) are per-fetch state, kept out of the
+data tables so that a doltlite diff between two syncs shows only what
+changed upstream. `datalib/backend/etl/README.md` explains the split.
+
+## What is owed
+
+The download keeps two facts apart and computes the rest
+([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)):
+
+- **Listed:** what the listing names, at its `update_time`.
+- **Held:** a conversation's sidecar `held_version`, the `update_time`
+  its stored copy was fetched at, written in the transaction that
+  stores the row and the attachment edges for the files it names. An
+  edge's sidecar holds the version its conversation was held at once
+  its bytes land.
+- **Owed** is the difference, asked of the store each run: a listed
+  conversation not held at the version listed, and an edge not held at
+  its conversation's version.
+
+Nothing is marked done, so a run cut off anywhere, killed or stopped,
+leaves a store the next run finishes:
+`tests/chatgpt_tests/interrupt.rs` cuts a replayed run at every
+request and requires the store an uninterrupted run leaves.
 
 ## One run
 
@@ -61,65 +84,94 @@ upstream. `datalib/backend/etl/README.md` explains the split.
    reports under and is cheap.
 2. **List** `/backend-api/conversations?offset=&limit=100&order=updated`,
    newest-updated first, until the pages run out, `max_pages` is hit,
-   or — with `since` set — a page ends past the cutoff. The walk is
-   *complete* only in the first case.
+   a page fails, or — with `since` set — a page ends past the cutoff.
+   The walk is *complete* only in the first case.
 3. **Prune**, only after a complete walk: a conversation the store
    holds that the listing did not name was deleted on chatgpt.com, so
-   it is deleted here (its row stays in doltlite history). An
-   incomplete walk says nothing about the pages it never asked for,
-   so it prunes nothing; with `since` configured, most runs stop early
-   and prune nothing.
-4. **Skip-check**: one bulk read of `conversations.update_time` for
-   every listed id. A listed conversation is *missing* (no row),
-   *stale* (row, but the stored `update_time` differs), or up to date.
-   Missing ones are fetched first, then stale ones, so a run cut
-   short by a rate limit spent its budget on new work. Conversations
-   older than `since` are never detail-fetched (`out_of_scope` in the
-   summary), but rows already stored stay — moving `since` further
-   back later backfills the newly in-scope ones as missing.
-5. **Detail** `/backend-api/conversation/{id}` for each, written as
-   one row; then every attachment that conversation's messages name.
-6. **Seal** after each conversation and its blobs have both landed,
-   never between the two, so a render that starts early never sees a
-   message pointing at bytes it cannot resolve.
+   it is deleted here with its edges (its rows stay in doltlite
+   history). An incomplete walk says nothing about the pages it never
+   asked for, so it prunes nothing; with `since` configured, most runs
+   stop early and prune nothing.
+4. **Conversations owed**, the never-fetched first, then the stale, so
+   a run cut short by a rate limit spent its budget on new work; at
+   most `limit` of them. Conversations older than `since` are never
+   detail-fetched (`out_of_scope` in the summary), but rows already
+   stored stay — moving `since` further back later lists the newly in
+   scope ones as owed. Each is `/backend-api/conversation/{id}`,
+   stored with its edges, 25 to a transaction, sealed as they land.
+5. **Attachments owed**, from the edges the store lists (below).
 
 `conv_uuids` replaces steps 2–4 with exactly the named conversations
-(bare ids or paste-able `https://chatgpt.com/c/<id>` URLs); the
-listing is never walked and nothing is pruned.
+(bare ids or paste-able `https://chatgpt.com/c/<id>` URLs), each
+fetched every run since nothing lists them; nothing is pruned.
 
-### The skip key compares at whole seconds
+### The version is the update time in whole seconds
 
 The listing endpoint reports `update_time` as an ISO-8601 string; the
 detail endpoint reports the same instant as a Unix-epoch float, and
 that is what the row stores (JSON-encoded, `1710959331.420159`). The
-two never match as text, so `update_time_secs` reduces both to whole
-seconds before comparing. Either side failing to parse counts as stale
-— the safe direction is to refetch. `since` is compared at the same
-grain.
+two never match as text, so the version a conversation is listed and
+held at is `update_time` reduced to whole seconds (`version_of`). One
+that will not parse is kept as written. `since` is compared at the
+same grain.
 
 ### Attachments
 
 For every `metadata.attachments[]` entry and `asset_pointer` in a
-conversation, the walk asks `/backend-api/files/{id}/download` for a
-signed URL, fetches the bytes through `latchkey curl`, and stores them
-in `blobs.sqlite` keyed by blake3, with a `chatgpt_attachments`
-row linking the conversation's `file_id` to that hash. Signed URLs
-rotate; bytes do not, so a file whose `blake3` is already on its edge
-row is not fetched again (delete `blobs.sqlite` *and* reset the ingest
-step, and the next sync re-pulls). A failed blob bumps its `attempt_count` and `last_error`
-and does not fail the sync. The name and MIME type render needs stay
-in the conversation payload; the edge table holds only the mapping.
+conversation, the conversation's transaction writes a
+`chatgpt_attachments` edge with no `blake3`; a refetch that no longer
+names a file drops its edge. The attachment loop asks
+`/backend-api/files/{id}/download` for a signed URL and fetches the
+bytes behind it, both through `latchkey_curl`, and stores them in
+`blobs.sqlite` keyed by blake3. Signed URLs rotate; bytes do not, so a
+file whose bytes the CAS already holds under any conversation is not
+fetched again (delete `blobs.sqlite` *and* reset the ingest step, and
+the next sync re-pulls). The name and MIME type render needs stay in
+the conversation payload.
 
-### Errors and rate limits
+A file that does not land is owed, with its edge's `problems` row
+saying why, which render shows on the conversation's page; the next
+run asks again. A file chatgpt.com answers `404` or `410` for is gone,
+not failed: its edge is held with a `not_found` warning, and asked for
+again only when its conversation changes.
 
-A conversation the API refuses (`ChatGPTError::Permanent`) is
-recorded on its bookkeeping row through `record_object_error`, which
-is how it reaches the `problems` table and the Manage screen; the run
-moves on. A `429` is retried with `Retry-After`, or exponential
-backoff when the header is absent, inside the shared `latchkey_curl`
-chokepoint; when that gives up, `api::ChatGPTClient::get` maps the
-`HttpError::GaveUp` to `ChatGPTError::RateLimited` and the run stops
-cleanly, to resume from the same store next time.
+### When part of a sync fails
+
+Only two things fail the step: `/me` failing (the credential is not
+working), and the first listing page failing with no conversation
+stored to fall back on. Anything else is a `problems` row, and the sync
+goes on with what it has:
+
+- **A conversation that will not fetch** is owed, with its
+  `conversations:<id>` row; render shows it on that conversation. The
+  row clears when it lands. A `404` on the detail of a conversation
+  the listing names is such a failure: what the mirror holds stays, and
+  only a complete listing that leaves it out deletes it.
+- **A listing page that fails** after the first keeps the pages before
+  it. The walk is then incomplete, so nothing is pruned, and the run
+  records `listing:conversations`. Every run lists again, so the next
+  clean listing clears it. A `200` whose body has no `items` array is
+  a failed page too, the first one included: only an `items` that is
+  an empty array says the listing has ended.
+- **A rate limit** — a `429` is retried with `Retry-After`, or
+  exponential backoff when the header is absent, inside the shared
+  `latchkey_curl` chokepoint; when that gives up, the loop it struck
+  ends the run's requests, since every later request would be refused
+  too, and records `phase:conversations` or `phase:attachments`. What
+  was left is still owed, so the next run fetches it, and that run's
+  report clears the row. Twenty-five failures in a row end a loop the
+  same way.
+- **A named conversation** (`conv_uuids`) that answers `404` is
+  `config:conv_uuids:<value>`; any other failure is its
+  `conversations:<id>` row, as above. Every named conversation is
+  fetched every run, so both clear when it answers.
+- **An attachment** is its edge's row (see Attachments above).
+
+The `listing:`/`phase:` and `config:` rows of a run that got to its end
+replace the last run's. A run cut short by the rate limit adds its rows
+and clears none, and does not rewrite the `config:` rows, since it did
+not check every named conversation. A run that was asked to stop
+clears none, and records nothing about a request the stop refused.
 
 A reset (`datalib-dag --reset`) empties all three tables and their
 bookkeeping, so the next sync's diff against the pre-reset commit is
@@ -245,11 +297,16 @@ latchkey auth set chatgpt -H "Cookie: cf_clearance=$(pbpaste)"
 
 A TNG-themed fixture of the API's shapes lives at
 `tests/fixtures/chatgpt_api/` (`me.json`, `conversations.json`, one
-`conversations/<id>.json` per conversation), exposed as the Bazel
-`tng_fixture` filegroup. Every hermetic test is a module of
+`conversations/<id>.json` per conversation, and `files/<file_id>.<ext>`
+for the attachment bytes the synthesizer serves behind each file's
+metadata call and signed URL), exposed as the Bazel `tng_fixture`
+filegroup. Every hermetic test is a module of
 `:chatgpt_tests`: `chatgpt_render` renders the fixture, and
-`incremental_skip` and `playback_roundtrip` replay it through a playback
-tape (`docs/dev/testing.md` § "Watching a sync stream" explains the
+`incremental_skip`, `playback_roundtrip`, `run_problems` (what a
+partial failure records, and when it clears), `interrupt` (a run cut
+off anywhere resumes to the same store) and `upgrade` (an older store
+opens holding what it had) replay small snapshots of the same shape
+through a playback tape (`docs/dev/testing.md` § "Watching a sync stream" explains the
 tapes). The shared `tests/fixtures` root ingests it too.
 
 The `live` module downloads one real conversation and snapshots it.

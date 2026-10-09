@@ -8,24 +8,36 @@ importers:
 
   .:
     dependencies:
+      '@codemirror/autocomplete':
+        specifier: 6.20.3
+        version: 6.20.3
+      '@codemirror/commands':
+        specifier: 6.11.1
+        version: 6.11.1
+      '@codemirror/state':
+        specifier: 6.7.6
+        version: 6.7.6
+      '@codemirror/view':
+        specifier: 6.43.14
+        version: 6.43.14
       '@slickgrid-universal/common':
-        specifier: 10.11.0
-        version: 10.11.0
+        specifier: 10.11.2
+        version: 10.11.2
       '@slickgrid-universal/event-pub-sub':
         specifier: 10.10.0
         version: 10.10.0
       '@slickgrid-universal/vanilla-bundle':
-        specifier: 10.11.0
-        version: 10.11.0
+        specifier: 10.11.2
+        version: 10.11.2
       '@tauri-apps/api':
-        specifier: ^2.11.1
-        version: 2.11.1
+        specifier: ^2.12.1
+        version: 2.12.1
       '@tauri-apps/plugin-dialog':
-        specifier: ^2.7.3
-        version: 2.7.3
+        specifier: ^2.8.1
+        version: 2.8.1
       '@tauri-apps/plugin-opener':
-        specifier: ^2.5.5
-        version: 2.5.5
+        specifier: ^2.7.0
+        version: 2.7.0
       dompurify:
         specifier: 3.4.16
         version: 3.4.16
@@ -49,14 +61,14 @@ importers:
         version: 3.5.43(typescript@6.0.3)
       vue-router:
         specifier: 5.3.1
-        version: 5.3.1(@vue/compiler-sfc@3.5.43)(esbuild@0.27.7)(pinia@4.0.3(@vue/devtools-api@8.2.1)(typescript@6.0.3)(vue@3.5.43(typescript@6.0.3)))(rolldown@1.2.11)(rollup@4.60.4)(vite@8.3.1(esbuild@0.27.7))(vue@3.5.43(typescript@6.0.3))
+        version: 5.3.1(@vue/compiler-sfc@3.5.43)(esbuild@0.27.7)(pinia@4.0.3(@vue/devtools-api@8.2.1)(typescript@6.0.3)(vue@3.5.43(typescript@6.0.3)))(rolldown@1.2.11)(rollup@4.60.4)(vite@8.3.2(esbuild@0.27.7))(vue@3.5.43(typescript@6.0.3))
     devDependencies:
       '@playwright/test':
         specifier: ^1.63.0
         version: 1.63.0
       '@vitejs/plugin-vue':
         specifier: ^6.0.9
-        version: 6.0.9(vite@8.3.1(esbuild@0.27.7))(vue@3.5.43(typescript@6.0.3))
+        version: 6.0.9(vite@8.3.2(esbuild@0.27.7))(vue@3.5.43(typescript@6.0.3))
       '@vue/test-utils':
         specifier: ^2.5.1
         version: 2.5.1(@vue/compiler-dom@3.5.43)(@vue/server-renderer@3.5.43)(vue@3.5.43(typescript@6.0.3))
@@ -70,11 +82,11 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
       vite:
-        specifier: 8.3.1
-        version: 8.3.1(esbuild@0.27.7)
+        specifier: 8.3.2
+        version: 8.3.2(esbuild@0.27.7)
       vitest:
-        specifier: 5.0.1
-        version: 5.0.1(jsdom@30.1.1)(vite@8.3.1(esbuild@0.27.7))
+        specifier: 5.0.3
+        version: 5.0.3(jsdom@30.1.1)(vite@8.3.2(esbuild@0.27.7))
       vue-tsc:
         specifier: 3.3.11
         version: 3.3.11(typescript@6.0.3)
@@ -126,6 +138,24 @@ packages:
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
     hasBin: true
+
+  '@codemirror/autocomplete@6.20.3':
+    resolution: {integrity: sha512-tlosUqb+3BbxCxZdu4tKeRghPFC+QM7q4X5YhKV2eCmPG+1r2F3f4AaSz5sCrFqUtX4Jh20VFTKecl16MgiV9g==}
+
+  '@codemirror/commands@6.11.1':
+    resolution: {integrity: sha512-O/4hG3SC1YwcmQ0d2UVNDs+AsaNWd1iHVxbTeEBuqH+6bExAiPK3iS/BvpY6rZGURALv4ZD3sIgcCmRvw3ehBg==}
+
+  '@codemirror/language@6.13.1':
+    resolution: {integrity: sha512-zfvU2r3TyylQLMj/te+5CnQ0rSqZi8B1oTCBbQkagcLW4Xc6imab6qN+pEJhsuNOLaJqiRyBXp9UhWA1DhVvDw==}
+
+  '@codemirror/state@6.7.6':
+    resolution: {integrity: sha512-kAz+AncRtKuIknedxT1bq4XwXv4UowhbkHU1myPrtVb/jZtImWuV5BXzv5vK6i3kYACsdiZiQKFQQ5Mq7elW8w==}
+
+  '@codemirror/streamparser@6.0.0':
+    resolution: {integrity: sha512-JTFPF6xrfjt0mnfGPgzcLiMwYmvIyNaoizp8BYzv8FE8KrT6GBGDZ190rtt+O7Wke3gG/MFHyiY9YGNeimof4w==}
+
+  '@codemirror/view@6.43.14':
+    resolution: {integrity: sha512-hC45YnmJNR1rz42OF57BLoQNFMV12/13drnvibDsR2quNDmldcb4WvYVV81hFQg56i9lcqQMEDqilhX2QDcGQQ==}
 
   '@csstools/color-helpers@6.1.1':
     resolution: {integrity: sha512-gLNsunvwf3mCi5u5o46/Z/JcJMnhbHSaZ69rkgPzNM3J4s8hWwpPUQB6/tt0EDFyCiWzxANlx+2LJwpYj4zS1w==}
@@ -349,6 +379,18 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@lezer/common@1.5.3':
+    resolution: {integrity: sha512-H0iErY4e43LpXbYDyBci5W4v/RwTgGV3YzYOlJPiGZ8RY8w51kVE+xLn1tg3Z6UmSfyETvtsUK3r7YsgDQEI7Q==}
+
+  '@lezer/highlight@1.2.5':
+    resolution: {integrity: sha512-O1GMVKgtf5YspFaRzpmqkVgMtIk2HG9uMAbH6wdAIdNh3TVzCsch/+cRi+6l2//UGDKe6NB9BW3cvuR5ezMQ0w==}
+
+  '@lezer/lr@1.4.11':
+    resolution: {integrity: sha512-UwgZcl1R66H2hDzBrA7kWyYmX6s8p5TQ+e/t7CuvgCtBEPxbEPaHYHu+pJBvTvDotEJpuQkJjbXuHiw5Cixxgw==}
+
+  '@marijn/find-cluster-break@1.0.4':
+    resolution: {integrity: sha512-Wy0V7+SGUjnF9/TkiM1hKVDPj7jKXduPNboMVtHTA8dySMURWqfg/JZ9E2Sq8JgSJmkl7k7Qe9FLeMSrSraWmQ==}
 
   '@one-ini/wasm@0.2.1':
     resolution: {integrity: sha512-TUqERXGNTifZ9y2g3wPxQrw3HpHv/02DsW3D90T9x0hhonrL1ZqpSmNrU2XkoIq0fP1N6gZfVQzy2Fw1ZvGBNg==}
@@ -598,39 +640,39 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@slickgrid-universal/binding@10.1.0':
-    resolution: {integrity: sha512-qJNRkiX3Z4jCTJkfX1bkMTJAFWbUhfunPd7c9/jf5Hijcb59oQlCpdoQGIOyuUbz3ooZd0N/cPKcET9x6RkKFQ==}
+  '@slickgrid-universal/binding@10.11.2':
+    resolution: {integrity: sha512-wxckeGHWyh0PG7qadv/EK1u9t+kmLsHnie1FDRltpmI44H7Ylc2kuw4uddOsIItJwUvlTsDfAlbLRqnsdAbnPA==}
 
-  '@slickgrid-universal/common@10.11.0':
-    resolution: {integrity: sha512-7GgLe5uXknLE2FNKecvk866S/0ckBjrVIs1Y28G3+ELdYODqUsnDhVKZLvZU3sP4fXvdHQai2jPz/ZT1q/gYow==}
+  '@slickgrid-universal/common@10.11.2':
+    resolution: {integrity: sha512-S7pimfZPL9xaG6SJuSyHUuU0AzpTForVOcZIMzOsyblmL4nsrdYTRcv6lgwE02PPp31JQzNlFuFoq/jPrbLMww==}
     engines: {node: ^20.0.0 || >=22.0.0}
 
-  '@slickgrid-universal/custom-footer-component@10.11.0':
-    resolution: {integrity: sha512-04YKv+uKZ4RXjRds8piJ6dic0uAL4RO5ErVAN7q99umfR9tJsE/ER54QxgJCw967b1M5+dnsiaQwwxZM/g944g==}
+  '@slickgrid-universal/custom-footer-component@10.11.2':
+    resolution: {integrity: sha512-p7Xz/dvkvCIsC/mUq2O/duy5VIzI3SVIxlFhKoztfX9GaaoeQb5DeTK0hx4Wp72ZBIK+MMcx0Qvq+GTQ7h5F/A==}
 
-  '@slickgrid-universal/empty-warning-component@10.11.0':
-    resolution: {integrity: sha512-wdjGvlAnQ19dpjOqjnyIOoyHStj7dkZo42jOPde64/g0sAoZSA1qcVv3hiaR+g0Ec67kXMH4tqznG510vCFQfw==}
+  '@slickgrid-universal/empty-warning-component@10.11.2':
+    resolution: {integrity: sha512-WwINf60qYFHRQ7KXvu9i/yHQTDuNUPz6GZii+0pcLWs7wlUJx/tb0ky8p/gvC9RK0Dh6KQBePnj5FfOdFPE/9g==}
 
   '@slickgrid-universal/event-pub-sub@10.10.0':
     resolution: {integrity: sha512-FKCTlV272lUNolIYeYYPggE3ducmmUeD+pxvHd+pCb1885080drQIr+k5wd+Q1eZj2P7BrlPKFEVF79ZL0QUmA==}
 
-  '@slickgrid-universal/pagination-component@10.11.0':
-    resolution: {integrity: sha512-UXPqkC/BrPPR/9R7kcPjZu+SSF+f5/ntp3RamhSi2+Rj1Eko5lEzQqgWYLJkfF1f24wf46Vt3yI0WNFAKUuE4Q==}
+  '@slickgrid-universal/pagination-component@10.11.2':
+    resolution: {integrity: sha512-78l0/W2QGphwA736OyPu1bTHKzIMEJeI6wgDZRQJVwapbT5eRi8Mejp3M9Z6FOS8EW8zGkY4fcW6zbYC39cxdw==}
 
   '@slickgrid-universal/utils@10.10.0':
     resolution: {integrity: sha512-Qwiv7Dl2O7qsV59WdSJjKpOzNZQpYwKJupJfdd/ru0gkEG3aD2Q0njA2hw0m+nhuQcLME+vbrMuMMnMsuQEwfw==}
 
-  '@slickgrid-universal/vanilla-bundle@10.11.0':
-    resolution: {integrity: sha512-QpieyvlFBgNrDeggg5FJBcFNJVc5rueCL7xAIHaJbDRDdifqS+y7cqLI7cQ16A11AQBjPrDxfFGvoc83G2eW7Q==}
+  '@slickgrid-universal/vanilla-bundle@10.11.2':
+    resolution: {integrity: sha512-bi5kQzAqg930D9MowY8KKSuopai8Z/BvVGn1+SX/Wvcc1rm2iLUPJXk8qysF32ZK61Cu/lBfhB0EHBHpkRfi/A==}
 
-  '@tauri-apps/api@2.11.1':
-    resolution: {integrity: sha512-M2FPuYND2m+wh5hfW9ZpSdxMPdEJovPBWwoHJmwUpysTYNHaOkVFN419m/K0LIgjb/7KU2vBgsUepJWugQCvAA==}
+  '@tauri-apps/api@2.12.1':
+    resolution: {integrity: sha512-DeyFHa3wynpyoqTDikDEDGTJIq4LQ5USfolQGRmGIWT6JMADyxZBTDa5cAdT3tDg73rUXufPaCwN7aXBos4OnQ==}
 
-  '@tauri-apps/plugin-dialog@2.7.3':
-    resolution: {integrity: sha512-CRgE+7TP4tvq9MjBU6f04NLTFIqVMLKHk3hAqlhil00ngK9ACTrXPH3oHpKMProxILodd3YjBoKbMwSI4IEcfA==}
+  '@tauri-apps/plugin-dialog@2.8.1':
+    resolution: {integrity: sha512-/DtE3B62JgpYuWFL5ATXM6KOXUq7pca7cJWOgSqULhZsgyjLk0PWKek1dbRDvhNBW6flNsOfWphsKnb+738Dmw==}
 
-  '@tauri-apps/plugin-opener@2.5.5':
-    resolution: {integrity: sha512-xvzGai5aQds8j8R8RsUK/lW6pGG50YgOYIPLzvkqmkwAj7dfySOD7sGtejRzvVdMmv1EQfKVEFh1MvmDp8QR0g==}
+  '@tauri-apps/plugin-opener@2.7.0':
+    resolution: {integrity: sha512-mBorYfVKh9Lt7s4ZFtKbMUTxBw+Y/sVmSlKCtkkoBgMTC/DIbt/kaPm67L/2djAUqDI1wbixy5OHHVmipjuGMw==}
 
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
@@ -657,8 +699,8 @@ packages:
       vite: ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0
       vue: ^3.2.25
 
-  '@vitest/mocker@5.0.1':
-    resolution: {integrity: sha512-6K1DoBNAPGvuOcSsGA4D6x+5zEEff/KmOOP3uetT2TrGpVfI+HRHRnJJfKi5ib/g1vx8IYHQD8s0pbJz8WQI7Q==}
+  '@vitest/mocker@5.0.3':
+    resolution: {integrity: sha512-T8sWAIbkSyAjkwTcaEc3Iu0o9A27X1/kdXrizhZkGuSKScRQtRzclfAMpOTcGdXCsqxeWlpGy3XjqaW8CpLORg==}
     peerDependencies:
       msw: ^2.4.9
       vite: ^6.0.0 || ^7.0.0 || ^8.0.0
@@ -668,8 +710,8 @@ packages:
       vite:
         optional: true
 
-  '@vitest/spy@5.0.1':
-    resolution: {integrity: sha512-rbto/mF/SGERxEgYOek7Xm6B9b+y+mVoo+f4b2LymYO8zM1b7uB5nHuhVMTP2hxdzgxvGiZYGxGIaMvL5y180Q==}
+  '@vitest/spy@5.0.3':
+    resolution: {integrity: sha512-XhFysQTB8AZ+P4gMi+Lpo99vg2AZi0qKpaB9yXQl37+CaMEAPO3iH/wGVnSyL5MPERiLezpqTVtrR6UZH5GCXg==}
 
   '@volar/language-core@2.4.28':
     resolution: {integrity: sha512-w4qhIJ8ZSitgLAkVay6AbcnC7gP3glYM3fYwKV3srj8m494E3xtrCv6E+bWviiK/8hs6e6t1ij1s2Endql7vzQ==}
@@ -822,6 +864,9 @@ packages:
 
   config-chain@1.1.13:
     resolution: {integrity: sha512-qj+f8APARXHrM0hraqXYb2/bOVSV4PvJQlNZ/DVj0QrmNM2q2euizkeuVckQ57J+W0mRH6Hvi+k50M4Jul2VRQ==}
+
+  crelt@1.0.7:
+    resolution: {integrity: sha512-aK6BbWfhf4U/wCcLHKPJl/xa6VkVstRaPywWtMKGwuOLc/wZTyQYuoxgvZnNsBvv7Kg3YTBQYYBCggcviQczuA==}
 
   css-tree@3.2.1:
     resolution: {integrity: sha512-X7sjQzceUhu1u7Y/ylrRZFU2FS6LRiFVp6rKLPg23y3x3c3DOKAwuXGDp+PAGjh6CSnCjYeAul8pcT8bAl+lSA==}
@@ -1183,9 +1228,6 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  siginfo@2.0.0:
-    resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
-
   sortablejs@1.15.7:
     resolution: {integrity: sha512-Kk8wLQPlS+yi1ZEf48a4+fzHa4yxjC30M/Sr2AnQu+f/MPwvvX9XjZ6OWejiz8crBsLwSq8GHqaxaET7u6ux0A==}
 
@@ -1193,11 +1235,11 @@ packages:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
 
-  stackback@0.0.2:
-    resolution: {integrity: sha512-1XMJE5fQo1jGH6Y/7ebnwPOBEkIEnT4QF32d5R1+VXdXveM0IBMJt8zfaxX1P3QhVwrYe+576+jkANtSS2mBbw==}
-
   std-env@4.2.0:
     resolution: {integrity: sha512-oCUKSupKTHX53EyjDtuZQ64pjLJ6yYCtpmEw0goYxtjG9KpbRe8KAsl2tBUGU9DyMcJ0RwJ8GqJAFzMXcXW1Rw==}
+
+  style-mod@4.1.4:
+    resolution: {integrity: sha512-XXWIQt633/EpAFx8aZDOTjBzrCaGmhvEQlQo6MVPfa2OzO2cWo+4hV9h+6UkHYlXGfy+ODXKUdP7Pthmcu5ATw==}
 
   tinybench@6.1.4:
     resolution: {integrity: sha512-9APumHG7r4yOk4X4WlkmE71aZcv1gvin1czO3OQ1U9iJcFA5Ja/ygyb0vPOVHTthFozUYs8CLoLUlM8grb2lTQ==}
@@ -1285,11 +1327,11 @@ packages:
   uplot@1.6.32:
     resolution: {integrity: sha512-KIMVnG68zvu5XXUbC4LQEPnhwOxBuLyW1AHtpm6IKTXImkbLgkMy+jabjLgSLMasNuGGzQm/ep3tOkyTxpiQIw==}
 
-  vanilla-calendar-pro@3.3.2:
-    resolution: {integrity: sha512-RaLpDtvQFeKi0ajOpGBedLNrr0YoiYAF+0sppk4XZV/U57AuihJIhw8h2whUvIG1ZSR3LrdSXk3lHLkCPGlHvg==}
+  vanilla-calendar-pro@3.4.0:
+    resolution: {integrity: sha512-HLWjzHOWvMIrjI77tXK5bYzp0s5TeBSrZC247STjcTAdWI7kqEwWT6Xvu20vqdwzF498H1Da8l4WpdgVIGtc1Q==}
 
-  vite@8.3.1:
-    resolution: {integrity: sha512-/bvH9E9tmCXRGp2uXY3WbOldqpTwFkbha/8ANaEQ6VkxhH60KyqLwgZq6lG2y+4uT55x9+9eUHMpQ7uGnOCKjA==}
+  vite@8.3.2:
+    resolution: {integrity: sha512-SQr1x6W5vVSbROg7vsyXIaxK9b0G7zsT68acdWWRmnBUsgDieLCRG+Rep9WdZgcposvv/GSnr4GUUBqB3vXq6w==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
@@ -1331,20 +1373,20 @@ packages:
       yaml:
         optional: true
 
-  vitest@5.0.1:
-    resolution: {integrity: sha512-iA95lQbKEkvrtTkdAgnWbXfbipWiiWe/hDl2P5tMi6WFwD76G0NxXAGp/M9EOcYupeGJRr6wppMc7CoA41TQjg==}
+  vitest@5.0.3:
+    resolution: {integrity: sha512-xMw97S3rjdtj5dkVat7jCsqWBpvchs3RlpQctUqwJD0KkERk40vz2fJ77lDwW/Vzh/pk18eItYAzkodhSes3jQ==}
     engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
       '@edge-runtime/vm': '*'
       '@opentelemetry/api': ^1.9.0
       '@types/node': ^22.0.0 || >=24.0.0
-      '@vitest/browser-playwright': 5.0.1
-      '@vitest/browser-preview': 5.0.1
+      '@vitest/browser-playwright': 5.0.3
+      '@vitest/browser-preview': 5.0.3
       '@vitest/browser-webdriverio': ^5.0.0-beta.5 || >=5.0.0
-      '@vitest/coverage-istanbul': 5.0.1
-      '@vitest/coverage-v8': 5.0.1
-      '@vitest/ui': 5.0.1
+      '@vitest/coverage-istanbul': 5.0.3
+      '@vitest/coverage-v8': 5.0.3
+      '@vitest/ui': 5.0.3
       happy-dom: '*'
       jsdom: '*'
       vite: ^6.4.0 || ^7.0.0 || ^8.0.0
@@ -1410,6 +1452,9 @@ packages:
       typescript:
         optional: true
 
+  w3c-keyname@2.2.8:
+    resolution: {integrity: sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ==}
+
   w3c-xmlserializer@6.0.0:
     resolution: {integrity: sha512-4Nsy8K5Tr6SPDH9jhKJOHf7ChDrc1zufZTVSF7x72hwuEXBqxqk9G6cK+K2NRUtB3iELRJqjXb4JPDMBjMTl2Q==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
@@ -1433,9 +1478,9 @@ packages:
     resolution: {integrity: sha512-ohjk1mdUebJVadRt3bAhQhx8lSnISq+GDttK79LFl8EHQkAPvzwctoasC4hs8tBt6kLAncBWWyq1N52qEfKvDw==}
     engines: {node: ^22.14.0 || >=24.0.0}
 
-  why-is-node-running@2.3.0:
-    resolution: {integrity: sha512-hUrmaWBdVDcxvYqnyh09zunKzROWjbZTiNy8dBEjkS7ehEDQibXJ7XvlmtbwuTclUiIyN+CyXQD4Vmko8fNm8w==}
-    engines: {node: '>=8'}
+  why-is-node-running@3.2.1:
+    resolution: {integrity: sha512-Tb2FUhB4vUsGQlfSquQLYkApkuPAFQXGFzxWKHHumVz2dK+X1RUm/HnID4+TfIGYJ1kTcwOaCk/buYCEJr6YjQ==}
+    engines: {node: '>=20.11'}
     hasBin: true
 
   xml-name-validator@5.0.0:
@@ -1491,6 +1536,43 @@ snapshots:
   '@bramus/specificity@2.4.2':
     dependencies:
       css-tree: 3.2.1
+
+  '@codemirror/autocomplete@6.20.3':
+    dependencies:
+      '@codemirror/language': 6.13.1
+      '@codemirror/state': 6.7.6
+      '@codemirror/view': 6.43.14
+      '@lezer/common': 1.5.3
+
+  '@codemirror/commands@6.11.1':
+    dependencies:
+      '@codemirror/language': 6.13.1
+      '@codemirror/state': 6.7.6
+      '@codemirror/view': 6.43.14
+      '@lezer/common': 1.5.3
+
+  '@codemirror/language@6.13.1':
+    dependencies:
+      '@codemirror/state': 6.7.6
+      '@codemirror/streamparser': 6.0.0
+      '@codemirror/view': 6.43.14
+      '@lezer/common': 1.5.3
+      '@lezer/highlight': 1.2.5
+      '@lezer/lr': 1.4.11
+      style-mod: 4.1.4
+
+  '@codemirror/state@6.7.6':
+    dependencies:
+      '@marijn/find-cluster-break': 1.0.4
+
+  '@codemirror/streamparser@6.0.0': {}
+
+  '@codemirror/view@6.43.14':
+    dependencies:
+      '@codemirror/state': 6.7.6
+      crelt: 1.0.7
+      style-mod: 4.1.4
+      w3c-keyname: 2.2.8
 
   '@csstools/color-helpers@6.1.1': {}
 
@@ -1618,6 +1700,18 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  '@lezer/common@1.5.3': {}
+
+  '@lezer/highlight@1.2.5':
+    dependencies:
+      '@lezer/common': 1.5.3
+
+  '@lezer/lr@1.4.11':
+    dependencies:
+      '@lezer/common': 1.5.3
+
+  '@marijn/find-cluster-break@1.0.4': {}
 
   '@one-ini/wasm@0.2.1': {}
 
@@ -1749,13 +1843,13 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.60.4':
     optional: true
 
-  '@slickgrid-universal/binding@10.1.0': {}
+  '@slickgrid-universal/binding@10.11.2': {}
 
-  '@slickgrid-universal/common@10.11.0':
+  '@slickgrid-universal/common@10.11.2':
     dependencies:
       '@excel-builder-vanilla/types': 5.2.3
       '@formkit/tempo': 1.1.0
-      '@slickgrid-universal/binding': 10.1.0
+      '@slickgrid-universal/binding': 10.11.2
       '@slickgrid-universal/event-pub-sub': 10.10.0
       '@slickgrid-universal/utils': 10.10.0
       '@types/sortablejs': 1.15.9
@@ -1764,49 +1858,49 @@ snapshots:
       dequal: 2.0.3
       multiple-select-vanilla: 5.2.2
       sortablejs: 1.15.7
-      vanilla-calendar-pro: 3.3.2
+      vanilla-calendar-pro: 3.4.0
 
-  '@slickgrid-universal/custom-footer-component@10.11.0':
+  '@slickgrid-universal/custom-footer-component@10.11.2':
     dependencies:
       '@formkit/tempo': 1.1.0
-      '@slickgrid-universal/binding': 10.1.0
-      '@slickgrid-universal/common': 10.11.0
+      '@slickgrid-universal/binding': 10.11.2
+      '@slickgrid-universal/common': 10.11.2
 
-  '@slickgrid-universal/empty-warning-component@10.11.0':
+  '@slickgrid-universal/empty-warning-component@10.11.2':
     dependencies:
-      '@slickgrid-universal/common': 10.11.0
+      '@slickgrid-universal/common': 10.11.2
 
   '@slickgrid-universal/event-pub-sub@10.10.0':
     dependencies:
       '@slickgrid-universal/utils': 10.10.0
 
-  '@slickgrid-universal/pagination-component@10.11.0':
+  '@slickgrid-universal/pagination-component@10.11.2':
     dependencies:
-      '@slickgrid-universal/binding': 10.1.0
-      '@slickgrid-universal/common': 10.11.0
+      '@slickgrid-universal/binding': 10.11.2
+      '@slickgrid-universal/common': 10.11.2
 
   '@slickgrid-universal/utils@10.10.0': {}
 
-  '@slickgrid-universal/vanilla-bundle@10.11.0':
+  '@slickgrid-universal/vanilla-bundle@10.11.2':
     dependencies:
-      '@slickgrid-universal/binding': 10.1.0
-      '@slickgrid-universal/common': 10.11.0
-      '@slickgrid-universal/custom-footer-component': 10.11.0
-      '@slickgrid-universal/empty-warning-component': 10.11.0
+      '@slickgrid-universal/binding': 10.11.2
+      '@slickgrid-universal/common': 10.11.2
+      '@slickgrid-universal/custom-footer-component': 10.11.2
+      '@slickgrid-universal/empty-warning-component': 10.11.2
       '@slickgrid-universal/event-pub-sub': 10.10.0
-      '@slickgrid-universal/pagination-component': 10.11.0
+      '@slickgrid-universal/pagination-component': 10.11.2
       '@slickgrid-universal/utils': 10.10.0
       dequal: 2.0.3
 
-  '@tauri-apps/api@2.11.1': {}
+  '@tauri-apps/api@2.12.1': {}
 
-  '@tauri-apps/plugin-dialog@2.7.3':
+  '@tauri-apps/plugin-dialog@2.8.1':
     dependencies:
-      '@tauri-apps/api': 2.11.1
+      '@tauri-apps/api': 2.12.1
 
-  '@tauri-apps/plugin-opener@2.5.5':
+  '@tauri-apps/plugin-opener@2.7.0':
     dependencies:
-      '@tauri-apps/api': 2.11.1
+      '@tauri-apps/api': 2.12.1
 
   '@types/chai@5.2.3':
     dependencies:
@@ -1824,22 +1918,22 @@ snapshots:
 
   '@types/trusted-types@2.0.7': {}
 
-  '@vitejs/plugin-vue@6.0.9(vite@8.3.1(esbuild@0.27.7))(vue@3.5.43(typescript@6.0.3))':
+  '@vitejs/plugin-vue@6.0.9(vite@8.3.2(esbuild@0.27.7))(vue@3.5.43(typescript@6.0.3))':
     dependencies:
       '@rolldown/pluginutils': 1.0.1
-      vite: 8.3.1(esbuild@0.27.7)
+      vite: 8.3.2(esbuild@0.27.7)
       vue: 3.5.43(typescript@6.0.3)
 
-  '@vitest/mocker@5.0.1(vite@8.3.1(esbuild@0.27.7))':
+  '@vitest/mocker@5.0.3(vite@8.3.2(esbuild@0.27.7))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
-      '@vitest/spy': 5.0.1
+      '@vitest/spy': 5.0.3
       estree-walker: 3.0.3
       magic-string: 1.4.1
     optionalDependencies:
-      vite: 8.3.1(esbuild@0.27.7)
+      vite: 8.3.2(esbuild@0.27.7)
 
-  '@vitest/spy@5.0.1': {}
+  '@vitest/spy@5.0.3': {}
 
   '@volar/language-core@2.4.28':
     dependencies:
@@ -2034,6 +2128,8 @@ snapshots:
     dependencies:
       ini: 1.3.8
       proto-list: 1.2.4
+
+  crelt@1.0.7: {}
 
   css-tree@3.2.1:
     dependencies:
@@ -2419,15 +2515,13 @@ snapshots:
 
   semver@7.7.4: {}
 
-  siginfo@2.0.0: {}
-
   sortablejs@1.15.7: {}
 
   source-map-js@1.2.1: {}
 
-  stackback@0.0.2: {}
-
   std-env@4.2.0: {}
+
+  style-mod@4.1.4: {}
 
   tinybench@6.1.4: {}
 
@@ -2469,7 +2563,7 @@ snapshots:
       pathe: 2.0.3
       picomatch: 4.0.7
 
-  unplugin@3.3.0(esbuild@0.27.7)(rolldown@1.2.11)(rollup@4.60.4)(vite@8.3.1(esbuild@0.27.7)):
+  unplugin@3.3.0(esbuild@0.27.7)(rolldown@1.2.11)(rollup@4.60.4)(vite@8.3.2(esbuild@0.27.7)):
     dependencies:
       '@jridgewell/remapping': 2.3.5
       picomatch: 4.0.7
@@ -2478,13 +2572,13 @@ snapshots:
       esbuild: 0.27.7
       rolldown: 1.2.11
       rollup: 4.60.4
-      vite: 8.3.1(esbuild@0.27.7)
+      vite: 8.3.2(esbuild@0.27.7)
 
   uplot@1.6.32: {}
 
-  vanilla-calendar-pro@3.3.2: {}
+  vanilla-calendar-pro@3.4.0: {}
 
-  vite@8.3.1(esbuild@0.27.7):
+  vite@8.3.2(esbuild@0.27.7):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -2495,10 +2589,10 @@ snapshots:
       esbuild: 0.27.7
       fsevents: 2.3.3
 
-  vitest@5.0.1(jsdom@30.1.1)(vite@8.3.1(esbuild@0.27.7)):
+  vitest@5.0.3(jsdom@30.1.1)(vite@8.3.2(esbuild@0.27.7)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.1(vite@8.3.1(esbuild@0.27.7))
+      '@vitest/mocker': 5.0.3(vite@8.3.2(esbuild@0.27.7))
       chai: 6.2.2
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -2509,8 +2603,8 @@ snapshots:
       tinybench: 6.1.4
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
-      vite: 8.3.1(esbuild@0.27.7)
-      why-is-node-running: 2.3.0
+      vite: 8.3.2(esbuild@0.27.7)
+      why-is-node-running: 3.2.1
     optionalDependencies:
       jsdom: 30.1.1
     transitivePeerDependencies:
@@ -2520,7 +2614,7 @@ snapshots:
 
   vue-component-type-helpers@3.2.8: {}
 
-  vue-router@5.3.1(@vue/compiler-sfc@3.5.43)(esbuild@0.27.7)(pinia@4.0.3(@vue/devtools-api@8.2.1)(typescript@6.0.3)(vue@3.5.43(typescript@6.0.3)))(rolldown@1.2.11)(rollup@4.60.4)(vite@8.3.1(esbuild@0.27.7))(vue@3.5.43(typescript@6.0.3)):
+  vue-router@5.3.1(@vue/compiler-sfc@3.5.43)(esbuild@0.27.7)(pinia@4.0.3(@vue/devtools-api@8.2.1)(typescript@6.0.3)(vue@3.5.43(typescript@6.0.3)))(rolldown@1.2.11)(rollup@4.60.4)(vite@8.3.2(esbuild@0.27.7))(vue@3.5.43(typescript@6.0.3)):
     dependencies:
       '@vue-macros/common': 3.1.4(vue@3.5.43(typescript@6.0.3))
       '@vue/devtools-api': 8.2.1
@@ -2536,13 +2630,13 @@ snapshots:
       picomatch: 4.0.7
       scule: 1.3.0
       tinyglobby: 0.2.17
-      unplugin: 3.3.0(esbuild@0.27.7)(rolldown@1.2.11)(rollup@4.60.4)(vite@8.3.1(esbuild@0.27.7))
+      unplugin: 3.3.0(esbuild@0.27.7)(rolldown@1.2.11)(rollup@4.60.4)(vite@8.3.2(esbuild@0.27.7))
       unplugin-utils: 0.3.2
       vue: 3.5.43(typescript@6.0.3)
     optionalDependencies:
       '@vue/compiler-sfc': 3.5.43
       pinia: 4.0.3(@vue/devtools-api@8.2.1)(typescript@6.0.3)(vue@3.5.43(typescript@6.0.3))
-      vite: 8.3.1(esbuild@0.27.7)
+      vite: 8.3.2(esbuild@0.27.7)
     transitivePeerDependencies:
       - '@farmfe/core'
       - '@rspack/core'
@@ -2568,6 +2662,8 @@ snapshots:
       '@vue/shared': 3.5.43
     optionalDependencies:
       typescript: 6.0.3
+
+  w3c-keyname@2.2.8: {}
 
   w3c-xmlserializer@6.0.0:
     dependencies:
@@ -2595,10 +2691,7 @@ snapshots:
     transitivePeerDependencies:
       - '@noble/hashes'
 
-  why-is-node-running@2.3.0:
-    dependencies:
-      siginfo: 2.0.0
-      stackback: 0.0.2
+  why-is-node-running@3.2.1: {}
 
   xml-name-validator@5.0.0: {}
 

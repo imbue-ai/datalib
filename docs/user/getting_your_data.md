@@ -103,8 +103,7 @@ pick — Signal, Google Chat and the rest Beeper bridges.
 
 On macOS the directory is `~/Library/Application Support/BeeperTexts`;
 no credentials. Lightly used — expect rough edges. It never notices a
-deletion, and `always_clear_before_ingest` is the wrong fix here (the
-provider's `INGEST.md` says why).
+deletion (the provider's `INGEST.md` says why).
 
 ## CalDAV
 
@@ -144,8 +143,8 @@ conversations.
 A one-time registration, then a browser login. ChatGPT uses a bearer
 access token rather than a cookie, and latchkey can go and fetch it
 for you. The app's Add Data Source wizard does both from its
-**Latchkey auth** button (and **Test connection** then lists the
-account's conversations to pick from); by hand it is:
+**Sign in with browser** button (and **Load conversations** then lists
+the account's conversations to pick from); by hand it is:
 
 ```sh
 latchkey services register chatgpt \
@@ -362,16 +361,22 @@ Contacts](#fastmail-contacts) and [Fastmail Calendar](#fastmail-calendar).
 
 Fastmail's CalDAV login is built into latchkey as `fastmail-dav`, and
 takes an app password (Settings → Privacy & Security → Integrations →
-App passwords, with calendar access) — not the OAuth login the mail
-source uses. The wizard asks for it itself (**Paste a credential**:
-your address and the app password); from a terminal it is:
+App passwords) — not the OAuth login the mail source uses. Set its
+Access to **Calendars (CalDAV)** and tick **Read-only access**, so
+Fastmail refuses any change made with it. The combined "DAV
+(CardDAV/CalDAV/WebDAV)" access has no read-only option, so a read-only
+setup takes one app password for calendars and another for
+[contacts](#fastmail-contacts), each stored under its own account name.
+The wizard asks for it itself (**Paste a key**: your address and
+the app password, stored as `you@fastmail.com calendar`); from a
+terminal it is:
 
 ```sh
-latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
+latchkey --account "you@fastmail.com calendar" auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
 ```
 
-The `fastmail` table needs nothing else; `calendars` narrows it to the
-calendars you name.
+and name the same account in the source. The `fastmail` table needs
+nothing else; `calendars` narrows it to the calendars you name.
 
 ## Fastmail Contacts
 
@@ -380,33 +385,38 @@ latchkey (`fastmail`). Rendered the way [Contacts](#contacts) says.
 
 The same `fastmail-dav` login as [Fastmail Calendar](#fastmail-calendar):
 an app password (Settings → Privacy & Security → Integrations → App
-passwords, with contacts access), not the OAuth login the mail source
-uses. One app password with both contacts and calendar access serves
-both sources. The wizard's **Paste a credential** form stores it, or
-from a terminal:
+passwords), not the OAuth login the mail source uses. Set its Access to
+**Contacts (CardDAV)** and tick **Read-only access**: Fastmail then
+refuses every change made with it, so the mirror can read your contacts
+but never alter them. An API token will not work here, even a read-only
+one — Fastmail's CardDAV turns them away with a 401.
+
+The wizard's **Paste a key** form stores it under the name in the
+**Fastmail account** box, `you@fastmail.com contacts` unless you type or
+pick another. latchkey
+keeps one credential per name per service, and Fastmail Contacts and
+Fastmail Calendar share the `fastmail-dav` service, so their two app
+passwords need two different names. From a terminal:
 
 ```sh
-latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
+latchkey --account "you@fastmail.com contacts" auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
 ```
 
-The `fastmail` table needs nothing else; `addressbooks` narrows it to
-the address books you name.
+and name the same account in the source. The `fastmail` table needs
+nothing else; `addressbooks` narrows it to the address books you name.
 
 ## Garmin
 
-`type = "garmin"` — Garmin Connect's API, with its own login rather
-than latchkey (`api`). Mirrors per-day health metrics (sleep, heart
+`type = "garmin"` — Garmin Connect's API through latchkey (`api`). Mirrors per-day health metrics (sleep, heart
 rate, stress, body battery, HRV, SpO₂, …), weigh-ins, activities with
 their original FIT files, devices, records, gear, badges, workouts and
 goals; the weigh-ins render as one page with an interactive plot.
 
-Garmin's API wants a bearer minted by a signed request that latchkey
-cannot make, so the provider signs in on its own. Run
-`datalib-step login garmin` once — it asks for your Garmin email,
-password and the MFA code Garmin emails you, and writes a token that
-lasts about a year under `~/.garth` (a token from the `garth` Python
-tool works too). Then add the source from the wizard or from the
-`all_sources.toml` example; `since` says how far back to mirror. The
+latchkey reaches Garmin through its Garmin plugin, which the Add a
+source dialog installs into `~/.latchkey/plugins/garmin` the first time
+you sign in there. Sign in with the browser, or import a token folder
+the `garth` Python tool wrote (`~/.garth`). The sign-in lasts about a
+year. `since` says how far back to mirror. The
 first sync makes one request per metric per day since `since`, so a
 long history takes a while; later syncs re-read only the trailing week.
 
@@ -480,16 +490,19 @@ DMs, spaces and bots with their attachments, rendered to markdown.
 
 Request a Takeout with **Chat** ticked and unpack it — see
 [Google Takeout](#google-takeout), which is the source this is one
-feed of. Every feed is off until you turn it on, so set
+feed of. The Add source form ticks it; in a hand-written config, set
 `google_chat = true` beside `export.path`.
 
 ## Google Takeout
 
 `type = "google_takeout"` — an unpacked Takeout tree on disk
-(`export`). Mirrors Google Chat and Voice messages (rendered to
-markdown); Maps reviews, saved places and photos, YouTube watch history
-and subscriptions, and Gemini Apps activity (extracted to the raw
-store, not yet rendered).
+(`export`). Mirrors Google Chat and Voice messages; Maps reviews, saved
+places and photos; YouTube watch history and subscriptions; and Gemini
+Apps activity, each prompt with Gemini's response and the files and
+images either one carried. Everything is rendered to markdown: a
+conversation as a page per month, and Gemini, YouTube and Maps as a
+page per year (subscriptions are one list). Voice bills and greetings
+are kept in the raw store only.
 
 Self-service export at <https://takeout.google.com>. Deselect all, then
 tick just what you want, request a `.zip`, and unpack it:
@@ -500,10 +513,11 @@ unzip ~/Downloads/takeout-*.zip -d ~/backups/
 
 Useful products: **Chat**, **Voice**, **Maps**, **YouTube history** and
 **Gemini** (read by this source from the unpacked tree), and **Mail**
-(a single `.mbox`, read by the [email](#email) source instead). Every
-feed is off until its flag beside `export.path` turns it on
-(`google_chat = true`, `google_voice = true`, …), because an export
-holds whatever you asked Google for; [Google Chat](#google-chat) and
+(a single `.mbox`, read by the [email](#email) source instead). The
+Add source form ticks every product; untick what you want left out. In
+a hand-written config every feed is off until its flag beside
+`export.path` turns it on (`google_chat = true`, `google_voice = true`,
+…); [Google Chat](#google-chat) and
 [Google Voice](#google-voice) have sections of their own. A Takeout is
 a complete snapshot, so it is also the way to notice what Google has
 deleted since the last one: unpack a newer export in its place, and
@@ -561,9 +575,8 @@ data**, request the full archive, and unzip it when the email arrives
 unzip ~/Downloads/Complete_LinkedInDataExport_*.zip -d ~/backups/LinkedInDataExport
 ```
 
-Point `export.path` at that directory. Each export is complete, so
-`all_sources.toml` sets `always_clear_before_ingest = true` to let a
-newer export drop what LinkedIn stopped including.
+Point `export.path` at that directory, and unzip each newer export over
+it or in its place.
 
 ## Local files
 
@@ -631,7 +644,9 @@ reports this service's credential as `invalid` even when it works;
 only a real request tells you.
 
 To mirror only part of the workspace, list the pages in `api.roots`
-(page ids or paste-able URLs); everything under them comes along.
+(page ids or paste-able URLs); every page linked under them comes
+along. A database embedded in one of those pages does not: its rows
+are mirrored only by the whole-workspace default.
 
 ## PDFs
 

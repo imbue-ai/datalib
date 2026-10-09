@@ -4,12 +4,14 @@
   "backup_time_ms": 12442118400000,
   "recipients": [
     { "id": 1, "self": true,  "name": "Jean-Luc Picard" },
-    { "id": 2, "name": "Will Riker",       "e164": 17015550101 },
+    { "id": 2, "name": "Will Riker",       "e164": 17015550101, "aci": "0195683a-d140-87f9-bdf6-234da6d6880c" },
     { "id": 3, "name": "Data Soong",       "e164": 17015550102 },
     { "id": 4, "name": "Geordi La Forge",  "e164": 17015550103 },
     { "id": 5, "name": "Worf Rozhenko",    "e164": 17015550104 },
     { "id": 6, "name": "Deanna Troi",      "e164": 17015550105 },
-    { "id": 7, "name": "Beverly Crusher",  "e164": 17015550106 }
+    { "id": 7, "name": "Beverly Crusher",  "e164": 17015550106 },
+    { "id": 8, "name": "Q",                "aci": "0195683a-d140-87f9-bdf6-234da6d6880f" },
+    { "id": 9, "name": "Guinan",           "pni": "0195683a-d140-87f9-bdf6-234da6d68810" }
   ],
   "chats": [
     { "id": 100, "recipient_id": 2 }
@@ -24,6 +26,9 @@
     { "chat_id": 100, "author_id": 7, "date_sent": 12442118760000, "text": "Sickbay reports no casualties.",           "outgoing": false },
     { "chat_id": 100, "author_id": 1, "date_sent": 12442118820000, "text": "Mr. Data, open hailing frequencies.",      "outgoing": true  },
     { "chat_id": 100, "author_id": 3, "date_sent": 12442118880000, "text": "Hailing frequencies open, sir.",           "outgoing": false },
-    { "chat_id": 100, "author_id": 1, "date_sent": 12442118940000, "text": "Make it so.",                              "outgoing": true  }
+    { "chat_id": 100, "author_id": 1, "date_sent": 12442118940000, "text": "Make it so.",                              "outgoing": true  },
+    { "chat_id": 100, "author_id": 8, "date_sent": 12442119000000, "text": "Mon capitaine, you are so predictable.",  "outgoing": false },
+    { "chat_id": 100, "author_id": 9, "date_sent": 12442119060000, "text": "\uFFFC, Ten Forward is open, if you need it.", "outgoing": false,
+      "mentions": ["0195683a-d140-87f9-bdf6-234da6d6880c"] }
   ]
 }

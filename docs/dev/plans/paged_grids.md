@@ -350,10 +350,10 @@ structured terms then filter that ranking in one statement
 of the result cache like any other, rather than asking qmd again per
 page. The old path cut qmd's hits to the page size *before* the
 structured filter, so a filtered free-text search could come back short
-while matching rows sat further down the ranking. Separately, every
-free-text search still loads all of `grid_rows` through
-`grid_row_refs()` to map hits to rows; that becomes a lookup by
-`qmd_path` over an index.
+while matching rows sat further down the ranking. Separately, a
+free-text search maps hits to rows by a lookup on `qmd_path` over an
+index (`grid_row_refs_for_hits`), no longer by loading all of
+`grid_rows`.
 
 ## Server: the log
 

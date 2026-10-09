@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use datalib_etl_contacts::ingest::api::{
-    split_vcards, vcard_all, vcard_categories, vcard_created, vcard_fn, vcard_is_group,
-    vcard_members, vcard_n_family_given, vcard_rev, vcard_uid, VcardProp,
+    split_vcards, vcard_all, vcard_categories, vcard_created, vcard_is_group, vcard_members,
+    vcard_n_family_given, vcard_rev, vcard_uid, VcardProp,
 };
 use datalib_etl_contacts::ingest::db::{LoadedRawContact, RawDb};
 use datalib_etl_render::inputs::{changed_rows, Input, RawRange};
@@ -24,9 +24,6 @@ pub struct ParsedContact {
     /// came from. Shows up on grid rows as `channel` and groups
     /// contacts together in the UI.
     pub addressbook: String,
-    /// Source file on disk — surfaced in tracing so misformatted
-    /// vCards point at the right file.
-    pub source_path: PathBuf,
     /// `FN` (formatted name). `None` for nameless cards — the
     /// render path falls back to the UID.
     pub display_name: Option<String>,
@@ -45,9 +42,8 @@ pub struct ParsedContact {
     pub emails: Vec<VcardProp>,
     pub phones: Vec<VcardProp>,
     pub addresses: Vec<VcardProp>,
-    /// `ORG:` parts (joined with `;` upstream). The first segment
-    /// is the company; subsequent ones are units / departments.
-    pub org: Option<String>,
+    /// `ORG:` parts, unescaped, in order: the company, then its units.
+    pub org: Vec<String>,
     pub title: Option<String>,
     pub note: Option<String>,
     /// Inline `PHOTO` payload. We decode the base64 once at parse
@@ -134,33 +130,21 @@ pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
             blocks
         };
         for (idx, block) in iter.into_iter().enumerate() {
-            match parse_block(&block, &source_path, &row.addressbook_label) {
-                Ok(mut c) => {
-                    if c.uid.is_empty() {
-                        c.uid = match idx {
-                            _ if row.uid.is_empty() => {
-                                derive_uid_from_path(&row.addressbook_label, &source_path, idx)
-                            }
-                            0 => row.uid.clone(),
-                            _ => format!("{}:{idx}", row.uid),
-                        };
+            let mut c = parse_block(&block, &row.addressbook_label);
+            if c.uid.is_empty() {
+                c.uid = match idx {
+                    _ if row.uid.is_empty() => {
+                        derive_uid_from_path(&row.addressbook_label, &source_path, idx)
                     }
-                    c.inputs.push(Input::new("contacts", &row.id));
-                    if let Some(book) = &row.addressbook_id {
-                        c.inputs.push(Input::new("addressbooks", book));
-                    }
-                    out.contacts.push(c);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        event = "contacts_vcard_parse_failed",
-                        href = %row.href,
-                        block_index = idx,
-                        error = %e,
-                        "a vCard block did not parse; skipped it"
-                    );
-                }
+                    0 => row.uid.clone(),
+                    _ => format!("{}:{idx}", row.uid),
+                };
             }
+            c.inputs.push(Input::new("contacts", &row.id));
+            if let Some(book) = &row.addressbook_id {
+                c.inputs.push(Input::new("addressbooks", book));
+            }
+            out.contacts.push(c);
         }
     }
     out.contacts.sort_by(|a, b| {
@@ -178,7 +162,7 @@ pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
 /// address, and `contacts:#93:0` says nothing where `weishi@x.test` does.
 fn display_name(block: &str, emails: &[VcardProp], phones: &[VcardProp]) -> Option<String> {
     let nonblank = |s: String| (!s.trim().is_empty()).then(|| s.trim().to_string());
-    vcard_fn(block)
+    single_text(block, "FN")
         .and_then(nonblank)
         .or_else(|| {
             vcard_n_family_given(block)
@@ -186,21 +170,20 @@ fn display_name(block: &str, emails: &[VcardProp], phones: &[VcardProp]) -> Opti
         })
         .or_else(|| emails.first().and_then(|e| nonblank(e.value.clone())))
         .or_else(|| phones.first().and_then(|p| nonblank(p.value.clone())))
-        .or_else(|| extract_single(block, "ORG").and_then(|o| nonblank(o.replace(';', " — "))))
+        .or_else(|| nonblank(org(block).join(" — ")))
 }
 
-fn parse_block(block: &str, source_path: &Path, addressbook: &str) -> Result<ParsedContact> {
+fn parse_block(block: &str, addressbook: &str) -> ParsedContact {
     let uid = vcard_uid(block).unwrap_or_default();
     let emails = vcard_all(block, "EMAIL");
     let phones = vcard_all(block, "TEL");
     let addresses = vcard_all(block, "ADR");
     let photo = vcard_all(block, "PHOTO");
     let (photo, photo_url) = pick_photo(photo);
-    Ok(ParsedContact {
+    ParsedContact {
         inputs: Vec::new(),
         uid,
         addressbook: addressbook.to_string(),
-        source_path: source_path.to_path_buf(),
         display_name: display_name(block, &emails, &phones),
         revision: vcard_rev(block),
         created: vcard_created(block),
@@ -210,16 +193,23 @@ fn parse_block(block: &str, source_path: &Path, addressbook: &str) -> Result<Par
         emails,
         phones,
         addresses,
-        org: extract_single(block, "ORG"),
-        title: extract_single(block, "TITLE"),
-        note: extract_single(block, "NOTE"),
+        org: org(block),
+        title: single_text(block, "TITLE"),
+        note: single_text(block, "NOTE"),
         photo,
         photo_url,
-    })
+    }
 }
 
-fn extract_single(vcard: &str, name: &str) -> Option<String> {
-    vcard_all(vcard, name).into_iter().next().map(|p| p.value)
+fn single_text(vcard: &str, name: &str) -> Option<String> {
+    vcard_all(vcard, name).first().map(VcardProp::text)
+}
+
+fn org(vcard: &str) -> Vec<String> {
+    vcard_all(vcard, "ORG")
+        .first()
+        .map(|p| p.text_list(';'))
+        .unwrap_or_default()
 }
 
 /// First base64-encoded photo wins; fall back to the first URL-only
@@ -376,11 +366,7 @@ mod tests {
     /// email-only cards rendered.
     #[test]
     fn nameless_card_is_titled_by_what_it_does_have() {
-        let name = |block: &str| {
-            parse_block(block, Path::new("x.vcf"), "book")
-                .unwrap()
-                .display_name
-        };
+        let name = |block: &str| parse_block(block, "book").display_name;
         assert_eq!(
             name("BEGIN:VCARD\nN:Picard;Jean-Luc;;;\nEMAIL:jlp@x.test\nEND:VCARD").as_deref(),
             Some("Jean-Luc Picard")
@@ -406,6 +392,30 @@ mod tests {
         assert_eq!(
             name("BEGIN:VCARD\nFN: \nEMAIL:jlp@x.test\nEND:VCARD").as_deref(),
             Some("jlp@x.test")
+        );
+    }
+
+    /// RFC 6350 escapes are undone in every text a person reads, and a
+    /// structured value splits only where its `;` is not escaped — read
+    /// raw, `ORG:Starfleet\; Command` was two units and the note kept its
+    /// backslashes.
+    #[test]
+    fn text_values_are_unescaped_and_structured_ones_split_on_bare_semicolons() {
+        let card = "BEGIN:VCARD\n\
+            FN:Picard\\, Jean-Luc\n\
+            ORG:Starfleet\\; Command;USS Enterprise\\, NCC-1701-D\n\
+            TITLE:Captain\\; Diplomat\n\
+            NOTE:Make it so.\\nTea\\, Earl Grey\\, hot.\n\
+            ADR;TYPE=WORK:;;Ready Room\\, Deck 1;;;;\n\
+            END:VCARD";
+        let c = parse_block(card, "book");
+        assert_eq!(c.display_name.as_deref(), Some("Picard, Jean-Luc"));
+        assert_eq!(c.org, ["Starfleet; Command", "USS Enterprise, NCC-1701-D"]);
+        assert_eq!(c.title.as_deref(), Some("Captain; Diplomat"));
+        assert_eq!(c.note.as_deref(), Some("Make it so.\nTea, Earl Grey, hot."));
+        assert_eq!(
+            c.addresses[0].text_list(';'),
+            ["", "", "Ready Room, Deck 1", "", "", "", ""]
         );
     }
 

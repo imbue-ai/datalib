@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use sqlx::Row;
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_pdf::ingest::{self, RawDb};
 use datalib_etl_pdf_render::render;
 
@@ -61,11 +61,24 @@ impl Harness {
         }
     }
 
+    /// A writable copy of the fixture corpus, for the tests that edit
+    /// it between scans.
+    fn on_a_copy() -> Self {
+        let h = Self::new();
+        let root = h._tmp.path().join("corpus");
+        copy_tree(&fixture_dir(), &root);
+        Self { root, ..h }
+    }
+
     async fn scan(&self) -> Result<ingest::FetchSummary> {
         self.scan_at(NOW).await
     }
 
     async fn scan_at(&self, now: &str) -> Result<ingest::FetchSummary> {
+        self.scan_with(now, None).await
+    }
+
+    async fn scan_with(&self, now: &str, max_bytes: Option<u64>) -> Result<ingest::FetchSummary> {
         let db = RawDb::open(&ingest::db_path_for(&self.raw_dir)).await?;
         // A temp cache per harness: tests must never read or write this
         // host's real one.
@@ -76,15 +89,17 @@ impl Harness {
             root: self.root.clone(),
             ignore: vec![],
             cache: cache.clone(),
-            max_bytes: None,
+            max_bytes,
             now: now.to_string(),
             progress: datalib_etl::progress::Progress::noop(),
         })
         .await;
         // Commit what the scan wrote, the way the processor's
-        // `RawStoreSession::finish` does in production: render pins HEAD, so
+        // `RawStoreSession::run` does in production: render pins HEAD, so
         // an uncommitted row is invisible to it.
-        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: pdf scan").await?;
+        if summary.is_ok() {
+            datalib_etl::doltlite_raw::commit_run(db.pool(), "test: pdf scan").await?;
+        }
         // Closed, not dropped: `db` and `render` both reopen this store,
         // and one doltlite file takes one connection at a time.
         db.close().await;
@@ -122,34 +137,30 @@ impl Harness {
     }
 }
 
-/// Scanning an unchanged tree again, five minutes later, changes no
-/// content row. Under one `now` this holds trivially — the same stamp
-/// is written twice — so the second scan gets a later one. A table
-/// named here carries a stamp the store mints, and the render step,
-/// which diffs these tables to decide what to re-convert, converted
-/// every document on every run for as long as `pdf_scan_meta` did.
+/// Scanning an unchanged tree again, five minutes later, changes
+/// nothing in the store, its sidecars included. Under one `now` a
+/// re-stamped sidecar would hide — the same stamp is written twice — so
+/// the second scan gets a later one. A commit here means a stamp moved:
+/// the store grows on every sync, and a stamp in a content table sends
+/// render, which diffs these tables to decide what to re-convert, back
+/// over every document. The corrupt fixture stays: a problem recorded
+/// again unchanged changes nothing either.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_second_scan_of_an_unchanged_tree_moves_no_content_row() -> Result<()> {
+async fn a_second_scan_of_an_unchanged_tree_commits_nothing() -> Result<()> {
     let h = Harness::new();
     h.scan().await?;
     let db = h.db().await;
-    let first = datalib_etl::doltlite_raw::head_commit(db.pool())
-        .await?
-        .expect("the first scan committed");
+    let first = datalib_etl::doltlite_raw::head_commit(db.pool()).await?;
     db.close().await;
 
     h.scan_at("2364-04-13T08:50:00-07:00").await?;
     let db = h.db().await;
-    let second = datalib_etl::doltlite_raw::head_commit(db.pool())
-        .await?
-        .expect("the second scan committed");
-    let changed =
-        datalib_etl::doltlite_raw::content_tables_changed(db.pool(), &first, &second).await?;
+    let second = datalib_etl::doltlite_raw::head_commit(db.pool()).await?;
     db.close().await;
+    assert!(first.is_some());
     assert_eq!(
-        changed,
-        Vec::<String>::new(),
-        "a content table moved between two scans of the same tree"
+        second, first,
+        "scanning an unchanged tree again changes nothing in the store"
     );
     Ok(())
 }
@@ -610,5 +621,246 @@ async fn scanned_documents_are_recorded_but_not_rendered() -> Result<()> {
             "the scanned fixture must not render until OCR lands"
         );
     }
+    Ok(())
+}
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        // Bazel's runfiles are symlinks; follow them.
+        if std::fs::metadata(entry.path()).unwrap().is_dir() {
+            copy_tree(&entry.path(), &dest);
+        } else {
+            std::fs::copy(entry.path(), &dest).unwrap();
+        }
+    }
+}
+
+async fn problems(h: &Harness) -> Result<Vec<(String, String)>> {
+    let db = h.db().await;
+    let rows = sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+        .fetch_all(db.pool())
+        .await?;
+    db.close().await;
+    Ok(rows)
+}
+
+async fn paths(h: &Harness) -> Result<Vec<String>> {
+    let db = h.db().await;
+    let rows = sqlx::query_scalar("SELECT id FROM pdf_paths ORDER BY id")
+        .fetch_all(db.pool())
+        .await?;
+    db.close().await;
+    Ok(rows)
+}
+
+async fn documents(h: &Harness) -> Result<Vec<String>> {
+    let db = h.db().await;
+    let rows = sqlx::query_scalar("SELECT blake3 FROM pdf_documents ORDER BY blake3")
+        .fetch_all(db.pool())
+        .await?;
+    db.close().await;
+    Ok(rows)
+}
+
+async fn blake3_of(h: &Harness, rel: &str) -> Result<String> {
+    let db = h.db().await;
+    let b = sqlx::query_scalar("SELECT blake3 FROM pdf_paths WHERE id = ?")
+        .bind(rel)
+        .fetch_one(db.pool())
+        .await?;
+    db.close().await;
+    Ok(b)
+}
+
+/// A document that will not identify is a row naming its path, retried
+/// every scan, and the scan that identifies it clears the row.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_that_will_not_identify_is_a_row_until_it_does() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let rows = problems(&h).await?;
+    assert_eq!(
+        rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        ["record:pdf_paths:holodeck/corrupt.pdf"]
+    );
+    assert!(rows[0].1.starts_with("classify: "), "{}", rows[0].1);
+    assert!(
+        !rows[0].1.contains(&*h.root.to_string_lossy()),
+        "the fixture pins the sample, so it names no machine's path: {}",
+        rows[0].1
+    );
+
+    std::fs::copy(
+        h.root.join("captains_log.pdf"),
+        h.root.join("holodeck/corrupt.pdf"),
+    )?;
+    let s = h.scan().await?;
+    assert_eq!(s.errors, 0, "{s:?}");
+    assert_eq!(problems(&h).await?, Vec::<(String, String)>::new());
+    Ok(())
+}
+
+/// A document the scan cannot see at all is not tried again, so its row
+/// stands rather than clearing.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unseen_document_keeps_its_row() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let corrupt = h.root.join("holodeck/corrupt.pdf");
+    std::fs::remove_file(&corrupt)?;
+    std::os::unix::fs::symlink(h.root.join("nowhere.pdf"), &corrupt)?;
+    h.scan().await?;
+    let keys: Vec<String> = problems(&h).await?.into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        ["listing:files", "record:pdf_paths:holodeck/corrupt.pdf"]
+    );
+    Ok(())
+}
+
+/// A walk that could not read part of the tree drops no path: a file it
+/// did not see may be one it could not see. The next clean walk drops
+/// what is really gone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_walk_with_errors_drops_no_path() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let before = paths(&h).await?;
+    std::fs::remove_file(h.root.join("engineering/hull_survey.pdf"))?;
+    let dead = h.root.join("engineering/dead.pdf");
+    std::os::unix::fs::symlink(h.root.join("nowhere.pdf"), &dead)?;
+
+    h.scan().await?;
+    assert_eq!(paths(&h).await?, before);
+    let keys: Vec<String> = problems(&h).await?.into_iter().map(|r| r.0).collect();
+    assert_eq!(
+        keys,
+        ["listing:files", "record:pdf_paths:holodeck/corrupt.pdf"]
+    );
+
+    std::fs::remove_file(&dead)?;
+    h.scan().await?;
+    let after = paths(&h).await?;
+    assert!(!after.contains(&"engineering/hull_survey.pdf".to_string()));
+    assert_eq!(after.len(), before.len() - 1);
+    let keys: Vec<String> = problems(&h).await?.into_iter().map(|r| r.0).collect();
+    assert_eq!(keys, ["record:pdf_paths:holodeck/corrupt.pdf"]);
+    Ok(())
+}
+
+/// A file over `max_bytes` was left out of the rebuilt path table, so a
+/// document still on disk lost its path. It keeps the row the last scan
+/// wrote.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_over_max_bytes_keeps_its_path() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let before = paths(&h).await?;
+
+    // `captains_log_v2.pdf` is the one fixture over 1900 bytes.
+    let s = h.scan_with(NOW, Some(1900)).await?;
+    assert_eq!(s.too_large, 1, "{s:?}");
+    assert_eq!(paths(&h).await?, before);
+    Ok(())
+}
+
+/// A document no path names any more stayed in `pdf_documents` for good.
+/// After a clean walk it goes; a copy elsewhere keeps it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_no_path_names_goes() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let hull = blake3_of(&h, "engineering/hull_survey.pdf").await?;
+    let log = blake3_of(&h, "captains_log.pdf").await?;
+    let before = documents(&h).await?;
+
+    std::fs::remove_file(h.root.join("engineering/hull_survey.pdf"))?;
+    std::fs::remove_file(h.root.join("captains_log.pdf"))?;
+    h.scan().await?;
+    let after = documents(&h).await?;
+    assert!(!after.contains(&hull), "no path names the survey");
+    assert!(
+        after.contains(&log),
+        "archive/ still holds a copy of the log"
+    );
+    assert_eq!(after.len(), before.len() - 1);
+    Ok(())
+}
+
+/// A file rewritten under a hash the host cache still vouched for was
+/// classified from its new bytes and filed under the old bytes' hash. The
+/// document is named by the hash of what was read.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_the_scan_misjudged_is_named_by_what_was_read() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let path = h.root.join("engineering/hull_survey.pdf");
+    let old = blake3_of(&h, "engineering/hull_survey.pdf").await?;
+
+    let mut bytes = std::fs::read(&path)?;
+    bytes.extend_from_slice(b"\n");
+    std::fs::write(&path, &bytes)?;
+    let cache = FingerprintCache::open(&h.raw_dir.join("fingerprints.sqlite")).await?;
+    cache.restamp_for_test(&path).await?;
+    cache.pool().close().await;
+    // Forget the document, so the scan reads the file rather than taking
+    // the stored document for it.
+    let db = h.db().await;
+    sqlx::query("DELETE FROM pdf_documents WHERE blake3 = ?")
+        .bind(&old)
+        .execute(db.pool())
+        .await?;
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: forget a document").await?;
+    db.close().await;
+
+    h.scan().await?;
+    let read = datalib_etl::blob_cas::blake3_hex(&bytes);
+    assert_eq!(blake3_of(&h, "engineering/hull_survey.pdf").await?, read);
+    assert!(documents(&h).await?.contains(&read));
+    Ok(())
+}
+
+/// A file changed since the download read it has no bytes left to convert
+/// under the document's hash. Its document stays, as a page saying so
+/// with a problem row, rather than vanishing or keeping a page a cold
+/// render could not produce.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_whose_file_changed_since_the_download_is_a_stand_in() -> Result<()> {
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+    let hull = blake3_of(&h, "engineering/hull_survey.pdf").await?;
+    let path = h.root.join("engineering/hull_survey.pdf");
+    let mut bytes = std::fs::read(&path)?;
+    bytes.extend_from_slice(b"\n");
+    std::fs::write(&path, &bytes)?;
+
+    let (s, emitted) = h.render().await?;
+    assert_eq!(
+        s.changed, 1,
+        "converted={} failed={}",
+        s.converted, s.failed
+    );
+    assert_eq!(s.failed, 0);
+    let doc = emitted
+        .iter()
+        .find(|d| d.bucket_key.as_deref() == Some(hull.as_str()))
+        .expect("the document is still emitted");
+    assert_eq!(doc.rows.len(), 1, "its document row, and no pages");
+    assert_eq!(doc.problems.len(), 1);
+    assert!(
+        doc.problems[0]
+            .sample
+            .starts_with("engineering/hull_survey.pdf: "),
+        "{}",
+        doc.problems[0].sample
+    );
+    let page = std::fs::read_to_string(&doc.md_path)?;
+    assert!(
+        page.contains("has changed since the last sync read it"),
+        "{page}"
+    );
     Ok(())
 }

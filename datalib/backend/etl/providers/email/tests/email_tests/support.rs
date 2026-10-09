@@ -5,12 +5,19 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
-use datalib_etl::progress::ProgressSink;
+use datalib_etl::checkpointer::Cadence;
+use datalib_etl::control::DownloadControl;
+use datalib_etl::download_metrics::DownloadMetrics;
+use datalib_etl::processor::RunCtx;
+use datalib_etl::progress::{Progress, ProgressSink};
+use datalib_etl::raw_store::Sealer;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_email::ingest::{db_path_for, RawDb};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::{json_response, write_fixture};
+use datalib_obs::diagnostics::Diagnostics;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -34,15 +41,64 @@ impl Mirror {
     }
 
     /// Runs one download against the fixtures: the store is opened here,
-    /// handed to `download`, then committed and closed.
-    pub async fn run<T, F>(&self, download: impl FnOnce(RawDb) -> F) -> T
+    /// handed to `download`, committed if the download returned `Ok`, as
+    /// the processor does, and closed.
+    pub async fn run<T, F>(&self, download: impl FnOnce(RawDb) -> F) -> anyhow::Result<T>
     where
-        F: Future<Output = T>,
+        F: Future<Output = anyhow::Result<T>>,
     {
         std::env::set_var(PLAYBACK_ENV, &self.playback);
-        let out = self.read(download).await;
+        let db = RawDb::open(&db_path_for(&self.root))
+            .await
+            .expect("open raw db");
+        let out = download(db.clone()).await;
+        if out.is_ok() {
+            db.commit_all("test").await.unwrap();
+        }
+        db.close().await;
         std::env::remove_var(PLAYBACK_ENV);
         out
+    }
+
+    /// Runs one download as the step does, through `RunCtx::run_store`:
+    /// it gets a `Sealer`, an `Ok` commits and an `Err` commits nothing.
+    /// The cadence is zero, so every point the download calls consistent
+    /// is a seal.
+    pub async fn run_sealing<T, F>(
+        &self,
+        download: impl FnOnce(RawDb, Sealer) -> F,
+    ) -> anyhow::Result<()>
+    where
+        F: Future<Output = anyhow::Result<T>>,
+    {
+        std::env::set_var(PLAYBACK_ENV, &self.playback);
+        let db = RawDb::open(&db_path_for(&self.root))
+            .await
+            .expect("open raw db");
+        let progress = Progress::noop();
+        let control = DownloadControl {
+            checkpoint_cadence: Some(Cadence {
+                at_most_every: Duration::ZERO,
+            }),
+            ..Default::default()
+        };
+        let ctx = RunCtx::new(
+            "email",
+            &self.root,
+            "2369-04-14T00:00:00+00:00",
+            &progress,
+            &control,
+            DownloadMetrics::new(),
+            Diagnostics::new(),
+        );
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        let out = ctx
+            .run_store(pool, Some(cas_pool), |sealer| async move {
+                download(db, sealer).await.map(|_| String::new())
+            })
+            .await;
+        std::env::remove_var(PLAYBACK_ENV);
+        out.map(|_| ())
     }
 
     /// Opens the store for `read` alone. The file takes one writer at a
@@ -60,12 +116,15 @@ impl Mirror {
         out
     }
 
+    /// The Gmail ids held: every listed message with a held version.
     pub async fn gmail_ids(&self) -> BTreeSet<String> {
         self.read(|db| async move {
-            sqlx::query_scalar::<_, String>("SELECT gmail_id FROM gmail_messages")
-                .fetch_all(db.pool())
-                .await
-                .expect("read gmail_messages")
+            sqlx::query_scalar::<_, String>(
+                "SELECT id FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL",
+            )
+            .fetch_all(db.pool())
+            .await
+            .expect("read what is held")
         })
         .await
         .into_iter()
@@ -75,7 +134,7 @@ impl Mirror {
 
 // ── Gmail fixtures ──────────────────────────────────────────────────
 
-const GMAIL: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
+pub const GMAIL: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
 
 pub fn put_gmail(playback: &Path, url: &str, body: &Value) {
     put_gmail_response(playback, url, &json_response(body));

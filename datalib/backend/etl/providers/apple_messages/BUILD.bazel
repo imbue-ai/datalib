@@ -1,6 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
-
-exports_files(["Cargo.toml"])
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # A small, Messages-shaped `chat.db`, minted by Python for the reasons
 # //datalib/backend/etl/sqlite_mirror:tng_catalog gives (a Rust tool here
@@ -32,5 +30,15 @@ rust_library(
         "//datalib/backend/etl/providers/apple_messages_config:datalib_etl_apple_messages_config",
         "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
         "@datalib_crates//:anyhow",
+    ],
+)
+
+rust_test(
+    name = "apple_messages_unittests",
+    size = "small",
+    crate = ":datalib_etl_apple_messages",
+    edition = "2021",
+    deps = [
+        "//datalib/backend/source_common:datalib_source_common",
     ],
 )

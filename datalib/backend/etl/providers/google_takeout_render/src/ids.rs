@@ -1,7 +1,9 @@
-//! Google Takeout entity ids: the Google Chat and Google Voice feeds.
-//! A Chat message id is `<space>/<topic>/<message>`, unique across
-//! Google Chat; a Voice row's id is the one the ingest minted from the
-//! export, unique across Voice. Both are provider-global.
+//! Google Takeout entity ids. A Chat message id is
+//! `<space>/<topic>/<message>`, unique across Google Chat; every other
+//! row's id is the one the ingest minted from the export, unique within
+//! its table, and its kind says which table. All are provider-global.
+//! The activity feeds datalib composes (Gemini, YouTube, Maps) are keyed
+//! on their names.
 
 use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
@@ -15,6 +17,15 @@ pub const KIND_MESSAGE: &str = "message";
 pub const KIND_VOICE_CONVERSATION: &str = "voice_conversation";
 pub const KIND_VOICE_MONTH: &str = "voice_month";
 pub const KIND_VOICE_MESSAGE: &str = "voice_message";
+pub const KIND_FEED: &str = "feed";
+pub const KIND_FEED_YEAR: &str = "feed_year";
+pub const KIND_GEMINI_PROMPT: &str = "gemini_prompt";
+pub const KIND_GEMINI_RESPONSE: &str = "gemini_response";
+pub const KIND_YOUTUBE_WATCH: &str = "youtube_watch";
+pub const KIND_YOUTUBE_SUBSCRIPTION: &str = "youtube_subscription";
+pub const KIND_MAPS_REVIEW: &str = "maps_review";
+pub const KIND_MAPS_SAVED_PLACE: &str = "maps_saved_place";
+pub const KIND_MAPS_PHOTO: &str = "maps_photo";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
@@ -58,6 +69,30 @@ pub fn voice_message(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Ide
     IDS.mint(source_id, KIND_VOICE_MESSAGE, row_id.to_string(), date_ms)
 }
 
+/// An activity feed datalib composes — `gemini`, `maps`, …
+pub fn feed(source_id: &str, name: &str) -> Identity {
+    IDS.mint(source_id, KIND_FEED, name.to_string(), None)
+}
+
+pub fn feed_period(source_id: &str, name: &str, period_key: &str) -> Identity {
+    IDS.mint(
+        source_id,
+        KIND_FEED_YEAR,
+        composite_key(&[name, period_key]),
+        None,
+    )
+}
+
+/// One item of a feed: `kind` names the raw table `row_id` is from.
+pub fn feed_item(
+    source_id: &str,
+    kind: &'static str,
+    row_id: &str,
+    date_ms: Option<i64>,
+) -> Identity {
+    IDS.mint(source_id, kind, row_id.to_string(), date_ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,6 +109,9 @@ mod tests {
             voice_conversation("src", "voice:+1555"),
             voice_month("src", "voice:+1555", "2024-03"),
             voice_message("src", "r1", MS),
+            feed("src", "gemini"),
+            feed_period("src", "gemini", "2364"),
+            feed_item("src", KIND_GEMINI_PROMPT, "r1", MS),
         ] {
             assert_eq!(
                 got.uuid,
@@ -101,6 +139,14 @@ mod tests {
         );
         assert_eq!(stamp_of(&space("src", "s").uuid), None);
         assert_eq!(stamp_of(&voice_month("src", "v", "2024-01").uuid), None);
+    }
+
+    #[test]
+    fn a_prompt_and_its_response_do_not_alias() {
+        assert_ne!(
+            feed_item("src", KIND_GEMINI_PROMPT, "r", MS).uuid,
+            feed_item("src", KIND_GEMINI_RESPONSE, "r", MS).uuid
+        );
     }
 
     #[test]

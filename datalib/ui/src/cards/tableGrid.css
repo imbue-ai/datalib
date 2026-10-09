@@ -17,6 +17,17 @@
   position: absolute;
   inset: 0;
 }
+/* Where a row dragged by its grip lands, across the whole grid. */
+.tg-move-guide {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--datalib-accent);
+  pointer-events: none;
+  z-index: 10;
+  display: none;
+}
 
 .tg-none { color: var(--datalib-muted); opacity: 0.55; }
 
@@ -61,7 +72,8 @@
   height: 100%;
   color: var(--datalib-muted);
 }
-.tg-status-running { color: var(--datalib-accent); }
+.tg-status-running,
+.tg-status-waiting { color: var(--datalib-accent); }
 .tg-status-queued { color: var(--datalib-muted); }
 .tg-status-failed { color: var(--datalib-log-error); }
 .tg-status-interrupted { color: var(--datalib-log-warn); }

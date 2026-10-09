@@ -6,7 +6,7 @@
 pub mod mojibake;
 pub mod schema_raw;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -15,17 +15,22 @@ use datalib_etl::blob_cas::{cas_path_for, load_blake3_index, BlobCas, CasEdgeAcc
 use datalib_etl::bulk::BulkUpsertable as _;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl::export_files::files_with_extension;
+use datalib_etl::download_problems::RunProblem;
 use datalib_etl::progress::Progress;
+use datalib_etl::prune;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_files::export_files::ExportFiles;
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fsscan::ScannedFile;
 use datalib_etl_macros::RawStoreHandle;
+use datalib_problems::Reason;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
-use tracing::warn;
 use uuid::Uuid;
 
-use schema_raw::{canonical_table, facebook_ns, media_ddl, MediaBlobRow};
+use schema_raw::{canonical_table, facebook_ns, store_ddl, MediaBlobRow};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -54,9 +59,9 @@ pub struct RawDb {
 
 impl RawDb {
     /// Open the store to write it. The record tables are created as the
-    /// walk meets their files, so only the media edge table is DDL here.
+    /// walk meets their files, so only the fixed tables are DDL here.
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let ddl = media_ddl();
+        let ddl = store_ddl();
         let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &ddl).await?;
         let cas = BlobCas::open(&cas_path_for(db_path)).await?;
@@ -76,12 +81,7 @@ impl RawDb {
         let Some(reader) = dr::open_reader(db_path, commit).await? else {
             return Ok(None);
         };
-        let cas_path = cas_path_for(db_path);
-        let cas = if cas_path.is_file() {
-            Some(BlobCas::open_reader(&cas_path).await?)
-        } else {
-            None
-        };
+        let cas = BlobCas::open_for_render(db_path).await?;
         Ok(Some(Self {
             pool: reader.pool().clone(),
             cas,
@@ -133,6 +133,10 @@ pub struct FetchSummary {
     pub files: usize,
     pub rows: usize,
     pub parse_errors: usize,
+    /// Records the export no longer holds, deleted.
+    pub removed: usize,
+    /// Media edges of deleted records, or to a `uri` a record stopped naming.
+    pub media_edges_removed: usize,
     /// Media files whose bytes this run put into the CAS.
     pub media_stored: usize,
     /// Media files already in the CAS from an earlier run.
@@ -145,17 +149,34 @@ pub struct FetchSummary {
 type Tables = BTreeMap<String, BTreeMap<String, Value>>;
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_export(opts, found)).await
+}
+
+async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
     let mut by_table: Tables = BTreeMap::new();
+    let export = ExportFiles::walk(&opts.input_path)?;
+    let mut problems = export.walk_problems();
+    // Chunks of one table share it (`album/0.json`, `album/1.json`), so a
+    // chunk that would not read leaves the whole table unpruned: its rows
+    // are not in this run's set, and absence from it means nothing.
+    let mut unread_tables: HashSet<String> = HashSet::new();
+    // Every chunk file this run read, by table, to stamp as what the table
+    // was last read from.
+    let mut chunks: BTreeMap<String, Vec<ScannedFile>> = BTreeMap::new();
+    let mut present: HashSet<String> = HashSet::new();
 
-    for path in files_with_extension(&opts.input_path, "json") {
-        let rel = relative(&opts.input_path, &path);
+    for path in export.with_extension("json") {
+        let rel = relative(&opts.input_path, path);
         let table = canonical_table(&rel);
-        match read_records(&path) {
-            Ok(records) => {
+        present.insert(rel.clone());
+        match read_records(path, &rel) {
+            Ok((records, file)) => {
                 summary.files += 1;
+                chunks.entry(table.clone()).or_default().push(file);
                 let rows = by_table.entry(table.clone()).or_default();
                 for record in records {
                     let id = row_id(&table, &record);
@@ -168,21 +189,64 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 ));
             }
             Err(e) => {
-                warn!(event = "facebook_file_failed", file = %path.display(), table, error = %format!("{e:#}"), "an export file could not be ingested");
+                problems.push(RunProblem::listing(
+                    &format!("file {rel}"),
+                    format!("{e:#}"),
+                ));
+                unread_tables.insert(table);
                 summary.parse_errors += 1;
             }
         }
     }
 
-    let mut tx = db.pool().begin().await.context("begin facebook tx")?;
-    for (table, rows) in &by_table {
-        upsert_and_prune(&mut tx, table, rows).await?;
-        summary.rows += rows.len();
+    // A table is split into chunks (`album/0.json`, `album/1.json`), and an
+    // export unpacked only in part can hold some of them: absence from this
+    // run's set then means nothing. A table prunes only when every chunk it
+    // was last read from is here.
+    let mut short_tables: HashSet<String> = HashSet::new();
+    for table in by_table.keys() {
+        let scope = chunk_scope(table);
+        for rel in file_checkpoint::load_cursor(db.pool(), &scope)
+            .await?
+            .keys()
+        {
+            if !present.contains(rel) {
+                problems.push(RunProblem::listing(
+                    &format!("file {rel}"),
+                    "a part of a table the export holds the rest of is missing, so \
+                     nothing of the table was deleted; reset the source if the export \
+                     really has fewer parts now"
+                        .to_string(),
+                ));
+                short_tables.insert(table.clone());
+            }
+        }
     }
+
+    let mut tx = db.pool().begin().await.context("begin facebook tx")?;
+    let mut pruned: HashSet<String> = HashSet::new();
+    let mut read_in_pruned: HashSet<&str> = HashSet::new();
+    for (table, rows) in &by_table {
+        let prune = export.errors.is_empty()
+            && !unread_tables.contains(table)
+            && !short_tables.contains(table);
+        let gone = upsert_and_prune(&mut tx, table, rows, prune).await?;
+        if prune {
+            pruned.extend(gone);
+            read_in_pruned.extend(rows.keys().map(String::as_str));
+        }
+        summary.rows += rows.len();
+        for file in chunks.get(table).into_iter().flatten() {
+            file_checkpoint::record_file(&mut tx, &chunk_scope(table), file).await?;
+        }
+    }
+    summary.removed = pruned.len();
+    summary.media_edges_removed =
+        prune_media_edges(&mut tx, &by_table, &pruned, &read_in_pruned).await?;
     tx.commit().await.context("commit facebook tx")?;
 
     // Media after the records are committed: an edge is additive, and a
-    // photo that fails to read costs a warning, never the rows.
+    // photo that fails to read costs its edge's problem, never the rows.
     // Through the handle's own CAS, so nothing here opens a second store.
     if let Some(cas) = db.cas() {
         store_media(
@@ -195,17 +259,61 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         )
         .await?;
     }
+    found.extend(problems);
     Ok(summary)
 }
 
-/// Upsert this run's rows and delete the ones the export no longer
-/// holds, in the caller's transaction, so a commit landing at any point
-/// sees either last run's table or this run's — never an emptied one.
+/// Delete the media edges that are no longer true, in the transaction that
+/// prunes the records: a deleted record's, and those of a record read this
+/// run, in a table that pruned, to a `uri` it no longer names. A record in
+/// a table held back keeps its edges, as it keeps its row. Returns how many
+/// went.
+async fn prune_media_edges(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    by_table: &Tables,
+    pruned: &HashSet<String>,
+    read_in_pruned: &HashSet<&str>,
+) -> Result<usize> {
+    let mut read: HashSet<&str> = HashSet::new();
+    let mut named: HashSet<String> = HashSet::new();
+    for rows in by_table.values() {
+        for (id, record) in rows {
+            read.insert(id);
+            let mut uris = Vec::new();
+            collect_uris(record, &mut uris);
+            named.extend(uris.iter().map(|uri| MediaBlobRow::pk_recipe(id, uri)));
+        }
+    }
+    let stored: Vec<(String, String)> = sqlx::query_as("SELECT id, owner_id FROM media_blobs")
+        .fetch_all(&mut **tx)
+        .await
+        .context("list media_blobs")?;
+    let held = stored.len();
+    let keep: HashSet<String> = stored
+        .into_iter()
+        .filter(|(id, owner)| {
+            let owner = owner.as_str();
+            let owner_gone = pruned.contains(owner) && !read.contains(owner);
+            let unnamed = read_in_pruned.contains(owner) && !named.contains(id);
+            !(owner_gone || unnamed)
+        })
+        .map(|(id, _)| id)
+        .collect();
+    let gone = prune::prune_scope_in_tx(tx, MediaBlobRow::TABLE, &[], &keep).await?;
+    prune::record(MediaBlobRow::TABLE, held, gone.len());
+    Ok(gone.len())
+}
+
+/// Upsert this run's rows and, when `prune`, delete the ones the export
+/// no longer holds, in the caller's transaction, so a commit landing at
+/// any point sees either last run's table or this run's — never an
+/// emptied one. Returns the ids deleted.
 async fn upsert_and_prune(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     rows: &BTreeMap<String, Value>,
-) -> Result<()> {
+    prune: bool,
+) -> Result<Vec<String>> {
     let ddl = dr::wire_payload_table_ddl(table, &[]);
     // Audited: `table` is `canonical_table`'s output — ASCII alphanumerics
     // and `_` only — so it is safe as an identifier; rows are bound.
@@ -214,11 +322,14 @@ async fn upsert_and_prune(
         .await
         .with_context(|| format!("create table {table}"))?;
 
-    let existing: Vec<String> =
+    let existing: Vec<String> = if prune {
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table}")))
             .fetch_all(&mut **tx)
             .await
-            .with_context(|| format!("list ids in {table}"))?;
+            .with_context(|| format!("list ids in {table}"))?
+    } else {
+        Vec::new()
+    };
     let gone: Vec<&String> = existing
         .iter()
         .filter(|id| !rows.contains_key(*id))
@@ -254,7 +365,12 @@ async fn upsert_and_prune(
             .await
             .with_context(|| format!("insert into {table}"))?;
     }
-    Ok(())
+    Ok(gone.into_iter().cloned().collect())
+}
+
+/// The `ingested_files` scope naming the chunk files a table was read from.
+fn chunk_scope(table: &str) -> String {
+    format!("facebook/{table}")
 }
 
 /// Every `uri` in every record, read off disk into the CAS once. A `uri`
@@ -275,7 +391,13 @@ async fn store_media(
         .context("load media_blobs index")?;
     let mut acc = CasEdgeAccumulator::new();
     let mut pending_bytes = 0usize;
-    let mut missing: HashSet<String> = HashSet::new();
+    // A `uri` this run could not read, and the edge it leaves: skipped
+    // when the export left the file out, failed when it is there and
+    // would not read.
+    let mut unread: HashMap<String, (bool, String)> = HashMap::new();
+    // A `uri` whose bytes are in the accumulator, not yet flushed: the
+    // CAS names them at the flush, and `known` learns the name then.
+    let mut pending: HashSet<String> = HashSet::new();
 
     for rows in by_table.values() {
         for (id, record) in rows {
@@ -289,39 +411,57 @@ async fn store_media(
                     summary.media_known += 1;
                     continue;
                 }
-                if missing.contains(&uri) {
-                    acc.add_failed(id, &uri, "media file not in the export");
+                if pending.contains(&uri) {
+                    acc.add_again(id, &uri);
+                    summary.media_known += 1;
                     continue;
                 }
-                let path = root.join(&uri);
-                match std::fs::read(&path) {
-                    Ok(bytes) => {
-                        let hash = datalib_etl::blob_cas::blake3_hex(&bytes);
-                        pending_bytes += bytes.len();
-                        acc.add_fetched(id, &uri, bytes, guess_content_type(&uri), file_name(&uri));
-                        known.insert(uri.clone(), hash);
-                        summary.media_stored += 1;
+                if !unread.contains_key(&uri) {
+                    match std::fs::read(root.join(&uri)) {
+                        Ok(bytes) => {
+                            pending_bytes += bytes.len();
+                            acc.add_fetched(id, &uri, bytes, guess_content_type(&uri));
+                            pending.insert(uri);
+                            summary.media_stored += 1;
+                            continue;
+                        }
+                        Err(e) => {
+                            let not_found = e.kind() == std::io::ErrorKind::NotFound;
+                            let detail = if not_found {
+                                format!("media file not in the export: {e}")
+                            } else {
+                                format!("media file would not read: {e}")
+                            };
+                            unread.insert(uri.clone(), (not_found, detail));
+                            summary.media_missing += 1;
+                        }
                     }
-                    Err(e) => {
-                        warn!(event = "facebook_media_missing", uri, error = %e, "a media file the export names is not there");
-                        missing.insert(uri.clone());
-                        acc.add_failed(id, &uri, "media file not in the export");
-                        summary.media_missing += 1;
-                    }
+                }
+                let (not_found, detail) = &unread[&uri];
+                if *not_found {
+                    acc.add_skipped(id, &uri, Reason::NotFound, detail.clone());
+                } else {
+                    acc.add_failed(id, &uri, detail.clone());
                 }
             }
             if pending_bytes >= MEDIA_FLUSH_BYTES {
-                flush_media(&acc, db, cas).await?;
+                known.extend(flush_media(&acc, db, cas).await?);
+                pending.clear();
                 acc = CasEdgeAccumulator::new();
                 pending_bytes = 0;
                 progress.set_message(&format!("media: {} stored", summary.media_stored));
             }
         }
     }
-    flush_media(&acc, db, cas).await
+    flush_media(&acc, db, cas).await?;
+    Ok(())
 }
 
-async fn flush_media(acc: &CasEdgeAccumulator, db: &RawDb, cas: &BlobCas) -> Result<()> {
+async fn flush_media(
+    acc: &CasEdgeAccumulator,
+    db: &RawDb,
+    cas: &BlobCas,
+) -> Result<HashMap<String, String>> {
     acc.flush(db.pool(), cas, |owning, uri, blake3| MediaBlobRow {
         id: MediaBlobRow::pk_recipe(owning, uri),
         owner_id: owning.to_string(),
@@ -363,13 +503,20 @@ fn looks_like_export_path(s: &str) -> bool {
 /// Parse one export file into its records: an array is one record per
 /// element, an object wrapping a single array (`{"comments_v2": […]}`)
 /// likewise, and anything else — an album, the profile — is one record.
-/// Every string is passed through [`mojibake::fix`] on the way in.
-fn read_records(path: &Path) -> Result<Vec<Value>> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+/// Every string is passed through [`mojibake::fix`] on the way in. The
+/// file comes back as what to stamp once its rows are stored.
+fn read_records(path: &Path, rel: &str) -> Result<(Vec<Value>, ScannedFile)> {
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let mut v: Value =
-        serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
     mojibake::fix(&mut v);
-    Ok(split_records(v))
+    let file = ScannedFile {
+        path: path.to_path_buf(),
+        rel: rel.to_string(),
+        size: bytes.len() as i64,
+        blake3: *blake3::hash(&bytes).as_bytes(),
+    };
+    Ok((split_records(v), file))
 }
 
 fn split_records(v: Value) -> Vec<Value> {
@@ -409,13 +556,6 @@ fn relative(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
-}
-
-fn file_name(uri: &str) -> Option<String> {
-    uri.rsplit('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
 }
 
 fn guess_content_type(uri: &str) -> Option<String> {

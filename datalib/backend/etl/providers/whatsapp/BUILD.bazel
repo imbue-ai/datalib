@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Checked-in TNG-themed fixture spec consumed by the unified
 # //tests/fixtures:ingested_tng genrule. Mirror of the signal pattern:
 # run_sync_pipeline.py runs `whatsapp_make_fixture` against this spec
@@ -27,6 +25,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/whatsapp_config:datalib_etl_whatsapp_config",
         "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
         "//datalib/backend/whatsapp-backup:datalib_whatsapp_backup",

@@ -1,5 +1,6 @@
-// The error a failed api.ts request throws. Its own module because every
+// The errors a failed api.ts request throws. Its own module because every
 // function api.ts exports is taken to be a request (tests/card_api.test.ts).
+import type { Failure } from "./api";
 
 // A request the server answered with an error status. `detail` is what
 // it said: the `error` of a `{"error": …}` body, else the body as text.
@@ -25,4 +26,12 @@ export function errorDetail(body: string): string {
     // Not JSON; the text is the detail.
   }
   return text;
+}
+
+/// A request that failed with a classified failure (`Failure` in
+/// api.ts), for the caller to show in its own words.
+export class FailureError extends Error {
+  constructor(public failure: Failure) {
+    super(failure.detail);
+  }
 }

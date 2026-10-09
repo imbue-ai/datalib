@@ -14,17 +14,17 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use strum::{EnumString, IntoStaticStr, VariantArray};
 use tokio::process::Command;
 
-use crate::AppState;
+use datalib_probe::issue::{classify, IssueKind};
+
+use crate::{plugins, AppState};
 
 /// How long to wait on `latchkey services info` before giving up. It
 /// makes a validation request per stored credential, so it is a network
 /// call, not a keyring read.
 const SERVICES_TIMEOUT: Duration = Duration::from_secs(45);
-/// How long a probe may take. Two HTTP calls against a mail API, plus
-/// however long latchkey needs to refresh an expired OAuth token.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a browser login may stay pending before we call it lost.
 /// Long, because the clock is a person reading a consent screen.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -33,12 +33,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// `auth browser` and `curl` are forwarded to the gateway, and every
 /// command that manages local state — `ensure-browser`, `services
 /// register`, `auth set`, `auth clear` — is refused outright. The same
-/// rule `datalib_etl::latchkey` applies, restated here because this
+/// rule `datalib_etl_web::latchkey` applies, restated here because this
 /// crate links no ETL code.
 const GATEWAY_ENV_VAR: &str = "LATCHKEY_GATEWAY";
 
 /// The gateway's URL, when this process is pointed at one.
-fn latchkey_gateway() -> Option<String> {
+pub(crate) fn latchkey_gateway() -> Option<String> {
     gateway_from(std::env::var_os(GATEWAY_ENV_VAR))
 }
 
@@ -87,6 +87,67 @@ pub struct ServiceInfo {
     /// keyring access). The wizard still lets you type an account name
     /// by hand, so this is a note rather than an error.
     pub error: Option<String>,
+    /// What kind of trouble `error` is, for the wizard's one sentence.
+    pub issue: Option<IssueKind>,
+    /// Where signing in will install the latchkey plugin that adds this
+    /// service, when latchkey lacks it and datalib ships one
+    /// ([`crate::plugins`]). The wizard says so before anything is
+    /// written.
+    pub installs_plugin: Option<String>,
+    /// Who names the account a browser login adds.
+    pub account_naming: AccountNaming,
+}
+
+/// Who names the account a browser login adds. `docs/dev/latchkey.md`
+/// §"Accounts: who names them" has the rules this stands for.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AccountNaming {
+    /// The login reports who signed in and stores under that; latchkey
+    /// accepts `--account` only for an account it already holds. Every
+    /// built-in service and plugin datalib signs in to with a browser.
+    Service,
+    /// `--account` decides, a new name included: a service whose login
+    /// cannot tell who signed in (every one registered with `latchkey
+    /// services register`), and one with no browser login, which only a
+    /// paste reaches.
+    Chosen,
+}
+
+impl AccountNaming {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+    /// From `latchkey services info`'s `capabilities.detectsLoginAccount`.
+    /// The flag is about a browser login, and latchkey says `true` for
+    /// `fastmail-dav`, which has none, so the browser login is checked
+    /// here. A gateway running a latchkey older than 3.18 reports no
+    /// flag; the box then stays free to type in, as when latchkey cannot
+    /// be asked at all.
+    fn of_service(detects_login_account: Option<bool>, auth_options: &[String]) -> Self {
+        let has_browser_login = auth_options.iter().any(|o| o == "browser");
+        if has_browser_login && detects_login_account == Some(true) {
+            AccountNaming::Service
+        } else {
+            AccountNaming::Chosen
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -120,6 +181,12 @@ pub async fn get_service(
             // into the "latchkey could not be asked" note.
             let message = e.to_string();
             let unknown = message.contains("Unknown service");
+            if let Some(info) = unknown
+                .then(|| plugin_service_info(&service, gateway.as_deref()))
+                .flatten()
+            {
+                return Ok(Json(info));
+            }
             Ok(Json(ServiceInfo {
                 service,
                 auth_options: Vec::new(),
@@ -127,15 +194,75 @@ pub async fn get_service(
                 accounts: Vec::new(),
                 registered: !unknown,
                 cli: datalib_core::node_runtime::latchkey_cli_hint(),
+                issue: (!unknown).then(|| classify(&message, gateway.is_some())),
                 gateway,
                 error: if unknown { None } else { Some(message) },
+                installs_plugin: None,
+                // Not registered yet: the wizard registers it, and a
+                // registered service names nothing. Unreachable latchkey:
+                // nothing to go on, and the box stays free to type in.
+                account_naming: AccountNaming::Chosen,
             }))
         }
     }
 }
 
+/// What a service latchkey lacks will offer once its plugin is in, for
+/// a service datalib ships the plugin for. Not under a gateway: the
+/// plugin would have to be on the gateway's machine.
+fn plugin_service_info(service: &str, gateway: Option<&str>) -> Option<ServiceInfo> {
+    let plugin = plugins::for_service(service)?;
+    if gateway.is_some() {
+        return None;
+    }
+    let dir = plugins::plugin_dir(&plugins::latchkey_dir()?, plugin);
+    Some(ServiceInfo {
+        service: service.to_string(),
+        auth_options: plugin.auth_options.iter().map(|o| o.to_string()).collect(),
+        set_example: Some(plugin.set_example.to_string()),
+        accounts: Vec::new(),
+        registered: false,
+        cli: datalib_core::node_runtime::latchkey_cli_hint(),
+        gateway: None,
+        error: None,
+        issue: None,
+        installs_plugin: Some(dir.display().to_string()),
+        // Garmin's names its own; `plugins::tests` checks it still does.
+        account_naming: AccountNaming::Service,
+    })
+}
+
+/// Puts the plugin that adds `service` where latchkey loads it, when
+/// datalib ships one: before a sign-in or a paste, which are the first
+/// things that need latchkey to know the service.
+async fn install_plugin_for(service: &str) -> Result<(), String> {
+    let Some(plugin) = plugins::for_service(service) else {
+        return Ok(());
+    };
+    let Some(latchkey_dir) = plugins::latchkey_dir() else {
+        return Err(format!(
+            "neither $LATCHKEY_DIRECTORY nor $HOME is set, so there is nowhere to install \
+             latchkey's {service} plugin"
+        ));
+    };
+    let dir = plugins::plugin_dir(&latchkey_dir, plugin);
+    let at = dir.clone();
+    let found = tokio::task::spawn_blocking(move || plugins::install(plugin, &at))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("could not install latchkey's {service} plugin: {e}"))?;
+    match found {
+        plugins::Found::Theirs => {
+            tracing::info!(service, dir = %dir.display(), "left a latchkey plugin datalib did not install")
+        }
+        plugins::Found::Ours(v) if v == plugin.version => {}
+        _ => tracing::info!(service, dir = %dir.display(), "installed a latchkey plugin"),
+    }
+    Ok(())
+}
+
 fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
-    let auth_options = v
+    let auth_options: Vec<String> = v
         .get("authOptions")
         .and_then(Value::as_array)
         .map(|a| {
@@ -166,6 +293,11 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
         .unwrap_or_default();
     // A map has no order; the picker should not shuffle between loads.
     accounts.sort_by(|a, b| a.account.cmp(&b.account));
+    let account_naming = AccountNaming::of_service(
+        v.pointer("/capabilities/detectsLoginAccount")
+            .and_then(Value::as_bool),
+        &auth_options,
+    );
     ServiceInfo {
         service: service.to_string(),
         auth_options,
@@ -178,6 +310,9 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
         cli: datalib_core::node_runtime::latchkey_cli_hint(),
         gateway: None,
         error: None,
+        issue: None,
+        installs_plugin: None,
+        account_naming,
     }
 }
 
@@ -195,9 +330,7 @@ pub struct ConnectRequest {
     /// account.
     #[serde(default)]
     pub register: Option<ServiceRegistration>,
-    /// Run the login without latchkey's saved browser session. Set for
-    /// a cookie capture, which cannot see a cookie an already
-    /// signed-in session does not re-send — see
+    /// Run the login without latchkey's saved browser session — see
     /// [`EPHEMERAL_BROWSER_ENV`].
     #[serde(default)]
     pub ephemeral_browser: bool,
@@ -234,17 +367,31 @@ pub enum ConnectState {
 pub struct ConnectStatus {
     pub id: String,
     pub status: ConnectState,
-    /// Which account latchkey filed the credential under, when it says.
-    /// Not the one that was asked for: `auth browser` ignores
-    /// `--account` when storing and uses the identity the login yields
-    /// (imbue-ai/latchkey#148) — the signed-in address for an OAuth
-    /// service, and the unnamed default for a flow with no identity in
-    /// it. Its own report is the only reliable way to know which.
+    /// Which account latchkey filed the credential under, when it says:
+    /// the one asked for, or with none asked for, the identity the login
+    /// yields.
     pub account: Option<String>,
     /// The command's combined output, so a failure is diagnosable
     /// without going to a terminal. Trimmed to the tail — latchkey can
     /// be chatty and the useful part is always at the end.
     pub output: String,
+    /// What the attempt is doing now, while it runs.
+    pub phase: ConnectPhase,
+    /// What kind of trouble `output` is, once `Failed`.
+    pub issue: Option<IssueKind>,
+}
+
+/// What a running browser login is doing, so the wizard can say what
+/// it is waiting on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectPhase {
+    /// Registering the service, finding a browser.
+    Preparing,
+    /// No browser on the machine: fetching one, a one-time download.
+    DownloadingBrowser,
+    /// The browser is open on the service's login page.
+    SigningIn,
 }
 
 // POST /api/latchkey/{service}/credential
@@ -260,6 +407,9 @@ pub enum PastedCredential {
     Headers { headers: Vec<String> },
     /// HTTP Basic, which is what an app password is (Fastmail's DAV).
     Basic { username: String, password: String },
+    /// A folder the service's plugin reads the credential from, stored
+    /// with `auth set-nocurl` (Garmin's garth tokens).
+    Directory { path: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -287,6 +437,9 @@ pub async fn set_credential(
     }
     let args = set_args(&service, body.account.trim(), &body.credential)
         .map_err(|m| err(StatusCode::BAD_REQUEST, &m))?;
+    install_plugin_for(&service)
+        .await
+        .map_err(|m| err(StatusCode::INTERNAL_SERVER_ERROR, &m))?;
     match latchkey_output(&args).await {
         Ok(_) => {
             tracing::info!(service, "latchkey stored a pasted credential");
@@ -295,7 +448,13 @@ pub async fn set_credential(
         Err(e) => {
             let message = scrub(&e.to_string());
             tracing::error!(service, "latchkey auth set failed: {message}");
-            Err(err(StatusCode::BAD_GATEWAY, &message))
+            Err((
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": message,
+                    "issue": classify(&message, false),
+                })),
+            ))
         }
     }
 }
@@ -317,7 +476,11 @@ fn set_args(
         }
         args.extend(["--account".to_string(), account.to_string()]);
     }
-    args.extend(["auth".to_string(), "set".to_string(), service.to_string()]);
+    let set = match credential {
+        PastedCredential::Directory { .. } => "set-nocurl",
+        _ => "set",
+    };
+    args.extend(["auth".to_string(), set.to_string(), service.to_string()]);
     match credential {
         PastedCredential::Headers { headers } => {
             if headers.is_empty() {
@@ -349,6 +512,13 @@ fn set_args(
                 return Err("the username has no ':' and neither has a line break".into());
             }
             args.extend(["-u".to_string(), format!("{username}:{password}")]);
+        }
+        PastedCredential::Directory { path } => {
+            let path = path.trim();
+            if path.is_empty() || path.starts_with('-') || !one_line(path) {
+                return Err("a folder is one line and does not start with '-'".into());
+            }
+            args.push(path.to_string());
         }
     }
     Ok(args)
@@ -397,6 +567,8 @@ pub async fn start_connect(
         status: ConnectState::Running,
         account: None,
         output: String::new(),
+        phase: ConnectPhase::Preparing,
+        issue: None,
     }));
     attempts()
         .lock()
@@ -404,7 +576,7 @@ pub async fn start_connect(
         .insert(id.clone(), slot.clone());
 
     // `--account` is a latchkey *global* option and must precede the
-    // subcommand — the same rule `datalib_etl::latchkey` writes down
+    // subcommand — the same rule `datalib_etl_web::latchkey` writes down
     // for `curl`. Built here rather than reused from there because
     // this crate deliberately links no ETL code.
     let mut args: Vec<String> = Vec::new();
@@ -415,6 +587,10 @@ pub async fn start_connect(
     args.extend(["auth".to_string(), "browser".to_string(), service.clone()]);
 
     tokio::spawn(async move {
+        if let Err(message) = install_plugin_for(&service).await {
+            fail(&slot, &service, message);
+            return;
+        }
         // Registering is what makes the browser login exist at all, so
         // it has to happen first. latchkey refuses a name it already
         // holds; that refusal is the desired outcome, not a failure —
@@ -431,42 +607,24 @@ pub async fn start_connect(
         // Before the login, not lazily after it fails: the refusal names
         // a command, and the person reading it pressed a button
         // precisely so they would not have to run one.
-        if let Err(e) = latchkey_output(&ensure_browser_args()).await {
-            let message = format!(
-                "no browser available for the login ({}). Latchkey can install one, which \
-                 downloads a Chromium of a few hundred megabytes: run `{} ensure-browser` and \
-                 try again.",
-                tail(&e.to_string()),
-                datalib_core::node_runtime::latchkey_cli_hint(),
-            );
-            fail(&slot, &service, message);
-            return;
-        }
-
-        let login =
-            || tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output_env(&args, &login_env));
-        let mut outcome = login().await;
-
-        // latchkey's `auth browser` *refreshes* an account; it will not
-        // create one, and refuses a name it has never seen. Seeding it
-        // is the whole remedy — the login overwrites the placeholder —
-        // so do that rather than handing the person a command. Only on
-        // that exact refusal: any other failure is its own problem.
-        let refused_unknown_account = !account.is_empty()
-            && matches!(&outcome, Ok(Err(e)) if e.to_string().contains("No credentials stored for account"));
-        if refused_unknown_account {
-            if let Err(e) = latchkey_output(&seed_args(&service, &account)).await {
-                fail(&slot, &service, tail(&e.to_string()));
+        if latchkey_output(&ensure_browser_args()).await.is_err() {
+            // No browser on the machine. The person pressed "Sign in
+            // with browser", so fetching one is what they asked for;
+            // the wizard says it is happening, since it takes a while.
+            slot.lock().expect("connect slot mutex").phase = ConnectPhase::DownloadingBrowser;
+            if let Err(e) = latchkey_output(&download_browser_args()).await {
+                let message = format!(
+                    "No browser found for the sign-in, and fetching one failed: {}",
+                    tail(&e.to_string()),
+                );
+                fail(&slot, &service, message);
                 return;
             }
-            outcome = login().await;
-            // A placeholder outliving a login that never finished is a
-            // stored credential that cannot work, and it would make the
-            // account look connected in every account list.
-            if !matches!(outcome, Ok(Ok(_))) {
-                let _ = latchkey_output(&clear_args(&service, &account)).await;
-            }
         }
+        slot.lock().expect("connect slot mutex").phase = ConnectPhase::SigningIn;
+
+        let outcome =
+            tokio::time::timeout(CONNECT_TIMEOUT, latchkey_output_env(&args, &login_env)).await;
 
         match outcome {
             Ok(Ok(output)) => succeed(&slot, &service, stored_account(&output), tail(&output)),
@@ -484,6 +642,8 @@ pub async fn start_connect(
         status: ConnectState::Running,
         account: None,
         output: String::new(),
+        phase: ConnectPhase::Preparing,
+        issue: None,
     }))
 }
 
@@ -496,6 +656,7 @@ fn fail(slot: &Arc<Mutex<ConnectStatus>>, service: &str, output: String) {
     tracing::error!(service, "latchkey login failed: {}", scrub(&output));
     let mut slot = slot.lock().expect("connect slot mutex");
     slot.status = ConnectState::Failed;
+    slot.issue = Some(classify(&output, false));
     slot.output = output;
 }
 
@@ -515,34 +676,9 @@ fn succeed(
     slot.output = output;
 }
 
-/// The placeholder that brings a named account into existence so the
-/// browser login has something to refresh. Never used as a credential:
-/// the login overwrites it, and a login that does not finish has it
-/// cleared again.
-fn seed_args(service: &str, account: &str) -> Vec<String> {
-    vec![
-        "--account".to_string(),
-        account.to_string(),
-        "auth".to_string(),
-        "set".to_string(),
-        service.to_string(),
-        "-H".to_string(),
-        "X-Datalib-Placeholder: pending-browser-login".to_string(),
-    ]
-}
-
-fn clear_args(service: &str, account: &str) -> Vec<String> {
-    vec![
-        "--account".to_string(),
-        account.to_string(),
-        "auth".to_string(),
-        "clear".to_string(),
-        service.to_string(),
-    ]
-}
-
 /// `ensure-browser`, restricted to the sources that use a browser
-/// already on the machine.
+/// already on the machine. When it finds none, [`download_browser_args`]
+/// fetches one.
 ///
 /// A latchkey store that has never done a browser login has none
 /// configured, and `auth browser` refuses outright ("No browser
@@ -550,19 +686,27 @@ fn clear_args(service: &str, account: &str) -> Vec<String> {
 /// new user, and was invisible to us because a developer's store is
 /// never new.
 ///
-/// The default source list ends in `download-playwright-browser`, so
-/// running it unrestricted can pull a Chromium of a hundred-odd
-/// megabytes. Nobody pressing "Latchkey auth" asked for that, and a
-/// long silent stall behind a spinner is the worst way to deliver it.
-/// These three sources configure an existing browser or fail fast; the
-/// download stays a thing someone chooses, by running the command
-/// themselves. `datalib/tauri/check-app.sh` runs the same sources
-/// against every built .app.
+/// The default source list ends in `download-playwright-browser`, which
+/// pulls a Chromium of a hundred-odd megabytes. A browser already on
+/// the machine is always preferred, so the download is its own step,
+/// taken only when these find nothing and said on screen while it runs
+/// rather than a silent stall behind a spinner.
+/// `datalib/tauri/check-app.sh` runs the same sources against every
+/// built .app.
 fn ensure_browser_args() -> Vec<String> {
     vec![
         "ensure-browser".to_string(),
         "--source".to_string(),
         "existing-config,system-browser,existing-playwright-browser".to_string(),
+    ]
+}
+
+/// `ensure-browser` from the one source that downloads.
+fn download_browser_args() -> Vec<String> {
+    vec![
+        "ensure-browser".to_string(),
+        "--source".to_string(),
+        "download-playwright-browser".to_string(),
     ]
 }
 
@@ -620,107 +764,13 @@ pub async fn connect_status(
     }
 }
 
-// POST /api/probe
-
-#[derive(Debug, Deserialize)]
-pub struct ProbeRequest {
-    /// The group's `type`: the provider word (`slack`, `email`, …).
-    #[serde(rename = "type")]
-    pub source_type: String,
-    /// The provider's **download** params, exactly as they would be
-    /// written under `[steps.params]`. Download-shaped even when the
-    /// wizard is filling in a render step: a render step's own params
-    /// hold no credentials, and the labels its filter can name are the
-    /// ones the account has.
-    #[serde(default)]
-    pub params: Value,
-}
-
-pub async fn probe(
-    State(s): State<AppState>,
-    Json(req): Json<ProbeRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let source_type = validated_type(&req.source_type)?;
-    let step_bin = crate::binaries::resolve_step_bin().ok_or_else(|| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no `datalib-step` binary found (set $DATALIB_STEP_BIN or $DATALIB_BINARY_DIR). \
-             Testing a connection runs the provider's own probe, so it needs the step binary \
-             the pipeline uses.",
-        )
-    })?;
-    let params = serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
-    // The wizard's typed credentials are in here; an owner-only file
-    // keeps them off argv, where `ps` would show them to every user.
-    let params_file = datalib_dag::subprocess::write_params_file(
-        &s.root,
-        &format!("probe_{source_type}"),
-        &params,
-    )
-    .map_err(|e| {
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("params file: {e:#}"),
-        )
-    })?;
-
-    let mut cmd = Command::new(step_bin);
-    cmd.arg("probe")
-        .arg(&source_type)
-        .arg(datalib_dag::subprocess::PARAMS_FILE_FLAG)
-        .arg(params_file.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let out = match tokio::time::timeout(PROBE_TIMEOUT, cmd.output()).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}"))),
-        Err(_) => {
-            return Err(err(
-                StatusCode::GATEWAY_TIMEOUT,
-                "the probe did not answer within two minutes",
-            ))
-        }
-    };
-    if !out.status.success() {
-        // The step prints its error chain to stderr; that chain is the
-        // useful message ("Gmail users.getProfile: HTTP 401 …"), so
-        // pass it through rather than replacing it with our own.
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        tracing::error!(
-            source_type = %source_type,
-            "probe failed: {}",
-            scrub(&error_chain(&stderr))
-        );
-        return Err(err(StatusCode::BAD_GATEWAY, &tail(&stderr)));
-    }
-    let report: Value = serde_json::from_slice(&out.stdout).map_err(|e| {
-        err(
-            StatusCode::BAD_GATEWAY,
-            &format!("the probe printed something that isn't JSON: {e}"),
-        )
-    })?;
-    Ok(Json(report))
-}
-
 // shared
 
-/// A browser login that must observe a *fresh* sign-in, so latchkey
-/// must not restore the session it saved last time.
-///
-/// Cookie capture reads the `Set-Cookie` headers that arrive while
-/// someone signs in. latchkey otherwise seeds the browser with its own
-/// persisted state, which lands you already signed in — and a site that
-/// sees an established session issues no new cookie, so the capture
-/// waits for something that can never arrive and the login hangs with
-/// nothing on screen to say why (imbue-ai/latchkey#150). Ephemeral mode
-/// neither loads nor saves that state.
-///
-/// Only for cookie capture. An OAuth login *benefits* from the saved
-/// session — it has an identity to re-derive either way, and being
-/// already signed in is one less password. Whether token capture needs
-/// it is open (imbue-ai/latchkey#152); until it is shown to, a sign-in
-/// every time is a cost nobody asked for.
+/// A browser login that neither loads nor saves latchkey's one saved
+/// browser session, which every service and account shares. The wizard
+/// asks for it when the login could otherwise file whoever is still
+/// signed in under the wrong account (`freshBrowser` in
+/// `ui/src/config/accountNaming.ts`).
 const EPHEMERAL_BROWSER_ENV: &str = "LATCHKEY_EPHEMERAL_BROWSER";
 
 async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
@@ -728,7 +778,7 @@ async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
 }
 
 async fn latchkey_output_env(args: &[String], env: &[(&str, &str)]) -> anyhow::Result<String> {
-    // The same resolution `datalib_etl::latchkey` uses, reached through
+    // The same resolution `datalib_etl_web::latchkey` uses, reached through
     // `datalib_core` so the pin is not spelled twice.
     let mut cmd: Command = datalib_core::node_runtime::latchkey_command()?.into();
     cmd.args(args)
@@ -759,7 +809,7 @@ async fn latchkey_json(args: &[&str], timeout: Duration) -> anyhow::Result<Value
         .map_err(|e| anyhow::anyhow!("latchkey printed something that isn't JSON: {e}"))
 }
 
-fn tail(s: &str) -> String {
+pub(crate) fn tail(s: &str) -> String {
     let s = s.trim();
     const MAX: usize = 4096;
     if s.len() <= MAX {
@@ -777,7 +827,7 @@ fn tail(s: &str) -> String {
 /// The `error: …` lines `datalib-step probe` prints on failure, without
 /// the tracing output around them. Falls back to the whole tail when a
 /// crash left no chain.
-fn error_chain(stderr: &str) -> String {
+pub(crate) fn error_chain(stderr: &str) -> String {
     let chain: Vec<&str> = stderr
         .lines()
         .filter(|l| l.starts_with("error: "))
@@ -799,7 +849,7 @@ fn error_chain(stderr: &str) -> String {
 /// the rest of a line after `Cookie:` / `Set-Cookie:`, any JWT, and the
 /// value of any `k=v` whose key mentions a token, secret, password,
 /// session or cookie.
-fn scrub(s: &str) -> String {
+pub(crate) fn scrub(s: &str) -> String {
     const BLANK: &str = "<redacted>";
     let mut out = String::with_capacity(s.len());
     for (i, line) in s.lines().enumerate() {
@@ -889,7 +939,7 @@ fn validated_service(service: &str) -> Result<String, (StatusCode, Json<Value>)>
     Ok(s.to_string())
 }
 
-fn validated_type(source_type: &str) -> Result<String, (StatusCode, Json<Value>)> {
+pub(crate) fn validated_type(source_type: &str) -> Result<String, (StatusCode, Json<Value>)> {
     let s = source_type.trim();
     if s.is_empty() || !s.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
         return Err(err(
@@ -900,7 +950,7 @@ fn validated_type(source_type: &str) -> Result<String, (StatusCode, Json<Value>)
     Ok(s.to_string())
 }
 
-fn err(status: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
+pub(crate) fn err(status: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
     (status, Json(serde_json::json!({ "error": message })))
 }
 
@@ -955,20 +1005,21 @@ mod scrub_tests {
 
 #[cfg(test)]
 mod ensure_browser_tests {
-    use super::ensure_browser_args;
+    use super::{download_browser_args, ensure_browser_args};
 
-    /// The whole point of naming sources explicitly: the default list
-    /// ends in `download-playwright-browser`, and a button press must
-    /// not turn into a few hundred megabytes nobody asked for.
+    /// A browser already on the machine is always tried first: the
+    /// download is its own step, so the wizard can say it is happening.
     #[test]
-    fn never_offers_to_download_a_browser() {
-        let args = ensure_browser_args();
-        let sources = args.last().expect("a --source value");
-        assert!(
-            !sources.contains("download"),
-            "ensure-browser must not reach the downloading source: {sources}"
-        );
+    fn the_first_look_never_downloads_and_the_second_only_does() {
+        let first = ensure_browser_args();
+        let sources = first.last().expect("a --source value");
+        assert!(!sources.contains("download"), "{sources}");
         assert!(sources.contains("system-browser"), "{sources}");
+        let second = download_browser_args();
+        assert_eq!(
+            second.last().map(String::as_str),
+            Some("download-playwright-browser")
+        );
     }
 }
 
@@ -1031,16 +1082,16 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The exact shape `latchkey services info <name>` prints, as
-    /// captured from latchkey 3.11.0 (unchanged through 3.14.0). If it changes, this test
-    /// is what says so — the handler itself would just start returning
-    /// an empty account list.
+    /// The shape `latchkey services info <name>` printed in 3.18.0. A
+    /// literal, so it cannot notice latchkey changing; `e2e_auth`'s
+    /// `accounts.spec.ts` asks the real one.
     #[test]
-    fn reads_a_real_services_info_payload() {
+    fn reads_a_services_info_payload() {
         let v = json!({
             "type": "built-in",
             "baseApiUrls": ["https://gmail.googleapis.com/"],
             "authOptions": ["browser", "set"],
+            "capabilities": { "detectsLoginAccount": true },
             "credentials": {
                 "thad@imbue.com": {
                     "credentialType": "oauth",
@@ -1050,6 +1101,7 @@ mod tests {
         });
         let info = parse_service_info("google-gmail", &v);
         assert_eq!(info.service, "google-gmail");
+        assert_eq!(info.account_naming, AccountNaming::Service);
         assert_eq!(info.auth_options, vec!["browser", "set"]);
         assert_eq!(info.accounts.len(), 1);
         assert_eq!(info.accounts[0].account, "thad@imbue.com");
@@ -1091,6 +1143,99 @@ mod tests {
                 "Authorization: Bearer ro-token"
             ]
         );
+    }
+
+    /// A login that cannot tell who signed in stores under the name in
+    /// the box: every registered service, and built-ins like `openrouter`.
+    #[test]
+    fn a_login_that_cannot_tell_who_signed_in_lets_the_person_name_the_account() {
+        let v = json!({
+            "type": "user-registered",
+            "authOptions": ["browser", "set"],
+            "capabilities": { "detectsLoginAccount": false },
+        });
+        assert_eq!(
+            parse_service_info("claude-ai", &v).account_naming,
+            AccountNaming::Chosen
+        );
+    }
+
+    /// A gateway on a latchkey older than 3.18 reports no capabilities;
+    /// the box stays free to type in rather than claim the service
+    /// names the account.
+    #[test]
+    fn no_capabilities_lets_the_person_name_the_account() {
+        let v = json!({ "type": "built-in", "authOptions": ["browser", "set"] });
+        assert_eq!(
+            parse_service_info("slack", &v).account_naming,
+            AccountNaming::Chosen
+        );
+    }
+
+    /// `fastmail-dav`, `notion` and `gitlab` have no browser login, so a
+    /// pasted credential is the only way in and the person names it —
+    /// though latchkey reports `detectsLoginAccount: true` for them.
+    #[test]
+    fn a_built_in_service_without_a_browser_login_lets_the_person_name_it() {
+        let v = json!({
+            "type": "built-in",
+            "authOptions": ["set"],
+            "capabilities": { "detectsLoginAccount": true },
+        });
+        assert_eq!(
+            parse_service_info("fastmail-dav", &v).account_naming,
+            AccountNaming::Chosen
+        );
+    }
+
+    #[test]
+    fn strum_and_serde_spell_account_naming_the_same() {
+        for naming in AccountNaming::VARIANTS {
+            let json = serde_json::to_string(naming).unwrap();
+            assert_eq!(json, format!("\"{}\"", naming.as_str()));
+            assert_eq!(AccountNaming::parse(naming.as_str()), Some(*naming));
+        }
+    }
+
+    /// A plugin's credential from files is stored with `set-nocurl`,
+    /// which takes the folder as its only argument.
+    #[test]
+    fn a_token_folder_becomes_auth_set_nocurl_arguments() {
+        let folder = PastedCredential::Directory {
+            path: " ~/.garth ".into(),
+        };
+        assert_eq!(
+            set_args("garmin", "picard", &folder).unwrap(),
+            vec![
+                "--account",
+                "picard",
+                "auth",
+                "set-nocurl",
+                "garmin",
+                "~/.garth"
+            ]
+        );
+        let refuse = |path: &str| {
+            set_args(
+                "garmin",
+                "",
+                &PastedCredential::Directory { path: path.into() },
+            )
+            .unwrap_err()
+        };
+        refuse("");
+        refuse("--help");
+        refuse("a\nb");
+    }
+
+    #[test]
+    fn a_service_datalib_has_a_plugin_for_offers_its_ways_in_before_it_is_installed() {
+        let info = plugin_service_info("garmin", None).unwrap();
+        assert!(!info.registered);
+        assert_eq!(info.auth_options, vec!["browser", "set"]);
+        assert!(info.installs_plugin.unwrap().ends_with("plugins/garmin"));
+        assert!(plugin_service_info("garmin", Some("http://gw")).is_none());
+        assert!(plugin_service_info("slack", None).is_none());
     }
 
     /// A refusal names what is wrong without echoing the secret.

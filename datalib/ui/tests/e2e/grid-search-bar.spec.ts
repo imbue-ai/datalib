@@ -45,7 +45,7 @@ test("a shift-click sorts by a second column too", async ({ page, request }) => 
 });
 
 /// A column dropped on the search bar keeps the rows with a value in it,
-/// as a term a person can read and edit: `author:*`.
+/// as a term a person can read and edit: the Author column's is `from:*`.
 test("a column dropped on the search bar keeps the rows with a value in it", async ({
   page,
   request,
@@ -53,18 +53,18 @@ test("a column dropped on the search bar keeps the rows with a value in it", asy
   // Counted off every row, not asked of the term under test.
   const all = (
     (await (await request.get("/applet/unified_index/search?q=&limit=100000")).json()) as {
-      rows: { author: string }[];
+      rows: { author: string; author_handle: string | null }[];
     }
   ).rows;
-  const withAuthor = all.filter((r) => r.author !== "").length;
+  const withAuthor = all.filter((r) => r.author !== "" || r.author_handle).length;
   expect(withAuthor, "some rows have an author").toBeGreaterThan(0);
   expect(withAuthor, "some rows have none").toBeLessThan(all.length);
 
   await openGrid(page);
   await page.evaluate(() =>
-    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.dropOnSearch("author"),
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.dropOnSearch("author_ref"),
   );
-  await expect(page.getByTestId("search-input")).toHaveValue("author:*");
+  await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "from:*");
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${withAuthor})`);
 
   // A column the search has no term for says so, and the query stays.
@@ -72,7 +72,7 @@ test("a column dropped on the search bar keeps the rows with a value in it", asy
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.dropOnSearch("snippet"),
   );
   await expect(page.locator(".datalib-toast", { hasText: "cannot filter by" })).toBeVisible();
-  await expect(page.getByTestId("search-input")).toHaveValue("author:*");
+  await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "from:*");
 });
 
 /// Every column but Score and Contents has a search key, so a cell's
@@ -93,7 +93,11 @@ test("a cell's right-click keeps only its value, in any column", async ({ page }
     "touched_at",
   );
   await searchMenuItem(page, /Keep only Touched=/).click();
-  await expect(page.getByTestId("search-input")).toHaveValue(`touched_at:"${touched}"`);
+  await expect(page.getByTestId("search-input")).toHaveAttribute(
+    "data-query",
+    // A term splits at its first colon, so the stamp's own need no quotes.
+    `touched_at:${touched}`,
+  );
   await gridSettled(page);
   const held = await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().map((r) => r.touched_at),

@@ -2,6 +2,12 @@
 
 Liberate and own your data. Run powerful AI tools on it, on your terms.
 
+> [!NOTE]
+> **datalib is alpha.** We don't promise stable bytes at rest yet: an
+> upgrade may change how your data is stored on disk, and now and then
+> one may ask you to re-download a source. We aim to carry every data
+> folder forward through upgrades, and to make that a promise soon.
+
 datalib mirrors your personal data — chats, email, messages, contacts,
 documents, photos, health and fitness — out of the services that hold it and into one place
 you own: a folder on your own computer, in open formats, with history.
@@ -37,8 +43,7 @@ Three ways in, from least to most hands-on:
 Cautious? The [Docker image](docs/user/docker.md) keeps the binaries
 and your credentials inside a container that sees only the folders
 you mount, and it comes with a demo library already loaded, so you can
-look before you hand it anything of yours. Building from source is the
-[first-time dev guide](docs/dev/first_time_dev.md).
+look before you hand it anything of yours.
 
 ## Read this before you point an agent at it
 
@@ -63,8 +68,9 @@ place — and most of it was written by other people. Three things follow:
   content. And remember that an agentic harness sends what it reads to a
   model provider: ask yourself whether the people who wrote you those
   messages would be fine with that.
-- **Terms of service.** The Claude.ai and ChatGPT sources talk to the
-  same undocumented web APIs your browser does, using your own session.
+- **Terms of service.** The Claude.ai, ChatGPT and Garmin sources talk
+  to the same undocumented APIs those services' own apps use, signed in
+  as you.
   It is your data, but check the terms of the services you use, and know
   that those APIs can change without notice.
 
@@ -147,14 +153,22 @@ language you like. `datalib-dag` arranges those programs into a graph
 executable that speaks a small NDJSON protocol can be a step — see
 [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md).
 
-**The upper layer is the batteries.** For each source above, an `ingest`
-step that brings the raw data in and, for most, a `render_markdown` step
-that turns it into readable markdown; then the index steps over
-everything rendered — a SQL table of every message and document
-(`grid_rows`) and a keyword and semantic search index (built with
-[qmd](https://github.com/tobi/qmd)). A local web UI, also shipped as a
-desktop app, searches and browses the result. The batteries are Rust;
-the UI is Vue, wrapped in Tauri for the desktop app.
+**The upper layer is the batteries.** Each source above comes with
+ready-made steps:
+
+- `ingest` brings the raw data in.
+- `render_markdown` turns the raw records into readable markdown (most
+  sources have one).
+- `keyword_index` adds that markdown to a keyword search index, built
+  with [qmd](https://github.com/tobi/qmd).
+- `embed` adds semantic search, which matches on meaning rather than
+  words. It is slow, so you can turn it off per source.
+
+Across all the sources, `grid_index` builds one SQL table of every
+message and document (`grid_rows`), and a single search box reads it
+together with the qmd index. A local web UI, also shipped as a desktop
+app (Tauri), manages your sources and syncs, searches, and browses the
+results.
 
 **The stores are [doltlite](https://github.com/dolthub/doltlite)**:
 SQLite's engine over a versioned, content-addressed file format, so a
@@ -186,7 +200,7 @@ Two mechanisms carry it here:
 
 ## What we are aiming for
 
-Near term, ingest and understand:
+Near term, we want to be able to ingest and understand many data sources:
 
 - **Big tent** — popular and unpopular sources alike, discovering each
   one's schema rather than forcing it into ours.
@@ -200,7 +214,7 @@ Near term, ingest and understand:
   between two syncs as a source of its own.
 - **Legible** — render raw data from many schemas into markdown.
 - **Findable** — search by metadata, keywords, and vectors.
-- **Read-only, for now** — ingest-only views of every source.
+- **Read-only (for now)** — ingest-only views of every source.
 
 Longer term: all your data in one place instead of one app per data
 type; your own apps that join data across sources; as much of your data

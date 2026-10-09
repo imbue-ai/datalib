@@ -468,7 +468,8 @@ your data root:
 datalib-http ./
 ```
 
-Pass `--no-open` if you'd rather click in yourself, and set
+It opens your browser when you start it from a terminal; pass
+`--no-open` if you'd rather click in yourself, and set
 `DATALIB_BIND=127.0.0.1:<port>` to change the listen address from
 step 4's default.
 

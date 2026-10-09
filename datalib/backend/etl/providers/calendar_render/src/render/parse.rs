@@ -8,6 +8,7 @@ use datalib_etl_calendar::ingest::db::{
     LoadedAccount, LoadedCalendar, LoadedGoogleEvent, LoadedIcsObject, RawDb,
 };
 use datalib_etl_render::inputs::{changed_rows, RawRange};
+use datalib_etl_render::processor::Unparsed;
 
 #[derive(Debug, Default)]
 pub struct Parsed {
@@ -15,6 +16,9 @@ pub struct Parsed {
     pub calendars: Vec<LoadedCalendar>,
     pub ics: Vec<LoadedIcsObject>,
     pub google: Vec<LoadedGoogleEvent>,
+    /// Event rows that would not read. While there are any, an event
+    /// missing from `ics` and `google` may only be unreadable, not gone.
+    pub unparsed: Vec<Unparsed>,
     /// The rows the diff names as changed since the cursor, per table;
     /// `None` when there is no cursor and everything renders.
     pub changed: Option<HashMap<String, HashSet<String>>>,
@@ -38,11 +42,18 @@ pub fn parse(db_path: &Path, range: RawRange<'_>) -> Result<Option<Parsed>> {
             };
             let loaded = async {
                 let pin = db.pin().expect("open_reader returns a pinned handle");
+                let (ics, bad_ics) = db.load_ics_objects().await?;
+                let (google, bad_google) = db.load_google_events().await?;
+                let unparsed = (bad_ics.into_iter().map(|r| ("ics_objects", r)))
+                    .chain(bad_google.into_iter().map(|r| ("google_events", r)))
+                    .map(|(table, r)| Unparsed::new(table, r.id, &r.sample))
+                    .collect();
                 Ok::<_, anyhow::Error>(Parsed {
                     account: db.load_account().await?,
                     calendars: db.load_calendars().await?,
-                    ics: db.load_ics_objects().await?,
-                    google: db.load_google_events().await?,
+                    ics,
+                    google,
+                    unparsed,
                     changed: changed_rows(db.pool(), range, pin, TABLES).await?,
                     head: Some(pin.commit().to_string()),
                 })

@@ -42,6 +42,7 @@ write the one index file under `unified_index/qmd_aggregator/`):
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
+│   ├── grid_index/search_terms.sqlite     # each row's ids, people, labels and names, full-text (plain SQLite)
 │   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
     ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
@@ -180,7 +181,7 @@ newest closed ones: each with its `roots`, `by`, and `state` (`open`, or
 how it ended: `done`, `failed`, `stopped`). `datalib-dag status
 <config>` prints the same from the shell, with the steps turned off and the steps
 running now. What each step is doing is in the loop's record, which the
-Manage screen's Last update column reads directly:
+Manage screen's Status column reads directly:
 
 ```sh
 sqlite3 <data_root>/system/supervisor.sqlite \
@@ -199,11 +200,12 @@ goes, and the doltlite history keeps them; its attachments stay in
 `blobs.sqlite`, which nothing resets. Then what reads it runs, so its documents leave the grid,
 and its next sync downloads everything again from nothing. Resetting a
 render step (`slack/render_markdown`) instead rebuilds its documents
-from what is downloaded, at once. It needs the
-root to itself, so it runs only when nothing is syncing. With the app
-up, use `POST /api/reset {"targets": ["slack/ingest"], "by":
-"claude"}`: it answers once the store is empty, opens the request that
-carries the emptiness downstream, and refuses while a sync runs. The
+from what is downloaded, at once. With the app up, use `POST /api/reset
+{"targets": ["slack/ingest"], "by": "claude"}`: whatever else is syncing,
+the step is stopped if it runs and emptied at once, and the request that
+carries the emptiness downstream is opened. It answers 204 once the
+store is empty, or 202 if the step had not stopped within ten seconds and
+is emptied once it has. The
 Manage screen's row menu offers the same. With no app up,
 `datalib-dag --reset slack/ingest` empties the store alone; add
 `--sync slack/ingest` to download it again at once.
@@ -301,13 +303,31 @@ Pick the surface that fits the question:
   `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:
   `field:value`, `-field:value`, quoted values, `field:*` for the rows
   with any value there and `-field:*` for the rows with none; fields
-  are `source:`, `source_id:` (`source_name:` is an accepted alias),
-  `kind:`, `channel:`, `author:`, `account:`, `project:`, `convo:`,
+  are `source_id:`, `kind:`, `channel:`, `account:`, `project:`, `convo:`,
   `notion_page:`, `change:`, and a grid column's id for the rest
   (`org_name:`, `byte_size:`, `created_at:`, …); `before:`/`after:`;
   `is:document` for the one row per rendered document and
-  `-is:document` for the rows inside them. A key the search does not
-  have is refused by name, in `errors`, rather than ignored. It answers a page: `limit=` rows from `offset=`, with `total`
+  `-is:document` for the rows inside them. A person is found by role
+  through the search terms: `from:` (also `author:`, `author_handle:`),
+  `to:`, `cc:`, `bcc:`, `recipient:` (any of those), `mention:`, and
+  `with:` (also `involves:`, any role), and `label:` an email's labels;
+  a handle (`email:a@b.c`, or `a@b.c`, `+1…`) or a quoted value
+  (`from:"Will Riker"`) matches whole, case-blind, anything else in
+  part. `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
+  the values one takes, most rows first. A key the search does not
+  have is refused by name, in `refused`, rather than ignored. Free text
+  made only of uuids and handles (an email address, `tel:+…`,
+  `slack:T…/U…`) is looked up in `grid_index/search_terms.sqlite`, not sent to
+  qmd: every row that answers to each one, best match first, with
+  `score` saying how (5 its own id, 4 its author or an addressee,
+  3 someone copied or mentioned, or what it is in, 2 its title or a label, 1 a name
+  it shows) and `snippet` naming the match.
+  `tab=` picks how free text is answered, each its own list:
+  `fields` (the search terms file, any word as the start of one), `words`
+  (every document's text by BM25, from qmd's keyword index) or
+  `meaning` (qmd's vectors alone: the 20 nearest documents across every
+  source, or within one under `source_id:`); with no `tab`, the free text goes to
+  qmd's hybrid query, identifiers aside. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
   columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists

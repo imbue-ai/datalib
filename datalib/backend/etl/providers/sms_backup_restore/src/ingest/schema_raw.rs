@@ -83,7 +83,7 @@ pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         SmsMessageRow::ddl(),
         SmsCallRow::ddl(),
-        datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
+        datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
     out.extend(SmsAttachmentRow::all_ddl());
     for table in DATA_TABLES.iter().chain(EDGE_TABLES.iter()) {

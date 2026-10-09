@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_calendar::ingest;
 use datalib_etl_calendar_config::CalendarRenderConfig;
-use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use datalib_etl_render::processor::{
+    plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
+};
 
 pub fn plan_render(
     ctx: PlanContext,
@@ -40,8 +42,13 @@ impl SourceRender for CalendarRender {
         let Some(parsed) = parsed else {
             return Ok("no raw store yet".into());
         };
+        ctx.report_unparsed(
+            &ReadScope::Whole(vec!["ics_objects", "google_events"]),
+            &parsed.unparsed,
+            Some(self.render_version()),
+        )?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        let buckets = render::render_all(
+        let rendered = render::render_all(
             &parsed,
             ctx.root,
             ctx.name,
@@ -50,7 +57,10 @@ impl SourceRender for CalendarRender {
             &mut on_doc,
         )
         .context("calendar render_all")?;
-        ctx.finish(&buckets, parsed.head.as_deref())?;
+        for key in &rendered.gone {
+            ctx.exclude_bucket(key)?;
+        }
+        ctx.finish(&rendered.buckets, parsed.head.as_deref())?;
         Ok("rendered".into())
     }
 }

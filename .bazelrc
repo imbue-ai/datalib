@@ -36,16 +36,12 @@ common --repo_env=ASPECT_TOOLS_TELEMETRY=-all
 test --zip_undeclared_test_outputs=true
 
 # Every bazel action inherits a fixed PATH, not the developer's host
-# PATH. Build and test actions resolve `npx`, `cmake`, etc. against
+# PATH. Build and test actions resolve `npx`, `perl`, etc. against
 # this PATH, so those tools must be installed somewhere here
 # (`/opt/homebrew/bin` covers the brew defaults on arm macs;
 # `/usr/local/bin` covers Intel macs — brew's prefix there — plus
 # Linux tools installed outside the system dirs; `/usr/bin:/bin`
-# covers system `make`/`perl`/`cc` etc.). protobuf-src's build script
-# in particular shells out to cmake + a C toolchain — the release
-# workflow's x86_64-apple-darwin leg failed until /usr/local/bin was
-# added here, because that's where the macos-15-intel runner's cmake
-# lives.
+# covers system `make`/`perl`/`cc` etc.).
 #
 # We deliberately do NOT `--action_env=NPX_BIN`. Forwarded host env
 # vars contribute to every action's cache key, so any caller-side
@@ -56,7 +52,7 @@ test --zip_undeclared_test_outputs=true
 # (handy when running the sync binary directly outside bazel), but
 # bazel doesn't propagate it into the action graph.
 # Resolver:
-#   * NPX_BIN  — datalib_etl::latchkey::latchkey_command (the manual
+#   * NPX_BIN  — datalib_etl_web::latchkey::latchkey_command (the manual
 #                `*_live` tests). Nothing qmd-shaped reaches npx under
 #                bazel any more: both consumers stage a
 #                DATALIB_RUNTIME_DIR from Bazel-managed inputs, so
@@ -75,6 +71,17 @@ test --zip_undeclared_test_outputs=true
 build --action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 build --host_action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 test --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+
+# That PATH makes `#!/usr/bin/env bash` Homebrew's bash, whose gettext
+# asks CoreFoundation for the preferred languages whenever no LANG is set
+# and a locale variable changes. On macOS 27 that call segfaults now and
+# then; bazel's generate-xml.sh (`LC_ALL=C sed`) hit it and the test was
+# reported FAILED TO BUILD. With LANG set, gettext never asks. Build and
+# tool actions run the same bash off the same PATH, so they get it too,
+# set three ways as PATH is.
+build:macos --action_env=LANG=C.UTF-8
+build:macos --host_action_env=LANG=C.UTF-8
+test:macos --test_env=LANG=C.UTF-8
 
 # There used to be a `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models`
 # here, so the qmd-indexer genrule could read the host's ~2 GB GGUF cache

@@ -6,7 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
 
 /// JMAP capability URIs we list in every `using:` array. Mail is the
 /// only capability we currently exercise; the core uri is required by

@@ -1,7 +1,7 @@
 // Auto-grow a textarea to fit its (soft-wrapped) content — both while
 // typing and when the bound value changes from outside (e.g. the grid
-// opening a card with a long documentView source). Shared by the
-// layout hosts' source boxes (MillerView, TreeView).
+// opening a card with a long documentView source). Used by a card's
+// source box in edit mode (ContainerNode).
 export function growSourceBox(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;

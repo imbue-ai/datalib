@@ -2,7 +2,12 @@
 // Read wrong, it stores a credential latchkey sends in the wrong place —
 // which looks like success until the first sync.
 import { describe, expect, it } from "vitest";
-import { credentialShape, pastedCredential } from "../src/config/credentialShape";
+import {
+  credentialShape,
+  pastedCredential,
+  pasteTarget,
+  suggestedAccount,
+} from "../src/config/credentialShape";
 
 describe("credentialShape", () => {
   it("reads an app password as a username and password", () => {
@@ -20,6 +25,20 @@ describe("credentialShape", () => {
       password: "engage",
     });
     expect(pastedCredential(shape, "", "engage")).toBeNull();
+  });
+
+  it("reads a plugin's set-nocurl example as a folder to import", () => {
+    const shape = credentialShape("latchkey auth set-nocurl garmin ~/.garth");
+    expect(shape).toEqual({
+      kind: "directory",
+      placeholder: "~/.garth",
+      secretLabel: "token folder",
+    });
+    expect(pastedCredential(shape, "", " ~/garth-tokens ")).toEqual({
+      kind: "directory",
+      path: "~/garth-tokens",
+    });
+    expect(pastedCredential(shape, "", "")).toBeNull();
   });
 
   it("puts the secret where latchkey's placeholder is", () => {
@@ -58,5 +77,40 @@ describe("credentialShape", () => {
       headers: ["X-Api-Key: 4"],
     });
     expect(pastedCredential(shape, "", "   ")).toBeNull();
+  });
+});
+
+// Pasting with no name overwrote a lone named credential, and a named
+// paste beside an unnamed one stranded every source that names none.
+describe("pasteTarget", () => {
+  it("says which stored credential a name replaces", () => {
+    expect(pasteTarget(["picard@enterprise.test"], " picard@enterprise.test ")).toEqual({
+      kind: "replaces",
+      account: "picard@enterprise.test",
+    });
+  });
+
+  it("flags a new name stored beside the unnamed credential", () => {
+    expect(pasteTarget(["", "riker"], "picard")).toEqual({ kind: "new", besideUnnamed: true });
+    expect(pasteTarget(["riker"], "picard")).toEqual({ kind: "new", besideUnnamed: false });
+  });
+
+  it("has no answer for a blank name", () => {
+    expect(pasteTarget([""], "  ")).toEqual({ kind: "unnamed" });
+  });
+});
+
+// Fastmail Contacts and Calendar share `fastmail-dav`; offering both the
+// bare address put the second read-only password over the first.
+describe("suggestedAccount", () => {
+  it("adds the entry's suffix to the username", () => {
+    expect(suggestedAccount(" picard@enterprise.test ", "contacts")).toBe(
+      "picard@enterprise.test contacts",
+    );
+    expect(suggestedAccount("picard@enterprise.test")).toBe("picard@enterprise.test");
+  });
+
+  it("offers nothing before there is a username", () => {
+    expect(suggestedAccount("  ", "calendar")).toBe("");
   });
 });

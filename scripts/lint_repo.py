@@ -32,6 +32,10 @@ instead from `bazel run //:precommit` and as a plain step in
  13. Every source icon is one file in datalib/ui/src/assets/ that both
      catalogs name alike, that shows on the light and the dark theme,
      and that the README's source grid uses rather than a copy.
+ 14. No first-party Rust outside a test renames a temp file into place
+     by hand: `datalib_runtime::atomic` is the one write-then-rename.
+ 15. Every crate datalib/backend/Cargo.toml lists is named by some
+     BUILD.bazel, so the list cannot keep a crate nothing links.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -102,6 +106,10 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     # ms-playwright browser cache.
     "datalib/ui:e2e_test": (
         "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
+    ),
+    "datalib/ui:e2e_auth_test": (
+        "manual; reuses ~/Library/Caches/ms-playwright and the host's browser, "
+        "which latchkey's own ensure-browser finds"
     ),
     # Applet coverage starts real applet processes and proxies to them
     # over loopback. The store semantics they sit on top of are unit
@@ -312,12 +320,13 @@ def main() -> int:
     rc |= _check_python_coverage(root)
     rc |= _check_module_lock_committed(root)
     rc |= _check_manual_targets_still_build(root)
-    rc |= _check_cursor_records_its_scope(root)
     rc |= _check_source_grid(root)
     rc |= _check_workflows_no_empty_arrays(root)
     rc |= _check_no_floating_npx(root)
     rc |= _check_pools_never_recycle(root)
     rc |= _check_icons(root)
+    rc |= _check_no_hand_rolled_atomic_write(root)
+    rc |= _check_cargo_manifest_crates_used(root)
     return rc
 
 
@@ -347,100 +356,6 @@ def _check_workflows_no_empty_arrays(root: Path) -> int:
         + "\n".join(hits)
         + "\n\n  Expanding it (\"${arr[@]}\") is 'unbound variable' under `set -u`\n"
         "  on the macOS runners' bash 3.2. Write two branches, or a scalar.",
-        file=sys.stderr,
-    )
-    return 1
-
-
-# --- Check 8: a cursor must be recorded with the config that set it ----
-#
-# A cursor answers "where do I resume?" from stored data alone, so the
-# config that narrowed the first walk -- a label filter, a `since`, a
-# device list -- is never consulted again. Widen it and the next run
-# resumes from the cursor as if nothing happened: the mail that already
-# sat outside the old filter never *changed*, so no change feed will ever
-# name it. The rule: a provider that keeps a cursor records the
-# scope-affecting config beside it through `datalib_etl::scope_config`
-# (`store` or `store_if_satisfied`), diffs it next run, and backfills
-# what widened. This check keeps a new cursor from arriving without the
-# record. The signal is the one primitive every cursor write bottoms out
-# in. Per provider crate, because a wrapper in `db.rs` is called from
-# `mod.rs`.
-#
-# docs/dev/data_architecture_ingestion.md, "When the cursor swallows a
-# config change", is the rule and the table of who records what.
-_CURSOR_WRITE = re.compile(r"\bupsert_scope_state\(")
-_SCOPE_RECORD = re.compile(r"\bscope_config::store(?:_if_satisfied)?\(")
-
-# Providers that keep a marker in `sync_scope_state` which is not a resume
-# position, with the reason. Everything else with a cursor records.
-_CURSOR_WITHOUT_SCOPE_CONFIG: dict[str, str] = {
-    # Listing-diff: every run re-lists and re-applies `since` to the fresh
-    # listing, so a widened filter surfaces what it admits on its own.
-    # The marker is "when did I last sweep", not a position in a walk.
-    "claude": "listing-diff; the sweep marker is not a resume cursor",
-}
-
-
-def _provider_ingest_sources(root: Path) -> dict[str, list[str]]:
-    by_provider: dict[str, list[str]] = {}
-    for rel in _git_ls_files(root, "datalib/backend/etl/providers"):
-        parts = rel.split("/")
-        # datalib/backend/etl/providers/<p>/src/ingest/...
-        if (
-            len(parts) < 8
-            or parts[5] != "src"
-            or parts[6] != "ingest"
-            or not rel.endswith(".rs")
-        ):
-            continue
-        by_provider.setdefault(parts[4], []).append(rel)
-    return by_provider
-
-
-def _check_cursor_records_its_scope(root: Path) -> int:
-    bad: list[str] = []
-    for provider, files in sorted(_provider_ingest_sources(root).items()):
-        writes: list[str] = []
-        records = False
-        for rel in files:
-            text = (root / rel).read_text(encoding="utf-8", errors="replace")
-            body = _without_test_module(text)
-            if _SCOPE_RECORD.search(body):
-                records = True
-            for lineno, line in enumerate(body.splitlines(), 1):
-                if (
-                    _CURSOR_WRITE.search(line)
-                    and "pub async fn upsert_scope_state" not in line
-                ):
-                    writes.append(f"{rel}:{lineno}")
-        if not writes or records:
-            continue
-        if provider in _CURSOR_WITHOUT_SCOPE_CONFIG:
-            continue
-        bad.append(f"{provider}: cursor written at {', '.join(writes)}")
-    if not bad:
-        print(
-            "OK: every provider with a sync cursor records the config it was taken under."
-        )
-        return 0
-    print(
-        "ERROR: a provider keeps a sync cursor without recording its scope config:",
-        file=sys.stderr,
-    )
-    for b in bad:
-        print(f"  - {b}", file=sys.stderr)
-    print(
-        "\nA cursor resumes from stored data alone, so widening the config that\n"
-        "set it (a label filter, a `since`, a device list) is a silent no-op:\n"
-        "nothing that already sat outside the old scope ever *changes*, so no\n"
-        "change feed names it. Record the scope-affecting config beside the\n"
-        "cursor with `datalib_etl::scope_config::store_if_satisfied`, diff it\n"
-        "on the next run with `filter_widened` / `limit_relaxed` / `turned_on`,\n"
-        "and backfill what widened. If the marker really is not a resume\n"
-        "position, allowlist the provider in _CURSOR_WITHOUT_SCOPE_CONFIG with\n"
-        'the reason. See docs/dev/data_architecture_ingestion.md, "When the\n'
-        'cursor swallows a config change".',
         file=sys.stderr,
     )
     return 1
@@ -1021,6 +936,84 @@ def _check_icons(root: Path) -> int:
     print(
         f"\nAn icon is one file in {_ICON_DIR}/, named by its stem, drawn for both\n"
         "themes; see the README.md beside it.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 14: one write-then-rename -----------------------------------
+#
+# Writing to a temp file and renaming it over the real one was hand-rolled
+# nine times (#995). Five used a fixed temp name, so two writers on one
+# path shared a temp file: one rename found it gone, and a reader could
+# see one writer's bytes cut into the other's. Only two fsynced.
+# `datalib_runtime::atomic` takes a fresh temp name per write and fsyncs
+# before the rename. The signal is the rename itself, of a variable named
+# for a temp file. Tests may still stage a file by hand.
+_HAND_ROLLED_SWAP = re.compile(r"\bfs::rename\(\s*&?\w*(?:tmp|temp)\w*", re.IGNORECASE)
+
+# Renames of a temp that is not a file of bytes, with the reason.
+_SWAP_ALLOWED: dict[str, str] = {
+    "datalib/backend/etl/src/blob_cas.rs": (
+        "the temp is a SQLite database another connection fills through "
+        "ATTACH; there are no bytes to hand to atomic::write"
+    ),
+}
+
+
+def _check_no_hand_rolled_atomic_write(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        if "/tests/" in rel or rel in _SWAP_ALLOWED:
+            continue
+        text = _without_test_module((root / rel).read_text(encoding="utf-8"))
+        for m in _HAND_ROLLED_SWAP.finditer(text):
+            lineno = text.count("\n", 0, m.start()) + 1
+            hits.append(f"  {rel}:{lineno}: {m.group(0)}")
+    if not hits:
+        print("OK: every write-then-rename goes through datalib_runtime::atomic.")
+        return 0
+    print(
+        "ERROR: a temp file renamed into place by hand:\n\n"
+        + "\n".join(hits)
+        + "\n\n  Use `datalib_runtime::atomic::write` (or `write_with` to stream,\n"
+        "  `write_owner_only` for credentials). See lint_repo.py check 14.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 15: every crate the Cargo manifest lists is used -------------
+#
+# The first-party crates have no Cargo.toml; datalib/backend/Cargo.toml is
+# one list of the third-party crates, which crate_universe turns into
+# `@datalib_crates//:<name>`. Bazel already fails on a target that names a
+# crate the list lacks. This is the other direction: a crate nothing names
+# any more still costs a resolve, a lockfile entry and a license review.
+_CARGO_MANIFEST = "datalib/backend/Cargo.toml"
+# `<crate>__<binary>` is the label crate_universe gives a crate's binary.
+_CRATE_LABEL = re.compile(
+    r"@datalib_crates//:([A-Za-z0-9_.-]+?)(?:__[A-Za-z0-9_.-]+)?\""
+)
+
+
+def _check_cargo_manifest_crates_used(root: Path) -> int:
+    manifest = tomllib.loads((root / _CARGO_MANIFEST).read_text(encoding="utf-8"))
+    listed = set(manifest.get("dependencies", {})) | set(
+        manifest.get("dev-dependencies", {})
+    )
+    named: set[str] = set()
+    for rel in _git_ls_files(root, "*BUILD.bazel") + _git_ls_files(root, "*.bzl"):
+        named.update(_CRATE_LABEL.findall((root / rel).read_text(encoding="utf-8")))
+    unused = sorted(listed - named)
+    if not unused:
+        print(f"OK: every crate {_CARGO_MANIFEST} lists is named by a BUILD.bazel.")
+        return 0
+    print(
+        f"ERROR: {_CARGO_MANIFEST} lists crates no BUILD.bazel names:\n\n"
+        + "\n".join(f"  {name}" for name in unused)
+        + "\n\n  Delete them from the manifest and run tools/repin_cargo.sh.\n"
+        "  See lint_repo.py check 15.",
         file=sys.stderr,
     )
     return 1

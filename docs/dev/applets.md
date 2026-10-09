@@ -186,7 +186,7 @@ Two kinds of file, and that is all:
 | File | Meaning |
 | --- | --- |
 | `<sha256>.js` | An ES module whose default export is the component factory. The server re-hashes it and skips the file if the name does not match its contents. |
-| `<name>.json` | Either `{title, description, component_hash, component_args, icon?}` or `{renamed_to}`. |
+| `<name>.json` | Either `{title, description, component_hash, component_args, icon?, dev_tool?}` or `{renamed_to}`. |
 
 Each component document does two things: it defines
 `comp.<namespace>.<name>` in the app, resolved by loading the module at
@@ -200,7 +200,10 @@ and the gallery draw beside the card's name: a glyph name from
 JPEG, GIF, WebP or SVG (`"data:image/svg+xml;base64,…"`). It is drawn
 through `<img>`, so an SVG's scripts never run. A builtin card names its icon the same way, in
 `datalib/ui/src/cards/catalog.ts`; leaving it out draws the generic
-component glyph.
+component glyph. `"dev_tool": true` says the component is a tool for
+working on the library rather than a view of its data, which puts its
+gallery entry under "Developer tools" (`cards.md` §"Titles, icons and
+edit mode").
 
 **There is one mechanism.** Nothing that reads this store knows what an
 applet is. An applet's only privilege is being *called* to write a
@@ -401,7 +404,13 @@ writes the indexes, and by `datalib-applet`, which serves them.
 ## Reference implementation
 
 `datalib/backend/applets` — `datalib-applet`, one subcommand per
-applet (`slack` and `unified_index`), the same shape as `datalib-step`. One
+applet (`slack`, `unified_index` and `datalib_contacts`), the same shape
+as `datalib-step`. `datalib_contacts` is the one that writes: it is the
+only writer of the contacts store under `datalib_curated/`
+(`app_stores.md`), and like `unified_index` it contributes endpoints
+only, which the document view calls; one of them,
+`/photo/<contact_id>`, serves the photo a person put on a contact (and
+takes one with `PUT`, drops it with `DELETE`). One
 binary rather than one per applet keeps the shared machinery in one
 place and ships one file instead of a growing list; adding an applet is
 a subcommand plus a module, not a new crate and five packaging edits.

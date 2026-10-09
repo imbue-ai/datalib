@@ -86,10 +86,9 @@ pub fn write(root: &Path, map: &EmbeddingMap) -> Result<Vec<u8>> {
     let dir = dir(root);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let bytes = serde_json::to_vec(map)?;
-    let tmp = dir.join(format!(".{FILE}.tmp"));
-    std::fs::write(&tmp, &bytes).with_context(|| format!("write {}", tmp.display()))?;
     let dest = path(root);
-    std::fs::rename(&tmp, &dest).with_context(|| format!("rename onto {}", dest.display()))?;
+    datalib_runtime::atomic::write(&dest, &bytes)
+        .with_context(|| format!("write {}", dest.display()))?;
     Ok(bytes)
 }
 

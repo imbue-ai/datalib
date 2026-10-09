@@ -41,44 +41,44 @@ const STAMP: Record<string, BrowseColumn> = {
 /// Extra columns per source type, after `ALWAYS`.
 const EXTRA: Record<string, BrowseColumn[]> = {
   // Channelled group chat: who said it, and where.
-  slack: ["channel", "author"],
-  whatsapp: ["channel", "author"],
-  signal: ["channel", "author"],
-  beeper: ["channel", "author", "account", "project"],
-  google_takeout: ["channel", "author", "project"],
-  sms_backup_restore: ["channel", "author", "project"],
-  apple_messages: ["channel", "author"],
-  linkedin: ["channel", "author", "account"],
+  slack: ["channel", "author_ref"],
+  whatsapp: ["channel", "author_ref"],
+  signal: ["channel", "author_ref"],
+  beeper: ["channel", "author_ref", "account", "project"],
+  google_takeout: ["channel", "author_ref", "project"],
+  sms_backup_restore: ["channel", "author_ref", "project"],
+  apple_messages: ["channel", "author_ref"],
+  linkedin: ["channel", "author_ref", "account"],
   // Posts, albums, comments, reactions and friends, all the owner's own:
   // `author` is who wrote it, `account` whose export it is.
-  facebook: ["author", "account"],
+  facebook: ["author_ref", "account"],
 
   // Mail and address books: a correspondent and a mailbox.
-  email: ["channel", "author", "account"],
-  contacts: ["channel", "author", "account"],
+  email: ["channel", "author_ref", "account"],
+  contacts: ["channel", "author_ref", "account"],
   // A calendar and the organizer.
-  calendar: ["channel", "author", "account"],
+  calendar: ["channel", "author_ref", "account"],
 
   // Assistant chats. `project` is Claude's project name and `org_name`
   // is the owning Anthropic organization — the only provider with one.
-  claude: ["project", "org_name", "account", "author"],
-  chatgpt: ["channel", "account", "author"],
+  claude: ["project", "org_name", "account", "author_ref"],
+  chatgpt: ["channel", "account", "author_ref"],
 
   // Code review: `project` is the repo (GitHub) or the project path
   // (GitLab). Neither has a channel.
-  github: ["project", "author"],
-  gitlab: ["project", "author"],
+  github: ["project", "author_ref"],
+  gitlab: ["project", "author_ref"],
 
-  notion: ["account", "author"],
-  perseus: ["author"],
+  notion: ["account", "author_ref"],
+  perseus: ["author_ref"],
   yolink: ["channel"],
   // The device rows: `channel` is the device name.
-  garmin: ["channel", "author"],
+  garmin: ["channel", "author_ref"],
 
   // The one source with a real per-row size and count: a document's
   // bytes, and its page count. Everywhere else those two are non-null
   // only on the storage rows, where they would be noise.
-  pdf: ["author", "byte_size", "item_count"],
+  pdf: ["author_ref", "byte_size", "item_count"],
 };
 
 /// Columns of `ALWAYS` a source type leaves out.
@@ -101,7 +101,7 @@ export function browsePresetTypes(): string[] {
 export function browseColumns(type: string | null): BrowseColumn[] | null {
   if (!type) return null;
   if (type === DIFF_TYPE) return DIFF_COLUMNS;
-  const extra = EXTRA[type] ?? ["channel", "author", "account", "project"];
+  const extra = EXTRA[type] ?? ["channel", "author_ref", "account", "project"];
   const omit = OMIT[type] ?? [];
   const stamp = STAMP[type] ?? "touched_at";
   const always = ALWAYS.filter((c) => !omit.includes(c)).map((c) =>
@@ -123,7 +123,7 @@ const DIFF_COLUMNS: BrowseColumn[] = [
   "conversation_name",
   "snippet",
   "channel",
-  "author",
+  "author_ref",
   "touched_at",
 ];
 

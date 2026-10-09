@@ -4,13 +4,19 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_yolink_config::{YolinkConfig, YolinkSync};
 
 use crate::ingest;
+
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
 
 /// Ingest wave: present iff `api`.
 pub fn plan_ingest(ctx: PlanContext, config: YolinkConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
@@ -39,21 +45,36 @@ impl DataProcessor for YolinkIngest {
         &self.id
     }
 
+    /// Every write is an upsert of whole rows and a window's coverage
+    /// lands with its readings, so between checkpoints the store is the
+    /// previous snapshot plus whole windows this run fetched.
+    fn streams_output(&self) -> bool {
+        true
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            sync: self.sync.clone(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        let pool = db.pool().clone();
+        ctx.run_store(pool, None, |sealer| async {
+            let now_ms = datalib_time::parse_strict(ctx.now)
+                .with_context(|| format!("yolink: run stamp {:?}", ctx.now))?
+                .inner()
+                .timestamp_millis();
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                sync: self.sync.clone(),
+                now_ms,
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+                sealer: Some(sealer),
+            })
+            .await?;
+            Ok(format!(
+                "devices={} windows={} windows_failed={} readings={} errors={} requests={}",
+                s.devices, s.windows, s.windows_failed, s.readings, s.errors, s.requests,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "devices={} windows={} readings={} errors={} requests={}",
-            s.devices, s.windows, s.readings, s.errors, s.requests,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

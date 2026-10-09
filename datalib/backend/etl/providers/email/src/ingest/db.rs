@@ -1,6 +1,6 @@
 //! Open + non-DDL data-manipulation for the JMAP raw store.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -10,7 +10,7 @@ use sqlx::{Row, Sqlite, Transaction};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{full_ddl, EmailKeywordRow, EmailMailboxRow, LADDER};
+use super::schema_raw::{full_ddl, EmailKeywordRow, EmailMailboxRow, EmlBlobRow, LADDER};
 pub use super::schema_raw::{EmailRow, BLOB_KIND_EML};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -63,22 +63,6 @@ impl RawDb {
 
     pub async fn load_threads(&self) -> Result<Vec<Value>> {
         dr::load_payloads(self.pool(), "threads").await
-    }
-
-    pub async fn thread_email_counts(&self) -> Result<HashMap<String, i64>> {
-        let rows = sqlx::query("SELECT id, email_count FROM threads")
-            .fetch_all(self.pool())
-            .await
-            .context("select thread_email_counts")?;
-        let mut out = HashMap::with_capacity(rows.len());
-        for r in rows {
-            let id: String = r.try_get("id").unwrap_or_default();
-            let n: Option<i64> = r.try_get("email_count").ok();
-            if !id.is_empty() {
-                out.insert(id, n.unwrap_or(0));
-            }
-        }
-        Ok(out)
     }
 
     pub async fn load_emails(&self) -> Result<Vec<LoadedEmail>> {
@@ -155,20 +139,6 @@ impl RawDb {
             keywords,
             attachments: HashMap::new(),
         })
-    }
-
-    pub async fn known_email_ids(&self) -> Result<HashSet<String>> {
-        let rows = sqlx::query("SELECT id FROM emails WHERE blob_id != ''")
-            .fetch_all(self.pool())
-            .await
-            .context("select known_email_ids")?;
-        let mut out = HashSet::with_capacity(rows.len());
-        for r in rows {
-            if let Ok(id) = r.try_get::<String, _>("id") {
-                out.insert(id);
-            }
-        }
-        Ok(out)
     }
 
     /// This account's mailbox rows: id → name.
@@ -287,23 +257,7 @@ impl RawDb {
             .begin()
             .await
             .context("begin delete emails tx")?;
-        for id in ids {
-            for sql in [
-                "DELETE FROM email_mailboxes WHERE email_id = ?",
-                "DELETE FROM email_keywords WHERE email_id = ?",
-                "DELETE FROM email_blobs_bookkeeping
-                   WHERE id IN (SELECT id FROM email_blobs WHERE email_id = ?)",
-                "DELETE FROM email_blobs WHERE email_id = ?",
-                "DELETE FROM emails WHERE id = ?",
-                "DELETE FROM emails_bookkeeping WHERE id = ?",
-            ] {
-                sqlx::query(sql)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await
-                    .with_context(|| format!("delete email {id}"))?;
-            }
-        }
+        delete_emails_in_tx(&mut tx, ids).await?;
         tx.commit().await.context("commit delete emails tx")?;
         Ok(())
     }
@@ -330,6 +284,67 @@ impl RawDb {
         }
         Ok(out)
     }
+}
+
+/// Delete these email rows with their joins, `.eml` edges and sidecars.
+pub async fn delete_emails_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<()> {
+    for id in ids {
+        // The `.eml`'s fetch problem goes with it: an email upstream no
+        // longer has cannot fail to download.
+        sqlx::query(
+            "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN \
+             (SELECT 'email_blobs:' || id FROM email_blobs WHERE email_id = ?)",
+        )
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("forget the problems of email {id}"))?;
+        for sql in [
+            "DELETE FROM email_mailboxes WHERE email_id = ?",
+            "DELETE FROM email_keywords WHERE email_id = ?",
+            "DELETE FROM email_blobs_bookkeeping
+               WHERE id IN (SELECT id FROM email_blobs WHERE email_id = ?)",
+            "DELETE FROM email_blobs WHERE email_id = ?",
+            "DELETE FROM emails WHERE id = ?",
+            "DELETE FROM emails_bookkeeping WHERE id = ?",
+        ] {
+            sqlx::query(sql)
+                .bind(id)
+                .execute(&mut **tx)
+                .await
+                .with_context(|| format!("delete email {id}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Write `.eml` edges. One that holds bytes is upserted; one without (a
+/// body skipped or failed) is added only where no row holds bytes for
+/// it already, since a failed read is not news that the bytes changed.
+pub async fn write_eml_edges_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    rows: &[EmlBlobRow],
+) -> Result<()> {
+    let holding: Vec<EmlBlobRow> = rows
+        .iter()
+        .filter(|r| r.blake3.is_some())
+        .cloned()
+        .collect();
+    bulk_upsert_entity_in_tx(tx, &holding).await?;
+    for row in rows.iter().filter(|r| r.blake3.is_none()) {
+        sqlx::query(
+            "INSERT INTO email_blobs (id, email_id, blob_id, blake3) VALUES (?, ?, ?, NULL)
+             ON CONFLICT(id) DO NOTHING",
+        )
+        .bind(&row.id)
+        .bind(&row.email_id)
+        .bind(&row.blob_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("write the empty .eml edge {}", row.id))?;
+    }
+    Ok(())
 }
 
 // Email join-table refresh
@@ -577,7 +592,7 @@ mod tests {
                 .fetch_one(db.pool())
                 .await
                 .unwrap();
-        assert_eq!(version, "1");
+        assert_eq!(version, super::LADDER.len().to_string());
         db.close().await;
     }
 
@@ -655,18 +670,8 @@ mod tests {
         });
         upsert_email(&db, &EmailRow::from_jmap_envelope("A", &p).unwrap()).await;
         // Stash an entry in the sibling CAS directly so we can prove
-        // it survives. blake3 is fake (64-char hex of zeros) — the
-        // CHECK constraint on `cas_objects.blake3` cares about
-        // length, not value.
-        let fake_blake3 = "0".repeat(64);
-        db.cas()
-            .put_many(&[datalib_etl::blob_cas::CasInsert {
-                blake3: &fake_blake3,
-                bytes: b"raw",
-                content_type: Some("message/rfc822"),
-            }])
-            .await
-            .unwrap();
+        // it survives.
+        let stashed = db.cas().put(b"raw", Some("message/rfc822")).await.unwrap();
 
         db.delete_emails(&["E1".to_string()]).await.unwrap();
 
@@ -683,7 +688,7 @@ mod tests {
         // CAS untouched.
         let cas_bytes: Option<Vec<u8>> =
             sqlx::query_scalar("SELECT bytes FROM cas_objects WHERE blake3 = ?")
-                .bind(&fake_blake3)
+                .bind(&stashed)
                 .fetch_optional(db.cas().pool())
                 .await
                 .unwrap();

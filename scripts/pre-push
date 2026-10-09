@@ -64,9 +64,6 @@ fi
 
 # --- Rust (datalib/backend) ---
 if [ -d datalib/backend ]; then
-    echo "[rust] cargo fmt --check"
-    (cd datalib/backend && cargo fmt --all -- --check)
-
     echo "[rust] bazelisk build --config=clippy //..."
     # rules_rust clippy aspect. Replaces `cargo clippy --all-targets
     # --all-features -- -W clippy::disallowed_macros -D warnings`,

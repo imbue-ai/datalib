@@ -297,6 +297,14 @@ drawn, so call `expandGroup` first; `readRow` says so when it gives up.
 The rule for any new helper: **a reader must not return the same value
 for "absent" and "not there yet".**
 
+**Type into a search field with `typeInto`, never `fill`.** Every
+search bar is a CodeMirror editor (`ui/src/search/`). In WebKit,
+Playwright's `fill` leaves it as it was and reports no error, so a
+spec that fills one waits on a search that never starts.
+`typeInto` in [`grid-helpers.ts`](/datalib/ui/tests/e2e/grid-helpers.ts)
+selects what is there and types over it, and the field's
+`data-query` attribute is what to assert on.
+
 **Take related values from one drawing.** Two separate reads can
 straddle a redraw. For example, the status from before a sync can sit
 beside the stamp that sync just wrote, which reads as the sync having
@@ -361,6 +369,16 @@ times") or `bazelisk test //datalib/ui:e2e_test --runs_per_test=N
 --local_test_jobs=1`. `scripts/flaky_tests.py` lists the targets that
 went red and then green on the same commit.
 
+## The sign-in suite
+
+`//datalib/ui:e2e_auth_test` drives the wizard's latchkey flows (pasting
+a key, "Sign in with browser", Check connection, a picker's Load, a
+gateway) against the real latchkey, curl router and browser, with the
+third-party sites faked. It is `manual`, not part of the merge gate; run it with
+`bazelisk run //datalib/ui:e2e_auth`, and CI runs it nightly on macOS
+(`.github/workflows/latchkey-auth.yml`). What is real and what is faked:
+[`tests/e2e_auth/README.md`](/datalib/ui/tests/e2e_auth/README.md).
+
 ## Watching a sync stream
 
 [`data-sources-streaming.spec.ts`](/datalib/ui/tests/e2e/data-sources-streaming.spec.ts)
@@ -384,7 +402,7 @@ bazelisk run //datalib/ui:e2e -- --project chromium-data-sources-streaming
 Three pieces make that possible, and each is small:
 
 * `DATALIB_HTTP_PLAYBACK_DELAY_MS` beside `DATALIB_HTTP_PLAYBACK`
-  ([`http.rs`](/datalib/backend/etl/src/http.rs)): a replayed request
+  ([`http.rs`](/datalib/backend/etl/web/src/http.rs)): a replayed request
   waits that long before it answers. Playback only; a fixture that
   answers instantly hides everything that depends on a download taking
   time. Its sibling `DATALIB_HTTP_PLAYBACK_HOLD` names a file: while it
@@ -493,17 +511,25 @@ misplaced knob fails here rather than during the live run.
 The test makes three pipeline runs, each asserting something different:
 
 1. **Cold** — snapshots the produced data tree, one `.snap` per file, plus a
-   manifest and the layout invariants.
+   manifest and the layout invariants. Then it makes the contacts listed in
+   `contacts.toml` (beside the config) in the contacts app, asserts every
+   handle they link is an author in the index, and snapshots the contacts
+   store with each minted `contact_id` replaced by the contact's name.
 2. **Incremental** — re-runs against the now-populated `data_root` and
    snapshots each source's `sync_runs.summary`, whose `deltas` prove the run
    didn't re-fetch the world. A broken-incrementality regression shows up as
    `deltas.<table>.added` back at first-run scale. Only the API-backed
    providers stamp `sync_runs`; file-backed sources record an explicit
    "no rows" marker, since there is no upstream to be incremental about.
+   It also asserts that no store's `problems` table changed: run 1's
+   problems are still standing, and a problem recorded again unchanged
+   keeps its row.
 3. **`--reset`, then sync** — empties the store and re-downloads it, then
    asserts the content tables come back byte-identical. This is what catches a
    per-fetch field leaking into a content payload (it belongs in the
-   `volatile_payload` sidecar instead).
+   `volatile_payload` sidecar instead). It also asserts that the contacts
+   store came through unchanged, that every linked handle is still in the
+   re-downloaded index, and that each one still resolves to its contact.
 
 The bake leaves its data root behind under `$TMPDIR/datalib-e2e-runs/run-<millis>/data`
 (the newest three runs are kept; the test prints the path as `[test]

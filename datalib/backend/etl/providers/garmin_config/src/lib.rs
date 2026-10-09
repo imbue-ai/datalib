@@ -3,15 +3,16 @@
 //! (serde + anyhow), so anything that needs to understand a config can
 //! link this without the downloader. `api` is its one way in.
 
-use datalib_source_common::SourceCommon;
+use datalib_source_common::{LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// Where the per-day walk starts when the config names no `since`.
-/// A year covers what a first-time user usually wants to see, and the
-/// value is recorded in the store, so widening it later backfills.
+/// A year covers what a first-time user usually wants to see; the start
+/// it gives is recorded in the store, and a `since` set earlier later on
+/// backfills.
 pub const DEFAULT_SINCE_DAYS: i64 = 365;
 
-/// How many days before each metric's cursor a run re-fetches. A watch
+/// How many days after a day ends a run still re-fetches it. A watch
 /// syncs when it feels like it, and Garmin recomputes sleep, HRV and
 /// training status for a day after that day ends, so the trailing week
 /// is re-read rather than trusted.
@@ -23,19 +24,22 @@ pub const DEFAULT_REFRESH_DAYS: i64 = 7;
 pub struct GarminConfig {
     #[serde(default)]
     pub common: SourceCommon,
+    /// Which latchkey identity this source mirrors, forwarded whole to
+    /// the download client — see [`LatchkeySettings`]. The `garmin`
+    /// service comes from latchkey's Garmin plugin.
+    #[serde(default)]
+    pub latchkey_settings: LatchkeySettings,
     #[serde(default)]
     pub api: Option<GarminApi>,
 }
 
-/// The live-API method. The credential is not here: it is the OAuth1
-/// token `datalib-step login garmin` (or garth) writes under
-/// `token_dir`, which outlives any one config.
+/// The live-API method. The credential is latchkey's.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct GarminApi {
-    /// Directory holding `oauth1_token.json` (and the cached
-    /// `oauth2_token.json`), in garth's file format so a token minted
-    /// by either tool works. Default `~/.garth`.
+    /// **Retired**: the token folder garth wrote. Garmin signs in
+    /// through latchkey now; parsed only so a config that still names
+    /// it fails with the fix.
     #[serde(default)]
     pub token_dir: Option<String>,
     /// Earliest calendar day to mirror, `YYYY-MM-DD`. Default: a year
@@ -47,7 +51,7 @@ pub struct GarminApi {
     /// stops growing — what a golden test wants.
     #[serde(default)]
     pub until: Option<String>,
-    /// Days before each metric's cursor to re-fetch every run. Default 7.
+    /// Days after a day ends that every run fetches it again. Default 7.
     #[serde(default)]
     pub refresh_days: Option<i64>,
     /// Which per-day metrics to mirror. Default: every one the provider
@@ -96,9 +100,19 @@ pub const DAILY_METRICS: &[&str] = &[
 
 impl GarminConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.latchkey_settings
+            .validate()
+            .map_err(anyhow::Error::msg)?;
         let Some(api) = &self.api else {
             return Ok(());
         };
+        if let Some(dir) = &api.token_dir {
+            anyhow::bail!(
+                "garmin: `api.token_dir` is gone — Garmin signs in through latchkey now. \
+                 Import those tokens once with `latchkey auth set-nocurl garmin {dir}` (or sign \
+                 in from the Add a source dialog), then delete the line"
+            );
+        }
         if let Some(since) = &api.since {
             if !is_yyyy_mm_dd(since) {
                 anyhow::bail!("garmin: api.since {since:?} is not YYYY-MM-DD");
@@ -180,6 +194,7 @@ mod tests {
     fn cfg(api: GarminApi) -> GarminConfig {
         GarminConfig {
             common: Default::default(),
+            latchkey_settings: Default::default(),
             api: Some(api),
         }
     }
@@ -209,6 +224,16 @@ mod tests {
         assert!(window("2025-08-01", "2025-08-01").is_ok());
         assert!(window("2025-08-01", "2025-07-31").is_err());
         assert!(window("2025-08-01", "31 Aug").is_err());
+    }
+
+    #[test]
+    fn the_retired_token_folder_fails_with_the_command_that_imports_it() {
+        let c = cfg(GarminApi {
+            token_dir: Some("~/.garth".into()),
+            ..Default::default()
+        });
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("set-nocurl garmin ~/.garth"), "{err}");
     }
 
     #[test]

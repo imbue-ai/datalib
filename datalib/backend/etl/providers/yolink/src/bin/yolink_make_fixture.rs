@@ -163,14 +163,6 @@ async fn write_store(spec: &Spec, raw_dir: &std::path::Path, now: &str) -> Resul
     bulk_upsert_in_tx(&mut tx, &reading_rows, &stamped_at).await?;
     tx.commit().await?;
 
-    // Advance each device's cursor the way a real fetch would, so the
-    // rendered page's "cursor at …" line is populated.
-    let last_ts = spec.start_ms + (spec.samples as i64 - 1) * spec.interval_ms;
-    sqlx::query("UPDATE yolink_devices SET last_ts_ms = ?1")
-        .bind(last_ts)
-        .execute(pool)
-        .await?;
-
     // The render cursor keys off HEAD, so the store must have a commit
     // — without one `dolt_log()` is empty, the cursor is never written,
     // and every run cold-starts.

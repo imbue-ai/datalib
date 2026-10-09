@@ -17,7 +17,10 @@ Read this before touching `qmd_indexer/src/lib.rs`,
 `qmd_indexer/src/js/qmd_sdk.mjs` or anything that drives `qmd embed`.
 Finding 6 is why the embed step calls past `store.embed()`. Findings 1
 and 3 are held by `//datalib/backend/qmd_indexer:qmd_indexer_tests`,
-which drives the real qmd through `Index`.
+which drives the real qmd through `Index`. The facts about the search
+side, under "How a running `qmd mcp` behaves" below, are each a test in
+`//datalib/backend/qmd_facts:qmd_facts_test`, named for the fact: run
+it after a qmd bump, and a fact that moved fails by name.
 
 **The CLI and the SDK are not the same program.** `@tobilu/qmd` ships
 both a CLI (`dist/cli/qmd.js`) and a library entry (`dist/index.js`,
@@ -183,13 +186,93 @@ does not carry over to `createStore()` without being re-measured.
     through the SDK rewrites `index.yml` whole, and two of those at once
     would lose one's collection.
 
-One more, about our side rather than qmd's: `QmdDaemon`
-(`unified_index/src/qmd/daemon.rs`) respawns `qmd mcp` whenever
-`index.sqlite`'s mtime differs from the one it spawned against. The
-mtime moves on every embed batch, so during a long embed every search
-reloads the model. Whether a live `qmd mcp` sees rows committed after
-it started (WAL says yes; whether qmd caches a document list is the
-question) was not measured.
+13. **A keyword update does not hear SIGINT until it is nearly done.**
+    node runs a signal handler only between turns of its event loop,
+    and `update` takes none while it hashes and indexes. Measured on
+    20,000 small files, where a whole update took 15.5s: a SIGINT 3s in
+    reached the script's handler 7.9s later. On a real mailbox a
+    stopped `keyword_index` ran on for 16s.
+
+## How a running `qmd mcp` behaves
+
+What the hybrid search (`QmdDaemon`, `unified_index/src/qmd/daemon.rs`)
+relies on. The Meaning tab does not go through `qmd mcp`: it asks
+qmd's SDK only to embed the query and scores the stored vectors
+itself. Each is a test in `qmd_facts_test`, which builds a small
+index through `Index` and talks to the pinned `qmd mcp` directly, so
+the facts are about qmd and not about our daemon.
+
+1. **A running server reads the index live.** A document keyword
+   indexed after the server started is found by a `lex` query, and one
+   embedded after it started is found by a `vec` query, with no
+   restart. qmd prepares each query's statements against the open
+   database (`dist/store.js`), and nothing it caches holds rows.
+2. **Only the first server after a keyword update writes.** At startup
+   `createStore` reconciles the collection registry with `index.yml`
+   (`syncConfigToDb`) unless the index already holds that file's hash
+   in `store_config.config_hash`, and a keyword update through the SDK
+   leaves the hash stale. So the first server writes the registry and
+   the hash, which reach `index.sqlite` when its WAL is checkpointed
+   on stop; the next server starts, searches and stops without
+   touching the file.
+3. **With no `collections`, a query searches the collections the
+   server read at startup** (`defaultCollectionNames`,
+   `dist/mcp/server.js`). A collection registered later is searched
+   only when a query names it.
+4. **An empty `collections` list is no scope at all.** qmd answers it
+   from every collection the index holds, one registered after the
+   server started included, as a single search with no collection
+   filter. So the daemon sends `[]` for an unscoped search, and
+   answers an empty *scope* (no source can match) itself, never
+   asking.
+5. **A scope applies before the limit.** With room for one hit, a
+   query scoped to a collection gets that collection's best hit even
+   when another collection's ranks above it. This is why `source_id:`
+   is sent to qmd as a scope (`collection_scope` in
+   `applets/src/unified_index/mod.rs`) and not only applied to its
+   answer: a source whose hits would fall outside the global top-N
+   still fills the answer. `source_id_scopes_qmd_before_its_limit` in
+   the applet's tests checks that the scope reaches qmd.
+6. **A keyword query needs no model.** A `lex` query answers with no
+   embedding model anywhere qmd could load one from. Measured on a
+   real root, a `lex` query took 0.07–0.23 s and a hybrid one
+   5.8–10.6 s on a fresh server.
+7. **Each sub-query takes 20 documents from each collection, and the
+   merged list is cut to `candidateLimit`, 40 unless asked.** qmd's
+   structured search fetches the best 20 of each collection it searches,
+   for each `lex` and each `vec` sub-query (hard-coded in
+   `structuredSearch`, `dist/store.js`), merges them, and keeps the
+   first `candidateLimit`, with rerank off as much as on, whatever
+   `limit` says. `QmdDaemon` sends `candidateLimit` equal to `limit`, so
+   a search reaches 20 per source per sub-query. On a real root with 11
+   sources a hybrid search for one common word went from 40 hits to
+   224, in the same time. One source never answers with more than 20 a
+   sub-query; nothing in the MCP arguments moves that. An unscoped
+   search, sent as `[]` (fact 4), is one collection's worth: 20 a
+   sub-query in all.
+8. **Several named collections are ranked apart and merged by rank
+   alone.** `structuredSearch` runs each sub-query once per named
+   collection and fuses the lists with reciprocal rank fusion, which
+   sees only each document's place in its own list, and weighs the
+   first list double. So every collection's best document scores
+   alike, the first collection named leads whatever its match, and the
+   answer is each collection's best, then each one's second, in the
+   order the collections were named. On the TNG fixture, a vector
+   search for each document's own opening words put that document in
+   its top ten 56 times in 139 with every collection named, and never
+   for any source after the tenth alphabetically; with `[]`, 135
+   times.
+
+What follows for our side. By facts 3, 4 and 8, an unscoped search
+sends `collections: []` (`query_arguments` in
+`unified_index/src/qmd/daemon.rs`): it reaches every collection,
+however new, and ranks them as one list, at the price of fact 7's
+depth, 20 documents a sub-query in all. Only `source_id:` names a
+collection, and only one. Then by fact 1 a write into the
+index needs no new `qmd mcp`, so `QmdDaemon` starts another only when
+`index.sqlite` is a different file than the one its child opened (its
+device and inode), not when its mtime moves, which every keyword and
+embed batch does.
 
 ## What the shipped steps do with these
 
@@ -208,6 +291,12 @@ Finding 6 is fixed rather than looped around: the script calls
 until it embeds nothing would never end on a document with a chunk that
 always fails, because `removeIncompleteEmbeddings` drops that
 document's good chunks at the end of each pass.
+
+Finding 13 is why a stopped step kills the script outright
+(`qmd_indexer::kill_on_stop`) rather than waiting for it to hear its
+SIGINT. Nothing is lost: SQLite rolls back the unfinished write, finding
+7 keeps the finished batches of an embed, and finding 5's PID check
+takes over the lock a killed embed leaves.
 
 The alternative that was built and closed unmerged — a loop over `qmd
 embed -c <g>` re-reading pending between calls, and a Rust writer for

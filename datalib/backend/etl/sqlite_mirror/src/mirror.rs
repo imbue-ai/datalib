@@ -10,6 +10,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool, SqlitePoo
 use sqlx::{Connection, Row};
 
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::RunProblems;
 use datalib_source_common::glob_match;
 
 use crate::plan::{self, ColumnSpec, KeyOrigin, SourceColumn, TableKind, TableSpec, UniqueIndex};
@@ -23,11 +24,6 @@ const SRC_SCHEMA: &str = "datalib_mirror_src";
 /// source table with one of these names is a hard error rather than a
 /// silent clobber of the store's own metadata.
 const RESERVED_TABLES: &[&str] = datalib_etl::doltlite_raw::SHARED_TABLES;
-
-/// Which rule picks a table's key. Bumped whenever that rule changes, so
-/// a provider that does not mirror an unchanged file again can record it
-/// beside its cursor and mirror once more under the new rule.
-pub const KEY_RULE_VERSION: u32 = 1;
 
 /// Everything the engine needs. Built from a provider's config by its
 /// processor, or from flags by a standalone CLI.
@@ -52,6 +48,12 @@ pub struct MirrorOptions {
     /// rebuild, and a source table with one of these names is an error,
     /// the same as [`RESERVED_TABLES`].
     pub sidecar_tables: Vec<String>,
+    /// Keep what the source dropped: upsert each table by its key rather
+    /// than drop and refill it, and never drop a table. For a source that
+    /// evicts (a cache of the last N days), where keeping what it let go
+    /// is the reason to mirror it; `lightroom/INGEST.md` § "A source that
+    /// evicts" has the rules.
+    pub append_only: bool,
 }
 
 impl MirrorOptions {
@@ -70,6 +72,7 @@ impl MirrorOptions {
             primary_keys: BTreeMap::new(),
             gc: false,
             sidecar_tables: Vec::new(),
+            append_only: false,
         }
     }
 
@@ -77,6 +80,39 @@ impl MirrorOptions {
         RESERVED_TABLES.contains(&name) || self.sidecar_tables.iter().any(|t| t == name)
     }
 }
+
+/// A source that holds no table to mirror: a 0-byte file (which SQLite
+/// opens as an empty database), a database with no tables left, or
+/// filters that match none of its tables. Mirroring it would empty the
+/// mirror, so [`run`] refuses before it drops anything.
+#[derive(Debug)]
+pub struct NothingToMirror {
+    pub source: PathBuf,
+    /// Tables the source does have, all of which the filters left out.
+    pub filtered_out: usize,
+}
+
+impl std::fmt::Display for NothingToMirror {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let source = self.source.display();
+        if self.filtered_out == 0 {
+            write!(
+                f,
+                "{source} holds no table: it is empty or not the database it should be, \
+                 so the mirror keeps what it had"
+            )
+        } else {
+            write!(
+                f,
+                "the table filters leave none of {source}'s {} tables to mirror, \
+                 so the mirror keeps what it had",
+                self.filtered_out
+            )
+        }
+    }
+}
+
+impl std::error::Error for NothingToMirror {}
 
 /// What one mirror run did. Feeds the run summary and the tests.
 #[derive(Debug, Default, Clone)]
@@ -281,13 +317,40 @@ pub async fn run(
     Ok(stats)
 }
 
+/// [`run`] inside a download's problem collector: a source that is
+/// [`NothingToMirror`] leaves the mirror as it was and is a
+/// `phase:source` problem, so the run's seal publishes the problem rather
+/// than the step failing with nothing to show for it. `None` then.
+pub async fn run_or_report(
+    pool: &SqlitePool,
+    opts: &MirrorOptions,
+    progress: &Progress,
+    found: &RunProblems,
+) -> Result<Option<MirrorStats>> {
+    match run(pool, opts, progress).await {
+        Ok(stats) => Ok(Some(stats)),
+        Err(e) if e.downcast_ref::<NothingToMirror>().is_some() => {
+            found.phase("source", format!("{e:#}"));
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 async fn mirror_attached(
     conn: &mut SqliteConnection,
     opts: &MirrorOptions,
     progress: &Progress,
 ) -> Result<MirrorStats> {
     let mut stats = MirrorStats::default();
-    let specs = build_specs(&mut *conn, opts, &mut stats).await?;
+    let (specs, source_tables) = build_specs(&mut *conn, opts, &mut stats).await?;
+    if specs.is_empty() {
+        return Err(NothingToMirror {
+            source: opts.source_path.clone(),
+            filtered_out: source_tables,
+        }
+        .into());
+    }
     stats.tables = specs.len();
     stats.columns_dropped = specs.iter().map(|s| s.dropped_columns.len()).sum();
     stats.tables_restably_keyed = specs
@@ -301,6 +364,17 @@ async fn mirror_attached(
         .count();
 
     progress.set_length(Some(specs.len() as u64));
+
+    if opts.append_only {
+        check_append_keys(&mut *conn, &specs).await?;
+        for spec in &specs {
+            progress.set_message(&spec.name);
+            stats.rows += append_table(&mut *conn, spec).await?;
+            progress.inc(1);
+        }
+        progress.finish_and_clear();
+        return Ok(stats);
+    }
 
     // Empty the mirror, then refill it from the source. Everything goes,
     // including tables the source no longer has — see
@@ -326,12 +400,14 @@ async fn mirror_attached(
     Ok(stats)
 }
 
+/// The tables to mirror, and how many tables the source has at all.
 async fn build_specs(
     conn: &mut SqliteConnection,
     opts: &MirrorOptions,
     stats: &mut MirrorStats,
-) -> Result<Vec<TableSpec>> {
+) -> Result<(Vec<TableSpec>, usize)> {
     let tables = plan::source_tables(&mut *conn, SRC_SCHEMA).await?;
+    let source_tables = tables.len();
     let mut specs = Vec::new();
     for table in tables {
         let name = table.name;
@@ -377,7 +453,7 @@ async fn build_specs(
         };
         specs.push(build_spec(opts, &name, &source_cols, &candidates)?);
     }
-    Ok(specs)
+    Ok((specs, source_tables))
 }
 
 /// What a table offers as its key besides a declared one, read and
@@ -618,6 +694,94 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
     tx.commit()
         .await
         .with_context(|| format!("commit rebuild tx for {}", spec.name))?;
+    Ok(n as u64)
+}
+
+/// The mirror's own key for each table it already holds, which an
+/// append-only run cannot change: the rows it kept are keyed by it. A
+/// source that re-keys a table fails the run before anything is written.
+async fn check_append_keys(conn: &mut SqliteConnection, specs: &[TableSpec]) -> Result<()> {
+    for spec in specs {
+        let held = plan::table_columns(&mut *conn, "main", &spec.name).await?;
+        if held.is_empty() {
+            continue;
+        }
+        let mut keyed: Vec<&SourceColumn> = held.iter().filter(|c| c.pk_seq > 0).collect();
+        keyed.sort_by_key(|c| c.pk_seq);
+        let key: Vec<&str> = keyed.iter().map(|c| c.spec.name.as_str()).collect();
+        if key != spec.pk.iter().map(String::as_str).collect::<Vec<_>>() {
+            bail!(
+                "table {:?} is keyed on {key:?} in the mirror and on {:?} in the source; \
+                 the mirror keeps rows the source dropped, and cannot re-key them",
+                spec.name,
+                spec.pk
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Upsert the source's rows into the mirror's table; returns the rows the
+/// table holds.
+async fn append_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<u64> {
+    let held = plan::table_columns(&mut *conn, "main", &spec.name).await?;
+    let mut tx = conn
+        .begin()
+        .await
+        .with_context(|| format!("begin append tx for {}", spec.name))?;
+    // Audited, for every statement here: table and column names come out
+    // of the source's or the mirror's own schema and go through
+    // `plan::quote_ident`, declared types too, inside `decl()`.
+    if held.is_empty() {
+        sqlx::query(sqlx::AssertSqlSafe(spec.create_ddl()))
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("create mirror table {}", spec.name))?;
+    }
+    let gained = spec
+        .columns
+        .iter()
+        .filter(|c| !held.is_empty() && !held.iter().any(|h| h.spec.name == c.name));
+    for col in gained {
+        // Nullable whatever the source says: the rows already kept have
+        // no value for it. A column the source dropped stays, and its
+        // new rows hold NULL there.
+        let added = ColumnSpec {
+            not_null: false,
+            ..col.clone()
+        };
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "ALTER TABLE main.{} ADD COLUMN {}",
+            plan::quote_ident(&spec.name),
+            added.decl()
+        )))
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("add column {} to {}", col.name, spec.name))?;
+    }
+    // A keyed table replaces each row by its key, so an edit is a
+    // modification. A keyless one has nothing to match an edited row by,
+    // so it adds the rows it does not hold whole and keeps both versions.
+    let sql = if spec.pk.is_empty() {
+        spec.copy_new_sql(SRC_SCHEMA)
+    } else {
+        spec.upsert_sql(SRC_SCHEMA)
+    };
+    sqlx::query(sqlx::AssertSqlSafe(sql))
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("append rows into {}", spec.name))?;
+    let n: i64 = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT COUNT(*) AS n FROM main.{}",
+        plan::quote_ident(&spec.name)
+    )))
+    .fetch_one(&mut *tx)
+    .await
+    .with_context(|| format!("count rows in {}", spec.name))?
+    .get("n");
+    tx.commit()
+        .await
+        .with_context(|| format!("commit append tx for {}", spec.name))?;
     Ok(n as u64)
 }
 

@@ -123,7 +123,7 @@ pub async fn matches_handler(
 /// nothing and says why.
 async fn matching(s: &Index, q: &str, errors: &mut Vec<String>) -> HashSet<String> {
     let parsed = parse_query(q);
-    if let Some(why) = parsed.refusal() {
+    if let Some(why) = super::refusal(&s.root, &parsed) {
         errors.push(why);
         return HashSet::new();
     }

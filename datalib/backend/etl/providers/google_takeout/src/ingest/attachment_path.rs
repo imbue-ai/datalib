@@ -129,8 +129,8 @@ mod tests {
         // reference must NOT be matched (the Voice false-positive that
         // kept this resolver extension-anchored).
         let d = tempdir().unwrap();
-        touch(d.path(), "Wes - Text - 2019.html");
-        let got = resolve(d.path(), "Wes - Text - 2019-1-1.jpg");
+        touch(d.path(), "Riker - Text - 2364.html");
+        let got = resolve(d.path(), "Riker - Text - 2364-1-1.jpg");
         assert_eq!(got, Resolved::Missing);
     }
 

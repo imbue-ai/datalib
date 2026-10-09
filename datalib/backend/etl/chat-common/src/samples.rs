@@ -17,7 +17,7 @@ use datalib_etl::progress::Progress;
 use datalib_schema::providers::Provider;
 use datalib_time::RecordStampPrecision;
 
-use crate::render::{render_all, RenderProfile, ENTITY_KIND_CONVERSATION};
+use crate::render::{render_all, RenderProfile, TextFormat, ENTITY_KIND_CONVERSATION};
 use crate::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,
@@ -36,6 +36,7 @@ pub fn sample_profile() -> RenderProfile {
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         stamp_precision: RecordStampPrecision::Seconds,
         render_version: 1,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -70,7 +71,7 @@ pub fn write_samples(out_dir: &Path) -> Result<Vec<String>> {
 fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: uuid.to_string(),
-        author_id: author.to_string(),
+        author_handle: None,
         author_display: author.to_string(),
         date_ms: Some(at),
         text: Some(body.to_string()),
@@ -83,7 +84,10 @@ fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
         kind_label: None,
         source_ref: None,
         is_aside: false,
+        branch: Vec::new(),
         unread: false,
+        recipients: Vec::new(),
+        mentions: Vec::new(),
         problems: Vec::new(),
     }
 }
@@ -92,12 +96,14 @@ fn aside(uuid: &str, at: i64, body: &str) -> NormalizedChatItem {
     NormalizedChatItem {
         kind_label: Some("Tool Call".to_string()),
         is_aside: true,
+        branch: Vec::new(),
         ..text(uuid, "claude-opus-5", at, body)
     }
 }
 
 fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedChat {
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: Vec::new(),
         id: id.to_string(),
         chat_uuid: id.to_string(),
@@ -200,6 +206,7 @@ fn group_chat() -> NormalizedChat {
     picard.reactions = vec![
         NormalizedReaction {
             reaction_uuid: "s2-react-1".to_string(),
+            reactor_handle: datalib_handle::Handle::email("riker@enterprise.org"),
             reactor_display: "Will Riker".to_string(),
             emoji: "🫡".to_string(),
             date_ms: Some(T0 + 60000),
@@ -207,6 +214,7 @@ fn group_chat() -> NormalizedChat {
         },
         NormalizedReaction {
             reaction_uuid: "s2-react-2".to_string(),
+            reactor_handle: None,
             reactor_display: "Deanna Troi".to_string(),
             emoji: "👍".to_string(),
             date_ms: Some(T0 + 90000),

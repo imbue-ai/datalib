@@ -5,12 +5,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use datalib_etl::event_store::load_latest_by_key;
-use datalib_etl::http::{HttpRequest, HttpService};
-use datalib_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
+use datalib_etl_web::http::{HttpRequest, HttpService};
+use datalib_etl_web::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
+use datalib_etl_forge_ingest_common::{covered_hi, Bounds};
+
 use crate::ingest::{
-    BASE, DEFAULT_SCOPES, ENTITY_ISSUE_COMMENT, ENTITY_PR, ENTITY_PR_REVIEW,
+    search_url, stamp, BASE, DEFAULT_SCOPES, ENTITY_ISSUE_COMMENT, ENTITY_PR, ENTITY_PR_REVIEW,
     ENTITY_PR_REVIEW_COMMENT, ENTITY_SELF, PER_PAGE,
 };
 
@@ -34,6 +36,17 @@ fn pr_repo_num(rec: &Value) -> Option<(String, u64)> {
     let repo = rec.get("repo_full_name")?.as_str()?.to_string();
     let num = rec.get("pr_number")?.as_u64()?;
     Some((repo, num))
+}
+
+/// Where a run after one pinned at `at`, which listed PRs updated at
+/// `newest` at the latest, starts its search: the top of what that run
+/// covered, by the policy the download itself runs.
+fn resumed_from(at: &str, newest: Option<&str>) -> Option<Bounds> {
+    let at = datalib_time::parse_strict(at).ok()?;
+    Some(Bounds {
+        lo: Some(covered_hi(&stamp(&at), newest).to_string()),
+        hi: None,
+    })
 }
 
 impl Synthesizer for GithubSynth {
@@ -80,28 +93,54 @@ impl Synthesizer for GithubSynth {
         }
 
         // Search fixtures per default scope — minimal item shape: download
-        // only reads `repository_url` (to derive repo) and `number`.
+        // reads `repository_url` (to derive repo), `number` and the
+        // `updated_at` it lists the PR at.
         let items: Vec<Value> = pr_by_key
-            .keys()
-            .map(|(repo, num)| {
-                json!({
+            .iter()
+            .map(|((repo, num), raw)| {
+                let mut item = json!({
                     "repository_url": format!("{BASE}/repos/{repo}"),
                     "number": num,
-                })
+                });
+                if let Some(updated_at) = raw.get("updated_at") {
+                    item["updated_at"] = updated_at.clone();
+                }
+                item
             })
             .collect();
-        for scope in DEFAULT_SCOPES {
-            let q = format!("is:pr {scope}");
-            let url = format!(
-                "{BASE}/search/issues?q={}&per_page={PER_PAGE}&sort=updated&order=desc",
-                urlencoding::encode(&q)
-            );
-            let body = json!({
+        let newest = pr_by_key
+            .values()
+            .filter_map(|raw| raw.get("updated_at").and_then(Value::as_str))
+            .max();
+        let search_page = |items: &[Value]| {
+            json_response(&json!({
                 "total_count": items.len(),
                 "incomplete_results": false,
                 "items": items,
-            });
-            write_fixture(out_root, &req_get(&url), &json_response(&body))?;
+            }))
+        };
+        for scope in DEFAULT_SCOPES {
+            write_fixture(
+                out_root,
+                &req_get(&search_url(scope, &Bounds::default())),
+                &search_page(&items),
+            )?;
+            count += 1;
+        }
+        // A sync after one pinned at the capture's own moment asks each
+        // scope what changed since; nothing had.
+        let captured_at = selves
+            .first()
+            .and_then(|(_, rec)| rec.get("_recorded_at")?.as_str());
+        for scope in DEFAULT_SCOPES {
+            let Some(bounds) = captured_at.and_then(|at| resumed_from(at, newest)) else {
+                break;
+            };
+            write_fixture(
+                out_root,
+                &req_get(&search_url(scope, &bounds)),
+                &search_page(&[]),
+            )?;
             count += 1;
         }
 
@@ -187,7 +226,7 @@ impl Synthesizer for GithubSynth {
 mod tests {
     use super::*;
     use datalib_etl::event_store::{diff_and_save, make_record};
-    use datalib_etl::http::{fixture_key, HttpResponse};
+    use datalib_etl_web::http::{fixture_key, HttpResponse};
     use serde_json::Map;
     use std::collections::HashMap;
     use std::fs;
@@ -204,10 +243,15 @@ mod tests {
         let api = d.path().join("github_api");
         fs::create_dir_all(&api).unwrap();
 
-        // self_identity
+        // self_identity, captured at a known moment
         let mut k = Map::new();
         k.insert("user_id".into(), json!(42));
-        write_event(&api, ENTITY_SELF, k, json!({"id": 42, "login": "octocat"}));
+        let mut rec = make_record(k, json!({"id": 42, "login": "octocat"}));
+        rec["_recorded_at"] = json!("2369-04-15T00:00:00+00:00");
+        diff_and_save(&api, ENTITY_SELF, &[rec], &HashMap::new(), |r| {
+            r.to_string()
+        })
+        .unwrap();
 
         // one PR
         let repo = "octocat/hello";
@@ -236,8 +280,20 @@ mod tests {
 
         let out = d.path().join("playback");
         let report = GithubSynth::new(&api).synthesize(&out).unwrap();
-        // 1 user + 3 scope searches + 1 PR detail + 3 list endpoints = 8
-        assert_eq!(report.fixtures_written, 8);
+        // 1 user + 3 scope searches + 3 resumed ones + 1 PR detail + 3
+        // list endpoints = 11
+        assert_eq!(report.fixtures_written, 11);
+
+        // a search resumed from the capture's moment finds nothing new
+        let resumed = Bounds {
+            lo: Some("2369-04-15T00:00:00Z".to_string()),
+            hi: None,
+        };
+        let req = req_get(&search_url(DEFAULT_SCOPES[0], &resumed));
+        let p = out.join("github").join(fixture_key(&req));
+        let resp: HttpResponse = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
+        let body: Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(body["items"], json!([]));
 
         // /user
         let req = req_get(&format!("{BASE}/user"));
@@ -247,12 +303,7 @@ mod tests {
         assert_eq!(body["login"], "octocat");
 
         // search fixture contains our PR
-        let q = format!("is:pr {}", DEFAULT_SCOPES[0]);
-        let url = format!(
-            "{BASE}/search/issues?q={}&per_page={PER_PAGE}&sort=updated&order=desc",
-            urlencoding::encode(&q)
-        );
-        let req = req_get(&url);
+        let req = req_get(&search_url(DEFAULT_SCOPES[0], &Bounds::default()));
         let p = out.join("github").join(fixture_key(&req));
         let resp: HttpResponse = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
         let body: Value = serde_json::from_slice(&resp.body).unwrap();

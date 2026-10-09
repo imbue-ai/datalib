@@ -33,7 +33,7 @@ test("an error toast over the wizard does not eat clicks on its buttons", async 
       body: JSON.stringify({ error: "accounts are unavailable" }),
     }),
   );
-  await page.goto("/sourcesView():1.6/gridView()");
+  await page.goto("/sourcesView():1.6/searchView()");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   const toast = page.locator(".datalib-toast--error", { hasText: "/api/accounts" });
   await expect(toast).toContainText("→ 502: accounts are unavailable");

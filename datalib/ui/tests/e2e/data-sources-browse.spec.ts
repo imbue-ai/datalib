@@ -8,15 +8,16 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
-  savedConfig,
-  searchAndSettle,
-  SEARCH_ROWS,
-  TABLE_ROWS,
-  searchHeader,
+  cardOf,
+  expandGroup,
   type GridApi,
   MANAGE_WITH_CONFIG,
-  expandGroup,
   pipelineRow,
+  savedConfig,
+  SEARCH_ROWS,
+  searchAndSettle,
+  searchHeader,
+  TABLE_ROWS,
 } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
@@ -80,7 +81,7 @@ const browseButton = (page: Page, groupId: string) =>
 async function browse(page: Page, groupId: string, expectQuery: string) {
   await browseButton(page, groupId).click();
   await expect(page.locator(SEARCH)).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator(SEARCH)).toHaveValue(expectQuery);
+  await expect(page.locator(SEARCH)).toHaveAttribute("data-query", expectQuery);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 30_000 });
 }
 
@@ -103,13 +104,12 @@ test("a source's row opens that source, with its type's columns", async ({ page 
   await openManage(page);
   await browse(page, "slack", "source_id:slack is:document");
 
-  // The card stack IS the URL, which is what makes a browse
-  // bookmarkable and shareable rather than a transient view.
-  await expect(page).toHaveURL(/source_id%3Aslack/);
+  // The browse is a card of its own, on that source's query.
+  await expect(cardOf(page, "source_id:slack")).toBeVisible();
 
   // The card is named for what it holds, not for its query, and keeps
   // that name while the person searches inside it (checked below).
-  const name = page.locator(".miller-col-title").last();
+  const name = page.locator(".ct-main .ct-card-title").last();
   await expect(name).toHaveText(/ documents$/);
 
   // Every row came from this source, and every row is a document: one
@@ -143,7 +143,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
   // no such thing, and a column of empty cells is what a preset exists
   // to prevent.
   await expect(searchHeader(page, "channel")).toBeVisible();
-  await expect(searchHeader(page, "author")).toBeVisible();
+  await expect(searchHeader(page, "author_ref")).toBeVisible();
   await expect(searchHeader(page, "project")).toHaveCount(0);
 });
 
@@ -160,7 +160,7 @@ test("a different type gets a different column set", async ({ page }) => {
   // share an author too, so the column shows once the review comments
   // are back in the grid.
   await searchAndSettle(page, "source_id:github");
-  await expect(searchHeader(page, "author")).toBeVisible();
+  await expect(searchHeader(page, "author_ref")).toBeVisible();
   await expect(searchHeader(page, "channel")).toHaveCount(0);
 });
 
@@ -197,8 +197,8 @@ test("a step's row opens its source, as its group's row does", async ({ page }) 
   await expect(step).toBeEnabled();
   await step.click();
   await expect(page.locator(SEARCH)).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator(SEARCH)).toHaveValue("source_id:slack is:document");
-  await expect(page).toHaveURL(/source_id%3Aslack/);
+  await expect(page.locator(SEARCH)).toHaveAttribute("data-query", "source_id:slack is:document");
+  await expect(cardOf(page, "source_id:slack")).toBeVisible();
 });
 
 /// A source that renders nothing has no rows at all — not even the

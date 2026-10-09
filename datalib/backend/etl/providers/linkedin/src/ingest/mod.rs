@@ -12,15 +12,17 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl::export_files::files_with_extension;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::export_files::ExportFiles;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sqlx::sqlite::SqlitePool;
+use std::collections::HashSet;
 use tracing::warn;
 use uuid::Uuid;
 
-use schema_raw::{canonical_table, known_file, linkedin_ns, ARTICLES_TABLE};
+use schema_raw::{canonical_table, known_file, linkedin_ns, ARTICLES_TABLE, CONNECTIONS_TABLE};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -67,12 +69,7 @@ impl RawDb {
         let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, commit).await? else {
             return Ok(None);
         };
-        let cas_path = cas_path_for(db_path);
-        let cas = if cas_path.is_file() {
-            Some(BlobCas::open_reader(&cas_path).await?)
-        } else {
-            None
-        };
+        let cas = BlobCas::open_for_render(db_path).await?;
         Ok(Some(Self {
             pool: reader.pool().clone(),
             cas,
@@ -141,16 +138,27 @@ pub struct FetchSummary {
     pub files: usize,
     pub rows: usize,
     pub parse_errors: usize,
+    /// Photo edges of connections the export no longer lists.
+    pub photos_removed: usize,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_export(opts, found)).await
+}
+
+async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
+    let export = ExportFiles::walk(&opts.input_path)?;
+    found.extend(export.walk_problems());
     let mut tx = db.pool().begin().await.context("begin linkedin tx")?;
 
-    for path in files_with_extension(&opts.input_path, "csv") {
-        let table = table_name(&opts.input_path, &path);
+    // Each CSV read whole replaces its table. A table whose CSV this
+    // export left out is not touched: the export form offers a subset.
+    for path in export.with_extension("csv") {
+        let table = table_name(&opts.input_path, path);
         if known_file(&table).is_none() {
             warn!(
                 event = "linkedin_unknown_file",
@@ -159,38 +167,60 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 "CSV not in KNOWN_FILES manifest; ingesting generically",
             );
         }
-        match ingest_one(&mut tx, &table, &path).await {
-            Ok(n) => {
-                summary.files += 1;
-                summary.rows += n;
-                opts.progress
-                    .set_message(&format!("{table}: {n} rows ({} files)", summary.files));
-            }
+        let rows = match read_csv(&table, path) {
+            Ok(rows) => rows,
             Err(e) => {
-                warn!(event = "linkedin_csv_failed", file = %path.display(), table, error = %e, "a CSV of the export could not be ingested");
+                // The table keeps what the last good read of this file
+                // left in it; the file is read again next run.
+                found.listing(
+                    &format!("csv {}", relative(&opts.input_path, path)),
+                    format!("{e:#}"),
+                );
                 summary.parse_errors += 1;
+                continue;
             }
+        };
+        let keep: HashSet<String> = rows.iter().map(|(id, _)| id.clone()).collect();
+        write_table(&mut tx, &table, &rows, Some(&keep)).await?;
+        // Only a clean read says who is connected: a Connections.csv left
+        // out or unreadable never reaches here.
+        if table == CONNECTIONS_TABLE {
+            summary.photos_removed += photos::prune_to_connections_in_tx(&mut tx, &keep).await?;
         }
+        summary.files += 1;
+        summary.rows += rows.len();
+        opts.progress.set_message(&format!(
+            "{table}: {} rows ({} files)",
+            rows.len(),
+            summary.files
+        ));
     }
 
-    // Articles are the one non-CSV feed: each `*.html` becomes a row in
-    // the shared `articles` table. No-op when the export has none.
-    let articles = discover_articles(&opts.input_path);
+    // Articles are the one non-CSV feed: each `*.html` under an
+    // `Articles/` directory becomes a row in the shared `articles` table.
+    let articles: Vec<&Path> = export
+        .with_extension("html")
+        .filter(|p| in_articles_dir(&opts.input_path, p))
+        .collect();
     if !articles.is_empty() {
-        match ingest_articles(&mut tx, &opts.input_path, &articles).await {
-            Ok(n) => {
-                summary.files += 1;
-                summary.rows += n;
-                opts.progress.set_message(&format!(
-                    "{ARTICLES_TABLE}: {n} rows ({} files)",
-                    summary.files
-                ));
-            }
-            Err(e) => {
-                warn!(event = "linkedin_articles_failed", error = %e, "the articles could not be ingested");
-                summary.parse_errors += 1;
-            }
+        let read = read_articles(&opts.input_path, &articles);
+        for (rel, e) in &read.failed {
+            found.listing(&format!("articles {rel}"), e.clone());
+            summary.parse_errors += 1;
         }
+        // An article that would not read keeps its row, and a walk that
+        // could not see everything deletes none.
+        let mut keep: HashSet<String> = read.rows.iter().map(|(id, _)| id.clone()).collect();
+        keep.extend(read.failed.iter().map(|(rel, _)| rel.clone()));
+        let keep = export.errors.is_empty().then_some(&keep);
+        write_table(&mut tx, ARTICLES_TABLE, &read.rows, keep).await?;
+        summary.files += 1;
+        summary.rows += read.rows.len();
+        opts.progress.set_message(&format!(
+            "{ARTICLES_TABLE}: {} rows ({} files)",
+            read.rows.len(),
+            summary.files
+        ));
     }
 
     tx.commit().await.context("commit linkedin tx")?;
@@ -201,41 +231,32 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Through the handle's own CAS, so nothing here opens a second
     // store. `None` is a reader, which never reaches a fetch.
     if let (true, Some(cas)) = (opts.fetch_photos, db.cas()) {
-        match photos::fetch_connection_photos(
+        let s = photos::fetch_connection_photos(
             &db,
             cas,
             &opts.progress,
+            &opts.control.stop,
             opts.photo_max_consecutive_failures,
         )
-        .await
-        {
-            Ok(s) => tracing::info!(
-                event = "linkedin_photos",
-                attempted = s.attempted,
-                fetched = s.fetched,
-                no_photo = s.no_photo,
-                transient = s.transient,
-                gave_up = s.gave_up,
-                "fetched the profile photos"
-            ),
-            Err(e) => {
-                warn!(event = "linkedin_photos_failed", error = %e, "the profile photos could not be fetched")
-            }
-        }
+        .await?;
+        tracing::info!(
+            event = "linkedin_photos",
+            attempted = s.attempted,
+            fetched = s.fetched,
+            no_photo = s.no_photo,
+            transient = s.transient,
+            gave_up = s.gave_up,
+            "fetched the profile photos"
+        );
+        found.extend(s.problem());
     }
     Ok(summary)
 }
 
-async fn ingest_one(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    table: &str,
-    path: &Path,
-) -> Result<usize> {
+fn read_csv(table: &str, path: &Path) -> Result<Vec<(String, String)>> {
     let raw = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let body = strip_notes_preamble(&raw);
-    let rows = parse_rows(table, &body)?;
-    replace_table(tx, table, &rows).await?;
-    Ok(rows.len())
+    parse_rows(table, &body)
 }
 
 /// The export mixes two quoting dialects: `Comments_<id>.csv` escapes an
@@ -255,6 +276,11 @@ pub(crate) fn csv_reader(body: &str) -> csv::Reader<&[u8]> {
 fn parse_rows(table: &str, body: &str) -> Result<Vec<(String, String)>> {
     let mut rdr = csv_reader(body);
     let headers = dedup_headers(rdr.headers().context("read CSV header")?);
+    // A CSV with a header and no rows empties its table; one with no
+    // header is not that, but a file cut short or never written.
+    if headers.is_empty() {
+        anyhow::bail!("no header row: the file is empty, or holds only its Notes preamble");
+    }
     let id_cols = known_file(table)
         .map(|f| f.id_cols)
         .filter(|c| !c.is_empty());
@@ -274,47 +300,70 @@ fn parse_rows(table: &str, body: &str) -> Result<Vec<(String, String)>> {
     Ok(rows)
 }
 
-/// Discover every `*.html` under an `Articles/` directory in the export
-/// and ingest each as one row of the shared [`ARTICLES_TABLE`]. The
-/// payload is `{ "file": <export-relative path>, "html": <contents> }`;
-/// the row id is the relative path (stable, one row per article file).
-async fn ingest_articles(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    root: &Path,
-    paths: &[PathBuf],
-) -> Result<usize> {
-    let mut rows: Vec<(String, String)> = Vec::with_capacity(paths.len());
-    for path in paths {
-        let rel = path
-            .strip_prefix(root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
-        let html =
-            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        let payload = serde_json::json!({ "file": rel, "html": html });
-        rows.push((rel, payload.to_string()));
-    }
-    replace_table(tx, ARTICLES_TABLE, &rows).await?;
-    Ok(rows.len())
+/// The articles a run read, as `(id, payload)` rows — the payload is
+/// `{ "file": <export-relative path>, "html": <contents> }` and the id
+/// the relative path — and the ones it could not, with why.
+struct ArticlesRead {
+    rows: Vec<(String, String)>,
+    failed: Vec<(String, String)>,
 }
 
-async fn replace_table(
+fn read_articles(root: &Path, paths: &[&Path]) -> ArticlesRead {
+    let mut read = ArticlesRead {
+        rows: Vec::with_capacity(paths.len()),
+        failed: Vec::new(),
+    };
+    for path in paths {
+        let rel = relative(root, path);
+        match std::fs::read_to_string(path) {
+            Ok(html) => {
+                let payload = serde_json::json!({ "file": rel, "html": html });
+                read.rows.push((rel, payload.to_string()));
+            }
+            Err(e) => read
+                .failed
+                .push((rel, format!("read {}: {e}", path.display()))),
+        }
+    }
+    read
+}
+
+/// Upsert `rows` into `table`, creating it, and delete every stored row
+/// `keep` does not name; `None` deletes nothing.
+async fn write_table(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     rows: &[(String, String)],
+    keep: Option<&HashSet<String>>,
 ) -> Result<()> {
     let ddl = dr::wire_payload_table_ddl(table, &[]);
-    // Audited: `wire_payload_table_ddl` renders DDL from `table`, which is a
-    // `&'static str` at every callsite; rows are bound below.
+    // Audited: `table` is `canonical_table`'s output — ASCII alphanumerics
+    // and `_` only — so it is safe as an identifier; rows are bound below.
     sqlx::query(sqlx::AssertSqlSafe(ddl))
         .execute(&mut **tx)
         .await
         .with_context(|| format!("create table {table}"))?;
-    sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("clear table {table}"))?;
+
+    if let Some(keep) = keep {
+        let existing: Vec<String> =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table}")))
+                .fetch_all(&mut **tx)
+                .await
+                .with_context(|| format!("list ids in {table}"))?;
+        let gone: Vec<&String> = existing.iter().filter(|id| !keep.contains(*id)).collect();
+        for chunk in gone.chunks(INSERT_CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {table} WHERE id IN ({placeholders})"
+            )));
+            for id in chunk {
+                q = q.bind((*id).clone());
+            }
+            q.execute(&mut **tx)
+                .await
+                .with_context(|| format!("prune {table}"))?;
+        }
+    }
 
     for chunk in rows.chunks(INSERT_CHUNK) {
         let mut sql = format!("INSERT OR REPLACE INTO {table} (id, payload) VALUES ");
@@ -356,33 +405,21 @@ fn row_id(table: &str, payload: &Value, id_cols: Option<&[&str]>) -> String {
         .to_string()
 }
 
-fn discover_articles(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    let mut in_articles = vec![false];
-    while let Some(dir) = stack.pop() {
-        let under = in_articles.pop().unwrap_or(false);
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                let name_is_articles = p
-                    .file_name()
-                    .is_some_and(|n| n.eq_ignore_ascii_case("articles"));
-                stack.push(p);
-                in_articles.push(under || name_is_articles);
-            } else if under
-                && p.extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("html"))
-            {
-                out.push(p);
-            }
-        }
-    }
-    out.sort();
-    out
+/// Whether a file sits, at any depth, inside a directory named
+/// `Articles` under the export root.
+fn in_articles_dir(root: &Path, path: &Path) -> bool {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    rel.parent().is_some_and(|dir| {
+        dir.components()
+            .any(|c| c.as_os_str().eq_ignore_ascii_case("articles"))
+    })
+}
+
+fn relative(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .to_string()
 }
 
 /// The raw table name for a CSV's path-relative-to-`root`. Delegates to

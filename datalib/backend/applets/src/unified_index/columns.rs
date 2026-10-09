@@ -9,15 +9,53 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use datalib_columns::{
-    source_catalog, ColumnSearch, ColumnSpec, ColumnType, DocumentLink, FreeTextMatch, Identity,
-    RowsSpec,
+    source_catalog, ColumnSearch, ColumnSpec, ColumnType, DocumentLink, Entity, FreeTextMatch,
+    Identity, KeyValues, RowsSpec, SearchKeySpec, ValueSuggestion,
 };
-use datalib_query::table::{FreeText, SearchTable};
+use datalib_handle::{Handle, HandleKind};
+use datalib_query::table::{Column, FreeText, SearchTable};
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::grid_columns::GridColumn;
 use datalib_unified_index::search::SearchRow;
+use datalib_unified_index::terms_keys::TERMS_KEYS;
 use datalib_unified_index::view::{self, View};
+use serde::Deserialize;
+
+/// The Author cell (docs/dev/chips.md § "In a grid"): the handle
+/// as a URI for its id, so the viewer resolves it as it does a chip link
+/// in a document, the name the source showed for its label, and the
+/// handle kind's mark. A row with neither has no author to draw.
+pub fn author_identity(author: &str, handle: Option<&str>) -> Option<Identity> {
+    let handle = handle.and_then(Handle::parse);
+    if author.is_empty() && handle.is_none() {
+        return None;
+    }
+    let label = match (&handle, author.is_empty()) {
+        (Some(h), true) => h.value().to_string(),
+        _ => author.to_string(),
+    };
+    Some(Identity {
+        id: handle
+            .as_ref()
+            .map_or_else(|| author.to_string(), Handle::to_uri),
+        label,
+        icon: handle.as_ref().map(|h| handle_mark(h.kind()).to_string()),
+        detail: handle.as_ref().map(|h| h.describe(author)),
+        entity: None,
+    })
+}
+
+/// The icon token for a handle kind; `KIND_ICON` in `ui/src/cards/contacts.ts`
+/// is the same table.
+fn handle_mark(kind: HandleKind) -> &'static str {
+    match kind {
+        HandleKind::Email => "email",
+        HandleKind::Tel => "sms",
+        HandleKind::Slack => "slack",
+        HandleKind::SignalAci => "signal",
+    }
+}
 
 pub fn columns() -> Vec<ColumnSpec> {
     searchable::<GridColumn>(declared())
@@ -44,6 +82,119 @@ pub fn free_text_of<T: SearchTable>() -> FreeTextMatch {
     }
 }
 
+/// Every key `T`'s search reads (`datalib_unified_index::query`), with
+/// what its values are.
+pub fn keys_of<T: SearchTable>() -> Vec<SearchKeySpec> {
+    let key = |key, values| SearchKeySpec {
+        key,
+        aliases: &[],
+        values,
+        partial: false,
+    };
+    let mut keys: Vec<SearchKeySpec> = T::KEYS
+        .iter()
+        .map(|k| SearchKeySpec {
+            key: k.key,
+            aliases: k.aliases,
+            values: match k.vocabulary {
+                Some(words) => KeyValues::Words { words: words() },
+                // Every table that files its rows under a source names
+                // the column so (AGENTS.md, "A source's id is not its name").
+                None if k.column.as_str() == "source_id" => KeyValues::Source,
+                None => KeyValues::Text,
+            },
+            partial: false,
+        })
+        .collect();
+    if T::RANGE.is_some() {
+        keys.push(key("before", KeyValues::Stamp));
+        keys.push(key("after", KeyValues::Stamp));
+    }
+    if !T::FLAGS.is_empty() {
+        let words = T::FLAGS.iter().map(|(word, _)| *word).collect();
+        keys.push(key("is", KeyValues::Words { words }));
+    }
+    if matches!(T::FREE_TEXT, FreeText::Qmd) {
+        keys.push(key("qmd", KeyValues::Text));
+        keys.push(key("qmd_vsearch", KeyValues::Text));
+    }
+    keys
+}
+
+/// The grid's keys: its columns' and those that read the search terms.
+pub fn grid_keys() -> Vec<SearchKeySpec> {
+    let mut keys = keys_of::<GridRow>();
+    keys.extend(TERMS_KEYS.iter().map(|k| SearchKeySpec {
+        key: k.key,
+        aliases: k.aliases,
+        values: if k.person {
+            KeyValues::Person
+        } else {
+            KeyValues::Text
+        },
+        partial: true,
+    }));
+    keys
+}
+
+/// `…/values?key=…&typed=…&q=…`: one key's values holding `typed`,
+/// among the rows the rest of the query `q` keeps.
+#[derive(Debug, Deserialize)]
+pub struct ValuesParams {
+    pub key: String,
+    #[serde(default)]
+    pub typed: String,
+    #[serde(default)]
+    pub q: String,
+}
+
+/// Where a key's values come from.
+pub enum ValueSource<C> {
+    /// Its closed set.
+    Words(Vec<&'static str>),
+    /// The column's values among the rows.
+    Column(C),
+    /// Nothing to offer: a date, the words free text routes to qmd, a key
+    /// the table does not have.
+    Nothing,
+}
+
+pub fn value_source<T: SearchTable>(key: &str) -> ValueSource<T::Column> {
+    if key == "is" {
+        return ValueSource::Words(T::FLAGS.iter().map(|(word, _)| *word).collect());
+    }
+    match datalib_query::table::key::<T>(key) {
+        Some(k) => match k.vocabulary {
+            Some(words) => ValueSource::Words(words()),
+            None => ValueSource::Column(k.column),
+        },
+        None => ValueSource::Nothing,
+    }
+}
+
+/// The words holding `typed`, case-blind, in their own order.
+pub fn words_holding(words: &[&'static str], typed: &str) -> Vec<ValueSuggestion> {
+    let typed = typed.to_lowercase();
+    words
+        .iter()
+        .filter(|w| w.to_lowercase().contains(&typed))
+        .map(|w| ValueSuggestion {
+            value: (*w).to_string(),
+            count: None,
+        })
+        .collect()
+}
+
+pub fn counted(values: Vec<(String, u64)>) -> Vec<ValueSuggestion> {
+    values
+        .into_iter()
+        .map(|(value, count)| ValueSuggestion {
+            value,
+            count: Some(count),
+        })
+        .collect()
+}
+
 /// The search bar is a grid's one filter: each column says which of its
 /// keys filters its cells.
 pub fn searchable<V: View>(mut columns: Vec<ColumnSpec>) -> Vec<ColumnSpec> {
@@ -51,6 +202,7 @@ pub fn searchable<V: View>(mut columns: Vec<ColumnSpec>) -> Vec<ColumnSpec> {
         c.search = view::for_column::<V>(&c.field).map(|(key, field)| ColumnSearch {
             key: key.into(),
             field: field.into(),
+            partial: datalib_unified_index::terms_keys::key(key).is_some(),
         });
     }
     columns
@@ -100,7 +252,11 @@ fn declared() -> Vec<ColumnSpec> {
                  not known to have changed since it was created.",
             )
             .hidden(),
-        ColumnSpec::new("author", "Author", ColumnType::Text),
+        ColumnSpec::new("author_ref", "Author", ColumnType::Identity).describe(
+            "Who wrote it, as the source showed them. Where the source has an identifier \
+             for them — an address, a number, a Slack user — the cell is a chip the \
+             contacts app resolves, and `from:` finds it by that identifier.",
+        ),
         ColumnSpec::new("account", "Account", ColumnType::Text).hidden(),
         ColumnSpec::new("org_name", "Org", ColumnType::Text).hidden(),
         ColumnSpec::new("byte_size", "Size", ColumnType::Bytes).hidden(),
@@ -194,6 +350,12 @@ impl Sources {
             source.detail = Some(row.source.clone());
         }
         row.source_ref = Some(source);
+        row.author_ref = author_identity(&row.author, row.author_handle.as_deref());
+        row.author_term = row
+            .author_handle
+            .clone()
+            .or_else(|| Some(row.author.clone()))
+            .filter(|t| !t.is_empty());
     }
 
     /// The source as the grid shows it: the name the config gives the
@@ -208,6 +370,7 @@ impl Sources {
                 label: "Datalib".to_string(),
                 icon: Some("system".to_string()),
                 detail: Some("Datalib's own row, not a source's data".to_string()),
+                entity: None,
             };
         }
         let group = self.groups.get(source_id);
@@ -223,6 +386,9 @@ impl Sources {
                 .unwrap_or_else(|| source_id.to_string()),
             icon: r#type.as_ref().and_then(|t| t.icon.clone()),
             detail: r#type.map(|t| t.label),
+            // A group the config declares is a chip the viewer can
+            // resolve and open; an id it does not know is only a name.
+            entity: group.map(|_| Entity::Group(source_id).uri()),
         }
     }
 }
@@ -231,12 +397,81 @@ impl Sources {
 mod tests {
     use super::*;
 
+    fn values_of(keys: &[SearchKeySpec], key: &str) -> KeyValues {
+        keys.iter()
+            .find(|k| k.key == key)
+            .unwrap_or_else(|| panic!("no `{key}:` in {keys:?}"))
+            .values
+            .clone()
+    }
+
+    /// Every key the grid's search reads is offered, each saying what its
+    /// values are, so the bar can draw a source as its chip.
+    #[test]
+    fn the_grid_offers_every_key_it_reads() {
+        let keys = grid_keys();
+        assert_eq!(values_of(&keys, "source_id"), KeyValues::Source);
+        assert_eq!(values_of(&keys, "channel"), KeyValues::Text);
+        assert_eq!(values_of(&keys, "before"), KeyValues::Stamp);
+        assert_eq!(
+            values_of(&keys, "is"),
+            KeyValues::Words {
+                words: vec!["document"]
+            }
+        );
+        assert_eq!(values_of(&keys, "qmd_vsearch"), KeyValues::Text);
+        assert_eq!(values_of(&keys, "from"), KeyValues::Person);
+        assert_eq!(values_of(&keys, "label"), KeyValues::Text);
+        let from = keys.iter().find(|k| k.key == "from").unwrap();
+        assert_eq!(from.aliases, ["author", "author_handle"]);
+        for k in &keys {
+            let value = match &k.values {
+                KeyValues::Words { words } => words[0],
+                _ => "x",
+            };
+            let q = format!("{}:{value}", k.key);
+            let refused = datalib_unified_index::query::parse_query(&q).refusal();
+            assert_eq!(refused, None, "`{q}` is offered but refused");
+        }
+    }
+
+    #[test]
+    fn a_key_takes_its_values_from_its_words_or_its_column() {
+        assert!(matches!(
+            value_source::<GridRow>("is"),
+            ValueSource::Words(w) if w == ["document"]
+        ));
+        assert!(matches!(
+            value_source::<GridRow>("channel"),
+            ValueSource::Column(GridRowColumn::Channel)
+        ));
+        assert!(matches!(
+            value_source::<GridRow>("before"),
+            ValueSource::Nothing
+        ));
+        assert!(matches!(
+            value_source::<GridRow>("nope"),
+            ValueSource::Nothing
+        ));
+        let held: Vec<String> = words_holding(&["error", "warning", "info"], "R")
+            .into_iter()
+            .map(|v| v.value)
+            .collect();
+        assert_eq!(held, ["error", "warning"]);
+    }
+
     /// The search bar is the grid's one filter: every column a person
     /// might narrow by names its key, and a row field the grid can read
     /// the term's value from.
     #[test]
     fn every_column_but_score_and_contents_says_how_to_search_it() {
-        let row = serde_json::to_value(SearchRow::default()).unwrap();
+        // A row as the applet sends it, with what it resolves filled in.
+        let mut row = SearchRow {
+            author: "Worf".into(),
+            ..SearchRow::default()
+        };
+        Sources::read(Path::new("/nonexistent")).resolve(&mut row);
+        let row = serde_json::to_value(row).unwrap();
         for c in columns() {
             match (&c.search, c.field.as_str()) {
                 (None, "score" | "snippet") => {}
@@ -290,6 +525,9 @@ mod tests {
             source_id: "slack".into(),
             kind: "k".into(),
             author: "who".into(),
+            author_handle: None,
+            author_ref: None,
+            author_term: None,
             channel: "#c".into(),
             source_url: "https://x".into(),
             notion_page_uuid: "n".into(),
@@ -313,6 +551,9 @@ mod tests {
             "markdown_uuid",
             "message_index",
             "sender",
+            "author",
+            "author_handle",
+            "author_term",
             "entire_chat",
             "source",
             "provider",

@@ -14,9 +14,10 @@ use anyhow::{Context, Result};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_agent_sessions::{read_changed, SessionCounts, SessionTree};
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 
 pub use datalib_etl_agent_sessions::FetchSummary;
 use datalib_etl_codex_config::SESSION_DIRS;
@@ -43,6 +44,11 @@ pub struct FetchOptions {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_rollouts(opts, found)).await
+}
+
+async fn read_rollouts(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
     let trees: Vec<SessionTree> = SESSION_DIRS
         .iter()
@@ -50,6 +56,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             root: opts.input_path.join(dir),
             scope: cursor_scope(dir),
             rel_prefix: format!("{dir}/"),
+            // Only an older Codex made it.
+            optional: *dir == "archived_sessions",
         })
         .collect();
     let mut transcript_rows: Vec<TranscriptRow> = Vec::new();
@@ -60,6 +68,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         &trees,
         &opts.progress,
         "codex",
+        &found,
         |rel_path, text| {
             let parsed = parse_rollout(text, rel_path)?;
             push_rows(&parsed, &mut transcript_rows, &mut record_rows);
@@ -67,6 +76,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 records: parsed.records.len(),
                 malformed_lines: parsed.stats.malformed,
                 is_subagent: parsed.meta.parent_thread_id.is_some(),
+                skipped: parsed.skipped.clone(),
             })
         },
     )

@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import {
   insertEntries,
+  fieldsFor,
   buildDiffSource,
   buildGroup,
   buildSource,
@@ -16,6 +17,8 @@ import {
   fieldIsActive,
   listGroups,
   listSteps,
+  moveAgainstDataFlow,
+  moveGroup,
   paramsAreRepresentable,
   paramsObject,
   producerOf,
@@ -32,7 +35,7 @@ import {
   unwireFromFanIns,
   wireIntoFanIns,
 } from "../src/config/sourceSteps";
-import { catalogFor } from "../src/config/catalog";
+import { CATALOG, catalogFor } from "../src/config/catalog";
 
 const SLACK = catalogFor("slack")!;
 const CLAUDE = catalogFor("claude")!;
@@ -494,7 +497,7 @@ describe("the Slack pickers", () => {
     expect(dms.kind === "string_list" && dms.probe).toBe("conversations");
   });
 
-  /// What "Test connection" authenticates with is what Save writes —
+  /// What "Check account" authenticates with is what Save writes —
   /// the `api` table that selects the live method, defaults included.
   it("probe with the ingest params the form would write", () => {
     expect(paramsObject(SLACK, seedFieldValues(SLACK), "download")).toEqual({
@@ -935,7 +938,7 @@ inputs = ["bridge/keyword_index"]
   });
 });
 
-describe("what Test connection is sent", () => {
+describe("what Check account is sent", () => {
   /// The form's `<input type=number>` hands back a string, and the
   /// backend's `Option<i64>` will not take `"30"`.
   it("sends numbers as numbers", () => {
@@ -948,7 +951,7 @@ describe("what Test connection is sent", () => {
   });
 });
 
-describe("what Test connection authenticates as", () => {
+describe("what Check account authenticates as", () => {
   /// The probe runs as `latchkey --account <acct> curl`, so an account
   /// left out of its params tests a different identity from the one
   /// picked — and comes back looking perfectly healthy while describing
@@ -1317,5 +1320,163 @@ command = "datalib-applet unified_index"
         .map((s) => s.id)
         .at(-1),
     ).toBe("slack/keyword_index");
+  });
+});
+
+describe("the latchkey account field", () => {
+  /// Picking a stored login, or naming a new one, is the same for every
+  /// service — Slack had none at all, and Claude's was hidden.
+  it("is there, once, on every source that signs in through latchkey", () => {
+    for (const entry of CATALOG.filter((e) => e.credentialService)) {
+      const accounts = fieldsFor(entry, "download").filter((f) => f.kind === "text" && f.latchkey);
+      expect(
+        accounts.map((f) => f.target),
+        entry.label,
+      ).toEqual(["latchkey_settings.account"]);
+    }
+  });
+
+  it("is worded for the source when it declares none", () => {
+    const [account] = fieldsFor(SLACK, "download");
+    expect(account).toMatchObject({ label: "Slack account", target: "latchkey_settings.account" });
+  });
+
+  it("never reaches a render step", () => {
+    expect(fieldsFor(SLACK, "render").some((f) => f.kind === "text" && f.latchkey)).toBe(false);
+  });
+});
+
+describe("moveGroup", () => {
+  const CONFIG = `data_root = "."
+
+# ── slack ──
+[[groups]]
+id = "slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+
+[steps.params.api]
+workspace = "enterprise"
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+inputs = ["slack/ingest"]
+
+# ── claude ──
+[[groups]]
+id = "claude"
+type = "claude"
+
+[[steps]]
+group = "claude"
+function = "ingest"
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = ["slack/render_markdown"]
+
+# A step filed under slack, written apart from it.
+[[steps]]
+group = "slack"
+function = "keyword_index"
+inputs = ["slack/render_markdown"]
+
+[[applets]]
+group = "slack"
+id = "slack_view"
+command = "datalib-applet slack_view"
+`;
+
+  const groupOrder = (text: string) => listGroups(text).map((g) => g.id);
+  const entryOrder = (text: string) =>
+    [...listGroups(text).map((g) => ({ id: `group ${g.id}`, start: g.start }))]
+      .concat(listSteps(text).map((s) => ({ id: s.id, start: s.start })))
+      .sort((a, b) => a.start - b.start)
+      .map((e) => e.id);
+  /// Every entry, as the loader would see it, whatever order it is in.
+  const entries = (text: string) => ({
+    groups: listGroups(text)
+      .map(({ id, name, type }) => ({ id, name, type }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    steps: listSteps(text)
+      .map(({ id, kind, inputs, params }) => ({ id, kind, inputs, params }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  });
+
+  it("puts a group, with every step under it, above another, and moves nothing else", () => {
+    const next = moveGroup(CONFIG, "claude", "slack");
+    expect(groupOrder(next)).toEqual(["claude", "slack", "unified_index"]);
+    expect(entryOrder(next)).toEqual([
+      "group claude",
+      "claude/ingest",
+      "group slack",
+      "slack/ingest",
+      "slack/render_markdown",
+      "group unified_index",
+      "unified_index/grid_index",
+      "slack/keyword_index",
+      "slack_view",
+    ]);
+    expect(entries(next)).toEqual(entries(CONFIG));
+    expect(next.startsWith('data_root = "."\n\n# ── claude ──\n[[groups]]')).toBe(true);
+    expect(next).toContain("# A step filed under slack, written apart from it.\n[[steps]]");
+  });
+
+  it("puts a group below the last one when there is nothing to put it above", () => {
+    const next = moveGroup(CONFIG, "slack", null);
+    expect(groupOrder(next)).toEqual(["claude", "unified_index", "slack"]);
+    expect(entryOrder(next)).toEqual([
+      "group claude",
+      "claude/ingest",
+      "group unified_index",
+      "unified_index/grid_index",
+      "group slack",
+      "slack/ingest",
+      "slack/render_markdown",
+      "slack/keyword_index",
+      "slack_view",
+    ]);
+    expect(entries(next)).toEqual(entries(CONFIG));
+    expect(next).toContain('[steps.params.api]\nworkspace = "enterprise"');
+  });
+
+  it("gathers a group's steps and applets when moving it down past their neighbours", () => {
+    const next = moveGroup(CONFIG, "slack", "unified_index");
+    expect(groupOrder(next)).toEqual(["claude", "slack", "unified_index"]);
+    expect(entryOrder(next)).toEqual([
+      "group claude",
+      "claude/ingest",
+      "group slack",
+      "slack/ingest",
+      "slack/render_markdown",
+      "slack/keyword_index",
+      "slack_view",
+      "group unified_index",
+      "unified_index/grid_index",
+    ]);
+    expect(entries(next)).toEqual(entries(CONFIG));
+  });
+
+  it("leaves the text alone for a group above itself or one the config lacks", () => {
+    expect(moveGroup(CONFIG, "slack", "slack")).toBe(CONFIG);
+    expect(moveGroup(CONFIG, "nope", "slack")).toBe(CONFIG);
+    expect(moveGroup(CONFIG, "slack", "nope")).toBe(CONFIG);
+  });
+
+  it("refuses a group above one it reads, or below one that reads it", () => {
+    expect(moveAgainstDataFlow(CONFIG, "unified_index", "slack")).toEqual({ reads: "slack" });
+    expect(moveAgainstDataFlow(CONFIG, "unified_index", "claude")).toBeNull();
+    expect(moveAgainstDataFlow(CONFIG, "slack", null)).toEqual({ readBy: "unified_index" });
+    expect(moveAgainstDataFlow(CONFIG, "claude", "slack")).toBeNull();
+    expect(moveAgainstDataFlow(CONFIG, "claude", null)).toBeNull();
+    expect(moveAgainstDataFlow(CONFIG, "slack", "unified_index")).toBeNull();
   });
 });

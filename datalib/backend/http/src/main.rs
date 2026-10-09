@@ -2,6 +2,7 @@
 
 use clap::Parser;
 use datalib_http::{router, ApiToken};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8731";
@@ -17,9 +18,9 @@ struct Args {
     /// absent; an empty root produces an empty search index.
     data_root: PathBuf,
 
-    /// Skip opening the default browser at the listening URL. Default
-    /// is to open; pass this for headless / scripted runs (e2e tests,
-    /// dev iteration where the tab is already open, CI).
+    /// Skip opening the default browser at the listening URL. It opens
+    /// only when stdout is a terminal, so an agent's or a script's run
+    /// never steals the focus; pass this to skip it at a terminal too.
     #[arg(long)]
     no_open: bool,
 
@@ -36,6 +37,12 @@ struct Args {
     /// one run: for building fixtures, never for a person's root.
     #[arg(long, value_parser = rfc3339)]
     now: Option<String>,
+
+    /// Write the starter `config.toml` first, when the root has none, so
+    /// the app opens on the Dashboard rather than the first-run screen.
+    /// The desktop app passes it for a library it has just created.
+    #[arg(long)]
+    init: bool,
 }
 
 fn rfc3339(s: &str) -> Result<String, String> {
@@ -85,6 +92,10 @@ async fn main() -> anyhow::Result<()> {
     // Dropped at the very end of `main`: that drop is the final flush.
     let _log = datalib_http::logging::init(&root);
 
+    if args.init && datalib_http::write_starter_config(&root)? {
+        tracing::info!("wrote the starter config");
+    }
+
     // `build_state` creates the root when absent; the log line here just
     // makes the first-run case visible.
     if created {
@@ -100,9 +111,9 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     let base_url = format!("http://{}", listener.local_addr()?);
-    // The app opens on Home (`/`, `homeView()`): what needs the person,
-    // their library and their sources. A root with no config gets the
-    // first-run screen there instead.
+    // The app opens on the Dashboard (`/`, `dashboardView()`): what
+    // needs the person, their library and their sources. A root with no
+    // config gets the first-run screen there instead.
     let url = format!("{base_url}/?token={}", api_token.value());
     // Record where we ended up, so a later would-be owner's refusal can
     // point at this server instead of just saying "taken".
@@ -130,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
         datalib_http::auth::restrict_to_owner(url_file)?;
     }
 
-    if !args.no_open {
+    if !args.no_open && std::io::stdout().is_terminal() {
         // Best-effort browser open. We don't propagate the error
         // because most users will already have the tab from a prior
         // run (and `webbrowser::open` returns Ok in that case anyway).

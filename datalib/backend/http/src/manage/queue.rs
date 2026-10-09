@@ -197,10 +197,21 @@ fn noted(note: &str, detail: String) -> Quantity {
     }
 }
 
+/// What a step's process is doing, as far as its two cells care.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activity {
+    Running,
+    /// Read every seal so far, with no process: its queue is how far
+    /// behind its producer it is, and there is no pace to estimate from.
+    BetweenPasses,
+    /// Not started, or finished.
+    Idle,
+}
+
 /// A step's two cells from what it has reported this run. A step that
-/// reports no `queued` series has neither; one that has finished keeps
-/// its queue only while something is still in it.
-pub fn step_cells(p: Option<&DagStepProgress>, running: bool) -> Cells {
+/// reports no `queued` series has neither; one at rest keeps its queue
+/// only while something is still in it.
+pub fn step_cells(p: Option<&DagStepProgress>, activity: Activity) -> Cells {
     let Some(p) = p else {
         return Cells {
             queue: blank("count"),
@@ -214,7 +225,7 @@ pub fn step_cells(p: Option<&DagStepProgress>, running: bool) -> Cells {
         .map(|(n, v)| (n, *v))
         .collect();
     let total: i64 = queued.iter().map(|(_, v)| v).sum();
-    if queued.is_empty() || (!running && total == 0) {
+    if queued.is_empty() || (activity == Activity::Idle && total == 0) {
         return Cells {
             queue: blank("count"),
             eta: blank("seconds"),
@@ -226,7 +237,7 @@ pub fn step_cells(p: Option<&DagStepProgress>, running: bool) -> Cells {
         note: None,
         detail: Some(queue_detail(&queued)),
     };
-    let eta = if running {
+    let eta = if activity == Activity::Running {
         eta(total, p.queue_drain, p.progress_age_secs, p.log_age_secs)
     } else {
         blank("seconds")
@@ -477,7 +488,7 @@ mod tests {
                 queue_drain: Some(d),
                 ..progress(&[("queued{from=a/ingest}", 60)], None)
             }),
-            true,
+            Activity::Running,
         );
         // 40 in 120s is 1 every 3s; 60 queued is 180s.
         assert_eq!(c.eta.value, Some(180));
@@ -550,16 +561,22 @@ mod tests {
             ],
             None,
         );
-        let c = step_cells(Some(&p), true);
+        let c = step_cells(Some(&p), Activity::Running);
         assert_eq!(c.queue.value, Some(12));
         assert!(c.queue.detail.unwrap().contains("7 from a/ingest"));
     }
 
     #[test]
     fn nothing_taken_off_yet_gets_a_word_not_a_figure() {
-        let none_yet = step_cells(Some(&progress(&[("queued", 50)], Some((0, 60.0)))), true);
+        let none_yet = step_cells(
+            Some(&progress(&[("queued", 50)], Some((0, 60.0)))),
+            Activity::Running,
+        );
         assert_eq!(none_yet.eta.note.as_deref(), Some(MEASURING));
-        let young = step_cells(Some(&progress(&[("queued", 50)], Some((10, 5.0)))), true);
+        let young = step_cells(
+            Some(&progress(&[("queued", 50)], Some((10, 5.0)))),
+            Activity::Running,
+        );
         assert_eq!(young.eta.note.as_deref(), Some(MEASURING));
         let mut drops_only = progress(&[("queued", 50)], Some((0, 60.0)));
         drops_only.queue_drain = drops_only.queue_drain.map(|d| QueueDrain {
@@ -568,7 +585,10 @@ mod tests {
             ..d
         });
         assert_eq!(
-            step_cells(Some(&drops_only), true).eta.note.as_deref(),
+            step_cells(Some(&drops_only), Activity::Running)
+                .eta
+                .note
+                .as_deref(),
             Some(GROWING)
         );
     }
@@ -578,7 +598,7 @@ mod tests {
         let mut p = progress(&[("queued", 300)], Some((300, 60.0)));
         p.progress_age_secs = Some(90);
         p.log_age_secs = Some(5);
-        let c = step_cells(Some(&p), true);
+        let c = step_cells(Some(&p), Activity::Running);
         assert_eq!(c.eta.note.as_deref(), Some(STALLED));
         assert!(c.eta.detail.unwrap().contains("busy, not advancing"));
     }
@@ -587,7 +607,7 @@ mod tests {
     fn a_finished_step_shows_nothing_once_its_queue_is_empty() {
         let p = progress(&[("queued", 0)], Some((10, 60.0)));
         assert_eq!(
-            step_cells(Some(&p), false),
+            step_cells(Some(&p), Activity::Idle),
             Cells {
                 queue: blank("count"),
                 eta: blank("seconds"),
@@ -595,15 +615,51 @@ mod tests {
         );
         // Work waiting on a step that has not started is still worth
         // showing, with no estimate.
-        let waiting = step_cells(Some(&progress(&[("queued{from=a}", 4)], None)), false);
+        let waiting = step_cells(
+            Some(&progress(&[("queued{from=a}", 4)], None)),
+            Activity::Idle,
+        );
         assert_eq!(waiting.queue.value, Some(4));
         assert_eq!(waiting.eta, blank("seconds"));
     }
 
+    /// A step between passes has caught up with its producer's seals and
+    /// has no process: its empty queue still shows, and its ETA never
+    /// reads stalled, however long the producer takes to seal again.
+    #[test]
+    fn a_step_between_passes_shows_its_empty_queue_and_no_estimate() {
+        let caught_up = step_cells(
+            Some(&progress(&[("queued{from=a}", 0)], None)),
+            Activity::BetweenPasses,
+        );
+        assert_eq!(caught_up.queue.value, Some(0));
+        assert_eq!(caught_up.eta, blank("seconds"));
+
+        let quiet = DagStepProgress {
+            progress_age_secs: Some(600),
+            ..progress(&[("queued{from=a}", 3)], None)
+        };
+        assert_eq!(
+            step_cells(Some(&quiet), Activity::Running)
+                .eta
+                .note
+                .as_deref(),
+            Some(STALLED)
+        );
+        let c = step_cells(Some(&quiet), Activity::BetweenPasses);
+        assert_eq!((c.queue.value, c.eta), (Some(3), blank("seconds")));
+    }
+
     #[test]
     fn a_group_sums_queues_and_waits_on_its_slowest_step() {
-        let fast = step_cells(Some(&progress(&[("queued", 10)], Some((60, 60.0)))), true);
-        let slow = step_cells(Some(&progress(&[("queued", 100)], Some((10, 60.0)))), true);
+        let fast = step_cells(
+            Some(&progress(&[("queued", 10)], Some((60, 60.0)))),
+            Activity::Running,
+        );
+        let slow = step_cells(
+            Some(&progress(&[("queued", 100)], Some((10, 60.0)))),
+            Activity::Running,
+        );
         let g = group_cells(&[("Ingest", &fast), ("Render", &slow)]);
         assert_eq!(g.queue.value, Some(110));
         assert_eq!(g.eta.value, slow.eta.value);
@@ -611,7 +667,7 @@ mod tests {
 
         let mut stuck = progress(&[("queued", 1)], None);
         stuck.progress_age_secs = Some(300);
-        let stuck = step_cells(Some(&stuck), true);
+        let stuck = step_cells(Some(&stuck), Activity::Running);
         let g = group_cells(&[("Ingest", &stuck), ("Render", &slow)]);
         assert_eq!(g.eta.note.as_deref(), Some(STALLED));
     }

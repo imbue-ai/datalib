@@ -7,8 +7,9 @@ fallback and a paste target; it is not the primary way in.
 
 In the desktop app every `kind: "path"` field in
 [`catalog.ts`](../../datalib/ui/src/config/catalog.ts) renders a
-**Choose folder… / Choose file…** button beside its input, wired to a
-real OS dialog. In a plain browser the button is absent and the typed
+**Choose folder… / Choose file…** button wired to a real OS dialog,
+with the path it picked beside it and the typed input behind "Type the
+path instead". In a plain browser the button is absent and the typed
 input is all there is; see
 [below](#the-browser-served-case-is-still-typed-only) for why, and what
 would fix it. Most source types read from local disk, so most new
@@ -53,7 +54,7 @@ Three pieces, one per layer:
    outcomes: `picked`, `canceled`, `unavailable`.
 3. **The control** in
    [`SourceWizard.vue`](../../datalib/ui/src/components/SourceWizard.vue)
-   — the button, shown only when `isDesktopApp()`, beside an input that
+   — the button, shown only when `isDesktopApp()`, and an input that
    stays editable either way.
 
 Two details in there are load-bearing and easy to get wrong:
@@ -109,12 +110,16 @@ comes for free. What you owe it:
 - **An example path in the `help`**. Paste is a legitimate way in —
   over ssh, from a note, from a colleague — and the browser-served case
   has nothing else. Not a `placeholder`: text inside the box reads as a
-  value someone already typed, so no wizard field has one.
+  value someone already typed, so no path field has one.
 - **`startIn`**, where the location is fixed by the app that owns it
   (`~/Library/Messages`, `~/Pictures/Lightroom`), not a download the
   user put somewhere. The picker opens there while the field is empty,
   and the help shows the path with a copy button, so the help must
   name it exactly (`catalogStartIn.test.ts` checks).
+- **`guarded`**, where macOS keeps the path private and choosing it in
+  the picker is what grants access (`~/Library/Messages`, a Photos
+  library). The field is then drawn as a card under that title, with
+  the Full Disk Access advice beneath it.
 
 Three behaviors the shared code already handles, worth not breaking:
 cancel is a no-op on the field; the dialog opens at the field's current

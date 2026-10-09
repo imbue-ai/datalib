@@ -6,11 +6,17 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_airvisual_config::{AirvisualConfig, AirvisualDevice};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 
 use crate::ingest;
+
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
 
 pub fn plan_ingest(
     ctx: PlanContext,
@@ -43,19 +49,21 @@ impl DataProcessor for AirvisualIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            devices: self.devices.clone(),
-            cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        let pool = db.pool().clone();
+        ctx.run_store(pool, None, |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                devices: self.devices.clone(),
+                cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "devices={} files={} files_skipped={} lines={} samples={} sentinels={} clock_unset={} bad_lines={} errors={}",
+                s.devices, s.files, s.files_skipped, s.lines, s.samples, s.sentinels, s.clock_unset, s.bad_lines, s.errors,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "devices={} files={} files_skipped={} lines={} samples={} sentinels={} clock_unset={} bad_lines={} errors={}",
-            s.devices, s.files, s.files_skipped, s.lines, s.samples, s.sentinels, s.clock_unset, s.bad_lines, s.errors,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

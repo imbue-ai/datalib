@@ -2,7 +2,9 @@
 //! WHERE-builder and the [`ChatMeta`] row shape the impl returns. All SQL goes through `sqlx` against
 //! [`crate::dolt_repo::DoltRepo`].
 
-use crate::query::{extract_uuid_suffix, Field, ParsedQuery};
+use crate::group::like_pattern;
+use crate::query::{extract_uuid_suffix, Field, FilterTerm, ParsedQuery};
+use crate::terms_keys::{self, TermsKey, TermsValue, ATTACHED_AS};
 use datalib_query::table::{Column, FreeText, SearchTable};
 use datalib_schema::providers::Provider;
 
@@ -55,6 +57,13 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     // result, which matches the "keep only X then keep only Y"
     // tree-zoom UX.
     for term in &q.terms {
+        if let Field::Terms(key) = term.field {
+            let pk = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
+            let (clause, bound) = terms_clause(pk, key, term);
+            clauses.push(clause);
+            params.extend(bound);
+            continue;
+        }
         // Before/after are a range, below; `is:` is a flag, above.
         let Field::Column(key) = term.field else {
             continue;
@@ -121,6 +130,44 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
         format!(" WHERE {}", clauses.join(" AND "))
     };
     (where_sql, params)
+}
+
+/// The rows whose search terms of `key`'s kinds hold `value`, as one
+/// clause over `pk` and the values it binds. The kinds are the enum's own
+/// codes, so they are written in; the value is bound.
+fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>) {
+    let s = ATTACHED_AS;
+    let codes: Vec<String> = key.kinds().iter().map(|k| k.code().to_string()).collect();
+    let (matched, bound) = match terms_keys::value_of(key, &term.value, term.quoted, ANY_VALUE) {
+        TermsValue::Any => (String::new(), Vec::new()),
+        // `vals_nocase` serves each `=`: a whole value, case-blind.
+        TermsValue::Exact(values) => {
+            let any: Vec<&str> = values.iter().map(|_| "value = ? COLLATE NOCASE").collect();
+            (
+                format!(
+                    " AND t.val_id IN (SELECT val_id FROM {s}.vals WHERE {})",
+                    any.join(" OR ")
+                ),
+                values,
+            )
+        }
+        TermsValue::Partial(v) => (
+            format!(
+                " AND t.val_id IN (SELECT val_id FROM {s}.vals \
+                 WHERE LOWER(value) LIKE ? ESCAPE '\\')"
+            ),
+            vec![like_pattern(&v)],
+        ),
+    };
+    let not = if term.negate { "NOT " } else { "" };
+    (
+        format!(
+            "{pk} {not}IN (SELECT r.uuid FROM {s}.terms t JOIN {s}.rows r ON r.row_id = t.row_id \
+             WHERE t.kind IN ({}){matched})",
+            codes.join(", ")
+        ),
+        bound,
+    )
 }
 
 #[cfg(test)]
@@ -208,24 +255,15 @@ mod tests {
     /// with none, an empty one included; nothing is bound.
     #[test]
     fn a_star_is_any_value_and_its_negation_none() {
-        let (sql, params) = build_where(&parse_query("author:* -channel:*"));
+        let (sql, params) = build_where(&parse_query("project:* -channel:*"));
         assert_eq!(
             sql,
-            " WHERE (author IS NOT NULL AND author != '') AND (channel IS NULL OR channel = '')"
+            " WHERE (project IS NOT NULL AND project != '') AND (channel IS NULL OR channel = '')"
         );
         assert!(params.is_empty(), "{params:?}");
     }
 
-    #[test]
-    fn source_filter_emits_equality_clause() {
-        let (sql, params) = build_where(&parse_query("source:Claude"));
-        assert_eq!(sql, " WHERE source_label = ?");
-        assert_eq!(params, vec!["Claude"]);
-    }
-
-    /// `source:` and `source_id:` answer different questions: the
-    /// provider label vs. the configured source. Two Slack workspaces are
-    /// one `source` and two `source_id`s. What a row's `source_id` is,
+    /// What a row's `source_id` is,
     /// storage rows filed under datalib included, is decided once at index
     /// time (`GridRow::derived_source_id`); the filter only compares, so
     /// the `(source_id, …)` index can serve it.
@@ -240,15 +278,33 @@ mod tests {
         assert_eq!(params, vec!["datalib"]);
     }
 
-    /// The old spelling has to reach the same SQL, not merely the same
-    /// field: this is the assertion that a saved `source_name:` query
-    /// keeps returning what it returned before the rename.
+    /// A person key reads the attached search terms: a handle by its one
+    /// value, anything else in part, `*` any term of its kinds; negated, the
+    /// rows without one.
     #[test]
-    fn the_old_source_name_spelling_builds_the_same_clause() {
+    fn a_terms_key_is_a_clause_over_the_attached_terms() {
+        let (sql, params) = build_where(&parse_query("from:Ann@Example.com"));
         assert_eq!(
-            build_where(&parse_query("source_name:slack")),
-            build_where(&parse_query("source_id:slack")),
+            sql,
+            " WHERE uuid IN (SELECT r.uuid FROM search_terms.terms t JOIN search_terms.rows r \
+             ON r.row_id = t.row_id WHERE t.kind IN (3, 11) AND t.val_id IN \
+             (SELECT val_id FROM search_terms.vals WHERE value = ? COLLATE NOCASE \
+             OR value = ? COLLATE NOCASE))"
         );
+        assert_eq!(params, ["email:ann@example.com", "Ann@Example.com"]);
+
+        let (sql, params) = build_where(&parse_query(r#"author:"Data""#));
+        assert!(sql.ends_with("WHERE value = ? COLLATE NOCASE))"), "{sql}");
+        assert_eq!(params, ["Data"]);
+
+        let (sql, params) = build_where(&parse_query("-author:riker"));
+        assert!(sql.starts_with(" WHERE uuid NOT IN ("), "{sql}");
+        assert!(sql.contains("LOWER(value) LIKE ?"), "{sql}");
+        assert_eq!(params, ["%riker%"]);
+
+        let (sql, params) = build_where(&parse_query("recipient:*"));
+        assert!(sql.contains("t.kind IN (6, 7, 9))"), "{sql}");
+        assert!(params.is_empty());
     }
 
     #[test]

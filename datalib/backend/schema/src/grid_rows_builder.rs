@@ -123,6 +123,22 @@ impl GridRow {
     }
 }
 
+/// [`qmd_path_key`] in SQL, for the index that serves it and the query that
+/// uses that index; the two must spell it alike.
+pub const QMD_PATH_KEY_SQL: &str = "replace(replace(lower(qmd_path), '-', ''), '_', '')";
+
+/// What a qmd hit's path and a row's `qmd_path` are matched by first. qmd
+/// folds case and joins a run of `-` and `_` into one `-`; this key drops
+/// them all, so it finds every row a hit could name and a few more, and an
+/// exact comparison keeps the right ones. Lowercased as SQLite's `lower`
+/// does, ASCII only, so it equals [`QMD_PATH_KEY_SQL`] on every path.
+pub fn qmd_path_key(path: &str) -> String {
+    path.chars()
+        .filter(|c| *c != '-' && *c != '_')
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
 impl GridRow {
     /// Start building a [`GridRow`]. Set only the columns you need — the
     /// ~17 optional ones default to `None` — then call
@@ -146,6 +162,7 @@ pub struct GridRowBuilder {
     touched_at: Option<String>,
     is_document: bool,
     author: Option<String>,
+    author_handle: Option<String>,
     account: Option<String>,
     project: Option<String>,
     org_uuid: Option<String>,
@@ -216,6 +233,7 @@ impl GridRowBuilder {
     // record's last change is neither (a calendar event's edit stamp).
     opt_setter!(touched_at);
     opt_setter!(author);
+    opt_setter!(author_handle);
     opt_setter!(account);
     opt_setter!(project);
     opt_setter!(org_uuid);
@@ -360,6 +378,7 @@ impl GridRowBuilder {
             modified_at: self.modified_at,
             is_document: self.is_document,
             author: self.author,
+            author_handle: self.author_handle,
             account: self.account,
             project: self.project,
             org_uuid: self.org_uuid,

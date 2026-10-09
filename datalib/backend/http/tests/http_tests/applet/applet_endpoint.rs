@@ -385,7 +385,11 @@ async fn a_hand_edit_reaches_the_registry_through_the_watcher() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
     let state = state_with(tmp.path(), &config_for(&["first"])).await;
-    let ready = datalib_http::watch::spawn(tmp.path().to_path_buf(), state.root_tx.clone());
+    let (ready, feed) = datalib_http::watch::spawn_fed(
+        tmp.path().to_path_buf(),
+        state.root_tx.clone(),
+        datalib_http::watch::Timing::default(),
+    );
     let mut reloaded =
         datalib_http::applets::watch_config(state.applets.clone(), state.root_tx.subscribe());
     let app = router(state);
@@ -399,8 +403,9 @@ async fn a_hand_edit_reaches_the_registry_through_the_watcher() {
     let tmp_file = tmp.path().join("config.tmp");
     std::fs::write(&tmp_file, config_for(&["first", "second"])).unwrap();
     std::fs::rename(&tmp_file, tmp.path().join("config.toml")).unwrap();
+    feed.moved(&tmp.path().join("config.toml"));
 
-    tokio::time::timeout(std::time::Duration::from_secs(30), reloaded.changed())
+    tokio::time::timeout(std::time::Duration::from_secs(10), reloaded.changed())
         .await
         .expect("the watcher never reached the registry")
         .unwrap();

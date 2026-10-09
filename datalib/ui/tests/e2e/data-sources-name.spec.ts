@@ -1,6 +1,7 @@
 // The sources card: one row per group with its steps under it, and the one
 // dialog that creates and edits them.
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { openAdvanced, reviewToml } from "./wizard-helpers";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
   savedConfig,
@@ -10,6 +11,7 @@ import {
   pickRowMenu,
   pipelineRow as row,
   MANAGE_WITH_CONFIG,
+  TABLE_ROWS,
 } from "./grid-helpers";
 
 async function openManager(page: Page) {
@@ -22,19 +24,14 @@ const wizard = (page: Page) => page.getByRole("dialog");
 // `<label>` wraps its help paragraph too, so the accessible name is the
 // caption plus a sentence of prose.
 const field = (page: Page, caption: string) =>
-  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) > .wiz-input`);
+  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-input`);
 const nameField = (page: Page) => field(page, "Name");
 /// The Rendering section's own toggle: whether this source writes a
 /// `render_markdown` step at all.
-const renderToggle = (page: Page) =>
-  wizard(page).locator(
-    '.wiz-field:has(> .wiz-label:text-is("Render this source into markdown")) input.wiz-bool',
-  );
-/// The Rendering section's qmd toggles: whether this source has its own
-/// `keyword_index` step, and so is reachable by free-text search, and
-/// whether it also has the `embed` step that reads it.
+/// A Rendering tickbox, by its caption. They sit in Advanced options.
 const toggle = (page: Page, caption: string) =>
-  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) input.wiz-bool`);
+  wizard(page).locator(".wiz-section .wiz-choice", { hasText: caption }).locator("input.wiz-bool");
+const renderToggle = (page: Page) => toggle(page, "Render this source into markdown");
 const keywordToggle = (page: Page) => toggle(page, "Keyword-index the markdown");
 const embedToggle = (page: Page) => toggle(page, "Embed it for search by meaning");
 
@@ -54,7 +51,7 @@ function fanInInputs(config: string, fn: string): string[] {
 /// another step names it as an input.
 const stepBlock = (group: string, fn: string) =>
   new RegExp(`group = "${group}"\nfunction = "${fn}"\n`);
-const idField = (page: Page) => field(page, "Id");
+const idField = (page: Page) => field(page, "ID");
 /// The step-role mark. It leads the name, where a group's brand mark
 /// sits — there is no Step column any more — and `aria-label` is the
 /// only place the word survives, which is also what a person gets by
@@ -64,9 +61,7 @@ const stepMark = (page: Page, id: string) => nameCell(page, id).locator('.tg-mar
 async function pickClaude(page: Page) {
   await page.getByRole("button", { name: "Add source" }).click();
   // By blurb: "Claude" alone also matches the "Claude export" tile.
-  await wizard(page)
-    .locator(".wiz-tile", { hasText: "Mirror your claude.ai conversations" })
-    .click();
+  await wizard(page).locator(".wiz-tile", { hasText: "Copy your claude.ai conversations" }).click();
 }
 
 let original = "";
@@ -108,7 +103,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
     "personal-claude/render_markdown",
   );
   await expect(wizard(page).locator(".wiz-section")).toContainText("no settings of its own");
-  await wizard(page).getByText("Review the TOML this writes").click();
+  await reviewToml(page);
   const preview = wizard(page).locator(".wiz-review pre");
   // The name lands on the group; the two steps are written as
   // `group` + `function` and carry none.
@@ -231,6 +226,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   // has no render step, so the box is clear and saving writes none.
   // Restoring one is a thing you ask for.
   await expect(renderToggle(page)).not.toBeChecked();
+  await openAdvanced(page);
   await renderToggle(page).check();
   // Now the dialog says what saving will do beyond changing a value.
   await expect(wizard(page)).toContainText("This source is missing");
@@ -255,9 +251,10 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
 
   await expandGroup(page, "no-render");
   await pickRowMenu(page, row(page, "no-render/ingest"), "Edit settings…", wizard(page));
+  await openAdvanced(page);
   await renderToggle(page).uncheck();
   // Saving takes the step out, so the dialog says so before it does.
-  await expect(wizard(page)).toContainText("Rendering is off below");
+  await expect(wizard(page)).toContainText("Rendering is off under Advanced options");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved No Render.")).toBeVisible();
 
@@ -281,6 +278,7 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   await nameField(page).fill("Rows Only");
   await expect(keywordToggle(page)).toBeChecked();
   await expect(embedToggle(page)).toBeChecked();
+  await openAdvanced(page);
   await keywordToggle(page).uncheck();
   // The embeddings read the keyword index, so they cannot be kept alone.
   await expect(embedToggle(page)).toBeDisabled();
@@ -300,13 +298,17 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   // Rendering off leaves nothing to index, so the question cannot be
   // answered — and answering it would write an input naming a step
   // that no longer exists.
+  await openAdvanced(page);
   await renderToggle(page).uncheck();
   await expect(keywordToggle(page)).toBeDisabled();
   await expect(embedToggle(page)).toBeDisabled();
+  await openAdvanced(page);
   await renderToggle(page).check();
 
   // Keyword search alone: the keyword index, and no embed step.
+  await openAdvanced(page);
   await keywordToggle(page).check();
+  await openAdvanced(page);
   await embedToggle(page).uncheck();
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Rows Only.")).toBeVisible();
@@ -320,6 +322,7 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   await pickRowMenu(page, row(page, "rows-only/ingest"), "Edit settings…", wizard(page));
   await expect(keywordToggle(page)).toBeChecked();
   await expect(embedToggle(page)).not.toBeChecked();
+  await openAdvanced(page);
   await embedToggle(page).check();
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   // Not the toast: the first save's may still be on screen.
@@ -352,7 +355,7 @@ test("a provider with render options writes them on the render step, from the on
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "Add source" }).click();
   await wizard(page)
-    .locator(".wiz-tile", { hasText: "Decrypt and mirror an Android Signal backup" })
+    .locator(".wiz-tile", { hasText: "Decrypt and copy an Android Signal backup" })
     .click();
   await nameField(page).fill("Signal Work");
   await wizard(page).locator("input.wiz-path").fill("/tmp/SignalBackups");
@@ -391,9 +394,7 @@ test("a hand-written render step under a download-only type is called out, then 
   // covered by the unit tests; this root's config declares none.)
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "Add source" }).click();
-  await wizard(page)
-    .locator(".wiz-tile", { hasText: "Mirror a Lightroom Classic catalog" })
-    .click();
+  await wizard(page).locator(".wiz-tile", { hasText: "Copy a Lightroom Classic catalog" }).click();
   await nameField(page).fill("Photos");
   // The catalog; the backups folder below it stays empty.
   await wizard(page).locator("input.wiz-path").first().fill("/tmp/cat.lrcat");
@@ -488,6 +489,58 @@ test("deleting the group takes every step under it", async ({ page }) => {
   // The `[[groups]]` entry, its `[[steps]]`, and any fan-in reference:
   // nothing of it is left in the file.
   await expect(editor).not.toHaveValue(/whole-group/);
+});
+
+/// The `[[groups]]` ids, in the order the config writes them.
+const groupOrder = (config: string) =>
+  [...config.matchAll(/\[\[groups\]\]\nid = "([^"]+)"/g)].map((m) => m[1]);
+
+test("dragging a group by its grip moves it, with every step under it, in the config", async ({
+  page,
+  request,
+}) => {
+  const [first, second] = groupOrder(original);
+  const grip = page.locator(`.tg-grid .slick-row[data-key="group:${second}"] .tg-grip`);
+  const target = nameCell(page, `group:${first}`);
+  await expect(grip).toBeVisible();
+
+  // The gesture is the subject, so it is the real one, retried with its
+  // effect as a pair: a redraw can replace the row under the pointer. A
+  // config already in the new order means an earlier attempt landed.
+  await expect(async () => {
+    if (groupOrder(await savedConfig(request))[0] === second) return;
+    const from = (await grip.boundingBox())!;
+    const to = (await target.boundingBox())!;
+    const x = from.x + from.width / 2;
+    await page.mouse.move(x, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(x, to.y + 2, { steps: 8 });
+    await page.mouse.up();
+    await expect
+      .poll(async () => groupOrder(await savedConfig(request))[0], { timeout: 2_000 })
+      .toBe(second);
+  }, `${second} never moved above ${first}`).toPass({
+    timeout: 15_000,
+    intervals: [250, 500, 1_000],
+  });
+
+  // The table follows the file: the moved group is now the first row.
+  await expect(page.locator(`${TABLE_ROWS}[data-key^="group:"]`).first()).toHaveAttribute(
+    "data-key",
+    `group:${second}`,
+  );
+
+  // Its steps and applets went with it, above the group it was dropped
+  // on, and nothing was added or lost.
+  const after = await savedConfig(request);
+  expect(groupOrder(after).slice(0, 2)).toEqual([second, first]);
+  expect([...groupOrder(after)].sort()).toEqual([...groupOrder(original)].sort());
+  const firstAt = after.indexOf(`[[groups]]\nid = "${first}"`);
+  const filedUnder = new RegExp(`\\]\\]\\ngroup = "${second}"\\n`, "g");
+  const filed = [...after.matchAll(filedUnder)];
+  expect(filed.length).toBeGreaterThan(0);
+  expect(filed.length).toBe([...original.matchAll(filedUnder)].length);
+  for (const entry of filed) expect(entry.index).toBeLessThan(firstAt);
 });
 
 /// The data root: the directory the served config lives in.

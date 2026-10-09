@@ -3,14 +3,20 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_slack_config::{SlackApiSync, SlackConfig};
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
+
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
 
 /// Ingest wave: present iff `api`.
 pub fn plan_ingest(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
@@ -50,22 +56,19 @@ impl DataProcessor for SlackIngest {
         &self.id
     }
 
-    /// Seals at the end of each channel, after that channel's prune rather
-    /// than before it: `export_channel` only prunes a window it walked to
-    /// completion, so what a consumer reads is a settled channel and not
-    /// one still carrying messages this run is about to delete. A channel
-    /// that failed seals nothing. Between channels the store is the
-    /// previous snapshot plus what this run has walked -- a superset.
+    /// Seals at the end of each channel.
     fn streams_output(&self) -> bool {
         true
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let now = datalib_time::parse_strict(ctx.now)
+            .with_context(|| format!("slack: run stamp {:?}", ctx.now))?
+            .inner()
+            .with_timezone(&chrono::Utc);
         let entity_db = ingest::db_path_for(&self.raw_path);
         let mut db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
-            .await;
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
         // Slack owns its wire-event tape: mirror every upsert to JSONL when the
         // resolved shared config leaves it enabled. (The orchestrator used to
         // attach this; now the one provider that consumes it does.)
@@ -80,36 +83,42 @@ impl DataProcessor for SlackIngest {
             );
             db.attach_event_tape(tape);
         }
-        let s = ingest::fetch(ingest::FetchOptions {
-            sealer: Some(session.sealer()),
-            db,
-            channels: self.sync.channels.clone(),
-            since: self
-                .sync
-                .since
-                .clone()
-                .unwrap_or_else(|| ingest::DEFAULT_SINCE.into()),
-            refresh_window_days: self.sync.refresh_window_days.unwrap_or(0),
-            members_only: !self.sync.all_channels && self.sync.channels.is_none(),
-            media: self.sync.media,
-            dms: self.sync.dms,
-            dm_conversations: self.sync.dm_conversations.clone(),
-            blob_size_limit_bytes: self.blob_size_limit_bytes,
-            latchkey: self.latchkey.clone(),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        ctx.run_store(pool, Some(cas_pool), |sealer| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                sealer: Some(sealer),
+                db,
+                channels: self.sync.channels.clone(),
+                since: self
+                    .sync
+                    .since
+                    .clone()
+                    .unwrap_or_else(|| ingest::DEFAULT_SINCE.into()),
+                refresh_window_days: self
+                    .sync
+                    .refresh_window_days
+                    .unwrap_or(ingest::DEFAULT_REFRESH_WINDOW_DAYS),
+                members_only: !self.sync.all_channels && self.sync.channels.is_none(),
+                media: self.sync.media,
+                dms: self.sync.dms,
+                dm_conversations: self.sync.dm_conversations.clone(),
+                blob_size_limit_bytes: self.blob_size_limit_bytes,
+                latchkey: self.latchkey.clone(),
+                now,
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            let media = s
+                .media
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            Ok(format!(
+                "msgs={} replies={} pruned={} media[{}]",
+                s.messages, s.replies, s.pruned, media
+            ))
         })
-        .await?;
-        let media = s
-            .media
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let summary = format!(
-            "msgs={} replies={} pruned={} media[{}]",
-            s.messages, s.replies, s.pruned, media
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

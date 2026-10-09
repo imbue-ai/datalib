@@ -34,14 +34,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use sqlx::{Row, SqlitePool};
 
+use datalib_columns::Entity;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::message::entity_link;
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
 use datalib_schema::providers::Provider;
 
-/// The `grid_rows.source_label` — what `source:` filters on. One label for every source's measurements, so
-/// `source:Storage` is "show me what everything weighs".
+/// The `grid_rows.source_label`: one label for every source's measurements, as the Source column shows them.
 ///
 /// The grid's *Source* column is not this. These rows live under the
 /// measured source's `render_markdown/`, which is where a source name
@@ -70,6 +71,15 @@ pub struct Subject {
 }
 
 impl Subject {
+    /// The step whose tree this is or holds: the path's first two
+    /// segments, `<group>/<function>`. None for the group's own tree.
+    fn step(&self) -> Option<&str> {
+        let path = self.path.split('#').next().unwrap_or(&self.path);
+        let mut parts = path.splitn(3, '/');
+        let (group, function) = (parts.next()?, parts.next()?);
+        Some(&path[..group.len() + 1 + function.len()])
+    }
+
     /// No stamp: a storage row's `created_at` is the run's now, and
     /// the row is rewritten every run under one id.
     fn uuid(&self, source_id: &str) -> String {
@@ -324,9 +334,12 @@ impl Measured {
 }
 
 fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
+    // The group and each store's step are chips: the app shows the name
+    // the config gives them now, and opens them (docs/dev/chips.md).
+    let group = entity_link(source_id, &Entity::Group(source_id).uri(), source_id);
     let mut out = format!(
         "---\ntitle: {source_id} storage\nsource: {source_id}\nmeasured_at: {now}\n---\n\n\
-         # {source_id} — storage\n\nMeasured {now}.\n\n"
+         # {group} — storage\n\nMeasured {now}.\n\n"
     );
     // One table, not one wrapped `<div>` per measurement. A source with
     // a dozen stores and tables used to render a dozen bordered cards
@@ -334,13 +347,14 @@ fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
     // fit in a dozen rows. The anchor moves onto a span inside the Id
     // cell — the frontend keys selection off `[data-section-uuid]`
     // wherever it sits, and a row is what a reader wants to land on.
-    out.push_str("| Kind | What | Size | Count | Id |\n|---|---|---|---|---|\n");
+    out.push_str("| Kind | Step | What | Size | Count | Id |\n|---|---|---|---|---|---|\n");
     for s in subjects {
         let uuid = s.uuid(source_id);
         out.push_str(&format!(
-            "| {kind} | `{path}` | {size} | {count} | \
+            "| {kind} | {step} | `{path}` | {size} | {count} | \
              <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">`{short}`</span> |\n",
             kind = s.kind.label(),
+            step = s.step().map(step_link).unwrap_or_default(),
             path = s.path,
             size = s.bytes.map(human_bytes).unwrap_or_default(),
             count = s.items.map(|n| plural(n, s.counts())).unwrap_or_default(),
@@ -352,6 +366,12 @@ fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
     }
     out.push('\n');
     out
+}
+
+/// A step chip, shown as its function until the app resolves it.
+fn step_link(step: &str) -> String {
+    let function = step.rsplit('/').next().unwrap_or(step);
+    entity_link(function, &Entity::Step(step).uri(), step)
 }
 
 /// Turn a scan into the document and samples to store. Writes nothing:
@@ -444,7 +464,9 @@ pub fn plan(
             render_version: RENDER_VERSION,
             rows,
             sections: Vec::new(),
+            search_terms: Vec::new(),
             edges: Vec::new(),
+            contacts: Vec::new(),
             problems: Vec::new(),
         },
         samples,
@@ -1063,7 +1085,19 @@ mod tests {
         let body = report_body("s", &subjects, "2026-09-07T10:00:00-07:00");
 
         assert!(
-            body.contains("| Kind | What | Size | Count | Id |"),
+            body.contains("| Kind | Step | What | Size | Count | Id |"),
+            "{body}"
+        );
+        // The group and each row's step are chips the app resolves and
+        // opens (docs/dev/chips.md).
+        assert!(
+            body.contains("# [s](datalib:group/s \"s\") — storage"),
+            "{body}"
+        );
+        assert_eq!(
+            body.matches("| [ingest](datalib:step/s/ingest \"s/ingest\") |")
+                .count(),
+            2,
             "{body}"
         );
         assert!(!body.contains("<div"), "no per-measurement card: {body}");

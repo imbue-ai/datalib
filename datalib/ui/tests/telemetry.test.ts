@@ -9,6 +9,7 @@ import {
   stampRequest,
   track,
 } from "../src/telemetry";
+import { pushToast } from "../src/toasts";
 
 /** A fake `fetch` that records each POST body; `status` is what it answers. */
 function fakeFetch(status = 204) {
@@ -164,5 +165,24 @@ describe("stampRequest", () => {
     const h = stampRequest(new Headers(), 3, null);
     expect(h.get("X-Datalib-Card")).toBeNull();
     expect(h.get("X-Datalib-Cause")).toBe("3");
+  });
+});
+
+describe("a toast", () => {
+  /// What a toast said was lost the moment it went: a person asked about
+  /// one they had seen mid-search, and the log had nothing to show.
+  it("is a line in the log, once, at its own level", async () => {
+    const { bodies } = fakeFetch();
+    pushToast("`is:do` is not something the search knows", "warn");
+    pushToast("`is:do` is not something the search knows", "warn");
+    await vi.advanceTimersByTimeAsync(3_000);
+    const events = (bodies[0] as { events: { name: string }[] }).events;
+    expect(events.filter((e) => e.name === "toast")).toEqual([
+      expect.objectContaining({
+        name: "toast",
+        level: "warn",
+        msg: "`is:do` is not something the search knows",
+      }),
+    ]);
   });
 });

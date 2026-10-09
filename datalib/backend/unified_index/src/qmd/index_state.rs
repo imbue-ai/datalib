@@ -8,7 +8,8 @@ use serde::Serialize;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-use crate::qmd::qmd_index_path;
+use crate::qmd::lex::Fts5Query;
+use crate::qmd::{qmd_index_path, QmdHit};
 use crate::repo::IndexRepo;
 
 /// Max hashes per batch. Each is bound twice, and SQLite's default
@@ -80,6 +81,10 @@ impl QmdIndexReader {
         Self { pool }
     }
 
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
     /// Look up the index state of each of `hashes`. Hashes with no
     /// active `documents` row are absent from the returned map; the
     /// caller reports those as not-indexed.
@@ -129,6 +134,73 @@ impl QmdIndexReader {
             }
         }
         Ok(out)
+    }
+
+    /// The documents qmd's keyword index ranks for `query`, best first by
+    /// BM25, at most `limit`, from `collections` or every one. Read from
+    /// `documents_fts` itself rather than through `qmd mcp`, which takes
+    /// only 20 documents from each collection (`docs/dev/qmd_behaviour.md`,
+    /// fact 7). Each hit's snippet opens with the line where `query.first`
+    /// first appears, in the header `snippet_match_line` reads, so the hit
+    /// lands on that message.
+    pub async fn keyword_hits(
+        &self,
+        query: &Fts5Query,
+        collections: Option<&[String]>,
+        limit: usize,
+    ) -> Result<Vec<QmdHit>, sqlx::Error> {
+        let scoped = collections.is_some();
+        let wanted = serde_json::to_string(&collections.unwrap_or_default()).unwrap_or_default();
+        // The line is counted in the top hits' bodies only, after the cut:
+        // a common word matches tens of thousands of documents. The body
+        // is the file as qmd read it, so its lines are the file's.
+        let rows: Vec<(String, f64, String, Option<i64>)> = sqlx::query_as(
+            "WITH hits AS ( \
+               SELECT d.id AS id, d.path AS path, \
+                      bm25(documents_fts, 0.0, 2.0, 1.0) AS rank, \
+                      snippet(documents_fts, 2, '', '', '…', 16) AS snippet \
+                 FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid \
+                WHERE documents_fts MATCH ?1 AND d.active = 1 \
+                  AND (NOT ?2 OR d.collection IN (SELECT value FROM json_each(?3))) \
+                ORDER BY rank LIMIT ?4) \
+             SELECT h.path, -h.rank, h.snippet, \
+                    (SELECT CASE WHEN instr(lower(f.body), lower(?5)) > 0 THEN \
+                       1 + length(substr(f.body, 1, instr(lower(f.body), lower(?5)))) \
+                         - length(replace(substr(f.body, 1, instr(lower(f.body), lower(?5))), char(10), '')) \
+                       END FROM documents_fts f WHERE f.rowid = h.id) \
+               FROM hits h ORDER BY h.rank",
+        )
+        .bind(&query.expr)
+        .bind(scoped)
+        .bind(wanted)
+        .bind(limit as i64)
+        .bind(&query.first)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(path, score, snippet, line)| QmdHit {
+                path,
+                score,
+                snippet: match line {
+                    Some(line) => format!("@@ -{line},1 @@ (0 before, 0 after)\n{snippet}"),
+                    None => snippet,
+                },
+                docid: String::new(),
+                title: String::new(),
+            })
+            .collect())
+    }
+
+    /// See [`crate::qmd::vectors::nearest_documents`].
+    pub async fn nearest_documents(
+        &self,
+        query: &crate::qmd::vectors::QueryVector<'_>,
+        collections: Option<&[String]>,
+        among: Option<&std::collections::HashSet<String>>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<QmdHit>> {
+        crate::qmd::vectors::nearest_documents(&self.pool, query, collections, among, limit).await
     }
 
     pub async fn summary(&self) -> Result<QmdIndexSummary, sqlx::Error> {
@@ -331,6 +403,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE store_collections (name TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
         pool
     }
 
@@ -472,6 +548,90 @@ mod tests {
         assert!(st["h_slack"].embedded);
         assert!(st["h_claude"].embedded);
         assert_eq!(r.summary().await.unwrap().documents, 2);
+    }
+
+    /// `documents` and `documents_fts` as qmd 2.8.3 makes them, with the
+    /// columns the keyword search reads.
+    async fn keyword_db(dir: &std::path::Path, docs: &[(&str, &str, &str)]) -> QmdIndexReader {
+        let pool = datalib_core::store::open_pool(&dir.join("index.sqlite"))
+            .await
+            .expect("open");
+        for ddl in [
+            "CREATE TABLE documents (id INTEGER PRIMARY KEY, collection TEXT, path TEXT, \
+             active INTEGER)",
+            "CREATE VIRTUAL TABLE documents_fts USING fts5(filepath, title, body, \
+             tokenize='porter unicode61')",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        for (id, (collection, path, body)) in docs.iter().enumerate() {
+            sqlx::query("INSERT INTO documents VALUES (?, ?, ?, 1)")
+                .bind(id as i64 + 1)
+                .bind(collection)
+                .bind(path)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO documents_fts (rowid, filepath, title, body) VALUES (?, ?, '', ?)",
+            )
+            .bind(id as i64 + 1)
+            .bind(format!("{collection}/{path}"))
+            .bind(body)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        QmdIndexReader::from_pool(pool)
+    }
+
+    /// The point of reading the table: qmd's own query takes 20 documents
+    /// from each collection, and this takes every match up to the limit.
+    #[tokio::test]
+    async fn keyword_hits_are_not_cut_at_twenty_a_collection() {
+        let td = tempfile::tempdir().unwrap();
+        let paths: Vec<String> = (0..30)
+            .map(|i| format!("bridge/render_markdown/log-{i}.md"))
+            .collect();
+        let mut docs: Vec<(&str, &str, &str)> = paths
+            .iter()
+            .map(|p| ("bridge", p.as_str(), "The Enterprise holds at warp six."))
+            .collect();
+        docs.push((
+            "sickbay",
+            "sickbay/render_markdown/r.md",
+            "Warp core breach, deck twelve.",
+        ));
+        let r = keyword_db(td.path(), &docs).await;
+        let warp = crate::qmd::lex::fts5_query("warp").unwrap();
+        assert_eq!(r.keyword_hits(&warp, None, 100).await.unwrap().len(), 31);
+        let sickbay = r
+            .keyword_hits(&warp, Some(&["sickbay".to_string()]), 100)
+            .await
+            .unwrap();
+        let paths: Vec<&str> = sickbay.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(paths, ["sickbay/render_markdown/r.md"]);
+    }
+
+    /// A hit carries the line its first word appears on, as the header the
+    /// mapping reads, so it lands on that message.
+    #[tokio::test]
+    async fn a_keyword_hit_names_the_line_its_word_is_on() {
+        let td = tempfile::tempdir().unwrap();
+        let body = "---\ntitle: Log\n---\n\nNothing here.\nThe Warp core holds.\n";
+        let r = keyword_db(
+            td.path(),
+            &[("bridge", "bridge/render_markdown/log.md", body)],
+        )
+        .await;
+        let hits = r
+            .keyword_hits(&crate::qmd::lex::fts5_query("warp").unwrap(), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::qmd::mapping::snippet_match_line(&hits[0].snippet),
+            Some(6)
+        );
     }
 
     /// Two paths with identical content share one hash. Both are

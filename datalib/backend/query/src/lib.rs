@@ -27,6 +27,9 @@ pub struct Term {
     pub key: String,
     pub value: String,
     pub negate: bool,
+    /// The value was written in double quotes: a key that matches in part
+    /// matches it whole instead.
+    pub quoted: bool,
 }
 
 pub fn parse(s: &str) -> Vec<Token> {
@@ -38,11 +41,14 @@ pub fn parse(s: &str) -> Vec<Token> {
                 None => (false, tok.as_str()),
             };
             match split_term(body) {
-                Some((key, value)) if !key.is_empty() && !value.is_empty() => Token::Term(Term {
-                    key: key.to_string(),
-                    value,
-                    negate,
-                }),
+                Some((key, value, quoted)) if !key.is_empty() && !value.is_empty() => {
+                    Token::Term(Term {
+                        key: key.to_string(),
+                        value,
+                        negate,
+                        quoted,
+                    })
+                }
                 _ => Token::Free(tok),
             }
         })
@@ -52,19 +58,39 @@ pub fn parse(s: &str) -> Vec<Token> {
 /// The token for a term, quoted as the grammar needs. What "keep only" and
 /// "exclude all" append to a query; `parse` reads it back as one `Term`.
 pub fn term(key: &str, value: &str, negate: bool) -> String {
-    format!("{}{key}:{}", if negate { "-" } else { "" }, quote(value))
+    let value = if bare(value, true) {
+        value.to_string()
+    } else {
+        quoted(value)
+    };
+    format!("{}{key}:{value}", if negate { "-" } else { "" })
+}
+
+/// The token for a term whose value is matched whole: always quoted.
+pub fn exact_term(key: &str, value: &str, negate: bool) -> String {
+    format!("{}{key}:{}", if negate { "-" } else { "" }, quoted(value))
 }
 
 /// `value` as one token: bare when it can be, double-quoted otherwise.
 pub fn quote(value: &str) -> String {
-    let bare = !value.is_empty()
+    if bare(value, false) {
+        return value.to_string();
+    }
+    quoted(value)
+}
+
+/// Whether `value` reads back as itself unquoted. A term's value may hold
+/// a colon, since a term splits at its first one (`from:email:a@b.c`); a
+/// free word with one would read back as a term.
+fn bare(value: &str, in_term: bool) -> bool {
+    !value.is_empty()
         && !value.starts_with('-')
         && !value
             .chars()
-            .any(|c| c.is_whitespace() || c == ':' || c == '"');
-    if bare {
-        return value.to_string();
-    }
+            .any(|c| c.is_whitespace() || c == '"' || (c == ':' && !in_term))
+}
+
+fn quoted(value: &str) -> String {
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
 }
@@ -79,7 +105,7 @@ pub fn free_text(token: &str) -> (String, bool) {
     (unquote(body), negate)
 }
 
-fn split_term(tok: &str) -> Option<(&str, String)> {
+fn split_term(tok: &str) -> Option<(&str, String, bool)> {
     let mut in_quote = false;
     let mut escape = false;
     for (i, ch) in tok.char_indices() {
@@ -90,7 +116,11 @@ fn split_term(tok: &str) -> Option<(&str, String)> {
         match ch {
             '\\' if in_quote => escape = true,
             '"' => in_quote = !in_quote,
-            ':' if !in_quote => return Some((&tok[..i], unquote(&tok[i + 1..]))),
+            ':' if !in_quote => {
+                let raw = &tok[i + 1..];
+                let quoted = raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"');
+                return Some((&tok[..i], unquote(raw), quoted));
+            }
             _ => {}
         }
     }
@@ -159,7 +189,37 @@ mod tests {
             key: key.into(),
             value: value.into(),
             negate,
+            quoted: false,
         })
+    }
+
+    fn tq(key: &str, value: &str, negate: bool) -> Token {
+        Token::Term(Term {
+            quoted: true,
+            ..match t(key, value, negate) {
+                Token::Term(term) => term,
+                Token::Free(_) => unreachable!(),
+            }
+        })
+    }
+
+    /// A quoted value says so, whatever it holds: a key that matches in
+    /// part reads it as the whole value.
+    #[test]
+    fn a_quoted_value_is_marked_and_exact_term_always_quotes() {
+        assert_eq!(
+            parse(r#"from:"Data" from:Data -from:"Lt. Cmdr. Data""#),
+            vec![
+                tq("from", "Data", false),
+                t("from", "Data", false),
+                tq("from", "Lt. Cmdr. Data", true),
+            ]
+        );
+        assert_eq!(exact_term("from", "Data", false), r#"from:"Data""#);
+        assert_eq!(
+            parse(&exact_term("k", "a \"b\"", true)),
+            vec![tq("k", "a \"b\"", true)]
+        );
     }
 
     #[test]
@@ -179,7 +239,10 @@ mod tests {
     fn quoted_values_hold_spaces_colons_and_escapes() {
         assert_eq!(
             parse(r#"msg:"a: b" k:"say \"hi\" \\ done""#),
-            vec![t("msg", "a: b", false), t("k", "say \"hi\" \\ done", false)]
+            vec![
+                tq("msg", "a: b", false),
+                tq("k", "say \"hi\" \\ done", false)
+            ]
         );
     }
 
@@ -209,10 +272,17 @@ mod tests {
             "say \"hi\" \\ done",
         ] {
             let tok = term("k", value, true);
-            assert_eq!(parse(&tok), vec![t("k", value, true)], "{tok}");
+            let quoted = if tok.ends_with('"') { tq } else { t };
+            assert_eq!(parse(&tok), vec![quoted("k", value, true)], "{tok}");
         }
         assert_eq!(term("k", "plain", false), "k:plain");
         assert_eq!(term("k", "two words", false), "k:\"two words\"");
+        assert_eq!(term("k", "a:b", false), "k:a:b");
+        assert_eq!(
+            quote("a:b"),
+            "\"a:b\"",
+            "a free word with a colon would be a term"
+        );
     }
 
     #[test]

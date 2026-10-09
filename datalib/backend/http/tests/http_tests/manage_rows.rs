@@ -84,6 +84,53 @@ async fn write_root(root: &Path, config: &str, state_json: Option<&str>) {
     }
 }
 
+/// What a chip naming a group or a step resolves to: the name the config
+/// gives it now (a step under its group's), its mark and its status; a
+/// URI naming nothing in the config, or no entity at all, is absent.
+#[tokio::test]
+async fn entities_answer_a_chip_for_a_group_and_a_step() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    let app = router(state(tmp.path()).await);
+    let body = serde_json::json!({
+        "entities": [
+            "datalib:group/slack",
+            "datalib:step/slack/ingest",
+            "datalib:group/nowhere",
+            "mailto:riker@enterprise.org",
+        ]
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/entities")
+                .header("x-datalib-token", TEST_TOKEN)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let got: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let entities = got["entities"].as_object().unwrap();
+    assert_eq!(
+        entities.keys().collect::<Vec<_>>(),
+        ["datalib:group/slack", "datalib:step/slack/ingest"]
+    );
+    let group = &entities["datalib:group/slack"];
+    assert_eq!(group["label"], "Work Slack");
+    assert_eq!(group["icon"], "slack");
+    assert_eq!(group["status"]["key"], "never_run");
+    let step = &entities["datalib:step/slack/ingest"];
+    assert_eq!(step["label"], "Work Slack · Ingest");
+    assert_eq!(step["icon"], "step:ingest");
+}
+
 /// The tree: a row per group, its steps and applets under it by
 /// `path`, in config order — and the names each row shows.
 #[tokio::test]
@@ -107,8 +154,6 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
             "identity",
             "actions",
             "status",
-            "quantity",
-            "quantity",
             "timeseries",
             "timestamp",
             "timestamp",
@@ -362,9 +407,9 @@ async fn a_finished_run_reaches_the_rows() {
 
 /// The counts after a row's name read the `problems{severity=…}`
 /// metrics a step reported at the end of its last run: a red and a
-/// yellow number on the render step that counted some, nothing on the
-/// index that counted none or the ingest step that never counted — and
-/// the group shows its last counting step's.
+/// yellow number on each step that counted some, nothing on the index
+/// that counted none or a step that never counted — and the group shows
+/// its steps' summed, since each counts only what it found itself.
 #[tokio::test]
 async fn problem_counts_reach_the_rows_from_the_run_store() {
     let tmp = tempfile::tempdir().unwrap();
@@ -389,6 +434,8 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
         };
         w.metric(metric("slack/render_markdown", "severity=error", 2));
         w.metric(metric("slack/render_markdown", "severity=warning", 5));
+        w.metric(metric("slack/ingest", "severity=error", 0));
+        w.metric(metric("slack/ingest", "severity=warning", 1));
         w.metric(metric("unified_index/grid_index", "severity=error", 0));
         w.metric(metric("unified_index/grid_index", "severity=warning", 0));
     }
@@ -413,11 +460,17 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
     ];
     assert_eq!(chips("slack/render_markdown"), red_and_yellow);
     assert_eq!(
-        chips("group:slack"),
-        red_and_yellow,
-        "the group shows render's"
+        chips("slack/ingest"),
+        vec![("warning".to_string(), "1".to_string())]
     );
-    assert_eq!(chips("slack/ingest"), vec![], "never counted");
+    assert_eq!(
+        chips("group:slack"),
+        vec![
+            ("error".to_string(), "2".to_string()),
+            ("warning".to_string(), "6".to_string()),
+        ],
+        "the group sums its steps"
+    );
     assert_eq!(
         chips("unified_index/grid_index"),
         vec![],
@@ -672,6 +725,39 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
     let slack = &rows["group:slack"];
     assert_eq!(slack["dropped"], serde_json::Value::Null);
     assert_eq!(slack["seeds"], serde_json::json!(["slack/ingest"]));
+}
+
+/// A config warning drops nothing, so no entry's row showed it, and it
+/// reached only `datalib-dag --check`. The System row carries the count,
+/// and every warning's words on hover, with nothing on any other row.
+#[tokio::test]
+async fn config_warnings_reach_the_system_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = CONFIG.replace(
+        "function = \"ingest\"\n",
+        "function = \"ingest\"\n[steps.params]\napi = {}\n\
+         [steps.params.common]\nalways_clear_before_ingest = true\n",
+    ) + "\n[[groups]]\nid = \"lonely\"\n";
+    write_root(tmp.path(), &config, None).await;
+
+    let got = get_rows(tmp.path()).await;
+    assert_eq!(got["ok"], true, "{got}");
+    let rows = by_key(&got);
+    let chips = rows["system"]["problems"].as_array().unwrap();
+    assert_eq!(chips.len(), 1, "{}", rows["system"]);
+    assert_eq!(chips[0]["kind"], "warning");
+    assert_eq!(chips[0]["text"], "2");
+    let title = chips[0]["title"].as_str().unwrap();
+    assert!(title.contains("always_clear_before_ingest"), "{title}");
+    assert!(title.contains("has no effect"), "{title}");
+    assert!(title.contains("delete this line"), "{title}");
+    assert!(title.contains("\"lonely\" has no steps"), "{title}");
+    // A warning is not a dropped entry: the step still loads, and its
+    // own row carries no count it did not earn.
+    let ingest = &rows["slack/ingest"];
+    assert_eq!(ingest["dropped"], serde_json::Value::Null, "{ingest}");
+    assert_eq!(ingest["problems"], serde_json::json!([]));
+    assert_eq!(rows["system/runs"]["problems"], serde_json::json!([]));
 }
 
 /// A file that is not TOML has no rows to show and says so, rather

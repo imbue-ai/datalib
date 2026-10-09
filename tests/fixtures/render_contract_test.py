@@ -191,7 +191,6 @@ _SKIP_TABLES = (
     "_datalib_meta",
     "sync_runs",
     "sync_scope_state",
-    "sync_scope_config",
     "ingested_files",
 )
 _SKIP_SUFFIXES = ("_bookkeeping",)
@@ -209,12 +208,22 @@ KNOWN_GAPS: dict[str, str] = {
     # missing one, since nothing would bring it back until its inputs
     # move again. Not a gap in what the provider declares.
     "tng_pdfs: tweak pdf_scan_meta": "a failed conversion keeps its last page",
+    # ── a re-key the driver cannot see ──
+    # A chat's uuid is minted from its jid's string, which the edit
+    # changes in place, and the chat also looks up `wa_db_contacts` by
+    # that string. The re-keyed chat therefore reads different lookup
+    # keys from the old one, so not every row the old bucket was built
+    # from is read by a bucket this run built, no row was removed, and
+    # the driver keeps the old chat's documents with a `no_document`
+    # warning beside the new ones. Upstream never rewrites a jid row's
+    # string; it is the chat's identity.
+    "whatsapp: tweak jid": "a jid edited in place re-keys its chat, and the old one is kept",
 }
 
 # Columns of the render store whose value is a stamp of *when* rather
 # than *what*: identical content renders them differently on every run.
 _VOLATILE = {
-    "problems": ("first_seen_at_utc", "last_seen_at_utc", "tz_offset"),
+    "problems": ("first_seen_at_utc", "changed_at_utc", "tz_offset"),
     "render_cursor": ("rendered_at_utc", "tz_offset", "raw_commit"),
 }
 

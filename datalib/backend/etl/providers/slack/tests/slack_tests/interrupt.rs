@@ -57,19 +57,18 @@ async fn a_stop_ends_the_walk_at_the_next_channel_boundary() {
     );
     assert!(stop.requested());
 
-    // The run did not walk every channel the config names, so it must not
-    // have recorded the config as satisfied: the next run has to reach
-    // the channels this one never started, exactly as after a widened
-    // filter.
+    // The channels the run never started have no coverage, which is all
+    // the next run needs to walk them.
     let reader = datalib_pin::open_reader(&db_path_for(&t.out))
         .await
         .unwrap();
-    let recorded = datalib_etl::scope_config::load(&reader, "slack:download")
+    let covered: Vec<String> = sqlx::query_scalar("SELECT scope FROM coverage ORDER BY scope")
+        .fetch_all(&reader)
         .await
         .unwrap();
     reader.close().await;
-    assert!(
-        recorded.is_none(),
-        "an interrupted run recorded its scope config as satisfied: {recorded:?}"
-    );
+    assert_eq!(covered.len(), 1, "{covered:?}");
+
+    fetch_into(&t.out, |o| o).await.unwrap();
+    assert_eq!(channels_with_messages(&t.out).len(), 3);
 }

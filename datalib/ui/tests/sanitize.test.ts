@@ -39,6 +39,10 @@ describe("sanitizeRenderedHtml", () => {
       `<audio controls src="/applet/unified_index/asset/u/blobs/a.m4a"></audio>` +
       `<video controls src="/applet/unified_index/asset/u/blobs/a.mp4"></video>` +
       `<a class="source-link" href="https://example.com/x" target="_blank" rel="noopener noreferrer">↗</a>` +
+      `<a class="chip" href="slack://user?team=T1&amp;id=U2" title="Data (slack:T1/U2)" data-handle="slack:T1/U2">Data</a>` +
+      `<a class="chip" href="datalib:group/slack">Slack</a>` +
+      `<a href="tel:+15550123456">call</a>` +
+      `<a href="gopher://old.example/">x</a>` +
       `<h1 class="page-title" data-page-title-uuid="p1">Title</h1>` +
       `<table><tr><th>a</th><td>b</td></tr></table>` +
       `<img src="/applet/unified_index/asset/u/blobs/a.png" alt="a" loading="lazy">`;
@@ -54,9 +58,16 @@ describe("sanitizeRenderedHtml", () => {
       'data-page-title-uuid="p1"',
       "<table>",
       'loading="lazy"',
+      // A chip link's two extra schemes, its title and its handle.
+      'href="slack://user?team=T1&amp;id=U2"',
+      'title="Data (slack:T1/U2)"',
+      'data-handle="slack:T1/U2"',
+      'href="datalib:group/slack"',
+      'href="tel:+15550123456"',
     ]) {
       expect(out, keep).toContain(keep);
     }
+    expect(out).not.toContain("gopher:");
   });
 
   it("keeps a diff document's wrappers and markers", () => {
@@ -67,7 +78,26 @@ describe("sanitizeRenderedHtml", () => {
     expect(sanitizeRenderedHtml(md)).toBe(md);
   });
 
-  it("keeps an iframe only when its src is one of our own paths", () => {
+  // An `.html` a sender attached sits in `blobs/`; framed from a message
+  // body it would run inside the app's chrome (audit 2026-10-02 finding 1).
+  it("drops an iframe that frames anything but a plot page", () => {
+    for (const notPlot of [
+      "blobs/0123456789abcdef.html",
+      "/applet/unified_index/asset/u/blobs/0123456789abcdef.html",
+      "/applet/unified_index/asset/u/plots/../blobs/x.html",
+      "/applet/unified_index/asset/u/plots/%2e%2e/blobs/x.html",
+      "/applet/unified_index/asset/%2e%2e/plots/x.html",
+      "plots\\..\\blobs\\x.html",
+      "plots/t.html?x=1",
+      "plots/t.svg",
+      "/api/remote_media?url=x",
+    ]) {
+      const out = sanitizeRenderedHtml(`<iframe src="${notPlot}"></iframe>`);
+      expect(out, notPlot).not.toContain("src=");
+    }
+  });
+
+  it("keeps an iframe that frames a plot page, relative or rewritten", () => {
     const own = sanitizeRenderedHtml(
       `<iframe src="/applet/unified_index/asset/u/plots/t.html" title="t" width="100%" height="520" style="border:1px solid gray"></iframe>`,
     );

@@ -82,23 +82,47 @@ pub async fn head(pool: &SqlitePool) -> Result<Option<Pin>> {
     commit.map(Pin::at).transpose()
 }
 
-/// True iff `e` says `table` is not there to read: SQLite's "no such
-/// table" for it bare or for its `dolt_at_` module, or doltlite's "table
-/// not found: <table> at <hash>" for a table the schema has and that
-/// commit does not. The fresh-store state, before whatever owns the table
-/// has committed it. Deliberately a match on the one table the query
-/// reads, so corruption, bad SQL and missing columns still surface as
-/// errors.
-pub fn is_missing_table(e: &sqlx::Error, table: &str) -> bool {
-    match e {
-        sqlx::Error::Database(db) => {
-            let m = db.message();
-            m == format!("no such table: {table}")
-                || m == format!("no such table: dolt_at_{table}")
-                || m.starts_with(&format!("table not found: {table} at "))
-        }
-        _ => false,
+/// Something a statement named that the store, at the commit read, does
+/// not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Missing {
+    /// A table, by its bare name: a `dolt_at_` module counts as the table
+    /// it reads.
+    Table(String),
+    Column(String),
+}
+
+/// The one reading of "this store lacks what the query named": SQLite's
+/// "no such table" and "no such column", doltlite's "table not found:
+/// <table> at <hash>" for a table the schema has and that commit does
+/// not, and sqlx's own column-not-found when a row is decoded by a column
+/// the `SELECT *` did not return. `None` for anything else, so corruption
+/// and bad SQL still surface as errors.
+pub fn missing_schema(e: &sqlx::Error) -> Option<Missing> {
+    let m = match e {
+        sqlx::Error::ColumnNotFound(column) => return Some(Missing::Column(column.clone())),
+        sqlx::Error::Database(db) => db.message(),
+        _ => return None,
+    };
+    if let Some(table) = m.strip_prefix("no such table: ") {
+        let table = table.strip_prefix("dolt_at_").unwrap_or(table);
+        return Some(Missing::Table(table.to_string()));
     }
+    if let Some((table, _commit)) = m
+        .strip_prefix("table not found: ")
+        .and_then(|rest| rest.split_once(" at "))
+    {
+        return Some(Missing::Table(table.to_string()));
+    }
+    m.strip_prefix("no such column: ")
+        .map(|column| Missing::Column(column.to_string()))
+}
+
+/// True iff `e` says `table` is not there to read: the fresh-store state,
+/// before whatever owns the table has committed it. Deliberately a match
+/// on the one table the query reads.
+pub fn is_missing_table(e: &sqlx::Error, table: &str) -> bool {
+    matches!(missing_schema(e), Some(Missing::Table(t)) if t == table)
 }
 
 /// How long a pool waits for its one connection before giving up. Far past
@@ -347,6 +371,39 @@ mod tests {
         let e = count_at(&r, &born).await.unwrap_err();
         assert!(is_missing_table(&e, "t"), "{e}");
         assert!(!is_missing_table(&e, "u"), "{e}");
+    }
+
+    /// Every way a read can name what the store lacks is one answer, and
+    /// a statement that is simply wrong is none.
+    #[tokio::test]
+    async fn a_missing_table_or_column_is_one_answer_and_bad_sql_is_not() {
+        use sqlx::Row;
+        let td = tempfile::tempdir().unwrap();
+        let w = writer(&td.path().join("t.doltlite_db")).await;
+        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            .execute(&w)
+            .await
+            .unwrap();
+        insert(&w, 1).await;
+        let err = |sql: &'static str| {
+            let w = w.clone();
+            async move { sqlx::query(sql).fetch_all(&w).await.unwrap_err() }
+        };
+        assert_eq!(
+            missing_schema(&err("SELECT * FROM u").await),
+            Some(Missing::Table("u".into()))
+        );
+        assert_eq!(
+            missing_schema(&err("SELECT nope FROM t").await),
+            Some(Missing::Column("nope".into()))
+        );
+        assert_eq!(missing_schema(&err("SELEKT 1").await), None);
+        let row = sqlx::query("SELECT * FROM t").fetch_one(&w).await.unwrap();
+        let decoded = row.try_get::<i64, _>("nope").unwrap_err();
+        assert_eq!(
+            missing_schema(&decoded),
+            Some(Missing::Column("nope".into()))
+        );
     }
 
     /// A reader must never be the thing that creates the writer's file.

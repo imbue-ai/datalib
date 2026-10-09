@@ -193,7 +193,10 @@ fn render_smoke_produces_thread_dir_with_md_and_rows() {
         md.contains("display: \"Hello\""),
         "subject as display: {md}"
     );
-    assert!(md.contains("external_id: T1"), "thread_id as external_id");
+    assert!(
+        md.contains("external_id: \"T1\""),
+        "thread_id as external_id"
+    );
     assert!(md.contains("Alice"), "sender in a message header");
     assert!(md.contains("doc.pdf"), "attachment listed");
     assert!(

@@ -353,6 +353,10 @@ The common-use subset:
 | `dolt_diff` | vtab | which tables each commit on the branch changed. |
 | `dolt_diff_summary` | vtab | which tables differ, data vs schema. Filter with `from_ref` / `to_ref`. |
 | `dolt_diff_<table>` | vtab | row-level diff for one table. Pass two refs, or leave them off for every adjacent pair on the branch. |
+| `dolt_merge(branch)` | scalar fn | merge a branch into the active one; returns the commit, or `Already up to date`. `'--squash'` first makes it one commit with one parent. See [Merging a branch](#merging-a-branch). |
+| `dolt_merge_base(a, b)` | scalar fn | the commit two branches split at. |
+| `dolt_conflicts_resolve('--ours' \| '--theirs', table)` | scalar fn | settles a merge's conflicts in one table, inside the merge's transaction, a whole row at a time; see [Merging a branch](#merging-a-branch). |
+| `dolt_revert(hash)` | scalar fn | a new commit undoing one; see [Reverting a commit](#reverting-a-commit). |
 | `dolt_at_<table>(ref)` | table-valued fn | one table as it was at a commit. |
 | `dolt_history_<table>` | vtab | every committed version of every row in one table; a primary-key equality seeks per commit. |
 | `dolt_blame_<table>` | vtab | per-row `git blame`: the last commit that changed each row. |
@@ -568,6 +572,71 @@ name itself and then switches branches in SQL, so `doltlite -readonly
   `ATTACH`ed store is `ref not found`; `datalib/backend/dirtree_diff/README.md`
   has the fetch-into-scratch way to compare two files.
 
+### Merging a branch
+
+How a draft works: edits go to a branch of their own, uncommitted, and
+saving merges that branch into the one readers see. `datalib_etl::draft`
+is the recipe in code.
+
+- **A branch's uncommitted rows outlive the connection that wrote
+  them**, and `dolt_reset('--hard')` / `dolt_clean()` on another branch
+  leave them alone. `dolt_diff_<table>('<commit>', 'WORKING')` on that
+  branch reads them as a diff.
+- **A connection on a branch reads another branch without leaving its
+  own**: `dolt_at_<table>('main')`, `dolt_merge_base('draft', 'main')`
+  and `dolt_diff_<table>('<base>', 'main')` all work from it, and its
+  uncommitted rows stay as they were.
+- **A merge takes a branch's commits, not its uncommitted rows**: a
+  branch that only has those merges as `Already up to date`. A merge
+  *into* a branch with uncommitted rows is refused (`uncommitted
+  changes`).
+- **Merges are cell by cell, until a cell conflicts.** Two branches
+  that change different columns of one row merge cleanly, into a
+  commit with two parents. When both change the same cell, the whole
+  row is in conflict.
+- **A conflict outside a transaction changes nothing** (`conflicts
+  detected`, rolled back). Inside `BEGIN`, `dolt_merge` still returns
+  an error (`Merge has 1 conflict(s)`), but the transaction stays open:
+  `dolt_conflicts_<table>` holds each row's `base_`, `our_` and
+  `their_` columns for every column, the table itself holds our side,
+  and `dolt_commit` commits the merge and ends the transaction. A
+  squash conflicts and resolves the same way, into one commit with one
+  parent.
+- **`dolt_conflicts_resolve('--theirs', '<table>')` takes the whole
+  row from the merged branch**, so a change on our side to another
+  column of that row is lost. To keep it, write the cells you want
+  from `their_<col>` into the table and `DELETE FROM
+  dolt_conflicts_<table>`; the commit then holds both sides' changes.
+- **`dolt_merge('--squash', b)` commits at once when the branch it
+  lands on has moved since `b` was cut**, one commit whose one parent
+  is the old head; the branch's own commits never reach the log. When
+  it has not moved, the squash stops with the rows applied and
+  uncommitted. With `'--no-commit'` it stops uncommitted either way, so
+  the commit that follows carries the caller's message.
+- **A branch name may hold a slash** (`draft/riker`).
+- **A merge commit and a squash both revert** with `dolt_revert`.
+- **`dolt_branch('-d', b)` refuses a branch with unmerged commits**
+  (`branch is not fully merged`) and drops one whose only change is
+  uncommitted; `-D` drops either, uncommitted rows included, so a
+  branch made again under the same name starts clean.
+
+### Reverting a commit
+
+- **`dolt_revert('<hash>')` makes a new commit that undoes the named
+  one, on the active branch, and returns its hash.** The commit need
+  not be HEAD; the ones after it stay. The message is
+  `Revert "<original message>"`, and the working set is clean after it.
+- **It is a merge, and is refused with `conflicts detected` when a
+  later commit changed a row the commit touched.** Nothing is
+  committed or changed then. A row still exactly as the commit left it
+  reverts cleanly, so a revert of a commit that deleted a row puts it
+  back even after later commits elsewhere.
+- **Reverting the same commit twice is `nothing to commit`**; reverting
+  the revert restores what the original did.
+- **An uncommitted change refuses it** (`Your local changes would be
+  overwritten by revert`), through the library we link; a probe through
+  the shell went ahead and left the change uncommitted.
+
 ### Query plans and indexes
 
 - **Plain tables plan as in SQLite**: on a read-only connection, inside
@@ -657,6 +726,48 @@ Creating and dropping a table in one open still appends chunks, though
   `doc/doltlite/dolt_gc.md`; not measured here).
 - Only `sqlite_mirror` and `fsindex` run gc today.
 
+### Full-text search (FTS5)
+
+The layout these were checked on: a plain table of terms keyed by an
+`INTEGER PRIMARY KEY` (`term_id`), indexed by document, and an FTS5
+index over the term's text alone, `content=''` and
+`contentless_delete=1`, linked by rowid. Doltlite embeds SQLite 3.54.0.
+
+- **The tokenizer can keep an id or an address whole.** With
+  `tokenize="unicode61 tokenchars '@.-_+:'"`, a uuid, `email:…` or
+  `slack:T…/U…` is one token, matched exactly as a phrase:
+  `email:ann@example.com` does not match `email:ann@example.com.au`,
+  and a uuid's first group alone matches nothing.
+- **`word*` matches by prefix**, and only at a word's start.
+- **An FTS5 table is matched by its own name, never by an alias**
+  (`no such column`).
+- **The join from a hit back to its term seeks the key**
+  (`SEARCH … USING INTEGER PRIMARY KEY`), so filtering on a term's
+  other columns costs nothing beyond the match.
+- **A contentless-delete index forgets a row by rowid**, so replacing a
+  document's terms is: delete their rowids from the index (found
+  through the plain table's index), delete them from the table, insert
+  the new ones.
+- **An `INTEGER PRIMARY KEY` is the rowid and counts up** from the
+  largest, unlike a text key's rowid.
+- **A reader of one commit matches that commit's terms**, through a
+  detached `<file>@<hash>` open and through a held read transaction
+  alike.
+- **A plain SQLite file attached to a reader of one commit matches
+  too**, and a join from its terms to the store's tables seeks keys on
+  both sides. The plain file is read as it is now, not at the commit.
+
+**What it costs to write, measured** (shell, 0.50.14, 732k synthetic
+terms for 122k rows; not a test). One transaction built the table and
+its index in 2.2 s into a 375 MB store; the same build into a plain
+SQLite file took 1.1 s and 97 MB. Then 200 one-document replaces, each
+its own transaction and, in the store, its own commit: about 1 ms each
+in both, but the store grew 35.5 MB (about 180 KB a commit, every one
+pinning the index pages it rewrote) and the plain file 0.7 MB.
+`dolt_gc()` took the store to 144 MB. An exact address matched in
+0.3 ms in the store and 0.1 ms in the plain file; a prefix with the
+join back, 27 ms and 6 ms.
+
 ### Plain SQLite files and SQLite compatibility
 
 - **Stock `sqlite3` cannot open a `.doltlite_db`**: `file is not a
@@ -671,9 +782,21 @@ Creating and dropping a table in one open still appends chunks, though
 - **`VACUUM INTO` of a live SQLite file in WAL mode includes the WAL's
   rows**, which is how the SQLite mirrors snapshot a source in use.
 - **`journal_mode` is inert**: any mode is accepted and reads back
-  `wal`, and doltlite makes no `-wal` or `-shm` sidecar. `synchronous`
+  `wal`, and doltlite makes no `-wal` or `-shm` sidecar. **A plain
+  SQLite file opened through doltlite answers `wal` too, but keeps a
+  rollback journal**: a `-journal` sidecar during a write, its header
+  never marked WAL, and stock `sqlite3` reads its mode as `delete`
+  (dolthub/doltlite#3740). By
+  SQLite's rules for a rollback journal, a reader of a plain file then
+  waits while its writer commits (not measured here). `synchronous`
   at anything above `OFF` syncs every commit (upstream
   `doc/doltlite/pragmas.md`).
+- **Doltlite cannot write a WAL, but it reads one.** A plain SQLite
+  file another program keeps in WAL mode, as qmd keeps its index, reads
+  through doltlite with the rows only its `-wal` holds, so a reader
+  sees what qmd wrote before any checkpoint. The test reads a pair
+  stock SQLite wrote (`scripts/make_doltlite_wal_fixture.py`). A
+  shell probe saw a row written while the reader ran, too.
 - **`:memory:` works**, commits and diffs included, which is what unit
   tests use.
 - **A primary key that is not `INTEGER` is `NOT NULL`**
@@ -748,7 +871,15 @@ The rows it throws away were written after the last seal and never
 committed, so no reader — every reader pins a commit — was ever
 promised them. Keeping them would have meant committing a state the
 writer never vouched for: an entity row whose blobs never arrived, half
-a channel. The next pass refetches from the cursor.
+a channel. The next pass owes them again.
+
+The other thing a dead writer can leave is a `dolt_commit` on its own
+branch that it never published: the kill landed between `commit_run`'s
+two halves. That commit is a seal the run vouched for, so `open`
+publishes it to `main` rather than discarding it.
+`doltlite_two_process_test` kills a writer at each of the three points
+— inside the transaction, after its SQL commit, after its `dolt_commit`
+— and reads what the next open makes of each.
 
 `commit_run` is tolerant of "nothing to commit, working tree clean": a
 pass that fetched nothing new leaves the working set clean.

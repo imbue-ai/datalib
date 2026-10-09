@@ -122,16 +122,16 @@ pub const SNAPSHOT_BLAKE3_RECIPE_DOC: &str =
 /// Errors if any of the three is missing or unreadable — the same condition
 /// that would later fail the decrypt pass, so failing fast here is correct.
 pub async fn snapshot_fingerprint(
-    cache: &datalib_etl::fingerprint_cache::FingerprintCache,
+    cache: &datalib_etl_files::fingerprint_cache::FingerprintCache,
     snapshot_dir: &std::path::Path,
 ) -> anyhow::Result<String> {
     use anyhow::Context;
     const PARTS: [&str; 3] = ["metadata", "main", "files"];
 
-    let scan = datalib_etl::fsscan::scan(
+    let scan = datalib_etl_files::fsscan::scan(
         cache,
         snapshot_dir,
-        &datalib_etl::fsscan::ScanOptions::default(),
+        &datalib_etl_files::fsscan::ScanOptions::default(),
         |p| {
             p.file_name()
                 .and_then(|n| n.to_str())
@@ -148,7 +148,7 @@ pub async fn snapshot_fingerprint(
             .iter()
             .find(|f| f.rel == name)
             .with_context(|| format!("snapshot {} has no {name}", snapshot_dir.display()))?;
-        parts.push(datalib_etl::fswalk::to_hex(&f.blake3));
+        parts.push(datalib_etl_files::fswalk::to_hex(&f.blake3));
     }
     Ok(parts.join(":"))
 }

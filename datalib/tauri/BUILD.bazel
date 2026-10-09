@@ -33,6 +33,17 @@ rust_test(
     ],
 )
 
+# Same arrangement for `src/zoom.rs`: the View menu's zoom levels and
+# the file the level is kept in. Nothing in it may reference `tauri`.
+rust_test(
+    name = "zoom_test",
+    size = "small",
+    srcs = ["src/zoom.rs"],
+    crate_root = "src/zoom.rs",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)
+
 # Same arrangement for `src/raw_store.rs`: what Browse may open a raw
 # store with, and the path check that keeps the page to stores inside
 # the data root. Nothing in it may reference `tauri`.

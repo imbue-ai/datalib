@@ -133,20 +133,18 @@ rather than an error.
    on its `#[col]` so Keep only, Exclude and dropping it on the search
    bar work; `every_filter_key_is_served_by_an_index` then asks for an
    index or a place in its `SCANS` list.
-5. Set the new DDL hashes in `BUILTIN_STORE_SHAPES`
-   (`datalib/backend/dag/src/config.rs`). The test
-   `builtin_store_shapes_are_the_ddl_the_step_writes` in `datalib_step`
-   fails until you do, and prints the hash to paste.
-6. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
+5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 On an existing root, a render store and the grid index change shape only
-when the step that writes them runs, and the loop runs a step only when
-it is stale. Step 5 is what makes them stale: each store's shape is in
-its writer's fingerprint, so the next sync re-runs every render step and
-the grid index once, whether or not anything new came in upstream. The
-render step then sees its own DDL hash moved (it is one of the render
-params, `_store_schema`) and re-renders every document into the new
-shape, and the grid index rebuilds itself from the stores.
+when the step that writes them runs. The first launch of the new build
+asks each of them (`--migrate`); each compares its store's recorded
+shape with this build's and answers that it needs to run again, and the
+app offers to re-render them all, downloading nothing; until then a
+source's own sync re-renders that source
+([dag README](../../datalib/backend/dag/README.md) § "Upgrading a
+root"). The render step then sees its own DDL hash moved (it is one of
+the render params, `_store_schema`) and re-renders every document into
+the new shape, and the grid index rebuilds itself from the stores.
 
 ## Adding a provider
 
@@ -263,7 +261,9 @@ finds it.
 The body is markdown, and `datalib_schema::plain_text` turns it into
 what a person reads: tags, images, link targets, heading and quote
 marks, emphasis and code fences go, and a `<details>` block reads as
-its summary unless it is all the body there is. A qmd hit's snippet
+its summary unless it is all the body there is. Text inside a code
+fence or a code span is kept as written, backslashes and `*` included,
+since that is what the page shows. A qmd hit's snippet
 goes through the same pass. So what a producer puts in the body is
 what the row *says*, in the order that matters: a calendar event's
 description comes before its guest list, a chat's document row leaves
@@ -351,7 +351,7 @@ emitting a handful of rows tagged `provider = "datalib"`, `source_label
 = "Storage"`, kinds `Source Size`, `Store` and `Table`. That is what
 gives a download-only source — `fsindex`, `media` — a place in the grid
 at all: they render no documents, so without this they appear nowhere.
-`source:Storage` is "show me what everything weighs". The code is
+`source_id:datalib` is "show me what everything weighs". The code is
 `datalib/backend/datalib_step/src/introspect.rs`; its header has the
 reasons behind the rules below.
 

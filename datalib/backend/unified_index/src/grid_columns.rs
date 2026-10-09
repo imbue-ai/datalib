@@ -21,6 +21,7 @@ pub enum GridColumn {
     TouchedAt,
     Snippet,
     Author,
+    AuthorRef,
     Account,
     OrgName,
     ByteSize,
@@ -62,12 +63,25 @@ impl View for GridColumn {
             // to match.
             GridColumn::Snippet => (SortBy::Column(G::Preview), None),
             GridColumn::Author => same(G::Author),
+            // The Author cell is an identity: sorted and filtered by the
+            // name it shows, as the Source cell is by its id.
+            GridColumn::AuthorRef => same(G::Author),
             GridColumn::Account => same(G::Account),
             GridColumn::OrgName => same(G::OrgName),
             GridColumn::ByteSize => same(G::ByteSize),
             GridColumn::ItemCount => same(G::ItemCount),
             GridColumn::DiffStatus => same(G::DiffStatus),
             GridColumn::DiffChangedColumns => same(G::DiffChangedColumns),
+        }
+    }
+
+    /// An author is found through the search terms: by the name shown,
+    /// or, from the chip, by the handle where the row has one.
+    fn terms_filter(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            GridColumn::Author => Some(("from", "author")),
+            GridColumn::AuthorRef => Some(("from", "author_term")),
+            _ => None,
         }
     }
 }
@@ -106,17 +120,15 @@ mod tests {
             keys,
             [
                 ("kind", none, "kind", false),
-                ("source", none, "source_label", false),
                 ("created_at", none, "created_at", false),
                 ("modified_at", none, "modified_at", false),
                 ("touched_at", none, "touched_at", false),
-                ("author", none, "author", true),
                 ("account", none, "account", true),
                 ("project", none, "project", true),
                 ("org_name", none, "org_name", false),
                 ("channel", none, "channel", false),
                 ("convo", none, "conversation_uuid", true),
-                ("source_id", &["source_name"][..], "source_id", false),
+                ("source_id", none, "source_id", false),
                 ("notion_page", none, "notion_page_uuid", true),
                 ("byte_size", none, "byte_size", false),
                 ("item_count", none, "item_count", false),
@@ -127,10 +139,14 @@ mod tests {
     }
 
     #[test]
-    fn a_key_is_found_by_its_name_an_alias_or_its_column() {
+    fn a_key_is_found_by_its_name_or_its_column() {
         let key = |typed| table::key::<GridRow>(typed).map(|k| k.column);
-        assert_eq!(key("author"), Some(GridRowColumn::Author));
-        assert_eq!(key("source_name"), Some(GridRowColumn::SourceId));
+        assert_eq!(key("channel"), Some(GridRowColumn::Channel));
+        assert_eq!(key("author"), None, "`author:` is `from:`, a terms key");
+        assert_eq!(
+            for_column::<GridColumn>("author_ref"),
+            Some(("from", "author_term"))
+        );
         assert_eq!(key("subj"), None);
         assert_eq!(
             for_column::<GridColumn>("source_ref"),

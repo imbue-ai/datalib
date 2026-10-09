@@ -38,8 +38,8 @@ struct UiAssets;
 ///   does not rewrite the policy the way it would for a page it serves
 ///   itself, and its `invoke` is a `fetch` to those origins.
 /// - `frame-src 'self'`: the DACTAL card and the plot pages are
-///   same-origin iframes — which is why every document the applet
-///   proxy serves gets [`DOCUMENT_SANDBOX_CSP`].
+///   same-origin iframes — which is why every document this origin
+///   serves as data gets a sandbox policy of its own ([`DocumentKind`]).
 pub const APP_CSP: &str = "default-src 'self'; \
     script-src 'self' 'unsafe-eval'; \
     style-src 'self' 'unsafe-inline'; \
@@ -54,13 +54,88 @@ pub const APP_CSP: &str = "default-src 'self'; \
     form-action 'self'; \
     frame-ancestors 'none'";
 
-/// The policy on every document that is *data*, not the app: a rendered
-/// plot page, an attachment, anything under `/dactal/`. `sandbox` puts
-/// the document in an opaque origin — its scripts may run (a plot page
-/// needs its own), but it has no cookie, no same-origin `fetch` to
-/// `/api/*`, and no way to navigate the window it sits in. Sent as a
-/// header because `sandbox` is ignored in a `<meta>` policy.
-pub const DOCUMENT_SANDBOX_CSP: &str = "sandbox allow-scripts allow-downloads";
+/// What a document this origin serves as *data* — not the app — may do.
+/// Every policy starts with `sandbox`, which puts the document in an
+/// opaque origin: no cookie, no same-origin `fetch` to `/api/*`, no way
+/// to navigate the window it sits in. It is sent as a header because
+/// `sandbox` is ignored in a `<meta>` policy.
+///
+/// The kind is named by whoever knows what the bytes are; anything not
+/// named is [`DocumentKind::Data`], the policy that runs nothing.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum DocumentKind {
+    /// Bytes from upstream: an attachment out of a render tree, a fetched
+    /// remote SVG. A sender wrote them, so they run no script at all and
+    /// load nothing from outside — not even a read receipt.
+    #[default]
+    Data,
+    /// A Plotly page a time-series renderer wrote (`plots/*.html`). It
+    /// needs its own inline script and Plotly from the pinned CDN
+    /// (`timeseries_render::plot`; `scattergl` compiles shaders through
+    /// `new Function`), and nothing else: `connect-src 'none'`.
+    Plot,
+}
+
+/// The DACTAL page (`/dactal/`) runs its own scripts in the sandbox. Its
+/// `<meta>` policy holds the rest (`ui/public/dactal/index.html`) — a
+/// header naming sources would intersect with it — and it is not a kind
+/// an applet can ask for.
+pub const DACTAL_SANDBOX_CSP: &str = "sandbox allow-scripts allow-downloads";
+
+impl DocumentKind {
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+
+    pub fn csp(self) -> &'static str {
+        match self {
+            DocumentKind::Data => {
+                "sandbox; default-src 'none'; style-src 'unsafe-inline'; \
+                 img-src 'self' data:; media-src 'self' data:; font-src data:; \
+                 base-uri 'none'; form-action 'none'"
+            }
+            DocumentKind::Plot => {
+                "sandbox allow-scripts allow-downloads; default-src 'none'; \
+                 script-src 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly; \
+                 style-src 'unsafe-inline'; img-src data: blob:; font-src data:; \
+                 worker-src blob:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+            }
+        }
+    }
+}
+
+/// Content types a page would run as code from `<script src>` or
+/// `WebAssembly.instantiateStreaming`. A render tree holds none of its
+/// own, so one served from this origin came from upstream — and the app
+/// page's `script-src 'self'` would let it run.
+pub fn is_executable(content_type: &str) -> bool {
+    let mime = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        mime.as_str(),
+        "text/javascript"
+            | "application/javascript"
+            | "application/x-javascript"
+            | "application/ecmascript"
+            | "text/ecmascript"
+            | "application/wasm"
+    )
+}
 
 /// Content types a browser would run script from if it navigated to
 /// them. Everything else — JSON, images as `<img>`, text — is inert.
@@ -164,7 +239,7 @@ fn asset_response(path: &str, content: rust_embed::EmbeddedFile) -> Response {
         if is_scriptable_document(mime.as_ref()) {
             headers.insert(
                 header::CONTENT_SECURITY_POLICY,
-                HeaderValue::from_static(DOCUMENT_SANDBOX_CSP),
+                HeaderValue::from_static(DACTAL_SANDBOX_CSP),
             );
         }
     }
@@ -196,6 +271,66 @@ mod tests {
             "application/octet-stream",
         ] {
             assert!(!is_scriptable_document(ct), "{ct}");
+        }
+    }
+
+    fn directive<'a>(csp: &'a str, name: &str) -> Option<&'a str> {
+        csp.split(';')
+            .map(str::trim)
+            .find(|d| d == &name || d.starts_with(&format!("{name} ")))
+    }
+
+    /// A sender's HTML framed in a document view must not run, and must
+    /// not reach the network even if it could — a read receipt is the
+    /// attack (audit 2026-10-02 finding 1).
+    #[test]
+    fn data_documents_run_nothing_and_reach_nothing() {
+        let csp = DocumentKind::Data.csp();
+        assert_eq!(directive(csp, "sandbox"), Some("sandbox"), "{csp}");
+        assert_eq!(directive(csp, "default-src"), Some("default-src 'none'"));
+        assert!(directive(csp, "script-src").is_none());
+        assert!(directive(csp, "connect-src").is_none());
+        for d in csp.split(';') {
+            assert!(!d.contains("http"), "no remote origin in {d:?}");
+        }
+    }
+
+    /// A plot page runs its own script and Plotly, and still sends
+    /// nothing anywhere.
+    #[test]
+    fn plot_documents_run_plotly_and_reach_nothing() {
+        let csp = DocumentKind::Plot.csp();
+        assert!(!csp.contains("allow-same-origin"), "{csp}");
+        assert_eq!(directive(csp, "default-src"), Some("default-src 'none'"));
+        assert_eq!(directive(csp, "connect-src"), Some("connect-src 'none'"));
+        assert_eq!(
+            directive(csp, "script-src"),
+            Some("script-src 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly")
+        );
+    }
+
+    #[test]
+    fn document_kinds_parse_as_they_print() {
+        use strum::VariantArray;
+        for &k in DocumentKind::VARIANTS {
+            let s: &'static str = k.into();
+            assert_eq!(DocumentKind::parse(s), Some(k));
+        }
+        assert_eq!(DocumentKind::parse("plot"), Some(DocumentKind::Plot));
+        assert_eq!(DocumentKind::parse("script"), None);
+    }
+
+    #[test]
+    fn executable_types_are_scripts_and_wasm() {
+        for ct in [
+            "text/javascript",
+            "application/javascript; charset=utf-8",
+            "application/wasm",
+        ] {
+            assert!(is_executable(ct), "{ct}");
+        }
+        for ct in ["text/plain", "application/json", "text/css", "text/html"] {
+            assert!(!is_executable(ct), "{ct}");
         }
     }
 }

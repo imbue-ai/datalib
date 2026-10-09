@@ -7,11 +7,17 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_chatgpt_config::{ChatgptApiSync, ChatgptConfig};
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
+
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
 
 /// Ingest wave: present iff `api`.
 pub fn plan_ingest(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
@@ -45,8 +51,8 @@ impl DataProcessor for ChatgptIngest {
         &self.id
     }
 
-    /// Upserts conversations one at a time and prunes to the enumeration it
-    /// just walked. Between checkpoints the store is therefore the previous
+    /// Upserts conversations a flush at a time and prunes to the
+    /// enumeration it just walked. Between checkpoints the store is therefore the previous
     /// snapshot plus whatever this run has fetched — a superset, never a
     /// gap — so a consumer reading one sees stale rows at worst, and the
     /// prune's deletions reach it through the same diff on the next pass.
@@ -59,27 +65,27 @@ impl DataProcessor for ChatgptIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
-            .await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            latchkey: self.latchkey.clone(),
-            max_pages: self.sync.max_pages.map(|v| v as usize),
-            limit: self.sync.limit.map(|v| v as usize),
-            sleep_between: Duration::ZERO,
-            since: self.sync.since.clone(),
-            conv_uuids: self.sync.conv_uuids.clone(),
-            now: Some(ctx.now.to_string()),
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
-            sealer: Some(session.sealer()),
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |sealer| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                latchkey: self.latchkey.clone(),
+                max_pages: self.sync.max_pages.map(|v| v as usize),
+                limit: self.sync.limit.map(|v| v as usize),
+                sleep_between: Duration::ZERO,
+                since: self.sync.since.clone(),
+                conv_uuids: self.sync.conv_uuids.clone(),
+                now: Some(ctx.now.to_string()),
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+                sealer: Some(sealer),
+            })
+            .await?;
+            Ok(format!(
+                "fetched={} skipped={} out_of_scope={} errors={} listing={} pruned={} requests={}",
+                s.fetched, s.skipped, s.out_of_scope, s.errors, s.listing, s.pruned, s.requests,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "fetched={} skipped={} out_of_scope={} errors={} listing={} pruned={} requests={}",
-            s.fetched, s.skipped, s.out_of_scope, s.errors, s.listing, s.pruned, s.requests,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

@@ -161,17 +161,27 @@ impl<'a> Iterator for RecordIter<'a> {
         if self.offset >= self.buf.len() {
             return None;
         }
-        let (len, consumed) = match read_varint(&self.buf[self.offset..]) {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
-        let start = self.offset + consumed;
-        let end = start + len as usize;
-        if end > self.buf.len() {
-            return Some(Err(anyhow!("truncated delimited record")));
+        let framed = read_varint(&self.buf[self.offset..]).and_then(|(len, consumed)| {
+            let start = self.offset + consumed;
+            usize::try_from(len)
+                .ok()
+                .and_then(|len| start.checked_add(len))
+                .filter(|&end| end <= self.buf.len())
+                .map(|end| (start, end))
+                .ok_or_else(|| anyhow!("truncated delimited record"))
+        });
+        match framed {
+            Ok((start, end)) => {
+                self.offset = end;
+                Some(Ok(&self.buf[start..end]))
+            }
+            // Past a framing error nothing can be delimited; a caller that
+            // steps over the error must not be handed it again for ever.
+            Err(e) => {
+                self.offset = self.buf.len();
+                Some(Err(e))
+            }
         }
-        self.offset = end;
-        Some(Ok(&self.buf[start..end]))
     }
 }
 
@@ -213,6 +223,21 @@ fn parse_files_sidecar(buf: &[u8]) -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A truncated record is one error and then the end: the ingest steps
+    /// over an error and asks again, which looped for ever while the
+    /// iterator stayed where it failed.
+    #[test]
+    fn a_truncated_record_ends_the_walk_after_one_error() {
+        let buf = [2u8, b'o', b'k', 9, b'x'];
+        let mut it = RecordIter {
+            buf: &buf,
+            offset: 0,
+        };
+        assert_eq!(it.next().unwrap().unwrap(), b"ok");
+        assert!(it.next().unwrap().is_err());
+        assert!(it.next().is_none());
+    }
     use super::*;
 
     #[test]

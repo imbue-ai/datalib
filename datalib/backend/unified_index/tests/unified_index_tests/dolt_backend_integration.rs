@@ -1,7 +1,7 @@
 //! End-to-end integration test for the doltlite backend.
 
 use datalib_query::table::SearchTable;
-use datalib_schema::grid_rows::{GridRow, DDL as GRID_DDL, INDEXES as GRID_INDEXES};
+use datalib_schema::grid_rows::{GridRow, GridRowColumn, DDL as GRID_DDL, INDEXES as GRID_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use datalib_schema::problems::{
     Outcome, Problem, ProblemRow, Reason, Scope, Stage, DDL as PROBLEMS_DDL,
@@ -135,7 +135,11 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
         .await
         .unwrap()
         .is_empty());
-    assert!(repo.grid_row_refs().await.unwrap().is_empty());
+    assert!(repo
+        .grid_row_refs_for_hits(&["slack/render_markdown/a.md".into()])
+        .await
+        .unwrap()
+        .is_empty());
     assert!(repo.chat_meta("c-1").await.unwrap().is_none());
     assert!(repo.qmd_path_for_markdown("c-1").await.unwrap().is_none());
     assert!(repo
@@ -160,6 +164,48 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
 
     drop(repo);
     let _ = std::fs::remove_file(&db_path);
+}
+
+/// A qmd hit names its file as qmd spells it: lowercased, a run of `-`
+/// and `_` joined into one `-`. Its rows are found through the path key,
+/// and a row whose path only shares the key is not one of them.
+#[tokio::test]
+async fn a_hit_finds_the_rows_of_its_file_and_no_others() {
+    use datalib_schema::grid_rows::QMD_PATH_KEY_SQL;
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let writer = writer(&root).await;
+    for (_t, ddl) in GRID_DDL {
+        sqlx::query(*ddl).execute(&writer).await.unwrap();
+    }
+    // Audited: the expression is a literal.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE INDEX grid_rows_by_qmd_path_key ON grid_rows ({QMD_PATH_KEY_SQL})"
+    )))
+    .execute(&writer)
+    .await
+    .unwrap();
+    insert_rows(
+        &writer,
+        &[
+            chat_row("in-the-file", "Google_Calendar/render_markdown/Week__12.md"),
+            chat_row(
+                "same-key-other-file",
+                "googlecalendar/render_markdown/week12.md",
+            ),
+            chat_row("elsewhere", "slack/render_markdown/c-1.md"),
+        ],
+    )
+    .await;
+    commit(&writer, "rows").await;
+
+    let refs = repo
+        .grid_row_refs_for_hits(&["google-calendar/render_markdown/week-12.md".into()])
+        .await
+        .unwrap();
+    let uuids: Vec<&str> = refs.iter().map(|r| r.uuid.as_str()).collect();
+    assert_eq!(uuids, ["in-the-file"]);
 }
 
 #[tokio::test]
@@ -219,12 +265,9 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     assert_eq!(rows[0].kind, "User Input");
     assert_eq!(rows[1].kind, "Chat");
 
-    let filtered = repo
-        .search(&parse_query("source:Claude"), 100)
-        .await
-        .unwrap();
+    let filtered = repo.search(&parse_query("kind:Chat"), 100).await.unwrap();
     assert!(!filtered.is_empty());
-    assert!(filtered.iter().all(|r| r.source == "Claude"));
+    assert!(filtered.iter().all(|r| r.kind == "Chat"));
 
     let meta = repo
         .chat_meta("c-1")
@@ -340,6 +383,66 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
         repo.head().await.unwrap().as_deref(),
         Some(head.as_str()),
         "a seal moves the head, so a cached listing is not reused past it"
+    );
+
+    drop(repo);
+    let _ = std::fs::remove_file(&db_path);
+}
+
+/// What the search bar suggests for a key's value: the values holding
+/// what was typed, among the rows the rest of the query keeps, most rows
+/// first.
+#[tokio::test]
+async fn a_key_suggests_its_values_most_rows_first() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let writer = writer(&root).await;
+    create_grid_tables(&writer).await;
+    let in_channel = |uuid: &str, path: &str, channel: &str| {
+        let mut row = chat_row(uuid, path);
+        row.channel = Some(channel.to_string());
+        row
+    };
+    insert_rows(
+        &writer,
+        &[
+            in_channel("e-1", "enterprise/a.md", "bridge"),
+            in_channel("e-2", "enterprise/b.md", "bridge"),
+            in_channel("e-3", "enterprise/c.md", "Engineering"),
+            in_channel("e-4", "enterprise/d.md", "50%_off"),
+            in_channel("v-1", "voyager/a.md", "bridge"),
+            chat_row("v-2", "voyager/b.md"),
+        ],
+    )
+    .await;
+    commit(&writer, "rows").await;
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let values = |q: &'static str, typed: &'static str| {
+        let repo = &repo;
+        async move {
+            repo.value_counts(&parse_query(q), GridRowColumn::Channel, typed)
+                .await
+                .unwrap()
+        }
+    };
+    let pairs = |v: &[(&str, u64)]| -> Vec<(String, u64)> {
+        v.iter().map(|(s, n)| (s.to_string(), *n)).collect()
+    };
+
+    assert_eq!(
+        values("", "").await,
+        pairs(&[("bridge", 3), ("50%_off", 1), ("Engineering", 1)])
+    );
+    assert_eq!(values("", "ENG").await, pairs(&[("Engineering", 1)]));
+    assert_eq!(
+        values("", "%").await,
+        pairs(&[("50%_off", 1)]),
+        "a % is itself"
+    );
+    assert_eq!(
+        values("source_id:voyager", "").await,
+        pairs(&[("bridge", 1)]),
+        "the rest of the query narrows the values"
     );
 
     drop(repo);
@@ -533,6 +636,7 @@ async fn every_wire_field_survives_the_round_trip() {
         .created_at(Some("2026-06-02T13:00:00-07:00".to_string()))
         .modified_at(Some("2026-06-03T09:30:00-07:00".to_string()))
         .author(Some("Jean-Luc Picard".to_string()))
+        .author_handle(Some("email:picard@enterprise.org".to_string()))
         .account(Some("acct-1701".to_string()))
         .project(Some("proj-1701".to_string()))
         .org_uuid(Some("org-1701".to_string()))
@@ -570,7 +674,7 @@ async fn every_wire_field_survives_the_round_trip() {
     let wire = serde_json::to_value(&rows[0]).unwrap();
     // Filled by the applet from the config, or only by a free-text
     // search: absent from a repo's own answer by design.
-    let not_the_repos: [&str; 2] = ["source_ref", "score"];
+    let not_the_repos: [&str; 4] = ["source_ref", "author_ref", "author_term", "score"];
     for key in not_the_repos {
         assert!(wire.get(key).is_none(), "{key}: {wire}");
     }

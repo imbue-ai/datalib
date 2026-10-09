@@ -35,6 +35,18 @@ can name their rows (a keyless table diffs by position:
 An iPhone backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28` is this
 same database and can be pointed at directly.
 
+## Nothing is deleted
+
+With "Keep messages" set to 30 days or a year, Messages deletes older
+messages from `chat.db`, and keeping them is the reason to mirror the
+database. So this source mirrors append-only
+(`MirrorOptions::append_only`, explained in
+[`lightroom/INGEST.md`](../lightroom/INGEST.md#a-source-that-evicts-append_only)):
+each table is upserted by its key, a row `chat.db` no longer has stays,
+and no table is dropped. The cost is that a message deleted on purpose
+stays too. A `chat.db` with no table in it (a 0-byte copy) changes
+nothing and is a `phase:source` problem.
+
 ## The body is not in `message.text`
 
 Since macOS Ventura the `text` column is usually NULL and the body is in

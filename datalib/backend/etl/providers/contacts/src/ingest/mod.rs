@@ -1,4 +1,6 @@
-//! CardDAV downloader entry point.
+//! CardDAV downloader entry point: discovery, then each address book
+//! kept in step through `datalib_etl_web::dav::sync`, which lists, stores
+//! and prunes; this crate says how a card becomes a row.
 
 pub mod api;
 pub mod db;
@@ -8,13 +10,19 @@ pub mod vcf_dir;
 pub use db::{db_path_for, RawDb};
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::http::LatchkeySettings;
+use datalib_etl::download_problems;
 use datalib_etl::progress::Progress;
-use tracing::{info, warn};
+use datalib_etl::raw_store::Sealer;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_web::dav::sync::{self, CollectionSync, ObjectStore};
+use datalib_etl_web::http::LatchkeySettings;
+use sqlx::{Sqlite, Transaction};
+use tracing::info;
 
-use api::{DavError, Multistatus};
-use datalib_etl::dav::absolutize;
+use api::ContactProps;
+use datalib_etl_web::dav::absolutize;
 use db::{addressbook_pk, ContactRow};
 
 /// Options for one `fetch` run. Mirrors the FetchOptions shape every
@@ -41,6 +49,8 @@ pub struct FetchOptions {
     pub addressbooks: Vec<String>,
     pub progress: Progress,
     pub control: DownloadControl,
+    /// Seals as pages land, when the step driver hands one over.
+    pub sealer: Option<Sealer>,
 }
 
 /// Per-run summary. The sync runner formats this into its
@@ -56,6 +66,15 @@ pub struct FetchSummary {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| {
+        sync_account(opts, found)
+    })
+    .await
+}
+
+async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
@@ -85,8 +104,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .await?;
     }
     summary.addressbooks = books.len();
+    let listed: Vec<String> = books
+        .iter()
+        .map(|b| addressbook_pk(&account_id, &b.href))
+        .collect();
+    summary.contacts_deleted += db.delete_addressbooks_not_in(&account_id, &listed).await?;
 
-    // ── Per-addressbook sync ──────────────────────────────────────
+    report_unmatched_names(&found, &opts.addressbooks, &books)?;
+
+    let run = sync::Run {
+        pool: db.pool(),
+        stop: &opts.control.stop,
+        found: &found,
+        sealer: opts.sealer.as_ref(),
+    };
     for book in &books {
         let named = book
             .display_name
@@ -95,34 +126,121 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         if !opts.addressbooks.is_empty() && !named {
             continue;
         }
+        if opts.control.stop.requested() {
+            break;
+        }
         let book_id = addressbook_pk(&account_id, &book.href);
-        let prev_token = db.sync_token(&book_id).await?.unwrap_or_default();
+        let label = book.display_name.as_deref().unwrap_or(&book.href);
         opts.progress
             .set_message(&format!("syncing addressbook {}", book.href));
-        match sync_addressbook(
-            &db,
-            &book_id,
-            &book.url,
-            &prev_token,
-            &mut summary,
-            &opts.latchkey,
-        )
-        .await
-        {
-            Ok(()) => {}
+        let token = db.sync_token(&book_id).await?;
+        let listing = CollectionSync::new(&api::KIND, &book.url, token, &opts.latchkey);
+        let listing_name = format!("addressbook {label}");
+        match sync::sync_collection(&run, &db, &book_id, label, listing).await {
+            Ok(synced) => {
+                summary.contacts_new += synced.new;
+                summary.contacts_updated += synced.updated;
+                summary.contacts_deleted += synced.deleted;
+                summary.errors += synced.unusable + synced.failed;
+                summary.requests += synced.requests;
+                if let Some(cut_short) = synced.cut_short {
+                    found.listing(
+                        &listing_name,
+                        format!(
+                            "{cut_short}; nothing it has not reached is deleted until it finishes"
+                        ),
+                    );
+                }
+            }
             Err(e) => {
                 summary.errors += 1;
-                warn!(
-                    event = "carddav_addressbook_sync_failed",
-                    addressbook = %book.href,
-                    error = %e,
-                    "an addressbook could not be synced"
-                );
+                found.listing(&listing_name, format!("{e:#}"));
             }
         }
     }
-
     Ok(summary)
+}
+
+#[async_trait]
+impl ObjectStore for RawDb {
+    type Props = ContactProps;
+    type Row = ContactRow;
+
+    fn row(
+        &self,
+        collection: &str,
+        href: &str,
+        etag: Option<&str>,
+        vcard: &str,
+    ) -> std::result::Result<ContactRow, String> {
+        let uid = api::vcard_uid(vcard)
+            .ok_or_else(|| "the vCard has no UID, so it cannot be stored".to_string())?;
+        Ok(ContactRow::new(
+            collection.to_string(),
+            uid,
+            href.to_string(),
+            etag.map(String::from),
+            api::vcard_fn(vcard),
+            api::vcard_rev(vcard),
+            vcard,
+        ))
+    }
+
+    async fn put(&self, tx: &mut Transaction<'_, Sqlite>, rows: &[&ContactRow]) -> Result<()> {
+        RawDb::upsert_contacts_in_tx(tx, rows).await
+    }
+
+    async fn remove(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        collection: &str,
+        href: &str,
+    ) -> Result<u64> {
+        RawDb::delete_contact(tx, collection, href).await
+    }
+
+    async fn set_token(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        collection: &str,
+        token: Option<&str>,
+    ) -> Result<()> {
+        RawDb::set_sync_token(tx, collection, token).await
+    }
+}
+
+/// A configured name no address book has is reported and costs only
+/// itself — unless none matches, which fails the run rather than
+/// falling back to every address book the filter was there to exclude.
+fn report_unmatched_names(
+    found: &RunProblems,
+    configured: &[String],
+    books: &[Book],
+) -> Result<()> {
+    let names = || {
+        books
+            .iter()
+            .map(|b| b.display_name.as_deref().unwrap_or(&b.href))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let resolution = download_problems::resolve_configured("addressbooks", configured, |want| {
+        books
+            .iter()
+            .any(|b| b.display_name.as_deref() == Some(want))
+            .then_some(())
+            .ok_or_else(|| format!("no address book has that name; the account has {}", names()))
+    });
+    let nothing_resolved = resolution.nothing_resolved();
+    found.config(resolution.problems);
+    if nothing_resolved {
+        anyhow::bail!(
+            "none of the configured addressbooks ({}) exists; the account has {}",
+            configured.join(", "),
+            names()
+        );
+    }
+    Ok(())
 }
 
 /// Resource the orchestrator carries around per addressbook —
@@ -176,7 +294,7 @@ async fn discover(
     summary: &mut FetchSummary,
     latchkey: &LatchkeySettings,
 ) -> Result<(String, String)> {
-    let principal_url = datalib_etl::dav::find_principal(
+    let principal_url = datalib_etl_web::dav::find_principal(
         api::HTTP_SERVICE,
         server_url,
         "carddav",
@@ -229,90 +347,6 @@ async fn list_addressbooks(
         });
     }
     Ok(out)
-}
-
-async fn sync_addressbook(
-    db: &RawDb,
-    book_id: &str,
-    book_url: &str,
-    prev_token: &str,
-    summary: &mut FetchSummary,
-    latchkey: &LatchkeySettings,
-) -> Result<()> {
-    summary.requests += 1;
-    let body = api::body_sync_collection(prev_token);
-    let ms = match api::report(book_url, &body, latchkey).await {
-        Ok(ms) => ms,
-        Err(DavError::Http {
-            status: 403 | 405 | 501,
-            ..
-        }) => {
-            // Server explicitly doesn't support sync-collection.
-            // Fall back to a multiget over what we already have plus
-            // a discovery walk. Not implemented yet — record the
-            // error and move on.
-            warn!(
-                event = "carddav_sync_collection_unsupported",
-                addressbook_url = %book_url,
-                "the server does not support sync-collection; walking whole"
-            );
-            return Ok(());
-        }
-        Err(e) => return Err(anyhow::anyhow!("sync-collection REPORT: {e}")),
-    };
-    apply_multistatus(db, book_id, &ms, summary).await?;
-    if let Some(token) = &ms.sync_token {
-        db.set_sync_token(book_id, token).await?;
-    }
-    Ok(())
-}
-
-async fn apply_multistatus(
-    db: &RawDb,
-    book_id: &str,
-    ms: &Multistatus,
-    summary: &mut FetchSummary,
-) -> Result<()> {
-    let changed = api::changed_contacts(ms);
-    let deleted = api::deleted_hrefs(ms);
-
-    // Pre-fetch existing etags so we can tell `new` from `updated`.
-    let existing = db.contact_etags_by_href(book_id).await?;
-
-    let mut rows: Vec<ContactRow> = Vec::with_capacity(changed.len());
-    for (href, (etag, vcard)) in &changed {
-        let Some(uid) = api::vcard_uid(vcard) else {
-            warn!(
-                event = "carddav_vcard_missing_uid",
-                href = %href,
-                "a vCard has no UID; keyed on its href"
-            );
-            summary.errors += 1;
-            continue;
-        };
-        let was_known = existing.contains_key(href);
-        if was_known {
-            summary.contacts_updated += 1;
-        } else {
-            summary.contacts_new += 1;
-        }
-        rows.push(ContactRow::new(
-            book_id.to_string(),
-            uid,
-            href.clone(),
-            etag.clone(),
-            api::vcard_fn(vcard),
-            api::vcard_rev(vcard),
-            vcard,
-        ));
-    }
-    db.upsert_contacts(&rows).await?;
-
-    for href in &deleted {
-        db.delete_contact(book_id, href).await?;
-        summary.contacts_deleted += 1;
-    }
-    Ok(())
 }
 
 /// Account identifier: the URL host. One latchkey credential entry

@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # The one place datalib mints an entity id. Every provider's
 # `grid_rows.uuid` / `markdown_uuid` / anchor uuid derives from
 # `entity_id` here, under a single root namespace, so the question

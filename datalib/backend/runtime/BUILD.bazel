@@ -2,7 +2,6 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files([
     "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
-    "Cargo.toml",
     # Canonical version constants, read by //tools:version_pins_test
     # (and by //tools:qmd_model_cache_path_test for the qmd one).
     "src/node_runtime.rs",  # LATCHKEY_VERSION
@@ -10,7 +9,8 @@ exports_files([
 ])
 
 # The data-root layout plus the bundled-Node/npx resolution every binary
-# shares. No dependencies, so any crate can link it.
+# shares. No first-party dependencies, so any crate can link it; its one
+# third-party one, tempfile, is in every test tree already.
 rust_library(
     name = "datalib_runtime",
     srcs = glob(["src/**/*.rs"]),
@@ -19,10 +19,11 @@ rust_library(
     # Sets CARGO_PKG_VERSION, which `build_id::DATALIB_VERSION` reads:
     # this is the crate every store-owning binary links, so it is where
     # "which datalib wrote this store" comes from. Must match
-    # [workspace.package].version in datalib/backend/Cargo.toml;
+    # [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.39.0",
+    version = "0.41.0",
     visibility = ["//datalib:__subpackages__"],
+    deps = ["@datalib_crates//:tempfile"],
 )
 
 rust_test(
@@ -30,7 +31,4 @@ rust_test(
     size = "small",
     crate = ":datalib_runtime",
     edition = "2021",
-    deps = [
-        "@datalib_crates//:tempfile",
-    ],
 )

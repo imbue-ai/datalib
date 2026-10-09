@@ -81,8 +81,9 @@ Its tree is worth nothing kept: both commits stay in the source's store,
 so comparing them again rebuilds it. Removing a diff group on the Manage
 screen therefore offers, checked by default, to delete the tree too —
 `POST /api/purge` with the group ids, once they are out of the config.
-The server deletes `<root>/<group>/` while no step runs and forgets the
-group's steps in its record; without that, a group re-added under the
+The loop stops the group's steps if they run, deletes `<root>/<group>/`
+and forgets the group's steps in its record, without waiting for a sync
+to end (`datalib/backend/dag/README.md` §"Resets and purges"); without that, a group re-added under the
 same id and definition would read as up to date and write nothing.
 
 `configs/dag_example.toml` is the commented, complete version;
@@ -177,7 +178,7 @@ test in `methods.rs` fails when it drifts, and
   "Ingest" (`http/src/manage/mod.rs::child_label`); the browser
   replaces that with "Download" for an origin method or "Import" for a
   local one (`cards/SourcesCard.ce.vue`), off the step's written params.
-- **The wizard's Connection section.** A descriptor with a
+- **The wizard's account row.** A descriptor with a
   `credentialService` shows its latchkey controls only while the
   params the form would write reach an origin: an import has nothing
   to log in to (`SourceWizard.vue`).
@@ -207,7 +208,11 @@ file runs.
 Warnings: a group with nothing filed under it; a `name` on a grouped
 step (the label comes from the group and the function); an applet
 filed under an undeclared group; a `keyword_index` that `qmd_aggregator`
-does not read, in a config that has one.
+does not read, in a config that has one; a built-in step's
+`common.always_clear_before_ingest`, which no longer does anything
+(`datalib-step` drops it before parsing). The Manage screen's System
+row counts the config's warnings and names them on hover; a
+double-click opens the config.
 
 ## What the runner forwards and what `datalib-step` refuses
 
@@ -295,8 +300,8 @@ off just its `embed` step keeps keyword search.
 
 The wizard maintains all of it (`ui/src/config/sourceSteps.ts`):
 `wireIntoFanIns` on create, `unwireFromFanIns` on delete and when a
-render step is removed, and `setQmdSteps` for the Rendering section's
-two qmd tickboxes. "Keyword-index the markdown" adds or removes the
+render step is removed, and `setQmdSteps` for the two qmd tickboxes
+under Rendering in Advanced options. "Keyword-index the markdown" adds or removes the
 source's `keyword_index` and its edge into `qmd_aggregator`; "Embed it
 for search by meaning", which needs the first, does the same for its
 `embed`. Removing any step takes every step that reads it (a fan-in loses
@@ -308,8 +313,9 @@ to remember, and the Manage screen flags a render step nothing consumes.
 
 One row per group, its steps and applets under a chevron. The group
 row's rules are in `http/src/manage/group.rs`: children in pipeline
-order; status running if any child is, else queued, else off, else
-failed, else stopped, else the last step's; last synced and last
+order; status running if any child is, else waiting, else failed, else
+queued, else stopped, else the last step's, passing over a child turned
+off (the group reads off only when every child is); last synced and last
 success are the ingest step's instants, else the newest child's; bytes
 are the group directory's own measured series, never a sum across
 children; a sync of the group starts at its steps with no inputs (for
@@ -320,8 +326,10 @@ the UI splits an id.
 
 The wizard (`SourceWizard.vue`, writers in `sourceSteps.ts`) edits a
 source as one thing: the group plus its `ingest` and `render_markdown`
-steps from one form, render fields under a "Rendering" heading, one
-name box for the group. Editing renames the group in place and
+steps from one form, one name box for the group. The form is the
+catalog entry's `sections`, with the render fields and everything else
+no section names under Advanced options
+([`wizard_design.md`](wizard_design.md)). Editing renames the group in place and
 rewrites both steps where the first of them stood. A source missing one of its
 two steps gets it back on save; a render step under a provider that
 renders nothing (`renderStep: false` in `ui/src/config/catalog.ts`) is
@@ -334,6 +342,14 @@ the last one and above the `unified_index` group, its qmd steps right
 after its render, and each step below the steps it reads. A file already
 out of that order where no place fits gets the new entries at the end.
 The runner itself reads only `inputs`.
+
+Dragging a group by the grip at the left of its row is how a person
+changes that order (`moveGroup`). The group's `[[groups]]` entry and
+every step and applet filed under it move together, comments included,
+to just above the group it was dropped on — the block `topo-sort-config`
+moves a group as. A drop that would put a group above one it reads, or below one
+that reads it, is refused and the card says why (`moveAgainstDataFlow`),
+so a file in data-flow order stays in it.
 
 `datalib-step topo-sort-config <root>/config.toml` puts a whole file in
 that order (`dag/src/config_order.rs`), keeping the old text as

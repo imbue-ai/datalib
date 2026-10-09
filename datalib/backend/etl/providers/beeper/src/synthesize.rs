@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use datalib_etl::synthesize::{SynthesizeReport, Synthesizer};
+use datalib_etl_web::synthesize::{SynthesizeReport, Synthesizer};
 
 pub struct BeeperSynth {
     #[allow(dead_code)]

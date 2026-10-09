@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { EVERY_ROW, clickRowByUuid } from "./grid-helpers";
+import { EVERY_ROW, selectRowByUuid, inDocFrame } from "./grid-helpers";
 
 // Clicking a grid row opens that row's document as a column on the
 // right with the corresponding section highlighted and scrolled into
@@ -22,14 +22,12 @@ type Row = {
 test.use({ viewport: { width: 1500, height: 450 } });
 
 async function assertSelectedVisible(page: import("@playwright/test").Page, uuid: string) {
-  const selected = page.locator(`.chat-preview [data-section-uuid="${uuid}"].selected`);
+  const selected = await inDocFrame(page, `[data-section-uuid="${uuid}"].selected`);
   await expect(selected).toBeVisible({ timeout: 10_000 });
+  // The document frame is the pane: its viewport is what the reader sees.
   const inView = await selected.evaluate((el) => {
-    const pane = el.closest(".chat-preview")!;
-    const p = pane.getBoundingClientRect();
     const r = el.getBoundingClientRect();
-    // The section's top edge sits inside the pane's viewport.
-    return r.top >= p.top - 1 && r.top < p.bottom;
+    return r.top >= -1 && r.top < el.ownerDocument.defaultView!.innerHeight;
   });
   expect(inView, `section ${uuid} must be inside the pane viewport`).toBe(true);
 }
@@ -77,13 +75,23 @@ test("row clicks highlight and scroll to the right message", async ({ page, requ
   await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
-  await clickRowByUuid(page, chosen!.uuidA);
+  await selectRowByUuid(page, chosen!.uuidA);
   await assertSelectedVisible(page, chosen!.uuidA);
 
-  await clickRowByUuid(page, chosen!.uuidB);
+  await selectRowByUuid(page, chosen!.uuidB);
   await assertSelectedVisible(page, chosen!.uuidB);
   // The previous selection is gone — exactly one selected section.
-  await expect(
-    page.locator(`.chat-preview [data-section-uuid="${chosen!.uuidA}"].selected`),
-  ).toHaveCount(0);
+  // The previous selection is gone from every document frame.
+  await expect
+    .poll(async () => {
+      let n = 0;
+      for (const f of page.frames()) {
+        n += await f
+          .locator(`[data-section-uuid="${chosen!.uuidA}"].selected`)
+          .count()
+          .catch(() => 0);
+      }
+      return n;
+    })
+    .toBe(0);
 });

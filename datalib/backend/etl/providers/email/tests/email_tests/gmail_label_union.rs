@@ -39,9 +39,10 @@ async fn mirrors_the_union_of_the_configured_labels() {
         .await;
 
     let summary = summary.expect("gmail fetch under playback");
-    assert!(
-        summary.full_sync,
-        "no stored cursor, so this is a full sync"
+    assert_eq!(
+        summary.walked,
+        ["datalib", "travel"],
+        "no stored cursor, so both labels are walked"
     );
     assert_eq!(
         summary.emails_upserted, 3,

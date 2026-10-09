@@ -22,27 +22,29 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { rmSync, writeFileSync } from "node:fs";
 import {
-  savedConfig,
+  cardOf,
   expandGroup,
   groupRow,
-  pickRowMenu,
-  lastSuccessOf,
   LAST_UPDATE_AT,
+  lastSuccessOf,
+  MANAGE_WITH_CONFIG,
+  pickRowMenu,
   pipelineRow as row,
-  showColumn,
   recordStatuses,
+  savedConfig,
   settle,
   settleRow,
   settleRunner,
+  showColumn,
+  shownCards,
   stampOf as lastSyncedOf,
-  untilTheSecondTurns,
   stampsBefore,
   statusLog,
-  statusWord,
   statusOf,
-  TERMINAL,
+  statusWord,
   TABLE_ROWS,
-  MANAGE_WITH_CONFIG,
+  TERMINAL,
+  untilTheSecondTurns,
 } from "./grid-helpers";
 import { expectSanePaints, watchPaints } from "./paint-watch";
 
@@ -120,7 +122,7 @@ async function writeConfig(page: Page, text: string) {
   //
   // Saving re-derives the table from the config text at once — that is
   // the point of the Advanced editor — but the per-step history behind
-  // the Last update column comes from `GET /api/dag`, which
+  // the Status column comes from `GET /api/dag`, which
   // is refetched separately. Between the two, a row that has run before
   // paints as "Never run": it exists because the config declares it,
   // and nothing has yet said what it did. Mounting the page afresh
@@ -209,7 +211,7 @@ command = "'${STEP_BIN}'"
 path = "${dataRoot}/fsindex_scan"
 
 # Declared and never synced by any test in this file, so "never run" is
-# a state the grid can be observed handling — a Last update with no time, and
+# a state the grid can be observed handling — a Status with no time, and
 # a row that has to stay at the bottom of that column whichever way it
 # is sorted. Without a row like this the sort test passes with the
 # comparator deleted, because same-offset ISO stamps happen to sort
@@ -300,8 +302,9 @@ ${applets()}`;
       .toContain("Running");
 
     // Syncing a source takes on everything downstream of it, so the
-    // render is in flight too: Queued behind its download, or Running on
-    // what the download has published, since the download streams.
+    // render is in flight too: Queued behind its download, Running on
+    // what the download has published, since the download streams, or
+    // Waiting for its next seal.
     // This is the assertion a download-only source could not support.
     await expect
       .poll(async () => (await since(TAPED_DOWN, beforeDown)).length, {
@@ -314,7 +317,7 @@ ${applets()}`;
     expect(
       statusWord(downstream[0]),
       `downstream sequence was ${JSON.stringify(downstream)}`,
-    ).toMatch(/^(Queued|Running)$/);
+    ).toMatch(/^(Queued|Running|Waiting)$/);
     // ...while the unrelated source is not claimed at all.
     expect(await statusOf(page, "docs/ingest")).not.toBe("Queued");
     // Only the hold keeps it here; if the step has finished anyway, the
@@ -396,7 +399,7 @@ ${applets()}`;
     await settleRunner(page);
   });
 
-  test("Last update's time holds still under a minute, then crosses to 1 minute ago", async ({
+  test("Status's time holds still under a minute, then crosses to 1 minute ago", async ({
     page,
   }) => {
     // What only a browser can answer about this column. The arithmetic
@@ -453,7 +456,7 @@ ${applets()}`;
     // column used to do, they would have read 3, 4, 5 — this is the
     // assertion that fails if the countup ever comes back.
     await page.clock.runFor(4000);
-    await expect(cell, "Last update ticked while nothing happened").toHaveText("seconds ago");
+    await expect(cell, "Status ticked while nothing happened").toHaveText("seconds ago");
 
     // The crossing to "1 minute ago" — the only self-repaint this
     // column does, and the reason the loop exists. It went untested
@@ -487,7 +490,7 @@ ${applets()}`;
     await page.clock.resume();
   });
 
-  test("sorting Last update orders by time, not by how the cell reads", async ({ page }) => {
+  test("sorting Status orders by time, not by how the cell reads", async ({ page }) => {
     // The column shows "5 minutes ago" and sorts on the underlying
     // stamp. Those two orders genuinely disagree here, which is what
     // makes this worth asserting through the real header rather than
@@ -647,9 +650,9 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
 
     await cell.dblclick();
     // The log is the column after the Manage card.
-    const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+    const dialog = shownCards(page).filter({ has: page.locator(".rl-panel") });
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator(".miller-col-title")).toHaveText("Log · flaky/ingest");
+    await expect(dialog.locator(".ct-card-title")).toHaveText("Log · flaky/ingest");
     // Opened on the step's attempt — a process of the run, with how it
     // ended in its name — and on the whole of it: the step's own words
     // and the runner's about it.
@@ -659,7 +662,8 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
     );
     // The pickers write what they pick into the query, which is the
     // whole of what the panel shows.
-    await expect(dialog.locator(".rl-search")).toHaveValue(
+    await expect(dialog.locator(".rl-search")).toHaveAttribute(
+      "data-query",
       /(^| )run:\S+ step:flaky\/ingest attempt:1$/,
     );
     // The line the panel opened on is the runner's word on how the step
@@ -673,6 +677,20 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
       '.rl-grid .slick-row:not(.slick-group) .slick-cell[col-id="msg"]',
     );
     await expect(messages.filter({ hasText: /^walking page 1$/ })).toBeVisible();
+
+    // The line's Group and Step are chips: the group resolves to its
+    // failed status, and a double-click opens its dashboard.
+    const line = dialog.locator(".rl-grid .slick-row:has(.rl-jumped)");
+    await expect(line.locator('[col-id="step"] a.chip')).toHaveAttribute(
+      "data-entity",
+      "datalib:step/flaky/ingest",
+    );
+    const groupChip = line.locator('[col-id="group_id"] a.chip[data-entity="datalib:group/flaky"]');
+    await expect(groupChip).toHaveClass(/entity-failed/, { timeout: 10_000 });
+    await groupChip.dblclick();
+    await expect(cardOf(page, 'syncDashboardView({"group":"flaky"})')).toBeVisible({
+      timeout: 10_000,
+    });
   });
 
   // A source that syncs once and fails from then on: Last synced
@@ -704,8 +722,22 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     expect(succeeded).not.toBeNull();
     expect(await lastSuccessOf(page, "soured/ingest")).toBe(succeeded);
 
+    // The step's log, left open beside the table: its Group chip says the
+    // group succeeded, and follows the next sync's failure without a
+    // reload (the chip's answer is asked again on each live frame).
+    const log = shownCards(page).filter({ has: page.locator(".rl-panel") });
+    await pickRowMenu(page, row(page, "soured/ingest"), "Show step log", log);
+    const groupChip = log.locator('.rl-grid a.chip[data-entity="datalib:group/soured"]').first();
+    await expect(groupChip).toBeVisible({ timeout: 10_000 });
+    // Resolved and held: the hover carries the group's status.
+    await expect(groupChip).toHaveAttribute("title", /\nSucceeded/, { timeout: 10_000 });
+    await expect(groupChip).not.toHaveClass(/entity-failed/);
+
     await untilTheSecondTurns();
     await syncBtn(page, "soured/ingest").click();
+    // Before `settle`, which reloads the page and would ask afresh: this
+    // is the chip drawn before the sync, following it.
+    await expect(groupChip).toHaveClass(/entity-failed/, { timeout: 30_000 });
     expect(await settle(page, "soured/ingest", succeeded)).toBe("Failed");
     await expandGroup(page, "soured");
     const failed = await lastSyncedOf(page, "soured/ingest");

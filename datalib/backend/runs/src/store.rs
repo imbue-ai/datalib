@@ -330,7 +330,10 @@ async fn write_meta(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         pool,
         datalib_store_meta::StoreKind::Runs,
         &hash,
-        SCHEMA_VERSION as u32,
+        datalib_store_meta::Versions {
+            schema: SCHEMA_VERSION as u32,
+            shared: 0,
+        },
     )
     .await
     .map_err(|e| sqlx::Error::Protocol(format!("_datalib_meta: {e:#}")))?;
@@ -1567,7 +1570,9 @@ impl ClosedRun {
 /// became, because the scheduler's vocabulary is not this crate's
 /// business (see [`crate::LiveState`]). `why` goes on each step's
 /// `error`, so a person can tell a step that stopped itself from one the
-/// server gave up on.
+/// server gave up on. A step still `pending` takes it too, where [`end`]
+/// deletes one: a runner that died never settled the steps it was asked
+/// for, so a pending row here may be one it was about to run.
 ///
 /// Processes are deliberately untouched. This crate would have to invent
 /// an exit code or a signal for them, and it does not know one: the
@@ -1726,7 +1731,10 @@ fn days_before(at: datalib_time::IsoOffsetTimestamp, days: u32) -> String {
 
 /// The process is over, and its run with it. Counted as a change to
 /// the runs so a watcher redraws a run that just finished; a launch
-/// ending is nobody's live question.
+/// ending is nobody's live question. By now the runner has settled
+/// every step a request reached, so a step still `pending` is one no
+/// request asked for: it was not part of this run, and its row goes
+/// rather than reading as waiting forever.
 async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
     let (finished_at_utc, _) = now_split();
     let mut tx = pool.begin().await?;
@@ -1742,6 +1750,15 @@ async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
             .execute(&mut *tx)
             .await?;
         bump(&mut tx, StorePart::Runs).await?;
+        let never_started = sqlx::query("DELETE FROM step_runs WHERE run_id = ? AND state = ?")
+            .bind(&run.run_id)
+            .bind(LiveState::Pending.as_str())
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        if never_started > 0 {
+            bump(&mut tx, StorePart::StepRuns).await?;
+        }
     }
     tx.commit().await
 }

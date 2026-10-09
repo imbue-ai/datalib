@@ -20,7 +20,7 @@ use axum::{
     Router,
 };
 use datalib_core::repo::{DynAppRepo, RepoError};
-use datalib_dag::config::{owner_only_options, replace_config};
+use datalib_dag::config::owner_only_options;
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -41,11 +41,14 @@ pub mod lock;
 pub mod logging;
 pub mod loop_guard;
 pub mod manage;
+pub mod plugins;
+pub mod probe;
 pub mod prometheus;
 pub mod remote_media;
 pub mod request_log;
 pub mod supervisor;
 pub mod ui_events;
+pub mod ui_state;
 pub mod usage;
 pub mod watch;
 
@@ -174,9 +177,11 @@ pub fn router(state: AppState) -> Router {
             "/api/latchkey/connect/{id}/status",
             get(connect::connect_status),
         )
-        .route("/api/probe", post(connect::probe))
+        .route("/api/probe", post(probe::start_probe))
+        .route("/api/probe/{id}", get(probe::probe_status))
         .route("/api/dag", get(get_dag))
         .route("/api/manage/rows", get(manage::get_manage_rows))
+        .route("/api/entities", post(manage::post_entities))
         // Prometheus's own path, so a scrape config needs nothing but the
         // address and the token.
         .route("/metrics", get(prometheus::get_metrics))
@@ -209,7 +214,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/{run}/steps", get(run_steps))
         .route("/api/runs/{run}/log", get(run_log))
         .route("/api/log", get(log_lines))
+        .route("/api/log/keys", get(log_keys))
+        .route("/api/log/values", get(log_values))
         .route("/api/ui/events", post(ui_events::post_events))
+        .route(
+            "/api/ui/state/{name}",
+            get(ui_state::get_state).put(ui_state::put_state),
+        )
         .route("/api/sync/stream", get(sync_stream))
         .route("/api/frontend", get(get_frontend))
         // Remote media a document was let load (remote_media.rs): the
@@ -433,15 +444,23 @@ async fn proxy_impl(
 /// An applet's answer, as the browser gets it. What an applet serves is
 /// data — a rendered plot page, an attachment out of a render tree — and
 /// a document among it must not run in the app's origin, where it would
-/// hold the session: it gets the same sandbox the DACTAL page does.
+/// hold the session: it gets the sandbox policy of the kind the applet
+/// names, and runs nothing when it names none. A script or wasm file
+/// goes out as bytes, so the app page's `script-src 'self'` cannot run
+/// one a sender attached.
 fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
     let mut resp = Response::builder()
         .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
     if embed::is_scriptable_document(&r.content_type) {
-        resp = resp.header(header::CONTENT_SECURITY_POLICY, embed::DOCUMENT_SANDBOX_CSP);
+        resp = resp.header(header::CONTENT_SECURITY_POLICY, r.document.csp());
     }
-    resp.header(header::CONTENT_TYPE, r.content_type)
+    let content_type = if embed::is_executable(&r.content_type) {
+        "application/octet-stream".to_string()
+    } else {
+        r.content_type
+    };
+    resp.header(header::CONTENT_TYPE, content_type)
         .body(Body::from(r.body))
         .unwrap_or_else(|_| applet_error(StatusCode::BAD_GATEWAY, "malformed applet response"))
 }
@@ -477,6 +496,10 @@ pub struct PutLibRequest {
     /// `frontend::Meta`), same keep/clear semantics as `title`.
     #[serde(default)]
     pub icon: Option<String>,
+    /// Whether the gallery lists it under "Developer tools" (see
+    /// `frontend::Meta`). Omitted = keep what is stored.
+    #[serde(default)]
+    pub dev_tool: Option<bool>,
 }
 
 /// What a write returns: the name, the content hash, and the metadata
@@ -571,15 +594,22 @@ async fn put_lib(
         Some(v) if v.trim().is_empty() => None,
         Some(v) => Some(v),
     };
-    let (prior_title, prior_desc, prior_args, prior_icon) = match prior {
+    let (prior_title, prior_desc, prior_args, prior_icon, prior_dev_tool) = match prior {
         Some(frontend::Meta::Component {
             title,
             description,
             component_args,
             icon,
+            dev_tool,
             ..
-        }) => (Some(title), Some(description), Some(component_args), icon),
-        _ => (None, None, None, None),
+        }) => (
+            Some(title),
+            Some(description),
+            Some(component_args),
+            icon,
+            dev_tool,
+        ),
+        _ => (None, None, None, None, false),
     };
     let meta = frontend::Meta::Component {
         title: merge(req.title, prior_title).unwrap_or_default(),
@@ -587,6 +617,7 @@ async fn put_lib(
         component_hash: hash.clone(),
         component_args: req.component_args.or(prior_args).unwrap_or_default(),
         icon: merge(req.icon, prior_icon),
+        dev_tool: req.dev_tool.unwrap_or(prior_dev_tool),
     };
     // Writing the metadata also retires any tombstone at this name: the
     // name holds a real component again.
@@ -792,6 +823,20 @@ pub struct ConfigResponse {
     /// else `npx -y latchkey@<pin>`. The Setup UI splices it into its
     /// copy-pasteable snippets.
     pub latchkey_cli: String,
+    /// The launch's upgrade: the steps being asked to migrate, and the ones
+    /// that answered they need to run again, which the page offers to run.
+    pub upgrade: UpgradeView,
+}
+
+/// `docs/dev/plans/upgrade_on_launch.md`, as the page needs it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UpgradeView {
+    #[serde(flatten)]
+    pub pass: supervisor::Upgrade,
+    /// The steps that answered the pass with `needs_rerun` and have not run
+    /// since (`round::rerun_offer`). Empty while the pass runs: the offer
+    /// comes after it.
+    pub rerender: Vec<String>,
 }
 
 /// A root this build refuses, for the UI: what wrote it, what this is.
@@ -858,6 +903,11 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         ),
         None => (false, None, 0, Vec::new(), false),
     };
+    let pass = s.sync.upgrade();
+    let rerender = match &checked {
+        Some(c) if !pass.migrating => rerun_offer(&c.graph, &s.sync).await,
+        _ => Vec::new(),
+    };
     Json(ConfigResponse {
         exists: path.exists(),
         path: path.display().to_string(),
@@ -869,7 +919,24 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         newer_root,
         source_count,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
+        upgrade: UpgradeView { pass, rerender },
     })
+}
+
+async fn rerun_offer(graph: &datalib_dag::Graph, sync: &supervisor::SyncControl) -> Vec<String> {
+    let record = match sync.mailbox().await {
+        Ok(store) => store.load_record().await,
+        Err(e) => Err(e),
+    };
+    match record {
+        Ok(record) => datalib_dag::supervisor::round::rerun_offer(graph, &record),
+        Err(e) => {
+            tracing::warn!(
+                "could not read the loop's record, so nothing is offered to re-render: {e:#}"
+            );
+            Vec::new()
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -944,7 +1011,7 @@ async fn put_config(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    if let Err(e) = replace_config(&path, &req.text) {
+    if let Err(e) = datalib_runtime::atomic::write_owner_only(&path, req.text.as_bytes()) {
         tracing::error!("put_config: write {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -978,44 +1045,39 @@ pub struct InitConfigResponse {
 /// makes the check and the write one operation.
 async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigResponse>, StatusCode> {
     let path = s.config_path();
-
-    if let Some(parent) = path.parent() {
-        datalib_core::layout::create_data_root(parent).map_err(|e| {
-            tracing::error!("init_config: mkdir {}: {e}", parent.display());
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let created = write_starter_config(&s.root).map_err(|e| {
+        tracing::error!("init_config: {}: {e}", path.display());
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    if created {
+        reload_applets(&s).await;
     }
+    Ok(Json(InitConfigResponse {
+        created,
+        path: path.display().to_string(),
+        text: std::fs::read_to_string(&path).unwrap_or_default(),
+        error: None,
+    }))
+}
 
-    let text = scaffold_toml();
-    // `create_new` is the whole point: the existence check and the
-    // write are one syscall, so this can never overwrite a config that
-    // arrived between them.
+/// Write the starter `config.toml` into `root`, creating the root, unless
+/// a config is already there. True when this call wrote it.
+/// `POST /api/config/init` and `datalib-http --init` both come here.
+///
+/// `create_new` is the whole point: the existence check and the write
+/// are one syscall, so this can never overwrite a config that arrived
+/// between them.
+pub fn write_starter_config(root: &std::path::Path) -> std::io::Result<bool> {
+    use std::io::Write;
+    datalib_core::layout::create_data_root(root)?;
+    let path = datalib_dag::config::root_config_path(root);
     match owner_only_options().create_new(true).open(&path) {
         Ok(mut f) => {
-            use std::io::Write;
-            f.write_all(text.as_bytes()).map_err(|e| {
-                tracing::error!("init_config: write {}: {e}", path.display());
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-            drop(f);
-            reload_applets(&s).await;
-            Ok(Json(InitConfigResponse {
-                created: true,
-                path: path.display().to_string(),
-                text,
-                error: None,
-            }))
+            f.write_all(scaffold_toml().as_bytes())?;
+            Ok(true)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(Json(InitConfigResponse {
-            created: false,
-            path: path.display().to_string(),
-            text: std::fs::read_to_string(&path).unwrap_or_default(),
-            error: None,
-        })),
-        Err(e) => {
-            tracing::error!("init_config: create {}: {e}", path.display());
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
     }
 }
 
@@ -1036,6 +1098,7 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         newer_root: None,
         source_count: 0,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
+        upgrade: UpgradeView::default(),
     })
 }
 
@@ -1696,9 +1759,10 @@ async fn step_turn_on(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/reset` — empty what the targets wrote, keeping the history,
-/// and sync what reads them so the emptiness reaches the grid. Answers
-/// once the targets are empty; refused while a sync runs.
+/// `POST /api/reset` — empty what the targets wrote and sync what reads
+/// them, so the emptiness reaches the grid. 204 once the targets are
+/// empty; 202 when they have not stopped yet, and the loop empties them
+/// once they have; 409, with the reason, for one it cannot reset.
 async fn reset_steps(
     State(s): State<AppState>,
     Json(req): Json<ResetRequest>,
@@ -1707,24 +1771,25 @@ async fn reset_steps(
         return Err((StatusCode::BAD_REQUEST, "nothing to reset".into()));
     }
     let by = req.by.unwrap_or_else(|| "ui".to_string());
-    s.sync
-        .reset(&req.targets, &by)
-        .await
-        .map_err(|e| (StatusCode::CONFLICT, e))?;
-    Ok(StatusCode::NO_CONTENT)
+    wiped(s.sync.reset(&req.targets, &by).await)
 }
 
 /// `POST /api/purge` — delete the trees of groups gone from the config.
-/// 204 once they are gone; 202 when a sync in progress holds the delete
-/// until it is over; 409, with the reason, for a group still configured.
+/// 204 once they are gone; 202 when their steps have not stopped yet, and
+/// the loop deletes them once they have; 409, with the reason, for a
+/// group still configured.
 async fn purge_groups(
     State(s): State<AppState>,
     Json(req): Json<PurgeRequest>,
 ) -> Result<StatusCode, Refusal> {
     let by = req.by.unwrap_or_else(|| "ui".to_string());
-    match s.sync.purge(&req.groups, &by).await {
-        Ok(supervisor::PurgeAnswer::Done) => Ok(StatusCode::NO_CONTENT),
-        Ok(supervisor::PurgeAnswer::Queued) => Ok(StatusCode::ACCEPTED),
+    wiped(s.sync.purge(&req.groups, &by).await)
+}
+
+fn wiped(answer: Result<supervisor::WipeAnswer, String>) -> Result<StatusCode, Refusal> {
+    match answer {
+        Ok(supervisor::WipeAnswer::Done) => Ok(StatusCode::NO_CONTENT),
+        Ok(supervisor::WipeAnswer::Queued) => Ok(StatusCode::ACCEPTED),
         Err(why) => Err((StatusCode::CONFLICT, why)),
     }
 }
@@ -1953,45 +2018,152 @@ async fn log_lines(
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
 }
 
+/// The keys the run log's search bar offers as a person types.
+async fn log_keys() -> Json<Vec<datalib_columns::SearchKeySpec>> {
+    Json(log_key_specs())
+}
+
+#[derive(Debug, Deserialize)]
+struct LogValuesParams {
+    key: String,
+    #[serde(default)]
+    typed: String,
+    #[serde(default)]
+    q: String,
+}
+
+/// `GET /api/log/values?key=…&typed=…&q=…`: what the run log's search
+/// bar suggests for one key's value.
+async fn log_values(
+    State(s): State<AppState>,
+    Query(p): Query<LogValuesParams>,
+) -> Result<Json<Vec<datalib_columns::ValueSuggestion>>, (StatusCode, String)> {
+    let values = datalib_runs::log_values(&s.root, &p.q, &p.key, &p.typed)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(
+        values
+            .into_iter()
+            .map(|(value, count)| datalib_columns::ValueSuggestion { value, count })
+            .collect(),
+    ))
+}
+
+fn log_key_specs() -> Vec<datalib_columns::SearchKeySpec> {
+    use datalib_columns::{KeyValues, SearchKeySpec};
+    use strum::VariantArray;
+    let words = |all: Vec<&'static str>| KeyValues::Words { words: all };
+    datalib_runs::key_names()
+        .into_iter()
+        .map(|key| SearchKeySpec {
+            key,
+            aliases: &[],
+            values: match key {
+                "group" => KeyValues::Group,
+                "step" => KeyValues::Step,
+                "level" | "min_level" => words(
+                    datalib_runs::LogLevel::VARIANTS
+                        .iter()
+                        .map(|l| l.as_str())
+                        .collect(),
+                ),
+                "stream" => words(
+                    datalib_runs::Stream::VARIANTS
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect(),
+                ),
+                _ => KeyValues::Text,
+            },
+            partial: false,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A document an applet serves is sandboxed on the way out; JSON is
-    /// left alone. The header, not the body, is what a browser reads.
+    /// The log's bar draws a group or a step as its chip and offers the
+    /// level words; every key it offers is one the log query reads.
+    #[test]
+    fn the_log_offers_every_key_it_reads() {
+        use datalib_columns::KeyValues;
+        let keys = log_key_specs();
+        let values = |key: &str| keys.iter().find(|k| k.key == key).map(|k| k.values.clone());
+        assert_eq!(values("group"), Some(KeyValues::Group));
+        assert_eq!(values("step"), Some(KeyValues::Step));
+        assert_eq!(values("msg"), Some(KeyValues::Text));
+        assert!(
+            matches!(values("min_level"), Some(KeyValues::Words { words }) if words.contains(&"warn"))
+        );
+        let names: Vec<&str> = keys.iter().map(|k| k.key).collect();
+        assert_eq!(names, datalib_runs::key_names());
+    }
+
+    fn proxied(content_type: &str, document: embed::DocumentKind) -> Response<Body> {
+        proxied_response(applets::ProxyResponse {
+            status: 200,
+            content_type: content_type.into(),
+            document,
+            body: b"<script>1</script>".to_vec(),
+        })
+    }
+
+    fn header_of(r: &Response<Body>, name: header::HeaderName) -> Option<&str> {
+        r.headers().get(name).and_then(|v| v.to_str().ok())
+    }
+
+    /// A document an applet serves is sandboxed on the way out, under the
+    /// policy of the kind it names — none means data, which runs
+    /// nothing. JSON is left alone. The header, not the body, is what a
+    /// browser reads.
     #[test]
     fn proxied_documents_are_sandboxed_and_data_is_not() {
-        let html = proxied_response(applets::ProxyResponse {
-            status: 200,
-            content_type: "text/html; charset=utf-8".into(),
-            body: b"<script>1</script>".to_vec(),
-        });
+        let html = proxied("text/html; charset=utf-8", embed::DocumentKind::Data);
         assert_eq!(html.status(), StatusCode::OK);
-        let csp = html
-            .headers()
-            .get(header::CONTENT_SECURITY_POLICY)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        assert!(csp.starts_with("sandbox "), "{csp:?}");
-        assert!(!csp.contains("allow-same-origin"), "{csp:?}");
         assert_eq!(
-            html.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
-            "nosniff"
+            header_of(&html, header::CONTENT_SECURITY_POLICY),
+            Some(embed::DocumentKind::Data.csp())
+        );
+        assert_eq!(
+            header_of(&html, header::X_CONTENT_TYPE_OPTIONS),
+            Some("nosniff")
         );
 
-        let json = proxied_response(applets::ProxyResponse {
-            status: 200,
-            content_type: "application/json".into(),
-            body: b"{}".to_vec(),
-        });
-        assert!(json
-            .headers()
-            .get(header::CONTENT_SECURITY_POLICY)
-            .is_none());
+        let plot = proxied("text/html", embed::DocumentKind::Plot);
         assert_eq!(
-            json.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
-            "nosniff"
+            header_of(&plot, header::CONTENT_SECURITY_POLICY),
+            Some(embed::DocumentKind::Plot.csp())
         );
+
+        let json = proxied("application/json", embed::DocumentKind::Data);
+        assert!(header_of(&json, header::CONTENT_SECURITY_POLICY).is_none());
+        assert_eq!(
+            header_of(&json, header::X_CONTENT_TYPE_OPTIONS),
+            Some("nosniff")
+        );
+    }
+
+    /// A `.js` a sender attached is served as bytes: under `nosniff` a
+    /// `<script src>` refuses it, so the app page's `script-src 'self'`
+    /// cannot be turned into a way to run it (audit 2026-10-02, P3).
+    #[test]
+    fn proxied_scripts_are_not_runnable() {
+        for ct in [
+            "text/javascript",
+            "application/javascript",
+            "application/wasm",
+        ] {
+            let r = proxied(ct, embed::DocumentKind::Data);
+            assert_eq!(
+                header_of(&r, header::CONTENT_TYPE),
+                Some("application/octet-stream"),
+                "{ct}"
+            );
+        }
+        let css = proxied("text/css", embed::DocumentKind::Data);
+        assert_eq!(header_of(&css, header::CONTENT_TYPE), Some("text/css"));
     }
 
     /// The ages are how long a running step has gone without a metric

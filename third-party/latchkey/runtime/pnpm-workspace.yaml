@@ -1,0 +1,2 @@
+minimumReleaseAgeExclude:
+  - latchkey@3.18.0

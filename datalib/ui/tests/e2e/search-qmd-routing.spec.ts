@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { GRID, searchAndSettle } from "./grid-helpers";
+import { GRID, pickAnswerTab, searchAndSettle } from "./grid-helpers";
 
 // Free-text search routes through qmd (BM25 + vector + reranker by
 // default). The bug this guards: previously the Rust backend did
@@ -8,7 +8,11 @@ import { GRID, searchAndSettle } from "./grid-helpers";
 // zero rows even though both tokens show up in many fixture rows (just
 // as the literal "earl grey").
 
-async function qmdSearch(page: import("@playwright/test").Page, q: string) {
+async function qmdSearch(
+  page: import("@playwright/test").Page,
+  q: string,
+  tab: "words" | "meaning" = "words",
+) {
   await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
   // Settle first, then assert. The score column is only ever populated
@@ -17,6 +21,8 @@ async function qmdSearch(page: import("@playwright/test").Page, q: string) {
   // query that silently stopped routing now fails immediately instead
   // of after a 90s wait indistinguishable from a slow daemon.
   await searchAndSettle(page, q);
+  // Free text answers in three tabs; qmd ranks the Words and Meaning ones.
+  await pickAnswerTab(page, tab);
   await expect(page.locator('.grid-box .slick-header-column[col-id="score"]')).toBeVisible();
   await expect(page.locator(".grid-box .slick-row").first()).toBeVisible();
 }
@@ -37,6 +43,6 @@ test.describe("free-text search routes through qmd", () => {
   });
 
   test('qmd_vsearch:"..." predicate routes to vector-only mode', async ({ page }) => {
-    await qmdSearch(page, 'qmd_vsearch:"earl grey"');
+    await qmdSearch(page, 'qmd_vsearch:"earl grey"', "meaning");
   });
 });

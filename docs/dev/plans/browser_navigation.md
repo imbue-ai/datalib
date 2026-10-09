@@ -115,7 +115,7 @@ Fix the two hrefs that exist and lie: `DocCard`'s `/#/chat/<uuid>`
 becomes `hrefFor(documentView(...))`, and a `/chat/:uuid` route redirects
 to `documentView("<uuid>")` alone, because that shape is written into
 rendered markdown in every render store and a redirect costs one line
-(the alias rule in `AGENTS.md` § "Breaking changes are fine").
+(the alias rule in `AGENTS.md` § "Keep a forward path for existing data").
 
 ### 3. Tell the browser the page's name
 

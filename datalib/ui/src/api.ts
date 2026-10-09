@@ -1,7 +1,8 @@
 // Thin fetch wrapper for the Datalib HTTP API.
 
+import type { ProbeNoun } from "./config/catalog";
 import type { FeedbackContext } from "./feedback/context";
-import { ApiError, errorDetail } from "./apiError";
+import { ApiError, errorDetail, FailureError } from "./apiError";
 import { pushToast } from "./toasts";
 
 // `DiffStatus` in datalib_schema, hand-kept in step.
@@ -60,6 +61,11 @@ export type SearchRow = {
   source_id: string;
   kind: string;
   author: string;
+  // The author's handle where the source has one, and the Author cell
+  // the applet resolves from it: the handle as a URI for its id, the
+  // author as shown for its label (docs/dev/chips.md).
+  author_handle: string | null;
+  author_ref: Identity | null;
   channel: string;
   // Public URL for the row's source artifact (Slack permalink, LinkedIn
   // post, …); empty when none.
@@ -139,6 +145,9 @@ export type RowsResponse<Row> = RowsSpec & {
   // surface a 500. `api.ts` raises each as a toast so the user sees
   // them; the field is omitted when empty (serde `skip_serializing_if`).
   errors?: string[];
+  // Why the query cannot be read as typed (the search's alone). Not an
+  // error: mid-keystroke it is usually a filter not finished yet.
+  refused?: string[];
 };
 
 export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho };
@@ -179,9 +188,11 @@ export type ProblemReason =
   | "deliberate_loss"
   | "render_failed"
   | "fetch_failed"
+  | "blob_missing"
   | "over_size_limit"
   | "not_found"
   | "forbidden"
+  | "no_document"
   | "silent"
   | "noted";
 
@@ -484,6 +495,45 @@ async function getJson<T>(
   return (await r.json()) as T;
 }
 
+/// A key a search bar takes, and what its values are
+/// (`datalib_columns::SearchKeySpec`).
+export type SearchKeySpec = {
+  key: string;
+  aliases: string[];
+  values: KeyValues;
+  /// A bare value matches in part and a quoted one whole.
+  partial: boolean;
+};
+
+/// `datalib_columns::KeyValues`: what decides how a value is offered and
+/// drawn. A source, group or step is drawn as its chip.
+export type KeyValues = {
+  kind: "text" | "words" | "source" | "group" | "step" | "stamp" | "person";
+  words?: string[];
+};
+
+/// `datalib_columns::ValueSuggestion`.
+export type ValueSuggestion = { value: string; count?: number };
+
+/// The keys the search bar at `base` takes: `${base}/keys`, for `base` a
+/// table's search (`/applet/unified_index/search`, `/api/log`).
+export function fetchSearchKeys(base: string, signal?: AbortSignal): Promise<SearchKeySpec[]> {
+  return getJson<SearchKeySpec[]>(`${base}/keys`, signal, { toast: false });
+}
+
+/// What the search bar at `base` suggests for `key`'s value: the values
+/// holding `typed` among the rows the rest of the query `q` keeps.
+export function fetchSearchValues(
+  base: string,
+  key: string,
+  typed: string,
+  q: string,
+  signal?: AbortSignal,
+): Promise<ValueSuggestion[]> {
+  const params = new URLSearchParams({ key, typed, q });
+  return getJson<ValueSuggestion[]>(`${base}/values?${params}`, signal, { toast: false });
+}
+
 export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
   const h = await getJson<Health>("/api/health", signal);
   lastHealth = h;
@@ -495,11 +545,17 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 /// for free text). `through` names a row the page must reach, however
 /// far past `offset` it is. `within` narrows it to one group,
 /// `[[column, value], …]` as JSON.
+/// Which answer to free text a search asks for: the grid's own fields,
+/// the words of the documents, or their meaning. Mirrors `SearchTab` in
+/// `applets/src/unified_index/tabs.rs`.
+export type SearchTab = "fields" | "words" | "meaning";
+
 export type SearchPageSpec = {
   offset?: number;
   sort?: string | null;
   through?: string | null;
   within?: string | null;
+  tab?: SearchTab | null;
 };
 
 export const SEARCH = `${UNIFIED_INDEX}/search`;
@@ -529,6 +585,7 @@ export async function fetchRows<Row>(
   if (spec.sort) params.set("sort", spec.sort);
   if (spec.through) params.set("through", spec.through);
   if (spec.within) params.set("within", spec.within);
+  if (spec.tab) params.set("tab", spec.tab);
   const r = await getJson<RowsResponse<Row>>(`${url}?${params.toString()}`, signal, options);
   // Backend returned 200 but is telling us something went sideways
   // (schema mismatch, fallback path errored, etc.). Surface each entry
@@ -553,6 +610,7 @@ export type GroupsResponse<Row = SearchRow> = {
   qmd_error?: string | null;
   qmd_index_missing?: boolean;
   errors: string[];
+  refused?: string[];
 };
 
 /// The groups the rows of `url` (the search's, by default) fall into by
@@ -563,8 +621,10 @@ export async function fetchGroups<Row = SearchRow>(
   by: string,
   signal?: AbortSignal,
   url: string = SEARCH,
+  tab: SearchTab | null = null,
 ): Promise<GroupsResponse<Row>> {
   const params = new URLSearchParams({ q, by });
+  if (tab) params.set("tab", tab);
   const r = await getJson<GroupsResponse<Row>>(`${url}/groups?${params.toString()}`, signal, {
     toast: false,
   });
@@ -644,6 +704,24 @@ export type ConfigResponse = {
   // an `npx -y latchkey@<pin>` fallback. Spliced into the Setup tab's
   // copy-pasteable credential snippets.
   latchkey_cli: string;
+  // The launch's upgrade (docs/dev/plans/upgrade_on_launch.md): the raw
+  // stores being migrated, then what is offered for a re-render.
+  upgrade: Upgrade;
+};
+
+/// Mirrors `supervisor::MigrateState`.
+export type MigrateState = "waiting" | "running" | "done" | "failed";
+
+export type Upgrade = {
+  // The migrate pass is running: nothing syncs until it is done.
+  migrating: boolean;
+  // The server has run its pass, or found it had none to run.
+  settled: boolean;
+  // Every step the pass asks, in the order it asks them.
+  steps: { step: string; state: MigrateState; error: string | null }[];
+  // The steps that answered that they need to run again: the roots of
+  // the re-render the app offers. Empty while migrating.
+  rerender: string[];
 };
 
 export type NewerRoot = {
@@ -939,7 +1017,9 @@ export type ColumnSpec = {
   editable: boolean;
   // How the producer's search bar filters on this column: the key a term
   // starts with, and the row field holding the value it names.
-  search?: { key: string; field: string };
+  // `partial`: the key matches a bare value in part, so a value written
+  // to be matched whole is quoted.
+  search?: { key: string; field: string; partial?: boolean };
   // On an identity column: the row field of chips drawn after the label,
   // as bare counts. Double-clicking them is a double-click on that field.
   badges?: string;
@@ -953,6 +1033,9 @@ export type Identity = {
   label: string;
   icon?: string | null;
   detail?: string | null;
+  /// The group or step this names, as a chip's URI (`datalib:group/slack`),
+  /// when the viewer should draw it as a chip it can resolve and open.
+  entity?: string | null;
 };
 
 export type Sample = { at: string; value: number };
@@ -1223,8 +1306,8 @@ export function fetchRequests(signal?: AbortSignal): Promise<SyncRequest[]> {
 
 /// Sync `roots` and everything downstream of them, one request per
 /// source they belong to; no roots syncs every source.
-export async function openRequest(roots: string[]): Promise<SyncRequest[]> {
-  return (await (await post("/api/requests", { roots })).json()) as SyncRequest[];
+export async function openRequest(roots: string[], by?: string): Promise<SyncRequest[]> {
+  return (await (await post("/api/requests", { roots, by })).json()) as SyncRequest[];
 }
 
 export async function stopRequest(id: string): Promise<void> {
@@ -1240,14 +1323,15 @@ export async function turnOnStep(id: string): Promise<void> {
 }
 
 /// Empty what the targets wrote, keeping the history, and sync what reads
-/// them; answers once they are empty. Refused while a sync runs.
-export async function resetSteps(targets: string[]): Promise<void> {
-  await post("/api/reset", { targets });
+/// them. The loop stops any of them running and empties them at once,
+/// whatever else is syncing; "queued" when one has not stopped yet.
+export async function resetSteps(targets: string[]): Promise<"done" | "queued"> {
+  const r = await post("/api/reset", { targets });
+  return r.status === 202 ? "queued" : "done";
 }
 
 /// Delete the trees of groups already gone from the config, and forget
-/// their steps ran. "queued" when a sync in progress holds the delete
-/// until it is over.
+/// their steps ran. "queued" when one of their steps has not stopped yet.
 export async function purgeGroups(groups: string[]): Promise<"done" | "queued"> {
   const r = await post("/api/purge", { groups });
   return r.status === 202 ? "queued" : "done";
@@ -1427,6 +1511,9 @@ export type Meta =
       component_args: unknown[];
       // A glyph name (cards/icons.ts) or a mark in src/assets/.
       icon?: string;
+      // A tool for working on the library, not a view of the data: the
+      // gallery lists it under "Developer tools".
+      dev_tool?: boolean;
     }
   | { renamed_to: string };
 
@@ -1466,6 +1553,30 @@ export async function putLib(
   });
   if (!r.ok) throw new Error(`PUT /api/lib/${name} → ${r.status}`);
   return (await r.json()) as LibEntry;
+}
+
+// A JSON document the UI keeps in the library (`http/src/ui_state.rs`):
+// null when none has been kept yet.
+export async function fetchUiState(name: string): Promise<unknown> {
+  const r = await fetch(`/api/ui/state/${encodeURIComponent(name)}`);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`GET /api/ui/state/${name} → ${r.status}`);
+  return (await r.json()) as unknown;
+}
+
+// `keepalive` lets a write sent as the page goes away finish anyway.
+export async function putUiState(
+  name: string,
+  value: unknown,
+  opts: { keepalive?: boolean } = {},
+): Promise<void> {
+  const r = await fetch(`/api/ui/state/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(value),
+    keepalive: opts.keepalive,
+  });
+  if (!r.ok) throw new Error(`PUT /api/ui/state/${name} → ${r.status}`);
 }
 
 export type FeedbackRequest = {
@@ -1540,7 +1651,17 @@ export type LatchkeyService = {
   /// Set when latchkey itself could not be asked. Not fatal: the
   /// account can still be typed.
   error: string | null;
+  /// What kind of trouble `error` is.
+  issue: IssueKind | null;
+  /// Where signing in will install the latchkey plugin that adds this
+  /// service, when latchkey lacks it and datalib ships one.
+  installs_plugin: string | null;
+  /// Who names the account a browser login adds.
+  account_naming: AccountNaming;
 };
+
+/// Mirrors `AccountNaming` in datalib/backend/http/src/connect.rs.
+export type AccountNaming = "service" | "chosen";
 
 /// How to teach latchkey a service it has never heard of, so that a
 /// browser login exists for it. Mirrors `ServiceRegistration` in
@@ -1590,9 +1711,35 @@ export type ProbeReport = {
   notes: string[];
 };
 
+/// What kind of trouble a sign-in or a probe ran into. Mirrors
+/// `IssueKind` in datalib/backend/probe/src/issue.rs; the wizard says
+/// one sentence per kind (`config/issues.ts`).
+export type IssueKind =
+  | "no_credential"
+  | "expired"
+  | "rejected"
+  | "forbidden"
+  | "blocked"
+  | "rate_limited"
+  | "service_error"
+  | "unreachable"
+  | "gateway_unreachable"
+  | "unexpected_response"
+  | "no_runtime"
+  | "no_browser"
+  | "keychain"
+  | "unknown";
+
+/// A failure as the wizard shows it. Mirrors `Failure` in
+/// datalib/backend/probe/src/issue.rs.
+export type Failure = { issue: IssueKind; detail: string };
+
 /// How one browser-login attempt is going. Mirrors `ConnectState` in
 /// datalib/backend/http/src/connect.rs.
 export type ConnectState = "running" | "ok" | "failed";
+
+/// What a running login is doing. Mirrors `ConnectPhase` there.
+export type ConnectPhase = "preparing" | "downloading_browser" | "signing_in";
 
 export type ConnectAttempt = {
   id: string;
@@ -1604,6 +1751,9 @@ export type ConnectAttempt = {
   /// identity to derive and used latchkey's unnamed default.
   account: string | null;
   output: string;
+  phase: ConnectPhase;
+  /// What kind of trouble `output` is, once `failed`.
+  issue: IssueKind | null;
 };
 
 /// The server's message for a failed request, which for these routes is
@@ -1612,17 +1762,21 @@ export type ConnectAttempt = {
 /// it. Falls back to the raw body, then to the status code.
 async function quietError(url: string, r: Response): Promise<Error> {
   let detail = "";
+  let issue: IssueKind | undefined;
   try {
     const text = (await r.text()).trim();
     try {
-      detail = (JSON.parse(text) as { error?: string }).error ?? text;
+      const body = JSON.parse(text) as { error?: string; issue?: IssueKind };
+      detail = body.error ?? text;
+      issue = body.issue;
     } catch {
       detail = text;
     }
   } catch {
     // ignore — the status line below is still worth reporting
   }
-  return new Error(detail || `${url} → ${r.status}`);
+  detail ||= `${url} → ${r.status}`;
+  return issue ? new FailureError({ issue, detail }) : new Error(detail);
 }
 
 async function quietJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -1659,7 +1813,9 @@ export function startLatchkeyConnect(
 /// A credential pasted by hand. Mirrors `PastedCredential` in
 /// datalib/backend/http/src/connect.rs.
 export type PastedCredential =
-  { kind: "headers"; headers: string[] } | { kind: "basic"; username: string; password: string };
+  | { kind: "headers"; headers: string[] }
+  | { kind: "basic"; username: string; password: string }
+  | { kind: "directory"; path: string };
 
 /// Store a pasted credential with `latchkey auth set`. An empty account
 /// lets latchkey choose, which replaces the one it holds if it holds one.
@@ -1682,13 +1838,67 @@ export function latchkeyConnectStatus(id: string): Promise<ConnectAttempt> {
   return quietJson<ConnectAttempt>(`/api/latchkey/connect/${encodeURIComponent(id)}/status`);
 }
 
-/// Ask a provider what these credentials can reach. `params` is the
-/// **download** params, even when the caller is configuring a render
-/// step: that is where the credentials and the download mode live.
-export function probeSource(type: string, params: Record<string, unknown>): Promise<ProbeReport> {
-  return quietJson<ProbeReport>("/api/probe", {
+/// How far a picker's list has got: items fetched so far, and the
+/// total when the service says it. Mirrors `ProbeProgress` in
+/// datalib/backend/probe/src/lib.rs.
+export type ProbeProgress = { done: number; total: number | null };
+
+/// How one probe is going. Mirrors `ProbeState` / `ProbeStatus` in
+/// datalib/backend/http/src/probe.rs.
+export type ProbeState = "running" | "ok" | "failed";
+
+export type ProbeStatus = {
+  id: string;
+  status: ProbeState;
+  progress: ProbeProgress | null;
+  report: ProbeReport | null;
+  /// What went wrong, on `failed`.
+  failure: Failure | null;
+};
+
+/// Start a probe: which account these credentials reach, and with
+/// `list` one of a picker's lists as well. `params` is the **download**
+/// params, even when the caller is configuring a render step: that is
+/// where the credentials and the download mode live. Answers with the
+/// probe's status, which may already be final.
+export function startProbe(
+  type: string,
+  params: Record<string, unknown>,
+  list: ProbeNoun | null,
+): Promise<ProbeStatus> {
+  return quietJson<ProbeStatus>("/api/probe", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ type, params }),
+    body: JSON.stringify({ type, params, list }),
   });
+}
+
+/// Poll one probe. The server drops a finished probe once it has been
+/// read, so read a final answer once and keep it.
+export function probeStatus(id: string): Promise<ProbeStatus> {
+  return quietJson<ProbeStatus>(`/api/probe/${encodeURIComponent(id)}`);
+}
+
+const PROBE_POLL_MS = 400;
+
+/// A probe from start to finish, telling `onProgress` how far a list
+/// has got on every poll. Rejects with a `FailureError`.
+export async function runProbe(
+  type: string,
+  params: Record<string, unknown>,
+  list: ProbeNoun | null,
+  onProgress: (progress: ProbeProgress | null) => void = () => {},
+): Promise<ProbeReport> {
+  let status = await startProbe(type, params, list);
+  while (status.status === "running") {
+    onProgress(status.progress);
+    await new Promise((resolve) => setTimeout(resolve, PROBE_POLL_MS));
+    status = await probeStatus(status.id);
+  }
+  if (status.status === "failed" || !status.report) {
+    throw new FailureError(
+      status.failure ?? { issue: "unknown", detail: "the probe ended without an answer" },
+    );
+  }
+  return status.report;
 }

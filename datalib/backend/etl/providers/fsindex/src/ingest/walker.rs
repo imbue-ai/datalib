@@ -6,16 +6,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
-use tracing::warn;
 
 use super::hash::{hash_file, hash_symlink_target, hash_tree, Blake3, TreeChild};
 use super::metrics::WalkerCounters;
 use super::options::{self, EffectiveOptions, FsindexYaml, OptionsCascade, BREADCRUMB_FILENAME};
-use datalib_etl::fingerprint_cache::{CachedTree, EntryKind, Fingerprint};
-use datalib_etl::fswalk::{self, StampCursor, StampKind};
+use datalib_etl_files::fingerprint_cache::{CachedTree, EntryKind, Fingerprint};
+use datalib_etl_files::fswalk::{self, StampCursor, StampKind};
 
 use super::schema_raw::{DirRow, FileKind, FileRow};
-use datalib_etl::fswalk::{FreshStat, StampDecision};
+use datalib_etl_files::fswalk::{FreshStat, StampDecision};
 
 /// Soft upper bound on the size of one streamed batch. The walker
 /// flushes the batch via the callback when it reaches this many rows.
@@ -35,6 +34,9 @@ pub struct ScanResult {
     pub row: ScanRow,
     /// The observation, bound for the host-local cache.
     pub fingerprint: Fingerprint,
+    /// The row is what the walk saw of a directory it could not list, so
+    /// only the fingerprint is written: the row the last scan wrote stays.
+    pub held: bool,
 }
 
 impl ScanResult {
@@ -46,12 +48,20 @@ impl ScanResult {
     }
 }
 
-/// One unreadable entry. The caller logs it and counts it in the run's
-/// summary; fsindex has no bookkeeping sidecar to record it in.
+/// One entry the walk could not record, for the run's `problems` rows.
 pub struct WalkerError {
+    /// `files` or `dirs`: the table the entry's row would be in, or
+    /// `files` when the walk could not learn which.
+    pub table: &'static str,
     pub id: String,
     pub message: String,
+    /// The entry is there and could not be read, so its row and every
+    /// row beneath it keep what the last scan wrote.
+    pub holds: bool,
 }
+
+/// A directory's children as `(name, root-relative id)`.
+type Children = Vec<(String, String)>;
 
 pub struct WalkerSummary {
     pub rehashed: usize,
@@ -61,7 +71,7 @@ pub struct WalkerSummary {
 pub struct Walker<'a> {
     root: &'a Path,
     /// What this host recorded for these paths last time. Host-local
-    /// and unversioned — see [`datalib_etl::fingerprint_cache`].
+    /// and unversioned — see [`datalib_etl_files::fingerprint_cache`].
     prev: &'a CachedTree,
     default_stamp_kind: StampKind,
 }
@@ -164,8 +174,12 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         Ok(())
     }
 
-    fn push_row(&mut self, row: ScanRow, fingerprint: Fingerprint) -> Result<()> {
-        self.buf.push(ScanResult { row, fingerprint });
+    fn push_row(&mut self, row: ScanRow, fingerprint: Fingerprint, held: bool) -> Result<()> {
+        self.buf.push(ScanResult {
+            row,
+            fingerprint,
+            held,
+        });
         self.counters.rows_emitted.fetch_add(1, Ordering::Relaxed);
         if self.buf.len() >= BATCH_SIZE {
             self.counters
@@ -189,7 +203,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         dir_meta: &std::fs::Metadata,
     ) -> Result<(Blake3, i64, i64)> {
         self.counters.dirs_visited.fetch_add(1, Ordering::Relaxed);
-        let dir_fresh = fresh_stat_for(dir_meta);
+        let dir_fresh = fswalk::fresh_stat(dir_meta);
 
         // Cascade + effective options for files directly in this dir.
         let dir_cascade = cascade_for_dir(
@@ -197,8 +211,14 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             dir_path,
             &mut self.config_cache,
             &mut self.cascade_cache,
+            &mut self.errors,
         );
         let dir_effective = dir_cascade.effective();
+        // Whether this directory lost a child this run. Its fingerprint
+        // then asks the next run for a real readdir, which is the only
+        // way that run can find the child again (or fail again, and say so).
+        let mut rescan = false;
+        let mut listed = true;
 
         // Enumerate children: from the in-memory cache when this is
         // demonstrably the same directory, unmodified; otherwise via a
@@ -229,13 +249,21 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                 .unwrap_or_default()
         } else {
             match self.read_children(dir_path, dir_rel) {
-                Ok(v) => v,
+                Ok((names, non_utf8)) => {
+                    rescan |= !non_utf8.is_empty();
+                    self.errors.extend(non_utf8);
+                    names
+                }
                 Err(e) => {
                     self.counters.stat_errors.fetch_add(1, Ordering::Relaxed);
                     self.errors.push(WalkerError {
+                        table: "dirs",
                         id: dir_rel.to_string(),
                         message: format!("readdir: {e}"),
+                        holds: true,
                     });
+                    rescan = true;
+                    listed = false;
                     Vec::new()
                 }
             }
@@ -250,16 +278,19 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             let meta = match std::fs::symlink_metadata(&child_path) {
                 Ok(m) => m,
                 Err(e) => {
-                    // A cached child that has vanished (or any stat
-                    // failure): with a truncate-and-rebuild, simply not
-                    // emitting its row is the deletion. NotFound on the
-                    // skip path is benign; anything else is a real error.
+                    // A cached child that has vanished: not emitting its
+                    // row is the deletion, made by the prune after the
+                    // walk. NotFound on the skip path is benign; anything
+                    // else is a real error, and holds the child's rows.
                     if e.kind() != std::io::ErrorKind::NotFound {
                         self.counters.stat_errors.fetch_add(1, Ordering::Relaxed);
                         self.errors.push(WalkerError {
+                            table: "files",
                             id: child_rel.clone(),
                             message: format!("stat: {e}"),
+                            holds: true,
                         });
+                        rescan = true;
                     }
                     continue;
                 }
@@ -284,6 +315,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                     &child_path,
                     &mut self.config_cache,
                     &mut self.cascade_cache,
+                    &mut self.errors,
                 )
                 .effective();
                 matches_ignore(&eff, &child_rel, true, self.root)
@@ -297,7 +329,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                 continue;
             }
 
-            let fresh = fresh_stat_for(&meta);
+            let fresh = fswalk::fresh_stat(&meta);
             let mut entries_below = 0i64;
             let (size, blake3, symlink_target): (i64, Blake3, Option<String>) = match kind {
                 EntryKind::File => {
@@ -326,9 +358,12 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                             Err(e) => {
                                 self.counters.read_errors.fetch_add(1, Ordering::Relaxed);
                                 self.errors.push(WalkerError {
+                                    table: "files",
                                     id: child_rel.clone(),
                                     message: format!("hash: {e:#}"),
+                                    holds: true,
                                 });
+                                rescan = true;
                                 continue;
                             }
                         }
@@ -343,9 +378,12 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                         Err(e) => {
                             self.counters.read_errors.fetch_add(1, Ordering::Relaxed);
                             self.errors.push(WalkerError {
+                                table: "files",
                                 id: child_rel.clone(),
                                 message: format!("read_link: {e}"),
+                                holds: true,
                             });
+                            rescan = true;
                             continue;
                         }
                     };
@@ -398,7 +436,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                     blake3,
                     cursor: fp_cursor(stamp_kind, size, &fresh),
                 };
-                self.push_row(ScanRow::File(file_row), fingerprint)?;
+                self.push_row(ScanRow::File(file_row), fingerprint, false)?;
             }
         }
 
@@ -420,7 +458,11 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         // change", which cannot tell one directory from a *different*
         // directory that happens to share an mtime — see
         // [`same_dir_unmodified`].
-        let stamp_kind = self.default_stamp_kind;
+        let stamp_kind = if rescan {
+            StampKind::Rescan
+        } else {
+            self.default_stamp_kind
+        };
         let fingerprint = Fingerprint {
             abs_path: fp_abs(self.root, dir_rel),
             kind: EntryKind::Dir,
@@ -431,42 +473,47 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             // deliberately does not compare it.
             cursor: fp_cursor(stamp_kind, dir_size, &dir_fresh),
         };
-        self.push_row(ScanRow::Dir(dir_row), fingerprint)?;
+        self.push_row(ScanRow::Dir(dir_row), fingerprint, !listed)?;
 
         Ok((dir_hash, dir_size, dir_entries))
     }
 
+    /// The children's `(name, rel)` pairs, and the ones whose names are
+    /// not UTF-8, which no row can key.
     fn read_children(
         &self,
         dir_path: &Path,
         dir_rel: &str,
-    ) -> std::io::Result<Vec<(String, String)>> {
-        let mut out: Vec<(String, String)> = Vec::new();
+    ) -> std::io::Result<(Children, Vec<WalkerError>)> {
+        let mut out: Children = Vec::new();
+        let mut non_utf8 = Vec::new();
         for entry in std::fs::read_dir(dir_path)? {
             let entry = entry?;
             let name_os = entry.file_name();
             if name_os == BREADCRUMB_FILENAME {
                 continue;
             }
+            let rel_of = |name: &str| {
+                if dir_rel.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{dir_rel}/{name}")
+                }
+            };
             let Some(name) = name_os.to_str() else {
                 self.counters.non_utf8_paths.fetch_add(1, Ordering::Relaxed);
-                warn!(
-                    event = "fsindex_skip_non_utf8_path",
-                    path = %dir_path.join(&name_os).display(),
-                    "a path is not UTF-8; skipped it"
-                );
+                non_utf8.push(WalkerError {
+                    table: "files",
+                    id: rel_of(&name_os.to_string_lossy()),
+                    message: "the name is not UTF-8, so it cannot be indexed".to_string(),
+                    holds: false,
+                });
                 continue;
             };
-            let name = name.to_string();
-            let child_rel = if dir_rel.is_empty() {
-                name.clone()
-            } else {
-                format!("{dir_rel}/{name}")
-            };
-            out.push((name, child_rel));
+            out.push((name.to_string(), rel_of(name)));
         }
         out.sort();
-        Ok(out)
+        Ok((out, non_utf8))
     }
 }
 
@@ -475,6 +522,7 @@ fn cascade_for_dir(
     dir: &Path,
     config_cache: &mut HashMap<PathBuf, Option<FsindexYaml>>,
     cascade_cache: &mut HashMap<PathBuf, OptionsCascade>,
+    errors: &mut Vec<WalkerError>,
 ) -> OptionsCascade {
     if let Some(cached) = cascade_cache.get(dir) {
         return cached.clone();
@@ -492,12 +540,14 @@ fn cascade_for_dir(
             .or_insert_with(|| match options::load_at(&d) {
                 Ok(y) => y,
                 Err(err) => {
-                    warn!(
-                        event = "fsindex_options_parse_error",
-                        dir = %d.display(),
-                        error = %err,
-                        "a directory's options file did not parse"
-                    );
+                    errors.push(WalkerError {
+                        table: "dirs",
+                        id: rel_id(root, &d),
+                        message: format!(
+                            "{BREADCRUMB_FILENAME} did not parse, so it was not applied: {err:#}"
+                        ),
+                        holds: false,
+                    });
                     None
                 }
             });
@@ -509,8 +559,19 @@ fn cascade_for_dir(
     cascade
 }
 
+/// The row id of a path under the root: slash-separated, `""` for the
+/// root itself.
+fn rel_id(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .iter()
+        .map(|c| c.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 fn fp_abs(root: &Path, rel: &str) -> String {
-    datalib_etl::fingerprint_cache::abs_key(root, rel)
+    datalib_etl_files::fingerprint_cache::abs_key(root, rel)
 }
 
 fn fp_cursor(stamp_kind: StampKind, size: i64, fresh: &FreshStat) -> StampCursor {
@@ -518,6 +579,7 @@ fn fp_cursor(stamp_kind: StampKind, size: i64, fresh: &FreshStat) -> StampCursor
     StampCursor {
         mtime_ns: fresh.mtime_ns,
         size,
+        ctime_ns: fresh.ctime_ns,
         stamp_kind,
         inode: if inode_ok { fresh.inode } else { None },
         dev: if inode_ok { fresh.dev } else { None },
@@ -529,7 +591,9 @@ fn same_dir_unmodified(prev: &StampCursor, fresh: &FreshStat) -> bool {
         // A previous run was interrupted here; take the readdir.
         return false;
     }
-    if prev.mtime_ns != fresh.mtime_ns {
+    // A directory's ctime also moves with its entries, and an mtime put
+    // back (`rsync -t`, `tar x`) cannot put it back.
+    if prev.mtime_ns != fresh.mtime_ns || prev.ctime_ns != fresh.ctime_ns {
         return false;
     }
     if matches!(prev.stamp_kind, StampKind::Inode)
@@ -564,39 +628,6 @@ fn ancestor_chain(root: &Path, entry: &Path) -> Vec<PathBuf> {
         chain.push(cur.clone());
     }
     chain
-}
-
-fn fresh_stat_for(meta: &std::fs::Metadata) -> FreshStat {
-    let mtime_ns = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0);
-    let ctime_ns = meta
-        .created()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as i64);
-    let (inode, dev) = unix_inode_dev(meta);
-    FreshStat {
-        mtime_ns,
-        size: meta.len() as i64,
-        inode,
-        dev,
-        ctime_ns,
-    }
-}
-
-#[cfg(unix)]
-fn unix_inode_dev(meta: &std::fs::Metadata) -> (Option<i64>, Option<i64>) {
-    use std::os::unix::fs::MetadataExt;
-    (Some(meta.ino() as i64), Some(meta.dev() as i64))
-}
-
-#[cfg(not(unix))]
-fn unix_inode_dev(_meta: &std::fs::Metadata) -> (Option<i64>, Option<i64>) {
-    (None, None)
 }
 
 /// Gitignore-shaped matcher backed by the `ignore` crate (same
@@ -678,6 +709,55 @@ mod tests {
     }
     fn has(rows: &[ScanResult], id: &str) -> bool {
         rows.iter().any(|r| r.id() == id)
+    }
+
+    /// Rewrite `path` to `body` in place and put its mtime back, as `cp -p`
+    /// over an existing file does. Rewrites again until the change time
+    /// has moved, which a coarse filesystem clock can take a tick to show.
+    #[cfg(unix)]
+    fn rewrite_keeping_mtime(path: &Path, body: &[u8]) {
+        use std::os::unix::fs::MetadataExt;
+        let before = fs::metadata(path).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            fs::write(path, body).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(before.modified().unwrap())
+                .unwrap();
+            let after = fs::metadata(path).unwrap();
+            if (after.ctime(), after.ctime_nsec()) != (before.ctime(), before.ctime_nsec()) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the change time of {} never moved",
+                path.display()
+            );
+        }
+    }
+
+    /// An in-place edit that keeps the length, the inode and the mtime is
+    /// caught by the change time. fsindex once took the birth time for it,
+    /// which an edit never moves, so the old bytes' hash was kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_rewrite_with_its_mtime_put_back_is_hashed_again() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write(&root.join("a.txt"), b"AAAA");
+        let (rows1, _) = walk(root, &CachedTree::default());
+
+        rewrite_keeping_mtime(&root.join("a.txt"), b"BBBB");
+        let (rows2, counters) = walk(root, &build_cache(&rows1));
+        assert_eq!(
+            blake_of(&rows2, "a.txt"),
+            Some(*blake3::hash(b"BBBB").as_bytes()),
+            "the AAAA hash was kept for BBBB bytes"
+        );
+        assert_eq!(counters.files_rehashed.load(Ordering::Relaxed), 1);
     }
 
     /// The readdir-skip fast path: an unchanged directory enumerates its
@@ -907,10 +987,10 @@ mod tests {
         let b = tempfile::tempdir().unwrap();
         write(&b.path().join("nested/only_b.txt"), b"bbb");
 
-        // Pretend the previous scan saw a root with B's mtime — so an
-        // mtime-only check passes — but A's identity.
-        let a_root = fresh_stat_for(&std::fs::metadata(a.path()).unwrap());
-        let b_root = fresh_stat_for(&std::fs::metadata(b.path()).unwrap());
+        // Pretend the previous scan saw a root with B's times — so a
+        // time-only check passes — but A's identity.
+        let a_root = fswalk::fresh_stat(&std::fs::metadata(a.path()).unwrap());
+        let b_root = fswalk::fresh_stat(&std::fs::metadata(b.path()).unwrap());
         assert_ne!(
             a_root.inode, b_root.inode,
             "the two temp roots must be distinct directories"
@@ -919,6 +999,7 @@ mod tests {
             let mut cursor = r.fingerprint.cursor;
             if r.id().is_empty() {
                 cursor.mtime_ns = b_root.mtime_ns;
+                cursor.ctime_ns = b_root.ctime_ns;
             }
             (
                 r.id().to_string(),

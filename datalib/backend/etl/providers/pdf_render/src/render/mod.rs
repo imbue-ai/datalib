@@ -9,10 +9,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::progress::Progress;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_html_outside_code, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
 use datalib_etl_render::section::{msg_div_open, MSG_DIV_CLOSE};
+use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 
 pub use convert::RENDER_VERSION;
 use datalib_etl_pdf::ingest::{RawDb, RenderTarget};
@@ -31,12 +35,22 @@ pub fn doc_qmd_path_rel(stanza: &str, blake3: &str) -> String {
 pub struct RenderSummary {
     pub converted: usize,
     pub failed: usize,
+    /// Documents whose file no longer holds the bytes they are named by.
+    /// Each is emitted as a stand-in: its document row, a page saying why
+    /// its pages are missing, and a problem row.
+    pub changed: usize,
     /// The documents whose conversion failed, by blake3. Their pages are
-    /// stale rather than gone, so the processor leaves them undeclared.
+    /// stale rather than gone.
     pub failed_blake3s: std::collections::HashSet<String>,
-    /// `(document uuid, error)` for each failure, for the processor to
-    /// record as the document's problem.
-    pub failures: Vec<(String, String)>,
+    /// Each failure, for the processor to record as the document's
+    /// problem and its bucket's failure.
+    pub failures: Vec<Failure>,
+}
+
+pub struct Failure {
+    pub blake3: String,
+    pub doc_uuid: String,
+    pub error: String,
 }
 
 /// Load the work list. Split from [`render_targets`] so the async
@@ -132,6 +146,7 @@ pub fn render_targets(
     let mut summary = RenderSummary {
         converted: 0,
         failed: 0,
+        changed: 0,
         failed_blake3s: Default::default(),
         failures: Vec::new(),
     };
@@ -151,9 +166,19 @@ pub fn render_targets(
             grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref()),
         )
         .uuid;
-        match render_one(t, &md_path, source_id, &doc_uuid) {
+        let content = match read_document(t) {
+            Ok(Some(bytes)) => convert::convert(&bytes, &t.abs_path).map(Content::Pages),
+            Ok(None) => Ok(Content::FileChanged),
+            Err(e) => Err(e),
+        };
+        let changed = matches!(content, Ok(Content::FileChanged));
+        match content.and_then(|c| render_one(t, c, &md_path, source_id, &doc_uuid)) {
             Ok(rendered) => {
-                summary.converted += 1;
+                if changed {
+                    summary.changed += 1;
+                } else {
+                    summary.converted += 1;
+                }
                 on_doc_complete(rendered)?;
             }
             Err(e) => {
@@ -162,7 +187,11 @@ pub fn render_targets(
                 // the processor, and a log line beside it.
                 summary.failed += 1;
                 summary.failed_blake3s.insert(t.blake3.clone());
-                summary.failures.push((doc_uuid.clone(), format!("{e:#}")));
+                summary.failures.push(Failure {
+                    blake3: t.blake3.clone(),
+                    doc_uuid: doc_uuid.clone(),
+                    error: format!("{e:#}"),
+                });
                 tracing::warn!(
                     path = %t.rel_path, blake3 = %t.blake3, error = %e,
                     "pdf_render_failed"
@@ -188,13 +217,33 @@ pub async fn render(
     render_targets(&targets, out_dir, source_id, progress, on_doc_complete)
 }
 
+/// The document's bytes, or `None` when its file no longer holds them. The
+/// document is its hash, so the markdown filed under it must come from
+/// those bytes and no others.
+fn read_document(t: &RenderTarget) -> Result<Option<Vec<u8>>> {
+    let bytes = fs::read(&t.abs_path).with_context(|| format!("read {}", t.abs_path.display()))?;
+    Ok((blake3_hex(&bytes) == t.blake3).then_some(bytes))
+}
+
+/// What a document's page holds.
+enum Content {
+    Pages(Vec<convert::Page>),
+    /// Its file no longer holds the bytes it is named by, so there is
+    /// nothing to convert. The page says so, and so does a problem row,
+    /// until the next sync reads the file as it is now.
+    FileChanged,
+}
+
+const FILE_CHANGED: &str = "This file has changed since the last sync read it, so its pages \
+     are not shown. The next sync reads it as it is now.";
+
 fn render_one(
     t: &RenderTarget,
+    content: Content,
     md_path: &Path,
     source_id: &str,
     doc_uuid: &str,
 ) -> Result<RenderedMarkdown> {
-    let pages = convert::convert(&t.abs_path)?;
     let title = grid_rows::display_title(t.title.as_deref(), &t.rel_path);
 
     let qmd_rel = doc_qmd_path_rel(source_id, &t.blake3);
@@ -202,56 +251,56 @@ fn render_one(
     let mut body = String::new();
     body.push_str("---\n");
     body.push_str(&format!("provider: {}\n", grid_rows::PROVIDER));
-    body.push_str(&format!("blake3: {}\n", yaml_str(&t.blake3)));
-    body.push_str(&format!("title: {}\n", yaml_str(&title)));
+    body.push_str(&format!("blake3: {}\n", yaml_scalar(&t.blake3)));
+    body.push_str(&format!("title: {}\n", yaml_scalar(&title)));
     if let Some(a) = &t.author {
-        body.push_str(&format!("author: {}\n", yaml_str(a)));
+        body.push_str(&format!("author: {}\n", yaml_scalar(a)));
     }
     body.push_str(&format!("page_count: {}\n", t.page_count));
-    body.push_str(&format!("pdf_type: {}\n", yaml_str(&t.pdf_type)));
-    body.push_str(&format!("source_path: {}\n", yaml_str(&t.rel_path)));
+    body.push_str(&format!("pdf_type: {}\n", yaml_scalar(&t.pdf_type)));
+    body.push_str(&format!("source_path: {}\n", yaml_scalar(&t.rel_path)));
     if t.copy_count > 1 {
         body.push_str(&format!("copies: {}\n", t.copy_count));
     }
     if let Some(c) = &t.doc_created_at {
-        body.push_str(&format!("created_at: {}\n", yaml_str(c)));
+        body.push_str(&format!("created_at: {}\n", yaml_scalar(c)));
     }
     if let Some(m) = &t.doc_modified_at {
-        body.push_str(&format!("modified_at: {}\n", yaml_str(m)));
+        body.push_str(&format!("modified_at: {}\n", yaml_scalar(m)));
     }
     body.push_str("---\n\n");
-    body.push_str(&format!("# {title}\n\n"));
-
-    let mut page_rows: Vec<(u32, String)> = Vec::with_capacity(pages.len());
-    for p in &pages {
-        if p.non_textual {
-            // A page we could not read. It goes in the markdown so the
-            // gap is visible to whoever opens the document, but carries
-            // no section wrapper and no grid row: there is no content to
-            // navigate to, and the note is the same sentence on every
-            // such page in every document. See `convert::note_for_page`.
-            body.push_str(&p.text);
-            body.push_str("\n\n");
-            continue;
+    let doc_stamp =
+        grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref());
+    let page_uuid = |number| grid_rows::page(source_id, &t.blake3, number, doc_stamp).uuid;
+    let (page_rows, problems) = match content {
+        Content::Pages(pages) => {
+            let (pages_md, page_rows) = pages_markdown(&title, &pages, page_uuid);
+            body.push_str(&pages_md);
+            (page_rows, Vec::new())
         }
-        // Per-page section wrapper. The `data-section-uuid` must be
-        // byte-equal to the page grid row's `uuid` or row→preview
-        // navigation silently fails (see `etl::section` docs).
-        let uuid = grid_rows::page(
-            source_id,
-            &t.blake3,
-            p.number,
-            grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref()),
-        )
-        .uuid;
-        body.push_str(&msg_div_open(&uuid, grid_rows::PROVIDER));
-        body.push('\n');
-        body.push_str(&p.text);
-        body.push('\n');
-        body.push_str(MSG_DIV_CLOSE);
-        body.push_str("\n\n");
-        page_rows.push((p.number, p.text.clone()));
-    }
+        Content::FileChanged => {
+            body.push_str(&format!(
+                "# {}
+
+*{FILE_CHANGED}*
+",
+                escape_md_inline(&title)
+            ));
+            let problem = ProblemRow::new(
+                source_id,
+                Stage::Render,
+                Scope::Markdown(doc_uuid),
+                Some(doc_uuid),
+                Outcome::Nulled,
+                Problem::record(
+                    Reason::RenderFailed,
+                    &format!("{}: {FILE_CHANGED}", t.rel_path),
+                ),
+                Some(RENDER_VERSION),
+            );
+            (Vec::new(), vec![problem])
+        }
+    };
 
     if let Some(parent) = md_path.parent() {
         fs::create_dir_all(parent)?;
@@ -282,18 +331,79 @@ fn render_one(
         render_version: RENDER_VERSION,
         rows,
         sections: Vec::new(),
+        search_terms: Vec::new(),
         edges: Vec::new(),
-        problems: Vec::new(),
+        contacts: Vec::new(),
+        problems,
     })
 }
 
-fn yaml_str(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+/// The document under its title: one section per readable page, and the
+/// note for a page that could not be read. Returns the markdown and each
+/// readable page's number and text, for its grid row.
+fn pages_markdown(
+    title: &str,
+    pages: &[convert::Page],
+    page_uuid: impl Fn(u32) -> String,
+) -> (String, Vec<(u32, String)>) {
+    let mut body = format!("# {}\n\n", escape_md_inline(title));
+    let mut page_rows: Vec<(u32, String)> = Vec::with_capacity(pages.len());
+    for p in pages {
+        if p.non_textual {
+            // A page we could not read. It goes in the markdown so the
+            // gap is visible to whoever opens the document, but carries
+            // no section wrapper and no grid row: there is no content to
+            // navigate to, and the note is the same sentence on every
+            // such page in every document. See `convert::note_for_page`.
+            body.push_str(&p.text);
+            body.push_str("\n\n");
+            continue;
+        }
+        // Per-page section wrapper. The `data-section-uuid` must be
+        // byte-equal to the page grid row's `uuid` or row→preview
+        // navigation silently fails (see `etl::section` docs).
+        body.push_str(&msg_div_open(&page_uuid(p.number), grid_rows::PROVIDER));
+        body.push('\n');
+        // pdf-inspector writes the page as markdown but leaves the
+        // words in it as the PDF had them.
+        body.push_str(&escape_html_outside_code(&p.text));
+        body.push('\n');
+        body.push_str(MSG_DIV_CLOSE);
+        body.push_str("\n\n");
+        page_rows.push((p.number, p.text.clone()));
+    }
+    (body, page_rows)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A PDF's title and its words are text: a `<` in a technical manual
+    /// shows as one, and only code keeps its characters as they are.
+    #[test]
+    fn a_document_in_markup_renders_escaped() {
+        let pages = [convert::Page {
+            number: 1,
+            text: "<script>x</script> & co\n\n`<kbd>`".to_string(),
+            non_textual: false,
+        }];
+        let (md, rows) = pages_markdown("<script>x</script> & co", &pages, |n| format!("p{n}"));
+        assert!(
+            md.starts_with("# &lt;script&gt;x&lt;/script&gt; &amp; co\n\n"),
+            "{md}"
+        );
+        assert!(
+            md.contains("\n&lt;script&gt;x&lt;/script&gt; &amp; co\n\n`<kbd>`\n"),
+            "{md}"
+        );
+        assert!(!md.contains("<script>"), "{md}");
+        assert_eq!(
+            rows,
+            [(1, pages[0].text.clone())],
+            "the grid keeps the words"
+        );
+    }
 
     #[test]
     fn md_path_is_content_named() {
@@ -322,12 +432,6 @@ mod tests {
         let md_path = md_path_for(&out_dir, "abc123");
         let from_md_path = md_path.strip_prefix(root).unwrap().to_string_lossy();
         assert_eq!(from_md_path, doc_qmd_path_rel("tng_pdfs", "abc123"));
-    }
-
-    #[test]
-    fn yaml_quoting_escapes_quotes_and_backslashes() {
-        assert_eq!(yaml_str(r#"a"b"#), r#""a\"b""#);
-        assert_eq!(yaml_str(r"a\b"), r#""a\\b""#);
     }
 }
 

@@ -13,6 +13,7 @@
 //! `qmd_path`, not qmd's collection-qualified display path.
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use datalib_qmd_fixture::{materialize_root, stage_models, stage_runtime};
 use datalib_unified_index::qmd::{CollectionScope, QmdDaemon, QmdDaemonConfig, QueryMode};
@@ -21,6 +22,9 @@ use datalib_unified_index::qmd::{CollectionScope, QmdDaemon, QmdDaemonConfig, Qu
 /// documents — so "scoped to it" and "everything" are clearly different
 /// answers, and an accidental no-op scope would still show up.
 const SCOPED_GROUP: &str = "slack";
+
+/// How long a search here may wait on qmd, its start included.
+const COLD_START_DEADLINE: Duration = Duration::from_secs(120);
 
 /// The group a hit belongs to: the first segment of the path the daemon
 /// resolved, which is what `grid_rows.qmd_path` is keyed on.
@@ -50,7 +54,15 @@ fn daemon_search_is_unscoped_by_default_and_scopes_on_request() {
     // no other test in this binary touches the environment.
     unsafe { std::env::set_var("DATALIB_RUNTIME_DIR", &runtime) };
 
-    let daemon = QmdDaemon::new(QmdDaemonConfig::new(root.to_path_buf()));
+    // The first search starts qmd, shakes hands with it and has it load
+    // its models, all inside one deadline. The shipped deadline is set
+    // for a person waiting on a search box; this test is about which
+    // documents come back, not how soon, and a loaded runner took 19s
+    // over the start alone. So the daemon is given the room a cold start
+    // on such a runner needs, still short of the test's own timeout.
+    let mut cfg = QmdDaemonConfig::new(root.to_path_buf());
+    cfg.answer_deadline = COLD_START_DEADLINE;
+    let daemon = QmdDaemon::new(cfg);
 
     // A word the fixture's corpus uses across several sources, so the
     // unscoped answer genuinely spans collections.

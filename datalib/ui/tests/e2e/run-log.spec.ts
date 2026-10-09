@@ -9,7 +9,7 @@
 // round-trip are exercised end to end.
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { menuEntry, stubClipboard } from "./grid-helpers";
+import { menuEntry, shownCards, stubClipboard } from "./grid-helpers";
 
 // The commit playwright.config.ts handed the backends. Node's globals
 // are not in this tsconfig, as in api-token.spec.ts.
@@ -22,7 +22,7 @@ const ROWS = ".rl-grid .slick-row:not(.slick-group)";
 /// `src/grid/query.ts` does — spelled out here because a spec runs
 /// outside the app's module graph.
 const quoted = (v: string) =>
-  /[\s:"]/.test(v) || v === "" || v.startsWith("-")
+  /[\s"]/.test(v) || v === "" || v.startsWith("-")
     ? `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
     : v;
 
@@ -48,17 +48,23 @@ async function scrollLogToStart(dialog: Locator) {
             ).__fwRunLogApi.hasOlder(),
           );
       },
-      { message: "the log's first line was never read" },
+      // One older page is read per scroll to the top, and how many pages
+      // there are grows with everything the suite has made this server
+      // log before this spec runs. So the wait is per page, at a steady
+      // pace, with room for a long log; the default backs off to a
+      // second between tries and gives up after a handful of pages.
+      { message: "the log's first line was never read", timeout: 20_000, intervals: [150] },
     )
     .toBe(false);
   await viewport.evaluate((el) => (el.scrollTop = 0));
   await expect(dialog.locator(`${ROWS}[data-row="0"]`)).toBeVisible();
 }
 
+// By a link, which opens the log in a Columns container, so a line
+// opens beside it. (The toolbar's Logs gives the log a tab to itself.)
 async function openServerLog(page: Page) {
-  await page.goto("/data_sources");
-  await page.locator(".cards-statusbar").getByRole("button", { name: "Logs" }).click();
-  const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+  await page.goto("/logView()");
+  const dialog = shownCards(page).filter({ has: page.locator(".rl-panel") });
   await expect(dialog).toBeVisible();
   const scope = dialog.getByLabel("Which run or launch");
   const mine = scope.locator("option", { hasText: /this server$/ });
@@ -73,7 +79,7 @@ async function openServerLog(page: Page) {
   await scope.selectOption(value);
   await loaded;
   await expect(dialog.locator(".rl-panel")).toHaveAttribute("aria-busy", "false");
-  await expect(dialog.locator(".miller-col-title")).toHaveText("Server log");
+  await expect(dialog.locator(".ct-card-title")).toHaveText("Server log");
   await expect(dialog.locator(ROWS).first()).toBeVisible({ timeout: 10_000 });
   return dialog;
 }
@@ -114,7 +120,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   // the whole of what the panel shows.
   const launch = await launchOf(dialog);
   const query = dialog.locator(".rl-search");
-  await expect(query).toHaveValue(`min_level:info process_id:${launch}`);
+  await expect(query).toHaveAttribute("data-query", `min_level:info process_id:${launch}`);
   const all = await lineCount(page);
   expect(all).toBeGreaterThan(1);
 
@@ -135,7 +141,10 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await expect(menuEntry(page, `Exclude all Message=${msg}`)).toBeVisible();
   await keepOnly.click();
 
-  await expect(query).toHaveValue(`min_level:info process_id:${launch} msg:${quoted(msg)}`);
+  await expect(query).toHaveAttribute(
+    "data-query",
+    `min_level:info process_id:${launch} msg:${quoted(msg)}`,
+  );
   // A reload empties the count before it refills, so "fewer than all"
   // alone is met mid-way; wait for the narrowed lines to be there.
   await expect
@@ -154,7 +163,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   const clear = menuEntry(page, "Clear the query");
   await rightClick(dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]'), clear);
   await clear.click();
-  await expect(query).toHaveValue("");
+  await expect(query).toHaveAttribute("data-query", "");
   // With no query at all, the whole store's newest lines, and the
   // picker says so: the launch was a term, and went with the rest.
   await expect(scope).toHaveValue("*");
@@ -165,9 +174,9 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   const level = dialog.getByLabel("Lowest level to show");
   await expect(level).toHaveValue("trace");
   await level.selectOption("warn");
-  await expect(query).toHaveValue("min_level:warn");
+  await expect(query).toHaveAttribute("data-query", "min_level:warn");
   await level.selectOption("trace");
-  await expect(query).toHaveValue("");
+  await expect(query).toHaveAttribute("data-query", "");
 });
 
 // A log longer than a page opens on its newest lines, at the bottom, and
@@ -205,7 +214,7 @@ test("a long log opens on its newest lines and reads older ones as it is scrolle
 
   await page.goto("/data_sources");
   await page.locator(".cards-statusbar").getByRole("button", { name: "Logs" }).click();
-  const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+  const dialog = shownCards(page).filter({ has: page.locator(".rl-panel") });
   await dialog.getByLabel("Which run or launch").selectOption(`launch:${id}`);
   const msgs = () => dialog.locator(`${ROWS} .slick-cell[col-id="msg"]`).allTextContents();
 
@@ -311,7 +320,7 @@ test("a selected line opens in full beside the log, and can narrow it", async ({
   const msg = (await first.locator('.slick-cell[col-id="msg"]').textContent())?.trim() ?? "";
   await first.locator('.slick-cell[col-id="msg"]').click();
 
-  const inspector = page.locator(".miller-col").filter({ has: page.locator(".ll") });
+  const inspector = shownCards(page).filter({ has: page.locator(".ll") });
   // The card mounts in a new column after the click; on a loaded runner
   // give it what the first row got above.
   await expect(inspector).toBeVisible({ timeout: 10_000 });
@@ -329,7 +338,8 @@ test("a selected line opens in full beside the log, and can narrow it", async ({
     .locator(".ll-meta")
     .getByRole("button", { name: /^main$/ })
     .click();
-  await expect(dialog.locator(".rl-search")).toHaveValue(
+  await expect(dialog.locator(".rl-search")).toHaveAttribute(
+    "data-query",
     `min_level:info process_id:${await launchOf(dialog)} thread:main`,
   );
 
@@ -491,7 +501,9 @@ test("a dragged column width outlives the panel resizing", async ({ page }) => {
   // ran on every resize of the grid used to put every column back.
   const grid = dialog.locator(".rl-grid .slickgrid-container");
   const gridBefore = (await grid.boundingBox())!.width;
-  const edge = (await dialog.locator(".miller-col-resize").boundingBox())!;
+  // A column's edge is the handle right after it in its container.
+  const column = page.locator(".ct-main .ct-child").filter({ has: page.locator(".rl-panel") });
+  const edge = (await column.locator("xpath=following-sibling::*[1]").boundingBox())!;
   const ex = edge.x + edge.width / 2;
   const ey = edge.y + edge.height / 2;
   await page.mouse.move(ex, ey);

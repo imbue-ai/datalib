@@ -87,7 +87,6 @@ onBeforeUnmount(() => unsubscribe?.());
 
 <template>
   <div class="root-bar" data-testid="root-storage">
-    <span class="root-bar-label">Data root</span>
     <span class="root-bar-where">
       <code class="root-bar-path" :title="storage?.root.abs ?? ''">{{ storage?.root.abs }}</code>
       <button
@@ -126,10 +125,6 @@ onBeforeUnmount(() => unsubscribe?.());
   align-items: center;
   gap: 12px;
   color: var(--datalib-muted);
-}
-.root-bar-label {
-  flex: 0 0 auto;
-  font-weight: 600;
 }
 /* The path and its buttons, kept together; the path yields first when
    the window narrows — the number and the plot are the point of the line. */

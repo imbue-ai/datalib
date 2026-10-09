@@ -1,7 +1,7 @@
 //! Photo albums: one document per album, its description first and
 //! then every photo in the order it was added.
 
-use datalib_etl_chat_common::render::RenderProfile;
+use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_facebook::ingest::schema_raw::ALBUMS_TABLE;
 
@@ -15,7 +15,12 @@ use crate::common::{
 use crate::processor::Owner;
 
 pub fn albums_profile() -> RenderProfile {
-    profile("Facebook Album", "Facebook Album Message", ids::KIND_ALBUM)
+    profile(
+        "Facebook Album",
+        "Facebook Album Message",
+        ids::KIND_ALBUM,
+        TextFormat::Plain,
+    )
 }
 
 pub fn build_albums(albums: &[(String, Value)], owner: &Owner) -> Vec<NormalizedChat> {
@@ -44,7 +49,6 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         let item_id = ids::album_description(&owner.source_id, row_id, date_ms);
         items.push(chat_item(
             item_id,
-            "me".to_string(),
             owner.name.clone(),
             date_ms,
             Some(strip_mentions(description)),
@@ -62,7 +66,6 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
             kind_label: Some("Facebook Photo".to_string()),
             ..chat_item(
                 item_id,
-                "me".to_string(),
                 owner.name.clone(),
                 date_ms,
                 media_caption(photo, Some(name)),
@@ -77,6 +80,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     }
     let album = ids::album(&owner.source_id, row_id);
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,
         id: id.clone(),

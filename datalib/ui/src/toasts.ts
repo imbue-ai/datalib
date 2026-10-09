@@ -1,6 +1,7 @@
 // Tiny module-level toast store.
 
 import { reactive } from "vue";
+import { track } from "./telemetry";
 
 export type ToastLevel = "error" | "warn" | "info";
 
@@ -38,6 +39,8 @@ export function pushToast(
 
   const id = nextId++;
   toasts.push({ id, level, message, timeoutMs });
+  // Gone from the screen in seconds; the log is where it can be read again.
+  track("toast", undefined, { level, msg: message });
   if (timeoutMs !== null) {
     window.setTimeout(() => dismissToast(id), timeoutMs);
   }

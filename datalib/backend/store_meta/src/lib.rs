@@ -5,8 +5,10 @@
 //! `git_hash`) is what a downgrade guard reads and a bug report needs;
 //! the shape (`schema_hash`, blake3 over the DDL the owner opened with)
 //! is what detects a change and cannot be forgotten, because it is
-//! derived; the ladder position (`schema_version`) orders migrations and
-//! is `0` until a store has a ladder. The owner writes on every open,
+//! derived; the ladder positions order migrations: `schema_version` on
+//! the owner's ladder, `0` until a store has one, and
+//! `shared_schema_version` on the framework's ladder for the tables every
+//! store shares (`problems`). The owner writes on every open,
 //! upserting only the rows whose value moved, so `written_at_utc` is when
 //! this build first wrote the store rather than when it last opened it.
 //! docs/dev/plans/completed/schema_migrations.md §3.1 is the design.
@@ -18,7 +20,7 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 pub mod guard;
 pub mod ladder;
 pub use guard::{inspect_root, refuse_if_newer, NewerBuild};
-pub use ladder::Migration;
+pub use ladder::{Ladder, Migration};
 
 pub const TABLE: &str = "_datalib_meta";
 
@@ -52,6 +54,9 @@ pub enum StoreKind {
     Runs,
     /// `system/supervisor.sqlite`: requests, steps turned off, and the loop's facts.
     Supervisor,
+    /// `datalib_curated/datalib_contacts/contacts.doltlite_db`: contacts a person
+    /// made and the handles they linked to them.
+    Contacts,
 }
 
 impl StoreKind {
@@ -72,6 +77,7 @@ enum Key {
     DoltliteVersion,
     SchemaHash,
     SchemaVersion,
+    SharedSchemaVersion,
     StoreKind,
 }
 
@@ -92,6 +98,7 @@ pub struct Meta {
     pub doltlite_version: Option<String>,
     pub schema_hash: String,
     pub schema_version: u32,
+    pub shared_schema_version: u32,
     /// `None` for a kind this build does not know.
     pub store_kind: Option<StoreKind>,
     /// The latest of the rows' stamps: when this build first wrote the
@@ -111,6 +118,13 @@ pub fn schema_hash<'a>(ddl: impl IntoIterator<Item = &'a str>) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+/// Where a store stands on its two ladders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Versions {
+    pub schema: u32,
+    pub shared: u32,
+}
+
 /// Create the table if it is missing and bring every row up to what this
 /// build would write. Returns whether any row changed, so an owner that
 /// commits can commit exactly when there is something to commit.
@@ -118,7 +132,7 @@ pub async fn write(
     pool: &SqlitePool,
     kind: StoreKind,
     schema_hash: &str,
-    schema_version: u32,
+    versions: Versions,
 ) -> Result<bool> {
     sqlx::query(DDL)
         .execute(pool)
@@ -126,7 +140,7 @@ pub async fn write(
         .context("create _datalib_meta")?;
     let doltlite_version = doltlite_version(pool).await;
     let git_hash = datalib_runtime::build_id::git_hash().unwrap_or_else(|| UNKNOWN.to_string());
-    let wanted: [(Key, String); 6] = [
+    let wanted: [(Key, String); 7] = [
         (
             Key::DatalibVersion,
             datalib_runtime::build_id::DATALIB_VERSION.to_string(),
@@ -137,7 +151,8 @@ pub async fn write(
             doltlite_version.unwrap_or_else(|| UNKNOWN.to_string()),
         ),
         (Key::SchemaHash, schema_hash.to_string()),
-        (Key::SchemaVersion, schema_version.to_string()),
+        (Key::SchemaVersion, versions.schema.to_string()),
+        (Key::SharedSchemaVersion, versions.shared.to_string()),
         (Key::StoreKind, kind.as_str().to_string()),
     ];
     let current = rows(pool).await?;
@@ -189,6 +204,9 @@ pub async fn read(pool: &SqlitePool) -> Result<Option<Meta>> {
         doltlite_version: known(get(Key::DoltliteVersion)),
         schema_hash: get(Key::SchemaHash).unwrap_or_default(),
         schema_version: get(Key::SchemaVersion)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0),
+        shared_schema_version: get(Key::SharedSchemaVersion)
             .and_then(|s| s.parse().ok())
             .unwrap_or(0),
         store_kind: get(Key::StoreKind).and_then(|s| StoreKind::parse(&s)),
@@ -295,7 +313,9 @@ mod tests {
         let p = pool(&td.path().join("s.db")).await;
         let hash1 = schema_hash(["CREATE TABLE t (x INT)"]);
 
-        assert!(write(&p, StoreKind::Raw, &hash1, 0).await.unwrap());
+        assert!(write(&p, StoreKind::Raw, &hash1, Versions::default())
+            .await
+            .unwrap());
         let first = read(&p).await.unwrap().expect("rows");
         assert_eq!(
             first.datalib_version,
@@ -314,7 +334,9 @@ mod tests {
                 .unwrap();
         assert!(!stored.is_empty());
 
-        assert!(!write(&p, StoreKind::Raw, &hash1, 0).await.unwrap());
+        assert!(!write(&p, StoreKind::Raw, &hash1, Versions::default())
+            .await
+            .unwrap());
         assert_eq!(read(&p).await.unwrap().unwrap(), first);
 
         // Stamps are microsecond UTC, so make the second write land later.
@@ -324,7 +346,17 @@ mod tests {
                 .await
                 .unwrap();
         let hash2 = schema_hash(["CREATE TABLE t (x INT, y INT)"]);
-        assert!(write(&p, StoreKind::Raw, &hash2, 1).await.unwrap());
+        assert!(write(
+            &p,
+            StoreKind::Raw,
+            &hash2,
+            Versions {
+                schema: 1,
+                shared: 0
+            }
+        )
+        .await
+        .unwrap());
         let after = read(&p).await.unwrap().unwrap();
         assert_eq!(after.schema_hash, hash2);
         assert_eq!(after.schema_version, 1);
@@ -348,7 +380,9 @@ mod tests {
     async fn a_newer_builds_spelling_is_none_not_a_guess() {
         let td = tempfile::tempdir().unwrap();
         let p = pool(&td.path().join("s.db")).await;
-        write(&p, StoreKind::Usage, "h", 0).await.unwrap();
+        write(&p, StoreKind::Usage, "h", Versions::default())
+            .await
+            .unwrap();
         sqlx::query("UPDATE _datalib_meta SET value = 'holodeck' WHERE key = 'store_kind'")
             .execute(&p)
             .await

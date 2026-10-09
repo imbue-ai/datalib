@@ -1,22 +1,27 @@
-// Slack: the Connection block fills the channel picker and, once DMs
-// are on, the DM picker — through the same probe and the same grid the
+// Slack: the channel picker and, once DMs are on, the DM picker each
+// load their own list — through the same probe and the same grid the
 // email and Claude forms use.
 import { test, expect, type Page } from "@playwright/test";
+import { reviewToml, row, wizardOf } from "./wizard-helpers";
 import { MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
+import { probeAsk, probeDone, reportFor, type ProbeAsk } from "./probe-stub";
 
-const wizard = (page: Page) => page.getByRole("dialog");
-const field = (page: Page, caption: string) =>
-  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-input`).first();
-const toggle = (page: Page, caption: string) =>
-  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-bool`);
-const picker = (page: Page, caption: string) =>
-  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .pick-grid`);
-const rows = (page: Page, caption: string) => picker(page, caption).locator(".slick-row");
-const tick = (page: Page, caption: string, id: string) =>
-  picker(page, caption)
+const wizard = wizardOf;
+/// The box a list is typed into, under the answer that shows it.
+const typed = (page: Page, heading: string) =>
+  row(page, heading).locator(".wiz-listfield > .wiz-input");
+const picker = (page: Page, heading: string) => row(page, heading).locator(".pick-grid");
+const rows = (page: Page, heading: string) => picker(page, heading).locator(".slick-row");
+/// Choosing an answer that shows a list loads it from the workspace.
+const answer = (page: Page, name: string) => wizard(page).getByRole("radio", { name }).check();
+const tick = (page: Page, heading: string, id: string) =>
+  picker(page, heading)
     .locator(`.slick-row[data-key="${id}"] .slick-cell-checkboxsel label`)
     .first()
     .click();
+
+const CHANNELS = "Which channels?";
+const DMS = "Direct messages?";
 
 const SLACK_SERVICE = {
   service: "slack",
@@ -86,13 +91,15 @@ const SLACK_PROBE = {
   notes: [],
 };
 
-let lastProbeRequest: { type?: string; params?: Record<string, unknown> } = {};
+let lastProbeRequest: ProbeAsk = {};
+
+const SLACK_LISTS = { channels: ["channel"], conversations: ["conversation"] };
 
 async function stubBackend(page: Page) {
   await page.route("**/api/latchkey/slack", (route) => route.fulfill({ json: SLACK_SERVICE }));
   await page.route("**/api/probe", (route) => {
-    lastProbeRequest = route.request().postDataJSON();
-    return route.fulfill({ json: SLACK_PROBE });
+    lastProbeRequest = probeAsk(route);
+    return route.fulfill(probeDone(reportFor(SLACK_PROBE, lastProbeRequest, SLACK_LISTS)));
   });
 }
 
@@ -105,7 +112,7 @@ async function pickSlack(page: Page) {
   await page.getByRole("button", { name: "Add source" }).click();
   await page.locator(".wiz-filter").fill("slack");
   await wizard(page)
-    .locator(".wiz-tile", { hasText: "Mirror channels and DMs from one Slack workspace." })
+    .locator(".wiz-tile", { hasText: "Copy channels and DMs from one Slack workspace." })
     .click();
 }
 
@@ -126,76 +133,91 @@ test.afterEach(async ({ page }) => {
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });
 
-test("a probe fills the channel picker, and ticking rows writes `channels`", async ({ page }) => {
+test("choosing channels loads the picker, and ticking rows writes `channels`", async ({ page }) => {
   await pickSlack(page);
 
-  // Nothing to pick from until the workspace has been asked.
-  await expect(picker(page, "Channels")).toHaveCount(0);
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  // Nothing to pick from until the answer asks for a list.
+  await expect(picker(page, CHANNELS)).toHaveCount(0);
+  await answer(page, "Only the channels I choose");
 
   // A Slack account has no address, so the line names the handle and
-  // the workspace, and counts both kinds of thing that came back.
-  await expect(wizard(page).locator(".wiz-probe-note")).toContainText(
-    "Reached picard in Enterprise — 3 channels, 2 conversations.",
+  // the workspace, and counts what came back in the field's own noun.
+  await expect(wizard(page).locator(".wiz-load-done")).toContainText(
+    "3 channels from picard in Enterprise.",
   );
-  // The probe authenticates with what Save would write: the `api`
-  // table that selects the live method, with the form's defaults.
+  // The probe asks for the channels alone, and authenticates with what
+  // Save would write: the `api` table that selects the live method,
+  // with the form's defaults.
   expect(lastProbeRequest.type).toBe("slack");
+  expect(lastProbeRequest.list).toBe("channels");
   expect(lastProbeRequest.params).toMatchObject({ api: { media: true, dms: false } });
 
   // Channels read with their `#`, and a tag says why one might not be
   // what you expect; membership doesn't gate the list, since naming a
-  // channel mirrors it either way.
-  await expect(rows(page, "Channels")).toHaveText([
+  // channel copies it either way.
+  await expect(rows(page, CHANNELS)).toHaveText([
     /#bridge.*12/,
     /#engineering.*private.*4/,
     /#ten-forward.*not a member.*40/,
   ]);
-  // The DM picker belongs to a field that only exists once DMs are
-  // on, so it isn't on the page yet.
-  await expect(picker(page, "Only these DMs")).toHaveCount(0);
+  // The DM picker belongs to an answer nobody has chosen yet.
+  await expect(picker(page, DMS)).toHaveCount(0);
 
-  await tick(page, "Channels", "engineering");
-  await tick(page, "Channels", "bridge");
-  await wizard(page).getByText("Review the TOML this writes").click();
-  const toml = wizard(page).locator(".wiz-review pre");
+  await tick(page, CHANNELS, "engineering");
+  await tick(page, CHANNELS, "bridge");
+  const toml = await reviewToml(page);
   // The bare name, never the `#` the grid shows.
   await expect(toml).toContainText('channels = ["engineering", "bridge"]');
 });
 
-test("turning DMs on reveals a DM picker filled from the same probe", async ({ page }) => {
+test("choosing some DMs turns DMs on and loads a list of its own", async ({ page }) => {
   await pickSlack(page);
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
-  await expect(wizard(page).locator(".wiz-probe-note")).toContainText("Reached");
+  await answer(page, "Only the channels I choose");
+  await expect(wizard(page).locator(".wiz-load-done")).toContainText("3 channels");
 
-  // One probe, both pickers: no second "Test connection" after the
-  // toggle.
-  await toggle(page, "Download direct messages").check();
+  // The channels' list holds no DMs: the DM picker asks for its own,
+  // so a workspace's directory is read only by someone who wants DMs.
+  await expect(picker(page, DMS)).toHaveCount(0);
+  await answer(page, "Only the conversations I choose");
   // Titled after who is on the far end, a group DM tagged and counted.
-  await expect(rows(page, "Only these DMs")).toHaveText([
-    /@William Riker/,
-    /@William Riker, Worf.*group.*2/,
-  ]);
+  await expect(rows(page, DMS)).toHaveText([/@William Riker/, /@William Riker, Worf.*group.*2/]);
+  expect(lastProbeRequest.list).toBe("conversations");
 
-  await tick(page, "Only these DMs", "G_AWAYTEAM");
-  await wizard(page).getByText("Review the TOML this writes").click();
-  const toml = wizard(page).locator(".wiz-review pre");
+  await tick(page, DMS, "G_AWAYTEAM");
+  const toml = await reviewToml(page);
   // Slack's own id for the conversation, which is what the downloader
   // walks — never the title, which is derived and can change.
   await expect(toml).toContainText('dm_conversations = ["G_AWAYTEAM"]');
   await expect(toml).toContainText("dms = true");
 });
 
+/// An answer is the whole of what it says: going back to "all" or
+/// "none" must not leave the list behind in the config.
+test("changing the answer empties the list the old answer showed", async ({ page }) => {
+  await pickSlack(page);
+  await answer(page, "Only the conversations I choose");
+  await tick(page, DMS, "D_RIKER");
+  const toml = await reviewToml(page);
+  await expect(toml).toContainText('dm_conversations = ["D_RIKER"]');
+
+  await answer(page, "All my direct messages");
+  await expect(toml).toContainText("dms = true");
+  await expect(toml).not.toContainText("dm_conversations");
+
+  await answer(page, "Leave them out");
+  await expect(toml).toContainText("dms = false");
+});
+
 test("a typed name is checked the way the downloader reads it", async ({ page }) => {
   await pickSlack(page);
+  await answer(page, "Only the channels I choose");
   // `#bridge` is fine (the downloader strips the `#`); `bridg` is not
   // a channel.
-  await field(page, "Channels").fill("#bridge, bridg");
-  await toggle(page, "Download direct messages").check();
+  await typed(page, CHANNELS).fill("#bridge, bridg");
+  await answer(page, "Only the conversations I choose");
   // The link `Copy link` hands out resolves to its id; a person's
-  // handle is not a conversation and would mirror nothing.
-  await field(page, "Only these DMs").fill("https://enterprise.slack.com/archives/D_RIKER, @riker");
-  await wizard(page).getByRole("button", { name: "Test connection" }).click();
+  // handle is not a conversation and would copy nothing.
+  await typed(page, DMS).fill("https://enterprise.slack.com/archives/D_RIKER, @riker");
 
   await expect(wizard(page).getByText(/Not on this account: bridg\./)).toBeVisible();
   await expect(wizard(page).getByText(/Not on this account: @riker\./)).toBeVisible();
@@ -206,13 +228,25 @@ test("a typed name is checked the way the downloader reads it", async ({ page })
 /// sets the whole value at once and never saw it.
 test("a list field can be typed key by key, commas included", async ({ page }) => {
   await pickSlack(page);
-  const box = field(page, "Channels");
+  await answer(page, "Only the channels I choose");
+  const box = typed(page, CHANNELS);
   await box.pressSequentially("bridge, engineering");
   await expect(box).toHaveValue("bridge, engineering");
-  await wizard(page).getByText("Review the TOML this writes").click();
-  await expect(wizard(page).locator(".wiz-review pre")).toContainText(
-    'channels = ["bridge", "engineering"]',
-  );
+  const toml = await reviewToml(page);
+  await expect(toml).toContainText('channels = ["bridge", "engineering"]');
+});
+
+/// "Only the channels I choose" with none chosen would quietly mean
+/// every channel, so Add waits for one.
+test("an answer that shows a list is not done until something is in it", async ({ page }) => {
+  await pickSlack(page);
+  const add = wizard(page).getByRole("button", { name: "Add source" });
+  await expect(add).toBeEnabled();
+  await answer(page, "Only the channels I choose");
+  await expect(add).toBeDisabled();
+  await expect(wizard(page).locator(".wiz-foot-note")).toContainText("Still needed: Channels");
+  await typed(page, CHANNELS).fill("bridge");
+  await expect(add).toBeEnabled();
 });
 
 /// Every text box was `width: 100%` plus its padding, so the form
@@ -220,7 +254,7 @@ test("a list field can be typed key by key, commas included", async ({ page }) =
 test("the form never scrolls sideways", async ({ page }) => {
   await pickSlack(page);
   const body = wizard(page).locator(".wiz-body");
-  await expect(field(page, "Channels")).toBeVisible();
+  await expect(row(page, CHANNELS)).toBeVisible();
   const overflow = await body.evaluate((el) => el.scrollWidth - el.clientWidth);
   expect(overflow).toBe(0);
 });
@@ -229,17 +263,14 @@ test("the form never scrolls sideways", async ({ page }) => {
 // the same two words — the form the backend parses.
 test("the attachment cap is edited in units and written the same way", async ({ page }) => {
   await pickSlack(page);
-  const row = wizard(page).locator(
-    '.wiz-field:has(> .wiz-label:text-is("Skip attachments larger than")) .wiz-bytes',
-  );
-  const amount = row.locator("input");
-  const unit = row.locator("select");
+  const cap = row(page, "Files people shared").locator(".wiz-bytes");
+  const amount = cap.locator("input");
+  const unit = cap.locator("select");
   // The 5_000_000 default opens as the whole number it is.
   await expect(amount).toHaveValue("5");
   await expect(unit).toHaveValue("MB");
 
-  await wizard(page).getByText("Review the TOML this writes").click();
-  const toml = wizard(page).locator(".wiz-review pre");
+  const toml = await reviewToml(page);
   await expect(toml).toContainText('blob_size_limit_bytes = "5 MB"');
 
   // Changing the unit keeps the number, like a phone's data-limit dialog.

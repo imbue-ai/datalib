@@ -6,15 +6,18 @@ pub mod db;
 pub mod identity;
 pub mod schema_raw;
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
-use datalib_etl::fswalk;
+use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
+use datalib_etl_files::fswalk;
 
 pub use db::{db_path_for, RawDb, RenderTarget};
 use schema_raw::{PdfDocumentRow, PdfKind, PdfPathRow, PdfScanMetaRow};
@@ -33,7 +36,7 @@ pub struct FetchOptions {
     pub ignore: Vec<String>,
     pub max_bytes: Option<u64>,
     /// This host's shared fingerprint cache. Host state, so it lives
-    /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
+    /// outside the scan store — see [`datalib_etl_files::fingerprint_cache`].
     pub cache: FingerprintCache,
     /// Run-pinned "now", per AGENTS.md — steps prefer `DATALIB_DAG_NOW`
     /// over sampling their own clock so one run's outputs agree. Every
@@ -58,10 +61,19 @@ pub struct FetchSummary {
     pub needs_ocr: usize,
     /// Paths skipped for exceeding `max_bytes`.
     pub too_large: usize,
+    /// Documents no path names any more.
+    pub documents_removed: usize,
     pub errors: usize,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let pool = opts.db.pool().clone();
+    // The scan has no stop to honour, so it always covers the whole tree.
+    let never_stops = StopFlag::new();
+    run_problems::collecting(&pool, &never_stops, |found| scan_tree(opts, found)).await
+}
+
+async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
 
     // Load the cache BEFORE truncating the path table, exactly as
@@ -69,7 +81,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // the in-memory cache is what preserves the fast-rescan path across
     // it.
     let prev = opts.db.load_prev().await.context("load rescan cache")?;
-    opts.db.reset_paths().await.context("reset pdf_paths")?;
 
     // Written before the walk, so an interrupted scan still leaves the
     // render step able to find the tree.
@@ -101,9 +112,25 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await?;
     summary.errors += scan.errors.len();
-    for e in &scan.errors {
-        tracing::warn!(path = %e.path.display(), error = %e.error, "pdf_walk_error");
+    scan.report_problems(&found, "files");
+    // A walk that could not read part of the tree may only have failed to
+    // see a path, so the table is not truncated and nothing falls out:
+    // what the walk did see is upserted over what was there.
+    if scan.errors.is_empty() {
+        opts.db.reset_paths().await.context("reset pdf_paths")?;
     }
+    // A file the scan found and did not read (over `max_bytes`) is still
+    // there, so it keeps the path row the last scan wrote.
+    let mut path_batch: Vec<PdfPathRow> = scan
+        .present_unread
+        .iter()
+        .filter_map(|rel| {
+            Some(PdfPathRow {
+                id: rel.clone(),
+                blake3: prev.paths.get(rel)?.clone(),
+            })
+        })
+        .collect();
     summary.pdfs_seen = scan.files.len();
     summary.too_large = scan.stats.too_large;
     summary.hashed = scan.stats.hashed;
@@ -111,37 +138,43 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.progress.set_length(Some(scan.files.len() as u64));
 
     let mut doc_batch: Vec<PdfDocumentRow> = Vec::new();
-    let mut path_batch: Vec<PdfPathRow> = Vec::new();
     // Documents identified during *this* scan, so N copies of one file
     // are classified once rather than N times.
-    let mut seen_docs: HashMap<String, bool> = HashMap::new();
+    let mut seen_docs: HashSet<String> = HashSet::new();
 
     for f in &scan.files {
         opts.progress.inc(1);
-        let hash_hex = fswalk::to_hex(&f.blake3);
+        let scanned = fswalk::to_hex(&f.blake3);
 
         // ── Classify the document, once per distinct content ─────────
-        if !prev.known_docs.contains(&hash_hex) && !seen_docs.contains_key(&hash_hex) {
-            match identify(&f.path, f.size) {
+        // The scan's hash only decides whether to look. A document read
+        // is named by the hash of the bytes it was classified from, which
+        // differ when the file changed after the scan or the scan's
+        // cached hash was stale.
+        let hash_hex = if prev.known_docs.contains(&scanned) || seen_docs.contains(&scanned) {
+            scanned
+        } else {
+            match identify(&f.path) {
                 Ok(row) => {
-                    let needs_ocr = row.needs_ocr;
-                    seen_docs.insert(hash_hex.clone(), needs_ocr);
-                    summary.documents += 1;
-                    if needs_ocr {
-                        summary.needs_ocr += 1;
+                    let read = row.blake3.clone();
+                    if seen_docs.insert(read.clone()) {
+                        summary.documents += 1;
+                        if row.needs_ocr {
+                            summary.needs_ocr += 1;
+                        }
+                        doc_batch.push(row);
                     }
-                    doc_batch.push(PdfDocumentRow {
-                        blake3: hash_hex.clone(),
-                        ..row
-                    });
+                    read
                 }
+                // Retried every scan: a document that never identified
+                // is not in `pdf_documents`.
                 Err(e) => {
                     summary.errors += 1;
-                    tracing::warn!(path = %f.rel, error = %e, "pdf_identify_failed");
+                    found.record_failed("pdf_paths", &f.rel, format!("{e:#}"));
                     continue;
                 }
             }
-        }
+        };
 
         path_batch.push(PdfPathRow {
             id: f.rel.clone(),
@@ -158,6 +191,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if !doc_batch.is_empty() || !path_batch.is_empty() {
         opts.db.write_batch(&doc_batch, &path_batch, &now).await?;
     }
+    // A document is reached only through a path, so after a clean walk one
+    // no path names is gone from the tree. A file moved within it is named
+    // at its new path by now, and keeps its document.
+    if scan.errors.is_empty() {
+        summary.documents_removed = opts.db.prune_unnamed().await? as usize;
+    }
+    // Every scan retries every document it could not identify, so a row
+    // stands only on a path under an entry the walk could not read.
+    found.records_tried_all_but("pdf_paths", scan.unseen());
     Ok(summary)
 }
 
@@ -167,17 +209,19 @@ fn is_pdf(p: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
 }
 
-/// Classify one PDF and read its metadata. Returns a row with an empty
-/// `blake3` — the caller fills that in, since it already has the digest.
-fn identify(path: &Path, size: i64) -> Result<PdfDocumentRow> {
+/// Classify one PDF and read its metadata, from one read of the file,
+/// and name it by the hash of those bytes.
+fn identify(path: &Path) -> Result<PdfDocumentRow> {
+    let bytes = std::fs::read(path).context("read")?;
     // Detect-only: we want the classification and page census here, not
     // the markdown. Conversion is the render step's job and happens
     // against a different cache key.
-    let det =
-        pdf_inspector::process_pdf_with_options(path, pdf_inspector::PdfOptions::detect_only())
-            .map_err(|e| anyhow::anyhow!("classify {}: {e}", path.display()))?;
+    let det = pdf_inspector::process_pdf_mem_with_options(
+        &bytes,
+        pdf_inspector::PdfOptions::detect_only(),
+    )
+    .map_err(|e| anyhow::anyhow!("classify: {e}"))?;
 
-    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     // One parse feeds both: the metadata fields and the content hash
     // want the same `lopdf::Document`, and building it is the expensive
     // half of each.
@@ -208,8 +252,8 @@ fn identify(path: &Path, size: i64) -> Result<PdfDocumentRow> {
     });
 
     Ok(PdfDocumentRow {
-        blake3: String::new(),
-        size,
+        blake3: blake3_hex(&bytes),
+        size: bytes.len() as i64,
         page_count: i64::from(det.page_count),
         pdf_type: kind,
         confidence: f64::from(det.confidence),

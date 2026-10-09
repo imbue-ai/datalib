@@ -14,6 +14,12 @@ use datalib_etl_beeper_config::{BeeperConfig, BeeperSync};
 
 use crate::ingest;
 
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
+
 /// Ingest wave: present iff `texts`.
 pub fn plan_ingest(ctx: PlanContext, config: BeeperConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
@@ -51,28 +57,28 @@ impl DataProcessor for BeeperIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
-            .await;
-        let s = ingest::fetch(ingest::FetchOptions {
-            db,
-            sources: self.sync.sources.clone(),
-            beeper_data_dir: self.sync.path(),
-            media: self.sync.media,
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |_| async {
+            let s = ingest::fetch(ingest::FetchOptions {
+                db,
+                sources: self.sync.sources.clone(),
+                beeper_data_dir: self.sync.path(),
+                media: self.sync.media,
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+            })
+            .await?;
+            Ok(format!(
+                "rooms={} users={} events={} blobs={} blob_errors={} enriched={} orphaned={}",
+                s.rooms,
+                s.users,
+                s.events,
+                s.blobs,
+                s.blob_errors,
+                s.events_enriched,
+                s.events_orphaned,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "rooms={} users={} events={} blobs={} blob_errors={} enriched={} orphaned={}",
-            s.rooms,
-            s.users,
-            s.events,
-            s.blobs,
-            s.blob_errors,
-            s.events_enriched,
-            s.events_orphaned,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }

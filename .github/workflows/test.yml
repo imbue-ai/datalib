@@ -15,7 +15,7 @@
 # BuildBuddy instead sidesteps the GHA-cache-shape mismatch entirely.
 #
 # Why the devcontainer image: `bazel test //...` needs the full Bazel
-# build toolchain — cmake, lld, perl, pkg-config, libssl-dev — that the
+# build toolchain — lld, perl, pkg-config, libssl-dev — that the
 # prod image deliberately omits. The
 # devcontainer image carries that toolchain on top of the prod image's
 # qmd model cache, latchkey, doltlite CLI, etc. Re-installing it via apt

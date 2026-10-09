@@ -16,4 +16,9 @@ export const CONFIG_MUTATING = [
   "wizard-select",
   "wizard-email",
   "wizard-slack",
+  // Writes the library's saved layout (system/ui-state/layout.json).
+  "containers",
+  // Links handles to contacts in the contacts app's store, on a root
+  // that has the app (`contactsRoot` in playwright.config.ts).
+  "contacts",
 ] as const;

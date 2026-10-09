@@ -14,11 +14,24 @@ One row per event in the upstream's own shape, keyed
   The `.ics` method splits a file into the same shape, carrying the
   `VTIMEZONE`s each event names.
 - `google_events` — a Google event resource verbatim. A changed or
-  cancelled occurrence is its own row naming its series.
+  cancelled occurrence is its own row naming its series. Its `etag`
+  and `updated` are in the sidecar's `volatile_payload`: Google bumps
+  them on hundreds of events at once with nothing else changed.
 
-`calendars.sync_token` is each calendar's resume position. It is per
-calendar, so widening the `calendars` filter needs no scope record: a
-calendar added to the list has no token and is listed whole.
+`calendars.sync_token` is each calendar's `sync-collection` token. It
+is per calendar, so widening the `calendars` filter needs no scope
+record: a calendar added to the list has no token and is listed whole.
+
+What a CalDAV listing named is `dav_resources`, one row per object with
+the etag it was listed at; the etag the stored object satisfies is
+`held_version` in that table's `_bookkeeping` sidecar, written in the
+transaction that stored it. What is owed is the difference, asked of
+the store each run and never stored: an object the listing named
+without its data and a `multiget` did not return stays owed after the
+token has moved on. A listing that stops short leaves what it never
+reached in `dav_unconfirmed`, and nothing is deleted by absence until a
+later run carries the listing to its end. Both tables are
+`datalib_etl_web::dav::state`.
 
 ## A window (`since` / `until`)
 
@@ -40,6 +53,9 @@ no longer names is dropped, and the calendar's token is cleared.
 
 ## Fastmail (CalDAV) — measured against a live account
 
+Which credential to use, and how to make it read-only, is in
+[`docs/dev/fastmail.md`](../../../../../docs/dev/fastmail.md).
+
 - **Discovery starts at `https://caldav.fastmail.com/dav/`.** The bare
   host answers a `PROPFIND` with 404; `/.well-known/caldav` 301s to
   `/dav/calendars`. The `fastmail` method hardcodes the first, and the
@@ -52,9 +68,29 @@ no longer names is dropped, and the calendar's token is cleared.
   `resourcetype` is `schedule-inbox` / `schedule-outbox`, not
   `calendar`. Only `calendar` collections are mirrored.
 - `sync-collection` with an empty token returned every object of a
-  2,000-event calendar in one reply, with no 507 truncation. The
-  truncation path (a 507 on the collection itself) follows the new
-  token anyway.
+  2,000-event calendar in one reply, with no 507 truncation. Asked for
+  fewer with `<limit><nresults>2</nresults></limit>`, it answers 2
+  objects and a 507 on the collection, and the token it returns moves
+  to the next page, so the truncation path is real; the address book
+  does the same.
+- An unknown or expired sync token is a 403 whose body names RFC
+  6578's precondition: `<D:error xmlns:D="DAV:"><D:valid-sync-token/>`
+  with a `responsedescription` of `Invalid sync-token`. Only that
+  starts a listing from nothing; any other refusal fails the calendar.
+- Depth makes no difference: `sync-collection`, `calendar-multiget`
+  and `calendar-query` returned the same at Depth 0, 1 and none, on
+  each of 6 calendars. We send what the RFCs define (0, 0 and 1).
+
+The loop is `datalib_etl_web::dav::sync`, which CardDAV shares: each page
+of a listing is one transaction (what it names, what came with its
+data, the deletions, the token), then what is listed and not held is
+fetched by `multiget` through `datalib_etl_web::owed`. A listing that stops
+short leaves a `listing:calendar <name>` problem and deletes nothing
+until a later run carries it to the end. An object with no `VEVENT`
+`UID` is held at its etag with a warning on its `dav_resources` row,
+and not asked for again until the listing names it at a new etag. A
+server without `sync-collection` fails the calendar: there is no second
+way to list one, apart from the window's `calendar-query` above.
 - Shape of the data across ~5,200 objects: 3,855 single events; the
   rest a series with 0 to many overrides in the same object; 5 objects
   holding only overrides (invitations to one occurrence). No `STATUS`
@@ -69,8 +105,24 @@ latchkey's `google-calendar` service holds the OAuth token
 `recurrence`, and changed and cancelled occurrences are resources with
 `recurringEventId` and `originalStartTime`. A `410 Gone` means the sync
 token expired: the calendar is listed whole again and whatever the new
-listing does not name is dropped.
+listing does not name is dropped. The listing carries whole events, so
+nothing is owed after it: each page is one transaction, and the token
+moves in the transaction that ends the listing, with its prune. A
+listing cut off before its last page kept no token and starts again.
 
+- **Every events reply carries `items`**, `[]` when there is nothing:
+  a whole listing, an empty window and an incremental sync with no
+  changes alike, across 7 calendars. A reply without it is not a page,
+  and fails the calendar rather than reading as an empty one.
+- **An invalid or expired sync token** is a `410` whose error reason is
+  `fullSyncRequired`.
+- **Every event had an `id`**, across about 7,500 on the first pages of
+  7 calendars. One without could be any stored event, so a whole
+  listing that meets one deletes nothing and says so on the calendar's
+  `listing:` row.
+- A whole sync of the 7 calendars stored 10,332 events in 10 requests
+  (two calendars ran past one 2,500-event page); the next, incremental,
+  changed nothing in 8.
 - **Pages come in no particular order.** A full listing names a deleted
   series as a `cancelled` resource, and its occurrences may come on
   either side of it; the deleted series is carried across pages so none

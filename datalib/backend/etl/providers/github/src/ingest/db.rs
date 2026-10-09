@@ -4,19 +4,21 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
-use sqlx::Row;
+use sqlx::{Row, Sqlite, Transaction};
 
-use datalib_etl::bulk::bulk_upsert;
+use datalib_etl::bulk::{bulk_upsert, bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl_forge_ingest_common::{load_self_identity, prune_children, row_payload};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
     full_ddl, IssueCommentRow, PrReviewCommentRow, PrReviewRow, PullRequestRow, SelfIdentityRow,
+    LADDER,
 };
 
-datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl(), LADDER);
 
 impl RawDb {
     // ── self_identity ───────────────────────────────────────────────
@@ -31,40 +33,45 @@ impl RawDb {
 
     // ── pull_requests ───────────────────────────────────────────────
 
-    pub async fn upsert_pull_request(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
-        bulk_upsert(
-            self.pool(),
-            &[PullRequestRow::from_payload(repo, num, payload)?],
-        )
-        .await
+    /// The record alone: its sidecar is written by the fetch loop, in
+    /// the same transaction, with the version it is held at.
+    pub async fn store_pull_request(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        repo: &str,
+        num: u32,
+        payload: &Value,
+    ) -> Result<()> {
+        bulk_upsert_entity_in_tx(tx, &[PullRequestRow::from_payload(repo, num, payload)?]).await
     }
 
     // ── issue_comments / pr_reviews / pr_review_comments ────────────
 
-    /// One PR's whole list from one child `table`, in one transaction.
-    pub async fn upsert_children(
+    /// One PR's whole list from one child `table`.
+    pub async fn store_children(
         &self,
+        tx: &mut Transaction<'_, Sqlite>,
         table: &str,
         repo: &str,
         num: u32,
         payloads: &[Value],
+        now: &IsoOffsetTimestamp,
     ) -> Result<()> {
         fn rows<T>(payloads: &[Value], row: impl Fn(&Value) -> Result<T>) -> Result<Vec<T>> {
             payloads.iter().map(row).collect()
         }
-        let pool = self.pool();
         match table {
             "issue_comments" => {
                 let rows = rows(payloads, |p| IssueCommentRow::from_payload(repo, num, p))?;
-                bulk_upsert(pool, &rows).await
+                bulk_upsert_in_tx(tx, &rows, now).await
             }
             "pr_reviews" => {
                 let rows = rows(payloads, |p| PrReviewRow::from_payload(repo, num, p))?;
-                bulk_upsert(pool, &rows).await
+                bulk_upsert_in_tx(tx, &rows, now).await
             }
             "pr_review_comments" => {
                 let rows = rows(payloads, |p| PrReviewCommentRow::from_payload(repo, num, p))?;
-                bulk_upsert(pool, &rows).await
+                bulk_upsert_in_tx(tx, &rows, now).await
             }
             other => anyhow::bail!("{other} is not a PR child table"),
         }
@@ -73,6 +80,7 @@ impl RawDb {
     /// Drop this PR's rows in `table` that the fresh listing did not name.
     pub async fn prune_pr_children(
         &self,
+        tx: &mut Transaction<'_, Sqlite>,
         table: &'static str,
         repo: &str,
         num: u32,
@@ -80,7 +88,7 @@ impl RawDb {
     ) -> Result<usize> {
         let num = num.to_string();
         prune_children(
-            self.pool(),
+            tx,
             table,
             &[("repo_full_name", repo), ("pr_number", &num)],
             keep,
@@ -127,8 +135,6 @@ impl RawDb {
         }
         Ok(out)
     }
-
-    // ── sync_scope_state (delegates) ────────────────────────────────
 
     pub async fn any_pull_requests(&self) -> Result<bool> {
         let row = sqlx::query("SELECT 1 FROM pull_requests WHERE payload IS NOT NULL LIMIT 1")
@@ -211,7 +217,9 @@ mod tests {
     async fn pr_and_children_round_trip() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("g.doltlite_db")).await.unwrap();
-        db.upsert_pull_request(
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_pull_request(
+            &mut tx,
             "octocat/hello",
             7,
             &json!({
@@ -224,14 +232,17 @@ mod tests {
         )
         .await
         .unwrap();
-        db.upsert_children(
+        db.store_children(
+            &mut tx,
             "issue_comments",
             "octocat/hello",
             7,
             &[json!({"id": 101, "body": "hi", "user": {"login": "alice"}})],
+            &IsoOffsetTimestamp::now_local(),
         )
         .await
         .unwrap();
+        tx.commit().await.unwrap();
         let prs = db.load_pull_requests().await.unwrap();
         assert_eq!(prs.len(), 1);
         assert_eq!(prs[0].pr_number, 7);
@@ -244,9 +255,16 @@ mod tests {
     async fn payload_stored_as_jsonb_blob() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("g.doltlite_db")).await.unwrap();
-        db.upsert_pull_request("octocat/hello", 7, &json!({"number": 7, "title": "T"}))
-            .await
-            .unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_pull_request(
+            &mut tx,
+            "octocat/hello",
+            7,
+            &json!({"number": 7, "title": "T"}),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
         let row = sqlx::query(
             "SELECT typeof(payload) AS t FROM pull_requests WHERE id='octocat/hello#7'",
         )
@@ -255,27 +273,5 @@ mod tests {
         .unwrap();
         let t: String = row.try_get("t").unwrap();
         assert_eq!(t, "blob", "payload should be JSONB-encoded BLOB");
-    }
-
-    #[tokio::test]
-    async fn scope_state_round_trips() {
-        let d = tempfile::tempdir().unwrap();
-        let db = RawDb::open(&d.path().join("g.doltlite_db")).await.unwrap();
-        datalib_etl::doltlite_raw::upsert_scope_state(
-            db.pool(),
-            "author:@me",
-            "2026-05-21T02:00:00+02:00",
-        )
-        .await
-        .unwrap();
-        let m = datalib_etl::doltlite_raw::load_scope_state(db.pool())
-            .await
-            .unwrap();
-        // Stored as UTC; `since_for_scope` is what turns it back into an
-        // API-shaped value.
-        assert_eq!(
-            m.get("author:@me").map(String::as_str),
-            Some("2026-05-21T00:00:00.000000+00:00")
-        );
     }
 }

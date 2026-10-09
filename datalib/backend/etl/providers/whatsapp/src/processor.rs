@@ -3,7 +3,7 @@
 //! mirror engine, register `Media/` in the CAS. Present when `backup` is
 //! configured; the render processor lives in `datalib_etl_whatsapp_render`.
 
-use datalib_etl::fingerprint_cache::{self, FingerprintCache};
+use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
@@ -13,6 +13,12 @@ use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_whatsapp_config::{WhatsAppSync, WhatsappConfig};
 
 use crate::ingest::{self, MirrorKnobs};
+
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
 
 pub fn plan_ingest(
     ctx: PlanContext,
@@ -39,7 +45,7 @@ pub fn plan_ingest(
 }
 
 /// Owns its raw doltlite store end to end: open, register the interrupt
-/// hook, fetch, commit + close via `session.finish`.
+/// hook, fetch, commit + close via `run_store`.
 struct WhatsappIngest {
     id: String,
     raw_path: PathBuf,
@@ -56,31 +62,29 @@ impl DataProcessor for WhatsappIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let db_path = datalib_etl::doltlite_raw::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&db_path).await?;
-        // Open the session (snapshot + interrupt hook) BEFORE fetch borrows
-        // `&db`: it captures the write pool the commit + report run against.
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), db_path)
-            .await;
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |_| async {
+            let env_var = self
+                .sync
+                .key_env_var
+                .clone()
+                .unwrap_or_else(|| "WHATSAPP_BACKUP_DECRYPTION_KEY".to_string());
+            let key_hex = std::env::var(&env_var)
+                .with_context(|| format!("read WhatsApp root key from env var `{env_var}`"));
+            let root_key = key_hex.and_then(|h| datalib_whatsapp_backup::decode_hex_key(&h))?;
 
-        let env_var = self
-            .sync
-            .key_env_var
-            .clone()
-            .unwrap_or_else(|| "WHATSAPP_BACKUP_DECRYPTION_KEY".to_string());
-        let key_hex = std::env::var(&env_var)
-            .with_context(|| format!("read WhatsApp root key from env var `{env_var}`"));
-        let root_key = key_hex.and_then(|h| datalib_whatsapp_backup::decode_hex_key(&h))?;
-
-        let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
-        let summary = ingest::fetch(
-            &self.sync.path(),
-            &root_key,
-            &db,
-            &cache,
-            &self.knobs,
-            ctx.progress,
-        )
-        .await?;
-        session.finish(ctx, summary.summary()).await
+            let cache = FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
+            let summary = ingest::fetch(
+                &self.sync.path(),
+                &root_key,
+                &db,
+                &cache,
+                &self.knobs,
+                ctx.progress,
+            )
+            .await?;
+            Ok(summary.summary())
+        })
+        .await
     }
 }

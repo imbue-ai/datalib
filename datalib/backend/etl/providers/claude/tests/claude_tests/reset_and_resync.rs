@@ -10,10 +10,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::time::Duration;
 
-use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_claude::ingest::{db::db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_claude::synthesize::ClaudeSynth;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::json;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Row;
@@ -158,7 +158,7 @@ async fn a_reset_and_resync_preserves_data_tables() {
         ..FetchOptions::new(db.clone())
     })
     .await;
-    // Seal before closing, as `session.finish` does in production. The
+    // Seal before closing, as the session does in production. The
     // read below opens its own pool, which lands on `main`; a download
     // that never sealed left its rows on the writer's branch, where no
     // reader can see them.

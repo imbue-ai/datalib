@@ -12,7 +12,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
-use datalib_etl_chat_common::render::RenderProfile;
+use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -42,6 +42,7 @@ fn profile() -> RenderProfile {
         reaction_kind: "Codex Reaction".to_string(),
         chat_entity_kind: ids::KIND_THREAD,
         render_version: RENDER_VERSION,
+        text_format: TextFormat::Markdown,
     }
 }
 
@@ -284,6 +285,7 @@ fn build_chat(
             source_ref: None,
             items,
         }],
+        contacts: Vec::new(),
         inputs: inputs.declared(),
     }
 }
@@ -320,10 +322,10 @@ fn response_item(
                 is_typed_message(p)
                     .unwrap_or_else(|| typed.contains(text.trim()) || !looks_injected(&text))
             };
-            let (author_id, author, label, aside) = match str_of(p, "role") {
-                Some("assistant") => ("assistant", model, "LLM Response", false),
-                Some("user") if typed_here() => ("user", "User", "User Input", false),
-                _ => ("system", "Codex", "Harness Message", true),
+            let (author, label, aside) = match str_of(p, "role") {
+                Some("assistant") => (model, "LLM Response", false),
+                Some("user") if typed_here() => ("User", "User Input", false),
+                _ => ("Codex", "Harness Message", true),
             };
             // An injected blob — a permissions primer, a whole AGENTS.md —
             // is cut like a tool output: the store keeps it, the page
@@ -333,7 +335,6 @@ fn response_item(
             }
             Some(item(
                 ids::record(source_id, tid, line_no, ms),
-                author_id,
                 author.to_string(),
                 ms,
                 text,
@@ -349,7 +350,6 @@ fn response_item(
             let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
             Some(item(
                 ids::record(source_id, tid, line_no, ms),
-                "thinking",
                 model.to_string(),
                 ms,
                 details("Thinking", &quoted),
@@ -431,7 +431,6 @@ fn response_item(
             };
             Some(item(
                 id,
-                "tool_result",
                 name.to_string(),
                 ms,
                 details(&summary, &fenced(&clamp(&text, max_bytes))),
@@ -460,7 +459,6 @@ fn tool_call(
     };
     item(
         id,
-        "tool_use",
         model.to_string(),
         ms,
         details(&format!("Tool call: {name}"), &body),
@@ -482,7 +480,6 @@ fn compacted_item(
     let message = str_of(p, "message").filter(|m| !m.trim().is_empty())?;
     let mut it = item(
         ids::record(source_id, tid, line_no, ms),
-        "system",
         "Codex".to_string(),
         ms,
         String::new(),
@@ -679,8 +676,6 @@ mod tests {
             .unwrap()
             .contains("Tool result: apply_patch"));
         assert_eq!(items[8].author_display, "gpt-5.3-codex");
-        // The event lines duplicate nothing on the page.
-        assert!(!items.iter().any(|i| i.author_id == "event"));
         // Stamps never run backwards, though most lines share a second.
         let stamps: Vec<i64> = items.iter().map(|i| i.date_ms.unwrap()).collect();
         assert!(stamps.windows(2).all(|w| w[0] < w[1]), "{stamps:?}");
@@ -745,6 +740,32 @@ mod tests {
         assert_eq!(agent.buckets[0].items.len(), 1);
         assert_ne!(agent.chat_uuid, chats[0].chat_uuid);
         assert_eq!(chats[0].buckets[0].items.len(), 1);
+    }
+
+    /// A tool's name comes from whoever wrote the tool; in a summary it
+    /// is text.
+    #[test]
+    fn a_tool_named_in_markup_renders_escaped() {
+        let transcripts = vec![meta("t1", "t", None)];
+        let records = vec![rec(
+            "t1",
+            1,
+            "2364-04-11T10:00:00.000Z",
+            "response_item",
+            json!({"type": "function_call", "call_id": "c1", "name": "<script>x</script> & co", "arguments": "{}"}),
+        )];
+        let items = build_chats("codex", &transcripts, &records, 1024)
+            .remove(0)
+            .buckets
+            .remove(0)
+            .items;
+        let text = items[0].text.as_deref().unwrap();
+        assert!(
+            text.starts_with(
+                "<details><summary>Tool call: &lt;script&gt;x&lt;/script&gt; &amp; co</summary>"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

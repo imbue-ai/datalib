@@ -1,0 +1,745 @@
+{
+  "title": "Risa Survey Briefing",
+  "create_time": 12648729600.0,
+  "update_time": 12648729905.0,
+  "conversation_id": "68fa0005-fake-7000-8000-positronic0005",
+  "is_archived": false,
+  "is_starred": false,
+  "default_model_slug": "gpt-5",
+  "current_node": "msg-fake-survey-0020",
+  "mapping": {
+    "client-created-root": {
+      "id": "client-created-root",
+      "message": null,
+      "parent": null,
+      "children": [
+        "msg-fake-survey-0001",
+        "msg-fake-survey-0019"
+      ]
+    },
+    "msg-fake-survey-0001": {
+      "id": "msg-fake-survey-0001",
+      "message": {
+        "id": "msg-fake-survey-0001",
+        "author": {
+          "role": "user",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729600.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "Search the subspace archives for the three most recent survey missions to Risa and cite your sources."
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": false,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "client-created-root",
+      "children": [
+        "msg-fake-survey-0002"
+      ]
+    },
+    "msg-fake-survey-0002": {
+      "id": "msg-fake-survey-0002",
+      "message": {
+        "id": "msg-fake-survey-0002",
+        "author": {
+          "role": "assistant",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729605.0,
+        "update_time": null,
+        "content": {
+          "content_type": "thoughts",
+          "thoughts": [
+            {
+              "summary": "Checking the archives",
+              "content": "Looking for survey logs.",
+              "chunks": [],
+              "finished": true
+            }
+          ],
+          "source_analysis_msg_id": "x"
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {
+          "model_slug": "gpt-5"
+        },
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0001",
+      "children": [
+        "msg-fake-survey-0003"
+      ]
+    },
+    "msg-fake-survey-0003": {
+      "id": "msg-fake-survey-0003",
+      "message": {
+        "id": "msg-fake-survey-0003",
+        "author": {
+          "role": "assistant",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729606.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            ""
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {
+          "model_slug": "gpt-5"
+        },
+        "recipient": "web.run",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0002",
+      "children": [
+        "msg-fake-survey-0004"
+      ]
+    },
+    "msg-fake-survey-0004": {
+      "id": "msg-fake-survey-0004",
+      "message": {
+        "id": "msg-fake-survey-0004",
+        "author": {
+          "role": "tool",
+          "name": "web.run",
+          "metadata": {}
+        },
+        "create_time": 12648729607.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            ""
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": false,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0003",
+      "children": [
+        "msg-fake-survey-0005"
+      ]
+    },
+    "msg-fake-survey-0005": {
+      "id": "msg-fake-survey-0005",
+      "message": {
+        "id": "msg-fake-survey-0005",
+        "author": {
+          "role": "assistant",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729608.0,
+        "update_time": null,
+        "content": {
+          "content_type": "reasoning_recap",
+          "content": "Searched 3 archives"
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {
+          "model_slug": "gpt-5"
+        },
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0004",
+      "children": [
+        "msg-fake-survey-0006"
+      ]
+    },
+    "msg-fake-survey-0006": {
+      "id": "msg-fake-survey-0006",
+      "message": {
+        "id": "msg-fake-survey-0006",
+        "author": {
+          "role": "assistant",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729609.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "The three most recent surveys of entity[\"planet\",\"Risa\",\"Class M pleasure planet\"] were led by the USS Enterprise. citeturn0search0"
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {
+          "content_references": [
+            {
+              "type": "grouped_webpages",
+              "matched_text": "citeturn0search0",
+              "start_idx": 0,
+              "end_idx": 1,
+              "alt": "",
+              "items": [
+                {
+                  "url": "https://memory-alpha.example/Risa",
+                  "title": "Risa",
+                  "attribution": "Memory Alpha",
+                  "snippet": "A Class M planet known for its climate control.",
+                  "supporting_websites": [
+                    {
+                      "url": "https://starfleet.example/surveys/risa",
+                      "title": "Starfleet Survey Log: Risa",
+                      "attribution": "Starfleet"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "sources_footnote",
+              "matched_text": "",
+              "start_idx": 0,
+              "end_idx": 0,
+              "alt": "",
+              "sources": [
+                {
+                  "url": "https://memory-alpha.example/Risa",
+                  "title": "Risa",
+                  "attribution": "Memory Alpha"
+                }
+              ]
+            }
+          ],
+          "model_slug": "gpt-5"
+        },
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0005",
+      "children": [
+        "msg-fake-survey-0007"
+      ]
+    },
+    "msg-fake-survey-0007": {
+      "id": "msg-fake-survey-0007",
+      "message": {
+        "id": "msg-fake-survey-0007",
+        "author": {
+          "role": "user",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729660.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "Use Python to plot the survey durations as a bar chart, and show me the code."
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": false,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0006",
+      "children": [
+        "msg-fake-survey-0008"
+      ]
+    },
+    "msg-fake-survey-0008": {
+      "id": "msg-fake-survey-0008",
+      "message": {
+        "id": "msg-fake-survey-0008",
+        "author": {
+          "role": "assistant",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729665.0,
+        "update_time": null,
+        "content": {
+          "content_type": "code",
+          "language": "unknown",
+          "text": "import matplotlib.pyplot as plt\nplt.bar(['41153', '42286', '43125'], [3, 5, 2])\nplt.savefig('surveys.png')"
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {
+          "model_slug": "gpt-5"
+        },
+        "recipient": "python",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0007",
+      "children": [
+        "msg-fake-survey-0009"
+      ]
+    },
+    "msg-fake-survey-0009": {
+      "id": "msg-fake-survey-0009",
+      "message": {
+        "id": "msg-fake-survey-0009",
+        "author": {
+          "role": "tool",
+          "name": "python",
+          "metadata": {}
+        },
+        "create_time": 12648729666.0,
+        "update_time": null,
+        "content": {
+          "content_type": "execution_output",
+          "text": "Saved surveys.png"
+        },
+        "status": "finished_successfully",
+        "end_turn": false,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0008",
+      "children": [
+        "msg-fake-survey-0010"
+      ]
+    },
+    "msg-fake-survey-0010": {
+      "id": "msg-fake-survey-0010",
+      "message": {
+        "id": "msg-fake-survey-0010",
+        "author": {
+          "role": "assistant",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729667.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "Here is the chart of survey durations in days."
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {
+          "model_slug": "gpt-5"
+        },
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0009",
+      "children": [
+        "msg-fake-survey-0011"
+      ]
+    },
+    "msg-fake-survey-0011": {
+      "id": "msg-fake-survey-0011",
+      "message": {
+        "id": "msg-fake-survey-0011",
+        "author": {
+          "role": "user",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729720.0,
+        "update_time": null,
+        "content": {
+          "content_type": "multimodal_text",
+          "parts": [
+            {
+              "content_type": "image_asset_pointer",
+              "asset_pointer": "sediment://file_tng0001",
+              "size_bytes": 0,
+              "width": 16,
+              "height": 9,
+              "fovea": null,
+              "metadata": {}
+            },
+            {
+              "content_type": "image_asset_pointer",
+              "asset_pointer": "sediment://file_tng0002",
+              "size_bytes": 0,
+              "width": 16,
+              "height": 9,
+              "fovea": null,
+              "metadata": {}
+            },
+            "Summarize the away team report and describe the photos."
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": false,
+        "weight": 1.0,
+        "metadata": {
+          "attachments": [
+            {
+              "id": "file_tng0001",
+              "name": "viewscreen.jpg",
+              "mime_type": "image/jpeg"
+            },
+            {
+              "id": "file_tng0002",
+              "name": "beach.jpg",
+              "mime_type": "image/jpeg"
+            },
+            {
+              "id": "file_tng0003",
+              "name": "Away Team Report.pdf",
+              "mime_type": "application/pdf"
+            }
+          ]
+        },
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0010",
+      "children": [
+        "msg-fake-survey-0012"
+      ]
+    },
+    "msg-fake-survey-0012": {
+      "id": "msg-fake-survey-0012",
+      "message": {
+        "id": "msg-fake-survey-0012",
+        "author": {
+          "role": "tool",
+          "name": "file_search",
+          "metadata": {}
+        },
+        "create_time": 12648729721.0,
+        "update_time": null,
+        "content": {
+          "content_type": "tether_browsing_display",
+          "result": "",
+          "summary": "",
+          "assets": null,
+          "tether_id": null
+        },
+        "status": "finished_successfully",
+        "end_turn": false,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0011",
+      "children": [
+        "msg-fake-survey-0013"
+      ]
+    },
+    "msg-fake-survey-0013": {
+      "id": "msg-fake-survey-0013",
+      "message": {
+        "id": "msg-fake-survey-0013",
+        "author": {
+          "role": "tool",
+          "name": "file_search",
+          "metadata": {}
+        },
+        "create_time": 12648729722.0,
+        "update_time": null,
+        "content": {
+          "content_type": "tether_quote",
+          "url": "file_tng0003",
+          "domain": "Away Team Report.pdf",
+          "title": "Away Team Report.pdf",
+          "text": "fileciteturn0file0\n\nAll crew accounted for.",
+          "tether_id": null
+        },
+        "status": "finished_successfully",
+        "end_turn": false,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0012",
+      "children": [
+        "msg-fake-survey-0014"
+      ]
+    },
+    "msg-fake-survey-0014": {
+      "id": "msg-fake-survey-0014",
+      "message": {
+        "id": "msg-fake-survey-0014",
+        "author": {
+          "role": "assistant",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729723.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "The report says all crew are accounted for. The first photo is the bridge viewscreen; the second is a beach at dusk."
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {
+          "model_slug": "gpt-5"
+        },
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0013",
+      "children": [
+        "msg-fake-survey-0015"
+      ]
+    },
+    "msg-fake-survey-0015": {
+      "id": "msg-fake-survey-0015",
+      "message": {
+        "id": "msg-fake-survey-0015",
+        "author": {
+          "role": "user",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729780.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "Generate an image of the Enterprise in orbit at dusk."
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": false,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0014",
+      "children": [
+        "msg-fake-survey-0016"
+      ]
+    },
+    "msg-fake-survey-0016": {
+      "id": "msg-fake-survey-0016",
+      "message": {
+        "id": "msg-fake-survey-0016",
+        "author": {
+          "role": "tool",
+          "name": "t2uay3k.sj1i4kz",
+          "metadata": {}
+        },
+        "create_time": 12648729790.0,
+        "update_time": null,
+        "content": {
+          "content_type": "multimodal_text",
+          "parts": [
+            {
+              "content_type": "image_asset_pointer",
+              "asset_pointer": "sediment://file_tng0004",
+              "size_bytes": 0,
+              "width": 16,
+              "height": 9,
+              "fovea": null,
+              "metadata": {
+                "dalle": null,
+                "generation": {
+                  "gen_id": "g1"
+                }
+              }
+            }
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": false,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0015",
+      "children": [
+        "msg-fake-survey-0017",
+        "msg-fake-survey-0018"
+      ]
+    },
+    "msg-fake-survey-0017": {
+      "id": "msg-fake-survey-0017",
+      "message": {
+        "id": "msg-fake-survey-0017",
+        "author": {
+          "role": "assistant",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729791.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "Here is the Enterprise in orbit."
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {
+          "model_slug": "gpt-5"
+        },
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0016",
+      "children": []
+    },
+    "msg-fake-survey-0018": {
+      "id": "msg-fake-survey-0018",
+      "message": {
+        "id": "msg-fake-survey-0018",
+        "author": {
+          "role": "assistant",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729800.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "Here is another rendering, with the planet's twin moons."
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {
+          "model_slug": "gpt-5"
+        },
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0016",
+      "children": []
+    },
+    "msg-fake-survey-0019": {
+      "id": "msg-fake-survey-0019",
+      "message": {
+        "id": "msg-fake-survey-0019",
+        "author": {
+          "role": "user",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729900.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "Search the subspace archives for the four most recent survey missions to Risa and cite your sources."
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": false,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "client-created-root",
+      "children": [
+        "msg-fake-survey-0020"
+      ]
+    },
+    "msg-fake-survey-0020": {
+      "id": "msg-fake-survey-0020",
+      "message": {
+        "id": "msg-fake-survey-0020",
+        "author": {
+          "role": "assistant",
+          "name": null,
+          "metadata": {}
+        },
+        "create_time": 12648729905.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": [
+            "Four surveys of Risa are on record; the most recent was led by the USS Enterprise. citeturn0search0"
+          ]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {
+          "content_references": [
+            {
+              "type": "grouped_webpages",
+              "matched_text": "citeturn0search0",
+              "start_idx": 0,
+              "end_idx": 1,
+              "alt": "",
+              "items": [
+                {
+                  "url": "https://memory-alpha.example/Risa",
+                  "title": "Risa",
+                  "attribution": "Memory Alpha",
+                  "snippet": "A Class M planet known for its climate control.",
+                  "supporting_websites": [
+                    {
+                      "url": "https://starfleet.example/surveys/risa",
+                      "title": "Starfleet Survey Log: Risa",
+                      "attribution": "Starfleet"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "sources_footnote",
+              "matched_text": "",
+              "start_idx": 0,
+              "end_idx": 0,
+              "alt": "",
+              "sources": [
+                {
+                  "url": "https://memory-alpha.example/Risa",
+                  "title": "Risa",
+                  "attribution": "Memory Alpha"
+                }
+              ]
+            }
+          ],
+          "model_slug": "gpt-5"
+        },
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-survey-0019",
+      "children": []
+    }
+  }
+}

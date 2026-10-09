@@ -79,6 +79,9 @@ pub struct StepFacts {
     /// Whether the step said its consumers may read its sink before it
     /// finishes.
     pub streams_output: bool,
+    /// It answered a launch's `--migrate` with `needs_rerun`, and has not
+    /// succeeded since: due whatever it read.
+    pub needs_rerun: bool,
 }
 
 /// What an invocation was started against.
@@ -113,6 +116,9 @@ pub struct Tick {
     pub stops: Vec<StepIx>,
     /// Requests that close now, by index into [`Intent::requests`].
     pub closed: Vec<(usize, Outcome)>,
+    /// What each open request wants, indexed like [`Intent::requests`]
+    /// and then like [`Shape::steps`].
+    pub scopes: Vec<Vec<bool>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,7 +196,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
     let scopes: Vec<Vec<bool>> = intent
         .requests
         .iter()
-        .map(|r| closure(shape, &readers, &r.roots))
+        .map(|r| scope(&readers, &r.roots))
         .collect();
     let wanting: Vec<Vec<usize>> = (0..n)
         .map(|i| (0..scopes.len()).filter(|&r| scopes[r][i]).collect())
@@ -229,7 +235,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
             states[i] = StepState::Off;
             continue;
         }
-        let stale = stale_by_inputs(f, &now);
+        let stale = f.needs_rerun || stale_by_inputs(f, &now);
         if wanting[i].is_empty() {
             states[i] = match (&f.last_attempt, stale) {
                 (Some(a), _) if a.failed => StepState::Failed,
@@ -329,6 +335,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
         starts,
         stops,
         closed,
+        scopes,
     }
 }
 
@@ -356,8 +363,8 @@ impl Held {
 }
 
 /// The roots and everything that reads, transitively, what they write.
-fn closure(shape: &Shape, readers: &[Vec<StepIx>], roots: &[StepIx]) -> Vec<bool> {
-    let mut seen = vec![false; shape.steps.len()];
+fn scope(readers: &[Vec<StepIx>], roots: &[StepIx]) -> Vec<bool> {
+    let mut seen = vec![false; readers.len()];
     let mut stack: Vec<StepIx> = roots.to_vec();
     while let Some(i) = stack.pop() {
         if std::mem::replace(&mut seen[i], true) {
@@ -498,6 +505,7 @@ mod tests {
                     }),
                     running: None,
                     streams_output: false,
+                    needs_rerun: false,
                 }
             })
             .collect();
@@ -1054,6 +1062,24 @@ mod tests {
         s.steps[1].fingerprint = "fp1-edited".into();
         let t = tick(&s, &request(&[1], 5), &facts);
         assert_eq!(started(&t), vec![1]);
+    }
+
+    /// A step that answered a launch's `--migrate` with `needs_rerun` is due
+    /// for the request that reaches it, though nothing it reads moved, and
+    /// is left alone by a request that does not: a sync of one source never
+    /// re-renders another.
+    #[test]
+    fn a_step_that_needs_a_rerun_runs_only_for_a_request_that_reaches_it() {
+        let s = shape(&[&[], &[0], &[], &[2]]);
+        let mut facts = all_fresh(&s, 1);
+        facts.steps[3].needs_rerun = true;
+
+        let t = tick(&s, &request(&[0], 5), &facts);
+        assert_eq!(started(&t), vec![0]);
+        assert_eq!(t.states[3], StepState::Stale);
+
+        let t = tick(&s, &request(&[3], 5), &facts);
+        assert_eq!(started(&t), vec![3]);
     }
 
     #[test]

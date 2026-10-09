@@ -9,10 +9,10 @@
 use std::fs;
 use std::time::Duration;
 
-use datalib_etl::http::{fixture_key, HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_claude::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_claude::synthesize::{ClaudeSynth, BASE, DETAIL_QUERY};
+use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -20,6 +20,12 @@ const ORG: &str = "org-a";
 
 fn seed(api: &std::path::Path, playback: &std::path::Path) {
     fs::create_dir_all(api).unwrap();
+    // The account, so the only rows are the ones this test is about.
+    fs::write(
+        api.join("users.json"),
+        serde_json::to_vec_pretty(&json!([{"uuid": "acct-1"}])).unwrap(),
+    )
+    .unwrap();
     fs::write(
         api.join("conversations.json"),
         serde_json::to_vec_pretty(&json!([{

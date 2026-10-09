@@ -49,7 +49,7 @@ describe("isExternalHref", () => {
 
   it("hands off mailto: and tel:", () => {
     expect(isExternalHref("mailto:picard@enterprise.fed", BASE, APP)).toBe(true);
-    expect(isExternalHref("tel:+15551234", BASE, APP)).toBe(true);
+    expect(isExternalHref("tel:+12025550123", BASE, APP)).toBe(true);
   });
 
   it("leaves other schemes to the host", () => {

@@ -112,7 +112,7 @@ The iframe is also a **security boundary**, in two layers that agree.
 The card mounts it with `sandbox="allow-scripts"` and no
 `allow-same-origin`, and the server sends every HTML document under
 `/dactal/` with `Content-Security-Policy: sandbox allow-scripts
-allow-downloads` (`DOCUMENT_SANDBOX_CSP` in
+allow-downloads` (`DACTAL_SANDBOX_CSP` in
 `datalib/backend/http/src/embed.rs`) — the header form, because `sandbox`
 is ignored in a `<meta>` policy.
 Either way the document runs in an *opaque origin*: it has no cookie, its

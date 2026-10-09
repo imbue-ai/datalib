@@ -38,11 +38,11 @@ pub const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 /// The ONE canonical latchkey version pin (see the qmd twin,
 /// `DEFAULT_QMD_VERSION` in [`crate::qmd`]): used for the `npx` fallback
 /// spec, as the key into the staged `runtime/latchkey/<version>/` tree,
-/// and re-exported by `datalib_etl::latchkey`.
+/// and re-exported by `datalib_etl_web::latchkey`.
 /// `scripts/stage_runtime.sh` greps this constant to decide
 /// what to stage — keep the `LATCHKEY_VERSION` name and string-literal
 /// shape.
-pub const LATCHKEY_VERSION: &str = "3.15.0";
+pub const LATCHKEY_VERSION: &str = "3.18.0";
 
 /// The latchkey invocation to show in user-facing instructions and
 /// error messages: the app-bundled launcher when present (the

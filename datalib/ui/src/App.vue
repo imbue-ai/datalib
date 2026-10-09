@@ -7,9 +7,12 @@ import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
 import FirstRunView from "@/views/FirstRunView.vue";
 import ConfigErrorView from "@/views/ConfigErrorView.vue";
 import NewerRootView from "@/views/NewerRootView.vue";
-import { fetchConfig, type ConfigResponse } from "@/api";
+import UpgradingView from "@/views/UpgradingView.vue";
+import RerenderDialog from "@/components/RerenderDialog.vue";
+import { fetchConfig, openRequest, type ConfigResponse } from "@/api";
 import { subscribeLive } from "@/live";
 import CommandBox from "@/components/CommandBox.vue";
+import LibraryCrumb from "@/components/LibraryCrumb.vue";
 import { isDesktopApp } from "@/desktop";
 
 // The app window has no browser chrome, so it draws the two buttons a
@@ -19,20 +22,19 @@ const desktop = isDesktopApp();
 // shell's `under_title_bar`): the toolbar is the title bar, so it leaves
 // the window buttons room and its empty areas move the window.
 const underTitleBar = desktop && /Mac/.test(navigator.platform);
-const goBack = () => history.back();
-const goForward = () => history.forward();
 
-// The gate in front of the whole app, for the three states where showing
-// the app would be a lie.
+// The gate in front of the whole app, for the states where showing the
+// app would be a lie.
 const config = ref<ConfigResponse | null>(null);
 const checked = ref(false);
 
-const gate = computed<"first-run" | "newer-root" | "config-error" | null>(() => {
+const gate = computed<"first-run" | "newer-root" | "upgrading" | "config-error" | null>(() => {
   const c = config.value;
   if (!c) return null;
   // A refused root comes first: with no store open, "no config" and
   // "not ready" are both consequences of it, not states of their own.
   if (c.newer_root) return "newer-root";
+  if (c.upgrade.migrating) return "upgrading";
   if (!c.exists) return "first-run";
   return c.app_ready ? null : "config-error";
 });
@@ -74,12 +76,28 @@ function onInitialized() {
   void refresh();
 }
 
+// The launch's re-render offer, asked once per page: a launch of the
+// desktop app is a page load, and the next launch asks again while the
+// steps have not run. A step the pass could not ask does not open it on
+// its own: that is a failed run on the step's row and in its log.
+const rerenderAnswered = ref(false);
+const rerenderAsked = computed(() => {
+  const u = config.value?.upgrade;
+  if (!u || gate.value || rerenderAnswered.value) return false;
+  return u.rerender.length > 0;
+});
+
+async function onRerender(yes: boolean) {
+  rerenderAnswered.value = true;
+  if (yes && config.value) await openRequest(config.value.upgrade.rerender, "upgrade");
+}
+
 let stop: (() => void) | null = null;
 onMounted(() => {
   void refresh();
   stop = subscribeLive({
     root: (e) => {
-      if (e.kind === "config_changed") void refresh();
+      if (e.kind === "config_changed" || e.kind === "upgrade_changed") void refresh();
     },
     resync: () => void refresh(),
   });
@@ -89,34 +107,23 @@ onUnmounted(() => stop?.());
 
 <template>
   <main class="datalib-shell" data-feedback-root>
-    <!-- The toolbar: back and forward in the desktop app, the name,
-         and the search box. -->
+    <!-- The toolbar: the app and library names, and the search box. The
+         first-run screen keeps the names, which are the way back to the
+         other libraries; there is nothing yet to sync or search. -->
     <nav
-      v-if="!gate"
+      v-if="!gate || gate === 'first-run'"
       class="datalib-toolbar"
       :class="{ 'datalib-toolbar--titlebar': underTitleBar }"
       aria-label="App"
       data-tauri-drag-region
     >
       <div class="datalib-toolbar-start" data-tauri-drag-region>
-        <template v-if="desktop">
-          <button class="datalib-tool" title="back (⌘[)" aria-label="Back" @click="goBack">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path fill="currentColor" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
-            </svg>
-          </button>
-          <button class="datalib-tool" title="forward (⌘])" aria-label="Forward" @click="goForward">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path fill="currentColor" d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />
-            </svg>
-          </button>
-        </template>
-        <div class="datalib-brand" data-tauri-drag-region>Data Liberation ✊</div>
+        <LibraryCrumb :config-path="config?.path ?? null" />
       </div>
-      <div class="datalib-toolbar-center"><CommandBox /></div>
-      <!-- Lightweight sync indicator in the toolbar's flexible space —
-           appearing/disappearing never shifts the page layout. -->
-      <div class="datalib-toolbar-end" data-tauri-drag-region><SyncProgressChrome /></div>
+      <template v-if="!gate">
+        <div class="datalib-toolbar-sync" data-tauri-drag-region><SyncProgressChrome /></div>
+        <div class="datalib-toolbar-search"><CommandBox /></div>
+      </template>
     </nav>
 
     <!-- The gates had the shell's padding before the cards went
@@ -128,6 +135,7 @@ onUnmounted(() => stop?.());
         @initialized="onInitialized"
       />
       <NewerRootView v-else-if="gate === 'newer-root' && config" :config="config" />
+      <UpgradingView v-else-if="gate === 'upgrading' && config" :config="config" />
       <ConfigErrorView
         v-else-if="gate === 'config-error' && config"
         :config="config"
@@ -137,6 +145,7 @@ onUnmounted(() => stop?.());
     <div v-if="cardsShown" v-show="!gate" class="datalib-cards">
       <RouterView />
     </div>
+    <RerenderDialog v-if="rerenderAsked && config" :upgrade="config.upgrade" @answer="onRerender" />
     <ToastStack />
     <!-- Agent hand-off instructions dialog; opened via handoff.ts from
          the card surface and the config editor. -->
@@ -153,7 +162,7 @@ onUnmounted(() => stop?.());
 .datalib-shell {
   /* Viewport-pinned flex column: the toolbar takes its natural height
      and the routed view flexes into the rest, so full-height views
-     (MillerView) reach the bottom without guessing the chrome height.
+     (the card layout) reach the bottom without guessing the chrome height.
      min-height (not height) so taller views (sync) still
      scroll the page normally. */
   display: flex;
@@ -179,60 +188,35 @@ onUnmounted(() => stop?.());
   border-bottom: 1px solid var(--datalib-border);
 }
 /* The title bar's height, whatever the density: the window buttons are
-   placed once, when the window opens, at this bar's middle. */
+   placed once, when the window opens, at this bar's middle. So its
+   controls keep their step-0 height too; taller ones crowd a 40px bar. */
 .datalib-toolbar--titlebar {
+  --datalib-control-h: 24px;
   height: 40px;
   padding-left: 92px;
   -webkit-user-select: none;
   user-select: none;
 }
-.datalib-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 6px;
-  font-size: var(--datalib-title-size);
-  font-weight: 600;
-  white-space: nowrap;
-}
-/* The search box centred on the window, whatever sits either side:
-   the two ends share the leftover width equally. */
+/* The search box at the right end. As the window narrows the search
+   box shrinks first, from 440px to its min-width (its far larger
+   flex-shrink leaves it nearly all the shrinking); past that the
+   crumb's library name ellipsizes. The desktop shell's minimum window
+   width (MIN_WINDOW_WIDTH in datalib/tauri/src/main.rs) keeps both in
+   view. */
 .datalib-toolbar-start {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
 }
-.datalib-toolbar-center {
-  flex: 0 1 440px;
+.datalib-toolbar-sync {
+  flex: 0 0 auto;
   display: flex;
-  justify-content: center;
 }
-.datalib-toolbar-end {
-  flex: 1 1 0;
+.datalib-toolbar-search {
+  flex: 0 1000 440px;
+  min-width: 180px;
   display: flex;
-  justify-content: flex-end;
-}
-.datalib-tool {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--datalib-control-h);
-  height: var(--datalib-control-h);
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--datalib-radius);
-  background: transparent;
-  color: var(--datalib-fg);
-  cursor: pointer;
-}
-.datalib-tool svg {
-  width: calc(var(--datalib-icon-size) + 4px);
-  height: calc(var(--datalib-icon-size) + 4px);
-}
-.datalib-tool:hover {
-  background: var(--datalib-hover);
-  border-color: var(--datalib-border);
 }
 </style>

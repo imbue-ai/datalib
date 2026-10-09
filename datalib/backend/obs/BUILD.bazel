@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Shared observability init for every datalib Rust binary: stderr
 # fmt layer (pretty or JSON), an `IndicatifWriter` that coordinates
 # log emission with a shared `MultiProgress` (exposed via

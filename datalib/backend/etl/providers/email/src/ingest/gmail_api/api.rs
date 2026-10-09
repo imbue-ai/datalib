@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokio::time::Instant;
 use tracing::{debug, warn};
 
-use datalib_etl::http::{
+use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, parse_retry_after, percent_encode, HttpError,
     HttpRequest, HttpResponse, HttpService, LatchkeySettings, Retryability,
 };
@@ -204,11 +204,20 @@ fn body_names_a_rate_limit(body: &str) -> bool {
 }
 
 /// True for the error the shared retry loop returns once it has backed
-/// off as long as the run's give-up bounds allow. Nothing after it will
-/// fare better, so a caller stops the run rather than walking on.
+/// off as long as the run's give-up bounds allow.
 pub fn is_gave_up(e: &anyhow::Error) -> bool {
     e.downcast_ref::<HttpError>()
         .is_some_and(|e| matches!(e, HttpError::GaveUp { .. }))
+}
+
+/// Nothing after this will fare better, so a caller stops the run rather
+/// than walking on to fail every remaining message the same way: the
+/// retry loop gave up, Google refused the credential, or the day's
+/// quota is spent.
+pub fn is_terminal(e: &anyhow::Error) -> bool {
+    is_gave_up(e)
+        || e.downcast_ref::<GmailApiError>()
+            .is_some_and(|e| matches!(e, GmailApiError::Refused(_) | GmailApiError::DailyQuota(_)))
 }
 
 async fn get_json(url: &str, client: &Client) -> Result<Value> {
@@ -235,10 +244,10 @@ fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
         return anyhow::Error::new(GmailApiError::NotFound);
     }
     if resp.status == 403 && resp.body_str().contains("dailyLimitExceeded") {
-        return anyhow!(
+        return anyhow::Error::new(GmailApiError::DailyQuota(format!(
             "Gmail API {url} → HTTP 403: the project's daily quota is spent. It resets at \
              midnight Pacific time; the next run resumes where this one stopped."
-        );
+        )));
     }
     if resp.status == 401 || resp.status == 403 {
         let body = resp.body_str();
@@ -250,13 +259,13 @@ fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
             url,
             "the Gmail API refused the credential"
         );
-        return anyhow!(
+        return anyhow::Error::new(GmailApiError::Refused(format!(
             "Gmail API {url} → HTTP {}: {body}\n\
              If this says ACCESS_TOKEN_SCOPE_INSUFFICIENT, re-run \
              `latchkey auth browser google-gmail` and approve every scope. \
              If it says the credential is missing, run that command for the first time.",
             resp.status,
-        );
+        )));
     }
     anyhow!(
         "Gmail API {url} → HTTP {}: {}",
@@ -274,6 +283,14 @@ pub enum GmailApiError {
     /// the message was deleted between the list and the get.
     #[error("Gmail API returned HTTP 404")]
     NotFound,
+    /// A 401, or a 403 that is not a rate limit: the token is expired,
+    /// revoked or missing a scope.
+    #[error("{0}")]
+    Refused(String),
+    /// The project's daily quota is spent; no backoff shorter than a day
+    /// waits it out.
+    #[error("{0}")]
+    DailyQuota(String),
 }
 
 pub async fn get_profile(user_id: &str, client: &Client) -> Result<Profile> {
@@ -295,10 +312,11 @@ pub struct Profile {
 
 pub async fn list_labels(user_id: &str, client: &Client) -> Result<Vec<Label>> {
     let v = get_json(&format!("{BASE}/{user_id}/labels"), client).await?;
-    Ok(v.get("labels")
+    let labels = v
+        .get("labels")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Label::from_json).collect())
-        .unwrap_or_default())
+        .context("labels.list answered without a `labels` list")?;
+    Ok(labels.iter().filter_map(Label::from_json).collect())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,7 +351,7 @@ pub struct MessagePage {
 
 // One label, not many: Gmail intersects repeated `labelIds`, so a
 // request naming three labels returns only messages carrying all three.
-// A union over several labels is several walks — see `full_sync`.
+// A union over several labels is several walks — see `walk_unlisted_scopes`.
 fn messages_list_url(
     user_id: &str,
     page_token: Option<&str>,

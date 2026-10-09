@@ -117,6 +117,19 @@ characters. Codex's own
 thread measured here; reading that database (and its `archived` flag)
 is open, and the reason `path` is the home rather than `sessions/`.
 
+A sync that cannot read part of the home goes on and leaves a
+`problems` row, the same way `claude_code` does (its INGEST.md
+§"When part of a read fails"; the walk is shared): lines stepped over
+inside a rollout are one `file:codex/<dir>:<path>` row per file, a
+torn last line excepted; a rollout that would not open is
+`record:codex/<dir>:<path>` (or `record:transcripts:<dir>/<path>` when
+the walk opened it and the read after failed); an entry the walk could
+not read is
+`listing:codex/<dir>`. A missing `sessions/` fails a first sync and is
+a `listing:codex/sessions` row after that; a missing
+`archived_sessions/` is nothing to report, since only an older Codex
+made it.
+
 **Transcripts are full of secrets.** A tool output can hold the
 output of `env` or the contents of `.env`. The store keeps the line as
 Codex wrote it, and the rendered document keeps the first

@@ -1,31 +1,43 @@
 //! The owner's comments and reactions. Neither names the post it was
 //! left on in any way the export lets us resolve, so each feed is one
-//! chat bucketed by month rather than a thread per post.
+//! chat bucketed by year rather than a thread per post.
 
 use std::collections::BTreeMap;
 
-use datalib_etl_chat_common::render::RenderProfile;
+use datalib_etl_chat_common::period::by_year;
+use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_facebook::ingest::schema_raw::{COMMENTS_TABLE, REACTIONS_TABLE};
+use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 
 use crate::ids;
 use datalib_etl_render::inputs::Inputs;
 use serde_json::Value;
 
 use crate::common::{
-    attachment_entries, chat_item, data_values, label_value, media_attachment, month_of, profile,
-    str_field, strip_mentions, ts_ms,
+    attachment_entries, chat_item, data_values, label_value, media_attachment, profile, str_field,
+    strip_mentions, ts_ms,
 };
 use crate::processor::Owner;
 
 pub fn comments_profile() -> RenderProfile {
-    profile("Facebook Comments", "Facebook Comment", ids::KIND_FEED)
+    profile(
+        "Facebook Comments",
+        "Facebook Comment",
+        ids::KIND_FEED,
+        TextFormat::Markdown,
+    )
 }
 
 pub fn reactions_profile() -> RenderProfile {
-    profile("Facebook Reactions", "Facebook Reaction", ids::KIND_FEED)
+    profile(
+        "Facebook Reactions",
+        "Facebook Reaction",
+        ids::KIND_FEED,
+        TextFormat::Plain,
+    )
 }
 
 pub const COMMENTS_CHAT: &str = "comments";
@@ -46,13 +58,13 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             .to_string();
         let mut text = comment
             .and_then(|c| str_field(c, "comment"))
-            .map(strip_mentions)
+            .map(|c| escape_md_block(&strip_mentions(c)))
             .unwrap_or_default();
         if let Some(title) = str_field(v, "title") {
             if !text.is_empty() {
                 text.push_str("\n\n");
             }
-            text.push_str(&format!("*{title}*"));
+            text.push_str(&format!("*{}*", escape_md_inline(title)));
         }
         let attachments: Vec<_> = attachment_entries(v)
             .filter_map(|e| e.get("media"))
@@ -60,27 +72,15 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             .collect();
         let date_ms = ts_ms(v, "timestamp");
         let item_id = ids::comment(&owner.source_id, row_id, date_ms);
-        let author_id = if author == owner.name {
-            "me".to_string()
-        } else {
-            author.clone()
-        };
         items.push(chat_item(
             item_id,
-            author_id,
             author,
             date_ms,
             (!text.is_empty()).then_some(text),
             attachments,
         ));
     }
-    vec![monthly_chat(
-        COMMENTS_CHAT,
-        "Comments",
-        items,
-        inputs,
-        owner,
-    )]
+    vec![yearly_chat(COMMENTS_CHAT, "Comments", items, inputs, owner)]
 }
 
 /// The export ships reactions in two shapes, sometimes both for one
@@ -147,7 +147,6 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
                 source_url: r.url.clone(),
                 ..chat_item(
                     item_id,
-                    "me".to_string(),
                     owner.name.clone(),
                     Some(ms),
                     Some(text),
@@ -156,7 +155,7 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
             }
         })
         .collect();
-    vec![monthly_chat(
+    vec![yearly_chat(
         REACTIONS_CHAT,
         "Reactions",
         items,
@@ -213,26 +212,19 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-fn monthly_chat(
+fn yearly_chat(
     id: &str,
     display: &str,
-    mut items: Vec<NormalizedChatItem>,
+    items: Vec<NormalizedChatItem>,
     inputs: Inputs,
     owner: &Owner,
 ) -> NormalizedChat {
     for input in &owner.inputs {
         inputs.read(&input.table, &input.id);
     }
-    items.sort_by_key(|i| i.date_ms);
-    let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
-    for item in items {
-        by_month
-            .entry(month_of(item.date_ms))
-            .or_default()
-            .push(item);
-    }
     let feed = ids::feed(&owner.source_id, id);
     NormalizedChat {
+        contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,
         id: id.to_string(),
@@ -247,14 +239,14 @@ fn monthly_chat(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: by_month
+        buckets: by_year(items)
             .into_iter()
             .map(|(period_key, items)| {
-                let month = ids::feed_month(&owner.source_id, id, &period_key);
+                let year = ids::feed_year(&owner.source_id, id, &period_key);
                 NormalizedDoc {
                     orphan_reactions: Vec::new(),
-                    markdown_uuid: month.uuid,
-                    source_ref: Some(UpstreamRef::new(month.entity_kind, month.natural_key)),
+                    markdown_uuid: year.uuid,
+                    source_ref: Some(UpstreamRef::new(year.entity_kind, year.natural_key)),
                     period_key,
                     items,
                 }
@@ -278,12 +270,13 @@ mod tests {
         }
     }
 
-    // 2369-03 and 2369-04, in seconds.
+    // 2369-03, 2369-04 and 2370-03, in seconds.
     const MARCH: i64 = 12_598_000_000;
     const APRIL: i64 = 12_600_000_000;
+    const NEXT_YEAR: i64 = MARCH + 365 * 86_400;
 
     #[test]
-    fn comments_bucket_by_month_and_keep_the_title() {
+    fn comments_bucket_by_year_and_keep_the_title() {
         let rows = vec![
             (
                 "c1".to_string(),
@@ -296,22 +289,27 @@ mod tests {
             (
                 "c2".to_string(),
                 json!({
-                    "timestamp": APRIL,
+                    "timestamp": NEXT_YEAR,
                     "attachments": [{"data": [{"media": {"uri": "m/4.png"}}]}],
-                    "data": [{"comment": {"timestamp": APRIL, "comment": "Same view.", "author": "Jean-Luc Picard"}}],
+                    "data": [{"comment": {"timestamp": NEXT_YEAR, "comment": "Same view.", "author": "Jean-Luc Picard"}}],
                     "title": "Jean-Luc Picard commented on his own photo.",
                 }),
             ),
         ];
         let chats = build_comments(&rows, &owner());
         assert_eq!(chats.len(), 1);
-        assert_eq!(chats[0].buckets.len(), 2, "one document per month");
+        let years: Vec<&str> = chats[0]
+            .buckets
+            .iter()
+            .map(|b| b.period_key.as_str())
+            .collect();
+        assert_eq!(years, ["2369", "2370"], "one document per year");
         let first = &chats[0].buckets[0].items[0];
         assert_eq!(
             first.text.as_deref(),
             Some("Enjoy the chair, Will.\n\n*Jean-Luc Picard commented on William Riker's post.*")
         );
-        assert_eq!(first.author_id, "me");
+        assert_eq!(first.author_display, owner().name);
         let second = &chats[0].buckets[1].items[0];
         assert_eq!(second.kind, ItemKind::Attachment);
         assert_eq!(second.attachments[0].ref_id.as_deref(), Some("m/4.png"));

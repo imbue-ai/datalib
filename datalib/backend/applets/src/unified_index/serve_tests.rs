@@ -53,6 +53,23 @@ fn get(port: u16, path: &str, secret: Option<&str>) -> (u16, serde_json::Value) 
     (status, serde_json::from_str(body).expect("a JSON body"))
 }
 
+fn post(port: u16, path: &str, body: &str) -> (u16, serde_json::Value) {
+    let mut conn = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    write!(
+        conn,
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{}: {SECRET}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        crate::gate::SECRET_HEADER,
+        body.len()
+    )
+    .expect("send");
+    let mut response = String::new();
+    conn.read_to_string(&mut response).expect("read");
+    let (head, body) = response.split_once("\r\n\r\n").expect("a head and a body");
+    let status = head[9..12].parse().expect("a status code");
+    (status, serde_json::from_str(body).expect("a JSON body"))
+}
+
 fn exit_code_within_deadline(child: &mut Child) -> Option<i32> {
     let start = Instant::now();
     loop {
@@ -101,4 +118,42 @@ fn without_a_data_root_it_says_so_and_stops() {
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains(super::DATA_ROOT_ENV), "{stderr}");
+}
+
+/// Who a handle is, from the index alone: every source that mentioned
+/// Picard's address gives one account of him, and a handle no source
+/// mentions is absent rather than an error.
+#[test]
+fn people_by_handle_gives_each_sources_account() {
+    let root = tempfile::tempdir().unwrap();
+    datalib_qmd_fixture::copy_grid_index(root.path());
+    let mut child = applet()
+        .env(super::DATA_ROOT_ENV, root.path())
+        .current_dir(root.path())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the applet");
+    let port = announced_port(&mut child);
+
+    let picard = "email:picard@enterprise.starfleet";
+    let (status, body) = post(
+        port,
+        "/people",
+        &format!(r#"{{"handles":["{picard}","email:nobody@nowhere.test"]}}"#),
+    );
+    assert_eq!(status, 200, "{body}");
+    let people = body["people"].as_object().expect("a map by handle");
+    assert_eq!(people.len(), 1, "{body}");
+    let mut sources: Vec<&str> = people[picard]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["source_id"].as_str().unwrap())
+        .collect();
+    sources.sort();
+    assert_eq!(sources, ["google-takeout", "slack", "tng_email"], "{body}");
+    for c in people[picard].as_array().unwrap() {
+        assert_eq!(c["names"][0], "Jean-Luc Picard", "{body}");
+    }
+    child.kill().ok();
 }

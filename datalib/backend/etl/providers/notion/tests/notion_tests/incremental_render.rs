@@ -25,7 +25,7 @@ fn page(id: &str) -> PageUpsert {
     PageUpsert {
         id: id.into(),
         last_edited_time: Some("2026-09-07T00:00:00.000Z".into()),
-        payload: Some(serde_json::to_string(&json!({"id": id, "object": "page"})).unwrap()),
+        payload: json!({"id": id, "object": "page"}).to_string(),
         ..Default::default()
     }
 }

@@ -9,10 +9,14 @@
 //! longer rebuilds the code that fetches from Slack.
 
 pub mod diff;
+pub mod front_matter;
 pub mod grid_index;
 pub mod html;
 pub mod indexed_markdown;
 pub mod inputs;
 pub mod message;
 pub mod processor;
+pub mod search_terms;
 pub mod section;
+pub mod sources;
+pub mod title;

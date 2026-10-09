@@ -30,6 +30,10 @@ pub struct KnownFile {
 /// the walker, but enumerated in [`KNOWN_FILES`] like everything else.
 pub const ARTICLES_TABLE: &str = "articles";
 
+/// Raw table of `Connections.csv`, keyed by [`connection_key`]: the rows
+/// the photo fetch and its prune join on.
+pub const CONNECTIONS_TABLE: &str = "connections";
+
 /// Every file a complete LinkedIn export can contain, as of the
 /// 06-2026 "Complete" export format. Adding a row here is documentation;
 /// the walker already ingests unlisted CSVs (with a WARN). Keep this
@@ -111,7 +115,7 @@ pub fn message_tables() -> Vec<&'static str> {
 
 /// The raw table for an export file. The trailing `_<digits>` it drops
 /// is the per-member id LinkedIn suffixes some filenames with.
-pub use datalib_etl::export_files::table_name as canonical_table;
+pub use datalib_etl_files::export_files::table_name as canonical_table;
 
 pub fn linkedin_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"linkedin.datalib")

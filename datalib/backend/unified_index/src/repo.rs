@@ -72,6 +72,39 @@ pub trait IndexRepo: Send + Sync {
         among: Option<&[String]>,
     ) -> Result<Grouping, RepoError>;
 
+    /// The values `column` takes among the rows `query`'s structured terms
+    /// match, those holding `typed` (case-blind), most rows first: what the
+    /// search bar suggests for a key's value.
+    async fn value_counts(
+        &self,
+        query: &ParsedQuery,
+        column: datalib_schema::grid_rows::GridRowColumn,
+        typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError>;
+
+    /// The values the search terms of `kinds` (their codes) hold that
+    /// hold `typed`, among the rows `query`'s structured terms match, most
+    /// rows first: what the search bar suggests for a terms key. Empty
+    /// before the first index pass writes the terms.
+    async fn term_value_counts(
+        &self,
+        _query: &ParsedQuery,
+        _kinds: &[u8],
+        _typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        Ok(Vec::new())
+    }
+
+    /// [`IndexRepo::value_counts`], over the problems.
+    async fn problem_value_counts(
+        &self,
+        _query: &ProblemsQuery,
+        _column: ProblemRowColumn,
+        _typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        Ok(Vec::new())
+    }
+
     /// The rows `uuids` name, in that order; one the index no longer has is
     /// left out.
     async fn rows_by_uuids(&self, uuids: &[String]) -> Result<Vec<SearchRow>, RepoError>;
@@ -111,7 +144,13 @@ pub trait IndexRepo: Send + Sync {
         markdown_uuids: &[String],
     ) -> Result<std::collections::HashMap<String, PathBuf>, RepoError>;
 
-    async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError>;
+    /// The rows behind the files qmd's hits name, matched as
+    /// `qmd::norm_path` matches them: what a hit is mapped to its rows by,
+    /// without reading every row.
+    async fn grid_row_refs_for_hits(
+        &self,
+        hit_paths: &[String],
+    ) -> Result<Vec<GridRowRef>, RepoError>;
 
     /// Every row that is a whole document, with just what the embedding
     /// map shows of it. Empty for a root with no index yet.
@@ -121,6 +160,13 @@ pub trait IndexRepo: Send + Sync {
     /// `markdown_uuid` behind every matching row, a message's as much as
     /// a document's. Free text is left out — qmd answers that.
     async fn matching_documents(
+        &self,
+        q: &ParsedQuery,
+    ) -> Result<std::collections::HashSet<String>, RepoError>;
+
+    /// The `qmd_path` behind every row a query's structured terms match,
+    /// `norm_path`ed: the documents a vector search may score.
+    async fn matching_qmd_paths(
         &self,
         q: &ParsedQuery,
     ) -> Result<std::collections::HashSet<String>, RepoError>;
@@ -136,16 +182,26 @@ pub trait IndexRepo: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Every source's account of whoever holds each of `handles`, one
+    /// row per document that mentioned them; `people::merge_and_rank`
+    /// makes them one account per source.
+    async fn people_for_handles(
+        &self,
+        _handles: &[String],
+    ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
+        Ok(Vec::new())
+    }
+
     /// List rendered documents (the `markdowns` table), newest first,
     /// for the document-picker card. Returns an empty Vec for an empty
-    /// or missing store — like [`grid_row_refs`](Self::grid_row_refs),
+    /// or missing store — like [`grid_row_refs_for_hits`](Self::grid_row_refs_for_hits),
     /// a bare data root just means there's nothing to pick yet.
     async fn list_docs(&self, _limit: usize) -> Result<Vec<DocRow>, RepoError> {
         Ok(Vec::new())
     }
 
     /// Every problem `query` matches, in the group `within` names, as
-    /// their ids in `sort`'s order, or the table's own (last seen first).
+    /// their ids in `sort`'s order, or the table's own (last changed first).
     /// Empty for a root with no index, or an index without the table.
     async fn problem_keys(
         &self,

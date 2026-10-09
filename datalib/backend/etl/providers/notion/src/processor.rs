@@ -6,17 +6,22 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use datalib_etl::http::HttpResponse;
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_notion_config::{NotionConfig, NotionSync};
+use datalib_etl_web::http::HttpResponse;
+use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
+
+pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    let db = ingest::RawDb::open(&datalib_etl::raw_layout::entities_db(raw_dir)).await?;
+    db.close().await;
+    Ok(())
+}
 
 /// Ingest wave: present iff `api`. Consumes the
 /// playback root (BFS seeds in synth/playback mode).
@@ -54,40 +59,46 @@ impl DataProcessor for NotionIngest {
         &self.id
     }
 
+    /// Seals as pages, bodies and comments land.
+    fn streams_output(&self) -> bool {
+        true
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx
-            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
-            .await;
-        // `roots` narrows the mirror; empty means the whole workspace.
-        // In playback mode the fixture tree is the workspace, so seeds
-        // are derived from every synthesized page response.
-        let mut seeds: Vec<String> = self.sync.roots.clone();
-        if let Some(pb) = self.playback_root.as_ref() {
-            let derived = derive_notion_seeds(&pb.join("notion")).context("derive notion seeds")?;
-            seeds.extend(derived);
-        }
-        seeds.sort();
-        seeds.dedup();
-        let s = ingest::fetch(ingest::FetchOptions {
-            latchkey: self.latchkey.clone(),
-            subtree_pages: seeds,
-            max_pages: self.sync.max_pages.map(|m| m as usize),
-            refresh_window_days: self.sync.refresh_window_days.unwrap_or(0),
-            comments: self.sync.comments,
-            attachments: self.sync.attachments,
-            sleep_between: Duration::ZERO,
-            progress: ctx.progress.clone(),
-            control: ctx.control.clone(),
-            ..ingest::FetchOptions::new(db)
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        ctx.run_store(pool, Some(cas_pool), |sealer| async {
+            // `roots` narrows the mirror; empty means the whole workspace.
+            // In playback mode the fixture tree is the workspace, so seeds
+            // are derived from every synthesized page response.
+            let mut seeds: Vec<String> = self.sync.roots.clone();
+            if let Some(pb) = self.playback_root.as_ref() {
+                let derived =
+                    derive_notion_seeds(&pb.join("notion")).context("derive notion seeds")?;
+                seeds.extend(derived);
+            }
+            seeds.sort();
+            seeds.dedup();
+            let s = ingest::fetch(ingest::FetchOptions {
+                latchkey: self.latchkey.clone(),
+                subtree_pages: seeds,
+                max_pages: self.sync.max_pages.map(|m| m as usize),
+                refresh_window_days: self.sync.refresh_window_days.unwrap_or(0),
+                comments: self.sync.comments,
+                attachments: self.sync.attachments,
+                progress: ctx.progress.clone(),
+                control: ctx.control.clone(),
+                sealer: Some(sealer),
+                ..ingest::FetchOptions::new(db)
+            })
+            .await?;
+            Ok(format!(
+                "pages(listed={}/new={}/upd={}) bodies={} comments={} requests={}",
+                s.listed, s.new_pages, s.upd_pages, s.bodies, s.comments, s.official_requests,
+            ))
         })
-        .await?;
-        let summary = format!(
-            "pages(new={}/upd={}) comments(new={}/upd={}) requests={}",
-            s.new_pages, s.upd_pages, s.new_comments, s.upd_comments, s.official_requests,
-        );
-        session.finish(ctx, summary).await
+        .await
     }
 }
 

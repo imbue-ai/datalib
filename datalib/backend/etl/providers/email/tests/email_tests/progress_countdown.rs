@@ -7,9 +7,8 @@
 //! So the assertion that matters is not "a total was announced" but
 //! "the last total announced equals what the run counted" — a bar that
 //! announces a stale or partial total reads as stuck just as badly as
-//! one that announces none. Both tests have been watched failing: with
-//! the announcement removed the series ends at 0 of 3, and with the
-//! skipped-id tick removed a re-walk ends at 0 of 3 the other way.
+//! one that announces none. The total is the number of messages the
+//! store owes when the fetch starts.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -48,31 +47,28 @@ async fn a_gmail_walk_announces_a_total_so_the_chip_can_count_down() {
         last,
         IDS.len() as u64,
         "the last total announced was {last}, not the {} messages the \
-         walk listed; the chip would not reach zero (series: {announced:?})",
+         run owed; the chip would not reach zero (series: {announced:?})",
         IDS.len(),
     );
     assert_eq!(
         recorder.final_done(),
         IDS.len() as u64,
-        "every listed id must tick the bar, or it stalls short of its total",
+        "every owed message must tick the bar, or it stalls short of its total",
     );
 }
 
-/// A re-walk of a mailbox already mirrored fetches nothing: every id is
-/// skipped before `messages.get`. The bar must still reach its total,
-/// or a routine incremental run leaves the chip pinned near full.
+/// A re-walk of a mailbox already mirrored fetches nothing, and
+/// announces nothing to fetch: the total is what the store owes, so the
+/// chip does not sit at a number that never counts down.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_walk_that_fetches_nothing_still_reaches_zero_queued() {
+async fn a_walk_that_fetches_nothing_leaves_nothing_queued() {
     let m = Mirror::new();
     write_fixtures(&m.playback);
 
-    // First run mirrors everything.
     m.run(|db| gmail_api::fetch(FetchOptions::new(db)))
         .await
         .expect("first gmail fetch");
 
-    // Second run: `full_resync`, so it walks the same ids again and
-    // skips every one of them as already held.
     let recorder = Recorder::default();
     let summary = m
         .run(|db| {
@@ -84,19 +80,13 @@ async fn a_walk_that_fetches_nothing_still_reaches_zero_queued() {
         .await;
 
     let summary = summary.expect("second gmail fetch under playback");
-    assert_eq!(
-        summary.messages_already_had,
-        IDS.len(),
-        "the second run should have skipped every id: {summary:?}",
-    );
+    assert_eq!(summary.walked, ["*"], "{summary:?}");
+    assert_eq!(summary.emails_upserted, 0, "{summary:?}");
     let announced = recorder.announcements();
-    let last = *announced.last().expect("a total was announced");
     assert_eq!(
         recorder.final_done(),
-        last,
-        "the bar stopped at {} of {last}: a skipped id never ticked it, \
-         so \"N queued\" stays pinned near full for the whole run",
-        recorder.final_done(),
+        announced.last().copied().unwrap_or(0),
+        "the bar stopped short of the total it announced ({announced:?})",
     );
 }
 

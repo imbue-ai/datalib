@@ -249,19 +249,16 @@ See datalib/backend/etl/providers/email/INGEST.md for details."
         }
         SourceType::Garmin => {
             "\
-Garmin Connect refused the credential, or there is none.
+Garmin Connect refused the credential, or latchkey holds none.
 
-Garmin is not a latchkey service: the ingest step mints its own bearer
-from an OAuth1 token that a login writes under `api.token_dir`
-(default ~/.garth), and that token lasts about a year.
+The `garmin` service comes from latchkey's Garmin plugin, which the
+Add a source dialog installs the first time you sign in there.
 
-  1. Sign in again (prompts for email, password and the emailed MFA
-     code; nothing is stored but the resulting tokens):
-       datalib-step login garmin
+  1. Sign in again from the source's settings, or in a terminal:
+       {LK} auth browser garmin
+     A token folder garth wrote works too:
+       {LK} auth set-nocurl garmin ~/.garth
   2. Re-run the sync.
-
-A token produced by garth (`garth login`, then
-`garth.client.dump(\"~/.garth\")`) works too — the files are the same.
 
 See datalib/backend/etl/providers/garmin/INGEST.md for details."
         }

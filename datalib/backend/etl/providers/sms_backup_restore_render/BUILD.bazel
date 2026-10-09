@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Render half of the `sms_backup_restore` provider. This is the side that knows
 # `datalib_schema`; //datalib/backend/etl/providers/sms_backup_restore is the
 # download half and deliberately does not.
@@ -20,6 +18,7 @@ rust_library(
         "//datalib/backend/etl/providers/sms_backup_restore_config:datalib_etl_sms_backup_restore_config",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/id:datalib_id",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",

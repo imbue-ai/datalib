@@ -1,5 +1,5 @@
 import type { ViewLibs } from "../types";
-import { gridView } from "./gridView";
+import { gridView, searchView } from "./gridView";
 import { documentView } from "./documentView";
 import { documentPickerView } from "./documentPickerView";
 import { galleryView } from "./galleryView";
@@ -16,12 +16,22 @@ import { logLineView } from "./logLineView";
 import { historyView } from "./historyView";
 import { umapView } from "./umapView";
 import { syncDashboardView } from "./syncDashboardView";
-import { homeView } from "./homeView";
-import { searchView } from "./searchView";
+import {
+  latestActivityView,
+  libraryView,
+  needsYouView,
+  sourcesOverviewView,
+  syncStatusView,
+} from "./dashboardSections";
+import { personView } from "./personView";
 
 // The names in scope when card source is evaluated (cardSource.ts).
 export const viewLibs: ViewLibs = {
-  homeView,
+  syncStatusView,
+  needsYouView,
+  libraryView,
+  sourcesOverviewView,
+  latestActivityView,
   searchView,
   gridView,
   documentView,
@@ -40,4 +50,5 @@ export const viewLibs: ViewLibs = {
   historyView,
   umapView,
   syncDashboardView,
+  personView,
 };

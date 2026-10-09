@@ -58,6 +58,10 @@ struct WaContactSpec {
     family_name: Option<String>,
     #[serde(default)]
     wa_name: Option<String>,
+    #[serde(default)]
+    company: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,7 +129,10 @@ struct MediaSpec {
 struct ReactionSpec {
     parent_message_id: i64,
     from_me: i64,
-    sender_jid_row_id: i64,
+    /// Absent where WhatsApp leaves it empty: a 1:1 chat's incoming
+    /// reaction, and the account's own.
+    #[serde(default)]
+    sender_jid_row_id: Option<i64>,
     reaction: String,
     timestamp: i64,
     key_id: String,
@@ -280,8 +287,8 @@ async fn build_wa_db(contacts: &[WaContactSpec]) -> Result<Vec<u8>> {
             let number = c.jid.split_once('@').map(|(user, _)| user.to_string());
             sqlx::query(
                 "INSERT INTO wa_contacts (jid, is_whatsapp_user, number, display_name, \
-                    given_name, family_name, wa_name, sort_name) \
-                 VALUES (?, 1, ?, ?, ?, ?, ?, ?)",
+                    given_name, family_name, wa_name, sort_name, company, title) \
+                 VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&c.jid)
             .bind(number)
@@ -290,6 +297,8 @@ async fn build_wa_db(contacts: &[WaContactSpec]) -> Result<Vec<u8>> {
             .bind(&c.family_name)
             .bind(&c.wa_name)
             .bind(&c.display_name)
+            .bind(&c.company)
+            .bind(&c.title)
             .execute(&pool)
             .await
             .context("insert wa_contacts")?;

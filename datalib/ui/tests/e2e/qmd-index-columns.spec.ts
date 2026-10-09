@@ -1,4 +1,11 @@
-import { GRID, actOnRowByUuid, EVERY_ROW, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import {
+  GRID,
+  actOnRowByUuid,
+  EVERY_ROW,
+  SEARCH_ROWS,
+  type GridApi,
+  typeInto,
+} from "./grid-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 // The grid's `Indexed` / `Embedded` columns, end to end against the
@@ -185,9 +192,13 @@ test.describe("the search coverage line", () => {
       "· search index not built yet — sync to build it",
     );
 
-    await page.getByTestId("search-input").fill("enterprise");
+    await typeInto(page.getByTestId("search-input"), "enterprise");
+    // The rewritten answer goes through the browser's request
+    // interception, which WebKit has taken close to five seconds to
+    // deliver on a loaded runner; the rows above get ten.
     await expect(page.locator(".qmd-unbuilt")).toHaveText(
       "Free-text search starts working once the first sync builds the search index.",
+      { timeout: 15_000 },
     );
     await expect(page.locator(".qmd-error")).toHaveCount(0);
     await expect(page.getByText("no matches.")).toHaveCount(0);

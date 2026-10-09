@@ -2,27 +2,38 @@
 
 pub mod api;
 pub mod db;
+pub mod files;
 pub mod schema_raw;
 pub mod shapes;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use datalib_etl::blob_cas::CasEdgeAccumulator;
 use serde_json::{json, Value};
+use sqlx::{Sqlite, Transaction};
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
-use datalib_etl::download_problems::{self, DownloadProblem, RunProblem};
+use async_trait::async_trait;
+use datalib_etl::bulk::BulkUpsertable;
+use datalib_etl::download_problems::{DownloadProblem, RunProblem};
 use datalib_etl::events;
-use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::RunBar;
-use datalib_etl::scope_config;
+use datalib_etl::raw_store::Sealer;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl::stop::StopFlag;
+use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::http::LatchkeySettings;
+use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Listed, Outcome};
 pub use db::{
-    block_on_load_all, db_path_for, FetchTarget, LoadedMessage, LoadedRaw, MessageInput, RawDb,
-    TsBounds, UnfetchedAttachment, UserDirectoryEntry,
+    block_on_load_all, db_path_for, Enumerated, FetchTarget, LoadedMessage, LoadedRaw,
+    MessageInput, OwedFile, RawDb, Thread, UserDirectoryEntry,
 };
+use files::{FileFetcher, FILE_BATCH};
+use schema_raw::{SlackAttachmentRow, THREADS};
 use shapes::{
     M_AUTH_TEST, M_BOOKMARKS, M_CHANNELS, M_COUNTS, M_HISTORY, M_REPLIES, M_SAVED, M_USERS,
 };
@@ -39,9 +50,17 @@ pub const MANIFEST_TTL: chrono::Duration = chrono::Duration::hours(6);
 // Per-method drivers.
 
 fn datetime_to_slack_ts(dt: &DateTime<Utc>) -> String {
-    let secs = dt.timestamp();
-    let nanos = dt.timestamp_subsec_micros();
-    format!("{}.{:06}", secs, nanos)
+    // Slack answers a negative `oldest` with an empty page, and a
+    // negative `ts` does not sort as a `coverage` bound. No message is
+    // older than the epoch, so an earlier instant asks for the same.
+    let dt = (*dt).max(DateTime::UNIX_EPOCH);
+    format!("{}.{:06}", dt.timestamp(), dt.timestamp_subsec_micros())
+}
+
+fn days_before(now: DateTime<Utc>, days: i64) -> DateTime<Utc> {
+    ChronoDuration::try_days(days)
+        .and_then(|window| now.checked_sub_signed(window))
+        .unwrap_or(DateTime::<Utc>::MIN_UTC)
 }
 
 fn empty_params() -> BTreeMap<String, String> {
@@ -103,12 +122,13 @@ pub(crate) fn conversation_types(dms: bool) -> &'static str {
     }
 }
 
-#[instrument(skip(db, progress, latchkey))]
+#[instrument(skip(db, now, progress, latchkey))]
 async fn fetch_channels(
     db: &RawDb,
     members_only: bool,
     include_archived: bool,
     dms: bool,
+    now: &DateTime<Utc>,
     progress: &datalib_etl::progress::Progress,
     latchkey: &LatchkeySettings,
 ) -> Result<Vec<FetchTarget>> {
@@ -117,7 +137,7 @@ async fn fetch_channels(
     // narrower one would suppress the refetch for up to MANIFEST_TTL —
     // the run would then find no DM rows and quietly mirror nothing.
     let sweep_key = format!("channels:archived={include_archived}:dms={dms}");
-    if let Some(age) = db.manifest_sweep_age(&sweep_key).await? {
+    if let Some(age) = db.manifest_sweep_age(&sweep_key, now).await? {
         if age < MANIFEST_TTL {
             let age_s = age.num_seconds().max(0);
             info!(
@@ -176,7 +196,7 @@ async fn fetch_channels(
         elapsed_ms = t0.elapsed().as_millis() as u64,
         "listed the channels"
     );
-    db.record_manifest_sweep(&sweep_key).await?;
+    db.record_manifest_sweep(&sweep_key, now).await?;
     db.channels_for_fetch(members_only, include_archived, dms)
         .await
 }
@@ -184,11 +204,12 @@ async fn fetch_channels(
 #[instrument(skip_all)]
 async fn fetch_users(
     db: &RawDb,
+    now: &DateTime<Utc>,
     progress: &datalib_etl::progress::Progress,
     latchkey: &LatchkeySettings,
 ) -> Result<usize> {
     let sweep_key = "users";
-    if let Some(age) = db.manifest_sweep_age(sweep_key).await? {
+    if let Some(age) = db.manifest_sweep_age(sweep_key, now).await? {
         if age < MANIFEST_TTL {
             let age_s = age.num_seconds().max(0);
             info!(
@@ -239,7 +260,7 @@ async fn fetch_users(
         elapsed_ms = elapsed_ms,
         "listed the users"
     );
-    db.record_manifest_sweep(sweep_key).await?;
+    db.record_manifest_sweep(sweep_key, now).await?;
     Ok(count)
 }
 
@@ -264,6 +285,13 @@ fn refused(e: &anyhow::Error) -> bool {
     matches!(
         e.downcast_ref::<SlackError>(),
         Some(SlackError::Refused { .. })
+    )
+}
+
+fn interrupted(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<SlackError>(),
+        Some(SlackError::Interrupted(_))
     )
 }
 
@@ -369,13 +397,14 @@ fn saved_items_in_scope(items: Vec<Value>, in_scope: &HashSet<String>) -> Vec<Va
 async fn fetch_bookmarks(
     db: &RawDb,
     targets: &[(String, String)],
+    now: &DateTime<Utc>,
     stop: &datalib_etl::stop::StopFlag,
     progress: &datalib_etl::progress::Progress,
     latchkey: &LatchkeySettings,
     problems: &mut Vec<RunProblem>,
 ) -> Result<(usize, usize)> {
     let sweep_key = "bookmarks";
-    if let Some(age) = db.manifest_sweep_age(sweep_key).await? {
+    if let Some(age) = db.manifest_sweep_age(sweep_key, now).await? {
         if age < MANIFEST_TTL {
             info!(
                 event = "slack_fetch_bookmarks_skipped",
@@ -423,7 +452,7 @@ async fn fetch_bookmarks(
         );
         problems.push(problem_for(M_BOOKMARKS, detail, refused(first)));
     } else if !stopped {
-        db.record_manifest_sweep(sweep_key).await?;
+        db.record_manifest_sweep(sweep_key, now).await?;
     }
     Ok((stored, pruned))
 }
@@ -434,6 +463,7 @@ async fn fetch_bookmarks(
 async fn fetch_account_state(
     db: &RawDb,
     targets: &[(String, String)],
+    now: &DateTime<Utc>,
     stop: &datalib_etl::stop::StopFlag,
     progress: &datalib_etl::progress::Progress,
     latchkey: &LatchkeySettings,
@@ -466,7 +496,7 @@ async fn fetch_account_state(
     }
 
     let (bookmarks, pruned) =
-        fetch_bookmarks(db, targets, stop, progress, latchkey, &mut problems).await?;
+        fetch_bookmarks(db, targets, now, stop, progress, latchkey, &mut problems).await?;
     totals.bookmarks = bookmarks;
     totals.pruned += pruned;
 
@@ -594,495 +624,88 @@ fn select_targets(
     plan
 }
 
-// Config-change adjustments.
+// One channel: its history, then what the store says it still owes.
 
-/// Scope key for this provider's [`datalib_etl::scope_config`] blob.
-/// Slack's incremental state is per-channel (`MAX(ts)` in `messages`),
-/// but every knob we remember applies workspace-wide, so one row per
-/// source is the right grain.
-const SCOPE_CONFIG_KEY: &str = "slack:download";
-
-/// Blob keys. Named so the writer below and the readers in
-/// [`Adjustments::plan`] can't drift — a typo in either half degrades
-/// silently to "no information, plan no work", which is the exact
-/// failure this machinery exists to eliminate.
-const K_SINCE: &str = "since";
-const K_MEDIA: &str = "media";
-
-/// The subset of [`FetchOptions`] that decides *which data lands on
-/// disk*, recorded after a successful run so the next one can spot a
-/// widening the per-channel resume cursor would otherwise swallow.
-///
-/// Split out of the options struct so the comparison can be exercised
-/// without a live store handle, and so a knob that must *not* reach the
-/// record cannot reach it by accident.
-#[derive(Debug, Clone)]
-struct ScopeInputs {
-    since: String,
-    media: bool,
+/// A `ts` as a `coverage` bound: padded, so bounds sort as instants do
+/// whatever the width of the seconds.
+fn ts_key(ts: &str) -> String {
+    format!("{ts:0>19}")
 }
 
-impl FetchOptions {
-    fn scope_inputs(&self) -> ScopeInputs {
-        ScopeInputs {
-            since: self.since.clone(),
-            media: self.media,
-        }
+fn key_ts(key: &str) -> String {
+    let ts = key.trim_start_matches('0');
+    if ts.is_empty() || ts.starts_with('.') {
+        format!("0{ts}")
+    } else {
+        ts.to_string()
     }
 }
 
-fn scope_config_blob(inputs: &ScopeInputs) -> Value {
-    json!({
-        K_SINCE: inputs.since,
-        K_MEDIA: inputs.media,
-    })
+/// A bound above every `ts`. The history wanted has no top: a walk
+/// covers up to the newest message it saw, never up to "now", so what
+/// is newer than that is asked for on every run and a message that
+/// becomes visible late is not skipped.
+const END_OF_TIME: &str = "999999999999.999999";
+
+/// One walk of `conversations.history` over a stretch of a channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Stretch {
+    span: Span,
+    /// Whether a message at either end is asked for. An end that is the
+    /// end of a stretch already covered has been read.
+    inclusive: bool,
+    /// Covered before: read again for edits, and what it no longer
+    /// lists is deleted.
+    reread: bool,
 }
 
-/// What this run has to do differently because the config widened since
-/// the run that produced the store's current contents.
-#[derive(Debug, Default, Clone)]
-struct Adjustments {
-    /// `since` moved earlier: walk `[since_ts, oldest_stored_ts]` for
-    /// each channel that already has history. The forward resume cursor is
-    /// untouched — this only fills in below the floor.
-    backfill_below_oldest: bool,
-    /// `media` turned on: re-walk each channel from `since_ts` instead of
-    /// resuming at its resume cursor. Attachment rows only exist for
-    /// messages walked while the knob was on, so there is nothing to
-    /// backfill in place — the messages have to come past
-    /// `download_files_for_messages` again.
-    force_full_walk: bool,
-}
-
-impl Adjustments {
-    /// Whether any adjustment is in play.
-    #[cfg(test)]
-    fn any(&self) -> bool {
-        self.backfill_below_oldest || self.force_full_walk
-    }
-
-    /// Whether pass B can skip a thread because its replies are already
-    /// mirrored.
-    fn thread_up_to_date(&self, api_latest: Option<&str>, stored: Option<&str>) -> bool {
-        if self.force_full_walk {
-            return false;
-        }
-        matches!((api_latest, stored), (Some(api), Some(s)) if s >= api)
-    }
-
-    fn run_satisfied_config(run_ok: bool, channel_failures: usize) -> bool {
-        run_ok && channel_failures == 0
-    }
-
-    fn plan(prev: Option<&Value>, inputs: &ScopeInputs) -> Self {
-        let mut out = Self::default();
-        let Some(prev) = prev else {
-            return out;
-        };
-
-        if let Some(stored) = prev.get(K_SINCE).and_then(Value::as_str) {
-            match (
-                parse_iso_or_utc_date(stored),
-                parse_iso_or_utc_date(&inputs.since),
-            ) {
-                (Ok(before), Ok(now)) if now < before => {
-                    out.backfill_below_oldest = true;
-                    info!(
-                        event = "slack_since_widened",
-                        from = stored,
-                        to = %inputs.since,
-                        "backfilling below each channel's oldest stored message",
-                    );
-                }
-                (Err(e), _) => warn!(
-                    event = "slack_stored_since_unparseable",
-                    stored = stored,
-                    error = %e,
-                    "ignoring stored since",
-                ),
-                _ => {}
-            }
-        }
-
-        if scope_config::turned_on(Some(prev), K_MEDIA, inputs.media) {
-            out.force_full_walk = true;
-            info!(
-                event = "slack_media_turned_on",
-                "re-walking history so existing messages' attachments get fetched",
-            );
-        }
-
-        out
-    }
-}
-
-// Attachment retry.
-//
-// The walk only reaches a message's files while it lists that message,
-// and the resume cursor passes a message once. So after the walk, every
-// attachment that has not landed — a failed fetch, or a file over the
-// size limit — goes through the download again from the file object its
-// stored message carries. The stored `url_private_download` stays good:
-// it carries no signature, and the session credential signs the request.
-
-#[derive(Debug, PartialEq)]
-struct Retry {
-    channel_id: String,
-    message_uuid: String,
-    file: Value,
-}
-
-/// Not one the walk already tried this run — its attempt count has moved
-/// since `attempts_before` — and not one outside the conversations this
-/// run mirrors. One whose message, or whose file on it, is gone has
-/// nothing to fetch from.
-fn attachments_to_retry(
-    attempts_before: &HashMap<String, i64>,
-    unfetched: Vec<UnfetchedAttachment>,
-    in_scope: &HashSet<&str>,
-) -> Vec<Retry> {
-    unfetched
+/// What to walk of a channel that has `held` covered: the gaps in
+/// `[since, ∞)`, newest first, then whatever was already covered from
+/// `refresh_from` up.
+fn stretches(since: &str, refresh_from: Option<&str>, held: &[Span]) -> Vec<Stretch> {
+    let wanted = Span::new(since, END_OF_TIME);
+    let mut out: Vec<Stretch> = coverage::gaps(&wanted, held)
         .into_iter()
-        .filter(|a| attempts_before.get(&a.id) == Some(&a.attempts))
-        .filter_map(|a| {
-            let channel_id = a.channel_id.filter(|c| in_scope.contains(c.as_str()))?;
-            let file = a
-                .message?
-                .get("files")?
-                .as_array()?
-                .iter()
-                .find(|f| f.get("id").and_then(Value::as_str) == Some(a.file_id.as_str()))?
-                .clone();
-            Some(Retry {
-                channel_id,
-                message_uuid: a.message_uuid,
-                file,
-            })
+        .rev()
+        .map(|gap| Stretch {
+            inclusive: gap.lo == since,
+            span: gap,
+            reread: false,
         })
-        .collect()
-}
-
-/// One flush per conversation, as the walk does. An error ends the pass,
-/// not the run: what did not land is still there for the next one.
-async fn retry_attachments(
-    db: &RawDb,
-    retries: &[Retry],
-    blake3_by_file: &mut HashMap<String, String>,
-    opts: &FetchOptions,
-    bar: &RunBar,
-    media: &mut BTreeMap<String, usize>,
-) {
-    if retries.is_empty() {
-        return;
-    }
-    info!(
-        event = "slack_attachment_retry",
-        attachments = retries.len(),
-        "trying again the attachments earlier runs did not land"
-    );
-    bar.expect(retries.len() as u64);
-    bar.doing("retrying attachments");
-    for group in retries.chunk_by(|a, b| a.channel_id == b.channel_id) {
-        let files: Vec<(&str, &Value)> = group
-            .iter()
-            .map(|r| (r.message_uuid.as_str(), &r.file))
-            .collect();
-        let tried = api::retry_files(
-            db,
-            &files,
-            blake3_by_file,
-            opts.blob_size_limit_bytes,
-            &opts.latchkey,
-        )
-        .await;
-        bar.did(group.len() as u64);
-        match tried {
-            Ok(counts) => {
-                for (k, v) in counts {
-                    *media.entry(k).or_insert(0) += v;
-                }
-                if let Some(sealer) = opts.sealer.as_ref() {
-                    sealer.wrote(group.len() as u64).await;
-                }
-            }
-            Err(e) => {
-                warn!(event = "slack_attachment_retry_failed", channel = %group[0].channel_id, error = %e, "the attachment retry stopped");
-                return;
-            }
-        }
-    }
-}
-
-// Per-channel history + threads.
-
-/// Every (message, file) the walk met is written when it ends, whether
-/// or not it ended well: the messages it stored are behind the resume
-/// cursor, so a file left out here would have no row for the retry pass
-/// to find.
-#[allow(clippy::too_many_arguments)]
-async fn export_channel(
-    db: &RawDb,
-    team_id: &str,
-    channel_id: &str,
-    since_ts: &str,
-    refresh_window_days: i64,
-    channel_latest_ts: Option<&str>,
-    channel_oldest_ts: Option<&str>,
-    adjust: &Adjustments,
-    latest_reply_by_thread: &std::collections::HashMap<(String, String), String>,
-    now: &DateTime<Utc>,
-    download_blobs: bool,
-    blob_size_limit_bytes: Option<u64>,
-    totals: &mut ChannelTotals,
-    blake3_by_file: &mut std::collections::HashMap<String, String>,
-    bar: &RunBar,
-    latchkey: &LatchkeySettings,
-) -> Result<()> {
-    let mut attach = CasEdgeAccumulator::new();
-    let walked = walk_channel(
-        db,
-        team_id,
-        channel_id,
-        since_ts,
-        refresh_window_days,
-        channel_latest_ts,
-        channel_oldest_ts,
-        adjust,
-        latest_reply_by_thread,
-        now,
-        download_blobs,
-        blob_size_limit_bytes,
-        totals,
-        blake3_by_file,
-        bar,
-        latchkey,
-        &mut attach,
-    )
-    .await;
-    if let Err(e) = api::flush_channel_attachments(db, &attach).await {
-        warn!(event = "slack_attachment_flush_err", channel = %channel_id, error = %e, "a channel's attachments could not be written");
-    }
-    walked
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn walk_channel(
-    db: &RawDb,
-    team_id: &str,
-    channel_id: &str,
-    since_ts: &str,
-    refresh_window_days: i64,
-    channel_latest_ts: Option<&str>,
-    channel_oldest_ts: Option<&str>,
-    adjust: &Adjustments,
-    latest_reply_by_thread: &std::collections::HashMap<(String, String), String>,
-    now: &DateTime<Utc>,
-    download_blobs: bool,
-    blob_size_limit_bytes: Option<u64>,
-    totals: &mut ChannelTotals,
-    blake3_by_file: &mut std::collections::HashMap<String, String>,
-    bar: &RunBar,
-    latchkey: &LatchkeySettings,
-    attach: &mut CasEdgeAccumulator,
-) -> Result<()> {
-    // Pass A: list every history page, upsert top-level messages, and
-    // download per-page media (preserves the existing commit-as-we-go
-    // semantics for Ctrl-C safety). Thread replies are deferred so
-    // we can announce a known total to the inner bar before starting
-    // the long-tail fetch.
-    let mut collected: Vec<Value> = Vec::new();
-
-    // Resume at the channel's resume cursor when it has one — unless
-    // `media` turned on means the already-stored messages have to come
-    // back past `download_files_for_messages`, in which case we walk
-    // the whole configured range again. Upserts are idempotent, so the
-    // cost is API calls, not duplicate rows.
-    let (forward_oldest, inclusive) = match channel_latest_ts.filter(|_| !adjust.force_full_walk) {
-        Some(ts) => (ts.to_string(), false),
-        None => (since_ts.to_string(), true),
+        .collect();
+    let Some(from) = refresh_from.map(|from| from.max(since)) else {
+        return out;
     };
-    // The resume decision, per conversation, in the run's own log.
-    info!(
-        event = "slack_channel_walk_planned",
-        channel = %channel_id,
-        resume_cursor = channel_latest_ts.unwrap_or("-"),
-        oldest = %forward_oldest,
-        inclusive = inclusive,
-        resumed = channel_latest_ts.is_some() && !adjust.force_full_walk,
-        force_full_walk = adjust.force_full_walk,
-        backfill_below_oldest = adjust.backfill_below_oldest,
-        "planned one channel's walk"
-    );
-    list_history(
-        db,
-        team_id,
-        channel_id,
-        &forward_oldest,
-        inclusive,
-        None,
-        download_blobs,
-        blob_size_limit_bytes,
-        totals,
-        attach,
-        blake3_by_file,
-        bar,
-        &mut collected,
-        latchkey,
-    )
-    .await?;
-
-    // Skipped under `force_full_walk`: the pass above already re-walked
-    // `[since_ts, now]`, which strictly contains the trailing window, so
-    // running it again would just double the API calls on exactly the
-    // run that is already the expensive one.
-    if refresh_window_days > 0 && !adjust.force_full_walk {
-        if let Some(latest_ts) = channel_latest_ts {
-            let window_dt = *now - ChronoDuration::days(refresh_window_days);
-            let window_oldest = datetime_to_slack_ts(&window_dt);
-            if window_oldest.as_str() < latest_ts {
-                let effective = if window_oldest.as_str() > since_ts {
-                    window_oldest
-                } else {
-                    since_ts.to_string()
-                };
-                // Track this pass's own returns separately: `collected`
-                // accumulates across every pass, and reconciling a window
-                // against messages the forward walk found outside it would
-                // spare nothing while widening what looks "seen".
-                let before = collected.len();
-                let drained = list_history(
-                    db,
-                    team_id,
-                    channel_id,
-                    &effective,
-                    true,
-                    Some(latest_ts),
-                    download_blobs,
-                    blob_size_limit_bytes,
-                    totals,
-                    attach,
-                    blake3_by_file,
-                    bar,
-                    &mut collected,
-                    latchkey,
-                )
-                .await?;
-
-                // The pass above enumerated `[effective, latest_ts]`
-                // completely, which is the one thing that makes a deletion
-                // visible: Slack has no tombstones and no changes cursor, so
-                // a message that is simply absent from a range we re-walked
-                // is a message that was deleted.
-                if drained == Drained::Yes {
-                    let seen_ts: std::collections::HashSet<String> = collected[before..]
-                        .iter()
-                        .filter_map(|m| m.get("ts").and_then(|v| v.as_str()))
-                        .map(String::from)
-                        .collect();
-                    totals.pruned += db
-                        .prune_history_window(channel_id, &effective, latest_ts, &seen_ts)
-                        .await?;
-                }
-            }
+    for span in coverage::merged(held.to_vec()).into_iter().rev() {
+        if span.hi.as_str() > from {
+            out.push(Stretch {
+                span: Span::new(span.lo.as_str().max(from), span.hi),
+                inclusive: true,
+                reread: true,
+            });
         }
     }
+    out
+}
 
-    // Backfill pass: `since` moved earlier than the run that built this
-    // channel's history, so the window below our oldest stored message
-    // was never fetched. Walk `[since_ts, oldest]` to fill it in. Runs
-    // before pass B so backfilled thread roots land in `collected` and
-    // get their replies fetched like any other message.
-    if adjust.backfill_below_oldest && !adjust.force_full_walk {
-        if let Some(oldest) = channel_oldest_ts {
-            if since_ts < oldest {
-                info!(
-                    event = "slack_backfill_window",
-                    channel = %channel_id,
-                    from = since_ts,
-                    to = oldest,
-                    "backfilling below the oldest message stored"
-                );
-                list_history(
-                    db,
-                    team_id,
-                    channel_id,
-                    since_ts,
-                    true,
-                    Some(oldest),
-                    download_blobs,
-                    blob_size_limit_bytes,
-                    totals,
-                    attach,
-                    blake3_by_file,
-                    bar,
-                    &mut collected,
-                    latchkey,
-                )
-                .await?;
-            }
-        }
-    }
+/// The part of `stretch` one page settles. History is newest first, so
+/// a page reaches from where the page before left off (`top`; on the
+/// first page of an open-topped stretch, the newest message it holds)
+/// down to its own oldest message, and the last page down to the
+/// stretch's bottom.
+fn settled(stretch: &Span, top: Option<&str>, page: &[String], last: bool) -> Option<Span> {
+    let hi = top.or(page.iter().max().map(String::as_str))?;
+    let lo = if last {
+        stretch.lo.as_str()
+    } else {
+        page.iter().min()?.as_str().max(stretch.lo.as_str())
+    };
+    (lo <= hi).then(|| Span::new(lo, hi))
+}
 
-    // Pass B: thread replies for threads whose latest_reply advanced.
-    let replies_to_fetch: u64 = collected
-        .iter()
-        .filter_map(|m| {
-            let ts = m.get("ts").and_then(|v| v.as_str())?;
-            let reply_count = m.get("reply_count").and_then(|v| v.as_i64()).unwrap_or(0);
-            if reply_count <= 0 {
-                return None;
-            }
-            let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
-            let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
-            if adjust.thread_up_to_date(api_latest, stored.map(String::as_str)) {
-                return None;
-            }
-            Some(reply_count as u64)
-        })
-        .sum();
-    // Only the replies. Pass A announced its own messages page by page
-    // as it listed them.
-    if replies_to_fetch > 0 {
-        bar.expect(replies_to_fetch);
-    }
-
-    for m in &collected {
-        let Some(ts) = m.get("ts").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let reply_count = m.get("reply_count").and_then(|v| v.as_i64()).unwrap_or(0);
-        if reply_count <= 0 {
-            continue;
-        }
-        let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
-        let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
-        if adjust.thread_up_to_date(api_latest, stored.map(String::as_str)) {
-            continue;
-        }
-        let before = totals.replies;
-        paginate_replies(
-            db,
-            team_id,
-            channel_id,
-            ts,
-            download_blobs,
-            blob_size_limit_bytes,
-            totals,
-            attach,
-            blake3_by_file,
-            latchkey,
-        )
-        .await?;
-        let fetched = totals.replies.saturating_sub(before) as u64;
-        bar.did(fetched);
-        let media_downloaded = totals.media.get("downloaded").copied().unwrap_or(0);
-        bar.doing(&format!(
-            "msgs={} replies={} media={}",
-            totals.messages, totals.replies, media_downloaded
-        ));
-    }
-
-    Ok(())
+/// `has_more` with no cursor to ask with: not a listing of anything.
+fn cut_short(method: &str) -> anyhow::Error {
+    anyhow::anyhow!("{method}: has_more with no cursor; the rest was not read")
 }
 
 #[derive(Default)]
@@ -1090,251 +713,326 @@ struct ChannelTotals {
     messages: usize,
     replies: usize,
     /// Messages and replies Slack has stopped serving inside a range we
-    /// re-walked. See `RawDb::prune_history_window`.
+    /// read whole.
     pruned: usize,
     media: BTreeMap<String, usize>,
 }
 
-/// Pass A of the per-channel export: walk `conversations.history`
-/// page-by-page, upserting each top-level message and (per page)
-/// downloading any media those messages reference. Threads are NOT
-/// fetched here — the caller defers those to pass B so the inner
-/// progress bar can announce a meaningful total before the long-tail
-/// thread fetches begin.
-#[allow(clippy::too_many_arguments)]
-async fn list_history(
-    db: &RawDb,
-    team_id: &str,
-    channel_id: &str,
-    oldest_ts: &str,
-    inclusive: bool,
-    latest_ts: Option<&str>,
-    download_blobs: bool,
+/// What every channel's mirroring shares.
+struct Mirror<'a> {
+    db: &'a RawDb,
+    team_id: &'a str,
+    since: String,
+    refresh_from: Option<String>,
+    media: bool,
     blob_size_limit_bytes: Option<u64>,
-    totals: &mut ChannelTotals,
-    attach: &mut CasEdgeAccumulator,
-    blake3_by_file: &mut std::collections::HashMap<String, String>,
-    bar: &RunBar,
-    collected: &mut Vec<Value>,
-    latchkey: &LatchkeySettings,
-) -> Result<Drained> {
-    let mut base = BTreeMap::new();
-    base.insert("channel".to_string(), channel_id.to_string());
-    base.insert("oldest".to_string(), oldest_ts.to_string());
-    base.insert(
-        "inclusive".to_string(),
-        if inclusive { "true" } else { "false" }.to_string(),
-    );
-    base.insert("include_all_metadata".to_string(), "true".to_string());
-    base.insert("limit".to_string(), "200".to_string());
-    if let Some(l) = latest_ts {
-        base.insert("latest".to_string(), l.to_string());
+    bar: &'a RunBar,
+    latchkey: &'a LatchkeySettings,
+    stop: &'a StopFlag,
+    found: &'a RunProblems,
+    sealer: Option<&'a Sealer>,
+    blake3_by_file: &'a Mutex<HashMap<String, String>>,
+}
+
+/// One channel's owed threads, for [`owed::drain`]: a thread is one
+/// record whose fetch is paged.
+struct Threads<'a> {
+    mirror: &'a Mirror<'a>,
+    channel_id: &'a str,
+    /// Top-level messages the channel's walk stored, for the progress line.
+    messages: usize,
+    replies: AtomicUsize,
+    pruned: AtomicUsize,
+}
+
+#[async_trait]
+impl Fetcher<Thread> for Threads<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<Fetched<Thread>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let fetched = self
+                .mirror
+                .fetch_thread(self.channel_id, &listed.key, &self.replies)
+                .await;
+            let outcome = match fetched {
+                Ok(thread) => Outcome::Got(thread),
+                // The loop reads a stop off its flag; every other error
+                // is this thread's.
+                Err(e) if interrupted(&e) => return Err(BatchError::Batch(e)),
+                Err(e) => Outcome::Failed(format!("{e:#}")),
+            };
+            out.push(Fetched { listed, outcome });
+            self.mirror.bar.doing(&format!(
+                "msgs={} replies={}",
+                self.messages,
+                self.replies.load(Ordering::Relaxed)
+            ));
+        }
+        Ok(out)
     }
 
-    let mut cursor: Option<String> = None;
-    loop {
-        let mut params = base.clone();
-        if let Some(c) = &cursor {
-            params.insert("cursor".to_string(), c.clone());
-        }
-        let resp = call(M_HISTORY, &params, latchkey).await?;
-        let messages: Vec<Value> = resp
-            .get("messages")
-            .and_then(|v| v.as_array())
-            .map(|a| a.to_vec())
-            .unwrap_or_default();
-        // One line per request actually issued, with the bounds that
-        // were sent. Pairs with `slack_channel_walk_planned`: that says
-        // what the walk intended, this says what went on the wire and
-        // what came back, so a re-fetch can be attributed to a specific
-        // call rather than inferred from a total.
-        info!(
-            event = "slack_history_page",
-            channel = %channel_id,
-            oldest = params.get("oldest").map(String::as_str).unwrap_or("-"),
-            latest = params.get("latest").map(String::as_str).unwrap_or("-"),
-            inclusive = params.get("inclusive").map(String::as_str).unwrap_or("-"),
-            cursor = params.get("cursor").map(String::as_str).unwrap_or("-"),
-            returned = messages.len(),
-            "fetched one page of history"
-        );
-
-        // Announced before it is counted: Slack names no message count
-        // up front, so a page is the first moment this walk knows of
-        // more work, and ticking first would count it against a total
-        // that does not include it yet.
-        bar.expect(messages.len() as u64);
-        let rows: Vec<MessageInput> = messages
-            .iter()
-            .filter_map(|m| history_message_input(team_id, channel_id, m))
-            .collect();
-        db.upsert_messages(&rows).await?;
-        totals.messages += messages.len();
-        bar.did(messages.len() as u64);
-
-        if download_blobs {
-            let counts = api::download_files_for_messages(
-                db,
-                team_id,
-                channel_id,
-                &messages,
-                None,
-                attach,
-                blake3_by_file,
-                blob_size_limit_bytes,
-                latchkey,
-            )
-            .await?;
-            for (k, v) in counts {
-                *totals.media.entry(k).or_insert(0) += v;
-            }
-        }
-
-        let media_downloaded = totals.media.get("downloaded").copied().unwrap_or(0);
-        bar.doing(&format!(
-            "listing  msgs={} media={}",
-            totals.messages, media_downloaded
-        ));
-
-        collected.extend(messages);
-
-        let has_more = resp.get("has_more").and_then(|v| v.as_bool());
-        cursor = next_cursor(&resp);
-        if cursor.is_none() || has_more == Some(false) {
-            // Slack said there is more and handed us nothing to ask with.
-            // The walk stops here having read part of the range, which is
-            // survivable on its own — the next run picks the rest up — but
-            // must never be read as "the rest of this range is empty".
-            return Ok(if cursor.is_none() && has_more == Some(true) {
-                warn!(
-                    event = "slack_history_walk_truncated",
-                    channel = %channel_id,
-                    oldest = oldest_ts,
-                    "has_more with no cursor; this range was only partly read",
-                );
-                Drained::No
-            } else {
-                Drained::Yes
-            });
-        }
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<Thread>],
+    ) -> Result<()> {
+        let gone = self.mirror.db.store_threads(tx, batch).await?;
+        self.pruned.fetch_add(gone, Ordering::Relaxed);
+        Ok(())
     }
 }
 
-/// Whether a paginated walk read its whole range, or stopped short.
-///
-/// Only the first licenses a prune. A short read looks exactly like a
-/// range whose messages were all deleted, and the two must not be
-/// confused — which is why this is a named type rather than a `bool` that
-/// a future caller could pass the wrong way round.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Drained {
-    Yes,
-    No,
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn paginate_replies(
-    db: &RawDb,
-    team_id: &str,
-    channel_id: &str,
-    thread_ts: &str,
-    download_blobs: bool,
-    blob_size_limit_bytes: Option<u64>,
-    totals: &mut ChannelTotals,
-    attach: &mut CasEdgeAccumulator,
-    blake3_by_file: &mut std::collections::HashMap<String, String>,
-    latchkey: &LatchkeySettings,
-) -> Result<()> {
-    let mut base = BTreeMap::new();
-    base.insert("channel".to_string(), channel_id.to_string());
-    base.insert("ts".to_string(), thread_ts.to_string());
-    base.insert("limit".to_string(), "200".to_string());
-
-    let mut cursor: Option<String> = None;
-    let mut last_seen_reply: Option<String> = None;
-    // Every message id this walk returned. `conversations.replies` hands
-    // back the thread whole (across pages), so once the walk finishes, a
-    // stored message on this thread that is not here was deleted.
-    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut drained = Drained::Yes;
-    loop {
-        let mut p = base.clone();
-        if let Some(c) = &cursor {
-            p.insert("cursor".to_string(), c.clone());
+impl Mirror<'_> {
+    /// A history walk that fails still leaves the channel's owed threads
+    /// and files to fetch: they are in the store whatever the walk did.
+    async fn channel(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
+        let walked = self.walk_history(channel_id, totals).await;
+        if walked.as_ref().is_err_and(interrupted) {
+            return walked;
         }
-        let resp = call(M_REPLIES, &p, latchkey).await?;
-        let msgs: Vec<Value> = resp
-            .get("messages")
-            .and_then(|v| v.as_array())
-            .map(|a| a.to_vec())
-            .unwrap_or_default();
-        for m in &msgs {
-            if let Some(ts) = m.get("ts").and_then(|v| v.as_str()) {
-                seen_ids.insert(schema_raw::slack_message_key(team_id, channel_id, ts));
+        self.fetch_owed_threads(channel_id, totals).await?;
+        if self.media {
+            self.fetch_owed_files(channel_id, totals).await?;
+        }
+        walked
+    }
+
+    async fn walk_history(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
+        let held = coverage::held(self.db.pool(), &db::history_scope(channel_id)).await?;
+        for stretch in stretches(&self.since, self.refresh_from.as_deref(), &held) {
+            self.walk_stretch(channel_id, &stretch, totals).await?;
+        }
+        Ok(())
+    }
+
+    async fn walk_stretch(
+        &self,
+        channel_id: &str,
+        stretch: &Stretch,
+        totals: &mut ChannelTotals,
+    ) -> Result<()> {
+        let open_top = stretch.span.hi == END_OF_TIME;
+        let mut base = BTreeMap::new();
+        base.insert("channel".to_string(), channel_id.to_string());
+        base.insert("oldest".to_string(), key_ts(&stretch.span.lo));
+        base.insert("inclusive".to_string(), stretch.inclusive.to_string());
+        base.insert("include_all_metadata".to_string(), "true".to_string());
+        base.insert("limit".to_string(), "200".to_string());
+        if !open_top {
+            base.insert("latest".to_string(), key_ts(&stretch.span.hi));
+        }
+
+        // Where the next page reaches up to, and whether a message there
+        // is that page's to return: the stretch's own top is, a page's
+        // oldest message was the page before's.
+        let mut top = (!open_top).then(|| stretch.span.hi.clone());
+        let mut top_included = true;
+        let mut cursor: Option<String> = None;
+        loop {
+            let mut params = base.clone();
+            if let Some(c) = &cursor {
+                params.insert("cursor".to_string(), c.clone());
+            }
+            let resp = call(M_HISTORY, &params, self.latchkey).await?;
+            let messages: Vec<Value> = resp
+                .get("messages")
+                .and_then(|v| v.as_array())
+                .map(|a| a.to_vec())
+                .unwrap_or_default();
+            info!(
+                event = "slack_history_page",
+                channel = %channel_id,
+                oldest = params.get("oldest").map(String::as_str).unwrap_or("-"),
+                latest = params.get("latest").map(String::as_str).unwrap_or("-"),
+                inclusive = stretch.inclusive,
+                reread = stretch.reread,
+                cursor = params.get("cursor").map(String::as_str).unwrap_or("-"),
+                returned = messages.len(),
+                "fetched one page of history"
+            );
+            // Announced before it is counted: Slack names no message
+            // count up front, so a page is the first this walk knows of
+            // the work in it.
+            self.bar.expect(messages.len() as u64);
+            let rows: Vec<MessageInput> = messages
+                .iter()
+                .filter_map(|m| history_message_input(self.team_id, channel_id, m))
+                .collect();
+
+            let has_more = resp.get("has_more").and_then(|v| v.as_bool());
+            cursor = next_cursor(&resp);
+            let last = cursor.is_none() || has_more == Some(false);
+            let short = cursor.is_none() && has_more == Some(true);
+            let in_stretch: Vec<String> = rows
+                .iter()
+                .map(|m| ts_key(&m.ts))
+                .filter(|key| *key >= stretch.span.lo)
+                .collect();
+            let covered =
+                settled(&stretch.span, top.as_deref(), &in_stretch, last).filter(|_| !short);
+            let enumerated = covered
+                .as_ref()
+                .filter(|_| stretch.reread)
+                .map(|span| Enumerated {
+                    oldest: key_ts(&span.lo),
+                    latest: key_ts(&span.hi),
+                    latest_included: top_included,
+                });
+            totals.pruned += self
+                .db
+                .store_history_page(channel_id, &rows, covered.as_ref(), enumerated.as_ref())
+                .await?;
+            totals.messages += messages.len();
+            self.bar.did(messages.len() as u64);
+            self.bar
+                .doing(&format!("listing  msgs={}", totals.messages));
+
+            if short {
+                return Err(cut_short(M_HISTORY));
+            }
+            if last {
+                return Ok(());
+            }
+            if let Some(oldest) = in_stretch.into_iter().min() {
+                top = Some(oldest);
+                top_included = false;
             }
         }
+    }
 
-        let rows: Vec<MessageInput> = msgs
-            .iter()
-            .filter_map(|m| reply_message_input(team_id, channel_id, thread_ts, m))
-            .collect();
-        db.upsert_messages(&rows).await?;
-        for m in &msgs {
-            if let Some(ts) = m.get("ts").and_then(|v| v.as_str()) {
-                if ts != thread_ts && last_seen_reply.as_deref().is_none_or(|prev| ts > prev) {
-                    last_seen_reply = Some(ts.to_string());
-                }
-            }
-        }
-        totals.replies += msgs.len().saturating_sub(1);
+    /// The threads of the channel owed by the store's own account, one
+    /// `conversations.replies` walk each. A thread that fails costs that
+    /// thread: an attempt on its own row, which is owed still.
+    async fn fetch_owed_threads(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
+        let listed = self.db.threads_listed(channel_id).await?;
+        let owed = owed::owed(self.db.pool(), THREADS, listed).await?;
+        let l = owed::Loop {
+            pool: self.db.pool(),
+            table: THREADS,
+            phase: M_REPLIES,
+            stop: self.stop,
+            found: self.found,
+            sealer: self.sealer,
+            batch: 1,
+            concurrency: 1,
+            flush: 1,
+            flush_bytes: 0,
+            failures_in_a_row: 0,
+        };
+        let threads = Threads {
+            mirror: self,
+            channel_id,
+            messages: totals.messages,
+            replies: AtomicUsize::new(0),
+            pruned: AtomicUsize::new(0),
+        };
+        owed::drain(&l, owed, &threads).await?;
+        totals.replies += threads.replies.into_inner();
+        totals.pruned += threads.pruned.into_inner();
+        Ok(())
+    }
 
-        if download_blobs {
-            let counts = api::download_files_for_messages(
-                db,
-                team_id,
-                channel_id,
-                &msgs,
-                Some(thread_ts),
-                attach,
-                blake3_by_file,
-                blob_size_limit_bytes,
-                latchkey,
-            )
-            .await?;
-            for (k, v) in counts {
-                *totals.media.entry(k).or_insert(0) += v;
+    /// Every page of `conversations.replies` for the thread rooted at
+    /// `key`: the thread whole, root copy included, or an error.
+    async fn fetch_thread(
+        &self,
+        channel_id: &str,
+        key: &str,
+        replies: &AtomicUsize,
+    ) -> Result<Thread> {
+        let (_, _, thread_ts) =
+            schema_raw::split_key(key).ok_or_else(|| anyhow::anyhow!("{key}: not a thread key"))?;
+        let mut base = BTreeMap::new();
+        base.insert("channel".to_string(), channel_id.to_string());
+        base.insert("ts".to_string(), thread_ts.to_string());
+        base.insert("limit".to_string(), "200".to_string());
+
+        let mut rows: Vec<MessageInput> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let mut p = base.clone();
+            if let Some(c) = &cursor {
+                p.insert("cursor".to_string(), c.clone());
             }
-        }
-        let has_more = resp.get("has_more").and_then(|v| v.as_bool());
-        cursor = next_cursor(&resp);
-        if cursor.is_none() || has_more == Some(false) {
+            let resp = call(M_REPLIES, &p, self.latchkey).await?;
+            let msgs: Vec<Value> = resp
+                .get("messages")
+                .and_then(|v| v.as_array())
+                .map(|a| a.to_vec())
+                .unwrap_or_default();
+            let page: Vec<MessageInput> = msgs
+                .iter()
+                .filter_map(|m| reply_message_input(self.team_id, channel_id, thread_ts, m))
+                .collect();
+            // Announced before it is counted, as a history page is.
+            let on_page = page.iter().filter(|m| !m.is_thread_root).count();
+            self.bar.expect(on_page as u64);
+            self.bar.did(on_page as u64);
+            replies.fetch_add(on_page, Ordering::Relaxed);
+            rows.extend(page);
+
+            let has_more = resp.get("has_more").and_then(|v| v.as_bool());
+            cursor = next_cursor(&resp);
             if cursor.is_none() && has_more == Some(true) {
-                warn!(
-                    event = "slack_replies_walk_truncated",
-                    channel = %channel_id,
-                    thread = thread_ts,
-                    "has_more with no cursor; this thread was only partly read",
-                );
-                drained = Drained::No;
+                return Err(cut_short(M_REPLIES));
             }
-            break;
+            if cursor.is_none() || has_more == Some(false) {
+                return Ok(Thread { rows });
+            }
         }
     }
-    db.upsert_replies_page(channel_id, thread_ts, last_seen_reply.as_deref())
-        .await?;
-    // Only when the loop drained: a walk that stopped early saw part of the
-    // thread, and reconciling against a partial read deletes replies that
-    // are still there. Every `?` above returns before reaching this, so the
-    // remaining way to be short is a `has_more` we could not follow.
-    if drained == Drained::Yes {
-        totals.pruned += db
-            .prune_thread_replies(
-                &schema_raw::slack_thread_key(team_id, channel_id, thread_ts),
-                &seen_ids,
-            )
-            .await?;
+
+    /// The channel's edges without bytes, [`FILE_BATCH`] to a request.
+    /// Every one is owed, whatever its sidecar says: only a landed file
+    /// is held, and it lands with its hash. A store an older build wrote
+    /// stamps some failed fetches as fetched.
+    async fn fetch_owed_files(&self, channel_id: &str, totals: &mut ChannelTotals) -> Result<()> {
+        let owed = self.db.files_listed(self.team_id, channel_id).await?;
+        self.bar.expect(owed.len() as u64);
+        let l = owed::Loop {
+            pool: self.db.pool(),
+            table: SlackAttachmentRow::TABLE,
+            phase: "files",
+            stop: self.stop,
+            found: self.found,
+            sealer: self.sealer,
+            batch: FILE_BATCH,
+            concurrency: 1,
+            flush: FILE_BATCH,
+            flush_bytes: 0,
+            failures_in_a_row: 0,
+        };
+        let files = FileFetcher {
+            db: self.db,
+            latchkey: self.latchkey,
+            blob_size_limit_bytes: self.blob_size_limit_bytes,
+            blake3_by_file: self.blake3_by_file,
+            bar: self.bar,
+            downloaded: AtomicUsize::new(0),
+        };
+        let drained = owed::drain(&l, owed, &files).await?;
+        let downloaded = files.downloaded.into_inner();
+        for (outcome, n) in [
+            ("downloaded", downloaded),
+            ("skipped", drained.got.saturating_sub(downloaded)),
+            ("too_large", drained.skipped),
+            ("error", drained.failed),
+        ] {
+            if n > 0 {
+                *totals.media.entry(outcome.to_string()).or_insert(0) += n;
+            }
+        }
+        self.bar.doing(&format!(
+            "msgs={} replies={} media={}",
+            totals.messages,
+            totals.replies,
+            totals.media.get("downloaded").copied().unwrap_or(0)
+        ));
+        Ok(())
     }
-    Ok(())
 }
 
 fn history_message_input(team_id: &str, channel_id: &str, m: &Value) -> Option<MessageInput> {
@@ -1411,6 +1109,9 @@ pub struct FetchOptions {
     /// gets here.
     pub dm_conversations: Option<Vec<String>>,
     pub blob_size_limit_bytes: Option<u64>,
+    /// The run's one "now": the refresh window and the age of a listing
+    /// sweep are measured from it.
+    pub now: DateTime<Utc>,
     pub progress: datalib_etl::progress::Progress,
     pub control: datalib_etl::control::DownloadControl,
 }
@@ -1431,6 +1132,7 @@ impl FetchOptions {
             dms: false,
             dm_conversations: None,
             blob_size_limit_bytes: None,
+            now: Utc::now(),
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
         }
@@ -1453,13 +1155,26 @@ pub struct FetchSummary {
 
 #[instrument(skip_all)]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_router();
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let sealer = opts.sealer.clone();
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| download(opts, found))
+        .await
+}
+
+async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
+    let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
     let since_dt =
         parse_iso_or_utc_date(&opts.since).with_context(|| format!("--since {:?}", opts.since))?;
-    let since_ts = datetime_to_slack_ts(&since_dt);
-    let now = Utc::now();
+    let since = ts_key(&datetime_to_slack_ts(&since_dt));
+    let now = opts.now;
+    let refresh_from = (opts.refresh_window_days > 0).then(|| {
+        ts_key(&datetime_to_slack_ts(&days_before(
+            now,
+            opts.refresh_window_days,
+        )))
+    });
 
     let run_config = json!({
         "channels": opts.channels,
@@ -1473,30 +1188,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     });
     let run = datalib_etl::download_run::DownloadRun::start(db.pool(), &run_config).await?;
 
-    // Diff this run's scope-affecting params against the ones that
-    // produced the store's current contents. `None` (fresh store, or one
-    // written before `sync_scope_config` existed) plans no adjustments.
-    let scope_cfg = scope_config_blob(&opts.scope_inputs());
-    let prior_scope_cfg = scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
-    let adjust = Adjustments::plan(prior_scope_cfg.as_ref(), &opts.scope_inputs());
-
-    let t_scan = std::time::Instant::now();
-    let channel_ts_bounds = db.ts_bounds_by_channel().await?;
-    let latest_reply_map = db.latest_reply_by_thread().await?;
-    // Run-scoped `(file_id → blake3)` cache: loaded once up-front so
-    // the per-file dedupe check inside `download_one_file` is a
-    // HashMap hit instead of a SQLite round trip per file.
-    // Successful downloads insert into it so later files in the same
-    // run hit the cache without re-fetching.
-    let mut blake3_by_file = db.load_attachment_blake3s().await?;
-    info!(
-        event = "slack_resume_scan_done",
-        channels_with_history = channel_ts_bounds.len(),
-        threads_with_replies = latest_reply_map.len(),
-        attachments_with_bytes = blake3_by_file.len(),
-        elapsed_ms = t_scan.elapsed().as_millis() as u64,
-        "read what the store already has, to resume from"
-    );
+    let blake3_by_file = Mutex::new(db.load_attachment_blake3s().await?);
 
     let mut grand = FetchSummary {
         problems: Vec::new(),
@@ -1506,31 +1198,45 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         media: BTreeMap::new(),
         account: AccountTotals::default(),
     };
-    // Channels whose export errored. A per-channel failure is warned and
-    // stepped over so one bad channel can't sink the sync, which means
-    // the work future can return `Ok` on a run that did NOT cover
-    // everything the config asked for — see `run_satisfied_config`.
-    let mut channel_failures: usize = 0;
-
     let work = async {
         // The step's own handle: setup only names what it is doing.
         let setup = opts.progress.clone();
         setup.set_message("starting");
         let t_setup = std::time::Instant::now();
+        // Without the workspace's identity nothing below can be keyed:
+        // the one failure that fails the run.
         let (team_id, self_user_id) = fetch_self(&db, &setup, &opts.latchkey).await?;
         // Users before channels: a DM is titled after its counterpart,
         // so the DM progress labels need the user directory to already
-        // be mirrored.
-        fetch_users(&db, &setup, &opts.latchkey).await?;
-        let listed = fetch_channels(
+        // be mirrored. A listing that fails leaves the stored one.
+        if let Err(e) = fetch_users(&db, &now, &setup, &opts.latchkey).await {
+            found.push(listing_problem(M_USERS, &e));
+        }
+        let listed = match fetch_channels(
             &db,
             opts.members_only,
             opts.channels.is_some(),
             opts.dms,
+            &now,
             &setup,
             &opts.latchkey,
         )
-        .await?;
+        .await
+        {
+            Ok(listed) => listed,
+            // The channels an earlier listing stored are still worth
+            // walking; with none stored there is nothing to do at all.
+            Err(e) => {
+                let stored = db
+                    .channels_for_fetch(opts.members_only, opts.channels.is_some(), opts.dms)
+                    .await?;
+                if stored.is_empty() {
+                    return Err(e.context("no channels are stored from an earlier listing"));
+                }
+                found.push(listing_problem(M_CHANNELS, &e));
+                stored
+            }
+        };
         // Only loaded when DMs are in play — it names them, and for a
         // channels-only run it is a whole table scan nothing would read.
         let user_labels: BTreeMap<String, String> = if opts.dms {
@@ -1557,16 +1263,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 format!("no channel by that name among {} listed", listed.len()),
             ));
         }
-        if !plan.unmatched_dms.is_empty() {
-            // Silence here would be indistinguishable from "that
-            // conversation has no messages".
-            warn!(
-                event = "slack_dm_conversations_unmatched",
-                entries = %plan.unmatched_dms.join(", "),
-                "no direct message matches these `dm_conversations` entries — \
-                 they will not be mirrored",
-            );
-        }
         for spec in &plan.unmatched_dms {
             grand.problems.push(DownloadProblem::not_found(
                 "dm_conversations",
@@ -1575,7 +1271,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                  not mirrored",
             ));
         }
-        download_problems::report(db.pool(), &grand.problems).await;
+        found.config(grand.problems.clone());
         info!(
             event = "slack_export_planned",
             channels = plan.targets.len() - plan.dm_targets,
@@ -1587,14 +1283,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let targets = plan.targets;
 
         if !opts.control.stop.requested() {
-            let (account, problems) =
-                fetch_account_state(&db, &targets, &opts.control.stop, &setup, &opts.latchkey)
-                    .await?;
-            // A stop may have cut the bookmarks short; the last run's
-            // rows stand until a run gets through them.
-            if !opts.control.stop.requested() {
-                download_problems::report_run(db.pool(), &problems).await;
-            }
+            let (account, problems) = fetch_account_state(
+                &db,
+                &targets,
+                &now,
+                &opts.control.stop,
+                &setup,
+                &opts.latchkey,
+            )
+            .await?;
+            found.extend(problems);
             if let Some(sealer) = opts.sealer.as_ref() {
                 sealer
                     .wrote(
@@ -1612,51 +1310,34 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             t_setup.elapsed().as_millis() as u64
         ));
 
-        let attempts_before: HashMap<String, i64> = if opts.media {
-            db.unfetched_attachments()
-                .await?
-                .into_iter()
-                .map(|a| (a.id, a.attempts))
-                .collect()
-        } else {
-            HashMap::new()
-        };
-
         // Seeded with one tick per channel, so the bar reads as
         // something before the first channel has listed anything.
         let bar = RunBar::new(&opts.progress, targets.len() as u64);
+        let mirror = Mirror {
+            db: &db,
+            team_id: &team_id,
+            since,
+            refresh_from,
+            media: opts.media,
+            blob_size_limit_bytes: opts.blob_size_limit_bytes,
+            bar: &bar,
+            latchkey: &opts.latchkey,
+            stop: &opts.control.stop,
+            found: &found,
+            sealer: opts.sealer.as_ref(),
+            blake3_by_file: &blake3_by_file,
+        };
         for (cid, name) in &targets {
-            // Asked to stop: the channel that just finished sealed (a stop
-            // makes every `wrote` a seal), so end here rather than start a
-            // channel whose first request the transport would refuse.
+            // Asked to stop: end here rather than start a channel whose
+            // first request the transport would refuse.
             if opts.control.stop.requested() {
                 info!(event = "slack_interrupted", next_channel = %name, "told to stop; leaving the rest for the next run");
                 break;
             }
-            bar.doing(name);
+            bar.doing(&format!("{name}: listing"));
             let span = info_span!("channel", channel_name = %name, channel_id = %cid);
             let mut totals = ChannelTotals::default();
-            bar.doing(&format!("{name}: listing"));
-            let result = export_channel(
-                &db,
-                &team_id,
-                cid,
-                &since_ts,
-                opts.refresh_window_days,
-                channel_ts_bounds.get(cid).map(|b| b.latest.as_str()),
-                channel_ts_bounds.get(cid).map(|b| b.oldest.as_str()),
-                &adjust,
-                &latest_reply_map,
-                &now,
-                opts.media,
-                opts.blob_size_limit_bytes,
-                &mut totals,
-                &mut blake3_by_file,
-                &bar,
-                &opts.latchkey,
-            )
-            .instrument(span)
-            .await;
+            let result = mirror.channel(cid, &mut totals).instrument(span).await;
             info!(
                 event = "slack_channel_done",
                 channel = %name,
@@ -1666,70 +1347,27 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 "finished one channel",
             );
             bar.did(1);
-            match result {
-                Ok(()) => {
-                    let written = (totals.messages + totals.replies + totals.pruned) as u64;
-                    grand.messages += totals.messages;
-                    grand.replies += totals.replies;
-                    grand.pruned += totals.pruned;
-                    for (k, v) in totals.media {
-                        *grand.media.entry(k).or_insert(0) += v;
-                    }
-                    // End of a channel is the consistent point, and it is
-                    // after the prune rather than before: `export_channel`
-                    // only prunes a window it walked to completion, so what
-                    // is published here is a settled channel rather than one
-                    // still carrying messages this run is about to delete.
-                    // A channel that *failed* deliberately seals nothing --
-                    // its window is half-walked.
-                    if let Some(sealer) = opts.sealer.as_ref() {
-                        sealer.wrote(written).await;
-                    }
-                }
-                Err(e) => {
-                    channel_failures += 1;
-                    warn!(event = "slack_channel_failed", channel = %name, error = %e, "a channel could not be walked");
-                }
+            // A channel that failed costs only itself: what it did not
+            // cover or fetch is still owed, by the store's own account.
+            if let Err(e) = result {
+                found.push(listing_problem(&format!("{M_HISTORY} {name}"), &e));
             }
-        }
-        if opts.media && !opts.control.stop.requested() {
-            let in_scope: HashSet<&str> = targets.iter().map(|(cid, _)| cid.as_str()).collect();
-            let retries = attachments_to_retry(
-                &attempts_before,
-                db.unfetched_attachments().await?,
-                &in_scope,
-            );
-            retry_attachments(
-                &db,
-                &retries,
-                &mut blake3_by_file,
-                &opts,
-                &bar,
-                &mut grand.media,
-            )
-            .await;
+            let written = (totals.messages + totals.replies + totals.pruned) as u64;
+            grand.messages += totals.messages;
+            grand.replies += totals.replies;
+            grand.pruned += totals.pruned;
+            for (k, v) in totals.media {
+                *grand.media.entry(k).or_insert(0) += v;
+            }
+            if let Some(sealer) = opts.sealer.as_ref() {
+                sealer.wrote(written).await;
+            }
         }
         bar.finish();
         Ok::<(), anyhow::Error>(())
     };
 
     let result = work.await;
-    // Record the config only once this run has actually satisfied it, so
-    // a failed, partial, or cancelled sync leaves the previous blob in
-    // place and the next run retries the adjustment. Bookkeeping
-    // failures are logged and swallowed: they must never mask the run's
-    // own error.
-    // A run that stopped when asked did not walk every channel the config
-    // names, so it did not satisfy the config either — recording it would
-    // tell the next run a widened filter had been backfilled.
-    let walked_everything = result.is_ok() && !opts.control.stop.requested();
-    scope_config::store_if_satisfied(
-        db.pool(),
-        SCOPE_CONFIG_KEY,
-        &scope_cfg,
-        Adjustments::run_satisfied_config(walked_everything, channel_failures),
-    )
-    .await;
     run.finish(&result, &grand).await;
     result?;
 
@@ -1753,214 +1391,170 @@ fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
 mod tests {
     use super::*;
 
-    fn opts(since: &str, media: bool) -> ScopeInputs {
-        ScopeInputs {
-            since: since.to_string(),
-            media,
+    const SINCE: &str = "1704067200.000000";
+
+    fn span(lo: &str, hi: &str) -> Span {
+        Span::new(ts_key(lo), ts_key(hi))
+    }
+
+    fn gap(lo: &str, hi: &str, inclusive: bool) -> Stretch {
+        Stretch {
+            span: span(lo, hi),
+            inclusive,
+            reread: false,
         }
     }
 
-    /// The steady state: same config as last run plans no work. Guards
-    /// the round trip `scope_config_blob` → store → load → `plan`, which
-    /// is what every unchanged sync exercises.
-    #[test]
-    fn unchanged_config_plans_nothing() {
-        let o = opts("2024-01-01", true);
-        let prev = scope_config_blob(&o);
-        assert!(!Adjustments::plan(Some(&prev), &o).any());
+    fn planned(refresh_from: Option<&str>, held: &[Span]) -> Vec<Stretch> {
+        stretches(&ts_key(SINCE), refresh_from.map(ts_key).as_deref(), held)
     }
 
+    /// The TNG fixtures' stardate `ts`es have an eleventh digit, which
+    /// as plain strings sort below every real one.
     #[test]
-    fn absent_prior_config_plans_nothing() {
-        // Every data root in the field on first upgrade. Must not
-        // trigger a backfill.
-        let o = opts("2020-01-01", true);
-        assert!(!Adjustments::plan(None, &o).any());
+    fn a_ts_key_sorts_by_instant_whatever_the_width_and_reads_back() {
+        assert!(ts_key("12604000800.000800") > ts_key(SINCE));
+        assert!(ts_key("999999999.000000") < ts_key(SINCE));
+        assert!(ts_key("12604000800.000800").as_str() < END_OF_TIME);
+        assert_eq!(key_ts(&ts_key(SINCE)), SINCE);
+        assert_eq!(key_ts(&ts_key("0.000001")), "0.000001");
     }
 
-    // ── since ────────────────────────────────────────────────────────
-
+    /// #1048: `since = "0001-01-01"` went out as
+    /// `oldest=-62135596800.000000`, which Slack answers with an empty
+    /// page, so the mirror held no messages.
     #[test]
-    fn since_moved_earlier_schedules_backfill_only() {
-        let prev = scope_config_blob(&opts("2024-01-01", true));
-        let plan = Adjustments::plan(Some(&prev), &opts("2023-01-01", true));
-        assert!(plan.backfill_below_oldest);
-        // A widened `since` never needs the expensive re-walk — the
-        // forward resume cursor is still valid.
-        assert!(!plan.force_full_walk);
-    }
-
-    #[test]
-    fn since_moved_later_is_a_noop() {
-        let prev = scope_config_blob(&opts("2024-01-01", true));
-        // Narrowing leaves an on-disk superset; nothing to fetch.
-        assert!(!Adjustments::plan(Some(&prev), &opts("2025-01-01", true)).any());
-    }
-
-    #[test]
-    fn since_compares_instants_not_strings() {
-        // `2024-01-01` and its RFC 3339 spelling are the same instant, so
-        // rewriting the config in the other format must not backfill.
-        let prev = scope_config_blob(&opts("2024-01-01", true));
-        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01T00:00:00Z", true));
-        assert!(!plan.any());
-    }
-
-    #[test]
-    fn unparseable_stored_since_is_ignored() {
-        let mut prev = scope_config_blob(&opts("2024-01-01", true));
-        prev[K_SINCE] = json!("not-a-date");
-        // No information beats guessing: a garbage stored value must not
-        // fail the sync or provoke a backfill.
-        assert!(!Adjustments::plan(Some(&prev), &opts("2020-01-01", true)).any());
-    }
-
-    // ── media ────────────────────────────────────────────────────────
-
-    #[test]
-    fn media_turned_on_forces_full_walk() {
-        let prev = scope_config_blob(&opts("2024-01-01", false));
-        let plan = Adjustments::plan(Some(&prev), &opts("2024-01-01", true));
-        // Attachment rows only exist for messages walked with media on,
-        // so the messages have to come back past the download path.
-        assert!(plan.force_full_walk);
-    }
-
-    #[test]
-    fn media_turned_off_is_a_noop() {
-        let prev = scope_config_blob(&opts("2024-01-01", true));
-        assert!(!Adjustments::plan(Some(&prev), &opts("2024-01-01", false)).any());
-    }
-
-    // ── thread reply skip ────────────────────────────────────────────
-
-    #[test]
-    fn mirrored_thread_is_skipped_normally() {
-        let plan = Adjustments::default();
-        assert!(plan.thread_up_to_date(Some("100.000000"), Some("100.000000")));
-        assert!(plan.thread_up_to_date(Some("100.000000"), Some("101.000000")));
-    }
-
-    #[test]
-    fn advanced_thread_is_never_skipped() {
-        let plan = Adjustments::default();
-        assert!(!plan.thread_up_to_date(Some("101.000000"), Some("100.000000")));
-        // Never-fetched thread, or an API response without `latest_reply`:
-        // fetch rather than silently drop.
-        assert!(!plan.thread_up_to_date(Some("101.000000"), None));
-        assert!(!plan.thread_up_to_date(None, Some("100.000000")));
-    }
-
-    #[test]
-    fn force_full_walk_re_walks_mirrored_threads() {
-        // Reply attachments are downloaded only inside `paginate_replies`,
-        // so turning `media` on has to re-enter fully-mirrored threads or
-        // it silently misses every in-thread file.
-        let plan = Adjustments {
-            force_full_walk: true,
-            ..Default::default()
-        };
-        assert!(!plan.thread_up_to_date(Some("100.000000"), Some("100.000000")));
-    }
-
-    #[test]
-    fn backfill_alone_leaves_thread_skipping_intact() {
-        // A widened `since` adds older messages; it says nothing about
-        // threads already mirrored above the floor.
-        let plan = Adjustments {
-            backfill_below_oldest: true,
-            ..Default::default()
-        };
-        assert!(plan.thread_up_to_date(Some("100.000000"), Some("100.000000")));
-    }
-
-    // ── recording the blob ───────────────────────────────────────────
-
-    #[test]
-    fn partial_run_does_not_record_config() {
-        // Per-channel failures are swallowed, so `Ok` does not imply full
-        // coverage. Recording anyway would drop the scheduled backfill
-        // permanently for the channels that failed.
-        assert!(!Adjustments::run_satisfied_config(true, 1));
-        assert!(!Adjustments::run_satisfied_config(false, 0));
-        assert!(!Adjustments::run_satisfied_config(false, 3));
-    }
-
-    #[test]
-    fn clean_run_records_config() {
-        assert!(Adjustments::run_satisfied_config(true, 0));
-    }
-
-    // ── blob contents ────────────────────────────────────────────────
-
-    #[test]
-    fn blob_records_only_scope_affecting_params() {
-        // Everything the blob must ignore — channels, refresh window,
-        // members_only, the DM knobs — is absent from `ScopeInputs` by
-        // construction, so this asserts the split as well as the blob.
-        let blob = scope_config_blob(&opts("2024-01-01", true));
-        let obj = blob.as_object().expect("blob is an object");
-        // A newly listed channel cold-starts on its own, and the refresh
-        // window is re-applied every run — recording either would only
-        // provoke pointless re-walks.
-        assert!(!obj.contains_key("channels"));
-        assert!(!obj.contains_key("refresh_window_days"));
-        assert!(!obj.contains_key("members_only"));
-        // Same reason for the DM knobs: a newly listed DM has no rows,
-        // so it cold-starts from `since` unaided. What a widened `dms`
-        // *does* need is a fresh `conversations.list` sweep, which is
-        // handled by the sweep key, not by this blob.
-        assert!(!obj.contains_key("dms"));
-        assert!(!obj.contains_key("dm_conversations"));
-        // The size limit is not recorded either: the retry pass re-judges
-        // every skipped file against it on every run.
-        assert!(!obj.contains_key("blob_size_limit_bytes"));
-        assert_eq!(obj.len(), 2, "unexpected keys in blob: {obj:?}");
-    }
-
-    // ── attachment retry ─────────────────────────────────────────────
-
-    fn unfetched(id: &str, attempts: i64, channel: Option<&str>) -> UnfetchedAttachment {
-        UnfetchedAttachment {
-            id: format!("T1#{}#1.0#F{id}", channel.unwrap_or("C0")),
-            message_uuid: format!("T1#{}#1.0", channel.unwrap_or("C0")),
-            file_id: format!("F{id}"),
-            attempts,
-            channel_id: channel.map(String::from),
-            message: channel.map(|_| json!({"ts": "1.0", "files": [{"id": format!("F{id}")}]})),
+    fn a_since_before_the_epoch_asks_from_the_epoch() {
+        for since in ["0001-01-01", "1969-12-31T23:59:59.5Z"] {
+            let ts = datetime_to_slack_ts(&parse_iso_or_utc_date(since).unwrap());
+            assert_eq!(ts, "0.000000", "{since}");
+            assert_eq!(key_ts(&ts_key(&ts)), "0.000000", "{since}");
         }
+        let later = parse_iso_or_utc_date("1970-01-02").unwrap();
+        assert_eq!(datetime_to_slack_ts(&later), "86400.000000");
     }
 
-    /// Only an attachment the walk left alone, in a mirrored
-    /// conversation, whose file is still on its stored message.
+    /// A refresh window longer than the calendar reaches panicked in
+    /// the subtraction; it is the whole history.
     #[test]
-    fn retries_are_the_unfetched_attachments_the_walk_left_alone() {
-        let mut file_gone = unfetched("e", 1, Some("C1"));
-        file_gone.message = Some(json!({"ts": "1.0", "files": [{"id": "Fother"}]}));
-        let rows = vec![
-            unfetched("a", 1, Some("C1")),
-            unfetched("b", 2, Some("C1")),
-            unfetched("c", 1, Some("C9")),
-            unfetched("d", 1, None),
-            file_gone,
-            unfetched("f", 1, Some("C1")),
-        ];
-        let before: HashMap<String, i64> = rows
-            .iter()
-            .filter(|r| r.file_id != "Ff")
-            .map(|r| (r.id.clone(), 1))
-            .collect();
-        let in_scope: HashSet<&str> = ["C1"].into();
-
-        let retries = attachments_to_retry(&before, rows, &in_scope);
+    fn a_refresh_window_past_the_start_of_time_reaches_the_epoch() {
+        let now = parse_iso_or_utc_date("2369-04-01").unwrap();
+        for days in [36_500_000, 1_000_000_000, i64::MAX] {
+            assert_eq!(
+                datetime_to_slack_ts(&days_before(now, days)),
+                "0.000000",
+                "{days}"
+            );
+        }
         assert_eq!(
-            retries,
-            vec![Retry {
-                channel_id: "C1".to_string(),
-                message_uuid: "T1#C1#1.0".to_string(),
-                file: json!({"id": "Fa"}),
-            }]
+            days_before(now, 30),
+            parse_iso_or_utc_date("2369-03-02").unwrap()
         );
+    }
+
+    #[test]
+    fn a_channel_never_walked_is_one_open_stretch_from_since() {
+        assert_eq!(planned(None, &[]), [gap(SINCE, END_OF_TIME, true)]);
+    }
+
+    /// What is newer than the newest message seen is asked for on every
+    /// run, without asking for that message again.
+    #[test]
+    fn a_channel_walked_whole_owes_only_what_is_newer() {
+        let held = [span(SINCE, "1735689600.000300")];
+        assert_eq!(
+            planned(None, &held),
+            [gap("1735689600.000300", END_OF_TIME, false)]
+        );
+    }
+
+    /// History is newest first, so a walk that stored its first page and
+    /// died has covered the top. The store's newest message says nothing
+    /// about what is under that page.
+    #[test]
+    fn a_walk_cut_off_after_its_first_page_owes_what_is_under_it() {
+        let held = [span("1735689600.000200", "1735689600.000300")];
+        assert_eq!(
+            planned(None, &held),
+            [
+                gap("1735689600.000300", END_OF_TIME, false),
+                gap(SINCE, "1735689600.000200", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_widened_since_owes_the_stretch_below_the_old_one() {
+        let held = [span("1735689600.000000", "1735689600.000300")];
+        assert_eq!(
+            planned(None, &held)[1],
+            gap(SINCE, "1735689600.000000", true)
+        );
+    }
+
+    /// The window re-reads what was covered and nothing else: a stretch
+    /// never read is a gap, walked once.
+    #[test]
+    fn the_refresh_rereads_what_was_already_covered_from_the_window_up() {
+        let reread = |lo: &str, hi: &str| Stretch {
+            span: span(lo, hi),
+            inclusive: true,
+            reread: true,
+        };
+        let held = [span(SINCE, "1735689600.000300")];
+        assert_eq!(
+            planned(Some("1735000000.000000"), &held),
+            [
+                gap("1735689600.000300", END_OF_TIME, false),
+                reread("1735000000.000000", "1735689600.000300"),
+            ]
+        );
+        // A window reaching below `since` stops at it, and one above
+        // everything covered re-reads nothing.
+        assert_eq!(
+            planned(Some("1000000000.000000"), &held)[1],
+            reread(SINCE, "1735689600.000300")
+        );
+        assert_eq!(planned(Some("1736000000.000000"), &held).len(), 1);
+    }
+
+    /// Three pages of a cold walk: the first settles from its oldest
+    /// message up to its newest, each next one down to its own oldest,
+    /// the last down to `since`.
+    #[test]
+    fn each_page_settles_from_its_oldest_message_up_to_the_page_before() {
+        let cold = span(SINCE, END_OF_TIME);
+        let keys = |ts: &[&str]| ts.iter().map(|t| ts_key(t)).collect::<Vec<_>>();
+        assert_eq!(
+            settled(
+                &cold,
+                None,
+                &keys(&["1735689600.000300", "1735689600.000200"]),
+                false
+            ),
+            Some(span("1735689600.000200", "1735689600.000300"))
+        );
+        let top = ts_key("1735689600.000200");
+        assert_eq!(
+            settled(&cold, Some(&top), &keys(&["1735689600.000100"]), false),
+            Some(span("1735689600.000100", "1735689600.000200"))
+        );
+        let top = ts_key("1735689600.000100");
+        assert_eq!(
+            settled(&cold, Some(&top), &keys(&["1735689600.000000"]), true),
+            Some(span(SINCE, "1735689600.000100"))
+        );
+    }
+
+    /// An open-topped walk that found nothing has looked at no stretch
+    /// it can name, so the channel is asked again next run.
+    #[test]
+    fn an_empty_walk_of_the_open_top_settles_nothing() {
+        assert_eq!(settled(&span(SINCE, END_OF_TIME), None, &[], true), None);
+        // A closed stretch that came back empty was read whole.
+        let below = span(SINCE, "1735689600.000100");
+        let top = ts_key("1735689600.000100");
+        assert_eq!(settled(&below, Some(&top), &[], true), Some(below.clone()));
     }
 
     // ── DM scoping ───────────────────────────────────────────────────

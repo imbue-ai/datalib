@@ -1,11 +1,15 @@
 //! A change request's one document: front matter, title, description,
 //! then its reviews, its general conversation and its inline threads.
+//! The description and the comments are markdown their authors wrote and
+//! go in as written; everything else here is plain text and is escaped.
 
 use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::title::Title;
+use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::html::{escape_md_inline, md_code_span, md_link_dest};
+use datalib_etl_render::title::Title;
 
 use crate::{ordered, ChangeRequest, Comment, ForgeProfile};
 
@@ -55,11 +59,11 @@ fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> 
         }
         .render(),
     );
-    let state = cr.state.as_deref().unwrap_or("unknown");
-    let author = cr.author.as_deref().unwrap_or("unknown");
-    let from = cr.from_ref.as_deref().unwrap_or("?");
-    let to = cr.to_ref.as_deref().unwrap_or("?");
-    out.push_str(&format!("*{state}* — @{author} — `{from}` → `{to}`\n\n"));
+    let state = escape_md_inline(cr.state.as_deref().unwrap_or("unknown"));
+    let author = escape_md_inline(cr.author.as_deref().unwrap_or("unknown"));
+    let from = md_code_span(cr.from_ref.as_deref().unwrap_or("?"));
+    let to = md_code_span(cr.to_ref.as_deref().unwrap_or("?"));
+    out.push_str(&format!("*{state}* — @{author} — {from} → {to}\n\n"));
 
     out.push_str("## Description\n\n");
     if cr.body.trim().is_empty() {
@@ -103,7 +107,10 @@ fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> 
         out.push_str("*(no inline comments)*\n\n");
     }
     for ((path, line), thread) in &ordered.inline {
-        out.push_str(&format!("### `{path}:{line}`\n\n"));
+        out.push_str(&format!(
+            "### {}\n\n",
+            md_code_span(&format!("{path}:{line}"))
+        ));
         for c in thread {
             push_comment(&mut out, c);
         }
@@ -126,18 +133,18 @@ fn push_comment(out: &mut String, c: &Comment) {
 }
 
 fn header(c: &Comment) -> String {
-    let who = c.author.as_deref().unwrap_or("unknown");
-    let when = c.created_at.as_str();
+    let who = escape_md_inline(c.author.as_deref().unwrap_or("unknown"));
+    let when = escape_md_inline(&c.created_at);
     let link = c
         .url
         .as_deref()
-        .map(|u| format!(" — [link]({u})"))
+        .map(|u| format!(" — [link]({})", md_link_dest(u)))
         .unwrap_or_default();
     let state = c
         .state
         .as_deref()
         .filter(|s| !s.is_empty())
-        .map(|s| format!(" *({s})*"))
+        .map(|s| format!(" *({})*", escape_md_inline(s)))
         .unwrap_or_default();
     let reply = if c.in_reply_to_id.is_some() {
         " *(reply)*"
@@ -164,21 +171,101 @@ fn quote_body(body: &str) -> String {
         .join("\n")
 }
 
-fn yaml_scalar(s: &str) -> String {
-    if s.is_empty() {
-        return "\"\"".into();
-    }
-    let needs_quote = s
-        .chars()
-        .any(|c| matches!(c, ':' | '#' | '\n' | '"' | '\''))
-        || s != s.trim();
-    if needs_quote {
-        serde_json::to_string(s).unwrap_or_else(|_| s.into())
-    } else {
-        s.into()
-    }
-}
-
 fn yaml_opt(s: Option<&str>) -> String {
     s.map(yaml_scalar).unwrap_or_else(|| "null".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Section;
+    use datalib_schema::providers::Provider;
+
+    const MARKUP: &str = "<script>x</script> & co";
+
+    fn profile() -> ForgeProfile {
+        ForgeProfile {
+            provider: Provider::Github,
+            tag: "github",
+            source_label: "GitHub",
+            doc_kind: "GitHub PR",
+            doc_entity_kind: "pull_request",
+            table: "pull_requests",
+            container_key: "repo",
+            number_key: "pr_number",
+            from_ref_key: "head_ref",
+            to_ref_key: "base_ref",
+            number_sigil: '#',
+            dir_prefix: "pr-",
+            container_needs_owner: true,
+            reviews: true,
+            render_version: 1,
+        }
+    }
+
+    /// A login, a state, a branch and a file path are names, not markup;
+    /// the description and the comments are markdown their authors wrote
+    /// and stay so.
+    #[test]
+    fn a_change_request_in_markup_renders_escaped() {
+        let cr = ChangeRequest {
+            uuid: "u".into(),
+            row_id: "r".into(),
+            container: "o/repo".into(),
+            number: 7,
+            title: MARKUP.into(),
+            body: "**Engage**".into(),
+            state: Some(MARKUP.into()),
+            url: None,
+            head_sha: None,
+            base_sha: None,
+            from_ref: Some("feat/`x`".into()),
+            to_ref: Some("main".into()),
+            author: Some(MARKUP.into()),
+            created_at: None,
+            updated_at: None,
+            merged_at: None,
+        };
+        let comment = Comment {
+            uuid: "c".into(),
+            table: "t",
+            row_id: "c1".into(),
+            parent_row_id: "r".into(),
+            kind: "k",
+            entity_kind: "e",
+            section: Section::Inline,
+            external_id: 1,
+            in_reply_to_id: None,
+            author: Some(MARKUP.into()),
+            body: "*looks good*".into(),
+            url: Some("https://e.invalid/c (1)".into()),
+            path: Some("src/`a`.rs".into()),
+            line: Some(3),
+            commit_sha: None,
+            created_at: "2364-04-11".into(),
+            updated_at: None,
+            state: Some(MARKUP.into()),
+        };
+        let md = render(&profile(), &cr, &[&comment]);
+        let (_, body) = md
+            .split_once("---\n\n")
+            .expect("front matter, then the body");
+        let escaped = "&lt;script&gt;x&lt;/script&gt; &amp; co";
+        assert!(!body.contains("<script>"), "{body}");
+        assert!(
+            body.contains(&format!(
+                "*{escaped}* — @{escaped} — `` feat/`x` `` → `main`"
+            )),
+            "{body}"
+        );
+        assert!(body.contains("\n**Engage**\n"), "the description: {body}");
+        assert!(body.contains("### `` src/`a`.rs:3 ``"), "{body}");
+        assert!(
+            body.contains(&format!(
+                "**@{escaped}** *({escaped})* @ 2364-04-11 — [link](<https://e.invalid/c (1)>)"
+            )),
+            "{body}"
+        );
+        assert!(body.contains("> *looks good*"), "a comment: {body}");
+    }
 }

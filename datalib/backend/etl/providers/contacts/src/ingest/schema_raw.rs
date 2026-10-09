@@ -82,9 +82,8 @@ pub struct AddressbookRow {
 
 impl BulkUpsertable for AddressbookRow {
     const TABLE: &'static str = "addressbooks";
-    // `sync_token` is bumped separately via `set_sync_token` after a
-    // successful sync-collection REPORT, so it stays out of the
-    // promoted-column list (and bulk-upsert won't clobber it).
+    // `sync_token` is the listing's (`RawDb::set_sync_token`), so the
+    // upsert leaves it alone.
     const TYPED_COLUMNS: &'static [&'static str] =
         &["account_id", "href", "display_name", "description", "ctag"];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
@@ -111,12 +110,10 @@ pub fn addressbook_pk(account_id: &str, href: &str) -> String {
 
 // contacts
 
-/// `contacts` — one row per vCard.
-///
-/// PK choice: `"<addressbook_id>#<UID>"` where UID is the vCard `UID:`
-/// field (RFC 6350 mandates non-empty). If a server ever emits a
-/// vCard without a UID the fetch path falls back to a UUIDv5 derived
-/// from `(addressbook_id, href)` and logs a warning.
+/// `contacts` — one row per vCard, keyed `"<addressbook_id>#<UID>"`
+/// (RFC 6350 mandates a non-empty `UID:`). A card from a server that
+/// has none is held in `dav_resources` with a warning and no row here;
+/// a `.vcf` file's card gets a synthesized one.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "contacts")]
 pub struct ContactRow {
@@ -344,6 +341,17 @@ pub const LADDER: &[Migration] = &[
             })
         },
     },
+    Migration {
+        version: 4,
+        name: "dav_resources lists what each address book holds",
+        apply: |conn| {
+            Box::pin(datalib_etl_web::dav::state::adopt(
+                conn,
+                "contacts",
+                "addressbook_id",
+            ))
+        },
+    },
 ];
 
 /// A rung creates its table rather than leaving it to the DDL, so the
@@ -383,11 +391,21 @@ const CONTACTS_UUID_NS: Uuid = Uuid::from_bytes([
 /// one PK across re-exports; it's the closest thing to object permanence
 /// the data allows when there's no stable server id.
 pub fn synthesized_name_uid(given: &str, family: &str) -> String {
-    let recipe = format!(
+    synthesized_name_uid_nth(given, family, 1)
+}
+
+/// [`synthesized_name_uid`] for the `nth` card of one file that carries
+/// the same name, so two people called the same are two rows. The first
+/// keeps the plain id.
+pub fn synthesized_name_uid_nth(given: &str, family: &str, nth: usize) -> String {
+    let mut recipe = format!(
         "contact:name:{}:{}",
         given.trim().to_lowercase(),
         family.trim().to_lowercase(),
     );
+    if nth > 1 {
+        recipe.push_str(&format!(":{nth}"));
+    }
     Uuid::new_v5(&CONTACTS_UUID_NS, recipe.as_bytes())
         .as_hyphenated()
         .to_string()
@@ -413,10 +431,11 @@ pub fn full_ddl() -> Vec<String> {
         // file whose `(size, mtime)` hasn't moved since last run. The
         // CardDAV server path uses etags/sync-tokens instead and never
         // touches this table. See [`vcf_dir`].
-        datalib_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
+        datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
     out.extend(GroupMemberRow::all_ddl());
     out.extend(ContactCategoryRow::all_ddl());
+    out.extend(datalib_etl_web::dav::state::ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }
@@ -466,12 +485,14 @@ mod tests {
     }
 
     #[test]
-    fn synthesized_name_uid_collides_on_shared_first_last_name() {
-        // The documented hazard: two distinct people, same first+last
-        // name, collapse onto one id. Callers warn on this.
+    fn a_second_card_of_the_same_name_gets_its_own_id() {
         assert_eq!(
             synthesized_name_uid("John", "Smith"),
+            synthesized_name_uid_nth("John", "Smith", 1),
+        );
+        assert_ne!(
             synthesized_name_uid("John", "Smith"),
+            synthesized_name_uid_nth("John", "Smith", 2),
         );
     }
 }

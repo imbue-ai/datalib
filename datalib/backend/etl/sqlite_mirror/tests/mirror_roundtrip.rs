@@ -1143,3 +1143,206 @@ async fn column_defaults_are_not_mirrored_and_the_rows_still_land() -> Result<()
     pool.close().await;
     Ok(())
 }
+
+// Nothing to mirror
+
+/// The tables a mirror holds of its source, sorted: not the store's own.
+async fn mirrored_tables(pool: &SqlitePool) -> Result<Vec<String>> {
+    let names: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .fetch_all(pool)
+            .await?;
+    Ok(names
+        .into_iter()
+        .filter(|n| {
+            !dr::SHARED_TABLES.contains(&n.as_str())
+                && !n.starts_with("dolt")
+                && !n.starts_with("sqlite_")
+        })
+        .collect())
+}
+
+/// What a run against `f.catalog` leaves of the mirror, and whether the
+/// run failed; nothing is committed.
+async fn mirror_after_run(f: &Fixture) -> Result<(Vec<String>, bool)> {
+    let pool = mirror::open_mirror(&f.mirror).await?;
+    let ran = mirror::run(&pool, &f.options(), &Progress::noop()).await;
+    let tables = mirrored_tables(&pool).await?;
+    pool.close().await;
+    Ok((tables, ran.is_err()))
+}
+
+/// A 0-byte file opens as an empty database, so the run dropped every
+/// mirrored table and refilled none: a source truncated, or replaced by
+/// a placeholder, emptied the mirror.
+#[tokio::test]
+async fn a_zero_byte_source_drops_nothing() -> Result<()> {
+    let f = Fixture::new();
+    f.ingest().await?;
+    std::fs::write(&f.catalog, b"")?;
+    let (tables, failed) = mirror_after_run(&f).await?;
+    assert_eq!(tables, CATALOG_TABLES, "the mirror still holds the catalog");
+    assert!(failed, "a source with nothing in it fails the run");
+    Ok(())
+}
+
+/// A database with no tables left in it is the same nothing.
+#[tokio::test]
+async fn a_source_with_no_tables_drops_nothing() -> Result<()> {
+    let f = Fixture::new();
+    f.ingest().await?;
+    let drops: Vec<String> = CATALOG_TABLES
+        .iter()
+        .map(|t| format!("DROP TABLE \"{t}\""))
+        .collect();
+    f.edit_catalog(&drops.iter().map(String::as_str).collect::<Vec<_>>())
+        .await?;
+    let (tables, failed) = mirror_after_run(&f).await?;
+    assert_eq!(tables, CATALOG_TABLES, "the mirror still holds the catalog");
+    assert!(failed, "a source with nothing in it fails the run");
+    Ok(())
+}
+
+/// A run inside a download's problem collector does not fail on a source
+/// that is nothing: it leaves the mirror alone and says so.
+#[tokio::test]
+async fn nothing_to_mirror_is_a_problem_inside_a_collector() -> Result<()> {
+    let f = Fixture::new();
+    f.ingest().await?;
+    std::fs::write(&f.catalog, b"")?;
+    let pool = mirror::open_mirror(&f.mirror).await?;
+    let stop = datalib_etl::stop::StopFlag::new();
+    let ran = datalib_etl::run_problems::collecting(&pool, &stop, |found| {
+        let (pool, opts) = (pool.clone(), f.options());
+        async move { mirror::run_or_report(&pool, &opts, &Progress::noop(), &found).await }
+    })
+    .await?;
+    assert!(ran.is_none());
+    assert_eq!(mirrored_tables(&pool).await?, CATALOG_TABLES);
+    let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(keys, ["phase:source"]);
+    pool.close().await;
+    Ok(())
+}
+
+// Append-only
+
+fn append_options(f: &Fixture) -> MirrorOptions {
+    MirrorOptions {
+        append_only: true,
+        ..f.options()
+    }
+}
+
+/// A source that evicts: what it deleted stays, what it edited is
+/// replaced, what it added lands, and a table it dropped stays. An
+/// unchanged source after that commits nothing.
+#[tokio::test]
+async fn append_only_keeps_what_the_source_dropped() -> Result<()> {
+    let f = Fixture::new();
+    f.ingest_with(append_options(&f)).await?;
+    f.edit_catalog(&[
+        "INSERT INTO Adobe_images (id_local, id_global, captureTime, fileFormat, fileWidth, \
+         fileHeight, rating, rootFile) VALUES \
+         (105, 'IMAGE-0105-CRUSHER', '2364-03-15T11:00:00-07:00', 'RAW', 6000, 4000, 2, 11)",
+        "UPDATE Adobe_images SET rating = 1 WHERE id_global = 'IMAGE-0102-DATA'",
+        "DELETE FROM Adobe_images WHERE id_global = 'IMAGE-0103-TROI'",
+        "INSERT INTO AgOzSpaceIds (ozCatalogId, ozSpaceId, isPublic) \
+         VALUES ('catalog-ncc-1701-d', 'space-gamma', 1)",
+        "DELETE FROM AgOzSpaceIds WHERE ozSpaceId = 'space-beta'",
+        "DROP TABLE AgLibraryImageChangeCounter",
+    ])
+    .await?;
+    let (stats, commit) = f.ingest_with(append_options(&f)).await?;
+    let commit = commit.expect("an edited source commits");
+    assert_eq!(stats.stale_tables_dropped, 0);
+
+    let pool = f.mirror_pool().await?;
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM Adobe_images").await,
+        5,
+        "4 originals + 1 inserted, the deleted one kept"
+    );
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT rating FROM Adobe_images WHERE id_global = 'IMAGE-0102-DATA'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        diff_types(&pool, "Adobe_images", &commit).await,
+        vec!["added", "modified"],
+        "nothing removed"
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM AgOzSpaceIds").await,
+        3,
+        "a keyless table keeps its rows and gains the new one"
+    );
+    assert_eq!(mirrored_tables(&pool).await?, CATALOG_TABLES);
+    pool.close().await;
+
+    let (_, again) = f.ingest_with(append_options(&f)).await?;
+    assert_eq!(again, None, "an unchanged source commits nothing");
+    Ok(())
+}
+
+/// A column the source gained is added, nullable, so the rows it no
+/// longer has keep their place.
+#[tokio::test]
+async fn append_only_adds_a_column_the_source_gained() -> Result<()> {
+    let f = Fixture::new();
+    f.ingest_with(append_options(&f)).await?;
+    f.edit_catalog(&[
+        "ALTER TABLE Adobe_images ADD COLUMN cullScore INTEGER NOT NULL DEFAULT 0",
+        "UPDATE Adobe_images SET cullScore = 1 WHERE id_global = 'IMAGE-0101-PICARD'",
+        "DELETE FROM Adobe_images WHERE id_global = 'IMAGE-0104-WORF'",
+    ])
+    .await?;
+    f.ingest_with(append_options(&f)).await?;
+    let pool = f.mirror_pool().await?;
+    assert!(mirror_columns(&pool, "Adobe_images")
+        .await
+        .contains(&"cullScore".to_string()));
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT cullScore FROM Adobe_images WHERE id_global = 'IMAGE-0101-PICARD'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT COUNT(*) FROM Adobe_images WHERE id_global = 'IMAGE-0104-WORF' \
+             AND cullScore IS NULL"
+        )
+        .await,
+        1
+    );
+    pool.close().await;
+    Ok(())
+}
+
+/// The rows an append-only mirror kept are keyed by the key it chose
+/// first; a run that would key a table otherwise fails before it writes.
+#[tokio::test]
+async fn append_only_refuses_to_re_key_a_table() -> Result<()> {
+    let f = Fixture::new();
+    f.ingest_with(append_options(&f)).await?;
+    let rekeyed = MirrorOptions {
+        stable_key_columns: Vec::new(),
+        ..append_options(&f)
+    };
+    let err = f.ingest_with(rekeyed).await.unwrap_err();
+    assert!(format!("{err:#}").contains("re-key"), "{err:#}");
+    let pool = f.mirror_pool().await?;
+    assert_eq!(mirror_pk(&pool, "Adobe_images").await, vec!["id_global"]);
+    pool.close().await;
+    Ok(())
+}

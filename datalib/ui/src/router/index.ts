@@ -2,16 +2,11 @@ import { chatUuidFromHref } from "@/cards/chatLink";
 import { encodeColumns } from "@/router/columns";
 import { createRouter, createWebHistory } from "vue-router";
 
-// History-mode routing: the URL path *is* the Miller column stack —
-// each path segment encodes one column as `code:state` (see
-// `router/columns.ts`). `/` is an empty stack; the empty-stack case is
-// rendered as the default `[gridView()]` by `MillerView`. The routed
-// component is `CardsView`, which hosts MillerView plus the
-// URL-independent tree layout behind a toggle.
-//
-// The browser's history is the only history the app keeps. Read
-// docs/dev/cards.md § "The miller layout and the browser" before adding
-// another.
+// History-mode routing. A path naming cards — one segment per card,
+// `code:state` (see `router/columns.ts`) — is a link: the card layout
+// opens those cards as a tab and puts the address back to `/`, since
+// what is open is kept in the library, not the URL. The routed
+// component is `CardsView`.
 //
 // The catchall MUST come after the explicit routes (the
 // `/data_sources` redirect); Vue Router does prefer specific over param routes by

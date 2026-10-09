@@ -2,10 +2,11 @@
 //!
 //! The historyId cursor answers "what changed since last run?", and mail
 //! that already sat outside the old label filter never changed — so an
-//! incremental run after a widening is a silent no-op unless the run
-//! notices the filter moved and walks what is newly in scope. Found on
-//! a real account on 2026-09-15: three labels, then no filter, and two
-//! further syncs spent 4 quota units each and mirrored nothing.
+//! incremental run after a widening is a silent no-op unless the newly
+//! admitted label is walked. Found on a real account on 2026-09-15:
+//! three labels, then no filter, and two further syncs spent 4 quota
+//! units each and mirrored nothing. The store records each label a walk
+//! has listed whole, so a label with no such record is walked.
 //!
 //! Driven through the HTTP playback layer: no credential, no network.
 
@@ -39,13 +40,12 @@ async fn a_widened_filter_backfills_what_is_newly_in_scope() {
 async fn an_unchanged_filter_replays_history_only() {
     let h = Harness::new();
     let first = h.run(&["datalib"]).await;
-    assert!(first.full_sync);
+    assert_eq!(first.walked, vec!["datalib".to_string()]);
     assert_eq!(first.emails_upserted, 1, "{first:?}");
 
     let second = h.run(&["datalib"]).await;
-    assert!(!second.full_sync, "{second:?}");
     assert_eq!(second.emails_upserted, 0, "{second:?}");
-    assert!(second.backfilled_labels.is_empty(), "{second:?}");
+    assert!(second.walked.is_empty(), "{second:?}");
     // profile + labels + history.list: the run must not have walked.
     assert_eq!(second.quota_units_spent, 4, "{second:?}");
     assert_eq!(h.mirrored().await, ids(&[UNDER_LIB]));
@@ -56,14 +56,16 @@ async fn an_added_label_walks_just_that_label() {
     h.run(&["datalib"]).await;
 
     let widened = h.run(&["datalib", "travel"]).await;
-    assert!(!widened.full_sync, "the cursor still stands: {widened:?}");
-    assert_eq!(widened.backfilled_labels, vec!["travel".to_string()]);
+    assert_eq!(
+        widened.walked,
+        vec!["travel".to_string()],
+        "only the new label is walked"
+    );
     assert_eq!(widened.emails_upserted, 1, "{widened:?}");
     assert_eq!(h.mirrored().await, ids(&[UNDER_LIB, UNDER_TRAVEL]));
 
-    // The filter is recorded once satisfied, so the next run is quiet.
     let again = h.run(&["datalib", "travel"]).await;
-    assert!(again.backfilled_labels.is_empty(), "{again:?}");
+    assert!(again.walked.is_empty(), "{again:?}");
     assert_eq!(again.emails_upserted, 0, "{again:?}");
 }
 
@@ -72,8 +74,7 @@ async fn a_removed_filter_walks_the_whole_account() {
     h.run(&["datalib"]).await;
 
     let widened = h.run(&[]).await;
-    assert!(!widened.full_sync, "the cursor still stands: {widened:?}");
-    assert_eq!(widened.backfilled_labels, vec!["*".to_string()]);
+    assert_eq!(widened.walked, vec!["*".to_string()]);
     assert_eq!(
         widened.emails_upserted, 2,
         "the whole account was not walked: {widened:?}",
@@ -84,7 +85,7 @@ async fn a_removed_filter_walks_the_whole_account() {
     );
 
     let again = h.run(&[]).await;
-    assert!(again.backfilled_labels.is_empty(), "{again:?}");
+    assert!(again.walked.is_empty(), "{again:?}");
     assert_eq!(again.quota_units_spent, 4, "{again:?}");
 }
 

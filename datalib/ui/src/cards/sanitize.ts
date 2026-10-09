@@ -20,7 +20,13 @@
 // server's `/api/remote_media` route (`remoteMedia.ts`). Nothing leaves
 // here pointing at a remote host, and the app's CSP refuses anything
 // that still does.
+//
+// An iframe survives only when it frames a plot page a renderer wrote
+// (`plots/*.html`). Anything else beside a markdown — an `.html`
+// attachment above all — is what a sender sent, and framed it would sit
+// inside the app's own chrome.
 import DOMPurify from "dompurify";
+import { UNIFIED_INDEX } from "../api";
 import {
   blockAttribute,
   hostOf,
@@ -51,18 +57,33 @@ export type Sanitized = {
   remote: RemoteRef[];
 };
 
-const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+const ASSET_PREFIX = `${UNIFIED_INDEX}/asset/`;
 
-/** True for a URL the page itself serves: a relative path or a
- *  root-relative one, never a scheme and never protocol-relative. */
-function isOwnPath(value: string): boolean {
-  const v = value.trim();
-  return v !== "" && !SCHEME.test(v) && !v.startsWith("//");
+/** `plots/<name>.html`, relative or under one markdown's asset route.
+ *  A browser reads `%2e%2e` as `..` and `\` as `/`, so the name is
+ *  judged decoded and a backslash refuses the whole value. */
+export function isPlotPage(src: string): boolean {
+  const v = src.trim();
+  if (v.includes("\\") || /[?#]/.test(v)) return false;
+  let segments = v.split("/");
+  if (v.startsWith(ASSET_PREFIX)) segments = v.slice(ASSET_PREFIX.length).split("/").slice(1);
+  if (segments.length !== 2 || segments[0] !== "plots") return false;
+  const decoded = v.split("/").map((s) => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return "..";
+    }
+  });
+  return (
+    decoded.every((s) => s !== "." && s !== ".." && !s.includes("/")) &&
+    segments[1].endsWith(".html")
+  );
 }
 
 DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
   if (node.nodeName !== "IFRAME") return;
-  if (data.attrName === "src" && !isOwnPath(data.attrValue)) {
+  if (data.attrName === "src" && !isPlotPage(data.attrValue)) {
     data.keepAttr = false;
   }
 });
@@ -121,6 +142,11 @@ export function sanitizeRenderedHtml(html: string, options: SanitizeOptions = {}
   context = options.context ?? NO_CONTEXT;
   found = [];
   const clean = DOMPurify.sanitize(html, {
+    // DOMPurify's own list plus the two schemes a chip link can carry:
+    // Slack's deep link for a user, and `datalib:` for our own entities
+    // (docs/dev/chips.md). An href in any other scheme is dropped.
+    ALLOWED_URI_REGEXP:
+      /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|slack|datalib):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
     // Not in DOMPurify's default set; the plot pages are iframes.
     ADD_TAGS: ["iframe"],
     // `target` is what makes an outlink open outside the app.

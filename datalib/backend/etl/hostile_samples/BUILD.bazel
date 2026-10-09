@@ -1,0 +1,28 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+# The markdown every shared renderer writes when each plain-text field
+# holds HTML and markdown, plus the escape helpers' output for generated
+# strings, as one JSON file. `//datalib/ui:unit_test` renders it through
+# the app's own markdown-it and sanitizer and checks every field reads as
+# typed (`datalib/ui/tests/hostile_text.test.ts`). Not shipped.
+rust_binary(
+    name = "render_hostile_samples",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    visibility = ["//datalib/ui:__pkg__"],
+    deps = [
+        "//datalib/backend/contact_schema:datalib_contact_schema",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/calendar-common:datalib_etl_calendar_common",
+        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
+        "//datalib/backend/etl/forge-render-common:datalib_etl_forge_render_common",
+        "//datalib/backend/etl/providers/slack_render:datalib_etl_slack_render",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/schema:datalib_schema",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+    ],
+)

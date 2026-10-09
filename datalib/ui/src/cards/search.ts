@@ -1,61 +1,43 @@
-// What the Search card decides, as pure functions: the query it sends
-// for what was typed and picked, what it keeps in its state string, and
-// which words of a snippet to mark.
-import { filterToken } from "@/grid/query";
-import { DEFAULT_QUERY } from "./searchDefaults";
+// What the Search card's controls decide, as pure functions over the
+// query string, which is the card's only record of a search: the source
+// chips read it and rewrite it, so a filter that was typed and one that
+// was clicked are the same thing.
+// Also which words of a snippet to mark.
+import { filterToken, isFilterWord, queryWords, unquoteValue } from "@/grid/query";
 
-/// A `key:value` word (possibly negated) rather than free text — the
-/// same shape `datalib_query` treats as a filter.
-const FILTER_WORD = /^-?[A-Za-z_]+:/;
+/// The two predicates that carry free text (`datalib_unified_index`'s
+/// `FreeTextMode`): words and meaning together, or meaning alone.
+const HYBRID = "qmd:";
+const MEANING = "qmd_vsearch:";
+const SOURCE = "source_id:";
 
-export type SearchInput = {
-  // What the person typed: free text, filters, or both.
-  text: string;
-  // Rank the free text by meaning alone, not words and meaning together.
-  meaningOnly: boolean;
-  // The source picked from the chips; null for every source.
-  sourceId: string | null;
-};
+const carriesText = (w: string) => w.startsWith(HYBRID) || w.startsWith(MEANING);
+const carried = (w: string) => unquoteValue(w.slice(w.indexOf(":") + 1));
 
-/// The free text of `text`, with its filter words taken out.
-export function freeText(text: string): string {
-  return text
-    .trim()
-    .split(/\s+/)
-    .filter((w) => w && !FILTER_WORD.test(w))
+/// What `query` ranks: its bare words and what its `qmd:` and
+/// `qmd_vsearch:` predicates carry, quotes off.
+export function freeText(query: string): string {
+  return queryWords(query)
+    .filter((w) => carriesText(w) || !isFilterWord(w))
+    .map((w) => (carriesText(w) ? carried(w) : unquoteValue(w)))
+    .filter(Boolean)
     .join(" ");
 }
 
-/// The query the search endpoint gets. Nothing typed browses every
-/// document; "meaning only" moves the free text into a `qmd_vsearch:`
-/// predicate, leaving the filters as they are.
-export function searchQuery(input: SearchInput, withSource = true): string {
-  const words = input.text.trim().split(/\s+/).filter(Boolean);
-  const filters = words.filter((w) => FILTER_WORD.test(w));
-  const free = words.filter((w) => !FILTER_WORD.test(w)).join(" ");
-  const parts = [...filters];
-  if (free) parts.push(input.meaningOnly ? filterToken("qmd_vsearch", free, false) : free);
-  else if (filters.length === 0) parts.push(DEFAULT_QUERY);
-  if (withSource && input.sourceId) parts.push(filterToken("source_id", input.sourceId, false));
-  return parts.join(" ");
+/// The one source `query` is narrowed to: the value of its `source_id:`
+/// filter when it has exactly one. Null for none, or for several.
+export function pickedSource(query: string): string | null {
+  const picked = queryWords(query).filter((w) => w.startsWith(SOURCE));
+  return picked.length === 1 ? carried(picked[0]) : null;
 }
 
-/// The card's state string: what it needs to come back as it was.
-export function encodeSearchState(input: SearchInput): string {
-  const p = new URLSearchParams();
-  if (input.text) p.set("q", input.text);
-  if (input.meaningOnly) p.set("m", "1");
-  if (input.sourceId) p.set("src", input.sourceId);
-  return p.toString();
-}
-
-export function decodeSearchState(state: string, fallbackText: string): SearchInput {
-  const p = new URLSearchParams(state);
-  return {
-    text: p.get("q") ?? fallbackText,
-    meaningOnly: p.get("m") === "1",
-    sourceId: p.get("src"),
-  };
+/// `query` narrowed to the source `id`, or to no source for null: every
+/// `source_id:` filter it had is replaced. An excluded source
+/// (`-source_id:`) is left alone.
+export function setSource(query: string, id: string | null): string {
+  const kept = queryWords(query).filter((w) => !w.startsWith(SOURCE));
+  if (id !== null) kept.push(filterToken("source_id", id, false));
+  return kept.join(" ");
 }
 
 export type Part = { text: string; hit: boolean };

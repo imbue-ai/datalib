@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Render half of the `slack` provider. This is the side that knows
 # `datalib_schema`; //datalib/backend/etl/providers/slack is the
 # download half and deliberately does not.
@@ -15,6 +13,8 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/contact_schema:datalib_contact_schema",
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/providers/slack:datalib_etl_slack",
         "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",

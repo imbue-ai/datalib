@@ -123,13 +123,13 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
     }
     let mut blobs_by_page = BlobBundle::load_many(
         db.pool(),
-        db.cas().pool(),
+        Some(db.cas().pool()),
         ATTACHMENTS_PROJECTION_SQL,
         refs_by_page,
     )
     .await
     .context("load attachments")?;
-    blobs_by_page.retain(|_, bundle| !bundle.is_empty());
+    blobs_by_page.retain(|_, bundle| !bundle.is_empty() || bundle.has_missing());
 
     Ok(ParsedNotion {
         pages,
@@ -253,7 +253,7 @@ mod tests {
         db.upsert_pages(&[PageUpsert {
             id: "p1".into(),
             last_edited_time: Some("2026-05-21T19:37:00Z".into()),
-            payload: Some(serde_json::to_string(&json!({"id": "p1", "object": "page"})).unwrap()),
+            payload: json!({"id": "p1", "object": "page"}).to_string(),
             ..Default::default()
         }])
         .await
@@ -284,7 +284,7 @@ mod tests {
         db.upsert_pages(&[PageUpsert {
             id: "row1".into(),
             parent_type: Some("data_source_id".into()),
-            payload: Some(serde_json::to_string(&json!({"id": "row1"})).unwrap()),
+            payload: json!({"id": "row1"}).to_string(),
             ..Default::default()
         }])
         .await

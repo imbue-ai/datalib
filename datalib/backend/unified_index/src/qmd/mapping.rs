@@ -6,17 +6,17 @@ use std::path::PathBuf;
 /// Which collections a search may draw from. There is one qmd
 /// collection per group, so this is a set of group ids.
 ///
-/// [`CollectionScope::All`] omits the argument rather than naming every
-/// collection: qmd then uses its own default set, which is every
-/// collection the index registers. Either way qmd searches each
-/// collection and merges, so no one source's hits can crowd out
-/// another's — the thing a post-retrieval filter cannot fix.
+/// [`CollectionScope::All`] is sent as an empty list: one search over
+/// every collection the index holds, best match first. Naming several
+/// would rank each collection apart and interleave the lists by rank, and
+/// leaving the argument out would search only the collections the server
+/// read at startup (`docs/dev/qmd_behaviour.md`, facts 3 and 4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CollectionScope {
     All,
     /// Exactly these. An empty list means "no collection can match", not
-    /// "all of them" — callers must not send it to qmd, which reads an
-    /// empty `collections` argument as unscoped.
+    /// "all of them": the daemon answers it without asking qmd, which
+    /// reads an empty `collections` argument as every collection.
     Only(Vec<String>),
 }
 

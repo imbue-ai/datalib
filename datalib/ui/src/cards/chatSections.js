@@ -12,6 +12,20 @@
 export const LONG_MESSAGE_PX = 360;
 
 /**
+ * The pane `el` scrolls in. In the document frame that is the frame's
+ * own root, which scrolls as the viewport does: its top is the
+ * viewport's, whatever it has scrolled by.
+ * @param {Element} el
+ * @returns {{ pane: Element, top: number, isViewport: boolean } | null}
+ */
+function scrollPane(el) {
+  const pane = el.closest(".chat-preview");
+  if (!pane) return null;
+  const isViewport = pane === el.ownerDocument.scrollingElement;
+  return { pane, top: isViewport ? 0 : pane.getBoundingClientRect().top, isViewport };
+}
+
+/**
  * Scroll `el` to the top of its scrollport.
  *
  * Sets scrollTop directly rather than calling `scrollIntoView`, which
@@ -21,9 +35,9 @@ export const LONG_MESSAGE_PX = 360;
  * @param {HTMLElement} el
  */
 export function scrollSectionToTop(el) {
-  const pane = el.closest(".chat-preview");
-  if (!pane) return;
-  pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+  const p = scrollPane(el);
+  if (!p) return;
+  p.pane.scrollTop += el.getBoundingClientRect().top - p.top;
 }
 
 /**
@@ -44,7 +58,8 @@ export function openEnclosingDetails(el) {
 
 /**
  * Where a section's copy button goes: the chat-common message header
- * (the `## ` line whose parts are tagged `.msg-author` / `.msg-ts`),
+ * (the `## ` line whose author is a `.msg-author` span or a chip link,
+ * then a `.msg-ts`),
  * else an explicit `.msg-meta` div, else the first `<p><em>…</em></p>`
  * some renderers emit as an italic meta line. Block sections have none
  * of the three and get the button at the top of the section.
@@ -52,7 +67,7 @@ export function openEnclosingDetails(el) {
  * @returns {HTMLElement | null}
  */
 export function metaHost(el) {
-  const header = el.querySelector(":scope > h2 > .msg-author");
+  const header = el.querySelector(":scope > h2 > .msg-author, :scope > h2 > a.chip");
   if (header?.parentElement) return header.parentElement;
   const meta = el.querySelector(":scope > .msg-meta");
   if (meta) return meta;
@@ -73,15 +88,16 @@ export function metaHost(el) {
  * @param {HTMLElement} control
  */
 function addHeaderControl(host, separator, control) {
+  const doc = host.ownerDocument;
   const link = host.querySelector(":scope > .source-link");
   if (!link) {
-    host.append(document.createTextNode(separator), control);
+    host.append(doc.createTextNode(separator), control);
     return;
   }
   link.before(
-    document.createTextNode(separator),
+    doc.createTextNode(separator),
     control,
-    document.createTextNode(" "),
+    doc.createTextNode(" "),
   );
 }
 
@@ -92,7 +108,7 @@ function addHeaderControl(host, separator, control) {
  */
 export function injectCopyUuidButtons(root) {
   const button = (uuid, label) => {
-    const btn = document.createElement("button");
+    const btn = root.ownerDocument.createElement("button");
     btn.type = "button";
     btn.className = "copy-uuid";
     btn.dataset.uuid = uuid;
@@ -178,7 +194,8 @@ export function decorateLongMessages(root, opts = {}) {
     if (el.scrollHeight <= clampPx) continue;
     el.classList.add("msg--long", "msg--clamped");
 
-    const more = document.createElement("button");
+    const doc = root.ownerDocument;
+    const more = doc.createElement("button");
     more.type = "button";
     more.className = "msg-expand";
     more.textContent = "Show more";
@@ -193,10 +210,10 @@ export function decorateLongMessages(root, opts = {}) {
 
     const host = metaHost(el);
     if (!host) continue;
-    const nav = document.createElement("span");
+    const nav = doc.createElement("span");
     nav.className = "msg-nav";
     const jump = (glyph, label, target) => {
-      const b = document.createElement("button");
+      const b = doc.createElement("button");
       b.type = "button";
       b.className = "msg-jump";
       b.textContent = glyph;
@@ -226,11 +243,13 @@ export function decorateLongMessages(root, opts = {}) {
     // The threshold/rootMargin pair is the standard detection: with the
     // root's top edge pulled in by 1px, a header sitting at `top: 0`
     // can no longer be fully visible, so its ratio drops below 1.
-    const pane = el.closest(".chat-preview");
-    if (!pane) continue;
+    const p = scrollPane(el);
+    if (!p) continue;
+    // The frame's viewport is observed through its document; an
+    // implicit root would be the app's window, not the frame's.
     const io = new IntersectionObserver(
       ([entry]) => host.classList.toggle("is-stuck", entry.intersectionRatio < 1),
-      { root: pane, threshold: [1], rootMargin: "-1px 0px 0px 0px" },
+      { root: p.isViewport ? el.ownerDocument : p.pane, threshold: [1], rootMargin: "-1px 0px 0px 0px" },
     );
     io.observe(host);
     root.__chatStickyObservers.push(io);

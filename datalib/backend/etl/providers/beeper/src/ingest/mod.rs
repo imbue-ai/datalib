@@ -8,9 +8,8 @@ pub mod schema_raw;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use datalib_etl::download_run::DownloadRun;
+use datalib_etl::run_problems::{self, RunProblems};
 use serde::Serialize;
-use serde_json::json;
 use tracing::{info, instrument};
 
 pub use db::{db_path_for, RawDb};
@@ -87,6 +86,11 @@ pub struct FetchSummary {
     db = %opts.db.pool().connect_options().get_filename().display()
 ))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_beeper(opts, found)).await
+}
+
+async fn read_beeper(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     if opts.sources.is_empty() {
         anyhow::bail!("no sources configured; set e.g. `sources: [\"signal\", \"googlechat\"]`");
     }
@@ -110,16 +114,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // reason. The path is handed straight to the reader, which
     // shells out to the system `sqlite3` CLI.
 
-    let run_config = json!({
-        "sources": opts.sources,
-        "beeper_data_dir": beeper_dir.display().to_string(),
-        "media": opts.media,
-    });
-    let run = DownloadRun::start(dst.pool(), &run_config).await?;
-
     let mut summary = FetchSummary::default();
     let result = (async {
-        index_db::ingest(
+        let unmatched = index_db::ingest(
             &index_db_path,
             &dst,
             &media_root,
@@ -127,6 +124,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             opts.media,
             &mut summary,
             &opts.progress,
+            &found,
         )
         .await?;
         // After the index.db spine is in place, walk every
@@ -134,7 +132,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // backfill external_event_id by joining on mxid. Cloud
         // bridges (slack/googlechat/…) have no local megabridge file
         // and are silently skipped.
-        megabridge::enrich(&beeper_dir, &dst, &opts.sources, &mut summary).await?;
+        megabridge::enrich(&beeper_dir, &dst, &opts.sources, &mut summary, &found).await?;
+        found.config(unmatched);
         Ok::<(), anyhow::Error>(())
     })
     .await;
@@ -162,7 +161,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     summary.blobs = counts.blobs;
     summary.blob_errors = counts.blob_errors;
 
-    run.finish(&result, &summary).await;
     result?;
 
     info!(

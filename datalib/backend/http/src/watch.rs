@@ -50,6 +50,17 @@ impl Default for Timing {
 /// watch that has been set up is not yet one that reports.
 const READY_MARKER: &str = ".watch-ready";
 
+/// How often the marker is written again until the watch hears it.
+const MARKER_EVERY: Duration = Duration::from_millis(250);
+
+/// Sleep until `at`, or forever when there is nothing to wait for.
+async fn until(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// A dataset the UI fetches, named by what serves it. A card subscribes
 /// to the ones it reads and refetches those; a change to anything else
 /// never reaches it. The set is closed and mirrored by hand in
@@ -92,6 +103,12 @@ pub enum Table {
     #[serde(rename = "storage")]
     #[strum(serialize = "storage")]
     Storage,
+    /// What a person curated: a store under `datalib_curated/` (the
+    /// contacts app's) published a new commit. A draft's autosave is no
+    /// commit, so it sends none.
+    #[serde(rename = "curated")]
+    #[strum(serialize = "curated")]
+    Curated,
 }
 
 impl Table {
@@ -122,6 +139,8 @@ pub enum RootEvent {
     /// commit, not the file: the applet reads at HEAD, so a write that
     /// has not committed is not something a reader can fetch yet.
     IndexChanged,
+    /// The launch's migrate pass moved: `/api/config`'s `upgrade` is new.
+    UpgradeChanged,
     /// Nothing changed; the stream is open. See [`HEARTBEAT`].
     Heartbeat,
 }
@@ -159,6 +178,8 @@ enum Moved {
     RunStore,
     Frontend,
     GridIndex,
+    /// A store under `datalib_curated/`, or that tree appearing.
+    Curated,
     /// The watch's own marker: it delivers.
     Ready,
 }
@@ -196,8 +217,15 @@ fn classify(root: &Path, path: &Path) -> Option<Moved> {
     {
         return Some(Moved::GridIndex);
     }
+    let curated = datalib_core::layout::curated_dir(root);
+    if path == curated || (path.starts_with(&curated) && name.contains(STORE_SUFFIX)) {
+        return Some(Moved::Curated);
+    }
     None
 }
+
+/// What a doltlite store's file name ends with.
+const STORE_SUFFIX: &str = ".doltlite_db";
 
 /// The datasets a part of the run store feeds.
 fn tables_of(part: StorePart) -> &'static [Table] {
@@ -233,6 +261,8 @@ struct Seen {
     runs: BTreeMap<StorePart, i64>,
     /// The grid index's HEAD as of the last burst.
     index_head: Option<String>,
+    /// Each curated store's `main` as of the last burst.
+    curated_heads: BTreeMap<PathBuf, String>,
     /// The last log line read for its chain.
     log_seq: i64,
 }
@@ -242,6 +272,7 @@ impl Seen {
         Seen {
             runs: datalib_runs::versions(root).await,
             index_head: index_head(root).await.unwrap_or(None),
+            curated_heads: curated_heads(root).await,
             log_seq: datalib_runs::last_log_seq(root).await,
         }
     }
@@ -385,6 +416,58 @@ async fn index_head(root: &Path) -> anyhow::Result<Option<String>> {
     Ok(head?.map(|pin| pin.commit().to_string()))
 }
 
+/// The published head of every store under `datalib_curated/`, by file:
+/// one directory per app, its stores directly in it. A store whose head
+/// cannot be read is left out, which says nothing about whether it
+/// moved; the same read-only look as [`index_head`].
+async fn curated_heads(root: &Path) -> BTreeMap<PathBuf, String> {
+    let mut out = BTreeMap::new();
+    let Ok(apps) = std::fs::read_dir(datalib_core::layout::curated_dir(root)) else {
+        return out;
+    };
+    for app in apps.flatten() {
+        let Ok(files) = std::fs::read_dir(app.path()) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            if !path.to_string_lossy().ends_with(STORE_SUFFIX) {
+                continue;
+            }
+            let head = async {
+                let pool = datalib_pin::open_reader(&path).await?;
+                let head = datalib_pin::head(&pool).await;
+                pool.close().await;
+                anyhow::Ok(head?.map(|pin| pin.commit().to_string()))
+            };
+            match head.await {
+                Ok(Some(head)) => {
+                    out.insert(path, head);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::debug!("watch: {}'s head is unreadable now: {e:#}", path.display())
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether any curated store published since `seen`: a head that moved,
+/// or a store that appeared. One that went missing or turned unreadable
+/// keeps its last head, so reading it again is not a move.
+fn curated_moved(now: BTreeMap<PathBuf, String>, seen: &mut BTreeMap<PathBuf, String>) -> bool {
+    let mut moved = false;
+    for (path, head) in now {
+        if seen.get(&path) != Some(&head) {
+            moved = true;
+            seen.insert(path, head);
+        }
+    }
+    moved
+}
+
 /// The frames one debounced burst of file moves becomes.
 async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet<RootFrame> {
     let mut out = HashSet::new();
@@ -422,6 +505,11 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
                 Ok(_) => {}
                 Err(e) => tracing::debug!("watch: the grid index's head is unreadable now: {e:#}"),
             },
+            Moved::Curated => {
+                if curated_moved(curated_heads(root).await, &mut seen.curated_heads) {
+                    out.insert(table(Table::Curated));
+                }
+            }
             Moved::Ready => {}
         }
     }
@@ -446,11 +534,90 @@ impl Ready {
     }
 }
 
-pub fn spawn(root: PathBuf, tx: RootTx) -> Ready {
-    spawn_with(root, tx, Timing::default())
+pub fn spawn(root: PathBuf, tx: RootTx) -> Nudge {
+    start(root, tx, Timing::default(), Ears::Os).2
 }
 
 pub fn spawn_with(root: PathBuf, tx: RootTx, timing: Timing) -> Ready {
+    start(root, tx, timing, Ears::Os).0
+}
+
+/// Tells the watch that something may have published a commit the
+/// filesystem will not report: a write to a file its writer holds open,
+/// which the OS reports only once it is closed. The applet gateway
+/// nudges after every write it forwards, since a curated store's one
+/// writer is an applet that holds its store open for its life. The
+/// watch then compares the stores' heads, so a nudge that published
+/// nothing sends nothing.
+#[derive(Clone)]
+pub struct Nudge(tokio::sync::mpsc::UnboundedSender<Moved>);
+
+impl Nudge {
+    pub fn an_applet_wrote(&self) {
+        let _ = self.0.send(Moved::Curated);
+    }
+}
+
+/// The watch with no filesystem watcher: it hears only the paths fed to
+/// it, and reports them exactly as it would one the OS delivered. For
+/// tests — what the watch does with a move (classify, diff, throttle,
+/// frame) is then tested without depending on when, or whether, the OS
+/// delivers it; fseventsd has held events back for over a minute on a
+/// busy disk.
+pub fn spawn_fed(root: PathBuf, tx: RootTx, timing: Timing) -> (Ready, Feed) {
+    let (ready, feed, _) = start(root, tx, timing, Ears::Fed);
+    (ready, feed.expect("a fed watch has a feed"))
+}
+
+/// What the watch hears file moves from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ears {
+    /// The OS's filesystem events.
+    Os,
+    /// Only what a [`Feed`] is told.
+    Fed,
+}
+
+/// Tells a [`spawn_fed`] watch that a file moved.
+pub struct Feed {
+    root: PathBuf,
+    listeners: PathBuf,
+    raw_tx: tokio::sync::mpsc::UnboundedSender<Moved>,
+}
+
+impl Feed {
+    pub fn nudge(&self) -> Nudge {
+        Nudge(self.raw_tx.clone())
+    }
+
+    /// `path` moved, as the OS would say: through whichever name the
+    /// writer used for it.
+    pub fn moved(&self, path: &Path) {
+        let resolved = match (path.parent(), path.file_name()) {
+            (Some(dir), Some(name)) => std::fs::canonicalize(dir)
+                .map(|d| d.join(name))
+                .unwrap_or_else(|_| path.to_path_buf()),
+            _ => path.to_path_buf(),
+        };
+        if let Some(moved) = classify(&self.root, &resolved) {
+            hear(moved, &self.listeners, &self.raw_tx);
+        }
+    }
+}
+
+/// One move heard, from the OS or a [`Feed`]. A config change is also
+/// announced to the loop, which re-reads its config when told to.
+fn hear(moved: Moved, listeners: &Path, raw_tx: &tokio::sync::mpsc::UnboundedSender<Moved>) {
+    if moved == Moved::Config {
+        use datalib_dag::supervisor::announce::{announce, CONFIG_CHANGED, FROM_SERVER};
+        announce(listeners, FROM_SERVER, CONFIG_CHANGED);
+    }
+    let _ = raw_tx.send(moved);
+}
+
+type MakeWatcher = Box<dyn Fn() -> notify::Result<notify::RecommendedWatcher> + Send>;
+
+fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Option<Feed>, Nudge) {
     let (ready_tx, ready) = tokio::sync::oneshot::channel();
     let heartbeat_tx = tx.clone();
     tokio::spawn(async move {
@@ -485,43 +652,67 @@ pub fn spawn_with(root: PathBuf, tx: RootTx, timing: Timing) -> Ready {
     // applet, and a root that has never synced has none. Watched once it
     // exists — see the debounce loop below.
     let grid_index = datalib_core::layout::grid_index_dir(&root);
+    // Likewise `datalib_curated/`, which exists once an app made it; its
+    // own watcher is recursive, since each app keeps a directory of its
+    // own, and holds a handful of files.
+    let curated = datalib_core::layout::curated_dir(&root);
 
     // notify calls back on its own thread, so hand off through an
     // unbounded channel rather than doing any work there.
     let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<Moved>();
+    let nudge = Nudge(raw_tx.clone());
     let (listening_tx, listening) = tokio::sync::oneshot::channel();
     tokio::spawn(watch_record(root.clone(), raw_tx.clone(), listening_tx));
     let listeners = datalib_dag::supervisor::announce::listeners_dir(&root);
-    let make_watcher = {
-        let (root, raw_tx) = (root.clone(), raw_tx.clone());
-        move || watcher_for(root.clone(), listeners.clone(), raw_tx.clone())
-    };
-    let mut watcher = match make_watcher() {
-        Ok(w) => w,
-        Err(e) => {
-            tracing::warn!(
-                "watch: could not create a filesystem watcher ({e}); \
-                 the UI will not see external changes to this root"
-            );
-            return Ready(ready);
-        }
-    };
 
-    // Three watches rather than one recursive watch on the root: the
-    // root *is* the data mirror, so a recursive watch would follow
-    // every blob a sync writes — thousands of events describing files
-    // no UI surface reads.
-    for (dir, mode) in [
-        (root.as_path(), RecursiveMode::NonRecursive),
-        (system.as_path(), RecursiveMode::NonRecursive),
-        (runs.as_path(), RecursiveMode::NonRecursive),
-        (frontend.as_path(), RecursiveMode::Recursive),
-    ] {
-        if let Err(e) = watcher.watch(dir, mode) {
-            tracing::warn!("watch: {} ({e})", dir.display());
+    let mut feed = None;
+    let mut make_watcher: Option<MakeWatcher> = None;
+    let mut watcher = None;
+    let mut index_watcher = None;
+    let mut curated_watcher = None;
+    match ears {
+        Ears::Fed => {
+            feed = Some(Feed {
+                root: root.clone(),
+                listeners,
+                raw_tx,
+            });
+        }
+        Ears::Os => {
+            let make: MakeWatcher = {
+                let (root, raw_tx) = (root.clone(), raw_tx.clone());
+                Box::new(move || watcher_for(root.clone(), listeners.clone(), raw_tx.clone()))
+            };
+            let mut w = match make() {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!(
+                        "watch: could not create a filesystem watcher ({e}); \
+                         the UI will not see external changes to this root"
+                    );
+                    return (Ready(ready), None, nudge);
+                }
+            };
+            // Three watches rather than one recursive watch on the root:
+            // the root *is* the data mirror, so a recursive watch would
+            // follow every blob a sync writes — thousands of events
+            // describing files no UI surface reads.
+            for (dir, mode) in [
+                (root.as_path(), RecursiveMode::NonRecursive),
+                (system.as_path(), RecursiveMode::NonRecursive),
+                (runs.as_path(), RecursiveMode::NonRecursive),
+                (frontend.as_path(), RecursiveMode::Recursive),
+            ] {
+                if let Err(e) = w.watch(dir, mode) {
+                    tracing::warn!("watch: {} ({e})", dir.display());
+                }
+            }
+            index_watcher = watch_dir(&grid_index, RecursiveMode::NonRecursive, &*make);
+            curated_watcher = watch_dir(&curated, RecursiveMode::Recursive, &*make);
+            watcher = Some(w);
+            make_watcher = Some(make);
         }
     }
-    let mut index_watcher = watch_index(&grid_index, &make_watcher);
     let marker = system.join(format!("{READY_MARKER}-{}", std::process::id()));
 
     tokio::spawn(async move {
@@ -539,24 +730,40 @@ pub fn spawn_with(root: PathBuf, tx: RootTx, timing: Timing) -> Ready {
             timing,
             ..Default::default()
         };
-        // Written once the stores are read, so whatever moves after the
-        // marker is heard is a move from what `seen` holds.
         let mut ready_tx = Some(ready_tx);
         let mut listening = Some(listening);
-        let _ = std::fs::write(&marker, "");
+        // A fed watch reports from its first feed; the OS's stream is
+        // only known to report once it has delivered the marker below.
+        if ears == Ears::Fed {
+            if let Some(listening) = listening.take() {
+                let _ = listening.await;
+            }
+            if let Some(ready_tx) = ready_tx.take() {
+                let _ = ready_tx.send(());
+            }
+        }
+        // Written once the stores are read, so whatever moves after the
+        // marker is heard is a move from what `seen` holds. Rewritten
+        // until heard: a write made before the stream has started is
+        // never delivered, and under load it starts late.
+        let mut remark = tokio::time::interval(MARKER_EVERY);
+        let mut marks = 0u64;
         loop {
-            // Wait for a file to move, or for a held frame to come due.
-            let first = match throttle.next_due() {
-                Some(at) => tokio::select! {
-                    moved = raw_rx.recv() => moved,
-                    _ = tokio::time::sleep_until(at) => {
-                        for frame in throttle.due(Instant::now()) {
-                            let _ = tx.send(frame);
-                        }
-                        continue;
+            // Wait for a file to move, for a held frame to come due, or
+            // to write the marker again.
+            let first = tokio::select! {
+                moved = raw_rx.recv() => moved,
+                _ = until(throttle.next_due()) => {
+                    for frame in throttle.due(Instant::now()) {
+                        let _ = tx.send(frame);
                     }
-                },
-                None => raw_rx.recv().await,
+                    continue;
+                }
+                _ = remark.tick(), if ready_tx.is_some() => {
+                    marks += 1;
+                    let _ = std::fs::write(&marker, marks.to_string());
+                    continue;
+                }
             };
             let Some(first) = first else {
                 return;
@@ -575,8 +782,11 @@ pub fn spawn_with(root: PathBuf, tx: RootTx, timing: Timing) -> Ready {
             // on every burst, and watched by a watcher of its own once it
             // does: on macOS every `watch` call restarts the watcher's
             // stream, and a restarted stream loses what lands meanwhile.
-            if index_watcher.is_none() {
-                index_watcher = watch_index(&grid_index, &make_watcher);
+            if let (None, Some(make)) = (&index_watcher, &make_watcher) {
+                index_watcher = watch_dir(&grid_index, RecursiveMode::NonRecursive, &**make);
+            }
+            if let (None, Some(make)) = (&curated_watcher, &make_watcher) {
+                curated_watcher = watch_dir(&curated, RecursiveMode::Recursive, &**make);
             }
             if pending.remove(&Moved::Ready) {
                 if let Some(ready_tx) = ready_tx.take() {
@@ -599,12 +809,10 @@ pub fn spawn_with(root: PathBuf, tx: RootTx, timing: Timing) -> Ready {
             }
         }
     });
-    Ready(ready)
+    (Ready(ready), feed, nudge)
 }
 
-/// A watcher reporting what [`classify`] names under `root`. A config
-/// change is also announced to the loop, which re-reads its config when
-/// told to.
+/// A watcher reporting what [`classify`] names under `root`.
 fn watcher_for(
     root: PathBuf,
     listeners: PathBuf,
@@ -619,11 +827,7 @@ fn watcher_for(
             );
         }
         for moved in moved_by(&root, &ev) {
-            if moved == Moved::Config {
-                use datalib_dag::supervisor::announce::{announce, CONFIG_CHANGED, FROM_SERVER};
-                announce(&listeners, FROM_SERVER, CONFIG_CHANGED);
-            }
-            let _ = raw_tx.send(moved);
+            hear(moved, &listeners, &raw_tx);
         }
     })
 }
@@ -640,6 +844,7 @@ fn moved_by(root: &Path, ev: &notify::Event) -> Vec<Moved> {
             Moved::RunStore,
             Moved::Frontend,
             Moved::GridIndex,
+            Moved::Curated,
         ];
     }
     // Reading something is not changing it, and on Linux this is not a
@@ -651,16 +856,17 @@ fn moved_by(root: &Path, ev: &notify::Event) -> Vec<Moved> {
     ev.paths.iter().filter_map(|p| classify(root, p)).collect()
 }
 
-/// A watcher on the grid index's directory, once there is one.
-fn watch_index(
+/// A watcher on a directory a step or an app makes, once there is one.
+fn watch_dir(
     dir: &Path,
-    make: &impl Fn() -> notify::Result<notify::RecommendedWatcher>,
+    mode: RecursiveMode,
+    make: &dyn Fn() -> notify::Result<notify::RecommendedWatcher>,
 ) -> Option<notify::RecommendedWatcher> {
     if !dir.is_dir() {
         return None;
     }
     let mut watcher = make().ok()?;
-    watcher.watch(dir, RecursiveMode::NonRecursive).ok()?;
+    watcher.watch(dir, mode).ok()?;
     Some(watcher)
 }
 
@@ -933,7 +1139,8 @@ mod tests {
                 Moved::Config,
                 Moved::RunStore,
                 Moved::Frontend,
-                Moved::GridIndex
+                Moved::GridIndex,
+                Moved::Curated
             ])
         );
         // The same event without the flag is a directory, which is nothing.
@@ -951,18 +1158,24 @@ mod tests {
         }
     }
 
+    /// A hang guard, not a wait: these watches are fed, so nothing here
+    /// waits on the OS.
+    const DEADLINE: Duration = Duration::from_secs(10);
+
     async fn within<T>(what: &str, f: impl std::future::Future<Output = T>) -> T {
-        tokio::time::timeout(Duration::from_secs(10), f)
+        tokio::time::timeout(DEADLINE, f)
             .await
-            .unwrap_or_else(|_| panic!("no {what} within 10s"))
+            .unwrap_or_else(|_| panic!("no {what} within {DEADLINE:?}"))
     }
 
-    /// A watch on `root` that has said it reports.
-    async fn watching(root: &Path) -> broadcast::Receiver<RootFrame> {
+    /// A fed watch on `root` that has said it reports. Each test writes
+    /// a file and then feeds its path, as the OS would report it; the
+    /// OS's own delivery is `tests/http_tests/watch_os.rs`'s business.
+    async fn watching(root: &Path) -> (broadcast::Receiver<RootFrame>, Feed) {
         let (tx, rx) = broadcast::channel(1024);
-        let ready = spawn_with(root.to_path_buf(), tx, at_once());
+        let (ready, feed) = spawn_fed(root.to_path_buf(), tx, at_once());
         within("readiness", ready.wait()).await;
-        rx
+        (rx, feed)
     }
 
     /// The events reported up to and including the first `want`.
@@ -985,19 +1198,20 @@ mod tests {
     }
 
     /// What the watch reported before a file of the test's own lands under
-    /// `system/frontend/`. The watch takes events in the order they
-    /// happened, so whatever an earlier write would have reported has
-    /// been by the time the barrier's `FrontendChanged` arrives; a burst
-    /// is sent whole, so what came with it is read too. The file is
-    /// written where the watch ignores it and renamed into place: one
-    /// event, so one frame, and a second barrier is not ended by the
-    /// first one's leftovers.
-    async fn barrier(root: &Path, rx: &mut broadcast::Receiver<RootFrame>) -> Vec<RootEvent> {
+    /// `system/frontend/`. The watch takes moves in the order they were
+    /// fed, so whatever an earlier one would have reported has been by
+    /// the time the barrier's `FrontendChanged` arrives; a burst is sent
+    /// whole, so what came with it is read too.
+    async fn barrier(
+        root: &Path,
+        feed: &Feed,
+        rx: &mut broadcast::Receiver<RootFrame>,
+    ) -> Vec<RootEvent> {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = root.join(format!("barrier-{n}.tmp"));
-        std::fs::write(&tmp, "").unwrap();
-        std::fs::rename(&tmp, root.join(format!("system/frontend/barrier-{n}.js"))).unwrap();
+        let file = root.join(format!("system/frontend/barrier-{n}.js"));
+        std::fs::write(&file, "").unwrap();
+        feed.moved(&file);
         let mut got = until(rx, RootEvent::FrontendChanged).await;
         while let Ok(frame) = rx.try_recv() {
             got.push(frame.event);
@@ -1019,11 +1233,13 @@ mod tests {
             .await
             .unwrap();
         let mut the_loop = Listener::new(&store, "test");
-        let mut rx = watching(td.path()).await;
+        let (mut rx, feed) = watching(td.path()).await;
 
         let tmp = td.path().join("config.tmp");
         std::fs::write(&tmp, "# rewritten\n").unwrap();
         std::fs::rename(&tmp, td.path().join("config.toml")).unwrap();
+        feed.moved(&tmp);
+        feed.moved(&td.path().join("config.toml"));
         until(&mut rx, RootEvent::ConfigChanged).await;
         let heard = within("the announcement", the_loop.next()).await;
         assert!(heard.iter().any(|l| l == CONFIG_CHANGED), "{heard:?}");
@@ -1039,7 +1255,7 @@ mod tests {
         let store = datalib_dag::supervisor::store::Store::open(td.path())
             .await
             .unwrap();
-        let mut rx = watching(td.path()).await;
+        let (mut rx, _feed) = watching(td.path()).await;
         store.turn_off("a/raw", "loop").await.unwrap();
         until(&mut rx, RootEvent::TableChanged { table: Table::Dag }).await;
     }
@@ -1054,33 +1270,27 @@ mod tests {
         let link = td.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         // Watched through the link...
-        let mut rx = watching(&link).await;
+        let (mut rx, feed) = watching(&link).await;
         // ...and written through the real path, the way another process
         // that resolved it would.
         let tmp = real.join("config.tmp");
         std::fs::write(&tmp, "# rewritten\n").unwrap();
         std::fs::rename(&tmp, real.join("config.toml")).unwrap();
+        feed.moved(&real.join("config.toml"));
         until(&mut rx, RootEvent::ConfigChanged).await;
     }
 
     /// Reading the component store is not a change to it: on Linux a read
     /// reported as a change is a feedback loop, not just a spurious
-    /// refetch.
-    #[tokio::test]
-    async fn reading_the_component_store_is_not_a_change_to_it() {
-        let td = tempfile::tempdir().unwrap();
-        std::fs::write(td.path().join("system/frontend/c.js"), "x").ok();
-        let mut rx = watching(td.path()).await;
-        let frontend = td.path().join("system/frontend");
-        for _ in 0..20 {
-            // What `FrontendStore::scan` does: walk it and open what it
-            // finds.
-            for e in std::fs::read_dir(&frontend).unwrap().flatten() {
-                let _ = std::fs::read(e.path());
-            }
-            let _ = std::fs::read(td.path().join("config.toml"));
-        }
-        assert_eq!(barrier(td.path(), &mut rx).await, []);
+    /// refetch. inotify reports reads as `Access`; `watch_os.rs` holds
+    /// the same against the OS.
+    #[test]
+    fn an_access_moves_nothing() {
+        use notify::event::{AccessKind, AccessMode};
+        let root = Path::new("/data");
+        let read = notify::Event::new(EventKind::Access(AccessKind::Close(AccessMode::Read)))
+            .add_path(root.join("system/frontend/c.js"));
+        assert_eq!(moved_by(root, &read), Vec::new());
     }
 
     /// The server's own log line, written through the real writer,
@@ -1090,7 +1300,8 @@ mod tests {
     #[tokio::test]
     async fn a_server_log_line_reaches_the_log_and_nothing_else() {
         let td = tempfile::tempdir().unwrap();
-        let mut rx = watching(td.path()).await;
+        let (mut rx, feed) = watching(td.path()).await;
+        let runs_store = td.path().join("system/runs/runs.sqlite");
         let server = datalib_runs::ProcessLogWriter::start(
             td.path(),
             datalib_runs::Process::Http,
@@ -1103,11 +1314,14 @@ mod tests {
             msg: "a line".into(),
             ..Default::default()
         });
+        server.flush().await;
+        feed.moved(&runs_store);
         let log = RootEvent::TableChanged { table: Table::Log };
         let mut got = until(&mut rx, log).await;
         // Everything the writer will ever write is on disk once it is gone.
         drop(server);
-        got.extend(barrier(td.path(), &mut rx).await);
+        feed.moved(&runs_store);
+        got.extend(barrier(td.path(), &feed, &mut rx).await);
         let rows = RootEvent::TableChanged {
             table: Table::ManageRows,
         };
@@ -1152,23 +1366,90 @@ mod tests {
         // pass; the watch is armed on it from the start here too.
         let db = datalib_core::layout::grid_index_db(td.path());
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let mut rx = watching(td.path()).await;
+        let (mut rx, feed) = watching(td.path()).await;
 
         // A store is born with a commit, so a first write moves the head
         // twice; the barrier takes whatever it reported.
         write_index(&db, 1, true).await;
+        feed.moved(&db);
         until(&mut rx, RootEvent::IndexChanged).await;
-        barrier(td.path(), &mut rx).await;
+        barrier(td.path(), &feed, &mut rx).await;
         for i in 100..110 {
             write_index(&db, i, false).await;
+            feed.moved(&db);
         }
-        let got = barrier(td.path(), &mut rx).await;
+        let got = barrier(td.path(), &feed, &mut rx).await;
         assert!(
             !got.contains(&RootEvent::IndexChanged),
             "a write the step has not committed was reported as an index change: {got:?}"
         );
         write_index(&db, 200, true).await;
+        feed.moved(&db);
         until(&mut rx, RootEvent::IndexChanged).await;
+    }
+
+    /// A curated store reports when it publishes and not when a draft's
+    /// autosave writes the file: an open contact card refetches on the
+    /// one, and would refetch for nothing on every keystroke of the other.
+    /// It is heard even when `datalib_curated/` appears after the watch
+    /// started.
+    #[tokio::test]
+    async fn a_curated_store_reports_its_commits_and_not_its_writes() {
+        let td = tempfile::tempdir().unwrap();
+        let (mut rx, feed) = watching(td.path()).await;
+        let curated = datalib_core::layout::curated_dir(td.path());
+        let db = curated
+            .join("datalib_contacts")
+            .join("contacts.doltlite_db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let published = RootEvent::TableChanged {
+            table: Table::Curated,
+        };
+
+        write_index(&db, 1, true).await;
+        feed.moved(&curated);
+        until(&mut rx, published).await;
+        barrier(td.path(), &feed, &mut rx).await;
+        for i in 100..105 {
+            write_index(&db, i, false).await;
+            feed.moved(&db);
+        }
+        let got = barrier(td.path(), &feed, &mut rx).await;
+        assert!(
+            !got.contains(&published),
+            "an uncommitted write was reported as published: {got:?}"
+        );
+        write_index(&db, 200, true).await;
+        feed.moved(&db);
+        until(&mut rx, published).await;
+    }
+
+    /// The contacts applet holds its store open for its life, and the OS
+    /// reports a write to a file held open only once it is closed: the
+    /// commit is heard through the gateway's nudge, never the filesystem.
+    /// A nudge that published nothing sends nothing, so the page's own
+    /// refetch after a frame cannot start another.
+    #[tokio::test]
+    async fn a_nudge_reports_what_a_curated_store_published_and_only_that() {
+        let td = tempfile::tempdir().unwrap();
+        let db = datalib_core::layout::curated_dir(td.path())
+            .join("datalib_contacts")
+            .join("contacts.doltlite_db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        write_index(&db, 1, true).await;
+        let (mut rx, feed) = watching(td.path()).await;
+        let nudge = feed.nudge();
+        let published = RootEvent::TableChanged {
+            table: Table::Curated,
+        };
+
+        nudge.an_applet_wrote();
+        let got = barrier(td.path(), &feed, &mut rx).await;
+        assert!(!got.contains(&published), "nothing was published: {got:?}");
+
+        write_index(&db, 2, true).await;
+        nudge.an_applet_wrote();
+        until(&mut rx, published).await;
     }
 
     /// A head that cannot be read says nothing about whether it moved.
@@ -1179,13 +1460,15 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let db = datalib_core::layout::grid_index_db(td.path());
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let mut rx = watching(td.path()).await;
+        let (mut rx, feed) = watching(td.path()).await;
         write_index(&db, 1, true).await;
+        feed.moved(&db);
         until(&mut rx, RootEvent::IndexChanged).await;
-        barrier(td.path(), &mut rx).await;
+        barrier(td.path(), &feed, &mut rx).await;
 
         std::fs::write(&db, "not a store").unwrap();
-        let got = barrier(td.path(), &mut rx).await;
+        feed.moved(&db);
+        let got = barrier(td.path(), &feed, &mut rx).await;
         assert!(!got.contains(&RootEvent::IndexChanged), "{got:?}");
     }
 
@@ -1194,12 +1477,13 @@ mod tests {
     #[tokio::test]
     async fn writes_to_the_usage_store_are_not_reported() {
         let td = tempfile::tempdir().unwrap();
-        let mut rx = watching(td.path()).await;
+        let (mut rx, feed) = watching(td.path()).await;
         let usage = td.path().join("system/usage.doltlite_db");
         for n in 0..20 {
             std::fs::write(&usage, format!("row {n}")).unwrap();
+            feed.moved(&usage);
         }
-        assert_eq!(barrier(td.path(), &mut rx).await, []);
+        assert_eq!(barrier(td.path(), &feed, &mut rx).await, []);
     }
 
     /// The watch's own marker is how it knows it reports, and is never

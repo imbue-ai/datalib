@@ -48,11 +48,8 @@ pub fn write_frontend(dir: &Path, params: &serde_json::Value) -> Result<()> {
     let hash = sha256_hex(COMPONENT_JS.as_bytes());
     let js = dir.join(format!("{hash}.js"));
     if !js.exists() {
-        // Write-then-rename so a reader never sees a half-written file
-        // under a name that promises complete content.
-        let tmp = dir.join(format!(".{hash}.tmp"));
-        std::fs::write(&tmp, COMPONENT_JS).with_context(|| format!("write {}", tmp.display()))?;
-        std::fs::rename(&tmp, &js).with_context(|| format!("rename into {}", js.display()))?;
+        datalib_runtime::atomic::write(&js, COMPONENT_JS.as_bytes())
+            .with_context(|| format!("write {}", js.display()))?;
     }
 
     let label = str_param(params, "workspace").unwrap_or_else(|| namespace.clone());
@@ -488,7 +485,9 @@ mod tests {
                     render_version: 1,
                     rows,
                     sections: Vec::new(),
+                    search_terms: Vec::new(),
                     edges: Vec::new(),
+                    contacts: Vec::new(),
                     problems: Vec::new(),
                 },
             )

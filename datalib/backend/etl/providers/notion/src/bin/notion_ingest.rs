@@ -2,7 +2,6 @@
 //! single doltlite database file.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
@@ -29,27 +28,18 @@ struct Args {
     #[arg(long)]
     max_pages: Option<usize>,
 
-    /// Ignore the stored resume cursor and walk the whole workspace.
+    /// Ignore what the search has covered and walk the whole workspace.
     #[arg(long)]
     full_sync: bool,
 
-    /// Re-examine anything edited within this many days even when the
-    /// resume cursor is newer.
+    /// List this many days of edits below the newest the store has
+    /// looked at, so a page shared late is listed once more.
     #[arg(long, default_value_t = 0)]
     refresh_window_days: u32,
 
-    /// Fetch a single page by UUID instead of BFS-walking a subtree.
+    /// Fetch a single page by UUID, and nothing under it.
     #[arg(long, value_name = "UUID")]
     page: Option<String>,
-
-    /// Re-fetch every page in the DB whose last attempt failed (or which
-    /// has a NULL payload after at least one attempt). Ignores subtree /
-    /// roots / page.
-    #[arg(long)]
-    retry_failed: bool,
-
-    #[arg(long, default_value_t = 0.0)]
-    sleep_between: f64,
 
     #[command(flatten)]
     obs: ObsArgs,
@@ -72,8 +62,6 @@ async fn main() -> Result<()> {
         full_sync: args.full_sync,
         refresh_window_days: args.refresh_window_days,
         page: args.page.clone(),
-        retry_failed: args.retry_failed,
-        sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
         ..FetchOptions::new(db.clone())
     };
 
@@ -83,16 +71,15 @@ async fn main() -> Result<()> {
     let summary = summary?;
     info!(
         event = "notion_download_complete",
+        listed = summary.listed,
         new_pages = summary.new_pages,
         upd_pages = summary.upd_pages,
+        skipped_pages = summary.skipped_pages,
         bodies = summary.bodies,
         empty_bodies = summary.empty_bodies,
         failed_bodies = summary.failed_bodies,
-        new_comments = summary.new_comments,
-        upd_comments = summary.upd_comments,
-        skipped_pages = summary.skipped_pages,
+        comments = summary.comments,
         new_blobs = summary.new_blobs,
-        skipped_blobs = summary.skipped_blobs,
         failed_blobs = summary.failed_blobs,
         official_requests = summary.official_requests,
         "the notion download is done"

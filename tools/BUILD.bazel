@@ -169,6 +169,7 @@ py_test(
     data = [
         "//tools/lint:package.json",
         "//.devcontainer:Dockerfile",
+        "//:.github/workflows/release.yml",
         "//:MODULE.bazel",
         "//:requirements.txt",
         "//datalib/backend/runtime:src/node_runtime.rs",

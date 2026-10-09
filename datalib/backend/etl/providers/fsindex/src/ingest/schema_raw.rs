@@ -14,8 +14,6 @@ use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
 
-pub const DATA_TABLES: &[&str] = &["files", "dirs", "scan_meta"];
-
 // fsindex carries ZERO secondary indexes: the path primary key on
 // `files` and `dirs` is the clustered storage order and the row
 // identity, which in dolt is what makes a subtree contiguous and its

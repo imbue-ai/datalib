@@ -2,12 +2,12 @@
 
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
-use sqlx::Row;
+use sqlx::{Row, Sqlite, Transaction};
 
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr};
@@ -121,10 +121,9 @@ impl RawDb {
 
     // ── addressbooks ────────────────────────────────────────────────
 
-    /// Upsert addressbook metadata harvested from PROPFIND. The
-    /// `sync_token` column is bumped separately via
-    /// [`Self::set_sync_token`] after a successful sync-collection
-    /// REPORT, so a failed write pass doesn't advance the cursor.
+    /// The `sync_token` column is the listing's, kept by
+    /// [`Self::set_sync_token`] in the transaction that stores what the
+    /// token covers, so the upsert leaves it alone.
     pub async fn upsert_addressbook(
         &self,
         account_id: &str,
@@ -148,11 +147,8 @@ impl RawDb {
         Ok(())
     }
 
-    /// Read the sync-token we persisted from the last
-    /// `sync-collection` REPORT against this addressbook. `None`
-    /// means we've never completed a sync-collection cycle, so the
-    /// next request should send an empty token to enumerate
-    /// everything.
+    /// The token the last `sync-collection` page of this address book
+    /// left; `None` lists it whole.
     pub async fn sync_token(&self, addressbook_id: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT sync_token FROM addressbooks WHERE id = ?")
             .bind(addressbook_id)
@@ -162,49 +158,18 @@ impl RawDb {
         Ok(row.and_then(|r| r.try_get::<Option<String>, _>("sync_token").ok().flatten()))
     }
 
-    /// Persist the sync-token returned from the most recent
-    /// `sync-collection` REPORT. Called only after every contact in
-    /// the response has been upserted, so an interrupted batch
-    /// doesn't poison the cursor.
-    pub async fn set_sync_token(&self, addressbook_id: &str, token: &str) -> Result<()> {
+    pub async fn set_sync_token(
+        tx: &mut Transaction<'_, Sqlite>,
+        addressbook_id: &str,
+        token: Option<&str>,
+    ) -> Result<()> {
         sqlx::query("UPDATE addressbooks SET sync_token = ? WHERE id = ?")
             .bind(token)
             .bind(addressbook_id)
-            .execute(&self.pool)
+            .execute(&mut **tx)
             .await
             .context("update sync_token")?;
         Ok(())
-    }
-
-    pub async fn addressbooks_for_fetch(
-        &self,
-        account_id: &str,
-        only_named: Option<&[String]>,
-    ) -> Result<Vec<(String, String, Option<String>)>> {
-        let rows = sqlx::query(
-            "SELECT id, href, display_name FROM addressbooks
-             WHERE account_id = ? ORDER BY id",
-        )
-        .bind(account_id)
-        .fetch_all(&self.pool)
-        .await
-        .context("select addressbooks_for_fetch")?;
-        let want_names =
-            only_named.map(|names| names.iter().collect::<std::collections::HashSet<_>>());
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| {
-                let id: String = r.try_get("id").ok()?;
-                let href: String = r.try_get("href").ok()?;
-                let dn: Option<String> = r.try_get("display_name").ok();
-                if let Some(names) = &want_names {
-                    if !dn.as_ref().is_some_and(|d| names.contains(d)) {
-                        return None;
-                    }
-                }
-                Some((id, href, dn))
-            })
-            .collect())
     }
 
     // ── contacts ────────────────────────────────────────────────────
@@ -214,15 +179,28 @@ impl RawDb {
         self.upsert_contacts(std::slice::from_ref(row)).await
     }
 
-    /// Upsert a whole sync-collection page (or REPORT result set) in
-    /// a single transaction. One `fsync` per page instead of per row.
+    /// Upsert a whole page of cards in a single transaction. One `fsync`
+    /// per page instead of per row.
     pub async fn upsert_contacts(&self, rows: &[ContactRow]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin contacts batch tx")?;
-        bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+        Self::upsert_contacts_in_tx(&mut tx, &rows.iter().collect::<Vec<_>>()).await?;
+        tx.commit().await.context("commit contacts batch tx")?;
+        Ok(())
+    }
+
+    pub async fn upsert_contacts_in_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[&ContactRow],
+    ) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        let owned: Vec<ContactRow> = rows.iter().map(|r| (*r).clone()).collect();
+        bulk_upsert_in_tx(tx, &owned, &now).await?;
         // Delete-then-insert: the members and categories are whatever the
         // card names now.
         let mut members: Vec<GroupMemberRow> = Vec::new();
@@ -235,61 +213,52 @@ impl RawDb {
             ] {
                 sqlx::query(sql)
                     .bind(id)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await
                     .context("clear what a card derives")?;
             }
             members.extend(GroupMemberRow::for_contact(row));
             categories.extend(ContactCategoryRow::for_contact(row));
         }
-        bulk_upsert_entity_in_tx(&mut tx, &members)
+        bulk_upsert_entity_in_tx(tx, &members)
             .await
             .context("insert group members")?;
-        bulk_upsert_entity_in_tx(&mut tx, &categories)
+        bulk_upsert_entity_in_tx(tx, &categories)
             .await
             .context("insert categories")?;
-        tx.commit().await.context("commit contacts batch tx")?;
         Ok(())
     }
 
-    /// Drop a contact + its sidecar row. Used when sync-collection
-    /// reports `<status>HTTP/1.1 404 Not Found</status>` (or `410
-    /// Gone`) for an href, meaning the contact was deleted upstream.
-    /// Idempotent.
-    pub async fn delete_contact(&self, addressbook_id: &str, href: &str) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin delete contact tx")?;
-        let row =
-            sqlx::query("SELECT id FROM contacts WHERE addressbook_id = ? AND href = ? LIMIT 1")
+    /// Drop the contact at `href` with its sidecar row and what the card
+    /// derives: what `sync-collection` reports gone, or a whole listing
+    /// never named. Returns how many went. Idempotent.
+    pub async fn delete_contact(
+        tx: &mut Transaction<'_, Sqlite>,
+        addressbook_id: &str,
+        href: &str,
+    ) -> Result<u64> {
+        let ids: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM contacts WHERE addressbook_id = ? AND href = ?")
                 .bind(addressbook_id)
                 .bind(href)
-                .fetch_optional(&mut *tx)
+                .fetch_all(&mut **tx)
                 .await
                 .context("select contact id for delete")?;
-        if let Some(row) = row {
-            let id: String = row.try_get("id").context("read contact id")?;
-            sqlx::query("DELETE FROM contacts WHERE id = ?")
-                .bind(&id)
-                .execute(&mut *tx)
-                .await
-                .context("delete contact")?;
-            sqlx::query("DELETE FROM contacts_bookkeeping WHERE id = ?")
-                .bind(&id)
-                .execute(&mut *tx)
-                .await
-                .context("delete contact bookkeeping")?;
+        for id in &ids {
             for sql in [
+                "DELETE FROM contacts WHERE id = ?",
+                "DELETE FROM contacts_bookkeeping WHERE id = ?",
                 "DELETE FROM contact_group_members WHERE group_id = ?",
                 "DELETE FROM contact_categories WHERE contact_id = ?",
             ] {
                 sqlx::query(sql)
-                    .bind(&id)
-                    .execute(&mut *tx)
+                    .bind(id)
+                    .execute(&mut **tx)
                     .await
-                    .context("delete what a card derives")?;
+                    .context("delete contact")?;
             }
         }
-        tx.commit().await.context("commit delete contact tx")?;
-        Ok(())
+        Ok(ids.len() as u64)
     }
 
     /// Drop the contacts of one address book whose uid is in `uids`, with
@@ -350,6 +319,51 @@ impl RawDb {
             .begin()
             .await
             .context("begin delete addressbook tx")?;
+        let contacts = Self::delete_addressbook(&mut tx, addressbook_id).await?;
+        datalib_etl_files::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
+        tx.commit().await.context("commit delete addressbook tx")?;
+        Ok(contacts)
+    }
+
+    /// The address books of `account_id` the server no longer lists,
+    /// with everything stored for them: a home listing is one PROPFIND,
+    /// whole by nature, so absence from it is deletion. Returns how many
+    /// contacts went.
+    pub async fn delete_addressbooks_not_in(
+        &self,
+        account_id: &str,
+        listed: &[String],
+    ) -> Result<usize> {
+        let stored: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM addressbooks WHERE account_id = ?")
+                .bind(account_id)
+                .fetch_all(&self.pool)
+                .await
+                .context("select addressbooks")?;
+        let gone: Vec<&String> = stored.iter().filter(|id| !listed.contains(id)).collect();
+        if gone.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin delete addressbooks tx")?;
+        let mut contacts = 0;
+        for id in gone {
+            contacts += Self::delete_addressbook(&mut tx, id).await?;
+            datalib_etl_web::dav::state::forget_collection(&mut tx, id).await?;
+        }
+        tx.commit().await.context("commit delete addressbooks tx")?;
+        Ok(contacts)
+    }
+
+    /// The address book, its contacts, their sidecars and what the cards
+    /// derive. Returns how many contacts went.
+    async fn delete_addressbook(
+        tx: &mut Transaction<'_, Sqlite>,
+        addressbook_id: &str,
+    ) -> Result<usize> {
         for sql in [
             "DELETE FROM contact_group_members WHERE addressbook_id = ?",
             "DELETE FROM contact_categories WHERE addressbook_id = ?",
@@ -358,13 +372,13 @@ impl RawDb {
         ] {
             sqlx::query(sql)
                 .bind(addressbook_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .context("delete the addressbook's contact edges")?;
         }
         let contacts = sqlx::query("DELETE FROM contacts WHERE addressbook_id = ?")
             .bind(addressbook_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .context("delete the addressbook's contacts")?
             .rows_affected();
@@ -374,12 +388,10 @@ impl RawDb {
         ] {
             sqlx::query(sql)
                 .bind(addressbook_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .context("delete addressbook")?;
         }
-        datalib_etl::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
-        tx.commit().await.context("commit delete addressbook tx")?;
         Ok(contacts as usize)
     }
 
@@ -426,13 +438,8 @@ impl RawDb {
         Ok(out)
     }
 
-    /// Every `uid` we already have in the addressbook. The local-`.vcf`
-    /// path has no server etag to store, so it can't use
-    /// [`Self::contact_etags_by_href`] (which filters `etag IS NOT NULL`)
-    /// to tell new contacts from updates. It compares against `uid`
-    /// instead — the stable identity that backs the PK
-    /// ([`contact_pk`]), so reordering a file doesn't reclassify an
-    /// unchanged contact as new.
+    /// Every `uid` the addressbook holds: how the `.vcf` path tells a
+    /// new contact from an update, since a file carries no etag.
     pub async fn contact_uids(&self, addressbook_id: &str) -> Result<HashSet<String>> {
         let rows = sqlx::query("SELECT uid FROM contacts WHERE addressbook_id = ?")
             .bind(addressbook_id)
@@ -444,28 +451,6 @@ impl RawDb {
             let uid: String = r.try_get("uid").unwrap_or_default();
             if !uid.is_empty() {
                 out.insert(uid);
-            }
-        }
-        Ok(out)
-    }
-
-    pub async fn contact_etags_by_href(
-        &self,
-        addressbook_id: &str,
-    ) -> Result<HashMap<String, String>> {
-        let rows = sqlx::query(
-            "SELECT href, etag FROM contacts WHERE addressbook_id = ? AND etag IS NOT NULL",
-        )
-        .bind(addressbook_id)
-        .fetch_all(&self.pool)
-        .await
-        .context("select contact etags")?;
-        let mut out = HashMap::with_capacity(rows.len());
-        for r in rows {
-            let href: String = r.try_get("href").unwrap_or_default();
-            let etag: String = r.try_get("etag").unwrap_or_default();
-            if !href.is_empty() && !etag.is_empty() {
-                out.insert(href, etag);
             }
         }
         Ok(out)
@@ -553,12 +538,19 @@ mod tests {
         assert!(le.is_none(), "last_error = {le:?}");
     }
 
+    async fn delete(db: &RawDb, book: &str, href: &str) -> u64 {
+        let mut tx = db.pool().begin().await.unwrap();
+        let n = RawDb::delete_contact(&mut tx, book, href).await.unwrap();
+        tx.commit().await.unwrap();
+        n
+    }
+
     #[tokio::test]
     async fn delete_contact_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("contacts.doltlite_db");
         let db = RawDb::open(&path).await.unwrap();
-        db.delete_contact("ab1", "/cards/X.vcf").await.unwrap();
+        assert_eq!(delete(&db, "ab1", "/cards/X.vcf").await, 0);
     }
 
     fn group_row(members: &[&str]) -> ContactRow {
@@ -616,7 +608,7 @@ mod tests {
             vec![("ab#bridge".to_string(), Some("ab#tng-picard".to_string()))]
         );
 
-        db.delete_contact("ab", "/cards/bridge.vcf").await.unwrap();
+        assert_eq!(delete(&db, "ab", "/cards/bridge.vcf").await, 1);
         assert!(members(&db).await.is_empty());
         db.close().await;
     }
@@ -659,7 +651,7 @@ mod tests {
         db.upsert_contact(&labelled("myContacts")).await.unwrap();
         assert_eq!(categories(&db).await, vec!["myContacts"]);
 
-        db.delete_contact("ab", "/cards/picard.vcf").await.unwrap();
+        assert_eq!(delete(&db, "ab", "/cards/picard.vcf").await, 1);
         assert!(categories(&db).await.is_empty());
         db.close().await;
     }

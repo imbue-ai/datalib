@@ -5,14 +5,14 @@ use std::fs;
 use std::time::Duration;
 
 use datalib_etl::event_store::{diff_and_save, make_record};
-use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_github::ingest::{
     block_on_load_all, db_path_for, fetch, FetchOptions, RawDb, ENTITY_ISSUE_COMMENT, ENTITY_PR,
     ENTITY_PR_REVIEW, ENTITY_PR_REVIEW_COMMENT, ENTITY_SELF,
 };
 use datalib_etl_github::synthesize::GithubSynth;
+use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 
@@ -75,8 +75,9 @@ async fn github_synth_playback_extract_roundtrip() {
     write_event(&api, ENTITY_PR_REVIEW_COMMENT, k, rc_raw.clone());
 
     let report = GithubSynth::new(&api).synthesize(&playback).unwrap();
-    // 1 user + 3 scope searches + 1 PR detail + 3 list endpoints = 8
-    assert_eq!(report.fixtures_written, 8);
+    // 1 user + 3 scope searches + 3 resumed ones + 1 PR detail + 3 list
+    // endpoints = 11
+    assert_eq!(report.fixtures_written, 11);
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
@@ -87,7 +88,7 @@ async fn github_synth_playback_extract_roundtrip() {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
-        ..FetchOptions::new(db.clone())
+        ..FetchOptions::new(db.clone(), crate::tng_now())
     })
     .await;
     db.commit_all("test").await.unwrap();

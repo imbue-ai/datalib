@@ -21,10 +21,14 @@ export function problemLabel(p: Pick<DocProblem, "field" | "reason" | "rule">): 
       return `${what} could not be rendered`;
     case "fetch_failed":
       return `${what} could not be fetched from the source`;
+    case "blob_missing":
+      return `${what} was fetched once, but its bytes are not in the blob store`;
     case "not_found":
       return `${what} is not there upstream`;
     case "forbidden":
       return `${what} cannot be read with this credential`;
+    case "no_document":
+      return "this document did not render again, though its rows are still upstream; this is the last rendering";
     case "noted":
       return `${what}: a finding, nothing lost`;
     default:

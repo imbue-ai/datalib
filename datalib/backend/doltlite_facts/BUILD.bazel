@@ -6,10 +6,15 @@ rust_test(
     name = "doltlite_facts_test",
     size = "small",
     srcs = ["doltlite_facts.rs"],
-    data = ["//third-party/doltlite:doltlite"],
+    data = [
+        "wal_fixture/wal.sqlite",
+        "wal_fixture/wal.sqlite-wal",
+        "//third-party/doltlite:doltlite",
+    ],
     edition = "2021",
     env = {
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
+        "WAL_FIXTURE_DIR": "datalib/backend/doltlite_facts/wal_fixture",
     },
     deps = [
         "@datalib_crates//:sqlx",

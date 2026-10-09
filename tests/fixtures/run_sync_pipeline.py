@@ -746,8 +746,8 @@ def _run_pipeline_twice_and_diff(
         print(f"[run_sync_pipeline] {s} diff {a[:12]}..{b[:12]}", flush=True)
     # `--sync` names source steps; each diff step is downstream of its
     # source's ingest and runs as part of that chain. The Slack ingest's
-    # incremental request has no tape in either tree now, which it
-    # reports and skips, and the store does not move.
+    # incremental requests now ask past everything v2 holds, and v2
+    # answers each with an empty page, so the store does not move.
     driver.sync(chains)
 
 
@@ -865,7 +865,10 @@ def _source_config(
         # `im` / `mpim` envelope at all. Leaving it off would mean the
         # DM surfaces are in the fixture but never mirrored, rendered,
         # indexed, or asserted on.
-        source["api"] = {"media": False, "dms": True}
+        #
+        # No refresh pass: its window is measured from the wall clock,
+        # so its request would differ by the day and miss the tape.
+        source["api"] = {"media": False, "dms": True, "refresh_window_days": 0}
     elif type_str == "beeper":
         # `sources` here is the canonical-network list that filters
         # which rooms get ingested. `path` points at the materialized
@@ -918,15 +921,19 @@ def _source_config(
         # phase.
         source["export"] = {"path": str(input_path), "fetch_photos": True}
     elif type_str == "google_takeout":
-        # Opt into the rendering feeds: Google Chat and Google Voice
-        # (incl. its Spam folder, to exercise that path). The other
-        # feeds stay off for the central pipeline (their extract is
-        # covered by the provider's own fixture_walk test).
+        # Every feed renders, so every feed is on, Google Voice's Spam
+        # folder included to exercise that path.
         source["export"] = {
             "path": str(input_path),
             "google_chat": True,
             "google_voice": True,
             "google_voice_include_spam": True,
+            "youtube_watch_history": True,
+            "youtube_subscriptions": True,
+            "maps_reviews": True,
+            "maps_saved_places": True,
+            "maps_photos": True,
+            "gemini_apps": True,
         }
     elif type_str == "sms_backup_restore":
         source["backup"] = {"path": str(input_path)}
@@ -957,8 +964,7 @@ def _source_config(
         source["fswalk"] = {"path": str(input_path)}
     elif type_str == "garmin":
         # `since` is the spec's; the walk's `today` is the pipeline's
-        # `--now`, which the spec matches too. The token dir is never
-        # read under playback.
+        # `--now`, which the spec matches too.
         source["api"] = {"since": "2369-04-01"}
     else:
         source["api"] = {}

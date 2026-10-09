@@ -21,6 +21,9 @@ pub enum ProblemColumn {
     SourceRef,
     Stage,
     Reason,
+    /// What a problem with no document is about — a listing, a
+    /// configured entry, a raw record — in words.
+    About,
     Field,
     Sample,
     MarkdownUuid,
@@ -28,7 +31,10 @@ pub enum ProblemColumn {
     Rule,
     ItemUuid,
     FirstSeenAtUtc,
-    LastSeenAtUtc,
+    /// Still read as `last_seen_at_utc`, the column's old name, which a
+    /// saved sort may hold.
+    #[strum(to_string = "changed_at_utc", serialize = "last_seen_at_utc")]
+    ChangedAtUtc,
     ScopeKind,
     ScopeKey,
     Path,
@@ -59,6 +65,8 @@ impl View for ProblemColumn {
             ProblemColumn::SourceRef => same(P::SourceId),
             ProblemColumn::Stage => same(P::Stage),
             ProblemColumn::Reason => same(P::Reason),
+            // Words read off the scope key, so sorted and kept by it.
+            ProblemColumn::About => same(P::ScopeKey),
             ProblemColumn::Field => same(P::Field),
             ProblemColumn::Sample => text(P::Sample),
             // The document a markdown-scoped problem is about is its
@@ -68,7 +76,7 @@ impl View for ProblemColumn {
             ProblemColumn::Rule => same(P::Rule),
             ProblemColumn::ItemUuid => same(P::ItemUuid),
             ProblemColumn::FirstSeenAtUtc => text(P::FirstSeenAtUtc),
-            ProblemColumn::LastSeenAtUtc => text(P::LastSeenAtUtc),
+            ProblemColumn::ChangedAtUtc => text(P::ChangedAtUtc),
             ProblemColumn::ScopeKind => same(P::ScopeKind),
             ProblemColumn::ScopeKey => same(P::ScopeKey),
             ProblemColumn::Path => text(P::Path),
@@ -131,12 +139,12 @@ mod tests {
         assert!(parse("colour:red").refusal().unwrap().contains("`colour:`"));
     }
 
-    /// `before:`/`after:` bound when a problem was last seen; there is no
+    /// `before:`/`after:` bound when a problem last changed; there is no
     /// `is:` and no qmd here.
     #[test]
-    fn a_range_is_the_last_seen_stamp() {
+    fn a_range_is_the_changed_stamp() {
         let (sql, _) = build_where(&parse("after:2025-01-01T00:00:00Z"));
-        assert_eq!(sql, " WHERE last_seen_at_utc > ?");
+        assert_eq!(sql, " WHERE changed_at_utc > ?");
         assert!(parse("is:document").refusal().is_some());
         assert!(parse("qmd:tea").refusal().is_some());
     }

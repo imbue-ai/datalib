@@ -2,7 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # What the agent-session sources' render crates (claude_code, codex)
 # share: the pieces a transcript's items are built from. Render side:
-# it knows chat-common's types. Bazel-only (no Cargo.toml).
+# it knows chat-common's types..
 rust_library(
     name = "datalib_etl_agent_sessions_render",
     srcs = glob(["src/**/*.rs"]),
@@ -11,6 +11,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/id:datalib_id",
         "@datalib_crates//:serde_json",
     ],

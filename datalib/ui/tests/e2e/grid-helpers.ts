@@ -11,15 +11,33 @@
 import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 /// The search grid's rows, wherever it is on the page.
+// The containers layout: the tabs down the side, and the cards the
+// selected tab shows (every card in it, however deep). A tab shown once
+// stays mounted, hidden and marked ct-hidden-pane; its cards do not
+// count, nor does a card that is the hidden tab itself. (Not
+// `:visible`: a card that draws nothing is zero-high.)
+export const SHOWN_CARDS = ".ct-main .ct-card:not(.ct-hidden-pane, .ct-hidden-pane .ct-card)";
+export const shownCards = (page: Page) => page.locator(SHOWN_CARDS);
+export const tabLabels = (page: Page) => page.locator(".ct-tab .ct-tab-label");
+// The shown card whose source contains `source`.
+export const cardOf = (page: Page, source: string) =>
+  page.locator(`${SHOWN_CARDS}[data-card-source*=${JSON.stringify(source)}]`);
+// A card's title, in the header it has inside a container outside a
+// solidified one.
+export const cardTitle = (card: Locator) => card.locator(".ct-card-title");
+// The shown tab's name. A card that fills its tab has no header; its
+// title names the tab.
+export const shownTabName = (page: Page) => page.locator(".ct-tab.is-selected .ct-tab-label");
+
 export const SEARCH_ROWS = ".grid-box .slick-row";
 
 /// The search grid on its default query, documents only. `/` opens on
-/// the Home card now, so a spec about the grid goes here.
-export const GRID = "/gridView()";
+/// the Dashboard card now, so a spec about the grid goes here.
+export const GRID = "/searchView()";
 
 /// The search grid with its query cleared: every row, the messages
 /// inside a document included. `GRID` opens on documents only.
-export const EVERY_ROW = "/gridView()::q%3D";
+export const EVERY_ROW = "/searchView()::q%3D";
 
 /// The Manage header's sync button, whichever way it faces: Sync
 /// everything, or Stop everything while anything syncs.
@@ -160,14 +178,24 @@ export async function actOnRowByUuid<T>(
   return out;
 }
 
-// Scroll a (possibly virtualized-away) row into view, then click it.
-// Returns after the click; callers assert on the consequences.
-export async function clickRowByUuid(page: Page, uuid: string) {
-  await actOnRowByUuid(page, uuid, (row) => row.click({ timeout: 3_000 }));
-}
+// Where a click on a row lands: near its left end, not its middle. The
+// columns keep their widths, so a row can be wider than the grid, and
+// its middle scrolled out of sight — Playwright then finds whatever is
+// drawn there (the "add a card" button, in one CI run), scrolls the
+// grid sideways to reach the row, and the click lands on a row the
+// grid has redrawn under it.
+const ROW_CLICK_POINT = { x: 40, y: 10 };
 
 // Select a row and confirm the grid agrees that it is selected — asked
 // of the grid's own selection model, not read off a styling class.
+//
+// Every attempt asks the grid first and clicks only if it says no. A
+// click whose mouse events landed can still throw: on a loaded runner
+// WebKit has answered the click three seconds late. A second click on
+// the row would then scroll the Columns row back to it — undoing the
+// reveal of the document column the first click opened — and select
+// nothing new. So a thrown click is not retried as a pair; the next
+// attempt starts from the grid's answer.
 export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator> {
   const selected = () =>
     page.evaluate(
@@ -175,7 +203,9 @@ export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator
       uuid,
     );
   await expect(async () => {
-    if (!(await selected())) await clickRowByUuid(page, uuid);
+    if (await selected()) return;
+    const rowIndex = await scrollRowIntoView(page, uuid);
+    await rowLocator(page, rowIndex).click({ position: ROW_CLICK_POINT, timeout: 3_000 });
     await expect.poll(selected, { timeout: 1_000 }).toBe(true);
   }, `row ${uuid} never became selected`).toPass({
     timeout: 15_000,
@@ -186,14 +216,12 @@ export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator
 }
 
 // Right-click a row located by uuid. Same virtualization dance as
-// `clickRowByUuid` — a row scrolled out of the viewport has no DOM
+// `selectRowByUuid` — a row scrolled out of the viewport has no DOM
 // node to dispatch at — but opens the context menu instead of
-// selecting. The click is near the row's left end, not its middle: the
-// columns keep their widths, so a row can be wider than the grid, and
-// its middle scrolled out of sight.
+// selecting.
 export async function contextMenuRowByUuid(page: Page, uuid: string) {
   await actOnRowByUuid(page, uuid, (row) =>
-    row.click({ button: "right", position: { x: 40, y: 10 }, timeout: 3_000 }),
+    row.click({ button: "right", position: ROW_CLICK_POINT, timeout: 3_000 }),
   );
   await expect(page.locator(SEARCH_MENU)).toBeVisible({ timeout: 5_000 });
 }
@@ -237,13 +265,22 @@ export const SEARCH_SETTLE = 90_000;
 
 // Type a query and wait until the grid has actually painted *its*
 // results.
+/// Open the answer tab `tab` of the free-text search on screen, and wait
+/// until the grid shows its rows.
+export async function pickAnswerTab(page: Page, tab: "fields" | "words" | "meaning") {
+  await page.locator(`.answer-tabs [data-tab="${tab}"]`).click();
+  await expect(page.locator(".grid-wrap")).toHaveAttribute("data-shown-tab", tab, {
+    timeout: SEARCH_SETTLE,
+  });
+}
+
 export async function searchAndSettle(
   page: Page,
   q: string,
   opts: { grid?: Locator; timeout?: number } = {},
 ) {
   const grid = opts.grid ?? page.locator(".grid-wrap");
-  await page.getByTestId("search-input").fill(q);
+  await typeInto(page.getByTestId("search-input"), q);
   await expect(grid).toHaveAttribute("data-shown-query", q, {
     timeout: opts.timeout ?? SEARCH_SETTLE,
   });
@@ -371,20 +408,20 @@ export type RowReading = {
   status: string;
   /// The exact instants, off the stamps' `title`. Not the visible
   /// "5 minutes ago", which drifts on its own. `lastSynced` is the stamp
-  /// beside the Last update glyph, which on a step is its last sync.
+  /// beside the Status glyph, which on a step is its last sync.
   /// Null: the step never ran (or never succeeded), or its column is
   /// hidden — `lastSuccessOf` shows it first.
   lastSynced: string | null;
   lastSuccess: string | null;
   /// The Bytes label over the sparkline, as drawn. Null: nothing on disk.
   disk: string | null;
-  /// The Queue and ETA cells as drawn — a figure, or a word such as
-  /// "stalled"; "" when blank.
+  /// The queue and the ETA as the Status cell draws them after the
+  /// status — a figure, or a word such as "stalled"; "" when absent.
   queue: string;
   eta: string;
 };
 
-/// The time beside the Last update glyph; absent on a row that never ran.
+/// The time beside the Status glyph; absent on a row that never ran.
 export const LAST_UPDATE_AT = '[col-id="status"] .tg-status-at';
 
 /// How long a row may take to be drawn: a remount fetches the rows after
@@ -404,7 +441,9 @@ export async function sampleRow(page: Page, id: string): Promise<RowReading | nu
           ?.getAttribute("aria-label");
         if (!status) return null;
         const quantity = (el: Element, col: string) => {
-          const text = el.querySelector(`[col-id="${col}"] .tg-quantity`)?.textContent?.trim();
+          const text = el
+            .querySelector(`[col-id="status"] .sx-${col} .tg-quantity`)
+            ?.textContent?.trim();
           return !text || text === "—" ? "" : text;
         };
         const stamp = (col: string) =>
@@ -665,4 +704,45 @@ export async function settle(
   timeout = ROW_SETTLE,
 ): Promise<string> {
   return (await settleRows(page, [id], { [id]: before }, timeout))[id];
+}
+
+/** A document card's rendered body. It is drawn inside the card's
+ *  own frame (`src/cards/docFrame.ts`), so a page-level locator
+ *  does not reach it. `scope` narrows to one card when several are open. */
+export function docBody(scope: Page | Locator): Locator {
+  return scope.frameLocator("iframe.doc-frame").locator("body.chat-body");
+}
+
+/** `selector` in whichever document frame holds it, waiting until one
+ *  does. One locator cannot reach across frames, and each document card
+ *  has its own frame. */
+export async function inDocFrame(page: Page, selector: string, timeout = 10_000): Promise<Locator> {
+  let hit: Locator | null = null;
+  await expect
+    .poll(
+      async () => {
+        for (const f of page.frames()) {
+          if (f === page.mainFrame()) continue;
+          const loc = f.locator(selector);
+          if ((await loc.count().catch(() => 0)) > 0) {
+            hit = loc;
+            return true;
+          }
+        }
+        return false;
+      },
+      { timeout, message: `no document frame holds ${selector}` },
+    )
+    .toBe(true);
+  return hit!;
+}
+
+/// Puts `text` in a search field over what it held, as a person typing
+/// would. Playwright's `fill` leaves the field's CodeMirror editor as it
+/// was in WebKit, with no error, so a spec never fills one.
+export async function typeInto(field: Locator, text: string) {
+  await field.click();
+  await field.press("ControlOrMeta+a");
+  if (text === "") await field.press("Backspace");
+  else await field.page().keyboard.insertText(text);
 }

@@ -1,0 +1,104 @@
+/* A chip: a link the app resolves, drawn as the person it names
+   (docs/dev/chips.md). Shared by the document frame and the
+   grid's cells, so both draw the same chip; each includes this file
+   in its own root, since neither sees the page's styles. */
+/* A handle the contacts app can name: a chip. One it cannot yet: the
+   source's own text, marked as clickable to link it. */
+.handle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 999px;
+  /* A message header is a wrapping flex row: the chip moves to its own
+     line rather than shrinking until the name breaks. */
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.handle-resolved,
+.handle-linkable {
+  cursor: pointer;
+}
+.handle-resolved {
+  padding: 0 0.5rem 0 0.15rem;
+  background: var(--datalib-hover, #f0f0f0);
+}
+.handle-stale {
+  opacity: 0.7;
+  font-style: italic;
+}
+.handle-initial {
+  /* Decoration: a copy carries the name and identifier, not the disc. */
+  user-select: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.3em;
+  height: 1.3em;
+  border-radius: 50%;
+  font-size: 0.75em;
+  background: var(--datalib-accent, #4f46e5);
+  color: #fff;
+}
+/* Scoped under the chip so they outrank a document's own `img` rule
+   (`.chat-body img`, sized `auto` for attachments): a mark is an SVG
+   with no size of its own, and `auto` lets it grow to the layout. */
+.handle-chip > .handle-photo {
+  /* Decoration, like the disc: a copy carries the name and identifier. */
+  user-select: none;
+  width: 1.3em;
+  height: 1.3em;
+  max-width: none;
+  max-height: none;
+  flex-shrink: 0;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.handle-chip > .handle-mark {
+  width: 0.9em;
+  height: 0.9em;
+  max-width: none;
+  max-height: none;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+.handle-linkable::after {
+  content: "+";
+  font-weight: 400;
+  color: var(--datalib-muted, #94a3b8);
+}
+.handle-chip:hover {
+  outline: 1px solid var(--datalib-border, #d8d8d8);
+}
+/* A chip is a link the app resolves (docs/dev/chips.md): drawn as
+   the person, not as a link. */
+a.chip {
+  color: inherit;
+  text-decoration: none;
+}
+/* A group or step chip: its pipeline glyph sits like a brand mark, and a
+   status worth noticing is a dot after the name (the words are on hover). */
+.handle-glyph {
+  display: inline-flex;
+  color: var(--datalib-muted, #94a3b8);
+}
+.entity-running::after,
+.entity-waiting::after,
+.entity-queued::after,
+.entity-failed::after,
+.entity-blocked::after,
+.entity-interrupted::after {
+  content: "";
+  width: 0.45em;
+  height: 0.45em;
+  border-radius: 50%;
+  background: var(--datalib-muted, #94a3b8);
+}
+.entity-running::after,
+.entity-waiting::after,
+.entity-queued::after {
+  background: var(--datalib-accent, #4f46e5);
+}
+.entity-failed::after,
+.entity-blocked::after,
+.entity-interrupted::after {
+  background: var(--datalib-log-error, #dc2626);
+}

@@ -6,6 +6,9 @@
 //! literal. The design — ids, severity, the copy rule, what reads the
 //! table — is `docs/dev/plans/problem_visibility.md`.
 
+mod recorded;
+pub use recorded::{log_recorded, note_recorded};
+
 use anyhow::{Context, Result};
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
@@ -109,6 +112,10 @@ closed_vocabulary! {
         /// The download could not fetch this record. → the record is
         /// missing, or — when an earlier fetch left a payload — stale.
         FetchFailed,
+        /// The download stored this attachment's bytes once, but the
+        /// blob store no longer holds them. → it renders without them;
+        /// a reset of the download fetches them again.
+        BlobMissing,
         /// The download declined to fetch this record, because a limit
         /// in the config said not to. → a warning: nothing failed, but
         /// the record is not in the mirror. A provider that retries its
@@ -121,6 +128,11 @@ closed_vocabulary! {
         /// A configured entry that exists but this credential cannot
         /// read. → the same.
         Forbidden,
+        /// A bucket a render looked at produced no document, though the
+        /// rows it was last built from are still upstream. → the
+        /// document an earlier run rendered is kept, possibly stale,
+        /// until the bucket renders again.
+        NoDocument,
         /// A configured entry upstream has sent nothing new for a while:
         /// a sensor unplugged, out of range or out of battery. → what
         /// came before is kept; nothing new is arriving.
@@ -230,7 +242,8 @@ pub struct Problem {
     /// lossy rule rather than a defect. Must be stable across runs —
     /// name it for the rule, not for the value it happened to see.
     pub rule: Option<String>,
-    /// First 80 characters of the offending value — see [`sample_of`].
+    /// First 80 characters of the offending value — see [`sample_of`] —
+    /// or, from [`Problem::explained`], the writer's explanation whole.
     pub sample: String,
     /// `None` takes [`Severity::default_for`] the outcome.
     pub severity: Option<Severity>,
@@ -257,6 +270,21 @@ impl Problem {
             path: None,
             rule: None,
             sample: sample_of(sample),
+            severity: None,
+        }
+    }
+
+    /// A problem about something larger than one value — a listing, a
+    /// phase, a configured entry — whose sample is the writer's own
+    /// explanation, kept whole: cut at 80 characters it stops saying
+    /// what happened.
+    pub fn explained(reason: Reason, field: Option<String>, explanation: &str) -> Self {
+        Self {
+            reason,
+            field,
+            path: None,
+            rule: None,
+            sample: explanation.to_string(),
             severity: None,
         }
     }
@@ -292,8 +320,8 @@ impl Problem {
     primary_key = "problem_uuid",
     // The search bar's keys are on the columns they filter.
     search(
-        order = "last_seen_at_utc desc, problem_uuid asc",
-        range = "last_seen_at_utc"
+        order = "changed_at_utc desc, problem_uuid asc",
+        range = "changed_at_utc"
     )
 )]
 pub struct ProblemRow {
@@ -351,11 +379,13 @@ pub struct ProblemRow {
     /// every copy downstream.
     #[col(sql = "VARCHAR(40)")]
     pub first_seen_at_utc: String,
-    /// When it was last re-recorded. Equal to `first_seen_at_utc` on a
-    /// problem seen once. Also stamped by the store.
+    /// When it last changed: first recorded, or recorded again with a
+    /// different severity, outcome, reason or sample. A problem recorded
+    /// again unchanged keeps this stamp, so a standing problem changes
+    /// nothing in the store. Also stamped by the store.
     #[col(sql = "VARCHAR(40)")]
-    pub last_seen_at_utc: String,
-    /// The offset the store's clock was in at `last_seen_at_utc`.
+    pub changed_at_utc: String,
+    /// The offset the store's clock was in at `changed_at_utc`.
     #[col(sql = "VARCHAR(8)")]
     pub tz_offset: Option<String>,
     /// The `RENDER_VERSION` of the renderer that recorded it, so a row
@@ -404,9 +434,42 @@ impl ProblemRow {
             rule: problem.rule,
             sample: problem.sample,
             first_seen_at_utc: String::new(),
-            last_seen_at_utc: String::new(),
+            changed_at_utc: String::new(),
             tz_offset: None,
             render_version: render_version.map(i64::from),
+        }
+    }
+
+    /// This row as the store keeps it, given the row the store already
+    /// holds for the same record, if any: recorded again unchanged, it
+    /// keeps every stamp; changed, it keeps when it was first seen and
+    /// is stamped `now`.
+    pub fn stamped(
+        self,
+        earlier: Option<&ProblemRow>,
+        now_utc: &str,
+        tz_offset: Option<&str>,
+    ) -> Self {
+        let unstamped = |r: &ProblemRow| ProblemRow {
+            first_seen_at_utc: String::new(),
+            changed_at_utc: String::new(),
+            tz_offset: None,
+            ..r.clone()
+        };
+        match earlier {
+            Some(e) if unstamped(e) == unstamped(&self) => ProblemRow {
+                first_seen_at_utc: e.first_seen_at_utc.clone(),
+                changed_at_utc: e.changed_at_utc.clone(),
+                tz_offset: e.tz_offset.clone(),
+                ..self
+            },
+            _ => ProblemRow {
+                first_seen_at_utc: earlier
+                    .map_or_else(|| now_utc.to_string(), |e| e.first_seen_at_utc.clone()),
+                changed_at_utc: now_utc.to_string(),
+                tz_offset: tz_offset.map(str::to_string),
+                ..self
+            },
         }
     }
 
@@ -437,7 +500,7 @@ impl ProblemRow {
             rule: r.try_get("rule")?,
             sample: r.try_get("sample")?,
             first_seen_at_utc: r.try_get("first_seen_at_utc")?,
-            last_seen_at_utc: r.try_get("last_seen_at_utc")?,
+            changed_at_utc: r.try_get("changed_at_utc")?,
             tz_offset: r.try_get("tz_offset")?,
             render_version: r.try_get("render_version")?,
         })
@@ -448,6 +511,44 @@ impl ProblemRow {
 mod tests {
     use super::*;
     use strum::VariantArray;
+
+    fn missing(sample: &str) -> ProblemRow {
+        ProblemRow::new(
+            "",
+            Stage::Fetch,
+            Scope::Entity("media_blobs:p1#a.mp4"),
+            None,
+            Outcome::Ok,
+            Problem::record(Reason::NotFound, sample),
+            None,
+        )
+    }
+
+    /// A standing problem re-stamped on every run made a commit, and
+    /// re-ran every step downstream, on every sync.
+    #[test]
+    fn a_problem_recorded_again_unchanged_keeps_its_stamps() {
+        let first = missing("not in the export").stamped(None, "t1", Some("+02:00"));
+        assert_eq!(
+            (
+                first.first_seen_at_utc.as_str(),
+                first.changed_at_utc.as_str()
+            ),
+            ("t1", "t1")
+        );
+        let again = missing("not in the export").stamped(Some(&first), "t2", Some("-07:00"));
+        assert_eq!(again, first);
+
+        let changed = missing("would not read").stamped(Some(&first), "t3", Some("-07:00"));
+        assert_eq!(
+            (
+                changed.first_seen_at_utc.as_str(),
+                changed.changed_at_utc.as_str(),
+                changed.tz_offset.as_deref()
+            ),
+            ("t1", "t3", Some("-07:00"))
+        );
+    }
 
     #[test]
     fn sample_truncates_on_a_char_boundary_and_marks_the_cut() {

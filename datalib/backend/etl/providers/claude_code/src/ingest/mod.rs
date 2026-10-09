@@ -12,9 +12,10 @@ use anyhow::{Context, Result};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_agent_sessions::{read_changed, SessionCounts, SessionTree};
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
 
 pub use datalib_etl_agent_sessions::FetchSummary;
 
@@ -41,11 +42,17 @@ pub struct FetchOptions {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_transcripts(opts, found)).await
+}
+
+async fn read_transcripts(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
     let trees = [SessionTree {
         root: opts.input_path.clone(),
         scope: CURSOR_SCOPE.to_string(),
         rel_prefix: String::new(),
+        optional: false,
     }];
     let mut transcript_rows: Vec<TranscriptRow> = Vec::new();
     let mut record_rows: Vec<RecordRow> = Vec::new();
@@ -55,6 +62,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         &trees,
         &opts.progress,
         "claude_code",
+        &found,
         |rel_path, text| {
             let parsed = parse_transcript(text, rel_path, agent_id_from_path(rel_path))?;
             push_rows(&parsed, &mut transcript_rows, &mut record_rows);
@@ -62,6 +70,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 records: parsed.records.len(),
                 malformed_lines: parsed.stats.malformed,
                 is_subagent: parsed.agent_id.is_some(),
+                skipped: parsed.skipped.clone(),
             })
         },
     )

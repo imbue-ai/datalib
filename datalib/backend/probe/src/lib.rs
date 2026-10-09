@@ -1,7 +1,9 @@
-//! The answer a "test connection" gives back, in the one shape every
-//! provider that can be probed produces. `datalib-step probe <type>`
-//! prints it to stdout and the HTTP server forwards it verbatim, so
-//! the field names here are the wire format the wizard reads.
+//! The answer a "Check connection" or a picker's "Load" gives back, in
+//! the one shape every provider that can be probed produces, and what
+//! it is asked for. `datalib-step probe <type>` prints the report to
+//! stdout, and its progress to stderr while it runs; the HTTP server
+//! forwards both, so the field names here are the wire format the
+//! wizard reads.
 //!
 //! Its own crate so that a provider gaining a probe, or the report
 //! growing a field, costs the probe-capable providers a rebuild and
@@ -9,6 +11,78 @@
 
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
+
+pub mod issue;
+
+/// What a probe is asked: only which account the credentials reach
+/// (fast — one request), or that and one list a picker offers (as slow
+/// as the account is big).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeAsk {
+    Account,
+    List(ProbeList),
+}
+
+/// The lists a picker can load: the catalog's `probe:` words. A
+/// provider answers the ones its fields name and refuses the rest.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ProbeList {
+    Channels,
+    Conversations,
+    Labels,
+    Mailboxes,
+    Calendars,
+    Addressbooks,
+}
+
+impl ProbeList {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+/// How far a list has got: items fetched so far, and the total when
+/// the service says it up front.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeProgress {
+    pub done: u64,
+    pub total: Option<u64>,
+}
+
+/// What marks a progress line among the other lines `datalib-step
+/// probe` writes to stderr.
+const PROGRESS_PREFIX: &str = "probe-progress: ";
+
+impl ProbeProgress {
+    pub fn line(self) -> String {
+        let json = serde_json::to_string(&self).expect("two numbers always serialize");
+        format!("{PROGRESS_PREFIX}{json}")
+    }
+    /// `None` for any other line.
+    pub fn parse_line(line: &str) -> Option<Self> {
+        serde_json::from_str(line.strip_prefix(PROGRESS_PREFIX)?).ok()
+    }
+}
+
+/// Where a provider reports progress while it pages through a list.
+pub type OnProgress<'a> = &'a (dyn Fn(ProbeProgress) + Sync);
 
 /// What a successful probe found.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +242,31 @@ mod tests {
             assert_eq!(json, format!("\"{}\"", kind.as_str()));
             assert_eq!(ProbeItemKind::parse(kind.as_str()), Some(*kind));
         }
+    }
+
+    #[test]
+    fn strum_and_serde_spell_the_lists_the_same() {
+        for list in ProbeList::VARIANTS {
+            let json = serde_json::to_string(list).unwrap();
+            assert_eq!(json, format!("\"{}\"", list.as_str()));
+            assert_eq!(ProbeList::parse(list.as_str()), Some(*list));
+        }
+    }
+
+    /// The line is what crosses the pipe; a tracing line or an error
+    /// beside it must not read as progress.
+    #[test]
+    fn a_progress_line_round_trips_and_nothing_else_parses() {
+        let p = ProbeProgress {
+            done: 400,
+            total: Some(1200),
+        };
+        assert_eq!(ProbeProgress::parse_line(&p.line()), Some(p));
+        assert_eq!(ProbeProgress::parse_line("error: HTTP 401"), None);
+        assert_eq!(
+            ProbeProgress::parse_line(r#"{"done":1,"total":null}"#),
+            None
+        );
     }
 
     #[test]

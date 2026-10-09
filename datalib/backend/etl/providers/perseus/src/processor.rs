@@ -15,6 +15,11 @@ use crate::ingest;
 // fetches into it, and render reads it (or a tree staged by hand, named
 // on the render step's `common.input_path`).
 
+/// Perseus keeps no raw store: its ingest writes a file tree.
+pub async fn migrate(_raw_dir: &std::path::Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
 /// Ingest wave: present iff `github` — fetch the TEI files.
 pub fn plan_ingest(ctx: PlanContext, config: PerseusConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;

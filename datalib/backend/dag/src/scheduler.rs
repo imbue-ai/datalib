@@ -134,7 +134,7 @@ impl Runner {
 impl Runner {
     /// Empty what the named steps wrote and forget that they ever ran, so
     /// the next run does their work from the start. Each step is invoked
-    /// once with `DATALIB_DAG_RESET=store`; what that empties is the
+    /// once with `--reset store` appended; what that empties is the
     /// step's to say (`step_protocol.md` § Reset).
     /// Nothing else runs: the caller holds the runner lock, which is what
     /// makes emptying a store safe.
@@ -152,72 +152,12 @@ impl Runner {
         store: &crate::supervisor::store::Store,
     ) -> Result<()> {
         for step in steps {
-            let &i = graph
-                .by_id
-                .get(step)
-                .with_context(|| format!("--reset {step}: no such step"))?;
-            let spec = &graph.steps[i];
-            let StepRun::Subprocess { argv, env, .. } = &spec.run else {
-                anyhow::bail!("--reset {step}: not a subprocess step");
-            };
-            let ctx = StepCtx {
-                step_id: spec.id.clone(),
-                group: spec.group.clone(),
-                group_type: spec.group_type.clone(),
-                function: spec.function.clone(),
-                data_root: self.data_root.clone(),
-                inputs: vec![],
-                changed_inputs: vec![],
-                reads: BTreeMap::new(),
-                progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
-                checkpoint: crate::step::CheckpointSink::disconnected(),
-                stop: StopSignal::never(),
-            };
-            let mut child_env = (*self.child_env).clone();
-            child_env.insert(
-                crate::subprocess::ENV_RESET.to_string(),
-                "store".to_string(),
-            );
-            self.sink.emit(&Event::StepStart {
-                step: spec.id.clone(),
-                attempt: 1,
-                builtin: argv
-                    .first()
-                    .is_some_and(|prog| crate::config::is_datalib_step(prog)),
-            });
-            let result =
-                crate::subprocess::run_subprocess(argv, env, None, &child_env, 1, &ctx, &self.sink)
-                    .await;
-            let (status, error) = match &result {
-                Ok(_) => (RunState::Succeeded, None),
-                Err(e) => (RunState::Failed, Some(format!("{:#}", e.error))),
-            };
-            self.sink.emit(&Event::StepFinish {
-                step: spec.id.clone(),
-                status,
-                error: error.clone(),
-                exit_code: None,
-                signal: None,
-            });
-            if let Some(error) = error {
-                anyhow::bail!("reset {step}: {error}");
-            }
-            // Emptied, not gone: what reads it sees a new version and runs,
-            // which is how the emptiness reaches the grid; and the step
-            // keeps no history, so its next run starts from nothing.
-            let fingerprint = &graph.fingerprints[i];
-            let reported = result.map(|o| o.outputs).unwrap_or_default();
-            let version = reported_version(spec, fingerprint, &reported)?.unwrap_or_else(|| {
-                fresh_version(fingerprint, &format!("reset-{}", uuid::Uuid::now_v7()))
-            });
+            let (_, version) = self.reset_one(graph, step).await?;
             let saved = store.load_record().await.context("load the record")?;
             let mut state = saved.clone();
             state.steps.insert(
                 step.clone(),
-                crate::supervisor::record::StepRecord {
-                    version: Some(version),
-                    ..Default::default()
-                },
+                crate::supervisor::wipe::emptied(saved.steps.get(step), version),
             );
             store
                 .save_record(&saved, &state)
@@ -226,6 +166,159 @@ impl Runner {
         }
         Ok(())
     }
+
+    /// `step` invoked once with `--reset store`; its index, and the version
+    /// its emptied tree is at. Emptied, not gone: what reads it sees a new
+    /// version and runs, which is how the emptiness reaches the grid.
+    pub(crate) async fn reset_one(&self, graph: &Graph, step: &StepId) -> Result<(usize, String)> {
+        let (i, outcome) = self
+            .invoke_once(graph, step, &[crate::subprocess::RESET_FLAG, "store"])
+            .await
+            .map_err(|e| anyhow::anyhow!("reset {step}: {e}"))?;
+        let fingerprint = &graph.fingerprints[i];
+        let version = reported_version(&graph.steps[i], fingerprint, &outcome.outputs)?
+            .unwrap_or_else(|| {
+                fresh_version(fingerprint, &format!("reset-{}", uuid::Uuid::now_v7()))
+            });
+        Ok((i, version))
+    }
+
+    /// Ask each named step to bring what it wrote to this build's shape,
+    /// fetching nothing: each is invoked once with `--migrate` appended
+    /// (`step_protocol.md` § Migrate). What a step can migrate in place it
+    /// does, and reports its new version; what it cannot it answers
+    /// `needs_rerun`, which the record keeps until the step next succeeds.
+    /// One that fails is reported and the rest go on.
+    pub async fn migrate(&self, graph: &Graph, steps: &[StepId]) -> Result<Vec<Migrated>> {
+        let store = crate::supervisor::store::Store::open(&self.data_root).await?;
+        let mut out = Vec::new();
+        for step in steps {
+            let answer = match self
+                .invoke_once(graph, step, &[crate::subprocess::MIGRATE_FLAG])
+                .await
+            {
+                Ok((i, outcome)) => match record_migrated(graph, i, &outcome, &store).await {
+                    Ok(()) => Ok(outcome.needs_rerun),
+                    Err(e) => Err(format!("{e:#}")),
+                },
+                Err(e) => Err(e),
+            };
+            out.push(Migrated {
+                step: step.clone(),
+                answer,
+            });
+        }
+        store.close().await;
+        Ok(out)
+    }
+
+    /// One invocation of `step` with `verb` appended to its argv, outside
+    /// any run of the loop: no inputs, no retries, no stop.
+    async fn invoke_once(
+        &self,
+        graph: &Graph,
+        step: &StepId,
+        verb: &[&str],
+    ) -> std::result::Result<(usize, StepOutcome), String> {
+        let &i = graph
+            .by_id
+            .get(step)
+            .ok_or_else(|| "no such step".to_string())?;
+        let spec = &graph.steps[i];
+        let StepRun::Subprocess { argv, env, .. } = &spec.run else {
+            return Err("not a subprocess step".to_string());
+        };
+        let ctx = StepCtx {
+            step_id: spec.id.clone(),
+            group: spec.group.clone(),
+            group_type: spec.group_type.clone(),
+            function: spec.function.clone(),
+            data_root: self.data_root.clone(),
+            inputs: vec![],
+            changed_inputs: vec![],
+            reads: BTreeMap::new(),
+            progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
+            checkpoint: crate::step::CheckpointSink::disconnected(),
+            stop: StopSignal::never(),
+        };
+        let argv: Vec<String> = argv
+            .iter()
+            .cloned()
+            .chain(verb.iter().map(|a| a.to_string()))
+            .collect();
+        self.sink.emit(&Event::StepStart {
+            step: spec.id.clone(),
+            attempt: 1,
+            builtin: argv
+                .first()
+                .is_some_and(|prog| crate::config::is_datalib_step(prog)),
+        });
+        let result = crate::subprocess::run_subprocess(
+            &argv,
+            env,
+            None,
+            &self.child_env,
+            1,
+            &ctx,
+            &self.sink,
+        )
+        .await;
+        let error = result.as_ref().err().map(|e| format!("{:#}", e.error));
+        let exit = match &result {
+            Ok(o) => o.exit,
+            Err(e) => e.exit,
+        };
+        self.sink.emit(&Event::StepFinish {
+            step: spec.id.clone(),
+            status: if error.is_none() {
+                RunState::Succeeded
+            } else {
+                RunState::Failed
+            },
+            error: error.clone(),
+            exit_code: exit.and_then(|x| x.code),
+            signal: exit.and_then(|x| x.signal),
+        });
+        match result {
+            Ok(o) => Ok((i, o)),
+            Err(_) => Err(error.unwrap_or_default()),
+        }
+    }
+}
+
+/// A step that reports a new version is recorded at it, so what reads it
+/// is stale; one that answers `needs_rerun` is marked so, and the tick
+/// treats it as due until it next succeeds. Everything else the record
+/// says of the step stands.
+async fn record_migrated(
+    graph: &Graph,
+    i: usize,
+    outcome: &StepOutcome,
+    store: &crate::supervisor::store::Store,
+) -> Result<()> {
+    let version = reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)?;
+    let saved = store.load_record().await.context("load the record")?;
+    let mut state = saved.clone();
+    let entry = state.steps.entry(graph.steps[i].id.clone()).or_default();
+    if let Some(version) = version {
+        entry.version = Some(version);
+    }
+    entry.needs_rerun |= outcome.needs_rerun;
+    if state == saved {
+        return Ok(());
+    }
+    store
+        .save_record(&saved, &state)
+        .await
+        .context("save the record")
+}
+
+/// How one step answered `--migrate`: whether it needs to run again, or
+/// why it could not answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Migrated {
+    pub step: StepId,
+    pub answer: std::result::Result<bool, String>,
 }
 
 /// Terminal state of one step in one run.
@@ -721,6 +814,7 @@ mod tests {
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, version)],
                         exit: None,
+                        needs_rerun: false,
                     })
                 }
             }),
@@ -882,6 +976,7 @@ mod tests {
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, "final")],
                         exit: None,
+                        needs_rerun: false,
                     })
                 }
             }),
@@ -923,6 +1018,7 @@ mod tests {
                 Ok(StepOutcome {
                     outputs: vec![ArtifactState::versioned(&pat, version)],
                     exit: None,
+                    needs_rerun: false,
                 })
             }),
         )
@@ -955,6 +1051,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "c1")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }
@@ -1004,6 +1101,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final").with_rows(5)],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -1119,6 +1217,9 @@ mod tests {
 
         // Two batches. After sealing each, wait (bounded, so a regression
         // fails rather than hangs) for the sink to have caught up with it.
+        // Each re-announcement is a burst, so a seal is waiting however
+        // quick the loop is: a loop that serves seals before joins starves
+        // here on every machine, not only on a slow disk.
         let producer = {
             let sink_passes = sink_passes.clone();
             let at_end = sink_passes_at_producer_end.clone();
@@ -1136,7 +1237,9 @@ mod tests {
                             while sink_passes.load(Ordering::SeqCst) < k + 1
                                 && std::time::Instant::now() < deadline
                             {
-                                ctx.checkpoint(&format!("v{k}"));
+                                for _ in 0..50 {
+                                    ctx.checkpoint(&format!("v{k}"));
+                                }
                                 tokio::time::sleep(Duration::from_millis(2)).await;
                             }
                         }
@@ -1146,6 +1249,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -1223,6 +1327,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -1275,6 +1380,7 @@ mod tests {
                 Ok(StepOutcome {
                     outputs: vec![ArtifactState::versioned(&pat, "final")],
                     exit: None,
+                    needs_rerun: false,
                 })
             }),
         );
@@ -1362,6 +1468,7 @@ mod tests {
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, "final")],
                         exit: None,
+                        needs_rerun: false,
                     })
                 }),
             )
@@ -1445,6 +1552,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -1608,6 +1716,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -1853,6 +1962,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -1960,6 +2070,7 @@ mod tests {
                 Ok(StepOutcome {
                     outputs: vec![ArtifactState::versioned(&pat, "fast-v1")],
                     exit: None,
+                    needs_rerun: false,
                 })
             }),
         )
@@ -1989,6 +2100,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -2050,6 +2162,7 @@ mod tests {
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, version)],
                         exit: None,
+                        needs_rerun: false,
                     })
                 }
             }),
@@ -2098,6 +2211,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -2178,6 +2292,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -2234,6 +2349,7 @@ mod tests {
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, "stable")],
                         exit: None,
+                        needs_rerun: false,
                     })
                 }),
             )
@@ -2318,6 +2434,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "early-final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -2346,6 +2463,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "late-final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }),
@@ -2441,6 +2559,7 @@ mod tests {
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "v-final")],
                             exit: None,
+                            needs_rerun: false,
                         })
                     }
                 }
@@ -3350,6 +3469,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         exit: None,
+                        needs_rerun: false,
                     })
                 }),
             )

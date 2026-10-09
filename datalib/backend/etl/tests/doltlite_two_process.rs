@@ -909,6 +909,135 @@ fn detached_readers_open_while_the_writer_holds_a_transaction() {
     detached_readers_beside_a_sealing_writer(3, 5, 2000);
 }
 
+/// The grid's terms in a plain SQLite file beside the store
+/// (`docs/dev/doltlite.md` § "Full-text search (FTS5)"): the writer seals
+/// each chunk through `commit_run` and then writes its terms, replacing
+/// one older row's, while readers open `main`'s tip detached, attach the
+/// terms file read-only and match it. Neither side may see an error, and
+/// every sample's full-text index must agree with its terms table. The
+/// file keeps a rollback journal (dolthub/doltlite#3740), so a reader can
+/// wait on the writer's commit; the busy timeout covers that wait, and
+/// the slowest sample is printed.
+#[test]
+fn readers_of_a_commit_match_an_attached_terms_file_while_the_writer_seals() {
+    terms_readers_beside_a_sealing_writer(false);
+}
+
+/// The search applet's read (`DoltRepo::pinned`): the terms file attached
+/// once to a read-only connection on `main`, and each request a
+/// transaction that holds one commit, and a shared lock on the terms
+/// file, while it reads. The writer's terms commits wait those out, so
+/// neither side may see an error, and the slowest of each is printed.
+#[test]
+fn pinned_readers_with_the_terms_attached_hold_off_no_writer() {
+    terms_readers_beside_a_sealing_writer(true);
+}
+
+#[allow(clippy::disallowed_macros)]
+fn terms_readers_beside_a_sealing_writer(pinned: bool) {
+    let readers = 3;
+    let t = Scratch::new();
+    let terms = t.path("terms.sqlite");
+    let ready: Vec<String> = (0..readers)
+        .map(|i| t.path(&format!("reader-{i}-ready")))
+        .collect();
+    let go_when = ready.join(",");
+    let mut writer = t.spawn(&[
+        "write",
+        "--db",
+        &t.db(),
+        "--terms",
+        &terms,
+        "--seed",
+        "--pin-out",
+        &t.path("pin"),
+        "--go-when",
+        &go_when,
+        "--max-commits",
+        "300",
+        "--interval-ms",
+        "0",
+        "--out",
+        &t.path("writer.json"),
+    ]);
+    t.await_file("pin", &mut writer);
+    let mut children: Vec<Child> = (0..readers)
+        .map(|i| {
+            let mut args = vec![
+                "terms-read".to_string(),
+                "--db".into(),
+                t.db(),
+                "--terms".into(),
+                terms.clone(),
+                "--until".into(),
+                t.path("writer.json"),
+                "--hold-ms".into(),
+                // The applet's transaction is one request's queries.
+                if pinned { "0" } else { "20" }.into(),
+                "--ready-out".into(),
+                ready[i].clone(),
+                "--out".into(),
+                t.path(&format!("reader-{i}.json")),
+            ];
+            if pinned {
+                args.push("--pinned".into());
+            }
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            t.spawn(&args)
+        })
+        .collect();
+    t.wait("writer", &mut writer);
+    for c in &mut children {
+        t.wait("reader", c);
+    }
+    let writer = t.report("writer.json");
+    if writer["dolt"] == Value::Bool(false) {
+        return;
+    }
+    assert_eq!(errors(&writer), Vec::<String>::new(), "writer errors");
+    let max = |v: &Value, key: &str| {
+        v.as_array()
+            .expect("an array")
+            .iter()
+            .filter_map(|x| {
+                if key.is_empty() {
+                    x.as_u64()
+                } else {
+                    x[key].as_u64()
+                }
+            })
+            .max()
+            .unwrap_or(0)
+    };
+    eprintln!(
+        "writer: {} seals, slowest terms write {} ms",
+        writer["commits"].as_array().map_or(0, Vec::len),
+        max(&writer["terms_ms"], ""),
+    );
+    for i in 0..readers {
+        let r = t.report(&format!("reader-{i}.json"));
+        assert_eq!(errors(&r), Vec::<String>::new(), "reader {i} errors");
+        let samples = samples(&r);
+        assert!(!samples.is_empty(), "reader {i} took no sample");
+        for s in samples {
+            assert_eq!(
+                s["fts"], s["terms"],
+                "the index disagrees with its table: {s}"
+            );
+            assert!(
+                s["joined"].as_u64() <= s["rows"].as_u64(),
+                "a term joined a row its commit lacks: {s}"
+            );
+        }
+        eprintln!(
+            "reader {i}: {} samples, slowest {} ms",
+            samples.len(),
+            max(&r["samples"], "ms")
+        );
+        assert_committed_throughout(&writer, &r);
+    }
+}
+
 #[test]
 fn a_second_writer_in_another_process_is_refused_and_told_who_holds_the_store() {
     let t = Scratch::new();
@@ -1091,6 +1220,67 @@ fn rows_a_killed_writer_committed_at_the_sql_level_are_discarded_by_the_next_ope
     assert!(
         !committed_a_rescue(&r),
         "open must not seal what it found: {r:?}"
+    );
+}
+
+/// The last point a writer can die inside a seal: its `dolt_commit` landed
+/// on the writer's branch, and the kill came before `publish_to_main`. That
+/// commit is a seal the run meant to make, so the next `open` publishes it
+/// rather than leaving it where no reader looks. Until then `main` has not
+/// moved, and the open commits nothing of its own.
+#[test]
+fn a_seal_a_killed_writer_committed_but_never_published_is_published_by_the_next_open() {
+    let t = Scratch::new();
+    let mut writer = t.spawn(&[
+        "hang",
+        "--db",
+        &t.db(),
+        "--rows",
+        "5",
+        "--commit",
+        "--dolt-commit",
+        "--ready-out",
+        &t.path("ready"),
+        "--out",
+        &t.path("hang.json"),
+    ]);
+    if t.await_file("ready", &mut writer) == "no-dolt" {
+        writer.kill().expect("kill");
+        return;
+    }
+    writer
+        .kill()
+        .expect("kill -9 the writer between its dolt_commit and its publish");
+    writer.wait().expect("reap");
+
+    let stranded = t.probe();
+    assert_eq!(
+        stranded["committed_rows"].as_i64(),
+        Some(SEED_ROWS),
+        "a reader on main does not see the unpublished seal: {stranded:?}"
+    );
+
+    let r = t.reopen();
+    assert_eq!(
+        r["working_set_rows"].as_i64(),
+        Some(SEED_ROWS + 5),
+        "the sealed rows are the working set, with nothing to discard: {r:?}"
+    );
+    assert_eq!(
+        r["committed_rows"].as_i64(),
+        Some(SEED_ROWS + 5),
+        "and HEAD is the stranded seal: {r:?}"
+    );
+    assert!(
+        !committed_a_rescue(&r),
+        "open published; it must not commit anything of its own: {r:?}"
+    );
+
+    let published = t.probe();
+    assert_eq!(
+        published["committed_rows"].as_i64(),
+        Some(SEED_ROWS + 5),
+        "the next open published the seal to main: {published:?}"
     );
 }
 

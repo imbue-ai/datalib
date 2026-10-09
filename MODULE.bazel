@@ -253,7 +253,8 @@ pip.parse(
 )
 use_repo(pip, "py_pip")
 
-# Rust — rules_rust + crate_universe ingesting datalib/backend Cargo workspace.
+# Rust — rules_rust, with crate_universe resolving the third-party crates
+# that datalib/backend/Cargo.toml lists.
 bazel_dep(name = "rules_rust", version = "0.74.0")
 
 # Proto / prost — first introduced for `datalib-signal-backup`, which
@@ -412,7 +413,7 @@ register_toolchains("@rust_toolchains//:all")
 # Hermetic musl-libc GCC cross toolchains (bazel-contrib/musl-toolchain)
 # for the C/C++ half of the musl builds: the doltlite amalgamation,
 # and every cargo build script that compiles native code (onig_sys,
-# protobuf-src's cmake build, ...) picks its CC/CXX up from the
+# ring, ...) picks its CC/CXX up from the
 # resolved cc toolchain. The toolchain enables
 # `fully_static_link`, which is what makes the shipped binaries run on
 # any Linux, glibc or musl, with no runtime deps. Exec platforms
@@ -494,16 +495,6 @@ crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 #     targets only: a `cc_library` there still works, but rules_rust
 #     prints a deprecation warning on every build and says the support
 #     is going away.
-# Disable signal-backup's build.rs under Bazel. Cargo runs build.rs
-# to generate the prost modules into OUT_DIR; under Bazel the same
-# modules come from `rust_prost_library` (a separate crate). Without
-# this annotation, crate_universe would try to run `protobuf-src`'s
-# binary download from build.rs — which fails in Bazel's sandbox.
-crate.annotation(
-    crate = "datalib-signal-backup",
-    gen_build_script = "off",
-)
-
 # The embedding map's nearest-neighbour search is one matrix product
 # after another (datalib/backend/embedding_map), and the product is
 # matrixmultiply's kernel. Optimised in every build, not just `-c opt`:
@@ -671,11 +662,6 @@ use_repo(pnpm, "pnpm")
 crate.from_cargo(
     name = "datalib_crates",
     cargo_lockfile = "//datalib/backend:Cargo.lock",
-    # `bazel mod deps` emits an INFO note that with a workspace
-    # Cargo.toml, only the workspace root is required here — bazel
-    # discovers per-crate manifests via the workspace's `members =`
-    # list. Adding a new provider crate now means a single edit to
-    # `datalib/backend/Cargo.toml`; no MODULE.bazel change.
     manifests = ["//datalib/backend:Cargo.toml"],
     # rules_rust's default SUPPORTED_PLATFORM_TRIPLES is a "reduced
     # subset" that omits x86_64-apple-darwin, so generated crate

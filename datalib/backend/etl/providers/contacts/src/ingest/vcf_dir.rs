@@ -3,19 +3,19 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use tracing::warn;
 
 use datalib_etl::control::DownloadControl;
-use datalib_etl::download_problems;
-use datalib_etl::file_checkpoint;
-use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fsscan;
 
 use super::api::{split_vcards, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
 use super::db::{addressbook_pk, RawDb};
-use super::schema_raw::{synthesized_name_uid, ContactRow};
+use super::schema_raw::{synthesized_name_uid_nth, ContactRow};
 
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
@@ -55,6 +55,11 @@ pub struct FetchSummary {
 const CHECKPOINT_SCOPE: &str = "contacts/vcf";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| read_folder(opts, found)).await
+}
+
+async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
     let account_id = opts
@@ -90,6 +95,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     opts.progress.inc(changes.unchanged as u64);
 
     let mut read: BTreeSet<&str> = BTreeSet::new();
+    scan.report_problems(&found, "files");
     for f in changes.needs_reading_by_path() {
         opts.progress
             .set_message(&format!("ingesting {}", f.path.display()));
@@ -108,14 +114,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 file_checkpoint::record_file_pool(db.pool(), CHECKPOINT_SCOPE, f).await?;
                 read.insert(f.rel.as_str());
             }
+            // Not stamped, so the next run reads it again.
             Err(e) => {
                 summary.errors += 1;
-                warn!(
-                    event = "contacts_vcf_ingest_failed",
-                    path = %f.path.display(),
-                    error = %e,
-                    "a vcf file could not be ingested"
-                );
+                found.listing(&format!("vcf {}", f.rel), format!("{e:#}"));
             }
         }
         opts.progress.inc(1);
@@ -131,7 +133,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .await?;
         summary.files_removed += 1;
     }
-    download_problems::report_run(db.pool(), &scan.walk_problems()).await;
     Ok(summary)
 }
 
@@ -143,6 +144,7 @@ async fn ingest_one(
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let body = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
+    let cards = whole_cards(&body)?;
     let label = addressbook_label(file);
     let book_href = relative_href(root, file);
     let book_id = addressbook_pk(account_id, &book_href);
@@ -153,11 +155,10 @@ async fn ingest_one(
     let existing = db.contact_uids(&book_id).await?;
     let mut seen: HashSet<String> = HashSet::new();
     let mut rows: Vec<ContactRow> = Vec::new();
-    // Synthesized name-based ids seen so far in *this* file, mapped to a
-    // human label, so we can warn when two distinct cards collapse onto
-    // the same id (e.g. two people named "John Smith").
-    let mut synth_seen: HashMap<String, String> = HashMap::new();
-    for (idx, block) in split_vcards(&body).into_iter().enumerate() {
+    // How many cards of each synthesized name this file has had so far,
+    // so a second "John Smith" gets an id of his own.
+    let mut synth_seen: HashMap<String, usize> = HashMap::new();
+    for (idx, block) in cards.into_iter().enumerate() {
         let href = if idx == 0 {
             book_href.clone()
         } else {
@@ -190,13 +191,32 @@ async fn ingest_one(
     Ok(())
 }
 
+/// The file's cards, or why it cannot stand for its whole address book.
+/// vCard has no envelope that could say "no cards", so a file holding none
+/// is unreadable rather than empty: deleting the file is what empties a
+/// book.
+fn whole_cards(body: &str) -> Result<Vec<String>> {
+    let cards = split_vcards(body);
+    if cards.is_empty() {
+        bail!("the file holds no vCard (BEGIN:VCARD … END:VCARD)");
+    }
+    let begun = body
+        .split(['\r', '\n'])
+        .filter(|l| l.trim().eq_ignore_ascii_case("BEGIN:VCARD"))
+        .count();
+    if begun != cards.len() {
+        bail!("a vCard in the file has no END:VCARD: a copy cut off part-way");
+    }
+    Ok(cards)
+}
+
 /// Stable id for one vCard, in priority order:
 fn contact_uid(
     file: &Path,
     label: &str,
     idx: usize,
     block: &str,
-    synth_seen: &mut HashMap<String, String>,
+    synth_seen: &mut HashMap<String, usize>,
 ) -> String {
     if let Some(uid) = vcard_uid(block) {
         return uid;
@@ -216,21 +236,11 @@ fn contact_uid(
         );
         return format!("{label}:{}:{idx}", file_stem_or_anon(file));
     }
-    let uid = synthesized_name_uid(&given, &family);
-    let display_name =
-        vcard_fn(block).unwrap_or_else(|| format!("{given} {family}").trim().to_string());
-    if let Some(prev) = synth_seen.insert(uid.clone(), display_name.clone()) {
-        warn!(
-            event = "contacts_vcf_synth_uid_collision",
-            path = %file.display(),
-            uid = %uid,
-            name = %display_name,
-            collides_with = %prev,
-            "two vCards share a first+last name and collapse onto one \
-             synthesized id; one will overwrite the other",
-        );
-    }
-    uid
+    let nth = synth_seen
+        .entry(synthesized_name_uid_nth(&given, &family, 1))
+        .or_insert(0);
+    *nth += 1;
+    synthesized_name_uid_nth(&given, &family, *nth)
 }
 
 fn addressbook_label(path: &Path) -> String {
@@ -527,11 +537,10 @@ mod tests {
         db.close().await;
     }
 
-    // Two UID-less cards sharing a first+last name collapse onto one
-    // synthesized id (the documented collision). We don't lose the file,
-    // but the rows merge — assert the collapse so the behavior is pinned.
+    /// Two UID-less cards sharing a first+last name used to collapse onto
+    /// one synthesized id, and one of the two people was lost.
     #[tokio::test]
-    async fn same_name_uidless_cards_collapse_to_one_row() {
+    async fn same_name_uidless_cards_stay_two_rows() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("Google.vcf"),
@@ -547,7 +556,73 @@ mod tests {
         assert_eq!(summary.addressbooks, 1);
 
         let n = contact_count(&db).await;
-        assert_eq!(n, 1, "same-name cards share a synthesized id");
+        assert_eq!(n, 2, "same-name cards are two people");
+        db.close().await;
+    }
+
+    /// A file that will not read is a row, and is read again next run.
+    #[tokio::test]
+    async fn a_file_that_will_not_read_is_a_row() {
+        let input = tempfile::tempdir().unwrap();
+        let path = input.path().join("Borg.vcf");
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&store.path().join("c.doltlite_db"))
+            .await
+            .unwrap();
+        let cache = test_cache().await;
+        let opts = || options(&db, input.path(), cache.clone());
+        fetch(opts()).await.unwrap();
+        let problems = || async {
+            sqlx::query_scalar::<_, String>("SELECT scope_key FROM problems")
+                .fetch_all(db.pool())
+                .await
+                .unwrap()
+        };
+        assert_eq!(problems().await, vec!["listing:vcf Borg.vcf"]);
+
+        std::fs::write(&path, BORG).unwrap();
+        fetch(opts()).await.unwrap();
+        assert!(problems().await.is_empty());
+        assert_eq!(uids(&db).await, vec!["hugh", "locutus"]);
+        db.close().await;
+    }
+
+    /// A `.vcf` rewritten to nothing (0 bytes, text that holds no vCard, a
+    /// copy cut off inside a card) read as an address book with fewer
+    /// cards, and every card it lost was deleted. vCard has no envelope
+    /// that could say "no cards", so a file holding none never empties its
+    /// book; deleting the file does.
+    #[tokio::test]
+    async fn a_file_that_is_recognizably_nothing_deletes_nothing() {
+        let input = tempfile::tempdir().unwrap();
+        let path = input.path().join("Borg.vcf");
+        std::fs::write(&path, BORG).unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&store.path().join("c.doltlite_db"))
+            .await
+            .unwrap();
+        let cache = test_cache().await;
+        let opts = || options(&db, input.path(), cache.clone());
+        fetch(opts()).await.unwrap();
+        assert_eq!(uids(&db).await, vec!["hugh", "locutus"]);
+
+        let cut_off = &BORG[..BORG.rfind("END:VCARD").unwrap()];
+        for (what, body) in [
+            ("an empty file", ""),
+            ("text that holds no vCard", "We are the Borg.\n"),
+            ("a copy cut off inside a card", cut_off),
+        ] {
+            std::fs::write(&path, body).unwrap();
+            let s = fetch(opts()).await.unwrap();
+            assert_eq!(s.contacts_deleted, 0, "{what} deleted contacts");
+            assert_eq!(uids(&db).await, vec!["hugh", "locutus"], "{what}");
+            let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+            assert_eq!(problems, vec!["listing:vcf Borg.vcf"], "{what}");
+        }
         db.close().await;
     }
 

@@ -6,10 +6,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl::title::Title;
+use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::escape_md_inline;
+use datalib_etl_render::title::Title;
 use datalib_etl_timeseries_render::page::write_page;
-use datalib_etl_timeseries_render::text::{iso, short_ts, yaml_safe};
+use datalib_etl_timeseries_render::text::{iso, short_ts};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -123,9 +125,9 @@ fn render_markdown(
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
     let _ = writeln!(out, "source_id: {source_id}");
     out.push_str("provider: garmin\n");
-    let _ = writeln!(out, "title: {}", yaml_safe(&title));
+    let _ = writeln!(out, "title: {}", yaml_scalar(&title));
     if let Some(ts) = &created_at {
-        let _ = writeln!(out, "created_at: {}", yaml_safe(ts));
+        let _ = writeln!(out, "created_at: {}", yaml_scalar(ts));
     }
     out.push_str("---\n\n");
     out.push_str(
@@ -193,7 +195,7 @@ fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, plot_file: Opt
             w.body_fat_pct
                 .map(|f| format!("{f:.1} %"))
                 .unwrap_or_default(),
-            w.source_type.as_deref().unwrap_or(""),
+            escape_md_inline(w.source_type.as_deref().unwrap_or("")),
         );
     }
     out.push('\n');
@@ -211,14 +213,14 @@ fn render_device_section(out: &mut String, parsed: &ParsedGarmin, source_id: &st
             out,
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--garmin\">\n"
         );
-        let _ = writeln!(out, "### {}\n", d.name);
+        let _ = writeln!(out, "### {}\n", escape_md_inline(&d.name));
         let _ = writeln!(
             out,
             "*device {}{}*\n",
-            d.id,
+            escape_md_inline(&d.id),
             d.last_sync
                 .as_deref()
-                .map(|s| format!(" · last synced {s}"))
+                .map(|s| format!(" · last synced {}", escape_md_inline(s)))
                 .unwrap_or_default()
         );
         out.push_str("</div>\n\n");
@@ -347,6 +349,45 @@ fn garmin_stamp_to_iso(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A device's name and a weigh-in's source come from Garmin's API;
+    /// on the page they are text.
+    #[test]
+    fn a_device_and_a_weigh_in_in_markup_render_escaped() {
+        let parsed = ParsedGarmin {
+            head: None,
+            display_name: None,
+            full_name: None,
+            weigh_ins: vec![super::super::parse::WeighIn {
+                id: "w1".into(),
+                calendar_date: "2364-04-11".into(),
+                timestamp_gmt_ms: 12442118400000,
+                weight_kg: 80.0,
+                bmi: None,
+                body_fat_pct: None,
+                source_type: Some("<b>scale</b> | x".into()),
+            }],
+            devices: vec![super::super::parse::Device {
+                id: "<i>1</i>".into(),
+                name: "<script>x</script> & co".into(),
+                last_sync: None,
+            }],
+            metrics: Vec::new(),
+            activities: 0,
+            activity_files: 0,
+            items: 0,
+        };
+        let mut out = String::new();
+        render_device_section(&mut out, &parsed, "garmin");
+        render_weight_section(&mut out, &parsed, None);
+        assert!(!out.contains("<script>") && !out.contains("<b>"), "{out}");
+        assert!(
+            out.contains("### &lt;script&gt;x&lt;/script&gt; &amp; co\n"),
+            "{out}"
+        );
+        assert!(out.contains("*device &lt;i&gt;1&lt;/i&gt;*"), "{out}");
+        assert!(out.contains("| &lt;b&gt;scale&lt;/b&gt; \\| x |"), "{out}");
+    }
 
     #[test]
     fn page_ids_are_source_scoped_and_device_ids_are_garmins() {

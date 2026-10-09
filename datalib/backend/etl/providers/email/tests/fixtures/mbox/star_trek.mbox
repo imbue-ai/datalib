@@ -138,6 +138,7 @@ Content-Type: text/html; charset=utf-8
 <html><body>
 <p>Bridge status display below:</p>
 <p><img src="cid:lcars-glyph@enterprise" alt="LCARS"></p>
+<p>Ping <a href="mailto:laforge@enterprise.starfleet">@Geordi La Forge</a> if the glyph fails.</p>
 <p>End of report.</p>
 </body></html>
 
@@ -159,6 +160,7 @@ Delivered-To: picard@enterprise.starfleet
 Message-Id: <log-001@enterprise.starfleet>
 From: Jean-Luc Picard <picard@enterprise.starfleet>
 To: Starfleet Command <command@starfleet.gov>
+Bcc: Deanna Troi <troi@enterprise.starfleet>
 Subject: Captain's Log — Stardate 80124.1
 Date: Wed, 7 Jan 2026 14:00:00 +0000
 Mime-Version: 1.0

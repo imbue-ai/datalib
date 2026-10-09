@@ -23,6 +23,9 @@ pub struct OutputClaim {
 pub struct Emitter {
     step: String,
     out: Arc<Mutex<std::io::Stdout>>,
+    /// Set by a `--migrate` that cannot bring the step's store to this
+    /// build's shape in place; the outcome then says `needs_rerun`.
+    needs_rerun: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Emitter {
@@ -30,7 +33,18 @@ impl Emitter {
         Self {
             step,
             out: Arc::new(Mutex::new(std::io::stdout())),
+            needs_rerun: Arc::default(),
         }
+    }
+
+    #[cfg(test)]
+    pub fn asked_for_a_rerun(&self) -> bool {
+        self.needs_rerun.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn needs_rerun(&self) {
+        self.needs_rerun
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn line(&self, v: &serde_json::Value) {
@@ -68,6 +82,9 @@ impl Emitter {
         let mut m = serde_json::Map::new();
         m.insert("event".into(), "outcome".into());
         m.insert("outputs".into(), outs.into());
+        if self.needs_rerun.load(std::sync::atomic::Ordering::SeqCst) {
+            m.insert("needs_rerun".into(), true.into());
+        }
         if let Some(f) = failure {
             m.insert("failure".into(), f.as_str().into());
         }

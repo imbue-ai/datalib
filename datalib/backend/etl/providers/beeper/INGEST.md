@@ -2,12 +2,10 @@
 
 > **Poorly supported.** Nobody is using this source, so it does not get
 > the attention the others do. In particular it does not notice when
-> something disappears upstream. Don't set
-> `common.always_clear_before_ingest` on it: `index.db` is a cache the
-> desktop app *evicts* from, so absence there does not mean deletion, and
-> wiping before each ingest would throw away real history. Fixing that
-> properly means reconciling against the megabridge files too. Expect
-> rough edges.
+> something disappears upstream, and it should not: `index.db` is a
+> cache the desktop app *evicts* from, so absence there does not mean
+> deletion. Noticing real deletions would mean reconciling against the
+> megabridge files too. Expect rough edges.
 
 Beeper Texts (the desktop app) keeps a unified per-account message
 cache at:
@@ -75,8 +73,15 @@ The ingest step writes `<data_root>/<group>/ingest/entities.doltlite_db`
   cached yet (or any file, with `media = false`) gets an edge with a
   NULL `blake3`, and render draws a "(not yet fetched)" placeholder.
 
-Every run is a `sync_runs` row; `sync_scope_state` is unused, since
-there is no remote endpoint to checkpoint against.
+A run keeps no `sync_runs` row and no `sync_scope_state`: there is no
+remote endpoint to checkpoint against, and what a run changed is its
+commit. A row's `_bookkeeping` sidecar is stamped the first time a run
+reads the row and left alone after, so reading an unchanged cache again
+commits nothing (`reading_an_unchanged_cache_again_commits_nothing`).
+A file the desktop app evicted after we copied it keeps its bytes; its
+failed read is a warning, and the same warning recorded again on later
+runs changes nothing
+(`a_file_evicted_after_its_copy_keeps_its_bytes_and_commits_nothing`).
 
 ## The megabridge pass
 
@@ -86,6 +91,26 @@ After the `index.db` pass, the ingest walks every
 bridge's own id (`src/ingest/megabridge.rs`). It adds no rows: a
 megabridge message with no matching event is only counted, as
 `events_orphaned`. Cloud bridges have no local file and are skipped.
+
+## When part of a sync fails
+
+Every run reads the whole of `index.db` and every configured bridge
+database, so everything below is tried again by the next run, and its
+row goes as soon as it reads. The step fails only when `index.db` is
+missing or its `threads` table will not read, or the store will not take
+a write.
+
+| what failed | its row |
+|---|---|
+| a cached media file that will not read (usually: not cached yet) | `beeper_media_attachments:<event>#<slot>`, an error, on an edge with no bytes |
+| an attachment whose URL is neither `mxc://` nor `localmxc://` | the same key, a warning: this build does not read it |
+| attachments that carry no `id` | `phase:attachments`, with a count |
+| one thread's participants, messages or reactions | `listing:messages <thread id>`; the other threads land |
+| a `megabridge.db` that will not read | `phase:megabridge <network>`; its events keep the ids an earlier run gave them |
+| a `sources` entry no account in `index.db` is on | `config:sources:<network>` |
+
+With `media = false` an edge with no bytes is a choice, not a problem,
+and has no row.
 
 ## Three Beeper runtimes — only two covered
 
@@ -165,5 +190,6 @@ Attachments inside `mx_room_messages.message` carry an `id` that is an
 
 Beeper Texts decrypts content before caching, so the on-disk files
 are plaintext. A file that has not been viewed in the desktop app may
-not exist on disk; its edge is recorded with no bytes and a later run
-with the file present fills it in.
+not exist on disk; its edge is recorded with no bytes and a `problems`
+row, and a later run with the file present fills it in and clears the
+row.

@@ -1,8 +1,10 @@
 //! The counts after a Manage row's name: how many errors and warnings a
-//! step's store holds, from the `problems{severity=…}` metrics the step
-//! reported at the end of its last run. A red and a yellow number when
-//! there are any; nothing when there are none, or when the step has
-//! never counted.
+//! step found, from the `problems{severity=…}` metrics it reported at
+//! the end of its last run. A red and a yellow number when there are
+//! any; nothing when there are none, or when the step has never
+//! counted. A group's is the sum of its steps', since each step counts
+//! only what it found itself. The System row's count is the config's
+//! own warnings.
 
 use std::collections::HashMap;
 
@@ -41,37 +43,76 @@ pub fn counts_by_step(latest: &[MetricRow]) -> HashMap<String, ProblemCounts> {
     out
 }
 
-/// The chips drawn after the name: bare numbers, the words on hover.
+/// A step's chips: bare numbers, the words on hover.
 pub fn chips(counts: Option<&ProblemCounts>) -> Vec<Chip> {
     let Some(c) = counts else {
         return Vec::new();
     };
-    let since = format!("as of run {}", c.run_id);
+    draw(
+        c.errors,
+        c.warnings,
+        &format!("this step found, as of run {}", c.run_id),
+    )
+}
+
+/// A group's chips: the sum over the steps under it that have counted.
+pub fn group_chips(steps: &[Option<&ProblemCounts>]) -> Vec<Chip> {
+    let counted: Vec<&ProblemCounts> = steps.iter().flatten().copied().collect();
+    draw(
+        counted.iter().map(|c| c.errors).sum(),
+        counted.iter().map(|c| c.warnings).sum(),
+        "its steps found, as of each one's last run",
+    )
+}
+
+fn draw(errors: i64, warnings: i64, whose: &str) -> Vec<Chip> {
     let plural = |n: i64| if n == 1 { "" } else { "s" };
     let mut out = Vec::new();
-    if c.errors > 0 {
+    if errors > 0 {
         out.push(Chip {
             kind: ChipKind::Error,
-            text: c.errors.to_string(),
+            text: errors.to_string(),
             title: format!(
-                "{n} error{s}: {n} record{s} dropped, {since} \u{2014} double-click to see them",
-                n = c.errors,
-                s = plural(c.errors)
+                "{errors} error{s} {whose} \u{2014} double-click to see them",
+                s = plural(errors)
             ),
         });
     }
-    if c.warnings > 0 {
+    if warnings > 0 {
         out.push(Chip {
             kind: ChipKind::Warning,
-            text: c.warnings.to_string(),
+            text: warnings.to_string(),
             title: format!(
-                "{n} warning{s}: {n} record{s} kept with something lost, {since} \u{2014} double-click to see them",
-                n = c.warnings,
-                s = plural(c.warnings)
+                "{warnings} warning{s} {whose} \u{2014} double-click to see them",
+                s = plural(warnings)
             ),
         });
     }
     out
+}
+
+/// The System row's chip: the config's warnings, each in words on
+/// hover. A warning drops nothing, so no entry's row says it; this is
+/// where the app shows what `datalib-dag --check` would print.
+pub fn config_warning_chips(diagnostics: &[datalib_dag::Diagnostic]) -> Vec<Chip> {
+    let warnings: Vec<String> = diagnostics
+        .iter()
+        .filter(|d| d.severity == datalib_dag::Severity::Warning)
+        .map(datalib_dag::Diagnostic::describe)
+        .collect();
+    if warnings.is_empty() {
+        return Vec::new();
+    }
+    let n = warnings.len();
+    let s = if n == 1 { "" } else { "s" };
+    vec![Chip {
+        kind: ChipKind::Warning,
+        text: n.to_string(),
+        title: format!(
+            "{n} config warning{s} \u{2014} double-click to open the config:\n{}",
+            warnings.join("\n")
+        ),
+    }]
 }
 
 #[cfg(test)]
@@ -145,7 +186,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(ChipKind::Error, "1"), (ChipKind::Warning, "12")]
         );
-        assert!(some[0].title.starts_with("1 error: 1 record dropped"));
+        assert!(some[0].title.starts_with("1 error this step found"));
         let warnings_only = chips(Some(&ProblemCounts {
             warnings: 3,
             run_id: "r1".into(),
@@ -158,5 +199,31 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(ChipKind::Warning, "3")]
         );
+    }
+
+    /// A group's count is its steps' summed: each counts only what it
+    /// found, so the download's warning and render's error are two, and
+    /// a step that never counted adds nothing.
+    #[test]
+    fn a_group_counts_the_sum_of_its_steps() {
+        let ingest = ProblemCounts {
+            warnings: 1,
+            run_id: "r1".into(),
+            ..Default::default()
+        };
+        let render = ProblemCounts {
+            errors: 2,
+            warnings: 1,
+            run_id: "r2".into(),
+        };
+        let drawn = group_chips(&[Some(&ingest), Some(&render), None]);
+        assert_eq!(
+            drawn
+                .iter()
+                .map(|c| (c.kind, c.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(ChipKind::Error, "2"), (ChipKind::Warning, "2")]
+        );
+        assert!(group_chips(&[None, None]).is_empty());
     }
 }

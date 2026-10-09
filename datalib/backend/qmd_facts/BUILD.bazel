@@ -1,0 +1,32 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+# The `qmd mcp` facts the search depends on (docs/dev/qmd_behaviour.md),
+# one test each, against the pinned qmd, node and embedding model. Run it
+# after every qmd bump; a fact that moved fails by name.
+rust_test(
+    name = "qmd_facts_test",
+    # Medium: three model loads, which CI's CPU-only runners take far
+    # longer over than a mac's GPU.
+    size = "medium",
+    srcs = ["qmd_facts.rs"],
+    data = [
+        "@nodejs_host//:node_bin",
+        "//third-party/qmd/runtime:qmd_package_dir",
+        "//third-party/qmd/runtime:qmd_tree",
+        "//third-party/qmd_models:embeddinggemma",
+    ],
+    edition = "2021",
+    env = {
+        "QMD_TEST_EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+        "QMD_TEST_NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+        "QMD_TEST_PACKAGE_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
+    },
+    deps = [
+        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+    ],
+    tags = ["cpu:2"],
+)

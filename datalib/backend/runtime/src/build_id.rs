@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 /// The workspace version, from this crate's `version` attr in
 /// `BUILD.bazel` — rules_rust does not read `Cargo.toml`, so the attr
 /// is a copy and `//datalib/backend:version_consistency_test` keeps it
-/// equal to `[workspace.package].version`.
+/// equal to `[package].version`.
 pub const DATALIB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// A dev launcher sets this to `git rev-parse HEAD` of the checkout it

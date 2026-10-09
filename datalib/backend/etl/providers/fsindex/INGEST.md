@@ -54,13 +54,15 @@ already explain. `datalib-dirtree-diff` does exactly that
 The two tables stay consistent by construction rather than by
 foreign key: the walker emits a directory's row only after every
 child's, in the same batch stream, and a directory's tree-hash is
-computed from the very child rows it just emitted. `identity_uuid`
-is set on `dirs` rows alone, by the post-write stamping pass.
+computed from the very child rows it just emitted, except where the
+walk could not read an entry and its last rows stand (below).
+`identity_uuid` is set on `dirs` rows alone, by the post-write
+stamping pass.
 
-The **rescan cursor** — `(mtime_ns, size, inode, dev, stamp_kind)`
+The **rescan cursor** — `(mtime_ns, size, ctime_ns, inode, dev, stamp_kind)`
 per path — is deliberately in neither table. It is host state
 (inodes mean nothing on another machine), so it lives in this
-machine's `datalib_etl::fingerprint_cache`, a plain-SQLite file
+machine's `datalib_etl_files::fingerprint_cache`, a plain-SQLite file
 outside version control; `STORAGE_NOTES.md` §3 has the measurements
 behind that.
 
@@ -80,23 +82,32 @@ expressive for this schema. Schema additions become
 `ALTER TABLE ADD COLUMN`, which is fine for a schema this small
 and stable.
 
-### Truncate-and-rebuild on every scan
+### Every scan rewrites the tree, and prunes what it did not write
 
-Every scan starts by emptying `files`, `dirs` and `scan_meta` (and
-`scan_meta_bookkeeping`), then walks the tree fresh. Two reasons this
-works:
+Every scan upserts a row for each entry it walks, then deletes the
+`files` and `dirs` rows it did not write, in one transaction after the
+walk (`RawDb::prune_unseen`). `scan_meta` keeps only this source's row,
+written whole. Two reasons this works:
 
 1. **Deletions fall out naturally.** A file present at scan-A and
-   gone at scan-B simply doesn't get re-inserted, so it disappears
-   from the table. No separate reconciliation pass
-   ("DELETE FROM files WHERE id NOT IN (this scan's ids)") to
-   maintain and forget to call.
-2. **The rewrite is free.** Re-inserting the same row for an
-   unchanged file is no change
+   gone at scan-B is not written by scan-B, so the prune takes its
+   row.
+2. **The rewrite is free.** Rewriting the same row for an unchanged
+   file is no change
    ([doltlite.md § Diffs](/docs/dev/doltlite.md#diffs)), so the diff
-   between two scans is exactly what changed on disk.
+   between two scans is exactly what changed on disk, and a scan of
+   an unchanged tree commits nothing.
 
-The fast-rescan cache is not in the store, so the truncate does not
+**An entry the walk found and could not read keeps its rows.** A
+folder that will not list, a child that will not `stat`, a file that
+will not hash or a link that will not read is a `record:` problem
+row, and its row and every row beneath it stay as the last scan wrote
+them (`WalkerError::holds`). Without that, a folder that failed to
+list would read as a folder emptied. The folder's own row stays too;
+the rolled-up `size`, `entries` and tree-hash of the folders above it
+are this scan's, computed without it.
+
+The fast-rescan cache is not in the store, so the prune does not
 touch it: the scan loads this host's prior fingerprints for the root —
 cursor and digest together — into memory, and `fswalk::decide` compares
 each entry against them, skipping the `read(2)` + `blake3` on
@@ -107,7 +118,9 @@ cache, which lives outside it; to force a full rehash, drop the cache
 file.
 
 `files` and `dirs` carry no bookkeeping sidecar; `scan_meta` is the one
-table with one, recording when the root was last scanned.
+table with one, recording when the root was first scanned. It is not
+re-stamped on later scans, or every scan would commit; when a scan
+happened is its commit's date.
 
 ## The fast-rescan trick
 
@@ -115,9 +128,9 @@ Cribbed from Unison's `src/fpcache.ml:243` (`dataClearlyUnchanged`).
 For each known path, before opening the file:
 
 1. Stat the path. Cheap on macOS/Linux — one syscall, no I/O.
-2. Read the cached `(mtime_ns, size, inode, dev, stamp_kind)` and the
+2. Read the cached `(mtime_ns, size, ctime_ns, inode, dev, stamp_kind)` and the
    hash that went with them from this host's fingerprint cache.
-3. If `stamp_kind = inode` and `(mtime, size, inode, dev)` all match
+3. If `stamp_kind = inode` and `(mtime, size, ctime, inode, dev)` all match
    the live stat, the cached digest is still valid — no rehash, no
    file read.
 4. If anything mismatched, open the file, rehash, and write the new
@@ -131,12 +144,17 @@ be nothing there. Holding both means an unchanged tree scans fast into
 8000 files / 64 MB, 0.63s against the 1.6s a cold scan costs.
 
 `stamp_kind = "nostamp"` (some FUSE mounts, some network filesystems)
-drops the inode check and falls back to `(mtime, size)`. Less safe,
-but Unison's own behavior on those filesystems.
+drops the inode check and falls back to `(mtime, size, ctime)`. Less safe,
+and close to Unison's own behavior on those filesystems.
 
 `stamp_kind = "rescan"` forces a rehash regardless of what the triple
-says. Nothing writes it today; a `stamp_kind` the cache does not
-recognise reads as `rescan`, so an unknown writer's row is rehashed.
+says, and on a directory a real `readdir` where an unchanged one would
+list its children from the cache. The walk writes it on a directory
+that would not list, or that lost a child to an error this scan: the
+cache cannot name a child it never saw, so without it that directory
+would read as empty, with no error, until its mtime next moved. A
+`stamp_kind` the cache does not recognise reads as `rescan` too, so an
+unknown writer's row is rehashed.
 
 ## Stamping policy
 
@@ -276,10 +294,16 @@ part of any tree-hash; see §"Stamping policy".
 - No JSONL wire-event tape. There is no upstream wire to mirror; the
   filesystem itself is the human-inspectable tape.
 - No retry semantics for transient failures. A `read(2)` either
-  succeeds or it's a real error. An unreadable entry is logged
-  (`fsindex_entry_error`) and counted in the `fsindex_phase_breakdown`
-  event (`stat_errors`, `read_errors`, `non_utf8_paths`); nothing about
-  it is written to the store, and the next scan simply tries it again.
+  succeeds or it's a real error, and the next scan simply tries it
+  again. An entry the scan could not record — a folder that would not
+  list, a file that would not stat or hash, a link that would not read,
+  a name that is not UTF-8, an `.fsindex.yaml` that would not parse,
+  a folder the stamping pass could not stamp — is a `problems` row
+  keyed `record:files:<id>` or `record:dirs:<id>`, and the rest of the
+  scan goes on. Every scan re-walks the whole tree, so its rows replace
+  the last scan's and an entry that reads cleanly drops off. The
+  `fsindex_phase_breakdown` event still counts them (`stat_errors`,
+  `read_errors`, `non_utf8_paths`).
 
 ## Open follow-ups
 

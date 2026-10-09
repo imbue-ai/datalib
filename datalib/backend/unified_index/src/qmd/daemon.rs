@@ -11,7 +11,7 @@ use std::process::{Child, ChildStdin, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 /// How long one search may wait on qmd, spawn and handshake included.
 /// Under the gateway's 30s (`APPLET_READ_TIMEOUT` in datalib-http), so a
@@ -54,10 +54,10 @@ struct DaemonState {
     /// waiting for an answer can give up.
     stdout: Option<Receiver<String>>,
     next_id: u64,
-    /// mtime of the index the live child was spawned against. When the
-    /// index on disk is newer (a sync rebuilt it), the child holds a
-    /// stale view and must be respawned. `None` when no child is live.
-    index_mtime: Option<SystemTime>,
+    /// The index file the live child opened. A write into that file
+    /// reaches the child (it reads the index live); a file put in its
+    /// place does not, and needs a new child. `None` when no child is live.
+    index_file: Option<FileId>,
     started_at: Option<Instant>,
 }
 
@@ -78,7 +78,7 @@ impl QmdDaemon {
                 stdin: None,
                 stdout: None,
                 next_id: 0,
-                index_mtime: None,
+                index_file: None,
                 started_at: None,
             }),
         }
@@ -118,35 +118,22 @@ impl QmdDaemon {
         // whole allowance for its own exchange.
         let deadline = Instant::now() + self.cfg.answer_deadline;
         let res = (|| -> Result<Vec<QmdHit>> {
-            // The index may be absent (no sync yet) or freshly rebuilt.
-            // Its mtime both gates the search and tells `ensure_started`
-            // whether the live child is stale. A missing index is an
-            // answer ("sync to build it"), not a daemon failure.
+            // The index may be absent (no sync yet) or replaced since the
+            // child opened it. A missing index is an answer ("sync to
+            // build it"), not a daemon failure.
             let idx = qmd_index_path(&self.cfg.qmd_root);
-            let index_mtime = std::fs::metadata(&idx)
-                .and_then(|m| m.modified())
+            let index_file = std::fs::metadata(&idx)
+                .map(|m| FileId::of(&m))
                 .map_err(|_| {
                     anyhow!(
                         "qmd index not found at {} — sync to build it",
                         idx.display()
                     )
                 })?;
-            ensure_started(&mut guard, &self.cfg, index_mtime, deadline)?;
+            ensure_started(&mut guard, &self.cfg, index_file, deadline)?;
             guard.next_id = guard.next_id.wrapping_add(1);
             let id = guard.next_id;
-            let mut arguments = serde_json::json!({
-                "searches": searches,
-                "limit": limit,
-                "rerank": false,
-            });
-            // Scoping happens *inside* retrieval: qmd searches each named
-            // collection and merges, so a source's hits cannot be crowded
-            // out of a global top-N by a larger one. Filtering the results
-            // afterwards — what the applet used to do alone — returns
-            // nothing at all whenever that crowding happens.
-            if let Some(names) = scope.names() {
-                arguments["collections"] = serde_json::json!(names);
-            }
+            let arguments = query_arguments(searches, limit, scope);
             let req = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -177,6 +164,27 @@ impl QmdDaemon {
     }
 }
 
+/// The `query` tool's arguments.
+fn query_arguments(
+    searches: serde_json::Value,
+    limit: usize,
+    scope: &CollectionScope,
+) -> serde_json::Value {
+    let mut arguments = serde_json::json!({
+        "searches": searches,
+        "limit": limit,
+        // qmd cuts its merged list to `candidateLimit` (40 unless asked),
+        // rerank or not, whatever `limit` says.
+        "candidateLimit": limit,
+        "rerank": false,
+    });
+    // A source scope applies inside retrieval, so its hits cannot be
+    // crowded out of a global top-N by a larger source's. An unscoped
+    // search is `[]`, every collection ranked as one list (`CollectionScope`).
+    arguments["collections"] = serde_json::json!(scope.names().unwrap_or_default());
+    arguments
+}
+
 /// Build the MCP `searches` JSON array for a given user query and mode.
 /// Extracted so the lex/vec routing is unit-testable without spawning
 /// the daemon. The lex rules are [`crate::qmd::lex`]'s.
@@ -204,15 +212,13 @@ fn build_daemon_searches(mode: QueryMode, q: &str) -> serde_json::Value {
 fn ensure_started(
     state: &mut DaemonState,
     cfg: &QmdDaemonConfig,
-    index_mtime: SystemTime,
+    index_file: FileId,
     deadline: Instant,
 ) -> Result<()> {
-    // A rebuilt index (mtime moved) means the resident child opened a
-    // now-stale copy — tear it down so we respawn against the fresh
-    // file. `teardown` clears `index_mtime`, so the checks below fall
-    // through to a clean spawn.
-    if state.index_mtime.is_some_and(|m| m != index_mtime) {
-        tracing::info!("the qmd index was rebuilt; restarting qmd");
+    // `teardown` clears `index_file`, so the checks below fall through
+    // to a clean spawn.
+    if state.index_file.is_some_and(|f| f != index_file) {
+        tracing::info!("the qmd index file was replaced; restarting qmd");
         teardown(state);
     }
     // If we still have a child, make sure it's alive — `try_wait`
@@ -231,7 +237,25 @@ fn ensure_started(
             Err(_) => teardown(state),
         }
     }
-    spawn(state, cfg, index_mtime, deadline)
+    spawn(state, cfg, index_file, deadline)
+}
+
+/// Which file a path names: the same inode on the same device is the same
+/// file, whatever was written into it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileId {
+    dev: u64,
+    ino: u64,
+}
+
+impl FileId {
+    fn of(meta: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+        FileId {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        }
+    }
 }
 
 fn qmd_mcp_command(cfg: &QmdDaemonConfig) -> Result<std::process::Command> {
@@ -266,7 +290,7 @@ fn qmd_mcp_command(cfg: &QmdDaemonConfig) -> Result<std::process::Command> {
 fn spawn(
     state: &mut DaemonState,
     cfg: &QmdDaemonConfig,
-    index_mtime: SystemTime,
+    index_file: FileId,
     deadline: Instant,
 ) -> Result<()> {
     let mut cmd = qmd_mcp_command(cfg)?;
@@ -334,7 +358,7 @@ fn spawn(
     state.stdin = Some(stdin);
     state.stdout = Some(lines);
     state.next_id = 0;
-    state.index_mtime = Some(index_mtime);
+    state.index_file = Some(index_file);
     state.started_at = Some(started);
     handshake(state, deadline).context("qmd mcp handshake failed")?;
     tracing::info!(
@@ -675,7 +699,7 @@ pub fn strip_uri(uri: &str) -> &str {
 fn teardown(state: &mut DaemonState) {
     state.stdin = None;
     state.stdout = None;
-    state.index_mtime = None;
+    state.index_file = None;
     let started_at = state.started_at.take();
     if let Some(mut child) = state.child.take() {
         let pid = child.id();
@@ -763,6 +787,23 @@ mod tests {
         assert_eq!(CollectionScope::All.names(), None);
     }
 
+    /// Without `candidateLimit`, qmd cuts every answer to 40 however deep
+    /// `limit` asks (`the_merged_answer_is_cut_to_its_candidate_limit` in
+    /// `qmd_facts_test`).
+    #[test]
+    fn a_query_asks_for_as_many_candidates_as_hits() {
+        let args = query_arguments(serde_json::json!([]), 1000, &CollectionScope::All);
+        assert_eq!(args["limit"], 1000);
+        assert_eq!(args["candidateLimit"], 1000);
+        assert_eq!(args["collections"], serde_json::json!([]));
+        let scoped = query_arguments(
+            serde_json::json!([]),
+            10,
+            &CollectionScope::Only(vec!["slack".into()]),
+        );
+        assert_eq!(scoped["collections"], serde_json::json!(["slack"]));
+    }
+
     /// A daemon whose `qmd mcp` is the shell script `script`, over a root
     /// with an index file for it to find.
     fn fake_daemon(root: &std::path::Path, script: &str, deadline: Duration) -> QmdDaemon {
@@ -780,6 +821,49 @@ mod tests {
         r#"read l; echo '{"jsonrpc":"2.0","id":1,"result":{}}'; read l; read l;"#;
     /// Answers the query, with a banner and a notification ahead of it.
     const ANSWER: &str = r#"echo 'a banner line'; echo '{"jsonrpc":"2.0","method":"notifications/message","params":{}}'; echo '{"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"results":[{"file":"slack/slack/a.md","score":0.5}]}}}'; exec sleep 60"#;
+
+    /// qmd restarts when the index file is replaced, and only then. Each
+    /// keyword or embed batch writes into the file in place, and a restart
+    /// on that reloaded the model for nearly every search; a running qmd
+    /// reads those writes itself (`docs/dev/qmd_behaviour.md`).
+    #[test]
+    fn qmd_restarts_when_the_index_file_is_replaced_not_when_it_is_written() {
+        use std::io::Write;
+        let td = tempfile::tempdir().unwrap();
+        let starts = td.path().join("starts");
+        let script = format!(
+            r#"echo x >> '{starts}'; read l; echo '{{"jsonrpc":"2.0","id":1,"result":{{}}}}'; read l; {ANSWER_EACH}"#,
+            starts = starts.display()
+        );
+        let daemon = fake_daemon(td.path(), &script, Duration::from_secs(5));
+        let search = || {
+            daemon
+                .search(QueryMode::Hybrid, "balcony", 10, &CollectionScope::All)
+                .unwrap()
+        };
+        let started = || std::fs::read_to_string(&starts).unwrap().lines().count();
+        let idx = qmd_index_path(td.path());
+
+        search();
+        assert_eq!(started(), 1);
+
+        let mut file = std::fs::OpenOptions::new().append(true).open(&idx).unwrap();
+        file.write_all(b"a batch").unwrap();
+        file.set_modified(std::time::SystemTime::now() + Duration::from_secs(60))
+            .unwrap();
+        drop(file);
+        search();
+        assert_eq!(started(), 1, "a write into the index restarted qmd");
+
+        let fresh = idx.with_extension("new");
+        std::fs::write(&fresh, b"").unwrap();
+        std::fs::rename(&fresh, &idx).unwrap();
+        search();
+        assert_eq!(started(), 2, "a replaced index kept the old qmd");
+    }
+
+    /// Answers every query, by its own id, with no hits.
+    const ANSWER_EACH: &str = r#"while read l; do id=$(printf '%s' "$l" | sed 's/.*"id":\([0-9]*\).*/\1/'); echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"structuredContent\":{\"results\":[]}}}"; done"#;
 
     /// The regression: a qmd that took a query and never answered held the
     /// daemon's lock on a blocking read, so every search after it hung

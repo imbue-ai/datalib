@@ -14,7 +14,7 @@ pub fn display_snippet(raw: &str) -> String {
         let rest = first.trim_start_matches(|c: char| c.is_ascii_digit());
         rest.len() < first.len() && rest.starts_with(": @@ ")
     });
-    let lines: Vec<&str> = raw
+    let lines: Vec<String> = raw
         .lines()
         .map(|line| {
             if numbered {
@@ -41,7 +41,7 @@ fn without_line_number(line: &str) -> &str {
 
 /// A front-matter field says only its title; any other line is the
 /// markdown `preview` reads, less qmd's own truncation mark.
-fn readable(line: &str) -> Option<&str> {
+fn readable(line: &str) -> Option<String> {
     let line = line.trim();
     if line == "---" {
         return None;
@@ -49,7 +49,7 @@ fn readable(line: &str) -> Option<&str> {
     if let Some((key, value)) = front_matter_field(line) {
         return (key == "title").then(|| unquote(value));
     }
-    Some(line.strip_suffix("...").unwrap_or(line))
+    Some(line.strip_suffix("...").unwrap_or(line).to_string())
 }
 
 /// `key: value` with a lowercase snake-case key: the shape every renderer's
@@ -64,12 +64,17 @@ fn front_matter_field(line: &str) -> Option<(&str, &str)> {
     snake.then_some((key, value))
 }
 
-fn unquote(value: &str) -> &str {
+/// Renderers JSON-quote a front-matter value (`yaml_scalar`); one that
+/// does not read as JSON — cut short by qmd, say — loses only its quotes.
+fn unquote(value: &str) -> String {
     let value = value.trim();
-    value
-        .strip_prefix('"')
-        .and_then(|v| v.strip_suffix('"'))
-        .unwrap_or(value)
+    serde_json::from_str::<String>(value).unwrap_or_else(|_| {
+        value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .unwrap_or(value)
+            .to_string()
+    })
 }
 
 #[cfg(test)]
@@ -98,6 +103,13 @@ mod tests {
                    title: \"Dinner: Ten Forward, senior staff\"\n\
                    external_id: \"0e1f2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7#ncc1701d@enterprise.test\"";
         assert_eq!(display_snippet(raw), "Dinner: Ten Forward, senior staff");
+    }
+
+    /// A title's quotes and backslashes are JSON escapes, read back.
+    #[test]
+    fn a_json_quoted_title_reads_as_written() {
+        let raw = "@@ -2,1 @@ (1 before, 9 after)\ntitle: \"The \\\"Q\\\" \\\\ continuum\"";
+        assert_eq!(display_snippet(raw), "The \"Q\" \\ continuum");
     }
 
     /// A weak vector hit lands on the first lines of the file, which are

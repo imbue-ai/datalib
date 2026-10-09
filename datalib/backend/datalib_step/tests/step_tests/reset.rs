@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
 
-use datalib_etl::download_problems::{report_run, RunProblem};
+use datalib_etl::run_problems::collecting;
+use datalib_etl::stop::StopFlag;
 use serde_json::Value;
 
 /// The Manage row shows a step's newest `problems` count, and the app's
@@ -16,11 +17,12 @@ async fn a_reset_download_reports_the_emptied_stores_problems() {
     let store = datalib_etl::raw_layout::entities_db(&root.join("tng/ingest"));
     std::fs::create_dir_all(store.parent().unwrap()).unwrap();
     let pool = datalib_etl::doltlite_raw::open(&store, &[]).await.unwrap();
-    report_run(
-        &pool,
-        &[RunProblem::phase("messages", "upstream fell over")],
-    )
-    .await;
+    collecting(&pool, &StopFlag::new(), |found| async move {
+        found.phase("messages", "upstream fell over");
+        Ok(())
+    })
+    .await
+    .unwrap();
     datalib_etl::doltlite_raw::commit_run(&pool, "seed")
         .await
         .unwrap();
@@ -32,7 +34,7 @@ async fn a_reset_download_reports_the_emptied_stores_problems() {
         .env("DATALIB_DAG_GROUP_TYPE", "slack")
         .env("DATALIB_DAG_FUNCTION", "ingest")
         .env("DATALIB_DAG_DATA_ROOT", root)
-        .env("DATALIB_DAG_RESET", "store")
+        .args(["--reset", "store"])
         .stdin(Stdio::null())
         .output()
         .expect("spawn datalib-step");

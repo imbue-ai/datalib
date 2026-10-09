@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # The TNG account, expanded into playback fixtures by the synthesizer.
 # Consumed by `//tests/fixtures:ingested_tng`.
 filegroup(
@@ -22,23 +20,19 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
+        "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:base64",
         "@datalib_crates//:chrono",
-        "@datalib_crates//:hmac",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:sha1",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
         "@datalib_crates//:thiserror",
-        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:urlencoding",
-        "@datalib_crates//:uuid",
         "@datalib_crates//:zip",
     ],
 )
@@ -64,9 +58,14 @@ rust_test(
     env = {
         "RUST_TEST_THREADS": "1",
     },
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
     deps = [
+        "@datalib_crates//:anyhow",
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/pin:datalib_pin",
         ":datalib_etl_garmin",
         "@datalib_crates//:chrono",

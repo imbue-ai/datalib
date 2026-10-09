@@ -1,7 +1,10 @@
 // The source catalog the "+ Data Source" picker renders, and the form
 // descriptors the wizard fills in. Before adding a source here, read
+// docs/dev/wizard_design.md (how a form is laid out and worded),
 // docs/dev/config_model.md (what the form writes) and
 // docs/dev/wizard_file_pickers.md (a path field offers a native picker).
+
+import { NAME_IT_HELP } from "./accountNaming";
 
 /// A form field, mapped onto a dotted path into a step's `params` tree
 /// (`api.channels` → `[steps.params.api] channels`).
@@ -20,15 +23,19 @@ type FieldBase = {
 export type Field =
   | ({ kind: "text" } & FieldBase & {
         required?: boolean;
+        /// The field names an environment variable holding a secret.
+        /// Drawn as the default variable's name with a copy button, and
+        /// the box only for someone who uses another name.
+        envVar?: { default: string; holds: string };
         /// Renders as the latchkey-account control rather than a bare
-        /// text box: a dropdown of the accounts latchkey has stored for
-        /// the entry's `credentialService`, a "Latchkey auth" button,
-        /// and — still — somewhere to type.
+        /// text box: a box that lists the accounts latchkey has stored
+        /// for the entry's `credentialService` and still takes typing,
+        /// with the sign-in tabs under it.
         ///
         /// Typing matters. latchkey may hold an account this server
         /// can't enumerate (no keyring access, latchkey not installed),
-        /// and a dropdown that came back empty must not be the only way
-        /// in. The value written is the account string either way.
+        /// and a list that came back empty must not be the only way in.
+        /// The value written is the account string either way.
         latchkey?: boolean;
       })
   /// A path on the machine running the backend.
@@ -55,6 +62,10 @@ export type Field =
         /// there while the field is empty, and the help text, which must
         /// name it, shows it with a copy button beside it.
         startIn?: string;
+        /// macOS keeps this path private, and choosing it in the picker
+        /// is what grants access. Drawn as a card that says so, under
+        /// this title.
+        guarded?: string;
       })
   /// A closed set of values — one Rust enum, one dropdown. Prefer this
   /// over `text` whenever the backend parses the string against a fixed
@@ -79,19 +90,41 @@ export type Field =
   /// count zeros. The label should therefore not say "(bytes)".
   | ({ kind: "bytes" } & FieldBase & { default?: number })
   | ({ kind: "string_list" } & FieldBase & {
-        /// Offer a picker built from `POST /api/probe`, alongside the
-        /// comma-separated box. Names *which* of the probe's items this
-        /// field takes: every label, only the ones a render filter can
-        /// match, an account's conversations (a Claude chat, a Slack
-        /// DM), or a workspace's channels.
+        /// Offer a picker, alongside the comma-separated box, that a
+        /// "Load" button fills from `POST /api/probe` with this list:
+        /// every label, only the ones a render filter can match, an
+        /// account's conversations (a Claude chat, a Slack DM), or a
+        /// workspace's channels.
         probe?: ProbeNoun;
       });
 
-/// What a `probe:` field is a picker *of*: which of the probe's items
-/// it takes. The wizard says `labels` and `mailboxes` in the source's
-/// own word for them (`CatalogEntry.mailboxNoun`), the rest as written.
+/// What a `probe:` field is a picker *of*: the list its "Load" asks the
+/// provider for. Mirrors `ProbeList` in datalib/backend/probe/src/lib.rs.
+/// The wizard says `labels` and `mailboxes` in the source's own word for
+/// them (`CatalogEntry.mailboxNoun`), the rest as written.
 export type ProbeNoun =
   "labels" | "mailboxes" | "conversations" | "channels" | "calendars" | "addressbooks";
+
+/// One answer to a section's question. Choosing it writes `sets` and
+/// shows `fields` under it; the fields of the answers not chosen are
+/// emptied, so an answer is the whole of what it says.
+export type Answer = {
+  label: string;
+  help?: string;
+  sets?: Record<string, boolean>;
+  fields?: string[];
+};
+
+/// A heading and the controls under it: either a question with
+/// `answers`, or `fields` drawn as they are. `advanced` puts it inside
+/// Advanced options. docs/dev/wizard_design.md says what goes where.
+export type Section = {
+  heading: string;
+  help?: string;
+  answers?: Answer[];
+  fields?: string[];
+  advanced?: boolean;
+};
 
 export type CatalogEntry = {
   /// The group's `type`: the thing mirrored (`slack`, `email`, …).
@@ -139,7 +172,7 @@ export type CatalogEntry = {
   /// puts it in the grid.
   renderStep?: boolean;
   /// The latchkey service name, when the source needs credentials. The
-  /// wizard shows its Connection section only while the params the form
+  /// wizard shows its account row only while the params the form
   /// would write reach an origin (`ingestReach`): an import has nothing
   /// to log in to.
   credentialService?: string;
@@ -152,11 +185,15 @@ export type CatalogEntry = {
   /// Shown beside the Connect button, when connecting this way costs
   /// something the person should decide about before clicking.
   credentialConnectWarning?: string;
-  /// The "Paste a credential" form. `help` says where the credential
+  /// The "Paste a key" tab. `help` says where the credential
   /// comes from; `headers` replaces the shape latchkey's own example
   /// gives, for a service whose example is wrong — `{secret}` marks
   /// where the pasted value goes (see `credentialShape.ts`).
-  credentialPaste?: { help?: string; headers?: string[] };
+  /// `accountSuffix` follows the username in the name the credential is
+  /// offered under, for entries that share one service but want
+  /// different credentials: Fastmail Contacts and Calendar both use
+  /// `fastmail-dav`, and a read-only app password covers only one.
+  credentialPaste?: { help?: string; headers?: string[]; accountSuffix?: string };
   /// Dotted params path whose presence identifies this entry among the
   /// several that share one `type`. Undefined on a type with only one
   /// entry, which is nearly all of them.
@@ -170,10 +207,20 @@ export type CatalogEntry = {
   requiresOneOf?: string[];
   /// Params this entry always writes, with no field to edit them.
   preset?: Preset[];
-  /// Offer "Test connection", and populate any `probe:` field from
-  /// what comes back. Requires a `datalib-step probe <type>` on the
-  /// backend side; see `datalib/backend/datalib_step/src/probe.rs`.
+  /// Offer "Check connection", and a "Load" on every `probe:` field.
+  /// Requires a `datalib-step probe <type>` on the backend side; see
+  /// `datalib/backend/datalib_step/src/probe.rs`.
   canProbe?: boolean;
+  /// One sentence above the form on what this source copies, where
+  /// the tile's blurb does not say enough.
+  intro?: string;
+  /// "Before you start": what the person has to have in hand, for a
+  /// source that cannot be set up from this dialog alone. A `needs`
+  /// item may hold `code` in backticks.
+  before?: { text: string; needs: string[] };
+  /// The form, top to bottom. A field no section names is an advanced
+  /// one, drawn under its own label in Advanced options.
+  sections?: Section[];
   fields?: Field[];
 };
 
@@ -194,7 +241,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "slack",
     method: "api",
     label: "Slack",
-    blurb: "Mirror channels and DMs from one Slack workspace.",
+    blurb: "Copy channels and DMs from one Slack workspace.",
     keywords: ["slack", "chat", "workspace", "channels", "messages"],
     kind: "api",
     icon: "slack",
@@ -203,52 +250,86 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     credentialService: "slack",
     canProbe: true,
+    sections: [
+      {
+        heading: "Which channels?",
+        answers: [
+          { label: "Every channel I'm in", sets: { "api.all_channels": false } },
+          {
+            label: "Every channel in the workspace",
+            help: "Including ones you haven't joined.",
+            sets: { "api.all_channels": true },
+          },
+          // No `sets`: a channel list wins over `all_channels` in the
+          // downloader, so a config holding both is this answer.
+          { label: "Only the channels I choose", fields: ["api.channels"] },
+        ],
+      },
+      {
+        heading: "Direct messages?",
+        answers: [
+          {
+            label: "Leave them out",
+            help: "DMs are the most private part of a workspace.",
+            sets: { "api.dms": false },
+          },
+          {
+            label: "All my direct messages",
+            help: "One-to-one and group conversations.",
+            sets: { "api.dms": true },
+          },
+          {
+            label: "Only the conversations I choose",
+            sets: { "api.dms": true },
+            fields: ["api.dm_conversations"],
+          },
+        ],
+      },
+      {
+        heading: "How far back?",
+        answers: [
+          { label: "Everything" },
+          { label: "Only messages since a date I choose", fields: ["api.since"] },
+        ],
+      },
+      { heading: "Files people shared", fields: ["api.media", "common.blob_size_limit_bytes"] },
+    ],
     fields: [
       {
         kind: "string_list",
         probe: "channels",
         target: "api.channels",
         label: "Channels",
-        help:
-          "Channel names without the #, comma-separated: general, engineering. Leave empty for " +
-          "every channel you're a member of. " +
-          "A channel named here is mirrored whether or not you're a member of it.",
+        help: "A channel named here is copied whether or not you're a member of it.",
       },
       {
         kind: "date",
         target: "api.since",
-        label: "Mirror messages since",
-        help:
-          "Oldest message to fetch (YYYY-MM-DD). This is what decides how far back the " +
-          "mirror goes. Moving it earlier backfills on the next run; moving it later does nothing.",
+        label: "Start date",
+        help: "Choosing an earlier date later brings in the older messages on the next sync.",
       },
       {
         kind: "date",
         target: "api.until",
-        label: "Mirror until",
-        help:
-          "The last day to mirror (YYYY-MM-DD). Leave empty to keep up with today; a day in " +
-          "the past fixes the window, so the mirror stops growing.",
+        label: "Copy until",
+        help: "Last day to copy. Empty keeps up with today; a past day fixes the window.",
       },
       {
         kind: "bool",
         target: "api.media",
-        label: "Download file attachments",
+        label: "Download them",
         default: true,
-        help: "Off stores JSON metadata only.",
+        help: "Off keeps each file's name and details, without the file.",
       },
       {
         kind: "bytes",
         target: "common.blob_size_limit_bytes",
         requires: "api.media",
-        label: "Skip attachments larger than",
+        label: "Skip files bigger than",
         default: 5_000_000,
         help:
-          "5 MB by default. A workspace's few largest uploads — screen recordings, design " +
-          "files, CI artifacts — are usually most of its bytes on disk and least of its " +
-          "text, so a cap here costs little and saves a lot. Raising it later backfills: " +
-          "Slack re-walks from the start date when the limit is relaxed. Clear it for no " +
-          "limit.",
+          "A few very large uploads usually take most of the disk space and hold little text. " +
+          "Clear the number for no limit; raising it later brings in the files it skipped.",
       },
       {
         kind: "bool",
@@ -264,26 +345,25 @@ export const CATALOG: CatalogEntry[] = [
         default: false,
         help:
           "Your 1:1 and group DMs, alongside the channels above. Off by default — DMs are " +
-          "the most private thing in a workspace, so mirroring them is opt-in.",
+          "the most private thing in a workspace, so copying them is opt-in.",
       },
       {
         kind: "string_list",
         probe: "conversations",
         target: "api.dm_conversations",
         requires: "api.dms",
-        label: "Only these DMs",
+        label: "Conversations",
         help:
-          "Slack's id for each conversation, or a link to it — right-click a DM in Slack's " +
-          "sidebar and Copy link, or copy the address bar with the DM open. Both 1:1 and " +
-          "group DMs. Leave empty for every DM.",
+          "A link to a conversation works too: right-click it in Slack's sidebar and choose " +
+          "Copy link.",
       },
       {
         kind: "int",
         target: "api.refresh_window_days",
         label: "Edit-catcher window (days)",
         help:
-          "Re-query the trailing N days of channels that already have history, to pick up " +
-          "edits and reactions. NOT a range bound — it only adds work. Leave empty for none.",
+          "Re-queries the trailing N days of channels that already have history, for edits, " +
+          "reactions and deletions. Not a range bound. Empty is 30; 0 turns it off.",
       },
     ],
   },
@@ -292,7 +372,7 @@ export const CATALOG: CatalogEntry[] = [
     variantKey: "api",
     method: "api",
     label: "Claude",
-    blurb: "Mirror your claude.ai conversations and projects.",
+    blurb: "Copy your claude.ai conversations and projects.",
     keywords: ["claude", "anthropic", "chat", "llm", "conversations"],
     kind: "api",
     icon: "claude",
@@ -321,45 +401,59 @@ export const CATALOG: CatalogEntry[] = [
         "Cookies → https://claude.ai → sessionKey → Value.",
     },
     canProbe: true,
+    sections: [
+      {
+        heading: "Which conversations?",
+        answers: [
+          { label: "All of them" },
+          {
+            label: "Only the conversations I choose",
+            help: "Useful for a first sync of a large account.",
+            fields: ["api.conv_uuids"],
+          },
+        ],
+      },
+      {
+        heading: "How far back?",
+        answers: [
+          { label: "Everything" },
+          { label: "Only conversations updated since a date I choose", fields: ["api.since"] },
+        ],
+      },
+      { heading: "Projects", fields: ["api.projects"] },
+    ],
     fields: [
       {
         kind: "text",
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Claude account",
-        help:
-          "Which stored claude.ai login to mirror. Leave it empty if latchkey holds only " +
-          "one — naming the wrong one mirrors someone else's conversations.",
+        help: NAME_IT_HELP,
       },
       {
         kind: "date",
         target: "api.since",
-        label: "Mirror conversations updated since",
-        help: "YYYY-MM-DD. Leave empty to sync everything.",
+        label: "Start date",
       },
       {
         kind: "bool",
         target: "api.projects",
-        label: "Also mirror Claude Projects",
+        label: "Also copy Claude Projects",
         default: true,
-        help:
-          "Each project's description, custom instructions and knowledge documents. " +
-          "A project is often the only place some written context lives.",
+        help: "Each project's description, custom instructions and knowledge documents.",
       },
       {
         kind: "int",
         target: "api.refresh_most_recent_n_chat_count",
-        label: "Force-refresh the N most recent chats each run",
-        help: "Leave empty to rely on updated_at alone.",
+        label: "Force-refresh the N most recent chats each sync",
+        help: "Empty relies on updated_at alone.",
       },
       {
         kind: "string_list",
         probe: "conversations",
         target: "api.conv_uuids",
-        label: "Only these conversations",
-        help:
-          "Bare UUIDs or paste-able chat URLs. Leave empty to walk everything — this is a " +
-          "scoping tool for a first run against a large account.",
+        label: "Conversations",
+        help: "Chat links work too: paste one in the box.",
       },
     ],
   },
@@ -368,7 +462,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "chatgpt",
     method: "api",
     label: "ChatGPT",
-    blurb: "Mirror your ChatGPT conversations.",
+    blurb: "Copy your ChatGPT conversations.",
     keywords: ["chatgpt", "openai", "gpt", "chat", "llm", "conversations"],
     kind: "api",
     icon: "chatgpt",
@@ -389,30 +483,45 @@ export const CATALOG: CatalogEntry[] = [
       },
     },
     canProbe: true,
+    sections: [
+      {
+        heading: "Which conversations?",
+        answers: [
+          { label: "All of them" },
+          {
+            label: "Only the conversations I choose",
+            help: "Useful for a first sync of a large account.",
+            fields: ["api.conv_uuids"],
+          },
+        ],
+      },
+      {
+        heading: "How far back?",
+        answers: [
+          { label: "Everything" },
+          { label: "Only conversations updated since a date I choose", fields: ["api.since"] },
+        ],
+      },
+    ],
     fields: [
       {
         kind: "text",
         latchkey: true,
         target: "latchkey_settings.account",
         label: "ChatGPT account",
-        help:
-          "Which stored chatgpt.com login to mirror. Leave it empty if latchkey holds only " +
-          "one — naming the wrong one mirrors someone else's conversations.",
+        help: NAME_IT_HELP,
       },
       {
         kind: "date",
         target: "api.since",
-        label: "Mirror conversations updated since",
-        help: "YYYY-MM-DD. Leave empty to sync everything.",
+        label: "Start date",
       },
       {
         kind: "string_list",
         probe: "conversations",
         target: "api.conv_uuids",
-        label: "Only these conversations",
-        help:
-          "Bare ids or paste-able chat URLs. Leave empty to walk everything — this is a " +
-          "scoping tool for a first run against a large account.",
+        label: "Conversations",
+        help: "Chat links work too: paste one in the box.",
       },
     ],
   },
@@ -422,7 +531,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "github",
     method: "api",
     label: "GitHub",
-    blurb: "Mirror pull requests and their review threads.",
+    blurb: "Copy pull requests and their review threads.",
     keywords: ["github", "pr", "code", "review"],
     kind: "api",
     icon: "github",
@@ -435,7 +544,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "gitlab",
     method: "api",
     label: "GitLab",
-    blurb: "Mirror merge requests and their discussions.",
+    blurb: "Copy merge requests and their discussions.",
     keywords: ["gitlab", "mr", "code"],
     kind: "api",
     icon: "gitlab",
@@ -448,7 +557,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "notion",
     method: "api",
     label: "Notion",
-    blurb: "Mirror pages and comment threads.",
+    blurb: "Copy pages and comment threads.",
     keywords: ["notion", "wiki", "docs", "pages"],
     kind: "api",
     icon: "notion",
@@ -467,7 +576,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "email",
     variantKey: "gmail",
     label: "Gmail",
-    blurb: "Mirror a Gmail account through Google's API.",
+    blurb: "Copy a Gmail account through Google's API.",
     keywords: ["gmail", "google", "email", "mail", "inbox", "labels"],
     kind: "api",
     icon: "gmail",
@@ -486,6 +595,16 @@ export const CATALOG: CatalogEntry[] = [
       { target: "gmail.user_id", value: "me" },
       { target: "outlink_format", value: "gmail", phase: "render" },
     ],
+    sections: [
+      {
+        heading: "Which mail?",
+        answers: [
+          { label: "The whole account" },
+          { label: "Only the labels I choose", fields: ["only_extract_labels"] },
+        ],
+      },
+      { heading: "Large messages", fields: ["common.blob_size_limit_bytes"] },
+    ],
     fields: [
       {
         kind: "text",
@@ -493,32 +612,27 @@ export const CATALOG: CatalogEntry[] = [
         target: "latchkey_settings.account",
         label: "Google account",
         help:
-          "Which stored Google login to mirror. Leave it empty if latchkey holds only one — " +
+          "Which stored Google login to copy. Leave it empty if only one is stored — " +
           "it is required only when the google-gmail service has more than one account, " +
-          "and naming the wrong one mirrors the wrong mailbox.",
+          "and naming the wrong one copies the wrong mailbox.",
       },
       {
         kind: "string_list",
         probe: "labels",
         target: "only_extract_labels",
-        label: "Download only these labels",
+        label: "Labels",
         help:
-          "Exact label paths, comma-separated — Inbox, Work/Projects. A nested label must be " +
-          "listed in full, and listing a parent " +
-          "does not include its children. Empty downloads the whole account, which is the " +
-          "point of a mirror; narrow it for a first run against a large mailbox. Widening " +
-          "it later backfills the labels you added.",
+          "A nested label is named in full (Work/Projects), and choosing a parent does not " +
+          "include its children. A label added later brings in its mail on the next sync.",
       },
       {
         kind: "bytes",
         target: "common.blob_size_limit_bytes",
-        label: "Skip messages larger than",
+        label: "Skip messages bigger than",
         help:
-          "Attachments are most of a mailbox's bytes and almost none of its text; a message " +
-          "over the limit keeps its headers and loses its body. Decide before the first " +
-          "download: Gmail's sync never asks again about a message it already has, so " +
-          "raising this later does not go back for the ones it skipped. Leave empty for " +
-          "no limit.",
+          "A skipped message keeps its headers and loses its body. Decide before the first " +
+          "sync: raising the limit later does not go back for messages already skipped. Empty " +
+          "means no limit.",
       },
       {
         kind: "string_list",
@@ -527,9 +641,8 @@ export const CATALOG: CatalogEntry[] = [
         target: "only_render_labels",
         label: "Render only these labels",
         help:
-          "A second, narrower filter applied when markdown is written — so a whole account " +
-          "can be downloaded once and only part of it turned into searchable pages. Empty " +
-          "renders everything downloaded. Changing it re-renders; it never re-downloads.",
+          "A narrower filter applied at render. Empty renders everything downloaded. Changing " +
+          "it re-renders; it never re-downloads.",
       },
     ],
   },
@@ -537,7 +650,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "email",
     variantKey: "jmap",
     label: "Fastmail",
-    blurb: "Mirror a Fastmail mailbox over JMAP.",
+    blurb: "Copy a Fastmail mailbox over JMAP.",
     keywords: ["fastmail", "jmap", "email", "mail", "inbox", "folders"],
     kind: "api",
     icon: "fastmail",
@@ -552,7 +665,7 @@ export const CATALOG: CatalogEntry[] = [
       help:
         "For read-only access, make an API token at app.fastmail.com → Settings → Privacy & " +
         "Security → Integrations → API tokens, with Read-only access ticked, and paste it " +
-        "here. Latchkey auth signs in with full read and write access instead.",
+        "here. Web login signs in with full read and write access instead.",
     },
     preset: [
       // The JMAP server. A preset rather than a field because this
@@ -562,40 +675,48 @@ export const CATALOG: CatalogEntry[] = [
       { target: "jmap.hostname", value: "api.fastmail.com" },
       { target: "outlink_format", value: "fastmail", phase: "render" },
     ],
+    sections: [
+      {
+        heading: "Which mail?",
+        answers: [
+          { label: "The whole mailbox" },
+          { label: "Only the folders I choose", fields: ["only_extract_labels"] },
+        ],
+      },
+      { heading: "Large attachments", fields: ["common.blob_size_limit_bytes"] },
+    ],
     fields: [
       {
         kind: "text",
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Fastmail account",
-        help: "Which stored Fastmail login to mirror. Leave it empty if latchkey holds only one.",
+        help: "Which stored Fastmail login to copy. Leave it empty if only one is stored.",
       },
       {
         kind: "string_list",
         probe: "labels",
         target: "only_extract_labels",
-        label: "Download only these folders",
+        label: "Folders",
         help:
-          "Exact folder paths, comma-separated, parent first — `travel/portugal` is the " +
-          "folder inside `travel`, and listing `travel` alone does not include it. Empty " +
-          "downloads the whole mailbox.",
+          "A folder inside another is named in full (travel/portugal), and choosing a parent " +
+          "does not include its children.",
       },
       {
         kind: "bytes",
         target: "common.blob_size_limit_bytes",
-        label: "Skip attachments larger than",
+        label: "Skip attachments bigger than",
         help:
-          "Attachments are most of a mailbox's bytes and almost none of its text. Leave " +
-          "empty for no limit.",
+          "Attachments take most of a mailbox's disk space and hold almost none of its text. " +
+          "Empty means no limit.",
       },
       {
         kind: "int",
         target: "jmap.blob_download_concurrency",
         label: "Message downloads in flight",
         help:
-          "JMAP has no bulk download — each message body is its own request — so this is " +
-          "the only lever on how fast a first backfill goes. Leave empty for the default; " +
-          "1 makes it strictly one at a time.",
+          "JMAP fetches each message body in its own request. Empty is the default; 1 is " +
+          "strictly one at a time.",
       },
       {
         kind: "string_list",
@@ -604,9 +725,8 @@ export const CATALOG: CatalogEntry[] = [
         target: "only_render_labels",
         label: "Render only these folders",
         help:
-          "A second, narrower filter applied when markdown is written — so a whole mailbox " +
-          "can be downloaded once and only part of it turned into searchable pages. Empty " +
-          "renders everything downloaded. Changing it re-renders; it never re-downloads.",
+          "A narrower filter applied at render. Empty renders everything downloaded. Changing " +
+          "it re-renders; it never re-downloads.",
       },
     ],
   },
@@ -635,7 +755,7 @@ export const CATALOG: CatalogEntry[] = [
     variantKey: "google",
     method: "google",
     label: "Google Calendar",
-    blurb: "Mirror the calendars on a Google account through Google's API.",
+    blurb: "Copy the calendars on a Google account through Google's API.",
     keywords: ["google", "calendar", "gcal", "events", "meetings", "schedule"],
     kind: "api",
     icon: "google_calendar",
@@ -644,6 +764,22 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     credentialService: "google-calendar",
     canProbe: true,
+    sections: [
+      {
+        heading: "Which calendars?",
+        answers: [
+          { label: "Every calendar on the account", help: "Subscribed ones included." },
+          { label: "Only the calendars I choose", fields: ["google.calendars"] },
+        ],
+      },
+      {
+        heading: "Which events?",
+        answers: [
+          { label: "All events" },
+          { label: "Only events in a range of dates", fields: ["google.since", "google.until"] },
+        ],
+      },
+    ],
     fields: [
       {
         kind: "text",
@@ -651,32 +787,29 @@ export const CATALOG: CatalogEntry[] = [
         target: "latchkey_settings.account",
         label: "Google account",
         help:
-          "Which stored Google login to mirror. Leave it empty if latchkey holds only one " +
+          "Which stored Google login to copy. Leave it empty if only one is stored " +
           "for google-calendar.",
       },
       {
         kind: "string_list",
         probe: "calendars",
         target: "google.calendars",
-        label: "Only these calendars",
-        help:
-          "Calendar names as Google shows them, comma-separated. Empty mirrors every calendar " +
-          "on the account's list, subscribed ones included. Adding one later downloads it whole.",
+        label: "Calendars",
+        help: "A calendar added later is downloaded whole.",
       },
       {
         kind: "date",
         target: "google.since",
-        label: "Only events from",
+        label: "First day",
         help:
-          "The first day to mirror (YYYY-MM-DD). With a last day too, only events with some " +
-          "part in that stretch are mirrored, and a series keeps only the changed dates inside " +
-          "it. A windowed calendar is listed whole every run. Leave both empty for everything.",
+          "Only events with some part in the range are copied, and a series keeps only its " +
+          "changed dates inside it.",
       },
       {
         kind: "date",
         target: "google.until",
-        label: "Only events until",
-        help: "The last day to mirror (YYYY-MM-DD), included. Leave empty for no end.",
+        label: "Last day",
+        help: "The last day, included. Leave empty for no end.",
       },
     ],
   },
@@ -685,7 +818,7 @@ export const CATALOG: CatalogEntry[] = [
     variantKey: "fastmail",
     method: "fastmail",
     label: "Fastmail Calendar",
-    blurb: "Mirror a Fastmail account's calendars over CalDAV.",
+    blurb: "Copy a Fastmail account's calendars over CalDAV.",
     keywords: ["fastmail", "calendar", "caldav", "events", "meetings", "schedule"],
     kind: "api",
     icon: "fastmail",
@@ -698,40 +831,60 @@ export const CATALOG: CatalogEntry[] = [
     credentialPaste: {
       help:
         "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
-        "Privacy & Security → Integrations → App passwords, with calendar access.",
+        "Privacy & Security → Integrations → App passwords: Access “Calendars (CalDAV)”, " +
+        "with Read-only access ticked. An API token won’t do: CalDAV refuses them.",
+      accountSuffix: "calendar",
     },
     canProbe: true,
+    sections: [
+      {
+        heading: "Which calendars?",
+        answers: [
+          { label: "Every calendar" },
+          { label: "Only the calendars I choose", fields: ["fastmail.calendars"] },
+        ],
+      },
+      {
+        heading: "Which events?",
+        answers: [
+          { label: "All events" },
+          {
+            label: "Only events in a range of dates",
+            fields: ["fastmail.since", "fastmail.until"],
+          },
+        ],
+      },
+    ],
     fields: [
       {
         kind: "text",
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Fastmail account",
-        help: "Which stored Fastmail app password to use. Leave it empty if latchkey holds only one.",
+        help:
+          "The name the app password is stored under in latchkey — “you@fastmail.com calendar”, " +
+          "say. Leave it empty if only one is stored.",
       },
       {
         kind: "string_list",
         probe: "calendars",
         target: "fastmail.calendars",
-        label: "Only these calendars",
-        help:
-          "Calendar names as Fastmail shows them, comma-separated. Empty mirrors every calendar. " +
-          "Adding one later downloads it whole.",
+        label: "Calendars",
+        help: "A calendar added later is downloaded whole.",
       },
       {
         kind: "date",
         target: "fastmail.since",
-        label: "Only events from",
+        label: "First day",
         help:
-          "The first day to mirror (YYYY-MM-DD). With a last day too, only events with some " +
-          "part in that stretch are mirrored, and a series keeps only the changed dates inside " +
-          "it. A windowed calendar is listed whole every run. Leave both empty for everything.",
+          "Only events with some part in the range are copied, and a series keeps only its " +
+          "changed dates inside it.",
       },
       {
         kind: "date",
         target: "fastmail.until",
-        label: "Only events until",
-        help: "The last day to mirror (YYYY-MM-DD), included. Leave empty for no end.",
+        label: "Last day",
+        help: "The last day, included. Leave empty for no end.",
       },
     ],
   },
@@ -739,7 +892,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "calendar",
     variantKey: "caldav",
     label: "CalDAV",
-    blurb: "Mirror the calendars on any CalDAV server: iCloud, Nextcloud, Radicale, ….",
+    blurb: "Copy the calendars on any CalDAV server: iCloud, Nextcloud, Radicale, ….",
     keywords: ["calendar", "caldav", "icloud", "nextcloud", "radicale", "events", "schedule"],
     kind: "api",
     icon: "calendar",
@@ -751,47 +904,66 @@ export const CATALOG: CatalogEntry[] = [
     // first, with an app password rather than a browser login — which
     // the Connect flow cannot do. The help text says how.
     canProbe: true,
+    before: {
+      text: "The sign-in for this server is set up in a terminal, with latchkey:",
+      needs: [
+        "`latchkey services register` a service for this host.",
+        '`latchkey auth set <service> -u "you@example.com:<app password>"`',
+      ],
+    },
+    sections: [
+      { heading: "Server address", fields: ["caldav.server_url"] },
+      {
+        heading: "Which calendars?",
+        answers: [
+          { label: "Every calendar" },
+          { label: "Only the calendars I choose", fields: ["caldav.calendars"] },
+        ],
+      },
+      {
+        heading: "Which events?",
+        answers: [
+          { label: "All events" },
+          { label: "Only events in a range of dates", fields: ["caldav.since", "caldav.until"] },
+        ],
+      },
+    ],
     fields: [
       {
         kind: "text",
         required: true,
         target: "caldav.server_url",
-        label: "Server URL",
+        label: "Server address",
         help:
-          "Where the server's CalDAV starts, e.g. https://caldav.icloud.com/. The host alone is " +
-          "usually enough: discovery tries /.well-known/caldav when it does not answer. The login " +
-          "is latchkey's: `latchkey services register` a service for this host, then " +
-          '`latchkey auth set <service> -u "you@example.com:<app password>"`.',
+          "Where the server's CalDAV starts, e.g. https://caldav.icloud.com/. The host alone is" +
+          " usually enough.",
       },
       {
         kind: "text",
         target: "latchkey_settings.account",
         label: "Latchkey account",
-        help: "Which stored login to use, when latchkey holds more than one for this host.",
+        help: "Which stored login to use, when more than one is stored for this host.",
       },
       {
         kind: "string_list",
         probe: "calendars",
         target: "caldav.calendars",
-        label: "Only these calendars",
-        help:
-          "Calendar names as the server shows them, comma-separated. Empty mirrors every calendar. " +
-          "Adding one later downloads it whole.",
+        label: "Calendars",
+        help: "A calendar added later is downloaded whole.",
       },
       {
         kind: "date",
         target: "caldav.since",
-        label: "Only events from",
+        label: "First day",
         help:
-          "The first day to mirror (YYYY-MM-DD). With a last day too, only events with some " +
-          "part in that stretch are mirrored, and a series keeps only the changed dates inside " +
-          "it. A windowed calendar is listed whole every run. Leave both empty for everything.",
+          "Only events with some part in the range are copied, and a series keeps only its " +
+          "changed dates inside it.",
       },
       {
         kind: "date",
         target: "caldav.until",
-        label: "Only events until",
-        help: "The last day to mirror (YYYY-MM-DD), included. Leave empty for no end.",
+        label: "Last day",
+        help: "The last day, included. Leave empty for no end.",
       },
     ],
   },
@@ -806,6 +978,7 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "ics_calendar",
     nameHint: "Old calendar export",
     wizard: true,
+    sections: [{ heading: "Calendar folder", fields: ["ics.path"] }],
     fields: [
       {
         kind: "path",
@@ -813,11 +986,11 @@ export const CATALOG: CatalogEntry[] = [
         pickTitle: "Choose the folder of .ics files",
         required: true,
         target: "ics.path",
-        label: "Folder",
+        label: "Calendar folder",
         help:
-          "A folder of .ics files, each one calendar — Takeout/Calendar from a Google export, " +
-          "say. A file's events are the whole of that calendar: an event a re-read file no " +
-          "longer holds is dropped from the mirror.",
+          "A folder of .ics files, one per calendar: the Calendar folder from a Google Takeout," +
+          " say. Each file is the whole of its calendar: an event a re-read file no longer " +
+          "holds is dropped from the copy.",
       },
     ],
   },
@@ -830,7 +1003,7 @@ export const CATALOG: CatalogEntry[] = [
     variantKey: "fastmail",
     method: "fastmail",
     label: "Fastmail Contacts",
-    blurb: "Mirror a Fastmail account's address books over CardDAV.",
+    blurb: "Copy a Fastmail account's address books over CardDAV.",
     keywords: ["fastmail", "contacts", "carddav", "vcard", "address book"],
     kind: "api",
     icon: "fastmail",
@@ -843,25 +1016,35 @@ export const CATALOG: CatalogEntry[] = [
     credentialPaste: {
       help:
         "Your Fastmail address and an app password from app.fastmail.com → Settings → " +
-        "Privacy & Security → Integrations → App passwords, with contacts access.",
+        "Privacy & Security → Integrations → App passwords: Access “Contacts (CardDAV)”, " +
+        "with Read-only access ticked. An API token won’t do: CardDAV refuses them.",
+      accountSuffix: "contacts",
     },
     canProbe: true,
+    sections: [
+      {
+        heading: "Which address books?",
+        answers: [
+          { label: "Every address book" },
+          { label: "Only the address books I choose", fields: ["fastmail.addressbooks"] },
+        ],
+      },
+    ],
     fields: [
       {
         kind: "text",
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Fastmail account",
-        help: "Which stored Fastmail app password to use. Leave it empty if latchkey holds only one.",
+        help:
+          "The name the app password is stored under in latchkey — “you@fastmail.com contacts”, " +
+          "say. Leave it empty if only one is stored.",
       },
       {
         kind: "string_list",
         probe: "addressbooks",
         target: "fastmail.addressbooks",
-        label: "Only these address books",
-        help:
-          "Address book names exactly as Fastmail shows them, comma-separated. Empty mirrors " +
-          "every address book on the account.",
+        label: "Address books",
       },
     ],
   },
@@ -869,7 +1052,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "contacts",
     variantKey: "carddav",
     label: "CardDAV contacts",
-    blurb: "Mirror the address books on any CardDAV server: iCloud, Nextcloud, Radicale, ….",
+    blurb: "Copy the address books on any CardDAV server: iCloud, Nextcloud, Radicale, ….",
     keywords: ["contacts", "carddav", "icloud", "nextcloud", "vcard", "address book"],
     kind: "api",
     icon: "contacts",
@@ -880,32 +1063,44 @@ export const CATALOG: CatalogEntry[] = [
     // keys the login by the server's host, and registering one takes an
     // app password, which the Connect flow cannot do.
     canProbe: true,
+    before: {
+      text: "The sign-in for this server is set up in a terminal, with latchkey:",
+      needs: [
+        "`latchkey services register` a service for this host.",
+        '`latchkey auth set <service> -u "you@example.com:<app password>"`',
+      ],
+    },
+    sections: [
+      { heading: "Server address", fields: ["carddav.server_url"] },
+      {
+        heading: "Which address books?",
+        answers: [
+          { label: "Every address book" },
+          { label: "Only the address books I choose", fields: ["carddav.addressbooks"] },
+        ],
+      },
+    ],
     fields: [
       {
         kind: "text",
         required: true,
         target: "carddav.server_url",
-        label: "Server URL",
+        label: "Server address",
         help:
-          "Where the server's CardDAV starts, e.g. https://contacts.icloud.com/. The host " +
-          "alone is usually enough: discovery tries /.well-known/carddav when it does not " +
-          "answer. The login is latchkey's: `latchkey services register` a service for this " +
-          'host, then `latchkey auth set <service> -u "you@example.com:<app password>"`.',
+          "Where the server's CardDAV starts, e.g. https://contacts.icloud.com/. The host alone" +
+          " is usually enough.",
       },
       {
         kind: "text",
         target: "latchkey_settings.account",
         label: "Latchkey account",
-        help: "Which stored login to use, when latchkey holds more than one for this host.",
+        help: "Which stored login to use, when more than one is stored for this host.",
       },
       {
         kind: "string_list",
         probe: "addressbooks",
         target: "carddav.addressbooks",
-        label: "Only these address books",
-        help:
-          "Address book names exactly as the server shows them, comma-separated. Empty " +
-          "mirrors every address book on the account.",
+        label: "Address books",
       },
     ],
   },
@@ -920,6 +1115,7 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "vcf-contacts",
     nameHint: "Old address book",
     wizard: true,
+    sections: [{ heading: "Contacts folder", fields: ["vcf.path"] }],
     fields: [
       {
         kind: "path",
@@ -927,19 +1123,10 @@ export const CATALOG: CatalogEntry[] = [
         pickTitle: "Choose the folder of .vcf files",
         required: true,
         target: "vcf.path",
-        label: "Folder",
+        label: "Contacts folder",
         help:
-          "A folder of .vcf files, read recursively — ~/Downloads/contacts say. A file may " +
-          "hold one contact or a whole address book.",
-      },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Treat the folder as the whole address book",
-        default: true,
-        help:
-          "Each sync rewrites the mirror from the files in the folder now, so a contact " +
-          "whose file is gone drops out (the store's history keeps it).",
+          "A folder of .vcf files, from Google Contacts, iCloud or a phone: ~/Downloads/contacts, say. Folders inside it " +
+          "are read too. A file may hold one contact or a whole address book.",
       },
     ],
   },
@@ -964,14 +1151,35 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "garmin",
     nameHint: "My Garmin",
     wizard: true,
+    // From latchkey's Garmin plugin, which datalib ships and installs
+    // on the first sign-in (datalib/backend/http/src/plugins.rs).
+    credentialService: "garmin",
+    credentialPaste: {
+      help:
+        "A folder holding oauth1_token.json, as garth or python-garminconnect write it. " +
+        "latchkey keeps a copy; the folder is not read again.",
+    },
+    canProbe: true,
+    sections: [
+      {
+        heading: "How far back?",
+        answers: [
+          { label: "One year before the first sync" },
+          { label: "From a date I choose", fields: ["api.since"] },
+        ],
+      },
+      {
+        heading: "FIT files",
+        fields: ["api.activity_files", "api.wellness_files"],
+        advanced: true,
+      },
+    ],
     fields: [
       {
         kind: "date",
         target: "api.since",
-        label: "Mirror from",
-        help:
-          "The earliest day to mirror (YYYY-MM-DD). Leave empty for a year before the first " +
-          "sync; move it earlier later to backfill.",
+        label: "First day",
+        help: "Choose an earlier date later to bring in older data.",
       },
       {
         kind: "bool",
@@ -986,17 +1194,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Keep each day's wellness FIT bundle",
         default: false,
         help:
-          "All-day heart rate, stress, steps, body battery and sleep at sensor resolution, " +
-          "one zip per day. The per-day metrics already carry the same series at chart resolution.",
-      },
-      {
-        kind: "text",
-        required: false,
-        target: "api.token_dir",
-        label: "Token folder",
-        help:
-          "Where `datalib-step login garmin` (or garth) put oauth1_token.json. " +
-          "Leave empty for ~/.garth.",
+          "All-day heart rate, stress, steps, body battery and sleep at sensor resolution, one " +
+          "zip per day. The per-day metrics already carry the same series at chart resolution.",
       },
     ],
   },
@@ -1024,6 +1223,7 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "claude-export",
     nameHint: "Claude export",
     wizard: true,
+    sections: [{ heading: "Export folder", fields: ["export.path"] }],
     fields: [
       {
         kind: "path",
@@ -1033,10 +1233,9 @@ export const CATALOG: CatalogEntry[] = [
         target: "export.path",
         label: "Export folder",
         help:
-          "The directory you unpacked the export into — the one holding conversations.json, " +
-          "~/Downloads/claude-export say. " +
-          "The export is a complete snapshot: a conversation it no longer mentions is " +
-          "dropped from the mirror.",
+          "The folder you unpacked the Claude export into: the one holding conversations.json, ~/Downloads/claude-export say. " +
+          "The export is a complete snapshot: a conversation it no longer mentions is dropped " +
+          "from the copy.",
       },
     ],
   },
@@ -1048,13 +1247,23 @@ export const CATALOG: CatalogEntry[] = [
     method: "sessions",
     label: "Claude Code",
     blurb:
-      "Mirror your Claude Code sessions — terminal, desktop and IDE — from their store on this machine.",
+      "Copy your Claude Code sessions — terminal, desktop and IDE — from their store on this machine.",
     keywords: ["claude", "code", "anthropic", "agent", "sessions", "transcripts", "coding"],
     kind: "local",
     icon: "claude_code",
     defaultName: "claude-code",
     nameHint: "Claude Code on this Mac",
     wizard: true,
+    sections: [
+      {
+        heading: "Sessions",
+        help: "A session Claude Code later deletes stays in the copy.",
+        answers: [
+          { label: "The standard place on this computer", help: "~/.claude/projects" },
+          { label: "Another folder", fields: ["sessions.path"] },
+        ],
+      },
+    ],
     fields: [
       {
         kind: "path",
@@ -1063,10 +1272,7 @@ export const CATALOG: CatalogEntry[] = [
         required: false,
         target: "sessions.path",
         label: "Sessions folder",
-        help:
-          "Leave empty for the standard store, ~/.claude/projects. Point it elsewhere for " +
-          "a copy of that folder from another machine. A session Claude Code later deletes " +
-          "stays in the mirror.",
+        help: "For a copy of that folder from another machine.",
       },
     ],
   },
@@ -1076,13 +1282,23 @@ export const CATALOG: CatalogEntry[] = [
     // is the standard home: Codex keeps its rollouts under ~/.codex.
     method: "sessions",
     label: "Codex",
-    blurb: "Mirror your Codex CLI sessions from their store on this machine.",
+    blurb: "Copy your Codex CLI sessions from their store on this machine.",
     keywords: ["codex", "openai", "agent", "sessions", "rollouts", "transcripts", "coding"],
     kind: "local",
     icon: "codex",
     defaultName: "codex",
     nameHint: "Codex on this Mac",
     wizard: true,
+    sections: [
+      {
+        heading: "Sessions",
+        help: "A thread Codex later deletes stays in the copy.",
+        answers: [
+          { label: "The standard place on this computer", help: "~/.codex" },
+          { label: "Another folder", fields: ["sessions.path"] },
+        ],
+      },
+    ],
     fields: [
       {
         kind: "path",
@@ -1091,26 +1307,42 @@ export const CATALOG: CatalogEntry[] = [
         required: false,
         target: "sessions.path",
         label: "Codex home",
-        help:
-          "Leave empty for the standard home, ~/.codex. Point it elsewhere for a copy of " +
-          "that folder from another machine. A thread Codex later deletes stays in the " +
-          "mirror.",
+        help: "For a copy of that folder from another machine.",
       },
     ],
   },
   {
     type: "google_takeout",
     label: "Google Takeout",
-    blurb: "Google Chat, Voice, Maps and YouTube from an export.",
-    keywords: ["google", "takeout", "chat", "voice", "youtube"],
+    blurb: "Google Chat, Voice, Gemini, Maps and YouTube from an export.",
+    keywords: ["google", "takeout", "chat", "voice", "youtube", "maps", "gemini"],
     kind: "export",
     icon: "google_takeout",
     defaultName: "google-takeout",
     nameHint: "My Google Takeout",
     wizard: true,
-    // Every feed defaults off, here as in the provider: an export holds
-    // whatever was asked of Google, so each feed is ticked on purpose
-    // (providers/google_takeout/INGEST.md).
+    // Every feed starts ticked: an export holds what its owner asked
+    // Google for, so reading all of it is what they expect. The provider
+    // still defaults each feed off, so a config that names none reads
+    // none (providers/google_takeout/INGEST.md).
+    sections: [
+      { heading: "Takeout folder", fields: ["export.path"] },
+      {
+        heading: "Conversations",
+        fields: ["export.google_chat", "export.google_voice", "export.google_voice_include_spam"],
+      },
+      {
+        heading: "Activity",
+        fields: [
+          "export.youtube_watch_history",
+          "export.youtube_subscriptions",
+          "export.maps_reviews",
+          "export.maps_saved_places",
+          "export.maps_photos",
+          "export.gemini_apps",
+        ],
+      },
+    ],
     fields: [
       {
         kind: "path",
@@ -1120,81 +1352,67 @@ export const CATALOG: CatalogEntry[] = [
         target: "export.path",
         label: "Takeout folder",
         help:
-          "The unzipped export — the Takeout folder holding Google Chat/, Voice/, " +
-          "YouTube and YouTube Music/ and the rest, ~/Downloads/Takeout say. Gmail is not " +
-          "read here: its .mbox is an email source of its own.",
+          "The unzipped export: the Takeout folder holding Google Chat, Voice, YouTube and " +
+          "YouTube Music and the rest, ~/Downloads/Takeout say. Gmail is not read here: its .mbox is an email source of " +
+          "its own.",
       },
       {
         kind: "bool",
         target: "export.google_chat",
         label: "Google Chat",
-        default: false,
-        help: "Direct messages and spaces, with their attachments. Rendered as conversations.",
+        default: true,
+        help: "Direct messages and spaces, with their attachments.",
       },
       {
         kind: "bool",
         target: "export.google_voice",
         label: "Google Voice",
-        default: false,
-        help: "Texts, voicemails, calls and bills. Rendered as conversations.",
+        default: true,
+        help: "Texts, voicemails, calls and bills.",
       },
       {
         kind: "bool",
         target: "export.google_voice_include_spam",
         requires: "export.google_voice",
         label: "Include Voice spam",
-        default: false,
-        help: "Also read Voice/Spam/. Bulky, and rarely worth searching.",
+        default: true,
+        help: "Also reads Voice/Spam. Bulky, and rarely worth searching.",
       },
       {
         kind: "bool",
         target: "export.youtube_watch_history",
         label: "YouTube watch history",
-        default: false,
-        help:
-          "Kept in this source's own store; not rendered into pages yet. The same is true " +
-          "of every feed below.",
+        default: true,
       },
       {
         kind: "bool",
         target: "export.youtube_subscriptions",
         label: "YouTube subscriptions",
-        default: false,
+        default: true,
       },
       {
         kind: "bool",
         target: "export.maps_reviews",
         label: "Maps reviews",
-        default: false,
+        default: true,
       },
       {
         kind: "bool",
         target: "export.maps_saved_places",
         label: "Maps saved places",
-        default: false,
+        default: true,
       },
       {
         kind: "bool",
         target: "export.maps_photos",
         label: "Maps photos and videos",
-        default: false,
+        default: true,
       },
       {
         kind: "bool",
         target: "export.gemini_apps",
         label: "Gemini activity",
-        default: false,
-      },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Empty the mirror before each sync",
-        default: false,
-        help:
-          "Not needed: every feed already drops what a newer export no longer holds " +
-          "(the store's history keeps it). Turned on, each sync empties the mirror and " +
-          "rewrites it from the export, so an export requested without some product " +
-          "loses that product's records.",
+        default: true,
       },
     ],
   },
@@ -1208,6 +1426,7 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "facebook",
     nameHint: "My Facebook",
     wizard: true,
+    sections: [{ heading: "Export folder", fields: ["export.path"] }],
     fields: [
       {
         kind: "path",
@@ -1217,10 +1436,9 @@ export const CATALOG: CatalogEntry[] = [
         target: "export.path",
         label: "Export folder",
         help:
-          'The unzipped "Download your information" export, requested in JSON format — a ' +
-          "folder like ~/Downloads/facebook-<id>-<date>, " +
-          "the folder holding your_facebook_activity/, connections/ and the rest. " +
-          "The HTML format is not read.",
+          'The unzipped "Download your information" export, requested in JSON format: the ' +
+          "folder holding your_facebook_activity, connections and the rest. The HTML format is " +
+          "not read.",
       },
     ],
   },
@@ -1234,6 +1452,10 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "linkedin",
     nameHint: "My LinkedIn",
     wizard: true,
+    sections: [
+      { heading: "Export folder", fields: ["export.path"] },
+      { heading: "Profile photos", fields: ["export.fetch_photos"] },
+    ],
     fields: [
       {
         kind: "path",
@@ -1243,42 +1465,41 @@ export const CATALOG: CatalogEntry[] = [
         target: "export.path",
         label: "Export folder",
         help:
-          'The unzipped "Get a copy of your data" export — the folder of CSVs, ' +
-          "~/Downloads/LinkedInDataExport say. Every CSV in it is read.",
+          'The unzipped "Get a copy of your data" export: the folder of CSV files, ~/Downloads/LinkedInDataExport say. Every CSV in' +
+          " it is read.",
       },
       {
         kind: "bool",
         target: "export.fetch_photos",
-        label: "Fetch connections' profile photos",
+        label: "Fetch each connection's public profile photo from linkedin.com",
         default: false,
         help:
-          "The export has no photos. On, each connection's public profile photo is fetched " +
-          "from linkedin.com, once per connection — the one part of this source that goes " +
-          "online. No login is needed.",
-      },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Treat each export as complete",
-        default: true,
-        help:
-          "Each sync rewrites the mirror from the export as it is now, so a message or " +
-          "connection a newer export no longer holds drops out (the store's history keeps " +
-          "it). Off, a CSV LinkedIn stops including keeps its rows from the last export " +
-          "that had it.",
+          "The export has no photos. This is the one part of this source that goes online. No " +
+          "login is needed.",
       },
     ],
   },
   {
     type: "signal",
     label: "Signal",
-    blurb: "Decrypt and mirror an Android Signal backup.",
+    blurb: "Decrypt and copy an Android Signal backup.",
     keywords: ["signal", "backup", "messages", "sms", "chat"],
     kind: "export",
     icon: "signal",
     defaultName: "signal",
     nameHint: "Signal on my phone",
     wizard: true,
+    before: {
+      text: "This reads a Signal backup from an Android phone. You need two things:",
+      needs: [
+        "The backup folder from the phone, copied to this computer.",
+        "The backup passphrase Signal showed when backups were turned on.",
+      ],
+    },
+    sections: [
+      { heading: "Backup folder", fields: ["backup.path"] },
+      { heading: "Passphrase", fields: ["backup.aep_env_var"] },
+    ],
     fields: [
       {
         kind: "path",
@@ -1287,18 +1508,14 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "backup.path",
         label: "Backup folder",
-        help:
-          "The folder holding your signal-backup-* snapshots, pulled off the phone. " +
-          "The newest snapshot in it is the one decrypted.",
+        help: "The folder holding your signal-backup-* files. The newest one in it is the one read.",
       },
       {
         kind: "text",
         target: "backup.aep_env_var",
-        label: "Passphrase environment variable",
-        help:
-          "Name of the env var holding the backup passphrase — not the passphrase itself. " +
-          "The backend reads it at download time. Leave empty for the default, " +
-          "SIGNAL_BACKUP_PASSPHRASE.",
+        label: "Passphrase",
+        envVar: { default: "SIGNAL_BACKUP_PASSPHRASE", holds: "passphrase" },
+        help: "Name of the environment variable holding the passphrase, not the passphrase itself.",
       },
       {
         kind: "select",
@@ -1319,13 +1536,26 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "whatsapp",
     label: "WhatsApp",
-    blurb: "Decrypt and mirror an Android crypt15 backup.",
+    blurb: "Decrypt and copy an Android crypt15 backup.",
     keywords: ["whatsapp", "backup", "messages", "chat"],
     kind: "export",
     icon: "whatsapp",
     defaultName: "whatsapp",
     nameHint: "WhatsApp old phone",
     wizard: true,
+    before: {
+      text:
+        "This reads a WhatsApp backup from an Android phone, protected with a 64-digit key " +
+        "(not a password). You need two things:",
+      needs: [
+        "The WhatsApp folder from the phone, copied to this computer.",
+        "The 64-digit key WhatsApp showed when the encrypted backup was turned on.",
+      ],
+    },
+    sections: [
+      { heading: "WhatsApp folder", fields: ["backup.path"] },
+      { heading: "Backup key", fields: ["backup.key_env_var"] },
+    ],
     fields: [
       {
         kind: "path",
@@ -1334,17 +1564,16 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "backup.path",
         label: "WhatsApp folder",
-        help:
-          "The WhatsApp/ directory pulled off the phone — the one containing " +
-          "Databases/msgstore.db.crypt15 and a Media/ tree.",
+        help: "Choose the folder named WhatsApp: the one with Databases and Media inside it.",
       },
       {
         kind: "text",
         target: "backup.key_env_var",
-        label: "Decryption-key environment variable",
+        label: "Backup key",
+        envVar: { default: "WHATSAPP_BACKUP_DECRYPTION_KEY", holds: "64-digit key" },
         help:
-          "Name of the env var holding the hex-encoded 32-byte root key — not the key " +
-          "itself. Leave empty for the default, WHATSAPP_BACKUP_DECRYPTION_KEY.",
+          "Name of the environment variable holding the hex-encoded 32-byte root key, not the " +
+          "key itself.",
       },
     ],
   },
@@ -1358,6 +1587,7 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "sms",
     nameHint: "Texts and calls",
     wizard: true,
+    sections: [{ heading: "Backup folder", fields: ["backup.path"] }],
     fields: [
       {
         kind: "path",
@@ -1367,19 +1597,9 @@ export const CATALOG: CatalogEntry[] = [
         target: "backup.path",
         label: "Backup folder",
         help:
-          "The folder the Android app SMS Backup & Restore writes its sms-*.xml and " +
-          "calls-*.xml files to, copied off the phone — ~/Documents/SMSBackupRestore say. " +
-          "A single .xml file typed in here works too.",
-      },
-      {
-        kind: "bool",
-        target: "common.always_clear_before_ingest",
-        label: "Treat the folder as the whole archive",
-        default: true,
-        help:
-          "Each sync rewrites the mirror from the backups in the folder now, so a message " +
-          "no longer in any of them drops out (the store's history keeps it). Leave it off " +
-          "if old backups get pruned from the folder.",
+          "The folder the Android app SMS Backup & Restore writes its sms-*.xml and calls-*.xml" +
+          " files to, copied off the phone: ~/Documents/SMSBackupRestore, say. The path of a single .xml file, typed in, works " +
+          "too.",
       },
     ],
   },
@@ -1406,6 +1626,7 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "pdfs",
     nameHint: "Papers and manuals",
     wizard: true,
+    sections: [{ heading: "PDF folder", fields: ["fswalk.path"] }],
     fields: [
       {
         kind: "path",
@@ -1415,26 +1636,22 @@ export const CATALOG: CatalogEntry[] = [
         target: "fswalk.path",
         label: "PDF folder",
         help:
-          "Scanned recursively for PDFs. Documents are identified by their bytes, so the " +
-          "same file in two places is one document; a PDF with no extractable text is " +
-          "recorded as scanned and left unconverted rather than indexed as empty.",
+          "Every PDF in this folder and the folders inside it. The same file in two places " +
+          "counts as one document. A scanned PDF with no text is recorded but not converted.",
       },
       {
         kind: "string_list",
         target: "ignore",
         label: "Ignore patterns",
         help:
-          "Gitignore-shaped patterns pruned from the scan, comma-separated — drafts/**, " +
-          "**/scans/** — on top of any .gitignore files found in the tree. Leave empty to " +
-          "walk everything.",
+          "Gitignore-shaped patterns, comma-separated (drafts/**, **/scans/**), on top of any " +
+          ".gitignore in the tree.",
       },
       {
         kind: "bytes",
         target: "max_bytes",
         label: "Skip files larger than",
-        help:
-          "A multi-gigabyte PDF is nearly always a scanned book, and either way one " +
-          "document shouldn't stall a whole scan. Leave empty for the 512 MiB default.",
+        help: "Empty is the 512 MiB default.",
       },
     ],
   },
@@ -1448,6 +1665,10 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "fsindex",
     nameHint: "My home folder",
     wizard: true,
+    sections: [
+      { heading: "Folder", fields: ["fswalk.path"] },
+      { heading: "Scan", fields: ["stamp"], advanced: true },
+    ],
     fields: [
       {
         kind: "path",
@@ -1457,10 +1678,9 @@ export const CATALOG: CatalogEntry[] = [
         target: "fswalk.path",
         label: "Folder",
         help:
-          "Scanned recursively, recording every entry's path, kind, size and content " +
-          "hash. Rescans are keyed on mtime, size and inode, so an unchanged file is " +
-          "never re-read. Nothing is converted to markdown — the index is queryable in " +
-          "this source's own store, and what reaches the grid is the storage report.",
+          "Records the path, kind, size and content hash of everything in this folder and the " +
+          "folders inside it. Files are not turned into pages: this source appears in Datalib " +
+          "as a storage report.",
       },
       {
         kind: "bool",
@@ -1468,10 +1688,9 @@ export const CATALOG: CatalogEntry[] = [
         label: "Write UUID breadcrumbs into the tree",
         default: false,
         help:
-          "Off by default, so the scan stays read-only against the folder it reads. On, " +
-          "it writes a UUID into the .fsindex.yaml of any directory that opted in with " +
-          "stamp_me_with_uuid: true — which is how a directory keeps one identity " +
-          "across moves and renames.",
+          "Off keeps the scan read-only. On writes a UUID into the .fsindex.yaml of any " +
+          "directory that set stamp_me_with_uuid: true, so it keeps one identity across moves " +
+          "and renames.",
       },
     ],
   },
@@ -1488,6 +1707,10 @@ export const CATALOG: CatalogEntry[] = [
     // Download-only: media has no text to convert, so nothing is
     // rendered and no render step is declared.
     renderStep: false,
+    sections: [
+      { heading: "Media folder", fields: ["fswalk.path"] },
+      { heading: "Scan", fields: ["playlists", "skip_dataless"], advanced: true },
+    ],
     fields: [
       {
         kind: "path",
@@ -1497,10 +1720,8 @@ export const CATALOG: CatalogEntry[] = [
         target: "fswalk.path",
         label: "Media folder",
         help:
-          "Scanned for audio, images, video and .m3u playlists. Files are identified by " +
-          "their bytes rather than their extension, and each one also gets a hash over " +
-          "just its audio or picture data — so retagging a track, or re-rendering a RAW " +
-          "preview, doesn't make it look like a new file.",
+          "Scanned for audio, images, video and .m3u playlists. Retagging a track or re-" +
+          "rendering a preview does not make a file look new.",
       },
       {
         kind: "bool",
@@ -1508,9 +1729,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Index .m3u playlists",
         default: true,
         help:
-          "Records each playlist's entries in order, including the ones pointing at " +
-          "tracks you no longer have. Streaming manifests that share the .m3u8 " +
-          "extension are recognized and skipped.",
+          "Records each playlist's entries in order, missing tracks included. Streaming .m3u8 " +
+          "manifests are skipped.",
       },
       {
         kind: "bool",
@@ -1518,9 +1738,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Skip cloud placeholders",
         default: true,
         help:
-          "Leave Dropbox online-only and iCloud evicted files alone rather than pulling " +
-          "them down. Turn this off only if your filesystem reports no block counts, " +
-          "which makes every file look evicted.",
+          "Leaves Dropbox online-only and iCloud evicted files alone. Turn off only if the " +
+          "filesystem reports no block counts.",
       },
     ],
   },
@@ -1542,7 +1761,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "lightroom",
     label: "Lightroom",
-    blurb: "Mirror a Lightroom Classic catalog, with full history.",
+    blurb: "Copy a Lightroom Classic catalog, with full history.",
     keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite", "images", "backup", "zip"],
     kind: "local",
     icon: "lightroom",
@@ -1553,6 +1772,14 @@ export const CATALOG: CatalogEntry[] = [
     // rendered and no render step is declared.
     renderStep: false,
     requiresOneOf: ["catalog.path", "backups.path"],
+    intro:
+      "Copies a Lightroom Classic catalog, with full history. Choose the catalog, the backups " +
+      "folder, or both.",
+    sections: [
+      { heading: "Catalog file", fields: ["catalog.path"] },
+      { heading: "Backups folder", fields: ["backups.path"] },
+      { heading: "Catalog database", fields: ["skip_xmp", "snapshot", "gc"], advanced: true },
+    ],
     fields: [
       {
         kind: "path",
@@ -1563,10 +1790,8 @@ export const CATALOG: CatalogEntry[] = [
         target: "catalog.path",
         label: "Catalog file",
         help:
-          "A .lrcat, which is an ordinary SQLite database — Lightroom keeps it under " +
-          "~/Pictures/Lightroom — or one of Lightroom's backup .zip files. Every table is " +
-          "mirrored, and doltlite stores only what changed between runs — so prior states " +
-          "stay queryable.",
+          "A .lrcat catalog, or one of Lightroom's backup .zip files. Lightroom keeps it in " +
+          "~/Pictures/Lightroom.",
       },
       {
         kind: "path",
@@ -1576,52 +1801,52 @@ export const CATALOG: CatalogEntry[] = [
         target: "backups.path",
         label: "Backups folder",
         help:
-          "Optional, beside or instead of the catalog: the folder Lightroom writes its " +
-          "backups into, by default a Backups folder beside the catalog in " +
-          "~/Pictures/Lightroom. Each backup (a " +
-          "folder named for when it was taken, holding a .zip) becomes one commit, oldest " +
-          "first and dated when it was taken, so the history reaches back before your first " +
-          "sync. Each sync adds the backups taken since, then mirrors the catalog on top.",
+          "The folder Lightroom writes its backups into, by default a Backups folder beside the" +
+          " catalog in ~/Pictures/Lightroom. Each backup becomes one point in the history, " +
+          "dated when it was taken, so the history reaches back before your first sync.",
       },
       {
         kind: "bool",
         target: "skip_xmp",
         label: "Skip XMP packets and search indexes",
         default: false,
-        help:
-          "The bulkiest columns in a catalog, and wholly derived from columns that stay. " +
-          "Off by default: a backup should be faithful unless you say otherwise.",
+        help: "The bulkiest columns, wholly derived from columns that stay.",
       },
       {
         kind: "bool",
         target: "snapshot",
         label: "Snapshot before reading",
         default: true,
-        help:
-          "Take a VACUUM INTO copy first, so a catalog Lightroom has open can't be read " +
-          "half-written.",
+        help: "Takes a VACUUM INTO copy first. An open catalog can't then be read half-written.",
       },
       {
         kind: "bool",
         target: "gc",
-        label: "Collect unreachable chunks each run",
+        label: "Collect unreachable chunks each sync",
         default: false,
         help:
-          "Much smaller store, history unaffected — but it rewrites the whole chunk store " +
-          "every run.",
+          "Much smaller store, history unaffected, but rewrites the whole chunk store every " +
+          "sync.",
       },
     ],
   },
   {
     type: "apple_messages",
     label: "Apple Messages",
-    blurb: "Mirror the Messages app's own database, with full history.",
+    blurb: "Copy the Messages app's own database, with full history.",
     keywords: ["apple", "messages", "imessage", "sms", "texts", "chat.db", "iphone"],
     kind: "local",
     icon: "apple_messages",
     defaultName: "apple-messages",
     nameHint: "Messages on this Mac",
     wizard: true,
+    intro:
+      "Copies your full Messages history from this Mac. Photos, videos and files in a " +
+      "conversation are listed by name; the files themselves are not copied.",
+    sections: [
+      { heading: "Messages folder", fields: ["messages.path"] },
+      { heading: "Messages database", fields: ["skip_churn", "snapshot", "gc"], advanced: true },
+    ],
     fields: [
       {
         kind: "path",
@@ -1635,13 +1860,10 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "messages.path",
         label: "Messages folder",
+        guarded: "Let Datalib read your Messages folder",
         help:
-          "The folder the Messages app keeps its database in, ~/Library/Messages. Choose it " +
-          "with the picker rather than typing the path: macOS protects the folder, and picking it is " +
-          'what lets Datalib read it. If a sync still fails with "Operation not permitted", ' +
-          "grant Datalib Full Disk Access in System Settings. A copied chat.db file works too, " +
-          "typed in here. Attachments (photos, videos, files) are listed by name and path " +
-          "only — their bytes are not copied.",
+          "The folder the Messages app keeps its database in, ~/Library/Messages. A copied " +
+          "chat.db file, typed in, works too.",
       },
       {
         kind: "bool",
@@ -1649,8 +1871,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Skip the app's counters and sync queues",
         default: true,
         help:
-          "Messages rewrites its bookkeeping tables continuously, so with this off every " +
-          "run commits even when nobody messaged. Nothing about a message lives there.",
+          "Messages rewrites these tables continuously; off, every sync commits even when " +
+          "nobody messaged. No message data lives there.",
       },
       {
         kind: "bool",
@@ -1658,24 +1880,24 @@ export const CATALOG: CatalogEntry[] = [
         label: "Snapshot before reading",
         default: true,
         help:
-          "Take a VACUUM INTO copy first. Messages keeps the database open whenever it is " +
-          "running, so this is the only way to read a consistent state.",
+          "Takes a VACUUM INTO copy first. Messages keeps the database open, so this is the " +
+          "only consistent read.",
       },
       {
         kind: "bool",
         target: "gc",
-        label: "Collect unreachable chunks each run",
+        label: "Collect unreachable chunks each sync",
         default: false,
         help:
-          "Much smaller store, history unaffected — but it rewrites the whole chunk store " +
-          "every run.",
+          "Much smaller store, history unaffected, but rewrites the whole chunk store every " +
+          "sync.",
       },
     ],
   },
   {
     type: "apple_photos",
     label: "Apple Photos",
-    blurb: "Mirror an Apple Photos library's database, with full history.",
+    blurb: "Copy an Apple Photos library's database, with full history.",
     keywords: ["apple", "photos", "photoslibrary", "iphone", "icloud", "sqlite", "images"],
     kind: "local",
     icon: "apple_photos",
@@ -1684,6 +1906,12 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     // Download-only, like lightroom: nothing is rendered.
     renderStep: false,
+    intro:
+      "Copies the database inside your Photos library (database/Photos.sqlite), with full history.",
+    sections: [
+      { heading: "Photos library", fields: ["library.path"] },
+      { heading: "Photos database", fields: ["skip_history", "snapshot", "gc"], advanced: true },
+    ],
     fields: [
       {
         kind: "path",
@@ -1697,12 +1925,10 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "library.path",
         label: "Photos library",
+        guarded: "Let Datalib read your Photos library",
         help:
-          "The library bundle, usually Photos Library.photoslibrary in ~/Pictures; its " +
-          "database/Photos.sqlite is what gets mirrored. Choose it " +
-          "with the picker rather than typing the path: macOS protects the library, and " +
-          "picking it is what lets Datalib read it. If a sync still fails with " +
-          '"Operation not permitted", grant Datalib Full Disk Access in System Settings.',
+          "The library bundle, usually Photos Library.photoslibrary in ~/Pictures. Its " +
+          "database/Photos.sqlite is what gets copied.",
       },
       {
         kind: "bool",
@@ -1710,8 +1936,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Skip Core Data's change log and daemon bookkeeping",
         default: true,
         help:
-          "Photos never stops writing its history tables and work queue, so with this off " +
-          "every run commits even when no photo changed. Nothing about a photo lives there.",
+          "Photos writes these continuously; off, every sync commits even when no photo " +
+          "changed. No photo data lives there.",
       },
       {
         kind: "bool",
@@ -1719,17 +1945,17 @@ export const CATALOG: CatalogEntry[] = [
         label: "Snapshot before reading",
         default: true,
         help:
-          "Take a VACUUM INTO copy first. Photos' daemons keep the library open at all " +
-          "times, so this is the only way to read a consistent state.",
+          "Takes a VACUUM INTO copy first. Photos' daemons keep the library open, so this is " +
+          "the only consistent read.",
       },
       {
         kind: "bool",
         target: "gc",
-        label: "Collect unreachable chunks each run",
+        label: "Collect unreachable chunks each sync",
         default: false,
         help:
-          "Much smaller store, history unaffected — but it rewrites the whole chunk store " +
-          "every run.",
+          "Much smaller store, history unaffected, but rewrites the whole chunk store every " +
+          "sync.",
       },
     ],
   },

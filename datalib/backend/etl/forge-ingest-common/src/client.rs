@@ -1,5 +1,5 @@
 //! A forge's REST client. Every request goes through
-//! [`datalib_etl::http::latchkey_curl_classified`], which handles the
+//! [`datalib_etl_web::http::latchkey_curl_classified`], which handles the
 //! latchkey subprocess, the rate-limit and transient retries, and
 //! playback from disk fixtures. Latchkey injects the credential for the
 //! service — don't add it here.
@@ -12,7 +12,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 
-use datalib_etl::http::{
+use datalib_etl_web::http::{
     latchkey_curl_classified, HttpError, HttpRequest, HttpResponse, HttpService, LatchkeySettings,
     Retryability,
 };
@@ -26,6 +26,44 @@ static LINK_NEXT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<([^>]+)>;\s*rel="
 pub enum ForgeError {
     #[error("{0}")]
     Permanent(String),
+    /// The shared retry loop spent the source's give-up budget: no
+    /// request after this one will fare better.
+    #[error("{0}")]
+    GaveUp(String),
+    #[error("{url}: HTTP {status} body={body:?}")]
+    Status {
+        url: String,
+        status: u16,
+        body: String,
+    },
+}
+
+impl ForgeError {
+    /// The forge would not give this credential what it asked for.
+    pub fn refused(&self) -> bool {
+        matches!(
+            self,
+            ForgeError::Status {
+                status: 401 | 403,
+                ..
+            }
+        )
+    }
+
+    pub fn gave_up(&self) -> bool {
+        matches!(self, ForgeError::GaveUp(_))
+    }
+
+    /// The forge says the thing is not there (any more).
+    pub fn gone(&self) -> bool {
+        matches!(
+            self,
+            ForgeError::Status {
+                status: 404 | 410,
+                ..
+            }
+        )
+    }
 }
 
 pub struct ForgeClient {
@@ -66,7 +104,10 @@ impl ForgeClient {
         // waited out every rate limit and transient it could.
         let resp = latchkey_curl_classified(&req, self.classify)
             .await
-            .map_err(|e: HttpError| ForgeError::Permanent(e.to_string()))?;
+            .map_err(|e: HttpError| match e {
+                HttpError::GaveUp { .. } => ForgeError::GaveUp(e.to_string()),
+                _ => ForgeError::Permanent(e.to_string()),
+            })?;
         self.network_ms
             .fetch_add(resp.duration_ms, Ordering::Relaxed);
         self.requests.fetch_add(1, Ordering::Relaxed);
@@ -94,11 +135,11 @@ impl ForgeClient {
             let headers: HashMap<String, String> = resp.headers.into_iter().collect();
             return Ok((value, headers));
         }
-        let preview: String = body.chars().take(300).collect();
-        Err(ForgeError::Permanent(format!(
-            "{url}: HTTP {} body={preview:?}",
-            resp.status
-        )))
+        Err(ForgeError::Status {
+            url: url.to_string(),
+            status: resp.status,
+            body: body.chars().take(300).collect(),
+        })
     }
 
     /// Walk `Link: rel=next` pagination until exhausted, accumulating
@@ -106,28 +147,61 @@ impl ForgeClient {
     /// `{"items": [...]}`; any other object is one item, handed back
     /// alone.
     pub async fn paginate(&self, start_url: &str) -> Result<Vec<Value>, ForgeError> {
+        Ok(self.search(start_url).await?.items)
+    }
+
+    /// [`paginate`](Self::paginate), with what the first page says of
+    /// the whole: GitHub search's `total_count`, against which fewer
+    /// items than that is the 1000-result cap, and `incomplete_results`.
+    pub async fn search(&self, start_url: &str) -> Result<Search, ForgeError> {
         let mut url = start_url.to_string();
-        let mut out: Vec<Value> = Vec::new();
+        let mut out = Search::default();
+        let mut total_count: Option<u64> = None;
         loop {
             let (data, headers) = self.get(&url).await?;
             match &data {
-                Value::Array(arr) => out.extend(arr.iter().cloned()),
+                Value::Array(arr) => out.items.extend(arr.iter().cloned()),
                 Value::Object(obj) => match obj.get("items").and_then(|v| v.as_array()) {
-                    Some(items) => out.extend(items.iter().cloned()),
+                    Some(items) => {
+                        if total_count.is_none() {
+                            total_count = obj.get("total_count").and_then(Value::as_u64);
+                            out.incomplete = obj
+                                .get("incomplete_results")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false);
+                        }
+                        out.items.extend(items.iter().cloned());
+                    }
                     None => {
-                        out.push(data.clone());
+                        out.items.push(data.clone());
                         return Ok(out);
                     }
                 },
                 _ => return Ok(out),
             }
-            let Some(link) = headers.get("link") else {
+            let next = headers
+                .get("link")
+                .and_then(|link| LINK_NEXT_RE.captures(link))
+                .map(|m| m.get(1).unwrap().as_str().to_string());
+            let Some(next) = next else {
+                out.truncated = total_count.is_some_and(|n| n > out.items.len() as u64);
                 return Ok(out);
             };
-            let Some(m) = LINK_NEXT_RE.captures(link) else {
-                return Ok(out);
-            };
-            url = m.get(1).unwrap().as_str().to_string();
+            url = next;
         }
     }
+}
+
+/// What one search answered.
+#[derive(Debug, Default)]
+pub struct Search {
+    /// The results, in the order the forge gave them: newest first.
+    pub items: Vec<Value>,
+    /// The forge has more than it would answer (GitHub's 1000-result
+    /// cap): what is older than the oldest item was not listed.
+    pub truncated: bool,
+    /// The forge says the answer is partial for a reason other than its
+    /// cap (GitHub's `incomplete_results`, a search that timed out):
+    /// nothing it covers can be vouched for.
+    pub incomplete: bool,
 }

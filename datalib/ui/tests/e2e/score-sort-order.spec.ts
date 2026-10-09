@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { GRID, searchAndSettle } from "./grid-helpers";
+import { GRID, pickAnswerTab, searchAndSettle } from "./grid-helpers";
 
 // Two contracts a single qmd-routed query has to satisfy. They share
 // the same setup (open page → type free-text → qmd routes → score
@@ -48,6 +48,7 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     // those two things — a slow daemon and a query that never reached
     // qmd failed identically.
     await searchAndSettle(page, "grey earl");
+    await pickAnswerTab(page, "words");
 
     const scoreHeader = page.locator('.grid-box .slick-header-column[col-id="score"]');
     await expect(scoreHeader).toBeVisible();

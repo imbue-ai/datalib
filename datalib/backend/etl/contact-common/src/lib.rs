@@ -1,8 +1,9 @@
-//! `datalib-etl-contact-common` — shared QMD-and-grid-rows rendering
-//! for contact-style providers (CardDAV vCards, LinkedIn connections, …).
+//! `datalib-etl-contact-common` — the one place a `NormalizedContact` becomes
+//! a document: its markdown page and grid row, for every source about
+//! people (vCards, LinkedIn connections, Facebook friends).
 
 pub mod render;
 pub mod types;
 
-pub use render::{render_all, ContactRenderProfile, RenderSummary};
-pub use types::{ContactField, ContactPhoto, NormalizedContact};
+pub use render::{render_all, table_rows, ContactRenderProfile, RenderSummary};
+pub use types::ContactDoc;

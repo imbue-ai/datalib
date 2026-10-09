@@ -16,6 +16,7 @@ rust_test(
     env = {"INSTA_WORKSPACE_ROOT": "."},
     deps = [
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/contacts:datalib_contacts",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/beeper:datalib_etl_beeper",
         "//datalib/backend/etl/providers/chatgpt:datalib_etl_chatgpt",

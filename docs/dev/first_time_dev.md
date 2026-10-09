@@ -7,10 +7,9 @@ just want to *run* the released tools against your own data, start with the
 ## Setup pre-reqs
 
 ```sh
-# Host tools Bazel can't provide for itself. `cmake` is required by the
-# `protobuf-src` crate's build script; `bazelisk` is the build driver
-# (it also answers to `bazel`).
-brew install bazelisk cmake
+# The one host tool Bazel can't provide for itself: `bazelisk`, the
+# build driver (it also answers to `bazel`).
+brew install bazelisk
 
 # That is all: Node, qmd and latchkey are Bazel inputs, so the build
 # needs nothing in your home directory. The binaries shell out to
@@ -54,7 +53,7 @@ Two coupled projects that mirror personal data into a queryable local store:
 ├── docs/                     dev/ architecture notes · user/ guides + config_examples
 ├── tests/fixtures/           the TNG fixture pipeline (the ingested_tng genrule)
 └── datalib/
-    ├── backend/              Cargo workspace
+    ├── backend/              Rust crates (Bazel); Cargo.toml lists their third-party deps
     │   ├── schema/           render schema: grid_rows / edges / markdowns structs
     │   ├── app_schema/       app-state schema: feedback / disk usage / remote media / runs
     │   ├── core/             the app stores + deeplink grammar
@@ -127,9 +126,11 @@ specific ports with `DATALIB_PORT` (Vite) and `DATALIB_BIND`
 (backend). Ctrl-C tears both down.
 
 The data root is the positional arg to `bazelisk run //datalib:dev` (or
-`:serve`), else `~/Documents/datalib`. It is the *directory*, not the
-config file: `datalib-http` takes it as a required positional and reads
-`<root>/config.toml` from inside it.
+`:serve`), else `~/Datalib/Default`, the library the desktop app opens
+first; `dev_library_root` in
+`datalib/dev_lib.sh` is where both launchers decide it. It is the
+*directory*, not the config file: `datalib-http` takes it as a required
+positional and reads `<root>/config.toml` from inside it.
 
 The backend starts even if the root is missing — `/api/health` reports
 `root_exists: false` and the search grid shows zero rows. (`/api/health`
