@@ -11,8 +11,8 @@
 // the one query: a list with a preview (SearchList.ce.vue) and this
 // table, picked by the tabs above them. A new search opens on the view
 // picked last (searchViewPref.ts). Both stay mounted once shown, so
-// switching keeps each one's selection and scroll. The source chips and "Meaning only" rewrite the
-// query (cards/search.ts) rather than keep state beside it.
+// switching keeps each one's selection and scroll. The source chips rewrite the query
+// (cards/search.ts) rather than keep state beside it.
 //
 // Selecting a row opens the row's document as a new card via
 // ctx.host.openCards — structural changes never go through the bus.
@@ -1158,7 +1158,7 @@ watch(view, (v) => {
   }
 });
 
-// --- the source chips and "Meaning only": views of the query ---------
+// --- the source chips: a view of the query ----------------------------
 
 /// The sources the search hits and how many rows each, whichever source
 /// the query is narrowed to.
@@ -2102,7 +2102,7 @@ function createGrid() {
 
 /// The search bar takes a column dragged from the headers, the way the
 /// grouping bar does, and adds a term keeping the rows with a value in
-/// it: `author:*`, which a person can then narrow to a value.
+/// it: `from:*`, which a person can then narrow to a value.
 const searchWrapEl = ref<HTMLDivElement | null>(null);
 type Sortable = { destroy(): void };
 type SortableClass = { create(el: HTMLElement, options: object): Sortable };

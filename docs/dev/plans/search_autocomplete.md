@@ -1,6 +1,7 @@
 # Search autocomplete: a person, a source, a value as a chip
 
-*Proposal (2026-10-09). Step 1 of the order of work is built. It builds on the search terms
+*Proposal (2026-10-09). Steps 1 to 3 of the order of work are built,
+but for `bcc:`, `mention:` and `@`. It builds on the search terms
 file from [`search_tabs.md`](search_tabs.md) §"The search terms" and changes
 what that plan says the search terms hold; the facts it cites about the tree
 were read that day.*
@@ -56,22 +57,36 @@ together, and `term_round_trips_through_parse` covers it.
 
 | key | aliases | matches | suggests |
 |---|---|---|---|
-| `from:` | `author_handle:` | the `from` terms | people |
-| `to:`, `cc:`, `bcc:` | | their own kinds | people |
-| `with:` | `involves:` | any person kind (below) | people |
+| `from:` | `author:`, `author_handle:` | the `from` terms (handles) and `author` terms (names shown) | people |
+| `to:`, `cc:` | | their own kinds | people |
+| `recipient:` | | `to` and `cc` (and `bcc` once it lands) | people |
+| `with:` | `involves:` | every person kind, and `author` | people |
+| `label:` | | the `label` terms | their values |
 | `source_id:` | | the column, as today | the configured sources |
 | `kind:`, `change:`, `is:` | | as today | their words |
 
-`with:` is a person in any role. A person kind is `from`, `to`, `cc`,
-`bcc`, `participant`, `mention` or `reactor`; which kinds count is one
-pure function beside `SearchTermKind::affinity`. Typing `@` at the start of a
-word opens the same people suggestions and writes `with:` with the
-value picked.
+The keys that read the search terms are declared once,
+`unified_index/src/terms_keys.rs` (`TERMS_KEYS`), and `parse_query`
+reads them beside the grid's column keys, so an unknown key is still
+refused by name. A term on one is a clause of the grid's own query: the
+search terms file is attached read-only to the applet's reader
+(`DoltRepo::pinned`) under `search_terms`, re-attached when a shape
+change replaces the file, and `-to:x` is the rows not in `to:x`. On a
+root whose first index pass has not written the file, a terms key is
+refused, saying so.
 
-A key served from the search terms is declared beside the grid's column keys
-and read through the same grammar (`search_tabs.md` §"How a search
-uses it"), so an unknown key is still refused by name. `-to:x` is the
-rows not in `to:x`; a key repeated is both, as every key is now.
+`author:` and `author_handle:` were `grid_rows` columns' keys, exact on
+the name or the handle; they are `from:` now, and their two indexes are
+retired. An author with no handle (an AI model, an account label) is
+found through the `author` kind (code 11), the name the row shows,
+split out of `name` for this. The Author cell's Keep only writes
+`from:` with the row's handle, or its name where it has none
+(`SearchRow::author_term`).
+
+Not built: `bcc:` and `mention:`, whose kinds arrive with
+imbue-ai/datalib#1138 (`with:` takes them as it reads every person
+kind); typing `@` at the start of a word to open the people suggestions
+and write `with:`.
 
 ## Contacts: expanded when the search runs
 
@@ -115,26 +130,20 @@ of the query keeps (`unified_index/src/group.rs::values_sql`), so
 `source_id:slack channel:` offers Slack's channels. Free text does not
 narrow them, which would be a qmd search per keystroke.
 
-A person key's values (step 2) come through the same route: your
-contacts whose name holds `typed` first (the contacts app's
-`GET /search`, each with its handles), then handles that appear in
-that role (any person kind for `with:`) whose value or a name they
-were seen under holds `typed`, ranked by how many rows name the handle
-in that role. The chip resolves as every person chip does (`people` in
-`contacts.ts`).
+A person key's values come through the same route, from the attached
+search terms: the values of its kinds holding `typed` (a `LIKE` over
+the dictionary of values), counted by the rows that hold them among the
+rows the rest of the query keeps (`dolt_repo.rs::term_values_sql`).
+They are handles, drawn as the person's chip, and the names authors
+were shown under, as text; picking a name is a partial match on it.
+On a real root, measure the `LIKE` against a 50 ms budget per keystroke
+before reaching for a trigram index.
 
-**Two things the search terms file gains for this:**
-
-- **The names each handle was seen under**, with counts: a small table
-  `grid_index` fills from `source_contacts` and `source_contact_handles`
-  and from `(author_handle, author)` on each row. It is what lets
-  "Will" find `email:riker@…`.
-- **A substring match.** The FTS5 index keeps a handle as one token
-  (its tokenizer treats `@ . - _ + : /` as letters), so it matches
-  `email:rik*` but never `rik` inside one. Either a second FTS5 index
-  with the `trigram` tokenizer over person values and names, or a
-  `LIKE` scan of the names table. Measure both on a real root against
-  a 50 ms budget per keystroke.
+Still to come: your contacts whose name holds `typed`, first (the
+contacts app's `GET /search`, each with its handles), with the
+`contact:` values below; and the names each handle was seen under
+(`source_contacts`), so "Will" offers `email:riker@…` itself rather
+than only the name it was shown under.
 
 ## The field
 
@@ -221,10 +230,13 @@ answered from the search terms.
    only" is gone: the Meaning tab does its job. A click selects a
    chip, a double-click edits it, and its menu edits, excludes, copies
    and opens it.
-2. **`from:` from the search terms**, `author_handle:` its alias, partial
-   values, the names table and `/suggest`.
-3. **Person kinds from renders** (`search_tabs.md` step 4), then `to:`,
-   `cc:`, `bcc:`, `with:` and `@`.
+2. **`from:` from the search terms.** Built, with `author:` and
+   `author_handle:` its aliases, partial values, and values suggested
+   from the attached terms file. The names table became the `author`
+   kind: a name shown is a term of its own.
+3. **The person keys.** Built: `to:`, `cc:`, `recipient:`, `with:` and
+   `involves:`, `label:`; person chips in the field and its menu. Not
+   yet `bcc:`, `mention:` (#1138) and `@`.
 4. **`contact:` values**, expanded when the search runs.
 5. **The index audit**, measured, then the identity indexes dropped.
 
@@ -234,5 +246,3 @@ answered from the search terms.
   `with:contact:<group>` reach its members' handles too, or only its
   own?
 - Does a reaction count as being involved, for `with:`?
-- Does partial `from:will` match the author's shown name as well as
-  the names the handle was seen under? They are mostly the same names.

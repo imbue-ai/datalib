@@ -8,7 +8,7 @@
 //
 // `gridView({ url })` is the general-purpose grid: the table alone,
 // over any endpoint that pages, sorts and groups the way the search
-// does (the problems). It has no views, chips or "Meaning only", and
+// does (the problems). It has no views or source chips, and
 // its `url` is required.
 import GridCard from "../GridCard.ce.vue";
 import SearchList from "../SearchList.ce.vue";

@@ -102,3 +102,17 @@ test("a chip's menu excludes what it names, and opens it as text", async ({ page
   await expect(slackChip(page)).toHaveCount(0);
   await expect(menu(page)).toBeVisible();
 });
+
+/// A person key offers handles as the person's chip: picking one is an
+/// exact search on that handle, drawn as their chip in the text.
+test("a person picked for from: is drawn as their chip", async ({ page }) => {
+  await page.goto(GRID);
+  await typeInto(field(page), "from:riker@enter");
+  const riker = menu(page).locator('a.chip[data-handle="email:riker@enterprise.starfleet"]');
+  await expect(riker).toBeVisible();
+  await field(page).press("Tab");
+  await expect(field(page)).toHaveAttribute("data-query", "from:email:riker@enterprise.starfleet ");
+  await expect(
+    field(page).locator('a.chip[data-handle="email:riker@enterprise.starfleet"]'),
+  ).toBeVisible();
+});

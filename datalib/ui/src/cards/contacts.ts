@@ -195,12 +195,10 @@ export function chipMenu(
   return out;
 }
 
-/** The search that finds everything from this person. The grid's Author
- *  column is the author as shown, so the term is the name the chip shows;
- *  once `grid_rows` carries `author_handle` (chips.md, step 4) this
- *  becomes a term on the handle itself. */
-export function searchQueryFor(handle: string, shownAs: string, who: Who): string {
-  return filterToken("author", chipLook(handle, shownAs, who, false).text, false);
+/** The search that finds everything from this person: their handle, in
+ *  the search terms' `from:`, which the search bar draws as their chip. */
+export function searchQueryFor(handle: string): string {
+  return filterToken("from", handle, false);
 }
 
 const MAX_SOURCE_CONTACTS = 4;

@@ -148,12 +148,10 @@ describe("chipMenu", () => {
     expect(ids(chipMenu(TEL, "+15550123456", NOBODY, false))).toEqual(["copy-id", "search"]);
   });
 
-  it("searches by the name the chip shows", () => {
-    expect(searchQueryFor("email:riker@enterprise.org", "Will Riker", NOBODY)).toBe(
-      'author:"Will Riker"',
-    );
-    const mine = contact("datalib_contacts", "Riker", [[TEL, null]]);
-    expect(searchQueryFor(TEL, "+1 555", { mine, sourceContacts: [] })).toBe("author:Riker");
+  /** By the handle, not the name shown: a name is any author holding it. */
+  it("searches by the handle itself", () => {
+    expect(searchQueryFor("email:riker@enterprise.org")).toBe("from:email:riker@enterprise.org");
+    expect(searchQueryFor(TEL)).toBe(`from:${TEL}`);
   });
 });
 

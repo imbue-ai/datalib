@@ -82,6 +82,19 @@ pub trait IndexRepo: Send + Sync {
         typed: &str,
     ) -> Result<Vec<(String, u64)>, RepoError>;
 
+    /// The values the search terms of `kinds` (their codes) hold that
+    /// hold `typed`, among the rows `query`'s structured terms match, most
+    /// rows first: what the search bar suggests for a terms key. Empty
+    /// before the first index pass writes the terms.
+    async fn term_value_counts(
+        &self,
+        _query: &ParsedQuery,
+        _kinds: &[u8],
+        _typed: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        Ok(Vec::new())
+    }
+
     /// [`IndexRepo::value_counts`], over the problems.
     async fn problem_value_counts(
         &self,

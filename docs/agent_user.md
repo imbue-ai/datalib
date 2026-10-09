@@ -303,11 +303,17 @@ Pick the surface that fits the question:
   `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:
   `field:value`, `-field:value`, quoted values, `field:*` for the rows
   with any value there and `-field:*` for the rows with none; fields
-  are `source_id:`, `kind:`, `channel:`, `author:`, `account:`, `project:`, `convo:`,
+  are `source_id:`, `kind:`, `channel:`, `account:`, `project:`, `convo:`,
   `notion_page:`, `change:`, and a grid column's id for the rest
   (`org_name:`, `byte_size:`, `created_at:`, …); `before:`/`after:`;
   `is:document` for the one row per rendered document and
-  `-is:document` for the rows inside them. A key the search does not
+  `-is:document` for the rows inside them. A person is found by role
+  through the search terms: `from:` (also `author:`, `author_handle:`),
+  `to:`, `cc:`, `recipient:` (any of those) and `with:` (also
+  `involves:`, any role), and `label:` an email's labels; a handle
+  (`email:a@b.c`, or `a@b.c`, `+1…`) matches exactly, anything else in
+  part. `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
+  the values one takes, most rows first. A key the search does not
   have is refused by name, in `refused`, rather than ignored. Free text
   made only of uuids and handles (an email address, `tel:+…`,
   `slack:T…/U…`) is looked up in `grid_index/search_terms.sqlite`, not sent to

@@ -333,7 +333,7 @@ async fn search_handler(
 ) -> Json<SearchResponse> {
     let q = p.q.unwrap_or_default();
     let parsed = parse_query(&q);
-    if let Some(why) = parsed.refusal() {
+    if let Some(why) = refusal(&s.root, &parsed) {
         return Json(SearchResponse {
             refused: vec![why],
             ..SearchResponse::unread(Vec::new())
@@ -468,7 +468,7 @@ async fn groups_handler(
     let q = p.q.unwrap_or_default();
     let parsed = parse_query(&q);
     let mut out = GroupsResponse::default();
-    if let Some(why) = parsed.refusal() {
+    if let Some(why) = refusal(&s.root, &parsed) {
         out.refused.push(why);
         return Json(out);
     }
@@ -1052,9 +1052,25 @@ async fn people(
     }
 }
 
+/// Why the grid cannot read `parsed`: the query's own refusal, or a key
+/// that reads the search terms on a root whose first index pass has not
+/// written them yet.
+pub fn refusal(root: &std::path::Path, parsed: &ParsedQuery) -> Option<String> {
+    use datalib_unified_index::query::Field;
+    parsed.refusal().or_else(|| {
+        let key = parsed.terms.iter().find_map(|t| match t.field {
+            Field::Terms(k) => Some(k.key),
+            _ => None,
+        })?;
+        (!datalib_runtime::layout::search_terms_db(root).exists()).then(|| {
+            format!("`{key}:` reads the search terms, which the first sync of the index writes")
+        })
+    })
+}
+
 /// The keys the search bar offers as a person types.
 async fn search_keys() -> Json<Vec<datalib_columns::SearchKeySpec>> {
-    Json(columns::keys_of::<GridRow>())
+    Json(columns::grid_keys())
 }
 
 /// `GET /search/values?key=…&typed=…&q=…`: what the search bar suggests
@@ -1065,6 +1081,20 @@ async fn search_values(
     State(s): State<Index>,
     Query(p): Query<columns::ValuesParams>,
 ) -> Result<Json<Vec<datalib_columns::ValueSuggestion>>, (StatusCode, String)> {
+    if let Some(key) = datalib_unified_index::terms_keys::key(&p.key) {
+        let kinds: Vec<u8> = key.kinds().iter().map(|k| k.code()).collect();
+        return s
+            .repo
+            .term_value_counts(&parse_query(&p.q), &kinds, &p.typed)
+            .await
+            .map(|v| Json(columns::counted(v)))
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("suggest values: {e}"),
+                )
+            });
+    }
     let suggested = match columns::value_source::<GridRow>(&p.key) {
         columns::ValueSource::Words(words) => Ok(columns::words_holding(&words, &p.typed)),
         columns::ValueSource::Column(column) => s
@@ -1447,6 +1477,172 @@ mod tests {
         assert_eq!(uuids(&narrowed), Vec::<&str>::new());
     }
 
+    /// Commits each row as a document of its own, with the search terms a
+    /// render supplies for it (an email's To and Cc).
+    async fn index_rows_with_terms(
+        root: &std::path::Path,
+        rows: Vec<(
+            datalib_schema::grid_rows::GridRow,
+            Vec<(datalib_schema::search_terms::SearchTermKind, &str)>,
+        )>,
+    ) {
+        use datalib_etl_render::grid_index::{apply_one, open_index, RenderedMarkdown, WriteLock};
+        use datalib_schema::search_terms::SuppliedSearchTerm;
+
+        let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
+            .await
+            .unwrap();
+        let lock = WriteLock::new(pool.clone());
+        for (row, supplied) in rows {
+            let uuid = row.uuid.clone();
+            let md = RenderedMarkdown {
+                markdown_uuid: uuid.to_string(),
+                source_id: "enterprise".into(),
+                upstream_cursor: None,
+                bucket_key: None,
+                md_path: root.join(format!("enterprise/{uuid}.md")),
+                render_version: 1,
+                rows: vec![row],
+                sections: Vec::new(),
+                search_terms: supplied
+                    .into_iter()
+                    .map(|(kind, value)| SuppliedSearchTerm {
+                        uuid: uuid.clone(),
+                        kind,
+                        value: value.to_string(),
+                    })
+                    .collect(),
+                edges: Vec::new(),
+                contacts: Vec::new(),
+                problems: Vec::new(),
+            };
+            apply_one(&lock, root, &md).await.unwrap();
+        }
+        datalib_etl::doltlite_raw::commit_run(&pool, "mail")
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    /// Three messages: Ann writes to Bo, copying Cy; Bo answers Ann; a
+    /// model, known by name alone, writes a note.
+    async fn mail(root: &std::path::Path) {
+        use datalib_schema::search_terms::SearchTermKind::{Cc, To};
+        let from = |uuid: &str, at: &str, name: &str, handle: Option<&str>| {
+            document_row(uuid, at, "Email")
+                .author(Some(name.to_string()))
+                .author_handle(handle.map(String::from))
+                .build()
+                .unwrap()
+        };
+        index_rows_with_terms(
+            root,
+            vec![
+                (
+                    from(
+                        "m-1",
+                        "2026-01-01T09:00:00+00:00",
+                        "Ann",
+                        Some("email:ann@example.com"),
+                    ),
+                    vec![(To, "email:bo@example.com"), (Cc, "email:cy@example.com")],
+                ),
+                (
+                    from(
+                        "m-2",
+                        "2026-01-02T09:00:00+00:00",
+                        "Bo",
+                        Some("email:bo@example.com"),
+                    ),
+                    vec![(To, "email:ann@example.com")],
+                ),
+                (
+                    from("m-3", "2026-01-03T09:00:00+00:00", "claude-opus", None),
+                    Vec::new(),
+                ),
+            ],
+        )
+        .await;
+    }
+
+    /// Each person key reads the search terms in its role: a handle by its
+    /// one value, a name or part of an address in part, `with:` in any
+    /// role, `-` the rows without. `author:` and `author_handle:` are
+    /// `from:`, which also finds an author known by name alone.
+    #[tokio::test]
+    async fn a_person_is_found_in_the_role_the_key_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        mail(tmp.path()).await;
+        let before = search(&index_over(tmp.path()).await, "from:ann", None, 10, None).await;
+        assert!(
+            before
+                .refused
+                .iter()
+                .any(|r| r.contains("`from:` reads the search terms")),
+            "{:?}",
+            before.refused
+        );
+
+        sync_terms(tmp.path()).await;
+        let s = index_over(tmp.path()).await;
+        for (q, want) in [
+            ("from:Ann@Example.com", vec!["m-1"]),
+            ("author:ann", vec!["m-1"]),
+            ("author_handle:email:bo@example.com", vec!["m-2"]),
+            ("from:claude", vec!["m-3"]),
+            ("to:ann@example.com", vec!["m-2"]),
+            ("cc:cy@example.com", vec!["m-1"]),
+            ("to:cy@example.com", vec![]),
+            ("recipient:cy@example.com", vec!["m-1"]),
+            ("with:ann@example.com", vec!["m-2", "m-1"]),
+            ("involves:cy", vec!["m-1"]),
+            ("-with:ann@example.com", vec!["m-3"]),
+            ("with:ann@example.com kind:Email -from:bo", vec!["m-1"]),
+        ] {
+            let r = search(&s, q, None, 10, None).await;
+            assert!(r.refused.is_empty() && r.errors.is_empty(), "{q}: {r:?}");
+            assert_eq!(uuids(&r), want, "{q}");
+        }
+    }
+
+    /// A person key's values come from the search terms of its kinds,
+    /// most rows first, among the rows the rest of the query keeps.
+    #[tokio::test]
+    async fn a_person_key_suggests_handles_and_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        mail(tmp.path()).await;
+        sync_terms(tmp.path()).await;
+        let s = index_over(tmp.path()).await;
+        let values = |key: &str, typed: &str, q: &str| {
+            let params = columns::ValuesParams {
+                key: key.into(),
+                typed: typed.into(),
+                q: q.into(),
+            };
+            let s = s.clone();
+            async move {
+                let got = search_values(State(s), Query(params)).await.unwrap().0;
+                got.into_iter().map(|v| v.value).collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(
+            values("from", "ann", "").await,
+            ["Ann", "email:ann@example.com"]
+        );
+        assert_eq!(
+            values("with", "example.com", "").await,
+            [
+                "email:ann@example.com",
+                "email:bo@example.com",
+                "email:cy@example.com"
+            ]
+        );
+        assert_eq!(
+            values("to", "", "from:bo@example.com").await,
+            ["email:ann@example.com"]
+        );
+    }
+
     pub(super) async fn index_over(root: &std::path::Path) -> Index {
         let root = Arc::new(root.to_path_buf());
         Index {
@@ -1790,11 +1986,13 @@ mod tests {
         );
     }
 
-    /// `author:*` is the rows with an author, `-author:*` the ones without.
+    /// `author:*` (`from:*`, through the search terms) is the rows with an
+    /// author, `-author:*` the ones without.
     #[tokio::test]
     async fn a_star_keeps_the_rows_with_a_value() {
         let tmp = tempfile::tempdir().unwrap();
         crew(tmp.path()).await;
+        sync_terms(tmp.path()).await;
         let s = index_over(tmp.path()).await;
 
         let signed = search(&s, "author:*", None, 10, None).await;

@@ -29,7 +29,7 @@ pub enum SearchTermKind {
     From = 3,
     /// The title of the row's conversation or document.
     Title = 4,
-    /// A name the row shows: its author, its channel, its account.
+    /// A name the row shows: its channel, its account.
     Name = 5,
     /// The handle of someone the row was addressed to: an email's To.
     To = 6,
@@ -37,6 +37,9 @@ pub enum SearchTermKind {
     Cc = 7,
     /// Where the row is filed upstream: an email's mailboxes and labels.
     Label = 8,
+    /// The name the row's author was shown under: what `from:` matches
+    /// for an author with no handle, an AI model or an account label.
+    Author = 11,
 }
 
 impl SearchTermKind {
@@ -73,7 +76,7 @@ impl SearchTermKind {
             SearchTermKind::From | SearchTermKind::To => 4,
             SearchTermKind::Cc | SearchTermKind::Container => 3,
             SearchTermKind::Title | SearchTermKind::Label => 2,
-            SearchTermKind::Name => 1,
+            SearchTermKind::Author | SearchTermKind::Name => 1,
         }
     }
 
@@ -85,6 +88,7 @@ impl SearchTermKind {
             | SearchTermKind::Container
             | SearchTermKind::Title
             | SearchTermKind::Name
+            | SearchTermKind::Author
             | SearchTermKind::Label => false,
         }
     }
@@ -138,11 +142,7 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
         row.markdown_uuid.as_deref(),
         row.notion_page_uuid.as_deref(),
     ];
-    let names = [
-        row.author.as_deref(),
-        row.channel.as_deref(),
-        row.account.as_deref(),
-    ];
+    let names = [row.channel.as_deref(), row.account.as_deref()];
     let candidates = std::iter::once((SearchTermKind::Id, Some(row.uuid.as_str())))
         .chain(
             containers
@@ -157,6 +157,10 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
         .chain(std::iter::once((
             SearchTermKind::Title,
             row.conversation_name.as_deref(),
+        )))
+        .chain(std::iter::once((
+            SearchTermKind::Author,
+            row.author.as_deref(),
         )))
         .chain(names.into_iter().map(|name| (SearchTermKind::Name, name)));
     let mut out: Vec<SearchTerm> = Vec::new();
@@ -177,7 +181,7 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
 /// What [`search_terms_of`] derives, which kinds renders supply, and how
 /// the file lays it out. A file built under another shape is rebuilt
 /// whole, so change it whenever any of them changes.
-pub const TERMS_SHAPE: &str = "3";
+pub const TERMS_SHAPE: &str = "4";
 
 /// The search terms file's tables, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three
@@ -234,7 +238,7 @@ mod tests {
                 ("container", "c-1"),
                 ("from", "email:ann@example.com"),
                 ("title", "Away team roster"),
-                ("name", "Ann"),
+                ("author", "Ann"),
             ]
         );
     }
@@ -283,6 +287,7 @@ mod tests {
             SearchTermKind::To,
             SearchTermKind::Cc,
             SearchTermKind::Label,
+            SearchTermKind::Author,
         ]
         .into_iter()
         .map(|k| (k, k.code()))
@@ -298,6 +303,7 @@ mod tests {
                 (SearchTermKind::To, 6),
                 (SearchTermKind::Cc, 7),
                 (SearchTermKind::Label, 8),
+                (SearchTermKind::Author, 11),
             ]
         );
     }

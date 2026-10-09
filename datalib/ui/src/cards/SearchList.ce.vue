@@ -226,7 +226,7 @@ onBeforeUnmount(() => {
           <button class="sc-link" @click="more">Show more</button>
         </li>
         <li v-if="!loading && results.length === 0 && !notice" class="sc-empty">
-          Nothing matches. Try fewer words, or untick Meaning only.
+          Nothing matches. Try fewer words, or another tab.
         </li>
       </ul>
       <section class="sc-preview" aria-label="Preview">

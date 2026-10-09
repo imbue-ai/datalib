@@ -16,6 +16,11 @@ pub trait View: Copy + 'static {
     /// filter on when a key filters them. A cell that shows a name
     /// filters on the id behind it.
     fn backing(self) -> (SortBy<Self::Column>, Option<Self::Column>);
+    /// Where no column key filters the cells: a key that reads the search
+    /// terms (`crate::terms_keys`), and the row field holding the value.
+    fn terms_filter(self) -> Option<(&'static str, &'static str)> {
+        None
+    }
 }
 
 /// An order as the grid spells it: `created_at:desc,author`.
@@ -34,9 +39,12 @@ pub fn group_column<V: View>(id: &str) -> Result<V::Column, String> {
 /// The key that filters a grid column's cells, and the row field holding
 /// the value a term names (the uuid behind a name, the id behind a label).
 pub fn for_column<V: View>(id: &str) -> Option<(&'static str, &'static str)> {
-    let column = V::parse(id)?.backing().1?;
-    let key = table::key_of::<<V::Column as Column>::Table>(column)?;
-    Some((key.key, column.as_str()))
+    let view = V::parse(id)?;
+    let column = view.backing().1?;
+    match table::key_of::<<V::Column as Column>::Table>(column) {
+        Some(key) => Some((key.key, column.as_str())),
+        None => view.terms_filter(),
+    }
 }
 
 /// Every column of a view that filters its cells has a key, or Keep only
@@ -46,9 +54,9 @@ pub fn unkeyed<V: View + std::fmt::Debug>(all: &[V]) -> Vec<String> {
     all.iter()
         .filter_map(|v| {
             let c = v.backing().1?;
-            table::key_of::<<V::Column as Column>::Table>(c)
-                .is_none()
-                .then(|| format!("{v:?} filters on {c:?}, which no key compares"))
+            (table::key_of::<<V::Column as Column>::Table>(c).is_none()
+                && v.terms_filter().is_none())
+            .then(|| format!("{v:?} filters on {c:?}, which no key compares"))
         })
         .collect()
 }

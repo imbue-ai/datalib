@@ -92,7 +92,7 @@ address-book card all write the same `tel:+12025550101` for one
 number. What that costs:
 
 - **The handle does not say which app.** The row it sits on does
-  (`source_id`, `provider`), so `author_handle:tel:…` finds a number's
+  (`source_id`, `provider`), so `from:tel:…` finds a number's
   messages in every app, and a source filter narrows it.
 - **A number's state is one state across apps. This is the cost to
   watch.** `stopped_working_by` is on the handle, so a person who keeps
@@ -429,8 +429,8 @@ Everything is in `datalib/ui/src/cards/`:
   first. It reads only, but for *Create contact* on an unlinked handle;
   linking stays the popover's.
 - The grid's Author column is a chip too: `grid_rows.author_handle`
-  (the `author_handle:` filter) comes with each message's row and each
-  reaction's, and
+  (which `from:` finds through the search terms) comes with each
+  message's row and each reaction's, and
   `GridCard.ce.vue` draws each Author cell from `people` and redraws
   them when an answer changes. The applet names the mark for a handle's
   kind in `columns.rs::handle_mark`.
@@ -440,27 +440,32 @@ contacts as `/people` ranked them, then the text the source showed.
 
 ## Searching for a person
 
+A person is searched by the role they had on a row, through the search
+terms (`docs/dev/plans/search_tabs.md` § "The search terms"), which
+hold each row's people by handle:
+
+| key | finds the rows where the person |
+|---|---|
+| `from:` (and `author:`, `author_handle:`) | wrote it: by handle, or by the name they were shown under |
+| `to:`, `cc:` | was in that header |
+| `recipient:` | was in any of them |
+| `with:` (and `involves:`) | had any role |
+
+A value that is a handle (`email:riker@enterprise.org`, or simply
+`riker@enterprise.org`, `+12025550101`) matches that handle exactly, and
+the search bar draws it as the person's chip; anything else matches any
+handle or name holding it, so `from:riker` finds Riker under every
+spelling a source used, and anyone else whose name holds it. A chip's
+"Everything from <name>" writes `from:<handle>`.
+
 **Search cannot yet ask "everything from Riker, whatever handle he
-used".** Links sit over the view, so the index knows handles and
-source contacts and has never heard of a contact. What exists today
-covers part of it, and both filters are exact matches:
-
-- **`author_handle:<handle>`** matches rows whose author is that one
-  handle. A grid's Author chip offers it. One handle is one namespace,
-  so `author_handle:email:riker@enterprise.org` misses his Slack
-  messages, and the grammar has no OR to ask for two.
-- **`author:<name>`** matches rows whose author the source showed under
-  exactly that name. A document's chip offers it ("Everything from
-  <name>"). It reaches across sources only where each spelled the name
-  the same way, and finds anyone else of that name too.
-
-**The plan** ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)):
-`from:`, `to:`, `cc:` and `with:` (a person in any role) over the
-search terms' person kinds, and `contact:<id>` as their value, read
-from the contacts store when the search runs and matched against each
-of the contact's handles. So a link changes nothing in the index, no
-document renders again and qmd re-indexes nothing, and search follows
-the link at once, as chips do.
+used".** Links sit over the view, so the search terms know handles and
+never contacts. A `contact:<id>` value, read from the contacts store
+when the search runs and matched against each of the contact's handles,
+is planned ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
+§"Contacts: expanded when the search runs"). It changes nothing in the
+index when a link is made: no document renders again, qmd re-indexes
+nothing, and search follows the link at once, as chips do.
 
 **Keeping the name out of the markdown is a choice, not a rule.**
 Writing a contact's name into each chip link (its text or its title)

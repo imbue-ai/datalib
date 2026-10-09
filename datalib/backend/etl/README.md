@@ -325,10 +325,17 @@ reads through `dolt_at_` modules,
 `dolt_diff_summary`, `dolt_diff_stat`, `dolt_status`, a `COUNT(*)` per
 table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
 `dolt_branches`, a read-only open of `<file>@<hash>` with a
-`COUNT(*)` and a `_datalib_meta` read on it, and, on that open, an
-`ATTACH` of a plain SQLite file read-only with an FTS5 `MATCH` on it
-and a join from it to the store's tables — and that list is the
-allowlist. Any other
+`COUNT(*)` and a `_datalib_meta` read on it, and, on that open or on
+the held read transaction's connection to `main`, an `ATTACH` of a
+plain SQLite file read-only with an FTS5 `MATCH` on it and a join from
+it to the store's tables — and that list is the allowlist. The plain
+file keeps a rollback journal (dolthub/doltlite#3740), so a transaction
+that reads it holds off its writer's commits for as long as it is open:
+keep one to a request's queries. A transaction around one query waits
+a few milliseconds at most
+(`pinned_readers_with_the_terms_attached_hold_off_no_writer`); readers
+that each held one open for 20 ms of queries were measured waiting over
+a second. Any other
 statement a reader adds is presumed guilty until
 `doltlite_two_process_test` has run with it. Looking like a read is not
 enough: a read-only `dolt_status` once failed the writer's commit and

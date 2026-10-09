@@ -359,7 +359,7 @@ async function onChipMenuPick(id: ChipMenuId | EntityMenuId) {
       await copy(copyText(handle, name));
       break;
     case "search":
-      emit("open-search", searchQueryFor(handle, shownAs, whoIs(chip)));
+      emit("open-search", searchQueryFor(handle));
       break;
     case "edit":
       openPopover(chip, menu.x, menu.y);

@@ -5,6 +5,7 @@
 // cases; this side only places words, it never decides a search.
 import type { KeyValues, SearchKeySpec } from "@/api";
 import { uriFromEntity } from "@/cards/chipLinks";
+import { handleKind } from "@/cards/contacts";
 
 export type Word = {
   /** The word as typed: `[from, to)` of the query. */
@@ -120,29 +121,40 @@ export function keyNamed(keys: SearchKeySpec[], typed: string): SearchKeySpec | 
   return keys.find((k) => k.key === typed || k.aliases.includes(typed));
 }
 
-/** The chip a value of a key with these values names, as its entity URI;
- *  null for a value drawn as text. */
-export function chipUri(values: KeyValues, value: string): string | null {
+/** What a chip names: a source, group or step by its entity URI, or a
+ *  person by their handle. */
+export type ChipRef = { kind: "entity"; uri: string } | { kind: "person"; handle: string };
+
+/** The resolver key a chip is asked about by. */
+export function chipKey(chip: ChipRef): string {
+  return chip.kind === "entity" ? chip.uri : chip.handle;
+}
+
+/** The chip a value of a key with these values names; null for a value
+ *  drawn as text. A person's value is a chip only when it is a handle as
+ *  `datalib_handle` spells it: anything else matches in part. */
+export function chipFor(values: KeyValues, value: string): ChipRef | null {
   switch (values.kind) {
     case "source":
     case "group":
-      return uriFromEntity("group", value);
+      return { kind: "entity", uri: uriFromEntity("group", value) };
     case "step":
-      return uriFromEntity("step", value);
+      return { kind: "entity", uri: uriFromEntity("step", value) };
+    case "person":
+      return handleKind(value) ? { kind: "person", handle: value } : null;
     default:
       return null;
   }
 }
 
-/** The words of `query` drawn as chips: each term whose key's values are
- *  a source, a group or a step, with the URI it names. */
-export function chipWords(query: string, keys: SearchKeySpec[]): { word: Word; uri: string }[] {
-  const out: { word: Word; uri: string }[] = [];
+/** The words of `query` drawn as chips, each with what it names. */
+export function chipWords(query: string, keys: SearchKeySpec[]): { word: Word; chip: ChipRef }[] {
+  const out: { word: Word; chip: ChipRef }[] = [];
   for (const w of words(query)) {
     if (w.key === null) continue;
     const spec = keyNamed(keys, w.key);
-    const uri = spec ? chipUri(spec.values, w.value) : null;
-    if (uri) out.push({ word: w, uri });
+    const chip = spec ? chipFor(spec.values, w.value) : null;
+    if (chip) out.push({ word: w, chip });
   }
   return out;
 }

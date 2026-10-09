@@ -194,17 +194,20 @@ already offers everything a chip's would.
 
 The search field (`ui/src/search/`) draws the value of a term whose key
 names a source, a group or a step (`source_id:slack`, the log's
-`step:slack/ingest`) as that entity's chip, in the text where it was
-typed, and its menu draws the values it offers the same way. The chip
-is a CodeMirror widget whose DOM is `entityCell`'s, resolved through
-`entities` and redrawn when it answers; the query text under it is
+`step:slack/ingest`) as that entity's chip, and a person key's value
+that is a handle (`from:email:riker@enterprise.org`) as the person's
+chip, in the text where it was typed; its menu draws the values it
+offers the same way. The chip is a CodeMirror widget whose DOM is
+`entityCell`'s or `chipCell`'s, resolved through `entities` or
+`people` and redrawn when either answers; the query text under it is
 unchanged. The field's host includes `chip.css`.
 
 Its clicks are a text field's: a click selects the chip whole, a
 double-click opens it as text to be edited, the one place a
 double-click does not open what the chip names. The right-click menu
-is the field's (Edit as text, Exclude) followed by `entityMenu`'s, so
-the dashboard or log is still a right-click away
+is the field's (Edit as text, Exclude) followed by `entityMenu`'s or
+`chipMenu`'s, so the dashboard, the log or "Everything from" is still a
+right-click away; linking a handle stays the popover's
 (`ui/src/search/chipMenu.ts`).
 
 ## Clicks

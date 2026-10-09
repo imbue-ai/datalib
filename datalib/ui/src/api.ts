@@ -506,7 +506,7 @@ export type SearchKeySpec = {
 /// `datalib_columns::KeyValues`: what decides how a value is offered and
 /// drawn. A source, group or step is drawn as its chip.
 export type KeyValues = {
-  kind: "text" | "words" | "source" | "group" | "step" | "stamp";
+  kind: "text" | "words" | "source" | "group" | "step" | "stamp" | "person";
   words?: string[];
 };
 

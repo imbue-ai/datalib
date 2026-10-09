@@ -919,8 +919,22 @@ fn detached_readers_open_while_the_writer_holds_a_transaction() {
 /// wait on the writer's commit; the busy timeout covers that wait, and
 /// the slowest sample is printed.
 #[test]
-#[allow(clippy::disallowed_macros)]
 fn readers_of_a_commit_match_an_attached_terms_file_while_the_writer_seals() {
+    terms_readers_beside_a_sealing_writer(false);
+}
+
+/// The search applet's read (`DoltRepo::pinned`): the terms file attached
+/// once to a read-only connection on `main`, and each request a
+/// transaction that holds one commit, and a shared lock on the terms
+/// file, while it reads. The writer's terms commits wait those out, so
+/// neither side may see an error, and the slowest of each is printed.
+#[test]
+fn pinned_readers_with_the_terms_attached_hold_off_no_writer() {
+    terms_readers_beside_a_sealing_writer(true);
+}
+
+#[allow(clippy::disallowed_macros)]
+fn terms_readers_beside_a_sealing_writer(pinned: bool) {
     let readers = 3;
     let t = Scratch::new();
     let terms = t.path("terms.sqlite");
@@ -949,21 +963,27 @@ fn readers_of_a_commit_match_an_attached_terms_file_while_the_writer_seals() {
     t.await_file("pin", &mut writer);
     let mut children: Vec<Child> = (0..readers)
         .map(|i| {
-            t.spawn(&[
-                "terms-read",
-                "--db",
-                &t.db(),
-                "--terms",
-                &terms,
-                "--until",
-                &t.path("writer.json"),
-                "--hold-ms",
-                "20",
-                "--ready-out",
-                &ready[i],
-                "--out",
-                &t.path(&format!("reader-{i}.json")),
-            ])
+            let mut args = vec![
+                "terms-read".to_string(),
+                "--db".into(),
+                t.db(),
+                "--terms".into(),
+                terms.clone(),
+                "--until".into(),
+                t.path("writer.json"),
+                "--hold-ms".into(),
+                // The applet's transaction is one request's queries.
+                if pinned { "0" } else { "20" }.into(),
+                "--ready-out".into(),
+                ready[i].clone(),
+                "--out".into(),
+                t.path(&format!("reader-{i}.json")),
+            ];
+            if pinned {
+                args.push("--pinned".into());
+            }
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            t.spawn(&args)
         })
         .collect();
     t.wait("writer", &mut writer);

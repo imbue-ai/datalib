@@ -1,5 +1,6 @@
 //! Every row of the TNG fixture, searched for by what it holds, is found:
 //! by each search key's value (exactly the rows holding that value), by
+//! each key that reads the search terms (`from:`, `to:`, `with:`, …), by
 //! each of its search terms on the Fields tab, and each document by its
 //! rarest word on the Words tab and, nearly always, by its opening words
 //! on the Meaning tab. Which source each search reached is a snapshot, so
@@ -11,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use datalib_query::table::SearchTable;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::search_terms::SearchTermKind;
+use datalib_unified_index::terms_keys::{self, TermsValue, TERMS_KEYS};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, SqliteConnection};
 
@@ -248,9 +250,62 @@ async fn every_row_is_found_by_what_it_holds() {
         }
     }
 
+    // A key that reads the search terms finds every row holding the value
+    // in one of its kinds: exactly those rows for a handle, and those
+    // among others for a name or a label, which match in part.
+    let terms = terms_of(root.path()).await;
+    for key in TERMS_KEYS {
+        let kinds: Vec<&str> = key.kinds().iter().map(|k| k.as_str()).collect();
+        let mut by_value: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        for ((kind, value), holding) in &terms {
+            if kinds.contains(&kind.as_str()) {
+                by_value
+                    .entry(value.as_str())
+                    .or_default()
+                    .extend(holding.iter().cloned());
+            }
+        }
+        for (value, holding) in &by_value {
+            let q = datalib_query::term(key.key, value, false);
+            let got: BTreeSet<String> = every_uuid(&s, &q, None)
+                .await
+                .into_iter()
+                .map(|r| r.uuid)
+                .collect();
+            let missing: BTreeSet<&str> = holding.difference(&got).map(String::as_str).collect();
+            // An exact value is also its handle's rows: `+1701…` shown as a
+            // name is the `tel:` handle too.
+            let mut expected = holding.clone();
+            let exact = match terms_keys::value_of(key, value, "*") {
+                TermsValue::Exact { handle, .. } => {
+                    if let Some(by_handle) = by_value.get(handle.as_str()) {
+                        expected.extend(by_handle.iter().cloned());
+                    }
+                    true
+                }
+                _ => false,
+            };
+            let extra: BTreeSet<&str> = if exact {
+                got.difference(&expected).map(String::as_str).collect()
+            } else {
+                BTreeSet::new()
+            };
+            if !missing.is_empty() || !extra.is_empty() {
+                failures.push(format!(
+                    "`{q}` missed [{}] and found [{}]",
+                    listed(&missing),
+                    listed(&extra)
+                ));
+            }
+            for uuid in holding {
+                coverage.checked(&format!("terms: {}:", key.key), &source_of(uuid));
+            }
+        }
+    }
+
     // A term is found by its value on the Fields tab, among whatever else
     // answers to the same words.
-    for ((kind, value), holding) in terms_of(root.path()).await {
+    for ((kind, value), holding) in terms {
         let q = format!("\"{value}\"");
         let got: HashSet<String> = every_uuid(&s, &q, Some(SearchTab::Fields))
             .await
