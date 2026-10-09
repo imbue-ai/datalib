@@ -43,7 +43,8 @@ use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 ///     Gmail's All Mail.
 /// v11: the author span carries the author's handle as `data-handle`.
 /// v12: a recipients line (To, Cc) under the header, each with its handle.
-pub const RENDER_VERSION: u32 = 12;
+/// v13: Bcc on the recipients line, and an `@` mention drawn as a chip.
+pub const RENDER_VERSION: u32 = 13;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -389,6 +390,9 @@ fn build_chat(
         let body = email_body_markdown(&parsed_eml, atts, &materialized, &inline_cid_to_fname)
             .unwrap_or_default();
         let (fresh, quoted) = split_quoted(&body);
+        // Only the fresh part: a quoted reply repeats the mentions of the
+        // message it quotes.
+        let (fresh, mentions) = super::mentions::mention_chips(&fresh);
 
         // Its flags and the mailboxes it is filed under: drawn above the
         // body, and kept out of the row's Contents.
@@ -481,6 +485,7 @@ fn build_chat(
             branch: Vec::new(),
             unread,
             recipients: parsed_eml.recipients.clone(),
+            mentions,
             problems,
         });
     }
@@ -665,24 +670,28 @@ impl ParsedEml {
             .and_then(|a| a.iter().next())
             .and_then(|a| a.address())
             .and_then(Handle::email);
-        let recipients = [(RecipientRole::To, msg.to()), (RecipientRole::Cc, msg.cc())]
-            .into_iter()
-            .flat_map(|(role, addrs)| {
-                addrs
-                    .into_iter()
-                    .flat_map(|a| a.iter())
-                    .filter_map(move |a| {
-                        let address = a.address().unwrap_or_default();
-                        let name = a.name().unwrap_or_default();
-                        let display = if name.is_empty() { address } else { name };
-                        (!display.is_empty()).then(|| Recipient {
-                            role,
-                            display: display.to_string(),
-                            handle: Handle::email(address),
-                        })
+        let recipients = [
+            (RecipientRole::To, msg.to()),
+            (RecipientRole::Cc, msg.cc()),
+            (RecipientRole::Bcc, msg.bcc()),
+        ]
+        .into_iter()
+        .flat_map(|(role, addrs)| {
+            addrs
+                .into_iter()
+                .flat_map(|a| a.iter())
+                .filter_map(move |a| {
+                    let address = a.address().unwrap_or_default();
+                    let name = a.name().unwrap_or_default();
+                    let display = if name.is_empty() { address } else { name };
+                    (!display.is_empty()).then(|| Recipient {
+                        role,
+                        display: display.to_string(),
+                        handle: Handle::email(address),
                     })
-            })
-            .collect();
+                })
+        })
+        .collect();
         let mut text_body = String::new();
         for &idx in &msg.text_body {
             if let Some(part) = msg.part(idx) {
@@ -781,12 +790,7 @@ fn email_body_markdown(
     }
 
     if !parsed.html_body.trim().is_empty() {
-        let rewritten = rewrite_cid_srcs(&parsed.html_body, &cid_to_blob);
-        let md = htmd::HtmlToMarkdown::builder()
-            .skip_tags(vec!["script", "style", "head"])
-            .build()
-            .convert(&rewritten)
-            .unwrap_or_default();
+        let md = html_markdown(&rewrite_cid_srcs(&parsed.html_body, &cid_to_blob));
         if !md.trim().is_empty() {
             return Some(md);
         }
@@ -795,6 +799,15 @@ fn email_body_markdown(
         return None;
     }
     Some(plain_body_markdown(&parsed.text_body))
+}
+
+/// An HTML body as markdown.
+pub(crate) fn html_markdown(html: &str) -> String {
+    htmd::HtmlToMarkdown::builder()
+        .skip_tags(vec!["script", "style", "head"])
+        .build()
+        .convert(html)
+        .unwrap_or_default()
 }
 
 /// A `text/plain` body as markdown that reads as the sender typed it:

@@ -131,6 +131,10 @@ struct ChatItemSpec {
     /// An incoming message the account has not read; read otherwise.
     #[serde(default)]
     unread: bool,
+    /// The ACI each `U+FFFC` in `text` mentions, in order, as Signal
+    /// marks a mention up.
+    #[serde(default)]
+    mentions: Vec<String>,
 }
 
 fn recipient_frame(r: &RecipientSpec) -> backup::Frame {
@@ -176,12 +180,43 @@ fn chat_frame(c: &ChatSpec) -> backup::Frame {
     }
 }
 
+/// One `mentionAci` range per placeholder, at its offset in UTF-16
+/// units, which is how Signal counts.
+fn mention_ranges(text: &str, acis: &[String]) -> Vec<backup::BodyRange> {
+    let placeholders: Vec<u32> = text
+        .chars()
+        .scan(0u32, |at, c| {
+            let here = *at;
+            *at += c.len_utf16() as u32;
+            Some((here, c))
+        })
+        .filter(|(_, c)| *c == '\u{FFFC}')
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(
+        placeholders.len(),
+        acis.len(),
+        "{text:?}: one mention per placeholder"
+    );
+    placeholders
+        .into_iter()
+        .zip(acis)
+        .map(|(start, aci)| backup::BodyRange {
+            start,
+            length: 1,
+            associated_value: Some(backup::body_range::AssociatedValue::MentionAci(uuid_bytes(
+                aci,
+            ))),
+        })
+        .collect()
+}
+
 fn chat_item_frame(ci: &ChatItemSpec) -> backup::Frame {
     use backup::chat_item;
     let item = chat_item::Item::StandardMessage(backup::StandardMessage {
         text: Some(backup::Text {
             body: ci.text.clone(),
-            body_ranges: vec![],
+            body_ranges: mention_ranges(&ci.text, &ci.mentions),
         }),
         ..Default::default()
     });

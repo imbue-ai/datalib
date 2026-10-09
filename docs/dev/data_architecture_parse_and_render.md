@@ -81,7 +81,8 @@ database per source, at
     document, and the index answers "who is this handle" from them
     (`unified_index`'s `POST /people`).
   - `supplied_search_terms` — what its rows answer to in search beyond
-    their own columns: an email's To and Cc by handle, and its labels.
+    their own columns: an email's To, Cc and Bcc by handle, the people
+    a message mentions, and an email's labels.
     chat-common supplies them; the index copies them into the search
     terms file (`etl/render/src/search_terms.rs`).
   - `problems` — what render could not do getting there (§4).

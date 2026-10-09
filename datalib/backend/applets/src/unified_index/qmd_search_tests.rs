@@ -339,6 +339,30 @@ async fn an_address_finds_the_emails_it_received_and_a_label_its_emails() {
     );
 }
 
+/// A person is found where they were only blind-copied or mentioned:
+/// Troi on the log Picard sent her a Bcc of, Geordi where an email
+/// @-mentions him, Riker (by his number) where a Signal message does.
+#[tokio::test]
+async fn a_person_is_found_where_they_were_blind_copied_or_mentioned() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    for (q, matched) in [
+        (
+            "troi@enterprise.starfleet",
+            "bcc: email:troi@enterprise.starfleet",
+        ),
+        (
+            "laforge@enterprise.starfleet",
+            "mention: email:laforge@enterprise.starfleet",
+        ),
+        ("+17015550101", "mention: tel:+17015550101"),
+    ] {
+        let found = search(&s, q, None, 1_000, None).await;
+        let snippets: HashSet<&str> = found.rows.iter().map(|r| r.snippet.as_str()).collect();
+        assert!(snippets.contains(matched), "{q}: {snippets:?}");
+    }
+}
+
 /// The Words tab is scoped by `source_id:` like any search, and its groups
 /// count the same rows its pages list.
 #[tokio::test]

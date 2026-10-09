@@ -50,7 +50,7 @@ written still finds the author. An author with no handle is a plain
 `docs/dev/contacts.md`; the design, and why a chip may appear anywhere
 in a body, is `docs/dev/chips.md`.
 
-An item with `recipients` (an email's To and Cc) gets one more line
+An item with `recipients` (an email's To, Cc and Bcc) gets one more line
 straight under the header, a paragraph rather than an HTML block
 because markdown is not parsed inside a block:
 `<span class="msg-recipients">To [Will Riker](mailto:… "…"), <span

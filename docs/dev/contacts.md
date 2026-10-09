@@ -186,15 +186,16 @@ union has the kind); nothing finds the rest:
 
 A provider's render decides, at normalize time, which identifier it
 has for a person; `NormalizedChatItem::author_handle`,
-`Recipient::handle` and `NormalizedReaction::reactor_handle` carry it.
+`Recipient::handle`, `NormalizedChatItem::mentions` and
+`NormalizedReaction::reactor_handle` carry it.
 What each source has today:
 
 | source | author | more |
 |---|---|---|
-| email | the From address | To and Cc as recipients; nothing from the body |
+| email | the From address | To, Cc and Bcc (the sender's copy) as recipients; an `@` or `+` mention, a `mailto:` link in the fresh part of an HTML body |
 | Slack | `slack:<team>/<user>` | a `<@U…>` mention in a body; each reaction's user; the profile's email, in the source contact |
 | WhatsApp | the sender's number, a linked id (`…@lid`) through `jid_map` | each reaction's sender |
-| Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | number and ACI together, in the source contact; one known by ACI alone reads as the dashed ACI. The ACI is read by its one path in the stored frame, and one that will not read is a problem on the recipient (`aci`, `CoercionFailed`), not a silent loss |
+| Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | a mention (a `mentionAci` body range), by number else ACI, written `@Name` in place of its `U+FFFC`; number and ACI together, in the source contact; one known by ACI alone reads as the dashed ACI. The ACI is read by its one path in the stored frame, and one that will not read is a problem on the recipient (`aci`, `CoercionFailed`), not a silent loss |
 | Messages | the number or Apple ID address | each tapback's |
 | Google Chat and Voice, SMS backup | the address or number; a group MMS, which does not say which number sent it, has none | |
 | address books | | a card's numbers and addresses, in the source contact |
@@ -218,7 +219,10 @@ and why the href is load-bearing, is
 message's reaction list and in the list of reactions to messages not
 in the mirror (`render.rs::reactor`). Slack writes a `<@U…>` mention as
 a chip link in the body (`slack_render/src/render/mrkdwn.rs`), and as
-plain `@Name` inside code, which shows what it holds. Every chip link
+plain `@Name` inside code, which shows what it holds; an email's
+`@` mention is a chip link too (`email_render/src/render/mentions.rs`).
+Every mention a source marks up is also a `mention` search term on its
+message's row. Every chip link
 the backend writes is shaped by one function,
 `datalib_etl_render::message::chip_link`.
 
@@ -520,13 +524,12 @@ chip in the UI is separate and always uses the latest answer.
 ## Not built
 
 Editing a contact on its card, merge, groups and members, undo, the triage grid of
-unresolved handles, recipients and mentions in the search terms, a
-`contact:` search value, a
+unresolved handles, a `contact:` search value, a
 handle for a number without its country code, a handle that stopped
-working in some apps but not others, mentions outside Slack
-(an email's @-mention or +-mention is drawn as a chip from its
-`mailto:` link but recorded nowhere), and a handle for a Beeper
-(Matrix) user: [`plans/contact_linking.md`](plans/contact_linking.md),
+working in some apps but not others, mentions in Google Chat,
+WhatsApp and Messages (each marks them up, in a shape not yet checked
+on real data) and in Facebook and Beeper (no handle kind for their
+users), and a handle for a Beeper (Matrix) user: [`plans/contact_linking.md`](plans/contact_linking.md),
 [`plans/contact_editing.md`](plans/contact_editing.md) and
 [`plans/search_autocomplete.md`](plans/search_autocomplete.md),
 §"Order of work" in each.

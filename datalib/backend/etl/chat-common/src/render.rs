@@ -32,7 +32,9 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v13: an attachment's size comes from its bytes when the provider
 /// gave none, lost bytes are a `blob_missing` problem, and the versions
 /// a conversation left fold in as `<details class="branch">`.
-pub const LAYOUT_VERSION: u32 = 13;
+/// v14: an email's Bcc shows on its recipients line, and it and each
+/// message's mentions are `supplied_search_terms` rows.
+pub const LAYOUT_VERSION: u32 = 14;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -701,7 +703,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
 fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
     use crate::types::RecipientRole;
     let mut groups: Vec<String> = Vec::new();
-    for role in [RecipientRole::To, RecipientRole::Cc] {
+    for role in [RecipientRole::To, RecipientRole::Cc, RecipientRole::Bcc] {
         let names: Vec<String> = recipients
             .iter()
             .filter(|r| r.role == role)
@@ -1002,10 +1004,10 @@ fn build_grid_rows(
     rows
 }
 
-/// Who each message was addressed to and where it is filed, as search
-/// terms on its own row: the people by handle (one with no handle has
-/// nothing to match exactly), every one of them however many. Only for a
-/// row the document kept.
+/// Who each message was addressed to, who it mentions and where it is
+/// filed, as search terms on its own row: the people by handle (one with
+/// no handle has nothing to match exactly), every one of them however
+/// many. Only for a row the document kept.
 fn supplied_search_terms(doc: &NormalizedDoc, rows: &[GridRow]) -> Vec<SuppliedSearchTerm> {
     let kept: std::collections::HashSet<&str> = rows.iter().map(|r| r.uuid.as_str()).collect();
     let mut out: Vec<SuppliedSearchTerm> = Vec::new();
@@ -1018,16 +1020,21 @@ fn supplied_search_terms(doc: &NormalizedDoc, rows: &[GridRow]) -> Vec<SuppliedS
             let kind = match r.role {
                 crate::types::RecipientRole::To => SearchTermKind::To,
                 crate::types::RecipientRole::Cc => SearchTermKind::Cc,
+                crate::types::RecipientRole::Bcc => SearchTermKind::Bcc,
             };
             r.handle.as_ref().map(|h| (kind, h.as_str().to_string()))
         });
+        let mentions = item
+            .mentions
+            .iter()
+            .map(|h| (SearchTermKind::Mention, h.as_str().to_string()));
         let labels = item
             .labels
             .iter()
             .map(|l| l.trim())
             .filter(|l| !l.is_empty())
             .map(|l| (SearchTermKind::Label, l.to_string()));
-        for (kind, value) in people.chain(labels) {
+        for (kind, value) in people.chain(mentions).chain(labels) {
             let term = SuppliedSearchTerm {
                 uuid: item.message_uuid.clone(),
                 kind,
@@ -1208,6 +1215,7 @@ mod tests {
                     branch: Vec::new(),
                     unread: false,
                     recipients: Vec::new(),
+                    mentions: Vec::new(),
                     problems: Vec::new(),
                 }],
             }],
@@ -1425,6 +1433,7 @@ mod tests {
             branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
+            mentions: Vec::new(),
             problems: Vec::new(),
         });
         chat.buckets[0].items.push(aside_item(
@@ -1679,6 +1688,7 @@ mod tests {
             branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
+            mentions: Vec::new(),
             problems: Vec::new(),
         }
     }
