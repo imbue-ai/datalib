@@ -193,25 +193,25 @@ pub fn columns() -> Vec<ColumnSpec> {
              lost. Hover a chip for what became of the data.",
         ),
         ColumnSpec::new("source_ref", "Source", ColumnType::Identity),
+        ColumnSpec::new("markdown_uuid", "Document", ColumnType::MarkdownUuid).describe(
+            "The document the record belongs to. Empty when there is none: a listing, a \
+             configured entry, or a record that never reached the mirror — About says which.",
+        ),
+        ColumnSpec::new("about", "About", ColumnType::Text).describe(
+            "What a problem with no document is about: a listing or phase the download \
+             could not do, a configured entry, a raw record, a render store the index could \
+             not read.",
+        ),
         ColumnSpec::new("stage", "Stage", ColumnType::Text).describe(
             "Which step noticed it: fetch (downloading), parse (reading the stored payload), \
              render (projecting it), grid_row (building the index row). The fix is in a \
              different place for each.",
         ),
         ColumnSpec::new("reason", "Reason", ColumnType::Text),
-        ColumnSpec::new("about", "About", ColumnType::Text).describe(
-            "What a problem with no document is about: a listing or phase the download \
-             could not do, a configured entry, a raw record, a render store the index could \
-             not read.",
-        ),
         ColumnSpec::new("field", "Field", ColumnType::Text),
         ColumnSpec::new("sample", "Detail", ColumnType::Text).describe(
             "What went wrong: the first 80 characters of the offending value, or, for a \
              listing, phase or configured entry, the download's explanation whole.",
-        ),
-        ColumnSpec::new("markdown_uuid", "Document", ColumnType::MarkdownUuid).describe(
-            "The document the record belongs to. Empty when there is none: a listing, a \
-             configured entry, or a record that never reached the mirror — About says which.",
         ),
         ColumnSpec::new("outcome", "Outcome", ColumnType::Text).hidden(),
         ColumnSpec::new("rule", "Rule", ColumnType::Text)
