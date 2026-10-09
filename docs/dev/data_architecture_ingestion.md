@@ -377,7 +377,8 @@ is there, what is missing was deleted. A single-file feed's product is
 its file, not its folder: YouTube's `history/` can hold search history
 without watch history when only one was ticked. What this cannot see is
 a product split across the zips of a large Takeout and unpacked from
-only some of them.
+only some of them; a source pointed at the zips themselves reads every
+part in the folder.
 
 ### What limits it
 

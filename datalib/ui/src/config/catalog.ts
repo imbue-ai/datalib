@@ -1347,14 +1347,14 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "path",
         picks: "dir",
-        pickTitle: "Choose your unzipped Google Takeout folder",
+        pickTitle: "Choose your Google Takeout folder",
         required: true,
         target: "export.path",
         label: "Takeout folder",
         help:
-          "The unzipped export: the Takeout folder holding Google Chat, Voice, YouTube and " +
-          "YouTube Music and the rest, ~/Downloads/Takeout say. Gmail is not read here: its .mbox is an email source of " +
-          "its own.",
+          "The folder holding the export's .zip or .tgz files as Google sent them, every part, " +
+          "or the unzipped Takeout folder holding Google Chat, Voice, YouTube and YouTube Music " +
+          "and the rest. Gmail is not read here: its .mbox is an email source of its own.",
       },
       {
         kind: "bool",

@@ -23,7 +23,7 @@ use super::schema_raw::{ns_id, GeminiActivityRow, GeminiAttachmentRow};
 use super::time as time_parser;
 use datalib_etl::doltlite_raw::WirePayload;
 
-const FILE_REL: &str = "My Activity/Gemini Apps/MyActivity.html";
+pub(crate) const FILE_REL: &str = "My Activity/Gemini Apps/MyActivity.html";
 const SCOPE: &str = "google_takeout/gemini_apps";
 
 #[derive(Debug, Default, Clone)]

@@ -209,7 +209,8 @@ pub const REREAD_V1: &[&str] = &[
 ];
 
 /// Forget what these feeds' files hashed to, so the next sync reads
-/// them whole, as if new.
+/// them whole, as if new. Which archive parts were read goes too, or an
+/// export kept zipped would never be unpacked for that read.
 async fn read_again(conn: &mut sqlx::SqliteConnection, scopes: &[&str]) -> anyhow::Result<()> {
     let has_cursor: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ingested_files')",
@@ -219,7 +220,7 @@ async fn read_again(conn: &mut sqlx::SqliteConnection, scopes: &[&str]) -> anyho
     if !has_cursor {
         return Ok(());
     }
-    for scope in scopes {
+    for scope in scopes.iter().chain([&super::unpack::SCOPE]) {
         sqlx::query("DELETE FROM ingested_files WHERE scope = ?")
             .bind(scope)
             .execute(&mut *conn)

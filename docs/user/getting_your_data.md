@@ -505,14 +505,15 @@ page per year (subscriptions are one list). Voice bills and greetings
 are kept in the raw store only.
 
 Self-service export at <https://takeout.google.com>. Deselect all, then
-tick just what you want, request a `.zip`, and unpack it:
-
-```sh
-unzip ~/Downloads/takeout-*.zip -d ~/backups/
-```
+tick just what you want and request a `.zip` (or `.tgz`). Put every part
+of the export in a folder of its own and point the source at that
+folder; the parts are read as they are, with no need to unpack them.
+Keep one export per folder: a folder holding parts of two exports is
+refused. An export you have already unpacked works too: point the
+source at its `Takeout` folder.
 
 Useful products: **Chat**, **Voice**, **Maps**, **YouTube history** and
-**Gemini** (read by this source from the unpacked tree), and **Mail**
+**Gemini** (read by this source), and **Mail**
 (a single `.mbox`, read by the [email](#email) source instead). The
 Add source form ticks every product; untick what you want left out. In
 a hand-written config every feed is off until its flag beside
@@ -520,13 +521,13 @@ a hand-written config every feed is off until its flag beside
 …); [Google Chat](#google-chat) and
 [Google Voice](#google-voice) have sections of their own. A Takeout is
 a complete snapshot, so it is also the way to notice what Google has
-deleted since the last one: unpack a newer export in its place, and
+deleted since the last one: put a newer export in its place, and
 what it no longer holds leaves the mirror on the next sync. A product
 the newer export does not have at all deletes nothing, so an export
 requested for one product leaves the others alone. The one thing this
 cannot tell apart: a large Takeout comes as several zips, and a product
-unpacked from only some of them looks smaller, not missing, so unpack
-every part.
+missing some of them looks smaller, not missing, so keep every part in
+the folder (or, unpacking by hand, unpack every part).
 
 ## Google Voice
 
