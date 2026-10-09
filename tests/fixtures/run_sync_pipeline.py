@@ -381,10 +381,6 @@ def prepare(argv: list[str]) -> Prepared:
     step_env = {**own_cache_env, "DATALIB_DAG_DATA_ROOT": str(workspace)}
     for name, (type_str, synth_input, _extract_input) in sources.items():
         source: dict = {"fixture_path": str(synth_input)}
-        if type_str == "linkedin":
-            # The photo fetch is linkedin's one HTTP path; the synth
-            # gate checks this flag.
-            source["export"] = {"fetch_photos": True}
         playback.mkdir(exist_ok=True)
         params_file = playback / f"synthesize-{name}.params.json"
         params_file.write_text(json.dumps(source))
@@ -915,11 +911,8 @@ def _source_config(
             "path": str(whatsapp_dir if whatsapp_dir is not None else input_path)
         }
     elif type_str == "linkedin":
-        # File-backed CSV walk. Turn on the connection-photo fetch so
-        # the pipeline exercises the og:image → CAS path — hermetically,
-        # against the playback fixtures LinkedinSynth wrote in the synth
-        # phase.
-        source["export"] = {"path": str(input_path), "fetch_photos": True}
+        # File-backed CSV walk.
+        source["export"] = {"path": str(input_path)}
     elif type_str == "google_takeout":
         # Every feed renders, so every feed is on, Google Voice's Spam
         # folder included to exercise that path.

@@ -233,8 +233,7 @@ genrule(
             # in the raw store.
             "datalib/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
             # LinkedIn export dir (Connections + messages + Skills). The
-            # message feeds + connections render; fetch_photos is on, so
-            # the synth phase writes photo playback fixtures.
+            # message feeds + connections render.
             "datalib/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
             # "SMS Backup & Restore" export dir (sms + calls XML with
             # inline base64 image/audio attachments). Texts + calls

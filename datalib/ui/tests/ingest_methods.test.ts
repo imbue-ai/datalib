@@ -3,20 +3,13 @@ import { INGEST_METHODS, ingestLabel, ingestReach, methodsHeld } from "../src/co
 import { CATALOG } from "../src/config/catalog";
 
 describe("ingestReach", () => {
-  it("reads a table by presence and a flag only when on", () => {
+  it("reads a table by presence, and not when it is false", () => {
     expect(ingestReach("slack", { api: {} })).toBe("origin");
     expect(ingestReach("slack", {})).toBeNull();
+    expect(ingestReach("slack", { api: false })).toBeNull();
     // A table the provider never declared is not a method.
     expect(ingestReach("slack", { export: { path: "/x" } })).toBeNull();
-
-    const exp = { export: { path: "/export" } };
-    expect(ingestReach("linkedin", exp)).toBe("local");
-    expect(ingestReach("linkedin", { export: { ...exp.export, fetch_photos: true } })).toBe(
-      "origin",
-    );
-    expect(ingestReach("linkedin", { export: { ...exp.export, fetch_photos: false } })).toBe(
-      "local",
-    );
+    expect(ingestReach("linkedin", { export: { path: "/export" } })).toBe("local");
   });
 
   it("tells email's server modes from its mbox", () => {

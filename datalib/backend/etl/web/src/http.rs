@@ -93,7 +93,6 @@ pub enum HttpService {
     GoogleCalendar,
     /// A JMAP server (Fastmail and friends), another `email` mode.
     Jmap,
-    Linkedin,
     /// The official `api.notion.com` REST API. Does **not** impersonate:
     /// the Cloudflare-fronted host was `www.notion.so`, reached only by
     /// the retired unofficial client. `api.notion.com` accepts a vanilla
@@ -957,7 +956,7 @@ pub(crate) mod tests {
     fn via_desktop_prefix_is_scoped_to_impersonating_latchkey_requests() {
         with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
             assert_eq!(
-                maybe_via_desktop_url("https://example.com/x", HttpService::Linkedin, false),
+                maybe_via_desktop_url("https://example.com/x", HttpService::Notion, false),
                 "https://example.com/x",
             );
             assert_eq!(
