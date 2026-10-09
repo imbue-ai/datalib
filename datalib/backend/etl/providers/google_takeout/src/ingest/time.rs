@@ -3,12 +3,35 @@
 use chrono::{NaiveDateTime, TimeZone};
 use datalib_time::IsoOffsetTimestamp;
 
-/// Map one of the North-American timezone abbreviations Google emits
-/// in Takeout exports to a fixed-offset minute count east of UTC.
-/// Returns `None` for any abbreviation we haven't audited.
+/// The offset east of UTC, in minutes, of the zone Google names at the
+/// end of a Takeout timestamp. Google writes the short name the account's
+/// English locale has for the zone (`PDT`, `CEST`, `AEST`), and for a zone
+/// with none, the offset itself (`GMT+2`, `GMT+5:30`). A name two zones
+/// share (`IST`: India, Ireland, Israel) is left out, so its entries are
+/// reported rather than misdated.
 fn tz_abbrev_offset_minutes(abbr: &str) -> Option<i32> {
+    if let Some(offset) = gmt_offset_minutes(abbr) {
+        return Some(offset);
+    }
+    let hours = |h: f32| Some((h * 60.0) as i32);
     match abbr {
-        "UTC" | "GMT" => Some(0),
+        "WET" => hours(0.0),
+        "BST" | "WEST" | "CET" => hours(1.0),
+        "CEST" | "EET" => hours(2.0),
+        "EEST" | "MSK" => hours(3.0),
+        "AWST" => hours(8.0),
+        "JST" | "KST" => hours(9.0),
+        "ACST" => hours(9.5),
+        "AEST" => hours(10.0),
+        "ACDT" => hours(10.5),
+        "AEDT" => hours(11.0),
+        "NZST" => hours(12.0),
+        "NZDT" => hours(13.0),
+        "NST" => hours(-3.5),
+        "NDT" => hours(-2.5),
+        "AST" => hours(-4.0),
+        "ADT" => hours(-3.0),
+        "HDT" => hours(-9.0),
         "EST" => Some(-5 * 60),
         "EDT" => Some(-4 * 60),
         "CST" => Some(-6 * 60),
@@ -22,6 +45,27 @@ fn tz_abbrev_offset_minutes(abbr: &str) -> Option<i32> {
         "HST" => Some(-10 * 60),
         _ => None,
     }
+}
+
+/// `GMT`, `UTC`, `GMT+2`, `GMT-3`, `GMT+5:30`.
+fn gmt_offset_minutes(abbr: &str) -> Option<i32> {
+    let rest = abbr
+        .strip_prefix("GMT")
+        .or_else(|| abbr.strip_prefix("UTC"))?;
+    if rest.is_empty() {
+        return Some(0);
+    }
+    let (sign, rest) = match rest.as_bytes().first()? {
+        b'+' => (1, &rest[1..]),
+        b'-' => (-1, &rest[1..]),
+        _ => return None,
+    };
+    let (h, m) = rest.split_once(':').unwrap_or((rest, "0"));
+    let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
+    if !(0..=14).contains(&h) || !(0..60).contains(&m) {
+        return None;
+    }
+    Some(sign * (h * 60 + m))
 }
 
 /// Normalize the Unicode spaces Google sprinkles into recent exports
@@ -122,10 +166,35 @@ mod tests {
         assert!(out.ends_with("-05:00"));
     }
 
+    /// An export from an English locale outside North America names its
+    /// zone `CEST`; every Gemini entry in one went unread, and every
+    /// YouTube watch landed with no time.
     #[test]
-    fn unknown_tz_abbreviation_yields_none() {
-        assert!(parse_mdl_grid("Jun 4, 2026, 11:48:37 AM BST").is_none());
-        assert!(parse_chat_long_form("Tuesday, February 11, 2025 at 11:33:35 AM CET").is_none());
+    fn mdl_grid_european_summer_time() {
+        let out = parse_mdl_grid("Jun 4, 2026, 8:29:39\u{202f}PM CEST").expect("parse");
+        assert_eq!(out, "2026-06-04T20:29:39+02:00");
+        let out =
+            parse_chat_long_form("Tuesday, February 11, 2025 at 11:33:35 AM CET").expect("parse");
+        assert_eq!(out, "2025-02-11T11:33:35+01:00");
+    }
+
+    #[test]
+    fn a_zone_with_no_name_is_its_offset() {
+        let at = |zone: &str| parse_mdl_grid(&format!("Jun 4, 2026, 8:29:39 PM {zone}"));
+        assert_eq!(at("GMT+2").as_deref(), Some("2026-06-04T20:29:39+02:00"));
+        assert_eq!(at("GMT+5:30").as_deref(), Some("2026-06-04T20:29:39+05:30"));
+        assert_eq!(at("GMT-3").as_deref(), Some("2026-06-04T20:29:39-03:00"));
+        assert_eq!(at("NST").as_deref(), Some("2026-06-04T20:29:39-03:30"));
+        assert_eq!(at("GMT").as_deref(), Some("2026-06-04T20:29:39+00:00"));
+        assert_eq!(at("GMT+25"), None);
+        assert_eq!(at("GMT+2:75"), None);
+        assert_eq!(at("GMTX"), None);
+    }
+
+    #[test]
+    fn a_name_two_zones_share_yields_none() {
+        assert!(parse_mdl_grid("Jun 4, 2026, 11:48:37 AM IST").is_none());
+        assert!(parse_mdl_grid("Jun 4, 2026, 11:48:37 AM XYZT").is_none());
     }
 
     #[test]

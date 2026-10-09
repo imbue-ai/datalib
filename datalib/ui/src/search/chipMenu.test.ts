@@ -23,8 +23,10 @@ describe("a chip's menu in the search field", () => {
     expect(fieldChipMenu("Will Riker", false, riker).map((e) => e.id)).toEqual([
       "edit-text",
       "toggle-negate",
-      "copy-name",
+      "open",
+      "compose",
       "copy-id",
+      "copy-name",
       "copy-both",
       "search",
     ]);

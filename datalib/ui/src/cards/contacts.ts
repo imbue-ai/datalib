@@ -165,12 +165,15 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
 /** What a right-click on a chip offers. An entry is an *id* the surface
  *  binds a handler to — the document view and a grid cell draw the same
  *  menu and act on it their own way (docs/dev/chips.md § Clicks). */
-export type ChipMenuId = "copy-name" | "copy-id" | "copy-both" | "search" | "edit";
+export type ChipMenuId =
+  "open" | "compose" | "copy-id" | "copy-name" | "copy-both" | "search" | "edit";
 export type ChipMenuEntry = { id: ChipMenuId; label: string; separator?: boolean };
 
-/** The menu for one chip: copy its name, its identifier, or both; find
- *  everything from this person; and, with a contacts app, link or edit
- *  the link. `canLink` is whether a contacts app is there to link with. */
+/** The menu for one chip: open the person's card, the double-click's
+ *  card; write to an email address; copy the identifier, the name, or
+ *  both; find everything from this person; and, with a contacts app,
+ *  link or edit the link. `canLink` is whether a contacts app is there
+ *  to link with. */
 export function chipMenu(
   handle: string,
   shownAs: string,
@@ -180,9 +183,12 @@ export function chipMenu(
   const { text: name } = chipLook(handle, shownAs, who, canLink);
   const value = handleValue(handle);
   const named = name !== value;
-  const out: ChipMenuEntry[] = [];
+  const out: ChipMenuEntry[] = [{ id: "open", label: "Open contact" }];
+  if (composeUri(handle)) {
+    out.push({ id: "compose", label: `Compose mail to ${value}`, separator: true });
+  }
+  out.push({ id: "copy-id", label: `Copy ${value}`, separator: out.length === 1 });
   if (named) out.push({ id: "copy-name", label: `Copy “${name}”` });
-  out.push({ id: "copy-id", label: `Copy ${value}` });
   if (named) out.push({ id: "copy-both", label: `Copy “${copyText(handle, name)}”` });
   out.push({ id: "search", label: `Everything from ${name}`, separator: true });
   if (canLink) {
@@ -193,6 +199,12 @@ export function chipMenu(
     });
   }
   return out;
+}
+
+/** The `mailto:` a chip's Compose entry hands to the mail app; null for a
+ *  handle that is not an email address. */
+export function composeUri(handle: string): string | null {
+  return handleKind(handle) === "email" ? uriFromHandle(handle) : null;
 }
 
 /** The search that finds everything from this person: their handle, in

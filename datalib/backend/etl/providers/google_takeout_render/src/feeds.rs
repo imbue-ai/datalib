@@ -122,10 +122,15 @@ pub fn attachment(ref_id: String, name: &str, file: &str) -> NormalizedAttachmen
 }
 
 /// A row's `when_ts` as unix millis. The ingest keeps what the export
-/// wrote: RFC 3339, or — for a Maps photo — unix seconds.
+/// wrote: RFC 3339, or — for a Maps photo — unix seconds. A date the
+/// ingest could not read is stored as no `when_ts` beside the export's own
+/// words (`whenStr`), which are offered instead, so the loss is reported.
 pub fn stamp_ms(row: &Row, problems: &mut Vec<Problem>) -> Option<i64> {
     own_stamp_ms(
-        row.when.as_deref().filter(|s| !s.is_empty()),
+        row.when
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| str_at(&row.payload, "/whenStr")),
         "when_ts",
         |s| match s.parse::<i64>() {
             Ok(seconds) => Some(seconds * 1000),
@@ -238,5 +243,29 @@ mod tests {
         assert!(problems.is_empty());
         assert_eq!(stamp_ms(&row("stardate 41153.7"), &mut problems), None);
         assert_eq!(problems.len(), 1, "a stamp that will not read is said");
+    }
+
+    /// A YouTube watch whose date the ingest could not read was stored with
+    /// no `when_ts`, and rendered undated with nothing said.
+    #[test]
+    fn a_date_the_ingest_could_not_read_is_said() {
+        let unread = Row {
+            id: "r".to_string(),
+            payload: serde_json::json!({"whenStr": "Mar 1, 2364, 9:00:00 AM IST"}),
+            when: None,
+        };
+        let mut problems = Vec::new();
+        assert_eq!(stamp_ms(&unread, &mut problems), None);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].sample.contains("IST"), "{problems:?}");
+
+        let undated = Row {
+            id: "r".to_string(),
+            payload: serde_json::json!({"channelTitle": "Starfleet Academy"}),
+            when: None,
+        };
+        let mut problems = Vec::new();
+        assert_eq!(stamp_ms(&undated, &mut problems), None);
+        assert!(problems.is_empty(), "a row with no date has nothing to say");
     }
 }

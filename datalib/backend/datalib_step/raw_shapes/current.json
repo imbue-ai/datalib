@@ -339,7 +339,7 @@
   },
   "google_takeout": {
     "schema_hash": "dd4b6017a184f85a8d55de498b16335eff9cfcfac64050fcf51320284b88ef1f",
-    "schema_version": 1,
+    "schema_version": 2,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE chat_attachments( id TEXT PRIMARY KEY, message_id TEXT NOT NULL, export_name TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",

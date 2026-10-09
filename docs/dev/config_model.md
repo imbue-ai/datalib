@@ -134,8 +134,7 @@ its own `path`. There is no global vocabulary — each provider's
 | email | `jmap`, `gmail`, `mbox` |
 | calendar | `google`, `fastmail`, `caldav`, `ics` |
 | lightroom | `catalog`, `backups` |
-| airvisual, facebook, google_takeout | `export` |
-| linkedin | `export`, plus `export.fetch_photos` |
+| airvisual, facebook, google_takeout, linkedin | `export` |
 | signal, sms_backup_restore, whatsapp | `backup` |
 | fsindex, media, pdf | `fswalk` |
 | beeper `texts` · apple_messages `database` · apple_photos `library` · claude_code `sessions` · codex `sessions` · perseus `github` | |
@@ -145,8 +144,7 @@ read the list from.
 
 A method is *held* when its path is written and its value is neither
 `null` nor `false`: a table counts by presence (`api = {}` is a
-complete selection), a flag such as linkedin's `export.fetch_photos`
-only when on. A provider with more than one table refuses a step
+complete selection). A provider with more than one table refuses a step
 naming two (its config's `validate`, e.g. `claude_config`'s), so a
 store is filled one way. `lightroom` is the exception: its `backups`
 folder is the catalog's past and `catalog` its present, so a step may
@@ -209,8 +207,10 @@ Warnings: a group with nothing filed under it; a `name` on a grouped
 step (the label comes from the group and the function); an applet
 filed under an undeclared group; a `keyword_index` that `qmd_aggregator`
 does not read, in a config that has one; a built-in step's
-`common.always_clear_before_ingest`, which no longer does anything
-(`datalib-step` drops it before parsing). The Manage screen's System
+`common.always_clear_before_ingest`, or linkedin's
+`export.fetch_photos` (linkedin.com no longer shows a profile to
+anyone signed out), which no longer do anything (`datalib-step` drops
+them before parsing). The Manage screen's System
 row counts the config's warnings and names them on hover; a
 double-click opens the config.
 

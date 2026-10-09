@@ -359,7 +359,7 @@ export function paramsAreRepresentable(
 /// Keys a hand-written config may still carry that no longer do anything
 /// (`datalib-dag --check` warns at each). Saving the form drops them,
 /// which is what the warning asks for, so they do not block an edit.
-const INERT = new Set(["common.always_clear_before_ingest"]);
+const INERT = new Set(["common.always_clear_before_ingest", "export.fetch_photos"]);
 
 /// A descriptor's presets for one phase. Same default as a field's:
 /// absent means `download`.

@@ -34,7 +34,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { fetchSearchKeys, fetchSearchValues, type KeyValues, type SearchKeySpec } from "@/api";
-import { searchSource } from "@/cards/cardSources";
+import { personSource, searchSource } from "@/cards/cardSources";
 import {
   canLinkHandles,
   chipCell,
@@ -43,6 +43,7 @@ import {
   contactsById,
   chipLook,
   chipMenu,
+  composeUri,
   copyText,
   handleValue,
   NOBODY,
@@ -58,6 +59,7 @@ import {
   entityMenu,
 } from "@/cards/entities";
 import { copyToClipboard } from "@/clipboard";
+import { openExternal } from "@/externalLinks";
 import { filterToken } from "@/grid/query";
 import { pushToast } from "@/toasts";
 import { fieldChipMenu, toggleNegate, type FieldMenuEntry, type FieldMenuId } from "./chipMenu";
@@ -380,8 +382,13 @@ async function runMenu(view: EditorView, id: FieldMenuId, w: Word, chip: ChipRef
       await copy(person ? copyText(person, name) : entityCopyText(uri ?? "", name));
       break;
     case "open": {
-      const source = uri ? entityCardSource(uri) : null;
+      const source = uri ? entityCardSource(uri) : person ? personSource(person) : null;
       if (source) hooks?.openCard(source);
+      break;
+    }
+    case "compose": {
+      const mailto = person ? composeUri(person) : null;
+      if (mailto) void openExternal(mailto);
       break;
     }
     case "browse": {

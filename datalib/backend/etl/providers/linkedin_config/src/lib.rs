@@ -7,7 +7,7 @@ use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// Typed config for a `linkedin` source: `export`, the data export on
-/// disk, whose `fetch_photos` is the one thing that reaches linkedin.com.
+/// disk.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LinkedinConfig {
@@ -19,15 +19,12 @@ pub struct LinkedinConfig {
     pub export: Option<LinkedinExport>,
 }
 
-/// The `export` table: where the unpacked export is, and whether to
-/// fetch each connection's public profile photo while ingesting it.
+/// The `export` table: where the unpacked export is.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LinkedinExport {
     /// The unpacked LinkedIn data export: the directory of CSVs.
     pub path: PathBuf,
-    #[serde(default)]
-    pub fetch_photos: bool,
 }
 
 impl LinkedinExport {
@@ -46,11 +43,7 @@ impl LinkedinConfig {
 /// this is the shared bare envelope (see the per-phase params split).
 pub type LinkedinRenderConfig = datalib_source_common::BareRenderConfig;
 
-// The export is read off disk; its `fetch_photos` alone reaches
-// linkedin.com, so a step with it on reads "Download".
 impl datalib_source_common::IngestMethods for LinkedinConfig {
-    const METHODS: &'static [datalib_source_common::IngestMethod] = &[
-        datalib_source_common::IngestMethod::local("export"),
-        datalib_source_common::IngestMethod::origin("export.fetch_photos"),
-    ];
+    const METHODS: &'static [datalib_source_common::IngestMethod] =
+        &[datalib_source_common::IngestMethod::local("export")];
 }

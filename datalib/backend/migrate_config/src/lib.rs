@@ -430,9 +430,10 @@ inputs = ["slack/render_markdown"]
             "{out}"
         );
         assert!(
-            out.contains("[steps.params.export]\nfetch_photos = true\npath = \"~/LinkedIn\""),
+            out.contains("[steps.params.export]\npath = \"~/LinkedIn\""),
             "{out}"
         );
+        assert!(!out.contains("fetch_photos"), "{out}");
         assert_eq!(cfg.groups.len(), 10);
         // Running it again finds nothing to do.
         let err = detect(&out).unwrap_err().to_string();

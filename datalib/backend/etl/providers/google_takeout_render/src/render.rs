@@ -552,14 +552,12 @@ fn space_of_dir(dir: &str) -> String {
 /// Parse Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`
 /// timestamp to unix millis, or `None` on any shape we don't recognize —
 /// which the caller records through `own_stamp_ms`.
+/// The ingest's reading of a Chat `created_date`, so a zone it knows is
+/// one the render knows.
 fn parse_date_ms(s: &str) -> Option<i64> {
-    let s = s.trim().replace(['\u{202f}', '\u{00a0}'], " ");
-    const FMTS: [&str; 2] = [
-        "%A, %B %d, %Y at %I:%M:%S %p UTC",
-        "%A, %B %e, %Y at %I:%M:%S %p UTC",
-    ];
-    FMTS.iter()
-        .find_map(|fmt| datalib_time::parse_custom_strftime_assumed_utc(&s, fmt).ok())
+    let rfc3339 = datalib_etl_google_takeout::ingest::time::parse_chat_long_form(s)?;
+    datalib_time::parse_strict(&rfc3339)
+        .ok()
         .map(|t| t.to_unix_millis())
 }
 
@@ -958,6 +956,17 @@ mod tests {
         assert_eq!(month_of(feb), "2025-02");
     }
 
+    /// A Chat message dated in a zone outside North America got its time
+    /// from the ingest and none from the render, which read only `UTC`.
+    #[test]
+    fn a_chat_date_in_any_zone_the_ingest_reads_parses() {
+        assert_eq!(
+            parse_date_ms("Tuesday, February 11, 2025 at 11:33:35 AM CET"),
+            parse_date_ms("Tuesday, February 11, 2025 at 10:33:35 AM UTC"),
+        );
+        assert!(parse_date_ms("Tuesday, February 11, 2025 at 11:33:35 AM GMT+5:30").is_some());
+    }
+
     /// A shape we don't recognize must produce no timestamp, never the
     /// epoch — the doc comment on `parse_date_ms` used to promise `0`,
     /// and those rows sorted into the grid as real 1970 records.
@@ -968,8 +977,8 @@ mod tests {
             "not a date",
             // Right words, wrong shape (no weekday, no "at").
             "February 11, 2025 11:33:35 AM UTC",
-            // A zone we have not audited — refusing is the point.
-            "Tuesday, February 11, 2025 at 11:33:35 AM PST",
+            // A zone name two zones share — refusing is the point.
+            "Tuesday, February 11, 2025 at 11:33:35 AM IST",
         ] {
             assert_eq!(
                 parse_date_ms(bad),

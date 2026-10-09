@@ -70,19 +70,6 @@ pub fn run(
         Some(SourceType::Garmin) => Box::new(datalib_etl_garmin::synthesize::GarminSynth::new(
             input.clone(),
         )),
-        // LinkedIn is file-backed except the optional connection-photo
-        // fetch; there are playback fixtures to synthesize iff that's
-        // enabled.
-        Some(SourceType::Linkedin)
-            if source
-                .pointer("/export/fetch_photos")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false) =>
-        {
-            Box::new(datalib_etl_linkedin::synthesize::LinkedinSynth::new(
-                input.clone(),
-            ))
-        }
         // Everything else is file-backed or otherwise synth-less: no
         // download HTTP to play back. Skip quietly like sync did.
         _ => {

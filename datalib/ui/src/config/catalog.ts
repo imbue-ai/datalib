@@ -1452,10 +1452,7 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "linkedin",
     nameHint: "My LinkedIn",
     wizard: true,
-    sections: [
-      { heading: "Export folder", fields: ["export.path"] },
-      { heading: "Profile photos", fields: ["export.fetch_photos"] },
-    ],
+    sections: [{ heading: "Export folder", fields: ["export.path"] }],
     fields: [
       {
         kind: "path",
@@ -1467,15 +1464,6 @@ export const CATALOG: CatalogEntry[] = [
         help:
           'The unzipped "Get a copy of your data" export: the folder of CSV files, ~/Downloads/LinkedInDataExport say. Every CSV in' +
           " it is read.",
-      },
-      {
-        kind: "bool",
-        target: "export.fetch_photos",
-        label: "Fetch each connection's public profile photo from linkedin.com",
-        default: false,
-        help:
-          "The export has no photos. This is the one part of this source that goes online. No " +
-          "login is needed.",
       },
     ],
   },
