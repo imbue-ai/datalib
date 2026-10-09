@@ -180,10 +180,11 @@ Lightroom's tables fall into three groups:
   payloadKey)`. It was in the catalog all along; we had only been
   reading declared primary keys. A UNIQUE index is not quite a primary
   key. It allows empty (NULL) values to repeat, and a table may have
-  several. So the rule is cautious: use a table's only UNIQUE index, or
-  the one named `…primaryKey` when there are several; check that no row
-  has a NULL in it; otherwise leave the table without a key and say so.
-  It never stops a sync.
+  several. So the rule is cautious: use a table's **only** UNIQUE index;
+  check that no row has a NULL in it; otherwise (two or more, or a NULL)
+  leave the table without a key and say so, because with several none is
+  more the key than another. It never stops a sync, and the same rule
+  now applies to the other SQLite-backed sources in datalib.
 
 With the key in place, the same table showed **128 modified rows across
 four weekly backups**.
@@ -285,7 +286,7 @@ measurement is consistent with it:
   end of a batch and the cleanup reclaims every intermediate page. Commit
   after each of many small transactions and it reclaims nothing, because
   each in-between state is now history. This tool rebuilds each table in
-  its own transaction and makes one commit at the end of a run.
+  its own transaction and makes one commit when a backup is done.
 - **The cleanup can run before or after a commit.** After one, it
   reclaims that run's own garbage.
 - **It writes a compacted copy before dropping the original**, so it
@@ -295,7 +296,7 @@ measurement is consistent with it:
 - **Deleting a row reclaims nothing.** The row stays reachable from the
   earlier commits. Space comes back only from chunks nothing reaches.
 
-In datalib this is the **"Collect unreachable chunks each run"** option
+In datalib this is the **"Collect unreachable chunks each sync"** option
 of a source, and it is off by default.
 
 ## Part 5. Try it on your own backups
@@ -353,7 +354,7 @@ copy, and compare sizes.
   largest source of noise here.
 - **A key should be a stable identity, not just something unique.** A
   UNIQUE index allows repeated NULLs and a table can have several, so
-  check which one really names a row.
+  check that there is one, and that it really names a row.
 - **Rewriting a table with the same rows is no change.** That makes
   "drop and refill everything" a cheap way to mirror a source whose
   changes you cannot track.
@@ -389,9 +390,9 @@ Each wrong turn was cheap to make, and the data corrected it.
 - We measured the cleanup once, on a copy.
 - The free-disk need of the cleanup comes from doltlite's documentation,
   not from our own measurement.
-- Other SQLite-backed sources in datalib (Apple Photos, Apple Messages,
-  WhatsApp) use the same engine, but their keys have not been examined the
-  way Lightroom's were.
+- The same key rule now applies to datalib's other SQLite-backed sources
+  (Apple Photos, Apple Messages, WhatsApp). We have not measured their
+  comparisons the way we did Lightroom's.
 
 ## Where to read more
 
