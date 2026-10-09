@@ -116,3 +116,13 @@ test("a person picked for from: is drawn as their chip", async ({ page }) => {
     field(page).locator('a.chip[data-handle="email:riker@enterprise.starfleet"]'),
   ).toBeVisible();
 });
+
+/// A name picked for a person key is written quoted: matched whole, where
+/// the same name typed bare matches any name holding it.
+test("a name picked for from: is quoted, to be matched whole", async ({ page }) => {
+  await page.goto(GRID);
+  await typeInto(field(page), "from:wtrik");
+  await expect(menu(page).getByText("wtriker", { exact: true })).toBeVisible();
+  await field(page).press("Tab");
+  await expect(field(page)).toHaveAttribute("data-query", 'from:"wtriker" ');
+});

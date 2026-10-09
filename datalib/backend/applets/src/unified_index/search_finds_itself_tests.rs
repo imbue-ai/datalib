@@ -250,9 +250,11 @@ async fn every_row_is_found_by_what_it_holds() {
         }
     }
 
-    // A key that reads the search terms finds every row holding the value
-    // in one of its kinds: exactly those rows for a handle, and those
-    // among others for a name or a label, which match in part.
+    // A key that reads the search terms, given a value whole, finds
+    // exactly the rows holding it in one of its kinds, case-blind; a
+    // handle-shaped value its handle's rows too (`+1701…` shown as a name
+    // is the `tel:` handle). A bare value matches in part, which the
+    // applet's own tests pin down.
     let terms = terms_of(root.path()).await;
     for key in TERMS_KEYS {
         let kinds: Vec<&str> = key.kinds().iter().map(|k| k.as_str()).collect();
@@ -266,30 +268,22 @@ async fn every_row_is_found_by_what_it_holds() {
             }
         }
         for (value, holding) in &by_value {
-            let q = datalib_query::term(key.key, value, false);
+            let q = datalib_query::exact_term(key.key, value, false);
             let got: BTreeSet<String> = every_uuid(&s, &q, None)
                 .await
                 .into_iter()
                 .map(|r| r.uuid)
                 .collect();
-            let missing: BTreeSet<&str> = holding.difference(&got).map(String::as_str).collect();
-            // An exact value is also its handle's rows: `+1701…` shown as a
-            // name is the `tel:` handle too.
-            let mut expected = holding.clone();
-            let exact = match terms_keys::value_of(key, value, "*") {
-                TermsValue::Exact { handle, .. } => {
-                    if let Some(by_handle) = by_value.get(handle.as_str()) {
-                        expected.extend(by_handle.iter().cloned());
-                    }
-                    true
-                }
-                _ => false,
+            let TermsValue::Exact(whole) = terms_keys::value_of(key, value, true, "*") else {
+                panic!("a quoted value is matched whole: {q}");
             };
-            let extra: BTreeSet<&str> = if exact {
-                got.difference(&expected).map(String::as_str).collect()
-            } else {
-                BTreeSet::new()
-            };
+            let expected: BTreeSet<String> = by_value
+                .iter()
+                .filter(|(v, _)| whole.iter().any(|w| w.eq_ignore_ascii_case(v)))
+                .flat_map(|(_, rows)| rows.iter().cloned())
+                .collect();
+            let missing: BTreeSet<&str> = expected.difference(&got).map(String::as_str).collect();
+            let extra: BTreeSet<&str> = got.difference(&expected).map(String::as_str).collect();
             if !missing.is_empty() || !extra.is_empty() {
                 failures.push(format!(
                     "`{q}` missed [{}] and found [{}]",

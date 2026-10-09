@@ -1646,8 +1646,8 @@ mod tests {
     }
 
     /// Each person key reads the search terms in its role: a handle by its
-    /// one value, a name or part of an address in part, `with:` in any
-    /// role, `-` the rows without. `author:` and `author_handle:` are
+    /// one value, a quoted name whole, a bare name or part of an address
+    /// in part, `with:` in any role, `-` the rows without. `author:` and `author_handle:` are
     /// `from:`, which also finds an author known by name alone.
     #[tokio::test]
     async fn a_person_is_found_in_the_role_the_key_names() {
@@ -1670,6 +1670,11 @@ mod tests {
             ("author:ann", vec!["m-1"]),
             ("author_handle:email:bo@example.com", vec!["m-2"]),
             ("from:claude", vec!["m-3"]),
+            // Quoted, a name is matched whole, case-blind.
+            (r#"author:"ann""#, vec!["m-1"]),
+            (r#"author:"An""#, vec![]),
+            (r#"from:"claude-opus""#, vec!["m-3"]),
+            (r#"-author:"claude-opus""#, vec!["m-2", "m-1"]),
             ("to:ann@example.com", vec!["m-2"]),
             ("cc:cy@example.com", vec!["m-1"]),
             ("to:cy@example.com", vec![]),

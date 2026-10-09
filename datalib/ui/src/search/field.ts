@@ -427,7 +427,8 @@ function completions(base: () => string) {
       label: v.value,
       chip: refs[i] ?? undefined,
       detail: v.count === undefined ? undefined : v.count.toLocaleString(),
-      apply: termValue(v.value) + (atEnd ? " " : ""),
+      // A name picked is matched whole; a chip is a handle, whole bare.
+      apply: termValue(v.value, spec.partial && !refs[i]) + (atEnd ? " " : ""),
     }));
     return { from: at.from, to: at.to, options, filter: false };
   };

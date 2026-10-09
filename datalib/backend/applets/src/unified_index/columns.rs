@@ -89,6 +89,7 @@ pub fn keys_of<T: SearchTable>() -> Vec<SearchKeySpec> {
         key,
         aliases: &[],
         values,
+        partial: false,
     };
     let mut keys: Vec<SearchKeySpec> = T::KEYS
         .iter()
@@ -102,6 +103,7 @@ pub fn keys_of<T: SearchTable>() -> Vec<SearchKeySpec> {
                 None if k.column.as_str() == "source_id" => KeyValues::Source,
                 None => KeyValues::Text,
             },
+            partial: false,
         })
         .collect();
     if T::RANGE.is_some() {
@@ -130,6 +132,7 @@ pub fn grid_keys() -> Vec<SearchKeySpec> {
         } else {
             KeyValues::Text
         },
+        partial: true,
     }));
     keys
 }
@@ -199,6 +202,7 @@ pub fn searchable<V: View>(mut columns: Vec<ColumnSpec>) -> Vec<ColumnSpec> {
         c.search = view::for_column::<V>(&c.field).map(|(key, field)| ColumnSearch {
             key: key.into(),
             field: field.into(),
+            partial: datalib_unified_index::terms_keys::key(key).is_some(),
         });
     }
     columns

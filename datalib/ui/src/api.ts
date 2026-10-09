@@ -501,6 +501,8 @@ export type SearchKeySpec = {
   key: string;
   aliases: string[];
   values: KeyValues;
+  /// A bare value matches in part and a quoted one whole.
+  partial: boolean;
 };
 
 /// `datalib_columns::KeyValues`: what decides how a value is offered and
@@ -1015,7 +1017,9 @@ export type ColumnSpec = {
   editable: boolean;
   // How the producer's search bar filters on this column: the key a term
   // starts with, and the row field holding the value it names.
-  search?: { key: string; field: string };
+  // `partial`: the key matches a bare value in part, so a value written
+  // to be matched whole is quoted.
+  search?: { key: string; field: string; partial?: boolean };
   // On an identity column: the row field of chips drawn after the label,
   // as bare counts. Double-clicking them is a double-click on that field.
   badges?: string;

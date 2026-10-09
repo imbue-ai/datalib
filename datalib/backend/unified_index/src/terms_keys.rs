@@ -63,7 +63,13 @@ pub const TERMS_KEYS: &[TermsKey] = &[
     ),
     person("to", &[], Kinds::These(&[Kind::To])),
     person("cc", &[], Kinds::These(&[Kind::Cc])),
-    person("recipient", &[], Kinds::These(&[Kind::To, Kind::Cc])),
+    person("bcc", &[], Kinds::These(&[Kind::Bcc])),
+    person(
+        "recipient",
+        &[],
+        Kinds::These(&[Kind::To, Kind::Cc, Kind::Bcc]),
+    ),
+    person("mention", &[], Kinds::These(&[Kind::Mention])),
     person("with", &["involves"], Kinds::AnyPerson),
     TermsKey {
         key: "label",
@@ -85,23 +91,25 @@ pub fn key(typed: &str) -> Option<&'static TermsKey> {
 pub enum TermsValue {
     /// `*`: any term of the key's kinds.
     Any,
-    /// A handle, as `datalib_handle` spells it, and the value as typed:
-    /// the handle, or an author shown under exactly that text (an address
-    /// a source had no handle for).
-    Exact { handle: String, typed: String },
+    /// Any of these values whole, case-blind: a handle (`datalib_handle`'s
+    /// spelling, and as typed, for an author shown under an address a
+    /// source had no handle for), or a quoted value.
+    Exact(Vec<String>),
     /// Anything else: a value holding it, case-blind.
     Partial(String),
 }
 
-pub fn value_of(key: &TermsKey, value: &str, any: &str) -> TermsValue {
-    if value == any {
+/// How a term's value matches: `*` anything; a handle, or a quoted value,
+/// whole; anything else in part (`from:Data` finds "Lt. Cmdr. Data",
+/// `from:"Data"` only "Data").
+pub fn value_of(key: &TermsKey, value: &str, quoted: bool, any: &str) -> TermsValue {
+    if value == any && !quoted {
         return TermsValue::Any;
     }
     match handle_of(value).filter(|_| key.person) {
-        Some(handle) => TermsValue::Exact {
-            handle,
-            typed: value.to_string(),
-        },
+        Some(handle) if handle == value => TermsValue::Exact(vec![handle]),
+        Some(handle) => TermsValue::Exact(vec![handle, value.to_string()]),
+        None if quoted => TermsValue::Exact(vec![value.to_string()]),
         None => TermsValue::Partial(value.to_string()),
     }
 }
@@ -141,33 +149,38 @@ mod tests {
         assert!(kinds.contains(&Kind::From) && kinds.contains(&Kind::Cc));
         assert!(kinds.contains(&Kind::Author));
         assert!(!kinds.contains(&Kind::Label) && !kinds.contains(&Kind::Name));
-        assert_eq!(key("recipient").unwrap().kinds(), [Kind::To, Kind::Cc]);
+        assert!(kinds.contains(&Kind::Bcc) && kinds.contains(&Kind::Mention));
+        assert_eq!(
+            key("recipient").unwrap().kinds(),
+            [Kind::To, Kind::Cc, Kind::Bcc]
+        );
     }
 
     #[test]
     fn a_handle_matches_exactly_and_anything_else_in_part() {
         let from = key("from").unwrap();
+        let exact = |v: &[&str]| TermsValue::Exact(v.iter().map(|s| s.to_string()).collect());
         assert_eq!(
-            value_of(from, "Ann@Example.com", "*"),
-            TermsValue::Exact {
-                handle: "email:ann@example.com".into(),
-                typed: "Ann@Example.com".into()
-            }
+            value_of(from, "Ann@Example.com", false, "*"),
+            exact(&["email:ann@example.com", "Ann@Example.com"])
         );
-        assert!(matches!(
-            value_of(from, "email:ann@example.com", "*"),
-            TermsValue::Exact { handle, .. } if handle == "email:ann@example.com"
-        ));
         assert_eq!(
-            value_of(from, "Riker", "*"),
+            value_of(from, "email:ann@example.com", false, "*"),
+            exact(&["email:ann@example.com"])
+        );
+        assert_eq!(
+            value_of(from, "Riker", false, "*"),
             TermsValue::Partial("Riker".into())
         );
-        assert_eq!(value_of(from, "*", "*"), TermsValue::Any);
+        assert_eq!(value_of(from, "Riker", true, "*"), exact(&["Riker"]));
+        assert_eq!(value_of(from, "*", false, "*"), TermsValue::Any);
+        assert_eq!(value_of(from, "*", true, "*"), exact(&["*"]));
         let label = key("label").unwrap();
         assert_eq!(
-            value_of(label, "a@b.c", "*"),
+            value_of(label, "a@b.c", false, "*"),
             TermsValue::Partial("a@b.c".into()),
             "a label is never a person"
         );
+        assert_eq!(value_of(label, "Work", true, "*"), exact(&["Work"]));
     }
 }

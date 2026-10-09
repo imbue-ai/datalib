@@ -63,6 +63,8 @@ pub struct FilterTerm<C: 'static> {
     pub field: Field<C>,
     pub value: String,
     pub negate: bool,
+    /// The value was quoted: a key that matches in part matches it whole.
+    pub quoted: bool,
 }
 
 /// How free-text should be evaluated. Bare search-bar text defaults to
@@ -134,6 +136,7 @@ impl<C: Column> ParsedQuery<C> {
                         field,
                         value: t.value,
                         negate: t.negate,
+                        quoted: t.quoted,
                     }),
                     Err(why) => {
                         refusal.get_or_insert(why);

@@ -3,11 +3,11 @@ import type { SearchKeySpec } from "@/api";
 import { chipWords, completingAt, termValue, words } from "./queryText";
 
 const KEYS: SearchKeySpec[] = [
-  { key: "source_id", aliases: [], values: { kind: "source" } },
-  { key: "channel", aliases: [], values: { kind: "text" } },
-  { key: "step", aliases: [], values: { kind: "step" } },
-  { key: "author_handle", aliases: ["handle"], values: { kind: "text" } },
-  { key: "from", aliases: ["author"], values: { kind: "person" } },
+  { key: "source_id", aliases: [], values: { kind: "source" }, partial: false },
+  { key: "channel", aliases: [], values: { kind: "text" }, partial: false },
+  { key: "step", aliases: [], values: { kind: "step" }, partial: false },
+  { key: "author_handle", aliases: ["handle"], values: { kind: "text" }, partial: false },
+  { key: "from", aliases: ["author"], values: { kind: "person" }, partial: true },
 ];
 
 /** `|` marks the cursor. */
@@ -76,6 +76,7 @@ describe("termValue", () => {
     expect(termValue("two words")).toBe('"two words"');
     expect(termValue("-leading")).toBe('"-leading"');
     expect(termValue('say "hi" \\ done')).toBe('"say \\"hi\\" \\\\ done"');
+    expect(termValue("Data", true)).toBe('"Data"');
   });
 });
 

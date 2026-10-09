@@ -110,9 +110,11 @@ export function completingAt(query: string, pos: number): Completing | null {
 }
 
 /** A term's value as the query spells it: bare when it reads back as
- *  itself, quoted otherwise. Mirrors `datalib_query::term`. */
-export function termValue(value: string): string {
-  const bare = !(/[\s"]/.test(value) || value === "" || value.startsWith("-"));
+ *  itself, quoted otherwise, and always quoted when `whole`, which a key
+ *  that matches a bare value in part reads as the whole value. Mirrors
+ *  `datalib_query::term` and `exact_term`. */
+export function termValue(value: string, whole = false): string {
+  const bare = !whole && !(/[\s"]/.test(value) || value === "" || value.startsWith("-"));
   return bare ? value : `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 

@@ -58,6 +58,8 @@ import {
   chipCell,
   chipLook,
   chipMenu,
+  handleKind,
+  searchQueryFor,
   copyText as copyHandleText,
   handleValue,
   people,
@@ -629,13 +631,15 @@ const feedbackSurfaceLabel = ref("");
 // the search bar. Null for a column the search has no key for (Score,
 // Contents) or a row with no value in it.
 type FilterCtx = {
-  // The search bar's key for the column (`author`, `source_id`).
+  // The search bar's key for the column (`from`, `source_id`).
   key: string;
   // Human-facing column header for menu labels.
   header: string;
   // The value a term names: what the column's key compares, which for
   // an id or a uuid behind a label is the id or uuid, not the cell's text.
   value: string;
+  // Written quoted, for a key that matches a bare value in part.
+  whole?: boolean;
 };
 
 function openFeedbackForSearchBar(ev: MouseEvent) {
@@ -712,7 +716,13 @@ function buildFilterCtx(colId: string, data: Row): FilterCtx | null {
       : spec.search.field !== colId && typeof shown === "string"
         ? shown
         : "";
-  return { key: spec.search.key, header: spec.header, value: formatSlugUuid(label, value) };
+  return {
+    key: spec.search.key,
+    header: spec.header,
+    value: formatSlugUuid(label, value),
+    // A handle is matched whole bare; a name only quoted.
+    whole: spec.search.partial === true && handleKind(value) === null,
+  };
 }
 
 function accountLabel(uuid: string): string {
@@ -1787,9 +1797,7 @@ const menuItems: (MenuCommandItem | "divider")[] = [
   chipEntry("copy-name", (m) => void copyToClipboard(m.chip!.name)),
   chipEntry("copy-id", (m) => void copyToClipboard(handleValue(m.chip!.handle))),
   chipEntry("copy-both", (m) => void copyToClipboard(copyHandleText(m.chip!.handle, m.chip!.name))),
-  chipEntry("search", (m) =>
-    appendFilterToQuery(filterToken("author_handle", m.chip!.handle, false)),
-  ),
+  chipEntry("search", (m) => appendFilterToQuery(searchQueryFor(m.chip!.handle))),
   dividerAfter((m) => m.chip !== null),
   entityEntry("copy-name", (m) => void copyToClipboard(m.entity!.name)),
   entityEntry(

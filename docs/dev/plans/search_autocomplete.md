@@ -1,7 +1,7 @@
 # Search autocomplete: a person, a source, a value as a chip
 
 *Proposal (2026-10-09). Steps 1 to 3 of the order of work are built,
-but for `bcc:`, `mention:` and `@`. It builds on the search terms
+but for `@`. It builds on the search terms
 file from [`search_tabs.md`](search_tabs.md) §"The search terms" and changes
 what that plan says the search terms hold; the facts it cites about the tree
 were read that day.*
@@ -58,8 +58,8 @@ together, and `term_round_trips_through_parse` covers it.
 | key | aliases | matches | suggests |
 |---|---|---|---|
 | `from:` | `author:`, `author_handle:` | the `from` terms (handles) and `author` terms (names shown) | people |
-| `to:`, `cc:` | | their own kinds | people |
-| `recipient:` | | `to` and `cc` (and `bcc` once it lands) | people |
+| `to:`, `cc:`, `bcc:`, `mention:` | | their own kinds | people |
+| `recipient:` | | `to`, `cc` and `bcc` | people |
 | `with:` | `involves:` | every person kind, and `author` | people |
 | `label:` | | the `label` terms | their values |
 | `source_id:` | | the column, as today | the configured sources |
@@ -83,10 +83,33 @@ split out of `name` for this. The Author cell's Keep only writes
 `from:` with the row's handle, or its name where it has none
 (`SearchRow::author_term`).
 
-Not built: `bcc:` and `mention:`, whose kinds arrive with
-imbue-ai/datalib#1138 (`with:` takes them as it reads every person
-kind); typing `@` at the start of a word to open the people suggestions
-and write `with:`.
+**A quoted value is matched whole.** On these keys a bare value
+matches in part and a quoted one whole, case-blind: `author:Data` finds
+"Data" and "Lt. Cmdr. Data", `author:"Data"` only "Data". A handle is
+whole either way. So a partial match cannot hold a space, which needs
+quotes. A name picked from the suggestions, and Keep only on the Author
+cell, are written quoted (`partial` on a key's spec and on a column's
+`search`, which the field and the grid read). The grammar keeps
+`quoted` on a term (`datalib_query::Term`), and the column keys, which
+compare whole values either way, ignore it.
+
+**Where a name is headed: contacts.** `from:<name>` reaches an author
+by the name the row shows (the `author` kind) today. That is the floor,
+and stays: an author with no handle at all (an AI model, a Facebook or
+LinkedIn post, a Beeper bridge) has nothing else to be found by. With
+the names table and `contact:` values (below), a plain-text person
+value will match the union of three, partly or, quoted, whole:
+
+- the names rows show, the `author` kind, as now;
+- the handles whose names seen under hold it (`source_contacts`);
+- the handles of your contacts whose name holds it.
+
+So `from:Riker` will find him by every handle linked to a contact named
+Riker, whatever each source showed, and a chip picked for a contact is
+`from:contact:<id>`.
+
+Not built: typing `@` at the start of a word to open the people
+suggestions and write `with:`.
 
 ## Contacts: expanded when the search runs
 
@@ -234,9 +257,9 @@ answered from the search terms.
    `author_handle:` its aliases, partial values, and values suggested
    from the attached terms file. The names table became the `author`
    kind: a name shown is a term of its own.
-3. **The person keys.** Built: `to:`, `cc:`, `recipient:`, `with:` and
-   `involves:`, `label:`; person chips in the field and its menu. Not
-   yet `bcc:`, `mention:` (#1138) and `@`.
+3. **The person keys.** Built: `to:`, `cc:`, `bcc:`, `mention:`,
+   `recipient:`, `with:` and `involves:`, `label:`; quoted values
+   whole; person chips in the field and its menu. Not yet `@`.
 4. **`contact:` values**, expanded when the search runs.
 5. **The index audit**, measured, then the identity indexes dropped.
 

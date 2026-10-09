@@ -209,6 +209,9 @@ pub const TERMS_DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS terms (val_id INTEGER NOT NULL, kind INTEGER NOT NULL, \
      row_id INTEGER NOT NULL, PRIMARY KEY (val_id, kind, row_id)) WITHOUT ROWID",
     "CREATE INDEX IF NOT EXISTS terms_by_row ON terms (row_id)",
+    // A quoted value or a handle on a search key matches a whole value,
+    // case-blind.
+    "CREATE INDEX IF NOT EXISTS vals_nocase ON vals (value COLLATE NOCASE)",
     "CREATE VIRTUAL TABLE IF NOT EXISTS vals_fts USING fts5(value, content='', \
      contentless_delete=1, tokenize=\"unicode61 tokenchars '@.-_+:/'\")",
     "CREATE TABLE IF NOT EXISTS terms_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",

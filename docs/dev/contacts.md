@@ -451,13 +451,15 @@ hold each row's people by handle:
 | key | finds the rows where the person |
 |---|---|
 | `from:` (and `author:`, `author_handle:`) | wrote it: by handle, or by the name they were shown under |
-| `to:`, `cc:` | was in that header |
+| `to:`, `cc:`, `bcc:` | was in that header |
 | `recipient:` | was in any of them |
+| `mention:` | was mentioned, where the source marks a mention up |
 | `with:` (and `involves:`) | had any role |
 
 A value that is a handle (`email:riker@enterprise.org`, or simply
 `riker@enterprise.org`, `+12025550101`) matches that handle exactly, and
-the search bar draws it as the person's chip; anything else matches any
+the search bar draws it as the person's chip; a quoted value matches a
+handle or name whole (`from:"Will Riker"`); anything else matches any
 handle or name holding it, so `from:riker` finds Riker under every
 spelling a source used, and anyone else whose name holds it. A chip's
 "Everything from <name>" writes `from:<handle>`.

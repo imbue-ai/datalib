@@ -309,9 +309,10 @@ Pick the surface that fits the question:
   `is:document` for the one row per rendered document and
   `-is:document` for the rows inside them. A person is found by role
   through the search terms: `from:` (also `author:`, `author_handle:`),
-  `to:`, `cc:`, `recipient:` (any of those) and `with:` (also
-  `involves:`, any role), and `label:` an email's labels; a handle
-  (`email:a@b.c`, or `a@b.c`, `+1…`) matches exactly, anything else in
+  `to:`, `cc:`, `bcc:`, `recipient:` (any of those), `mention:`, and
+  `with:` (also `involves:`, any role), and `label:` an email's labels;
+  a handle (`email:a@b.c`, or `a@b.c`, `+1…`) or a quoted value
+  (`from:"Will Riker"`) matches whole, case-blind, anything else in
   part. `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
   the values one takes, most rows first. A key the search does not
   have is refused by name, in `refused`, rather than ignored. Free text
