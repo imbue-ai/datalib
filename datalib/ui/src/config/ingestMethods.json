@@ -147,10 +147,6 @@
     {
       "path": "export",
       "reach": "local"
-    },
-    {
-      "path": "export.fetch_photos",
-      "reach": "origin"
     }
   ],
   "media": [

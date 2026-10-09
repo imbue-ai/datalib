@@ -7,15 +7,12 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_linkedin::ingest::photos::load_photo_blobs;
 use datalib_etl_linkedin::ingest::{self, db_path_for, FetchOptions, RawDb};
-use datalib_etl_linkedin::synthesize::LinkedinSynth;
 use datalib_etl_linkedin_render::connections;
 use datalib_etl_linkedin_render::posts;
 use datalib_etl_linkedin_render::processor::Source;
 use datalib_etl_linkedin_render::render;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
-use datalib_etl_web::http::PLAYBACK_ENV;
-use datalib_etl_web::synthesize::Synthesizer;
 
 fn build_export(root: &Path) -> Result<()> {
     // Who the export belongs to. The primary address is deliberately not
@@ -115,6 +112,26 @@ async fn rows(db: &RawDb, table: &str) -> Vec<serde_json::Value> {
     db.load_payloads(table).await.unwrap_or_default()
 }
 
+const CONTACT_PHOTOS_DDL: &str = "CREATE TABLE IF NOT EXISTS contact_photos (id TEXT PRIMARY KEY, \
+     owner_id TEXT NOT NULL, source_url TEXT NOT NULL, blake3 TEXT NULL)";
+
+/// What the photo fetch earlier builds ran left for one connection: the
+/// bytes in the CAS and an edge row naming them.
+async fn seed_photo(db: &RawDb, owner: &str, bytes: &[u8]) -> Result<()> {
+    let cas = db.cas().expect("the download handle has a CAS");
+    let blake3 = cas.put(bytes, Some("image/png")).await?;
+    sqlx::query(CONTACT_PHOTOS_DDL).execute(db.pool()).await?;
+    let image = format!("{owner}/photo.png");
+    sqlx::query("INSERT INTO contact_photos VALUES (?, ?, ?, ?)")
+        .bind(format!("{owner}#{image}"))
+        .bind(owner)
+        .bind(&image)
+        .bind(blake3)
+        .execute(db.pool())
+        .await?;
+    Ok(())
+}
+
 #[test]
 fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
     let tmp = tempfile::tempdir()?;
@@ -140,8 +157,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         let summary = ingest::fetch(FetchOptions {
             db: db.clone(),
             input_path: export.clone(),
-            fetch_photos: false,
-            photo_max_consecutive_failures: 50,
             progress: Progress::noop(),
             control: Default::default(),
         })
@@ -429,41 +444,35 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             "field values in search text"
         );
 
-        // ── photo fetch (hermetic via the synthesizer + playback) ──
-        // Synthesize profile-page + image fixtures, point the curl
-        // chokepoint at them, and re-download with fetch_photos on. This
-        // is the only test in this binary, so mutating the playback env
-        // var here is race-free.
-        let playback = tmp.path().join("playback");
-        fs::create_dir_all(&playback)?;
-        Synthesizer::synthesize(&LinkedinSynth::new(export.clone()), &playback)?;
-        std::env::set_var(PLAYBACK_ENV, &playback);
+        // ── a photo an earlier build fetched ──────────────────────
+        // Nothing fetches a photo now (linkedin.com shows a profile only
+        // to a signed-in visitor), but a store an earlier build filled
+        // keeps its photos: a re-read of the export leaves them, and the
+        // contact still embeds one.
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        seed_photo(
+            &db,
+            "https://www.linkedin.com/in/jlp",
+            b"PNG bytes for Picard",
+        )
+        .await?;
         ingest::fetch(FetchOptions {
             db: db.clone(),
             input_path: export.clone(),
-            fetch_photos: true,
-            photo_max_consecutive_failures: 50,
             progress: Progress::noop(),
             control: Default::default(),
         })
         .await
-        .context("fetch with photos")?;
-        // Commit, the way the processor does in production: render reads
-        // committed state only.
+        .context("re-read the export")?;
         datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: linkedin fetch").await?;
-        std::env::remove_var(PLAYBACK_ENV);
-
-        // The photo landed in CAS, keyed by the connection's URL — the
-        // raw row's key.
+        assert_eq!(problems(&db).await, [], "nothing was asked of linkedin.com");
         let blobs = load_photo_blobs(&db).await?;
         let photo = blobs
             .get("https://www.linkedin.com/in/jlp")
-            .expect("Picard's photo fetched into CAS");
-        assert!(!photo.bytes.is_empty(), "photo bytes stored");
+            .expect("Picard's photo kept");
+        assert_eq!(photo.bytes, b"PNG bytes for Picard");
         assert_eq!(photo.content_type.as_deref(), Some("image/png"));
 
-        // Re-render: the contact markdown now embeds the photo blob.
         let out2 = tmp.path().join("out2");
         fs::create_dir_all(&out2)?;
         let source2 = Source {
@@ -488,133 +497,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             md.contains(&format!("blobs/{picard_uuid}")),
             "markdown embeds the photo blob: {md}"
         );
-
-        // ── transient misses are retryable ─────────────────────────
-        // A fresh store, then a photo pass pointed at an EMPTY playback
-        // dir: every fetch is a playback miss (transient), so NOTHING is
-        // recorded. A second pass with real fixtures retries and fetches.
-        let raw2 = tmp.path().join("raw2");
-        fs::create_dir_all(&raw2)?;
-        let db2 = RawDb::open(&db_path_for(&raw2)).await?;
-        ingest::fetch(FetchOptions {
-            db: db2.clone(),
-            input_path: export.clone(),
-            fetch_photos: false,
-            photo_max_consecutive_failures: 50,
-            progress: Progress::noop(),
-            control: Default::default(),
-        })
-        .await?;
-        // Commit, the way the processor does in production: render reads
-        // committed state only.
-        datalib_etl::store_handle::RawStoreHandle::commit_all(&db2, "test: linkedin fetch").await?;
-
-        let empty_pb = tmp.path().join("empty_pb");
-        fs::create_dir_all(&empty_pb)?;
-        std::env::set_var(PLAYBACK_ENV, &empty_pb);
-        let s1 = ingest::photos::fetch_connection_photos(
-            &db2,
-            db2.cas().expect("the download handle has a CAS"),
-            &Progress::noop(),
-            &Default::default(),
-            50,
-        )
-        .await?;
-        std::env::remove_var(PLAYBACK_ENV);
-        assert_eq!(s1.fetched, 0, "no photos on a playback miss");
-        assert!(s1.transient >= 1, "playback miss is transient, got {s1:?}");
-        assert!(
-            load_photo_blobs(&db2).await?.is_empty(),
-            "transient miss records nothing"
-        );
-
-        // Retry with the real fixtures — now it succeeds.
-        std::env::set_var(PLAYBACK_ENV, &playback);
-        let s2 = ingest::photos::fetch_connection_photos(
-            &db2,
-            db2.cas().expect("the download handle has a CAS"),
-            &Progress::noop(),
-            &Default::default(),
-            50,
-        )
-        .await?;
-        std::env::remove_var(PLAYBACK_ENV);
-        assert!(
-            s2.fetched >= 1,
-            "transient miss retried and fetched, got {s2:?}"
-        );
-        assert!(
-            !load_photo_blobs(&db2).await?.is_empty(),
-            "photo recorded after retry"
-        );
-
-        // ── give-up after N consecutive failures ───────────────────
-        // Fresh store, empty playback (every fetch transient), limit 1:
-        // it should stop after the very first failure rather than walk
-        // all connections.
-        let raw3 = tmp.path().join("raw3");
-        fs::create_dir_all(&raw3)?;
-        let db3 = RawDb::open(&db_path_for(&raw3)).await?;
-        ingest::fetch(FetchOptions {
-            db: db3.clone(),
-            input_path: export.clone(),
-            fetch_photos: false,
-            photo_max_consecutive_failures: 50,
-            progress: Progress::noop(),
-            control: Default::default(),
-        })
-        .await?;
-        // Commit, the way the processor does in production: render reads
-        // committed state only.
-        datalib_etl::store_handle::RawStoreHandle::commit_all(&db3, "test: linkedin fetch").await?;
-        std::env::set_var(PLAYBACK_ENV, &empty_pb);
-        let g = ingest::photos::fetch_connection_photos(
-            &db3,
-            db3.cas().expect("the download handle has a CAS"),
-            &Progress::noop(),
-            &Default::default(),
-            1, // give up after a single consecutive failure
-        )
-        .await?;
-        std::env::remove_var(PLAYBACK_ENV);
-        assert!(g.gave_up, "should give up at the limit, got {g:?}");
-        assert_eq!(g.attempted, 1, "stopped after the first failure, got {g:?}");
-
-        // ── photos it could not fetch are a problem until they fetch ──
-        let with_photos = |db: &RawDb| FetchOptions {
-            db: db.clone(),
-            input_path: export.clone(),
-            fetch_photos: true,
-            photo_max_consecutive_failures: 1,
-            progress: Progress::noop(),
-            control: Default::default(),
-        };
-        std::env::set_var(PLAYBACK_ENV, &empty_pb);
-        ingest::fetch(with_photos(&db3)).await?;
-        std::env::remove_var(PLAYBACK_ENV);
-        let rows = problems(&db3).await;
-        assert_eq!(
-            rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
-            ["phase:photos"],
-            "{rows:?}"
-        );
-        std::env::set_var(PLAYBACK_ENV, &playback);
-        ingest::fetch(with_photos(&db3)).await?;
-        std::env::remove_var(PLAYBACK_ENV);
-        assert_eq!(problems(&db3).await, [], "they fetched, so the row is gone");
-
-        // ── a photo is fetched once ────────────────────────────────
-        // The export read again, with every fetch bound to miss: a
-        // connection whose photo the store holds asks for nothing, so
-        // nothing misses and the photo stays.
-        std::env::set_var(PLAYBACK_ENV, &empty_pb);
-        let again = ingest::fetch(with_photos(&db)).await;
-        std::env::remove_var(PLAYBACK_ENV);
-        again?;
-        assert_eq!(problems(&db).await, [], "no connection was asked for again");
-        assert!(load_photo_blobs(&db)
-            .await?
-            .contains_key("https://www.linkedin.com/in/jlp"));
+        db.close().await;
 
         Ok::<_, anyhow::Error>(())
     })?;
@@ -643,8 +526,6 @@ async fn a_file_that_will_not_read_keeps_its_rows_and_is_a_problem_until_it_read
         ingest::fetch(FetchOptions {
             db: db.clone(),
             input_path: export.clone(),
-            fetch_photos: false,
-            photo_max_consecutive_failures: 50,
             progress: Progress::noop(),
             control: Default::default(),
         })
@@ -699,8 +580,6 @@ async fn an_export_path_that_is_not_there_fails_the_run() -> Result<()> {
     let got = ingest::fetch(FetchOptions {
         db: db.clone(),
         input_path: tmp.path().join("not-unpacked-yet"),
-        fetch_photos: false,
-        photo_max_consecutive_failures: 50,
         progress: Progress::noop(),
         control: Default::default(),
     })
@@ -723,8 +602,6 @@ async fn a_walk_error_deletes_no_article() -> Result<()> {
         ingest::fetch(FetchOptions {
             db: db.clone(),
             input_path: export.clone(),
-            fetch_photos: false,
-            photo_max_consecutive_failures: 50,
             progress: Progress::noop(),
             control: Default::default(),
         })
@@ -769,8 +646,6 @@ async fn only_a_well_formed_csv_empties_its_table() -> Result<()> {
         ingest::fetch(FetchOptions {
             db: db.clone(),
             input_path: export.clone(),
-            fetch_photos: false,
-            photo_max_consecutive_failures: 50,
             progress: Progress::noop(),
             control: Default::default(),
         })
@@ -833,8 +708,6 @@ async fn a_connection_dropped_from_the_export_loses_its_photo_edge() -> Result<(
         ingest::fetch(FetchOptions {
             db: db.clone(),
             input_path: export.clone(),
-            fetch_photos: false,
-            photo_max_consecutive_failures: 50,
             progress: Progress::noop(),
             control: Default::default(),
         })
@@ -846,13 +719,9 @@ async fn a_connection_dropped_from_the_export_loses_its_photo_edge() -> Result<(
             .unwrap()
     };
     fetch().await?;
-    // What the photo sweep records for both connections.
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS contact_photos (id TEXT PRIMARY KEY, \
-         owner_id TEXT NOT NULL, source_url TEXT NOT NULL, blake3 TEXT NULL)",
-    )
-    .execute(db.pool())
-    .await?;
+    // What an earlier build's photo fetch recorded for two connections
+    // that had no photo.
+    sqlx::query(CONTACT_PHOTOS_DDL).execute(db.pool()).await?;
     for owner in [
         "https://www.linkedin.com/in/bev",
         "https://www.linkedin.com/in/jlp",

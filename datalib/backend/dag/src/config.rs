@@ -1395,13 +1395,14 @@ fn accept_steps(
             );
         }
         if c.entry.command.is_none() {
-            for (key, why) in INERT_COMMON_KEYS {
-                if inert_key_is_written(c.entry.params.as_ref(), key) {
-                    let d = Diagnostic::new(Severity::Warning, format!("`common.{key}` {why}"))
+            for (path, why) in INERT_PARAM_PATHS {
+                if inert_path_is_written(c.entry.params.as_ref(), path) {
+                    let d = Diagnostic::new(Severity::Warning, format!("`{path}` {why}"))
                         .at_entry(c.reference.clone())
                         .with_help("delete this line");
                     diags.push(match (text, &c.span) {
                         (Some(t), Some(sp)) => {
+                            let key = path.rsplit('.').next().unwrap_or(path);
                             let at = params_key_span(t, sp.clone(), key);
                             d.at_span(t, at)
                         }
@@ -1468,19 +1469,27 @@ fn retired_subcommand(command: &str) -> Option<&str> {
         .filter(|w| matches!(*w, "download" | "render" | "grid_index" | "qmd_index"))
 }
 
-/// Keys a built-in step's `common` may still carry that no longer do
+/// Params paths a built-in step may still carry that no longer do
 /// anything, with why. `datalib-step` drops them before it parses, so a
 /// config that writes one loads; this check is what tells the person.
-const INERT_COMMON_KEYS: &[(&str, &str)] = &[(
-    "always_clear_before_ingest",
-    "has no effect: a local source decides what its input's absence means",
-)];
+const INERT_PARAM_PATHS: &[(&str, &str)] = &[
+    (
+        "common.always_clear_before_ingest",
+        "has no effect: a local source decides what its input's absence means",
+    ),
+    (
+        "export.fetch_photos",
+        "has no effect: linkedin.com shows a profile only to a signed-in visitor now, so \
+         connection photos can no longer be fetched; the ones already fetched are kept",
+    ),
+];
 
-fn inert_key_is_written(params: Option<&toml::Value>, key: &str) -> bool {
-    params
-        .and_then(|p| p.get("common"))
-        .and_then(|c| c.get(key))
-        .is_some()
+fn inert_path_is_written(params: Option<&toml::Value>, path: &str) -> bool {
+    let mut at = params;
+    for key in path.split('.') {
+        at = at.and_then(|v| v.get(key));
+    }
+    at.is_some()
 }
 
 /// Where `key = …` sits in this entry's body, its `[steps.params…]`
@@ -3654,6 +3663,41 @@ command = "datalib-applet unified_index"
         assert!(d.message.contains("has no effect"), "{d:?}");
         assert_eq!(d.help.as_deref(), Some("delete this line"));
         assert_eq!(d.column, Some(1), "{d:?}");
+    }
+
+    /// LinkedIn's photo fetch went when linkedin.com stopped showing a
+    /// profile to anyone signed out. A config that turned it on still
+    /// loads, and the warning says why at the line to delete.
+    #[test]
+    fn a_retired_linkedin_fetch_photos_key_only_warns_at_its_line() {
+        let check = check_text(
+            "[[groups]]\nid = \"li\"\ntype = \"linkedin\"\n\n\
+             [[steps]]\ngroup = \"li\"\nfunction = \"ingest\"\n\
+             [steps.params.export]\npath = \"/e\"\nfetch_photos = true\n\n\
+             [[groups]]\nid = \"li2\"\ntype = \"linkedin\"\n\n\
+             [[steps]]\ngroup = \"li2\"\nfunction = \"ingest\"\n\
+             params = { export = { path = \"/e\", fetch_photos = false } }\n",
+        );
+        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
+        assert_eq!(check.cfg.steps.len(), 2);
+        let warned: Vec<_> = check
+            .diagnostics
+            .iter()
+            .map(|d| (d.severity, d.id(), d.line))
+            .collect();
+        assert_eq!(
+            warned,
+            vec![
+                (Severity::Warning, Some("li/ingest"), Some(10)),
+                (Severity::Warning, Some("li2/ingest"), Some(19)),
+            ]
+        );
+        let d = &check.diagnostics[0];
+        assert!(
+            d.message.starts_with("`export.fetch_photos` has no effect"),
+            "{d:?}"
+        );
+        assert!(d.message.contains("signed-in"), "{d:?}");
     }
 
     /// A group whose only step was rejected is not empty — somebody filled

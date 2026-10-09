@@ -63,10 +63,7 @@ const RETIRED_PARAM_PATHS: &[(&str, &str)] = &[
         "a file-backed method carries its own `path` now",
     ),
     ("gmail_api", "email's Gmail table is `gmail` now"),
-    (
-        "fetch_photos",
-        "linkedin's photo fetch is `export.fetch_photos` now",
-    ),
+    ("fetch_photos", "linkedin's settings are under `export` now"),
     (
         "common.raw_path",
         "the store is the step's own tree; to keep it on another disk, put a symlink there",
@@ -95,24 +92,26 @@ pub fn refuse_retired_params(source_type: SourceType, params: &serde_json::Value
     )
 }
 
-/// Keys of `common` that no longer do anything. Unlike the retired ones
-/// they are dropped rather than refused: the config still means what it
-/// says without them, and `datalib-dag --check` warns at the line.
-const INERT_COMMON_KEYS: &[&str] = &["always_clear_before_ingest"];
+/// Params paths that no longer do anything. Unlike the retired ones they
+/// are dropped rather than refused: the config still loads without them,
+/// and `datalib-dag --check` warns at the line, saying why.
+const INERT_PARAM_PATHS: &[&str] = &["common.always_clear_before_ingest", "export.fetch_photos"];
 
-/// Removes the [`INERT_COMMON_KEYS`] these params write, returning the
+/// Removes the [`INERT_PARAM_PATHS`] these params write, returning the
 /// ones it removed.
 pub fn drop_inert_params(params: &mut serde_json::Value) -> Vec<&'static str> {
-    let Some(common) = params
-        .get_mut("common")
-        .and_then(serde_json::Value::as_object_mut)
-    else {
-        return Vec::new();
-    };
-    INERT_COMMON_KEYS
+    INERT_PARAM_PATHS
         .iter()
         .copied()
-        .filter(|k| common.remove(*k).is_some())
+        .filter(|path| {
+            let (table, key) = match path.rsplit_once('.') {
+                Some((parent, key)) => (params.pointer_mut(&json_pointer(parent)), key),
+                None => (Some(&mut *params), *path),
+            };
+            table
+                .and_then(serde_json::Value::as_object_mut)
+                .is_some_and(|table| table.remove(key).is_some())
+        })
         .collect()
 }
 
@@ -192,12 +191,6 @@ mod tests {
         let linkedin = ingest_methods(SourceType::Linkedin);
         let export = json!({"export": {"path": "/export"}});
         assert_eq!(reach_of(&held(&export, linkedin)), Some(Reach::Local));
-        let mut with_photos = export.clone();
-        with_photos["export"]["fetch_photos"] = json!(true);
-        assert_eq!(reach_of(&held(&with_photos, linkedin)), Some(Reach::Origin));
-        let mut photos_off = export;
-        photos_off["export"]["fetch_photos"] = json!(false);
-        assert_eq!(reach_of(&held(&photos_off, linkedin)), Some(Reach::Local));
     }
 
     /// Email is the one with three ways in; `mbox` is the Local one.

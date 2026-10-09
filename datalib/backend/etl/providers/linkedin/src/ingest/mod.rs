@@ -33,16 +33,16 @@ const INSERT_CHUNK: usize = 400;
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
-    /// Connection profile photos. Opened with the handle rather than
-    /// from a path at the call site, so there is one opener per store
-    /// and `close_all` reaches it.
+    /// Connection profile photos an earlier build fetched (see
+    /// [`photos`]). Opened with the handle rather than from a path at the
+    /// call site, so there is one opener per store and `close_all`
+    /// reaches it.
     ///
-    /// `Some` on the download path even when `fetch_photos` is off — a
-    /// handle whose store set depends on a config flag is one nobody
-    /// can reason about, and an empty CAS file costs nothing. `None`
-    /// only on a reader whose store predates any photo fetch, since
-    /// opening a missing file read-only is an error and creating it
-    /// would be a write render does not own.
+    /// `Some` on the download path, which writes nothing to it but keeps
+    /// the store set the same for every root. `None` only on a reader
+    /// whose store never had a photo fetched, since opening a missing
+    /// file read-only is an error and creating it would be a write
+    /// render does not own.
     cas: Option<BlobCas>,
     /// The commit a reader is pinned at; `None` for the writer.
     pin: Option<datalib_etl::pin::Pin>,
@@ -121,14 +121,6 @@ pub struct FetchOptions {
     pub db: RawDb,
     /// Root of the user's LinkedIn export (the directory full of CSVs).
     pub input_path: PathBuf,
-    /// When set, fetch each connection's profile photo (og:image) into
-    /// the per-source CAS + `contact_photos` edge table. Off by default;
-    /// once fetched, a connection is never re-fetched (see [`photos`]).
-    pub fetch_photos: bool,
-    /// Give up the photo sweep after this many *consecutive* transient
-    /// fetch failures (LinkedIn hard-blocking). Resolved from the source's
-    /// `download_params.maximum_sequential_failed_requests`.
-    pub photo_max_consecutive_failures: u64,
     pub progress: Progress,
     pub control: DownloadControl,
 }
@@ -224,32 +216,6 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     }
 
     tx.commit().await.context("commit linkedin tx")?;
-
-    // Photo fetch runs after the snapshot is committed (it needs the
-    // `connections` rows persisted) and is a no-op unless enabled. Each
-    // connection is fetched at most once across runs.
-    // Through the handle's own CAS, so nothing here opens a second
-    // store. `None` is a reader, which never reaches a fetch.
-    if let (true, Some(cas)) = (opts.fetch_photos, db.cas()) {
-        let s = photos::fetch_connection_photos(
-            &db,
-            cas,
-            &opts.progress,
-            &opts.control.stop,
-            opts.photo_max_consecutive_failures,
-        )
-        .await?;
-        tracing::info!(
-            event = "linkedin_photos",
-            attempted = s.attempted,
-            fetched = s.fetched,
-            no_photo = s.no_photo,
-            transient = s.transient,
-            gave_up = s.gave_up,
-            "fetched the profile photos"
-        );
-        found.extend(s.problem());
-    }
     Ok(summary)
 }
 
@@ -557,7 +523,7 @@ mod tests {
             "https://x/in/abc"
         );
         // `connections` is keyed by the URL itself, which is what the
-        // photo fetch joins on.
+        // stored photos join on.
         let conn_id = row_id("connections", &v, Some(&["URL"]));
         assert_eq!(conn_id, schema_raw::connection_key("https://x/in/abc"));
         assert_eq!(conn_id, "https://x/in/abc");

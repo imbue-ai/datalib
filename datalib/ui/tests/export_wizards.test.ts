@@ -162,17 +162,14 @@ gemini_apps = false`,
 describe("LinkedIn", () => {
   const LINKEDIN = byType("linkedin");
 
-  it("writes the export folder and the photo switch", () => {
-    const body = toml(LINKEDIN, {
-      "export.path": "~/backups/LinkedInDataExport",
-      "export.fetch_photos": true,
-    });
+  it("writes the export folder and no photo switch", () => {
+    const body = toml(LINKEDIN, { "export.path": "~/backups/LinkedInDataExport" });
     expect(body).toContain("[steps.params.export]");
     expect(body).toContain('path = "~/backups/LinkedInDataExport"');
-    expect(body).toContain("fetch_photos = true");
+    expect(body).not.toContain("fetch_photos");
   });
 
-  it("can edit a config with the snapshot switch on", () => {
+  it("can edit a config that still has the retired switches on", () => {
     const steps = ingestStep(
       "linkedin",
       `[steps.params.export]

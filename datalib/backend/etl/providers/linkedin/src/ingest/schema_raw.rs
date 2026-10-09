@@ -31,7 +31,7 @@ pub struct KnownFile {
 pub const ARTICLES_TABLE: &str = "articles";
 
 /// Raw table of `Connections.csv`, keyed by [`connection_key`]: the rows
-/// the photo fetch and its prune join on.
+/// the stored photos and their prune join on.
 pub const CONNECTIONS_TABLE: &str = "connections";
 
 /// Every file a complete LinkedIn export can contain, as of the
@@ -97,7 +97,7 @@ pub fn known_file(table: &str) -> Option<&'static KnownFile> {
 
 /// The raw `connections.id`: the member's profile URL, the export's
 /// one stable field for a connection, so the same connection keeps
-/// one row across re-exports and the photo fetch joins on it.
+/// one row across re-exports and the stored photos join on it.
 pub fn connection_key(url: &str) -> String {
     url.to_string()
 }

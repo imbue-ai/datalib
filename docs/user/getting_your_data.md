@@ -579,6 +579,10 @@ unzip ~/Downloads/Complete_LinkedInDataExport_*.zip -d ~/backups/LinkedInDataExp
 Point `export.path` at that directory, and unzip each newer export over
 it or in its place.
 
+Connections come without photos: the export has none, and linkedin.com
+shows a profile only to someone signed in. Photos an earlier version
+fetched are kept.
+
 ## Local files
 
 `type = "fsindex"` — any directory tree on disk (`fswalk.path`).
