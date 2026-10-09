@@ -177,10 +177,12 @@ test are in [`doltlite.md`](../doltlite.md) § "Full-text search
 
 **`kind` is an enum**, `SearchTermKind`, with the usual strum pair, and a
 new kind is new data, never a schema change. Built: `id`, `container`,
-`from`, `title`, `name`. Planned: the person kinds `to`, `cc`, `bcc`,
-`participant`, `mention` and `reactor`, and `label`; and, if the terms
-come to serve the `author:`, `channel:` and `account:` keys,
-`name` split into one kind for each ([`search_autocomplete.md`](search_autocomplete.md)
+`from`, `title`, `name` (a channel, an account), `to`, `cc`, `label`,
+and `author`, the name a row's author was shown under, split from
+`name` so `from:` finds an author with no handle. Planned: the person
+kinds `bcc`, `participant`, `mention` and `reactor`; and, if the terms
+come to serve the `channel:` and `account:` keys, `name` split into one
+kind for each ([`search_autocomplete.md`](search_autocomplete.md)
 §"The wide columns and the tall search terms"). Each kind has an affinity, a
 pure function in code (`affinity(kind)`): a row's own id outranks a
 `to`, a `to` outranks a `cc`, a `title` outranks a `name`.
@@ -226,12 +228,14 @@ edges: each time it loads a document it deletes the terms carrying its
   `MATCH` over every term, ranked by the best kind each row matched
   in, then FTS5's own score, then newest first. A handle is normalized
   by `datalib_handle` first, so `sam@s.com` searches `email:sam@s.com`.
-- **A keyed search names a kind**: `to:sam@s.com`, `cc:…`, `from:…`,
-  `label:work`. It is the same `MATCH` restricted to `kind = ?`, and
-  `-to:…` is `uuid NOT IN` that. These keys are declared beside the
-  grid's column keys and read through the same grammar, so a key the
-  search does not have is still refused by name. `from:` replaces
-  `author_handle:`, which a person no longer needs to know. A value
+- **A keyed search names its kinds**: `to:sam@s.com`, `cc:…`, `from:…`,
+  `label:work`. Built: the terms file is attached to the grid's reader,
+  so the key is one clause of the grid's query, `uuid IN` the rows
+  holding the value in those kinds (`-to:…` is `NOT IN`). These keys
+  are declared beside the grid's column keys and read through the same
+  grammar, so a key the search does not have is still refused by name.
+  `from:` replaces `author:` and `author_handle:`, which stay its
+  aliases. A value
   that is a handle or a contact matches exactly and anything else
   matches part of one, and `with:` is a person in any role:
   [`search_autocomplete.md`](search_autocomplete.md) §"The keys".

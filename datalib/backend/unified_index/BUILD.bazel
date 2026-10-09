@@ -23,6 +23,7 @@ rust_library(
         "//datalib/backend/columns:datalib_columns",
         "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/runtime:datalib_runtime",

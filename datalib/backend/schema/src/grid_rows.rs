@@ -32,8 +32,6 @@ use serde::{Deserialize, Serialize};
     index = "grid_rows_by_kind:kind,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_channel:channel,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_conversation:conversation_uuid,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_author:author,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_author_handle:author_handle,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_account:account,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
@@ -118,14 +116,15 @@ pub struct GridRow {
     #[col(sql = "INTEGER", is = "document")]
     pub is_document: bool,
     /// Display name of the author: the model slug for LLM responses, the
-    /// account for user input, the real name for Slack.
-    #[col(sql = "VARCHAR(255)", search, uuid)]
+    /// account for user input, the real name for Slack. Searched through
+    /// the search terms (`from:`, an `author` term), not by its own key.
+    #[col(sql = "VARCHAR(255)")]
     pub author: Option<String>,
     /// The author as an identifier (`datalib_handle`: `email:…`, `tel:…`,
     /// `slack:T/U`) where the source has one; `author` stays the name it
-    /// showed. What the grid's Author chip resolves to a contact, and
-    /// the `author_handle:` filter.
-    #[col(sql = "VARCHAR(255)", search)]
+    /// showed. What the grid's Author chip resolves to a contact; `from:`
+    /// finds it through the search terms (a `from` term).
+    #[col(sql = "VARCHAR(255)")]
     pub author_handle: Option<String>,
     /// On a contact's own row (an address-book card, a LinkedIn
     /// connection, a group of contacts): the name of the person or group

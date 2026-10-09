@@ -8,9 +8,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_handle::Handle;
 use datalib_schema::search_terms::{SearchTermKind, META_GRID_COMMIT};
 use datalib_unified_index::query::{extract_uuid_suffix, is_uuid_shape};
+use datalib_unified_index::terms_keys::handle_of;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
 
@@ -79,16 +79,7 @@ fn identifier(word: &str) -> Option<String> {
     if is_uuid_shape(id) {
         return Some(id.to_lowercase());
     }
-    let handle = if word.contains(':') {
-        Handle::rebuild(word)
-    } else if word.contains('@') {
-        Handle::email(word)
-    } else if word.starts_with('+') {
-        Handle::tel(word)
-    } else {
-        None
-    };
-    handle.map(|h| h.as_str().to_string())
+    handle_of(word)
 }
 
 /// One term an identifier matched.

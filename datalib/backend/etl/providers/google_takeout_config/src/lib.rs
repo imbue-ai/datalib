@@ -8,8 +8,8 @@ use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The google_takeout-owned slice of a `google_takeout` source. `export`
-/// — the unzipped Takeout root, plus which of its feeds to read — is its
-/// one way in.
+/// — where the Takeout is, plus which of its feeds to read — is its one
+/// way in.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoogleTakeoutConfig {
@@ -27,7 +27,7 @@ impl GoogleTakeoutConfig {
     }
 }
 
-/// The `export` table: where the unzipped Takeout is, and per-feed
+/// The `export` table: where the Takeout is, and per-feed
 /// opt-in switches. The switches mirror
 /// `datalib_etl_google_takeout::ingest::SyncFlags` (the provider's
 /// `plan()` maps one to the other); they default to `false` so a fresh
@@ -35,7 +35,8 @@ impl GoogleTakeoutConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct GoogleTakeoutSync {
-    /// The unzipped Takeout root (the directory holding `Takeout/`).
+    /// The unpacked `Takeout/` folder, or a folder holding the `.zip` or
+    /// `.tgz` parts of one export.
     pub path: PathBuf,
     pub maps_reviews: bool,
     pub maps_saved_places: bool,

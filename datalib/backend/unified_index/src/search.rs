@@ -87,6 +87,11 @@ pub struct SearchRow {
     /// URI for its id. Resolved by the applet; never read from the index.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact_ref: Option<datalib_columns::Identity>,
+    /// What a `from:` term names this row's author by: the handle where
+    /// there is one, else the name shown. What the Author cell's Keep
+    /// only writes. Resolved by the applet; never read from the index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_term: Option<String>,
     /// Slack channel display name for Slack rows; empty otherwise.
     pub channel: String,
     /// Public URL for the row's source artifact (Slack permalink,

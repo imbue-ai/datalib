@@ -419,7 +419,12 @@ const QMD_HIT_INDEXES: &[&str] = &[
 
 /// Indexes an older build made and this one no longer reads. Every write
 /// keeps an index current, so one nothing queries is dropped, not left.
-const RETIRED_INDEXES: &[&str] = &["DROP INDEX IF EXISTS grid_rows_by_source_label"];
+const RETIRED_INDEXES: &[&str] = &[
+    "DROP INDEX IF EXISTS grid_rows_by_source_label",
+    // `author:` and `author_handle:` read the search terms, as `from:`.
+    "DROP INDEX IF EXISTS grid_rows_by_author",
+    "DROP INDEX IF EXISTS grid_rows_by_author_handle",
+];
 
 /// Every `CREATE TABLE` in the grid index, in creation order. One list, so
 /// the DDL pass and the schema check can't drift into covering different

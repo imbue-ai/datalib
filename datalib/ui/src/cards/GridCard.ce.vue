@@ -11,8 +11,8 @@
 // the one query: a list with a preview (SearchList.ce.vue) and this
 // table, picked by the tabs above them. A new search opens on the view
 // picked last (searchViewPref.ts). Both stay mounted once shown, so
-// switching keeps each one's selection and scroll. The source chips and "Meaning only" rewrite the
-// query (cards/search.ts) rather than keep state beside it.
+// switching keeps each one's selection and scroll. The source chips rewrite the query
+// (cards/search.ts) rather than keep state beside it.
 //
 // Selecting a row opens the row's document as a new card via
 // ctx.host.openCards — structural changes never go through the bus.
@@ -58,6 +58,8 @@ import {
   chipCell,
   chipLook,
   chipMenu,
+  handleKind,
+  searchQueryFor,
   copyText as copyHandleText,
   handleValue,
   people,
@@ -629,13 +631,15 @@ const feedbackSurfaceLabel = ref("");
 // the search bar. Null for a column the search has no key for (Score,
 // Contents) or a row with no value in it.
 type FilterCtx = {
-  // The search bar's key for the column (`author`, `source_id`).
+  // The search bar's key for the column (`from`, `source_id`).
   key: string;
   // Human-facing column header for menu labels.
   header: string;
   // The value a term names: what the column's key compares, which for
   // an id or a uuid behind a label is the id or uuid, not the cell's text.
   value: string;
+  // Written quoted, for a key that matches a bare value in part.
+  whole?: boolean;
 };
 
 function openFeedbackForSearchBar(ev: MouseEvent) {
@@ -712,7 +716,13 @@ function buildFilterCtx(colId: string, data: Row): FilterCtx | null {
       : spec.search.field !== colId && typeof shown === "string"
         ? shown
         : "";
-  return { key: spec.search.key, header: spec.header, value: formatSlugUuid(label, value) };
+  return {
+    key: spec.search.key,
+    header: spec.header,
+    value: formatSlugUuid(label, value),
+    // A handle is matched whole bare; a name only quoted.
+    whole: spec.search.partial === true && handleKind(value) === null,
+  };
 }
 
 function accountLabel(uuid: string): string {
@@ -1158,7 +1168,7 @@ watch(view, (v) => {
   }
 });
 
-// --- the source chips and "Meaning only": views of the query ---------
+// --- the source chips: a view of the query ----------------------------
 
 /// The sources the search hits and how many rows each, whichever source
 /// the query is narrowed to.
@@ -1793,9 +1803,7 @@ const menuItems: (MenuCommandItem | "divider")[] = [
   chipEntry("copy-name", (m) => void copyToClipboard(m.chip!.name)),
   chipEntry("copy-id", (m) => void copyToClipboard(handleValue(m.chip!.handle))),
   chipEntry("copy-both", (m) => void copyToClipboard(copyHandleText(m.chip!.handle, m.chip!.name))),
-  chipEntry("search", (m) =>
-    appendFilterToQuery(filterToken("author_handle", m.chip!.handle, false)),
-  ),
+  chipEntry("search", (m) => appendFilterToQuery(searchQueryFor(m.chip!.handle))),
   dividerAfter((m) => m.chip !== null),
   entityEntry("copy-name", (m) => void copyToClipboard(m.entity!.name)),
   entityEntry(
@@ -2108,7 +2116,7 @@ function createGrid() {
 
 /// The search bar takes a column dragged from the headers, the way the
 /// grouping bar does, and adds a term keeping the rows with a value in
-/// it: `author:*`, which a person can then narrow to a value.
+/// it: `from:*`, which a person can then narrow to a value.
 const searchWrapEl = ref<HTMLDivElement | null>(null);
 type Sortable = { destroy(): void };
 type SortableClass = { create(el: HTMLElement, options: object): Sortable };

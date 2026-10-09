@@ -16,7 +16,7 @@ use super::schema_raw::{ns_id, YoutubeWatchRow};
 use super::time as time_parser;
 use datalib_etl::doltlite_raw::WirePayload;
 
-const FILE_REL: &str = "YouTube and YouTube Music/history/watch-history.html";
+pub(crate) const FILE_REL: &str = "YouTube and YouTube Music/history/watch-history.html";
 const SCOPE: &str = "google_takeout/youtube_watch_history";
 
 pub async fn ingest(

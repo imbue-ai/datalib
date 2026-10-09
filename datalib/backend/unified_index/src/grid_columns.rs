@@ -81,6 +81,16 @@ impl View for GridColumn {
             GridColumn::DiffChangedColumns => same(G::DiffChangedColumns),
         }
     }
+
+    /// An author is found through the search terms: by the name shown,
+    /// or, from the chip, by the handle where the row has one.
+    fn terms_filter(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            GridColumn::Author => Some(("from", "author")),
+            GridColumn::AuthorRef => Some(("from", "author_term")),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -120,8 +130,6 @@ mod tests {
                 ("created_at", none, "created_at", false),
                 ("modified_at", none, "modified_at", false),
                 ("touched_at", none, "touched_at", false),
-                ("author", none, "author", true),
-                ("author_handle", none, "author_handle", false),
                 ("contact", none, "contact", false),
                 ("email", none, "email", false),
                 ("phone", none, "phone", false),
@@ -143,7 +151,12 @@ mod tests {
     #[test]
     fn a_key_is_found_by_its_name_or_its_column() {
         let key = |typed| table::key::<GridRow>(typed).map(|k| k.column);
-        assert_eq!(key("author"), Some(GridRowColumn::Author));
+        assert_eq!(key("channel"), Some(GridRowColumn::Channel));
+        assert_eq!(key("author"), None, "`author:` is `from:`, a terms key");
+        assert_eq!(
+            for_column::<GridColumn>("author_ref"),
+            Some(("from", "author_term"))
+        );
         assert_eq!(key("subj"), None);
         assert_eq!(
             for_column::<GridColumn>("source_ref"),

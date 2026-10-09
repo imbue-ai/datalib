@@ -1,5 +1,5 @@
 //! Program-A `DataProcessor`s for the `google_takeout` source. File-backed:
-//! download walks the unzipped Takeout tree at `export.path` and lands the
+//! download walks the Takeout at `export.path`, unpacked or zipped, and lands the
 //! opted-in feeds into a provider-owned doltlite raw store, which
 //! `datalib_etl_google_takeout_render` renders. The source owns its raw
 //! store (open/commit/checkpoint); the orchestrator only drives `run`.
@@ -82,7 +82,8 @@ impl DataProcessor for GoogleTakeoutIngest {
             Ok(format!(
                 "maps(reviews={} saved={} photos={}) youtube(watch={} subs={}) \
                      chat(groups={} users={} messages={}) gemini(activity={}) \
-                     blobs={} removed={} files_removed={} feeds_failed={}",
+                     blobs={} removed={} files_removed={} feeds_failed={} \
+                     archives={} unpacked={}",
                 s.maps_reviews,
                 s.maps_saved_places,
                 s.maps_photos,
@@ -96,6 +97,8 @@ impl DataProcessor for GoogleTakeoutIngest {
                 s.removed,
                 s.files_removed,
                 s.feeds_failed,
+                s.archives,
+                s.unpacked,
             ))
         })
         .await

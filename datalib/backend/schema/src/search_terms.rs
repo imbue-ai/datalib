@@ -29,7 +29,7 @@ pub enum SearchTermKind {
     From = 3,
     /// The title of the row's conversation or document.
     Title = 4,
-    /// A name the row shows: its author, its channel, its account.
+    /// A name the row shows: its channel, its account.
     Name = 5,
     /// The handle of someone the row was addressed to: an email's To.
     To = 6,
@@ -43,6 +43,9 @@ pub enum SearchTermKind {
     /// The handle of someone the row's text names where its source marks
     /// the name up as a person: Slack's `<@U…>`, an email's `@` link.
     Mention = 10,
+    /// The name the row's author was shown under: what `from:` matches
+    /// for an author with no handle, an AI model or an account label.
+    Author = 11,
 }
 
 impl SearchTermKind {
@@ -82,7 +85,7 @@ impl SearchTermKind {
             | SearchTermKind::Mention
             | SearchTermKind::Container => 3,
             SearchTermKind::Title | SearchTermKind::Label => 2,
-            SearchTermKind::Name => 1,
+            SearchTermKind::Author | SearchTermKind::Name => 1,
         }
     }
 
@@ -98,6 +101,7 @@ impl SearchTermKind {
             | SearchTermKind::Container
             | SearchTermKind::Title
             | SearchTermKind::Name
+            | SearchTermKind::Author
             | SearchTermKind::Label => false,
         }
     }
@@ -151,11 +155,7 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
         row.markdown_uuid.as_deref(),
         row.notion_page_uuid.as_deref(),
     ];
-    let names = [
-        row.author.as_deref(),
-        row.channel.as_deref(),
-        row.account.as_deref(),
-    ];
+    let names = [row.channel.as_deref(), row.account.as_deref()];
     let candidates = std::iter::once((SearchTermKind::Id, Some(row.uuid.as_str())))
         .chain(
             containers
@@ -170,6 +170,10 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
         .chain(std::iter::once((
             SearchTermKind::Title,
             row.conversation_name.as_deref(),
+        )))
+        .chain(std::iter::once((
+            SearchTermKind::Author,
+            row.author.as_deref(),
         )))
         .chain(names.into_iter().map(|name| (SearchTermKind::Name, name)));
     let mut out: Vec<SearchTerm> = Vec::new();
@@ -191,7 +195,7 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
 /// built under another shape is rebuilt whole, so change it whenever
 /// either changes. A kind a render starts to supply needs no change: it
 /// reaches the file through the diff of `supplied_search_terms`.
-pub const TERMS_SHAPE: &str = "3";
+pub const TERMS_SHAPE: &str = "4";
 
 /// The search terms file's tables, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three
@@ -205,6 +209,9 @@ pub const TERMS_DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS terms (val_id INTEGER NOT NULL, kind INTEGER NOT NULL, \
      row_id INTEGER NOT NULL, PRIMARY KEY (val_id, kind, row_id)) WITHOUT ROWID",
     "CREATE INDEX IF NOT EXISTS terms_by_row ON terms (row_id)",
+    // A quoted value or a handle on a search key matches a whole value,
+    // case-blind.
+    "CREATE INDEX IF NOT EXISTS vals_nocase ON vals (value COLLATE NOCASE)",
     "CREATE VIRTUAL TABLE IF NOT EXISTS vals_fts USING fts5(value, content='', \
      contentless_delete=1, tokenize=\"unicode61 tokenchars '@.-_+:/'\")",
     "CREATE TABLE IF NOT EXISTS terms_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
@@ -248,7 +255,7 @@ mod tests {
                 ("container", "c-1"),
                 ("from", "email:ann@example.com"),
                 ("title", "Away team roster"),
-                ("name", "Ann"),
+                ("author", "Ann"),
             ]
         );
     }
@@ -299,6 +306,7 @@ mod tests {
             SearchTermKind::Label,
             SearchTermKind::Bcc,
             SearchTermKind::Mention,
+            SearchTermKind::Author,
         ]
         .into_iter()
         .map(|k| (k, k.code()))
@@ -316,6 +324,7 @@ mod tests {
                 (SearchTermKind::Label, 8),
                 (SearchTermKind::Bcc, 9),
                 (SearchTermKind::Mention, 10),
+                (SearchTermKind::Author, 11),
             ]
         );
     }

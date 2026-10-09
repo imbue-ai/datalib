@@ -10,9 +10,11 @@ export function quoteValue(v: string): string {
 }
 
 /// A term's value may hold a colon, since a term splits at its first one
-/// (`from:email:a@b.c`). Mirrors `datalib_query::term`.
-export function filterToken(key: string, value: string, exclude: boolean): string {
-  const bare = !(/[\s"]/.test(value) || value === "" || value.startsWith("-"));
+/// (`from:email:a@b.c`). Mirrors `datalib_query::term`, and with `whole`,
+/// `datalib_query::exact_term`: always quoted, which a key that matches
+/// a bare value in part reads as the whole value.
+export function filterToken(key: string, value: string, exclude: boolean, whole = false): string {
+  const bare = !whole && !(/[\s"]/.test(value) || value === "" || value.startsWith("-"));
   return `${exclude ? "-" : ""}${key}:${bare ? value : quoted(value)}`;
 }
 
@@ -114,13 +116,13 @@ export function keepExcludeEntries(opts: {
   key: string;
   value: string;
   shown?: string;
+  /// The key matches a bare value in part: the value is written whole.
+  whole?: boolean;
 }): FilterEntry[] {
   const shown = opts.shown ?? opts.value;
+  const token = (exclude: boolean) => filterToken(opts.key, opts.value, exclude, opts.whole);
   return [
-    { label: `Keep only ${opts.header}=${shown}`, token: filterToken(opts.key, opts.value, false) },
-    {
-      label: `Exclude all ${opts.header}=${shown}`,
-      token: filterToken(opts.key, opts.value, true),
-    },
+    { label: `Keep only ${opts.header}=${shown}`, token: token(false) },
+    { label: `Exclude all ${opts.header}=${shown}`, token: token(true) },
   ];
 }
