@@ -48,14 +48,13 @@ const EXTRA: Record<string, BrowseColumn[]> = {
   google_takeout: ["channel", "author_ref", "project"],
   sms_backup_restore: ["channel", "author_ref", "project"],
   apple_messages: ["channel", "author_ref"],
-  linkedin: ["channel", "author_ref", "account"],
+  linkedin: ["contact_ref", "email", "channel", "author_ref", "account"],
   // Posts, albums, comments, reactions and friends, all the owner's own:
   // `author` is who wrote it, `account` whose export it is.
-  facebook: ["author_ref", "account"],
+  facebook: ["contact_ref", "author_ref", "account"],
 
-  // Mail and address books: a correspondent and a mailbox.
+  // Mail: a correspondent and a mailbox.
   email: ["channel", "author_ref", "account"],
-  contacts: ["channel", "author_ref", "account"],
   // A calendar and the organizer.
   calendar: ["channel", "author_ref", "account"],
 
@@ -81,6 +80,15 @@ const EXTRA: Record<string, BrowseColumn[]> = {
   pdf: ["author_ref", "byte_size", "item_count"],
 };
 
+/// A type whose browse is not a list of things that say something, so
+/// `ALWAYS` does not fit it: its columns whole, in order.
+const WHOLE: Record<string, BrowseColumn[]> = {
+  // An address book: who, how to reach them, what the card says. The
+  // address book a card is filed in is the channel, last, and shown only
+  // when there is more than one.
+  contacts: ["contact_ref", "phone", "email", "snippet", "touched_at", "kind", "channel"],
+};
+
 /// Columns of `ALWAYS` a source type leaves out.
 const OMIT: Record<string, BrowseColumn[]> = {
   // A thread's conversation name is its channel's name again
@@ -92,7 +100,14 @@ const OMIT: Record<string, BrowseColumn[]> = {
 /// check them against the catalog: a key misspelled here is not an
 /// error, it silently falls through to the generic preset below.
 export function browsePresetTypes(): string[] {
-  return [...new Set([...Object.keys(EXTRA), ...Object.keys(OMIT), ...Object.keys(STAMP)])];
+  return [
+    ...new Set([
+      ...Object.keys(EXTRA),
+      ...Object.keys(OMIT),
+      ...Object.keys(STAMP),
+      ...Object.keys(WHOLE),
+    ]),
+  ];
 }
 
 /// The columns a Browse of a source of this type opens with, or `null`
@@ -101,6 +116,7 @@ export function browsePresetTypes(): string[] {
 export function browseColumns(type: string | null): BrowseColumn[] | null {
   if (!type) return null;
   if (type === DIFF_TYPE) return DIFF_COLUMNS;
+  if (WHOLE[type]) return WHOLE[type];
   const extra = EXTRA[type] ?? ["channel", "author_ref", "account", "project"];
   const omit = OMIT[type] ?? [];
   const stamp = STAMP[type] ?? "touched_at";

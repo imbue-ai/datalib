@@ -19,7 +19,9 @@ use serde_json::Value;
 ///     backpointer, and an item's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). Every uuid moved.
 /// v4: the comments and reactions feeds are one document per year.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: a friend is their own conversation, and the friends list is the
+///     channel alone.
+pub const RENDER_VERSION: u32 = 5;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 

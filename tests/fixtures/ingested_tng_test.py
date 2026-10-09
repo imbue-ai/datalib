@@ -498,8 +498,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
 
     def _diff_shape(self, group: str) -> dict[str, tuple[str, str]]:
-        """A diff group's rows: author → (status, changed columns), for a
-        group whose rows have one author each.
+        """A contacts diff group's rows: contact → (status, changed columns).
 
         The contacts diff is one add, one delete and one edit, which is
         every row of the table in docs/dev/plans/completed/diff_renderer.md; the
@@ -510,14 +509,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """
         rows = self._query(
             self._index_db,
-            "SELECT g.author || '|' || g.diff_status || '|' || coalesce(g.diff_changed_columns, '') "
+            "SELECT g.contact || '|' || g.diff_status || '|' || coalesce(g.diff_changed_columns, '') "
             "FROM grid_rows g JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
-            f"WHERE m.source_id = '{group}' ORDER BY g.author;",
+            f"WHERE m.source_id = '{group}' ORDER BY g.contact;",
         )
         out: dict[str, tuple[str, str]] = {}
         for row in rows:
-            author, status, changed = row.split("|", 2)
-            out[author] = (status, changed)
+            contact, status, changed = row.split("|", 2)
+            out[contact] = (status, changed)
         return out
 
     def _diff_fates(self, group: str) -> dict[str, int]:
@@ -549,6 +548,16 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "SELECT DISTINCT g.qmd_path FROM grid_rows g JOIN markdowns m "
             "ON g.markdown_uuid = m.markdown_uuid "
             f"WHERE m.source_id = '{group}' AND g.preview LIKE '%{needle}%';",
+        )
+        return (self.workspace / qmd_path).read_text()
+
+    def _contact_markdown(self, group: str, contact: str) -> str:
+        """A contacts group's page for `contact`, off the tree."""
+        qmd_path = self._scalar(
+            self._index_db,
+            "SELECT DISTINCT g.qmd_path FROM grid_rows g JOIN markdowns m "
+            "ON g.markdown_uuid = m.markdown_uuid "
+            f"WHERE m.source_id = '{group}' AND g.contact = '{contact}';",
         )
         return (self.workspace / qmd_path).read_text()
 
@@ -1200,10 +1209,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT coalesce(g.author, '') || '|' || g.channel FROM grid_rows g "
+                "SELECT coalesce(g.contact, '') || '|' || g.channel FROM grid_rows g "
                 "JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
                 "WHERE m.source_id = 'tng_contacts' "
-                "AND g.channel IN ('Borg', 'Maquis') ORDER BY g.author;",
+                "AND g.channel IN ('Borg', 'Maquis') ORDER BY g.contact;",
             ),
             [
                 "Hugh|Borg",
@@ -1223,7 +1232,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "0",
             "diff_status is NULL on every real source's rows",
         )
-        picard = self._markdown(CONTACTS_DIFF_GROUP, "Jean-Luc Picard")
+        picard = self._contact_markdown(CONTACTS_DIFF_GROUP, "Jean-Luc Picard")
         self.assertIn('<div class="diff-modified">', picard)
         self.assertIn("<del>NCC-1701-D</del><ins>NCC-1701-E</ins>", picard)
         self.assertIn(
@@ -1231,10 +1240,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self.assertIn(
             '<div class="diff-removed">',
-            self._markdown(CONTACTS_DIFF_GROUP, "Data"),
+            self._contact_markdown(CONTACTS_DIFF_GROUP, "Data"),
         )
         self.assertIn(
-            '<div class="diff-added">', self._markdown(CONTACTS_DIFF_GROUP, "Worf")
+            '<div class="diff-added">',
+            self._contact_markdown(CONTACTS_DIFF_GROUP, "Worf"),
         )
 
         # The Slack diff, which is chat-common under a diff: three #bridge

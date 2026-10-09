@@ -8,7 +8,6 @@ use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Contacts;
 
 pub const KIND_CONTACT: &str = "contact";
-pub const KIND_ADDRESSBOOK: &str = "addressbook";
 
 const IDS: Minter = Minter::unstamped(ID_NAMESPACE);
 
@@ -24,15 +23,6 @@ pub fn contact(source_id: &str, addressbook_label: &str, uid: &str) -> Identity 
     )
 }
 
-pub fn addressbook(source_id: &str, addressbook_label: &str) -> Identity {
-    IDS.mint(
-        source_id,
-        KIND_ADDRESSBOOK,
-        addressbook_label.to_string(),
-        None,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40,22 +30,18 @@ mod tests {
 
     #[test]
     fn natural_key_regenerates_the_uuid() {
-        for got in [
-            contact("c", "Personal", "uid-1"),
-            addressbook("c", "Personal"),
-        ] {
-            assert_eq!(
-                got.uuid,
-                entity_id_str(
-                    ID_NAMESPACE,
-                    "c",
-                    None,
-                    got.entity_kind,
-                    &got.natural_key,
-                    got.at,
-                ),
-            );
-        }
+        let got = contact("c", "Personal", "uid-1");
+        assert_eq!(
+            got.uuid,
+            entity_id_str(
+                ID_NAMESPACE,
+                "c",
+                None,
+                got.entity_kind,
+                &got.natural_key,
+                got.at,
+            ),
+        );
     }
 
     /// A vCard `UID` is free text, and a card with none is keyed by its
@@ -78,6 +64,5 @@ mod tests {
         assert_eq!(a.uuid, contact("c", "Personal", "uid-1").uuid);
         assert_ne!(a.uuid, contact("c", "Work", "uid-1").uuid);
         assert_ne!(a.uuid, contact("d", "Personal", "uid-1").uuid);
-        assert_ne!(a.uuid, addressbook("c", "Personal").uuid);
     }
 }

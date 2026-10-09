@@ -66,6 +66,14 @@ export type SearchRow = {
   // author as shown for its label (docs/dev/chips.md).
   author_handle: string | null;
   author_ref: Identity | null;
+  // On a contact's own row: who it is about, its first email address and
+  // phone number as written, and the Contact cell the applet resolves
+  // from them (a chip where the address or number makes a handle).
+  // Null on every other row.
+  contact: string | null;
+  email: string | null;
+  phone: string | null;
+  contact_ref?: Identity | null;
   channel: string;
   // Public URL for the row's source artifact (Slack permalink, LinkedIn
   // post, …); empty when none.

@@ -17,27 +17,50 @@ describe("browseColumns", () => {
 
   /// The text column is the reason the grid is worth looking at. No
   /// preset may drop it, and only what the row is and what it is called
-  /// come before it, so it is on screen however narrow the card.
+  /// come before it, so it is on screen however narrow the card. An
+  /// address book's row is a person, and who they are and how to reach
+  /// them is what it is called.
   it("shows the contents right after the row's kind and name", () => {
+    const naming = [
+      "kind",
+      "conversation_name",
+      "diff_status",
+      "diff_changed_columns",
+      "contact_ref",
+      "phone",
+      "email",
+    ];
     for (const type of [...browsePresetTypes(), "some_type_we_never_heard_of", "diff"]) {
       const cols = browseColumns(type)!;
       const before = cols.slice(0, cols.indexOf("snippet"));
       expect(cols).toContain("snippet");
-      expect(
-        before.filter(
-          (c) => !["kind", "conversation_name", "diff_status", "diff_changed_columns"].includes(c),
-        ),
-      ).toEqual([]);
+      expect(before.filter((c) => !naming.includes(c))).toEqual([]);
     }
   });
 
   /// One source is rarely one kind of thing — Slack has threads and
   /// messages, PDFs have documents and pages — and `kind` is also what
-  /// separates content rows from the storage rows render emits.
+  /// separates content rows from the storage rows render emits. An
+  /// address book is the exception: it leads with who.
   it("always leads with the row's kind", () => {
-    for (const type of browsePresetTypes()) {
+    for (const type of browsePresetTypes().filter((t) => t !== "contacts")) {
       expect(browseColumns(type)![0]).toBe("kind");
     }
+  });
+
+  /// An address book reads as one: the contact as a chip, how to reach
+  /// them, what the card says, and the address book it is filed in last,
+  /// as the channel — never as the name of the row.
+  it("browses an address book by who", () => {
+    expect(browseColumns("contacts")).toEqual([
+      "contact_ref",
+      "phone",
+      "email",
+      "snippet",
+      "touched_at",
+      "kind",
+      "channel",
+    ]);
   });
 
   it("repeats no column", () => {

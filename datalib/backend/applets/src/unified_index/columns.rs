@@ -45,6 +45,30 @@ pub fn author_identity(author: &str, handle: Option<&str>) -> Option<Identity> {
     })
 }
 
+/// The Contact cell: the contact's name, a chip where its first address,
+/// else its first number, makes a handle, and plain text where neither
+/// does (a group, a number with no country code). Only a contact's own
+/// row has one.
+pub fn contact_identity(
+    contact: Option<&str>,
+    email: Option<&str>,
+    phone: Option<&str>,
+) -> Option<Identity> {
+    let name = contact.filter(|c| !c.is_empty())?;
+    let handle = email
+        .and_then(Handle::email)
+        .or_else(|| phone.and_then(Handle::tel));
+    Some(Identity {
+        id: handle
+            .as_ref()
+            .map_or_else(|| name.to_string(), Handle::to_uri),
+        label: name.to_string(),
+        icon: handle.as_ref().map(|h| handle_mark(h.kind()).to_string()),
+        detail: handle.as_ref().map(|h| h.describe(name)),
+        entity: None,
+    })
+}
+
 /// The icon token for a handle kind; `KIND_ICON` in `ui/src/cards/contacts.ts`
 /// is the same table.
 fn handle_mark(kind: HandleKind) -> &'static str {
@@ -237,6 +261,19 @@ fn declared() -> Vec<ColumnSpec> {
              for them — an address, a number, a Slack user — the cell is a chip the \
              contacts app resolves, and `author_handle:` filters on that identifier.",
         ),
+        ColumnSpec::new("contact_ref", "Contact", ColumnType::Identity)
+            .describe(
+                "On a contact's own row, who it is: a chip drawn from the contact's first \
+                 email address, else its first phone number, so it shows their photo and \
+                 the name your contacts give them.",
+            )
+            .hidden(),
+        ColumnSpec::new("email", "Email", ColumnType::Text)
+            .describe("A contact's first email address.")
+            .hidden(),
+        ColumnSpec::new("phone", "Phone", ColumnType::Text)
+            .describe("A contact's first phone number, as the address book wrote it.")
+            .hidden(),
         ColumnSpec::new("account", "Account", ColumnType::Text).hidden(),
         ColumnSpec::new("org_name", "Org", ColumnType::Text).hidden(),
         ColumnSpec::new("byte_size", "Size", ColumnType::Bytes).hidden(),
@@ -331,6 +368,11 @@ impl Sources {
         }
         row.source_ref = Some(source);
         row.author_ref = author_identity(&row.author, row.author_handle.as_deref());
+        row.contact_ref = contact_identity(
+            row.contact.as_deref(),
+            row.email.as_deref(),
+            row.phone.as_deref(),
+        );
     }
 
     /// The source as the grid shows it: the name the config gives the
@@ -371,6 +413,27 @@ impl Sources {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A contact's cell is a chip by its address, else its number, and
+    /// plain text where neither makes a handle; any other row has none.
+    #[test]
+    fn a_contacts_cell_is_its_address_else_its_number() {
+        let id = |c, e, p| contact_identity(c, e, p).map(|i| (i.id, i.label));
+        let riker = Some("Will Riker");
+        assert_eq!(
+            id(riker, Some("riker@enterprise.org"), Some("+1 202 555 0101")),
+            Some(("mailto:riker@enterprise.org".into(), "Will Riker".into()))
+        );
+        assert_eq!(
+            id(riker, None, Some("+1 202 555 0101")),
+            Some(("tel:+12025550101".into(), "Will Riker".into()))
+        );
+        assert_eq!(
+            id(Some("Bridge crew"), None, Some("(202) 555-0101")),
+            Some(("Bridge crew".into(), "Bridge crew".into()))
+        );
+        assert_eq!(id(None, Some("riker@enterprise.org"), None), None);
+    }
 
     fn values_of(keys: &[SearchKeySpec], key: &str) -> KeyValues {
         keys.iter()
@@ -492,6 +555,10 @@ mod tests {
             author: "who".into(),
             author_handle: None,
             author_ref: None,
+            contact: Some("Will Riker".into()),
+            email: Some("riker@enterprise.org".into()),
+            phone: Some("+1 202 555 0101".into()),
+            contact_ref: None,
             channel: "#c".into(),
             source_url: "https://x".into(),
             notion_page_uuid: "n".into(),
@@ -517,6 +584,7 @@ mod tests {
             "sender",
             "author",
             "author_handle",
+            "contact",
             "entire_chat",
             "source",
             "provider",

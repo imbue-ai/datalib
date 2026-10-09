@@ -22,6 +22,9 @@ pub enum GridColumn {
     Snippet,
     Author,
     AuthorRef,
+    ContactRef,
+    Email,
+    Phone,
     Account,
     OrgName,
     ByteSize,
@@ -66,6 +69,10 @@ impl View for GridColumn {
             // The Author cell is an identity: sorted and filtered by the
             // name it shows, as the Source cell is by its id.
             GridColumn::AuthorRef => same(G::Author),
+            // Sorted and filtered by the name it shows, as Author is.
+            GridColumn::ContactRef => same(G::Contact),
+            GridColumn::Email => same(G::Email),
+            GridColumn::Phone => same(G::Phone),
             GridColumn::Account => same(G::Account),
             GridColumn::OrgName => same(G::OrgName),
             GridColumn::ByteSize => same(G::ByteSize),
@@ -115,6 +122,9 @@ mod tests {
                 ("touched_at", none, "touched_at", false),
                 ("author", none, "author", true),
                 ("author_handle", none, "author_handle", false),
+                ("contact", none, "contact", false),
+                ("email", none, "email", false),
+                ("phone", none, "phone", false),
                 ("account", none, "account", true),
                 ("project", none, "project", true),
                 ("org_name", none, "org_name", false),

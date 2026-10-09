@@ -1824,6 +1824,9 @@ grid_rows
     is_document
     author
     author_handle
+    contact
+    email
+    phone
     account
     project
     org_uuid

@@ -12,6 +12,7 @@ use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_render::inputs::{Bucket, Buckets};
+use datalib_etl_render::message::chip_link;
 use datalib_etl_render::section::{join, Section};
 use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
@@ -19,6 +20,7 @@ use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
 use datalib_contact_schema::{is_drawable_photo, ContactHandle, Medium, NormalizedContact, Photo};
+use datalib_handle::Handle;
 
 use crate::types::ContactDoc;
 
@@ -199,9 +201,9 @@ fn display_or_id(doc: &ContactDoc) -> &str {
         .unwrap_or(&doc.doc_uuid)
 }
 
-/// The page's field table and the grid row's text, in one order for
-/// every source: where the person is filed, who they are, how to reach
-/// them, then whatever else the source says.
+/// The page's field table, in one order for every source: where the
+/// person is filed, who they are, how to reach them, then whatever else
+/// the source says. A group's members are listed under the table.
 pub fn table_rows(contact: &NormalizedContact) -> Vec<(String, String)> {
     let mut rows: Vec<(String, String)> = Vec::new();
     rows.extend(
@@ -209,12 +211,6 @@ pub fn table_rows(contact: &NormalizedContact) -> Vec<(String, String)> {
             .groups
             .iter()
             .map(|g| ("Group".to_string(), g.clone())),
-    );
-    rows.extend(
-        contact
-            .members
-            .iter()
-            .map(|m| ("Member".to_string(), m.clone())),
     );
     if let Some(org) = &contact.org {
         rows.push(("Org".to_string(), org.clone()));
@@ -238,6 +234,52 @@ pub fn table_rows(contact: &NormalizedContact) -> Vec<(String, String)> {
         rows.push(("Note".to_string(), note.clone()));
     }
     rows
+}
+
+/// A contact's first email address or phone number, as the source wrote it.
+pub fn first_value(contact: &NormalizedContact, medium: Medium) -> Option<&str> {
+    contact
+        .handles
+        .iter()
+        .find(|h| h.medium == medium)
+        .map(|h| h.value.as_str())
+}
+
+/// The handle a contact's chip is drawn by, from its first email address
+/// and its first number: the address, else the number, where either makes
+/// one. The grid's Contact cell (`columns.rs::contact_identity` in the
+/// applets) reads the `email` and `phone` columns by the same rule.
+pub fn chip_handle(email: Option<&str>, phone: Option<&str>) -> Option<Handle> {
+    email
+        .and_then(Handle::email)
+        .or_else(|| phone.and_then(Handle::tel))
+}
+
+/// The grid row's Contents: what the card says besides the name and the
+/// first address and number, which have columns of their own. The note
+/// leads, since it is the one thing nobody but the person wrote; the
+/// groups the card is filed in come last.
+fn summary(contact: &NormalizedContact) -> String {
+    let email = first_value(contact, Medium::Email);
+    let phone = first_value(contact, Medium::Phone);
+    let mut lines: Vec<String> = contact.note.iter().cloned().collect();
+    lines.extend(contact.org.iter().cloned());
+    lines.extend(contact.title.iter().cloned());
+    lines.extend(contact.members.iter().cloned());
+    lines.extend(
+        contact
+            .handles
+            .iter()
+            .filter(|h| match h.medium {
+                Medium::Email => Some(h.value.as_str()) != email,
+                Medium::Phone => Some(h.value.as_str()) != phone,
+                Medium::Other => true,
+            })
+            .map(|h| h.value.clone()),
+    );
+    lines.extend(contact.details.iter().map(|d| d.value.clone()));
+    lines.extend(contact.groups.iter().cloned());
+    lines.join("\n")
 }
 
 fn handle_label(h: &ContactHandle) -> String {
@@ -323,6 +365,18 @@ fn render_markdown(
         out.push('\n');
     }
 
+    if !contact.members.is_empty() {
+        out.push_str("**Members**\n\n");
+        for (i, name) in contact.members.iter().enumerate() {
+            let line = match doc.member_handles.get(i).and_then(Option::as_ref) {
+                Some(handle) => chip_link(name, handle),
+                None => escape_md_inline(name),
+            };
+            out.push_str(&format!("- {line}\n"));
+        }
+        out.push('\n');
+    }
+
     vec![frontmatter, Section::keyed(m_uuid, out)]
 }
 
@@ -337,14 +391,8 @@ fn build_grid_row(
 ) -> Option<GridRow> {
     let contact = &doc.contact;
     let title = display_or_id(doc).to_string();
-    // Body the UI displays / qmd indexes — compact, single string:
-    // the name followed by every field value.
-    let mut text = title.clone();
-    for (_, value) in table_rows(contact) {
-        text.push('\n');
-        text.push_str(&value);
-    }
-
+    // The contact is the document, so it is its own conversation; the
+    // address book it is filed in is the channel.
     GridRow::builder()
         .uuid(doc.doc_uuid.clone())
         .provider(profile.provider)
@@ -354,13 +402,15 @@ fn build_grid_row(
         .item_count(Some(1))
         .created_at(contact.created_at.clone())
         .modified_at(contact.modified_at.clone())
-        .author(Some(title))
+        .contact(Some(title.clone()))
+        .email(first_value(contact, Medium::Email).map(str::to_string))
+        .phone(first_value(contact, Medium::Phone).map(str::to_string))
         .account(profile.account.clone())
         .channel(Some(doc.group_label.clone()))
-        .conversation_name(Some(doc.group_label.clone()))
-        .conversation_uuid(doc.group_uuid.clone())
+        .conversation_name(Some(title))
+        .conversation_uuid(doc.doc_uuid.clone())
         .entire_chat(format!("/contact/{}", doc.doc_uuid))
-        .body(text)
+        .body(summary(contact))
         .qmd_path(Some(md_rel.to_string()))
         .source_url(contact.source_url.clone())
         .upstream_id(Some(contact.key.clone()).filter(|k| !k.is_empty()))
@@ -446,8 +496,8 @@ mod tests {
         ContactDoc {
             contact,
             doc_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
-            group_uuid: "22222222-2222-2222-2222-222222222222".to_string(),
             group_label: "LinkedIn Connections".to_string(),
+            member_handles: Vec::new(),
             upstream_account: None,
             inputs: Vec::new(),
         }
@@ -466,14 +516,12 @@ mod tests {
         ];
         c.title = Some("Commander".into());
         c.org = Some("Starfleet".into());
-        c.members = vec!["Troi".into()];
         c.groups = vec!["Bridge".into()];
         let labels: Vec<String> = table_rows(&c).into_iter().map(|(l, _)| l).collect();
         assert_eq!(
             labels,
             [
                 "Group",
-                "Member",
                 "Org",
                 "Title",
                 "Email (work)",
@@ -482,8 +530,8 @@ mod tests {
                 "Note"
             ]
         );
-        assert_eq!(table_rows(&c)[5].1, "(555) 010-1234");
-        assert_eq!(table_rows(&c)[7].1, "two\nlines");
+        assert_eq!(table_rows(&c)[4].1, "(555) 010-1234");
+        assert_eq!(table_rows(&c)[6].1, "two\nlines");
     }
 
     fn mk_profile() -> ContactRenderProfile {
@@ -574,12 +622,19 @@ mod tests {
             row.source_url.as_deref(),
             Some("https://www.linkedin.com/in/jlp")
         );
-        assert!(row.preview.contains("Jean-Luc Picard"));
-        assert!(row.preview.contains("Starfleet"));
-        assert_eq!(
-            row.conversation_name.as_deref(),
-            Some("LinkedIn Connections")
+        assert!(
+            !row.preview.contains("Jean-Luc Picard"),
+            "the name is the Contact cell"
         );
+        assert!(row.preview.contains("Starfleet"));
+        assert_eq!(row.conversation_name.as_deref(), Some("Jean-Luc Picard"));
+        assert_eq!(
+            row.conversation_uuid, row.uuid,
+            "the contact is the document"
+        );
+        assert_eq!(row.channel.as_deref(), Some("LinkedIn Connections"));
+        assert_eq!(row.contact.as_deref(), Some("Jean-Luc Picard"));
+        assert_eq!(row.author, None, "nobody wrote a contact");
         // The profile's account, not the source name: a source name is
         // not a login and polluted every `account:` filter.
         assert_eq!(row.account.as_deref(), Some("jlp@enterprise.test"));
@@ -651,6 +706,63 @@ mod tests {
             .unwrap()
             .join("blobs/11111111-1111-1111-1111-111111111111.png");
         assert!(written.is_file(), "the URL names a file beside the page");
+    }
+
+    /// A contact's row carries its first address and number in columns of
+    /// their own, and its Contents leads with the note and leaves out
+    /// what those columns and the Contact chip already show.
+    #[test]
+    fn a_contacts_row_has_its_address_and_number_and_a_note_first() {
+        let mut doc = mk_contact();
+        doc.contact.handles = vec![
+            ContactHandle::email(Some("work".into()), "riker@enterprise.org"),
+            ContactHandle::email(Some("home".into()), "will@risa.test"),
+            ContactHandle::phone(Some("cell".into()), "(555) 010-1234"),
+        ];
+        doc.contact.note = Some("Plays the trombone".into());
+        doc.contact.groups = vec!["Bridge".into()];
+        let row = build_grid_row(&mk_profile(), &doc, "linkedin", "x.md", &mut Vec::new())
+            .expect("valid contact grid row");
+        assert_eq!(row.email.as_deref(), Some("riker@enterprise.org"));
+        assert_eq!(row.phone.as_deref(), Some("(555) 010-1234"));
+        assert_eq!(
+            row.preview,
+            "Plays the trombone Starfleet Captain | USS Enterprise will@risa.test Bridge"
+        );
+    }
+
+    /// The chip is the first address, else the first number that makes a
+    /// handle; a number with no country code makes none.
+    #[test]
+    fn a_contacts_chip_is_its_address_else_its_number() {
+        let h = |e, p| chip_handle(e, p).map(|h| h.as_str().to_string());
+        assert_eq!(
+            h(Some("Riker@Enterprise.org"), Some("+1 202 555 0101")).as_deref(),
+            Some("email:riker@enterprise.org")
+        );
+        assert_eq!(
+            h(None, Some("+1 202 555 0101")).as_deref(),
+            Some("tel:+12025550101")
+        );
+        assert_eq!(h(None, Some("(202) 555-0101")), None);
+    }
+
+    /// A group's page lists its members, each a chip where the member has
+    /// a handle and a plain name where not.
+    #[test]
+    fn a_groups_members_are_chips() {
+        let mut doc = mk_contact();
+        doc.contact.members = vec!["Will Riker".into(), "Q".into()];
+        doc.member_handles = vec![Handle::email("riker@enterprise.org"), None];
+        let md = join(&render_markdown(&mk_profile(), &doc, "linkedin", None));
+        assert!(
+            md.contains(
+                "**Members**\n\n\
+                 - [Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\")\n\
+                 - Q\n"
+            ),
+            "{md}"
+        );
     }
 
     /// The sink's answer is the run's answer: a document it refuses fails

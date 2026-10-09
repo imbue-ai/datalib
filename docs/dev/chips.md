@@ -69,7 +69,8 @@ failing.
 
 Who writes chips today: chat-common for a message's author,
 recipients and reactors (`chat-common/README.md` §"The message
-header"); Slack for a `<@U…>` mention in a body; the storage report
+header"); Slack for a `<@U…>` mention in a body; contact-common for
+each member of a group of contacts that has a handle; the storage report
 (`datalib_step/src/introspect.rs`) for its group in the heading and
 each store's step in a column.
 
@@ -172,7 +173,11 @@ A grid draws a chip from an `identity` typed cell
 - **A person**: the cell's `id` is the handle as a URI and its `label`
   the name the source showed. The search grid's Author column is one
   (`author_ref`, built by `columns.rs::author_identity` from
-  `grid_rows.author_handle`).
+  `grid_rows.author_handle`), and so is its Contact column on a
+  contact's own row (`contact_ref`, built by
+  `columns.rs::contact_identity` from `grid_rows.contact`, `email` and
+  `phone`). An identity cell whose `id` is no handle is drawn as plain
+  text: a group of contacts, a contact with no address or full number.
 - **A group or a step**: the cell's `entity` is the URI, *beside* a
   bare `id`. The id stays bare because other code keys on it: the
   document view stores a source's "always load images" setting under

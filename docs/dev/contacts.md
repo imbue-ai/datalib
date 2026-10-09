@@ -221,6 +221,9 @@ in the mirror (`render.rs::reactor`). Slack writes a `<@U…>` mention as
 a chip link in the body (`slack_render/src/render/mrkdwn.rs`), and as
 plain `@Name` inside code, which shows what it holds; an email's
 `@` mention is a chip link too (`email_render/src/render/mentions.rs`).
+A group of contacts lists its members under its field table, each a
+chip link where the member's card has an address or a full number
+(contact-common, from `ContactDoc::member_handles`).
 Every mention a source marks up is also a `mention` search term on its
 message's row. Every chip link
 the backend writes is shaped by one function,
@@ -438,6 +441,17 @@ Everything is in `datalib/ui/src/cards/`:
   `GridCard.ce.vue` draws each Author cell from `people` and redraws
   them when an answer changes. The applet names the mark for a handle's
   kind in `columns.rs::handle_mark`.
+- A contact's own row is drawn by who it is about, not by where it is
+  filed. Its grid row names the person in `contact` and
+  `conversation_name`, puts its first email address and phone number
+  in `email` and `phone`, and files the address book (or LinkedIn's or
+  Facebook's list) in `channel` alone. The grid's Contact column is a
+  chip from those (`columns.rs::contact_identity`: the address, else
+  the number, by the rule `contact-common::chip_handle` writes the
+  members' chips by), and the search list titles such a row with the
+  same chip (`SearchList.ce.vue`). Browsing an address book opens on
+  Contact, Phone, Email, Contents (the note first), Touched, Type and
+  then Channel (`config/browsePresets.ts`).
 
 A chip ranks what it hears: your contact first, then the source
 contacts as `/people` ranked them, then the text the source showed.
