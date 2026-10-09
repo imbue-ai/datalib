@@ -478,7 +478,7 @@ programs against:
   filter, so a filter that was clicked is the one that could have been
   typed. Free text has three answers, a
   small tab each at the start of that row (`grid/searchTabs.ts`):
-  **Fields** (the terms file), **Words** (BM25 over qmd's keyword
+  **Fields** (the search terms file), **Words** (BM25 over qmd's keyword
   index) and **Meaning** (qmd's vectors), the search's `tab=`. All
   three are asked at once; the first to come back with rows opens,
   a tab that comes back while another is open shows a dot until it is

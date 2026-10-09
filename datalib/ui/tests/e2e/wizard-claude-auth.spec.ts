@@ -101,11 +101,31 @@ test("the login runs as the account named in the box", async ({ page }) => {
   await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
   await expect.poll(() => connectBody?.account).toBe("riker@enterprise.gov");
 
-  // And the login must not reuse latchkey's saved session: a cookie
-  // capture reads the `Set-Cookie` of a sign-in that then never
-  // happens, and waits for it until the 15-minute timeout with an
-  // innocent-looking browser window open (imbue-ai/latchkey#150).
+  // latchkey holds other accounts, and its saved browser session may
+  // still be signed in as one of them; claude.ai's login cannot say
+  // which, so this one starts signed out.
   await expect.poll(() => connectBody?.ephemeral_browser).toBe(true);
+});
+
+/// Signing in again to the one account latchkey holds keeps its saved
+/// session, so an expired key is a click rather than a password.
+test("signing in again to the only account keeps the saved session", async ({ page }) => {
+  await openClaude(page, {
+    ...WITH_BROWSER,
+    accounts: [
+      { account: STORED_ACCOUNT, credential_type: "rawCurl", credential_status: "unknown" },
+    ],
+  });
+  await wizard(page).getByRole("combobox", { name: "Claude account" }).fill(STORED_ACCOUNT);
+
+  let connectBody: { account?: string; ephemeral_browser?: boolean } | null = null;
+  await page.route("**/api/latchkey/claude-ai/connect", (route) => {
+    connectBody = route.request().postDataJSON();
+    return route.fulfill({ json: { id: "a1", status: "running", output: "" } });
+  });
+  await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
+  await expect.poll(() => connectBody?.account).toBe(STORED_ACCOUNT);
+  await expect.poll(() => connectBody?.ephemeral_browser).toBe(false);
 });
 
 /// Left empty, the box means latchkey's unnamed default, which is

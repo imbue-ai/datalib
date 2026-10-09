@@ -2,8 +2,6 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 load("//tools:live.bzl", "live_run")
 
-exports_files(["Cargo.toml"])
-
 # The checked-in TNG playback fixture, an input of the Python
 # fixture-build pipeline at //tests/fixtures:ingested_tng.
 filegroup(

@@ -1,7 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# Schema-only config crate for github_api. Bazel-only by
-# design (no Cargo.toml). See
+# Schema-only config crate for github_api. See
 # AGENTS.md §"Repo layout" (why each provider has a <p>_config crate).
 rust_library(
     name = "datalib_etl_github_config",

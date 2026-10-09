@@ -24,3 +24,13 @@ export function nameLeftToService(naming: AccountNaming, stored: string[], typed
   const name = typed.trim();
   return naming === "service" && name !== "" && !stored.includes(name);
 }
+
+/// Whether a browser login to `account` must start from a signed-out
+/// browser. latchkey restores one saved session for every service, so
+/// the login opens signed in as whoever used it last. A service that
+/// names its own accounts files that under whoever it was; one that
+/// does not files it under `account`, which is right only when no other
+/// account could be the one still signed in.
+export function freshBrowser(naming: AccountNaming, stored: string[], account: string): boolean {
+  return naming !== "service" && stored.some((name) => name !== account);
+}

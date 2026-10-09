@@ -152,27 +152,12 @@ impl Runner {
         store: &crate::supervisor::store::Store,
     ) -> Result<()> {
         for step in steps {
-            let (i, outcome) = self
-                .invoke_once(graph, step, &[crate::subprocess::RESET_FLAG, "store"])
-                .await
-                .map_err(|e| anyhow::anyhow!("reset {step}: {e}"))?;
-            let reported = outcome.outputs;
-            // Emptied, not gone: what reads it sees a new version and runs,
-            // which is how the emptiness reaches the grid; and the step
-            // keeps no history, so its next run starts from nothing.
-            let fingerprint = &graph.fingerprints[i];
-            let version = reported_version(&graph.steps[i], fingerprint, &reported)?
-                .unwrap_or_else(|| {
-                    fresh_version(fingerprint, &format!("reset-{}", uuid::Uuid::now_v7()))
-                });
+            let (_, version) = self.reset_one(graph, step).await?;
             let saved = store.load_record().await.context("load the record")?;
             let mut state = saved.clone();
             state.steps.insert(
                 step.clone(),
-                crate::supervisor::record::StepRecord {
-                    version: Some(version),
-                    ..Default::default()
-                },
+                crate::supervisor::wipe::emptied(saved.steps.get(step), version),
             );
             store
                 .save_record(&saved, &state)
@@ -180,6 +165,22 @@ impl Runner {
                 .context("save the record")?;
         }
         Ok(())
+    }
+
+    /// `step` invoked once with `--reset store`; its index, and the version
+    /// its emptied tree is at. Emptied, not gone: what reads it sees a new
+    /// version and runs, which is how the emptiness reaches the grid.
+    pub(crate) async fn reset_one(&self, graph: &Graph, step: &StepId) -> Result<(usize, String)> {
+        let (i, outcome) = self
+            .invoke_once(graph, step, &[crate::subprocess::RESET_FLAG, "store"])
+            .await
+            .map_err(|e| anyhow::anyhow!("reset {step}: {e}"))?;
+        let fingerprint = &graph.fingerprints[i];
+        let version = reported_version(&graph.steps[i], fingerprint, &outcome.outputs)?
+            .unwrap_or_else(|| {
+                fresh_version(fingerprint, &format!("reset-{}", uuid::Uuid::now_v7()))
+            });
+        Ok((i, version))
     }
 
     /// Ask each named step to bring what it wrote to this build's shape,

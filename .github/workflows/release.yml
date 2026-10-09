@@ -224,30 +224,6 @@ jobs:
           repository-cache: true
           external-cache: false
 
-      # Install the Linux-only build dependencies the macOS runner gets
-      # for free via Xcode CLT / Homebrew:
-      #   cmake        — protobuf-src's build script shells out to it.
-      #
-      # Skipped on macOS; that runner already has cmake via Homebrew
-      # (`brew install bazel cmake` per README).
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y cmake
-
-      # protobuf-src needs cmake. Guarded so an image that gains or
-      # loses it doesn't fail on "already installed".
-      - name: Install macOS build dependencies
-        if: runner.os == 'macOS'
-        run: |
-          set -euo pipefail
-          if ! command -v cmake >/dev/null 2>&1; then
-              brew install cmake
-          fi
-          cmake --version | head -1
-
       - name: Show toolchain versions
         run: |
           bazel version
@@ -292,8 +268,8 @@ jobs:
           tag_version="${REF_NAME#v}"
           cargo_version="$(grep -E '^version = "[^"]+"$' datalib/backend/Cargo.toml | head -n1 | sed -E 's/^version = "([^"]+)"$/\1/')"
           if [[ "$tag_version" != "$cargo_version" ]]; then
-              echo "Tag ${REF_NAME} disagrees with Cargo.toml workspace version ${cargo_version}." >&2
-              echo "Bump datalib/backend/Cargo.toml [workspace.package].version to ${tag_version} before re-tagging." >&2
+              echo "Tag ${REF_NAME} disagrees with the Cargo.toml version ${cargo_version}." >&2
+              echo "Bump datalib/backend/Cargo.toml [package].version to ${tag_version} before re-tagging." >&2
               exit 1
           fi
 
@@ -587,7 +563,7 @@ jobs:
       - name: Build, sign, notarize
         # DATALIB_APP_VERSION stamps the tag's version into the
         # bundle (tauri.conf.json's checked-in version is not kept in
-        # sync with the backend workspace version the tag asserts on).
+        # sync with the backend Cargo.toml version the tag asserts on).
         # The tag goes through env, never ${{ }}-interpolated into run:
         # (see verify-version in sculptor's build-desktop.yml for why).
         env:

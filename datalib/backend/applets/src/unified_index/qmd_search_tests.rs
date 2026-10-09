@@ -28,7 +28,7 @@ fn stage_runtime_once() {
 }
 
 /// The fixture's root: its grid index, its qmd index and qmd's model.
-fn fixture_root() -> tempfile::TempDir {
+pub(super) fn fixture_root() -> tempfile::TempDir {
     stage_runtime_once();
     let root = tempfile::tempdir().unwrap();
     datalib_qmd_fixture::materialize_root_with_grid(root.path());
@@ -158,14 +158,14 @@ async fn free_text_groups_the_ranked_rows() {
     let counted: u64 = by_source.groups.iter().map(|g| g.count).sum();
     assert_eq!(counted, ranked.total);
 
-    let slack = by_source
-        .groups
-        .iter()
-        .find(|g| g.values == [Some("slack".to_string())])
-        .expect("the fixture's slack source has hits");
-    let rows = search_within(&s, QUERY, r#"[["source_ref","slack"]]"#, 1_000).await;
-    assert_eq!(rows.total, slack.count);
-    assert!(rows.rows.iter().all(|r| r.source_id == "slack"));
+    let group = &by_source.groups[0];
+    let source = group.values[0]
+        .clone()
+        .expect("a source group names its source");
+    let within = serde_json::json!([["source_ref", source]]).to_string();
+    let rows = search_within(&s, QUERY, &within, 1_000).await;
+    assert_eq!(rows.total, group.count);
+    assert!(rows.rows.iter().all(|r| r.source_id == source));
     assert!(
         rows.rows.iter().all(|r| r.score.is_some()),
         "a group keeps qmd's scores"
@@ -263,7 +263,7 @@ async fn free_text_without_a_qmd_index_says_it_is_not_built() {
 }
 
 /// Each tab answers the same words its own way, and keeps its answer apart
-/// from the others': Fields from the terms file, each row saying which of
+/// from the others': Fields from the search terms file, each row saying which of
 /// its terms matched; Words by BM25 from qmd's keyword index, best first;
 /// Meaning from qmd's vectors alone.
 #[tokio::test]
@@ -283,7 +283,7 @@ async fn each_tab_answers_free_text_its_own_way() {
             .split_once(": ")
             .expect("a fields hit names its term");
         assert!(
-            datalib_schema::terms::TermKind::parse(kind).is_some(),
+            datalib_schema::search_terms::SearchTermKind::parse(kind).is_some(),
             "{kind}"
         );
         assert!(value.to_lowercase().contains("enterprise"), "{value}");
@@ -307,6 +307,36 @@ async fn each_tab_answers_free_text_its_own_way() {
     assert_eq!(meaning.query_echo["tab"], "meaning");
     assert!(!meaning.rows.is_empty());
     assert_ne!(uuids(&words), uuids(&meaning), "two tabs gave one answer");
+}
+
+/// A pasted address finds the emails it was copied on, not only the ones
+/// it wrote, and a label is a field like any other: both are terms the
+/// email render supplies, beyond the row's own columns.
+#[tokio::test]
+async fn an_address_finds_the_emails_it_received_and_a_label_its_emails() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let snippets = |r: &SearchResponse| -> HashSet<String> {
+        r.rows.iter().map(|row| row.snippet.clone()).collect()
+    };
+
+    let riker = search(&s, "riker@enterprise.starfleet", None, 1_000, None).await;
+    let matched = snippets(&riker);
+    assert!(
+        matched.contains("cc: email:riker@enterprise.starfleet"),
+        "{matched:?}"
+    );
+    assert!(
+        matched.contains("from: email:riker@enterprise.starfleet"),
+        "{matched:?}"
+    );
+
+    let inbox = search_tab(&s, "inbox", Some(SearchTab::Fields), None, 1_000, None).await;
+    assert!(
+        snippets(&inbox).contains("label: Inbox"),
+        "{:?}",
+        snippets(&inbox)
+    );
 }
 
 /// The Words tab is scoped by `source_id:` like any search, and its groups

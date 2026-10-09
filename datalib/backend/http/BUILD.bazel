@@ -4,7 +4,6 @@ load("//tools:test_slice.bzl", "rust_test_slice", "skip_slices")
 
 exports_files([
     "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
-    "Cargo.toml",
     # Its TOML example is loaded like the example configs, by
     # //datalib/backend/datalib_step:datalib_step_unittests.
     "src/agent_config_guide.md",
@@ -70,7 +69,7 @@ rust_library(
     # Sets CARGO_PKG_VERSION under rules_rust (which does NOT read
     # Cargo.toml) — /api/health and the feedback cards report it, and
     # since the Tauri shell ships this bazel-built binary, it's also the
-    # desktop app's version. Must match [workspace.package].version in
+    # desktop app's version. Must match [package].version in
     # datalib/backend/Cargo.toml; the
     # //datalib/backend:version_consistency_test asserts that.
     version = "0.41.0",

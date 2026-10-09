@@ -70,6 +70,7 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
                 render_version: 1,
                 rows,
                 sections: Vec::new(),
+                search_terms: Vec::new(),
                 edges: Vec::new(),
                 contacts: Vec::new(),
                 problems: Vec::new(),

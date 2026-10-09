@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Render half of the `apple_messages` provider: the side that knows
 # `datalib_schema`. //datalib/backend/etl/providers/apple_messages is the
 # ingest half and deliberately does not.

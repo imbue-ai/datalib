@@ -19,6 +19,30 @@ export const TNG = {
   garminBearer: "tng-garmin-bearer",
 };
 
+/// Who can sign in to claude.ai and chatgpt.com, each with their own
+/// credentials. A login page that sees no session signs in whoever
+/// `internet.signInAs` last named, Picard to start.
+export const CREW = {
+  picard: {
+    id: "picard",
+    email: "picard@enterprise.test",
+    name: "Jean-Luc Picard",
+    claudeSessionKey: TNG.claudeSessionKey,
+    chatgptSessionCookie: TNG.chatgptSessionCookie,
+    chatgptAccessToken: TNG.chatgptAccessToken,
+  },
+  riker: {
+    id: "riker",
+    email: "riker@enterprise.test",
+    name: "William Riker",
+    claudeSessionKey: "sk-ant-tng-riker",
+    chatgptSessionCookie: "tng-chatgpt-session-riker",
+    chatgptAccessToken: "tng-chatgpt-access-riker",
+  },
+};
+const crewBy = (field, value) => Object.values(CREW).find((m) => value && m[field] === value);
+const CHATGPT_SESSION = "__Secure-next-auth.session-token";
+
 const cookies = (req) =>
   Object.fromEntries(
     String(req.headers.cookie ?? "")
@@ -85,13 +109,18 @@ function slack(req) {
 }
 
 function claude(req) {
+  const member = crewBy("claudeSessionKey", cookies(req).sessionKey);
   if (req.path === "/login") {
+    // As the real one: a signed-in browser is sent on, with no new cookie.
+    if (member) return { status: 302, headers: { location: "/new" } };
+    const signsIn = CREW[req.signsInAs];
     return {
       html: "<h1>Signed in to claude.ai (fake)</h1>",
-      headers: { "set-cookie": `sessionKey=${TNG.claudeSessionKey}; Path=/; Secure; HttpOnly` },
+      headers: { "set-cookie": `sessionKey=${signsIn.claudeSessionKey}; Path=/; Secure; HttpOnly` },
     };
   }
-  if (cookies(req).sessionKey !== TNG.claudeSessionKey) {
+  if (req.path === "/new" && member) return { html: "<h1>New chat (fake)</h1>" };
+  if (!member) {
     return {
       status: 401,
       json: { type: "error", error: { type: "authentication_error", message: "Invalid authorization" } },
@@ -99,9 +128,7 @@ function claude(req) {
   }
   switch (req.path) {
     case "/api/account":
-      return {
-        json: { uuid: "acct-picard", email_address: "picard@enterprise.test", full_name: "Jean-Luc Picard" },
-      };
+      return { json: { uuid: `acct-${member.id}`, email_address: member.email, full_name: member.name } };
     case "/api/organizations":
       return { json: [{ uuid: "org-enterprise", name: "Enterprise" }] };
     case "/api/organizations/org-enterprise/chat_conversations":
@@ -117,26 +144,33 @@ function claude(req) {
 }
 
 function chatgpt(req) {
+  const signedIn = crewBy("chatgptSessionCookie", cookies(req)[CHATGPT_SESSION]);
   if (req.path === "/auth/login") {
+    // As the real one: a signed-in browser is sent on, with no new cookie.
+    if (signedIn) return { status: 302, headers: { location: "/" } };
+    const signsIn = CREW[req.signsInAs];
     return {
       html: "<h1>Signed in to ChatGPT (fake)</h1>",
       headers: {
-        "set-cookie": `__Secure-next-auth.session-token=${TNG.chatgptSessionCookie}; Path=/; Secure; HttpOnly`,
+        "set-cookie": `${CHATGPT_SESSION}=${signsIn.chatgptSessionCookie}; Path=/; Secure; HttpOnly`,
       },
     };
   }
+  if (req.path === "/" && signedIn) return { html: "<h1>ChatGPT (fake)</h1>" };
   if (req.path === "/api/auth/session") {
     // What chatgpt.com's own page fetches: the bearer token, but only
     // for a signed-in browser.
-    const signedIn = cookies(req)["__Secure-next-auth.session-token"] === TNG.chatgptSessionCookie;
-    return { json: signedIn ? { user: { id: "user-picard" }, accessToken: TNG.chatgptAccessToken } : {} };
+    return {
+      json: signedIn ? { user: { id: `user-${signedIn.id}` }, accessToken: signedIn.chatgptAccessToken } : {},
+    };
   }
-  if (bearer(req) !== TNG.chatgptAccessToken) {
+  const member = crewBy("chatgptAccessToken", bearer(req));
+  if (!member) {
     return { status: 401, json: { detail: "Unauthorized" } };
   }
   switch (req.path) {
     case "/backend-api/me":
-      return { json: { id: "user-picard", email: "picard@enterprise.test", name: "Jean-Luc Picard" } };
+      return { json: { id: `user-${member.id}`, email: member.email, name: member.name } };
     case "/backend-api/conversations":
       return {
         json: {

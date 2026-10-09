@@ -80,7 +80,7 @@ import {
   suggestedAccount,
 } from "@/config/credentialShape";
 import { ingestReach } from "@/config/ingestMethods";
-import { loginAccount, nameLeftToService } from "@/config/accountNaming";
+import { freshBrowser, loginAccount, nameLeftToService } from "@/config/accountNaming";
 import { isDesktopApp, pickPath } from "@/desktop";
 import {
   BYTE_UNITS,
@@ -896,18 +896,12 @@ async function connectViaLatchkey() {
     message: "A browser window should open. Finish the login there.",
   };
   try {
-    // A cookie capture has to watch a real sign-in happen. latchkey
-    // otherwise restores the session it saved last time, so the browser
-    // opens already signed in, no new cookie is issued, and the login
-    // waits forever (imbue-ai/latchkey#150). Told from the descriptor,
-    // not from whether we are registering: the flow is the service's
-    // either way.
-    const ephemeral = chosen.value?.credentialRegister?.login_flow === "cookie-capture";
+    const account = loginAccount(accountNaming.value, storedNames.value, accountValue.value);
     const started = await startLatchkeyConnect(
       name,
-      loginAccount(accountNaming.value, storedNames.value, accountValue.value),
+      account,
       wouldRegister.value,
-      ephemeral,
+      freshBrowser(accountNaming.value, storedNames.value, account),
     );
     for (;;) {
       await new Promise((r) => setTimeout(r, 1500));

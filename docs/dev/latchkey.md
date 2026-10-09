@@ -62,21 +62,19 @@ every request. Leaving the setting out passes no flag at all, so datalib
 never sends `--account ""`.
 
 **Who picks the name depends on the service**, and only for a browser
-login:
+login. `latchkey services info` says which, as
+`capabilities.detectsLoginAccount`:
 
 | | browser login (`auth browser`) | pasted credential (`auth set`, `auth set-nocurl`) |
 |---|---|---|
-| **built-in and plugin services** | The service names the account: the login asks who you signed in as (an email, a workspace user) and stores the credential under that. `--account X` is accepted only when X is already stored, which refreshes it. A new name is refused before any browser opens. | Stored under the name you give. |
-| **registered services** | You name it: `--account X` stores under X, a new name included. With none, the default account. | Stored under the name you give. |
+| **detects the login account** (Slack, Gmail, Fastmail, GitHub, Garmin) | The service names the account: the login asks who you signed in as (an email, a workspace user) and stores the credential under that. `--account X` is accepted only when X is already stored, which refreshes it. A new name is refused before any browser opens. | Stored under the name you give. |
+| **does not** (every registered service, so Claude and ChatGPT; `openrouter`, `ngrok`) | You name it: `--account X` stores under X, a new name included. With none, the default account. | Stored under the name you give. |
 
-Two services latchkey ships with a browser login and no naming of their
-own (`openrouter`, `ngrok`) break the first row's rule. datalib uses
-neither. latchkey does not report the rule directly, which is why
-datalib reads it off the service's type
-([imbue-ai/latchkey#169](https://github.com/imbue-ai/latchkey/issues/169)).
-`e2e_auth/accounts.spec.ts` checks the rule for every service the
-catalog signs in to with a browser, so a latchkey upgrade that changes
-it fails there.
+The flag describes a browser login, so it means nothing for a service
+that has none: latchkey reports `true` for `fastmail-dav` and `notion`,
+which only take a pasted key. `e2e_auth/accounts.spec.ts` checks the
+rule against the pinned latchkey for every service the catalog signs in
+to with a browser.
 
 When no account is named, latchkey works it out from what is stored:
 
@@ -102,7 +100,7 @@ Three more rules follow from that:
 
 The account row has one account box per source, and it behaves
 the way the service names accounts (`ServiceInfo.account_naming`, read
-off latchkey's `type` and whether the service has a browser login):
+off `detectsLoginAccount` and whether the service has a browser login):
 
 - **The service names it** (Slack, Gmail, Garmin, …): the box says so
   and offers the accounts latchkey holds. "Sign in with browser" passes
@@ -142,6 +140,19 @@ to sign in instead, and no plugin is installed.
 `ensure-browser` with only the sources that find one already on the
 machine. If none turns up, it downloads Playwright's Chromium, once, and says
 so on screen while it runs.
+
+latchkey keeps **one saved browser session** (`browser_state.json.enc`)
+for every service and account, and a login starts from it, so a site
+you signed in to before opens already signed in. That saves a password,
+and latchkey takes the session's cookie from the browser when the site
+sends no new one. But it is signed in as whoever used it last, and a
+service that does not detect the login account files that person under
+the name it was given. So the wizard starts the login from a signed-out
+browser (`LATCHKEY_EPHEMERAL_BROWSER`, which neither loads nor saves
+the session) when the service does not detect the account and latchkey
+already holds a different account for it: a second Claude or ChatGPT
+account. The decision is `freshBrowser` in
+`datalib/ui/src/config/accountNaming.ts`.
 
 ## When it fails
 

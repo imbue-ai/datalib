@@ -618,15 +618,15 @@ fn manual_e2e_live_sync_golden() {
         assert_json_snapshot!("qmd_collections", qmd_collections_report(&data_root, &cfg_out));
     });
 
-    // The terms file: what each row answers to when an id or a handle is
+    // The search terms file: what each row answers to when an id or a handle is
     // pasted into the search. Derived from `grid_rows`, so a change here
     // with no change above is a change in the derivation.
     insta::with_settings!({
         snapshot_path => snap_base().join("unified_index").display().to_string(),
         prepend_module_to_snapshot => false,
-        description => "unified_index/grid_index/terms.sqlite, one term a line: kind, value, uuid",
+        description => "unified_index/grid_index/search_terms.sqlite, one term a line: kind, value, uuid",
     }, {
-        assert_snapshot!("terms", index_terms(&data_root));
+        assert_snapshot!("search_terms", search_terms(&data_root));
     });
 
     // ── The contacts app: links a person made, which nothing rebuilds ──
@@ -1412,10 +1412,10 @@ fn index_problems(data_root: &Path) -> Value {
     rows
 }
 
-/// Every term in the grid's terms file, decoded from its dictionary, one
+/// Every term in the grid's search terms file, decoded from its dictionary, one
 /// line each as `kind<TAB>value<TAB>uuid`, sorted.
-fn index_terms(data_root: &Path) -> String {
-    let path = datalib_runtime::layout::grid_terms_db(data_root);
+fn search_terms(data_root: &Path) -> String {
+    let path = datalib_runtime::layout::search_terms_db(data_root);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1435,7 +1435,7 @@ fn index_terms(data_root: &Path) -> String {
     let mut lines: Vec<String> = coded
         .into_iter()
         .map(|(code, value, uuid)| {
-            let kind = datalib_schema::terms::TermKind::from_code(code)
+            let kind = datalib_schema::search_terms::SearchTermKind::from_code(code)
                 .map_or_else(|| format!("kind {code}"), |k| k.as_str().to_string());
             format!("{kind}\t{value}\t{uuid}")
         })

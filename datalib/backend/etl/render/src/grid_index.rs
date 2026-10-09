@@ -30,6 +30,7 @@ use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
 use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
 use datalib_schema::source_contacts::DDL as SOURCE_CONTACTS_DDL;
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
+use datalib_schema::supplied_search_terms::DDL as SUPPLIED_SEARCH_TERMS_DDL;
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -404,6 +405,8 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS edges_by_src_markdown ON edges (src_markdown_uuid)",
     // A chip asks who a handle is.
     "CREATE INDEX IF NOT EXISTS source_contact_handles_by_handle ON source_contact_handles (handle)",
+    "CREATE INDEX IF NOT EXISTS supplied_search_terms_by_markdown \
+     ON supplied_search_terms (markdown_uuid)",
 ];
 
 /// What a qmd hit is mapped to its rows by
@@ -429,6 +432,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACTS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(SUPPLIED_SEARCH_TERMS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(PROBLEMS_DDL.iter().map(|(_table, ddl)| *ddl))
         // `source_cursors` belongs in this list, not beside it: the reconcile
         // drops and rebuilds every table named here together, and a cursor
@@ -633,6 +637,10 @@ pub struct RenderedMarkdown {
     /// The people this document describes or mentions, as its source
     /// describes them; owned by the document like its edges.
     pub contacts: Vec<NormalizedContact>,
+    /// The search terms the rows answer to beyond their own columns
+    /// (`datalib_schema::search_terms`), each for one of `rows`; owned by
+    /// the document like its edges.
+    pub search_terms: Vec<datalib_schema::search_terms::SuppliedSearchTerm>,
     /// What render could not do while producing this document: records
     /// dropped, fields nulled, lossy rules that fired. Travels with the
     /// document so the rows and the record of what was lost commit together.
@@ -1230,6 +1238,7 @@ pub(crate) async fn delete_document_rows(
         "DELETE FROM edges WHERE src_markdown_uuid = ?",
         "DELETE FROM source_contacts WHERE markdown_uuid = ?",
         "DELETE FROM source_contact_handles WHERE markdown_uuid = ?",
+        "DELETE FROM supplied_search_terms WHERE markdown_uuid = ?",
         "DELETE FROM markdowns WHERE markdown_uuid = ?",
     ] {
         sqlx::query(sql)
@@ -1318,6 +1327,12 @@ async fn apply_markdown(
     for contact in &md.contacts {
         insert_source_contact(conn, &md.markdown_uuid, contact).await?;
     }
+    sqlx::query("DELETE FROM supplied_search_terms WHERE markdown_uuid = ?")
+        .bind(&md.markdown_uuid)
+        .execute(&mut **conn)
+        .await
+        .context("delete prior search terms")?;
+    insert_supplied_search_terms(conn, md).await?;
 
     upsert_markdown(conn, md, canonical, qmd_path)
         .await
@@ -1446,6 +1461,38 @@ async fn insert_source_contact(
         .execute(&mut **conn)
         .await
         .with_context(|| format!("insert handle {handle} of {}", contact.key))?;
+    }
+    Ok(())
+}
+
+async fn insert_supplied_search_terms(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    md: &RenderedMarkdown,
+) -> Result<()> {
+    let rows: std::collections::HashSet<&str> = md.rows.iter().map(|r| r.uuid.as_str()).collect();
+    if let Some(stray) = md
+        .search_terms
+        .iter()
+        .find(|t| !rows.contains(t.uuid.as_str()))
+    {
+        bail!(
+            "{} supplies a search term for {}, which is not one of its rows",
+            md.markdown_uuid,
+            stray.uuid
+        );
+    }
+    for term in &md.search_terms {
+        sqlx::query(
+            "INSERT OR IGNORE INTO supplied_search_terms (markdown_uuid, uuid, kind, value) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(&md.markdown_uuid)
+        .bind(&term.uuid)
+        .bind(term.kind.as_str())
+        .bind(&term.value)
+        .execute(&mut **conn)
+        .await
+        .with_context(|| format!("insert a search term for {}", term.uuid))?;
     }
     Ok(())
 }
@@ -1587,6 +1634,7 @@ mod open_index_tests {
             &[
                 "DELETE FROM grid_rows WHERE markdown_uuid = ?",
                 "DELETE FROM edges WHERE src_markdown_uuid = ?",
+                "DELETE FROM supplied_search_terms WHERE markdown_uuid = ?",
             ],
         )
         .await;
@@ -1831,6 +1879,7 @@ mod write_lock_tests {
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            search_terms: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
             problems: Vec::new(),
@@ -2368,6 +2417,7 @@ mod source_cursor_tests {
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            search_terms: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
             problems: Vec::new(),

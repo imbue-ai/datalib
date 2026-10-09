@@ -81,8 +81,9 @@ Its tree is worth nothing kept: both commits stay in the source's store,
 so comparing them again rebuilds it. Removing a diff group on the Manage
 screen therefore offers, checked by default, to delete the tree too —
 `POST /api/purge` with the group ids, once they are out of the config.
-The server deletes `<root>/<group>/` while no step runs and forgets the
-group's steps in its record; without that, a group re-added under the
+The loop stops the group's steps if they run, deletes `<root>/<group>/`
+and forgets the group's steps in its record, without waiting for a sync
+to end (`datalib/backend/dag/README.md` §"Resets and purges"); without that, a group re-added under the
 same id and definition would read as up to date and write nothing.
 
 `configs/dag_example.toml` is the commented, complete version;

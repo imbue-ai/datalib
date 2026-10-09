@@ -92,7 +92,7 @@ fn main() {
             "launcher_pick",
             "launcher_forget",
             "launcher_open_folder",
-            "launcher_move_legacy",
+            "launcher_move_from_documents",
             "library_menu",
             "library_switch",
             "libraries_show",

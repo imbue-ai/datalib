@@ -2,8 +2,6 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 load(":qmd_fixture.bzl", "QMD_FIXTURE_DATA", "QMD_FIXTURE_ENV")
 
-exports_files(["Cargo.toml"])
-
 # The unified index: the grid index, the qmd index, and the query
 # language over them.
 #

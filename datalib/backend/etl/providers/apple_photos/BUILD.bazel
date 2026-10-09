@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # A small, Photos-shaped library fixture: a `.photoslibrary` bundle with
 # only its `database/Photos.sqlite`, minted by Python for the reasons
 # //datalib/backend/etl/sqlite_mirror:tng_catalog gives (a Rust tool here

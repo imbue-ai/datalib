@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # The TNG account, expanded into playback fixtures by the synthesizer.
 # Consumed by `//tests/fixtures:ingested_tng`.
 filegroup(

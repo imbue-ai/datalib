@@ -4,8 +4,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary")
 # holds HTML and markdown, plus the escape helpers' output for generated
 # strings, as one JSON file. `//datalib/ui:unit_test` renders it through
 # the app's own markdown-it and sanitizer and checks every field reads as
-# typed (`datalib/ui/tests/hostile_text.test.ts`). Not shipped;
-# Bazel-only (no Cargo.toml).
+# typed (`datalib/ui/tests/hostile_text.test.ts`). Not shipped.
 rust_binary(
     name = "render_hostile_samples",
     srcs = ["src/main.rs"],

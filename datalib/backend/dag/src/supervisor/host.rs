@@ -28,19 +28,14 @@ pub trait Periods {
         &mut self,
         store: &Store,
     ) -> impl Future<Output = Option<BTreeMap<String, String>>> + Send;
-    /// What only an idle loop may do, such as a reset.
-    fn idle_work(&mut self, store: &Store) -> impl Future<Output = ()> + Send;
-    /// Resolves when something in this process wants a look that no
-    /// announcement carries.
-    fn nudged(&self) -> impl Future<Output = ()> + Send;
 }
 
 /// The loop between busy periods, for a host holding `runner-lock`: a busy
-/// period whenever a request is open, requests asked to stop before any
-/// period took them closed where they stand, the record settled when the
-/// switches or the config move, and otherwise a wait for an announcement, a
-/// nudge or `stop`. `listener` is made before the first look, so nothing
-/// announced after it is missed.
+/// period whenever a request or a wipe is open, requests asked to stop
+/// before any period took them closed where they stand, the record settled
+/// when the switches or the config move, and otherwise a wait for an
+/// announcement or `stop`. `listener` is made before the first look, so
+/// nothing announced after it is missed.
 pub async fn run_idle(
     store: &Store,
     listener: &mut Listener,
@@ -54,7 +49,6 @@ pub async fn run_idle(
     // dead loop left running.
     let mut settled: Option<BTreeMap<String, String>> = None;
     while !*stop.borrow() {
-        periods.idle_work(store).await;
         let open = match store.open_requests().await {
             Ok(open) => open,
             Err(e) => {
@@ -62,7 +56,14 @@ pub async fn run_idle(
                 Vec::new()
             }
         };
-        if open.iter().any(|r| r.stop_requested_by.is_none()) {
+        let wiping = match store.open_wipes().await {
+            Ok(wipes) => !wipes.is_empty(),
+            Err(e) => {
+                tracing::error!("supervisor: could not read the open wipes: {e:#}");
+                false
+            }
+        };
+        if wiping || open.iter().any(|r| r.stop_requested_by.is_none()) {
             periods.busy_period(store).await;
             // Its last save holds the switches as it last read them, which
             // may not be where they stand now.
@@ -94,7 +95,6 @@ pub async fn run_idle(
                     settled = None;
                 }
             }
-            () = periods.nudged() => {}
             _ = stop.changed() => {}
         }
     }
@@ -243,9 +243,6 @@ mod tests {
     struct Fake {
         calls: tokio::sync::mpsc::UnboundedSender<String>,
         release: std::sync::Arc<tokio::sync::Notify>,
-        nudge: std::sync::Arc<tokio::sync::Notify>,
-        /// Set by the test beside a nudge: the in-memory work a nudge is for.
-        queued: std::sync::Arc<std::sync::atomic::AtomicBool>,
         /// A step the first settle turns off before it reads the switches:
         /// one flipped between the host's look and the settle's.
         turn_off_in_settle: Option<&'static str>,
@@ -263,6 +260,9 @@ mod tests {
                         .unwrap();
                 }
             }
+            for w in store.open_wipes().await.unwrap() {
+                store.close_wipe(&w.id, None).await.unwrap();
+            }
         }
         async fn settle(&mut self, store: &Store) -> Option<BTreeMap<String, String>> {
             if let Some(step) = self.turn_off_in_settle.take() {
@@ -273,37 +273,25 @@ mod tests {
             let _ = self.calls.send(format!("settle {steps:?}"));
             turned_off
         }
-        async fn idle_work(&mut self, _: &Store) {
-            if self.queued.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                let _ = self.calls.send("work".into());
-            }
-        }
-        async fn nudged(&self) {
-            self.nudge.notified().await;
-        }
     }
 
-    /// The idle side, woken only by announcements and nudges (its backstop
-    /// is an hour): a request starts a busy period, one asked to stop
-    /// before any period took it is closed without one, a switch settles
-    /// the record, a nudge runs the work it was for, and a stop ends it.
+    /// The idle side, woken only by announcements (its backstop is an
+    /// hour): a request starts a busy period, one asked to stop before any
+    /// period took it is closed without one, a switch settles the record,
+    /// a wipe starts a busy period of its own, and a stop ends it.
     #[tokio::test]
     async fn the_idle_host_answers_each_kind_of_wake_and_nothing_else() {
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use crate::supervisor::store::WipeKind;
         use std::sync::Arc;
         let root = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(root.path()).await.unwrap());
         let other = Store::open(root.path()).await.unwrap();
         let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
         let release = Arc::new(tokio::sync::Notify::new());
-        let nudge = Arc::new(tokio::sync::Notify::new());
-        let queued = Arc::new(AtomicBool::new(false));
         let (stop_tx, stop) = watch::channel(false);
         let fake = Fake {
             calls: tx,
             release: release.clone(),
-            nudge: nudge.clone(),
-            queued: queued.clone(),
             turn_off_in_settle: None,
         };
         let host = spawn_host(&store, fake, stop);
@@ -323,9 +311,15 @@ mod tests {
         assert_eq!(closed(&served).await, Some(Some(RequestOutcome::Done)));
         assert_eq!(closed(&stopped).await, Some(Some(RequestOutcome::Stopped)));
 
-        queued.store(true, Ordering::SeqCst);
-        nudge.notify_one();
-        next("work").await;
+        let wipe = other
+            .open_wipe(WipeKind::Reset, &["a/x".into()], "ui")
+            .await
+            .unwrap();
+        next("busy").await;
+        release.notify_one();
+        // A busy period is followed by a settle: the period is over.
+        next(r#"settle ["a/x"]"#).await;
+        assert_eq!(other.wipe(&wipe).await.unwrap().unwrap().closed, Some(None));
         stop_tx.send(true).unwrap();
         host.await.unwrap();
         assert_eq!(calls.recv().await, None, "nothing more after the stop");
@@ -345,8 +339,6 @@ mod tests {
         let fake = Fake {
             calls: tx,
             release: Arc::new(tokio::sync::Notify::new()),
-            nudge: Arc::new(tokio::sync::Notify::new()),
-            queued: Arc::default(),
             turn_off_in_settle: None,
         };
         let host = spawn_host(&store, fake, stop);
@@ -374,8 +366,6 @@ mod tests {
         let fake = Fake {
             calls: tx,
             release: release.clone(),
-            nudge: Arc::new(tokio::sync::Notify::new()),
-            queued: Arc::default(),
             turn_off_in_settle: None,
         };
         let host = spawn_host(&store, fake, stop);
@@ -411,8 +401,6 @@ mod tests {
         let fake = Fake {
             calls: tx,
             release: Arc::new(tokio::sync::Notify::new()),
-            nudge: Arc::new(tokio::sync::Notify::new()),
-            queued: Arc::default(),
             turn_off_in_settle: Some("a/x"),
         };
         let host = spawn_host(&store, fake, stop);

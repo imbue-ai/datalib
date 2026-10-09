@@ -23,9 +23,11 @@ mod problems;
 mod qmd_search_tests;
 mod results;
 #[cfg(test)]
+mod search_finds_itself_tests;
+mod search_terms;
+#[cfg(test)]
 mod serve_tests;
 mod tabs;
-mod terms;
 
 use datalib_columns::Identity;
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
@@ -681,14 +683,14 @@ async fn ranked(
         return Ok((list, key.at, true));
     }
     let (ranking, terms_at) = match (tab, identifiers(parsed)) {
-        (Some(SearchTab::Fields), _) => match terms::fields(&parsed.free_text) {
+        (Some(SearchTab::Fields), _) => match search_terms::fields(&parsed.free_text) {
             Some(m) => from_terms(s, &m).await?.unwrap_or((Vec::new(), Some(None))),
             None => (Vec::new(), None),
         },
         (_, Some(ids)) => match from_terms(s, &ids).await? {
             Some(found) => found,
             None => {
-                tracing::info!("no terms file yet; searching identifiers through qmd");
+                tracing::info!("no search terms file yet; searching identifiers through qmd");
                 (qmd_or_no_index(s, parsed).await?, None)
             }
         },
@@ -733,16 +735,16 @@ async fn ranked(
     Ok((list, listing.at, keep))
 }
 
-/// The terms file's ranking for `m`, and the grid commit the file reflects;
-/// `None` when the root has no terms file yet.
+/// The search terms file's ranking for `m`, and the grid commit the file reflects;
+/// `None` when the root has no search terms file yet.
 async fn from_terms(
     s: &Index,
-    m: &terms::Match,
+    m: &search_terms::Match,
 ) -> Result<Option<(Vec<(String, (f64, String))>, Option<Option<String>>)>, SearchFailure> {
-    Ok(terms::lookup(&s.root, m)
+    Ok(search_terms::lookup(&s.root, m)
         .await
         .map_err(index)?
-        .map(|found| (terms::rank(&found), Some(found.grid_commit))))
+        .map(|found| (search_terms::rank(&found), Some(found.grid_commit))))
 }
 
 /// The Words tab: qmd's keyword index ranked by BM25, read from its own
@@ -772,11 +774,11 @@ async fn words_ranking(
 
 /// The identifiers a search is made of, when it is made of nothing else
 /// and asked for no qmd mode of its own.
-fn identifiers(parsed: &ParsedQuery) -> Option<terms::Match> {
+fn identifiers(parsed: &ParsedQuery) -> Option<search_terms::Match> {
     if parsed.free_text_mode != FreeTextMode::Hybrid {
         return None;
     }
-    terms::identifiers(&parsed.free_text)
+    search_terms::identifiers(&parsed.free_text)
 }
 
 async fn qmd_or_no_index(
@@ -808,10 +810,7 @@ async fn qmd_ranking(
 ) -> anyhow::Result<Vec<(String, (f64, String))>> {
     let parsed_for_qmd = parsed.clone();
     let daemon = daemon.clone();
-    let scope = match collection_scope(parsed) {
-        CollectionScope::All => every_collection(root).await?,
-        scoped => scoped,
-    };
+    let scope = collection_scope(parsed);
     let hits = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let mode = match parsed_for_qmd.free_text_mode {
             FreeTextMode::Hybrid => QueryMode::Hybrid,
@@ -853,25 +852,6 @@ async fn rows_of_hits(
         .into_iter()
         .map(|(row, hit)| (row.uuid.clone(), (hit.score, display_snippet(&hit.snippet))))
         .collect())
-}
-
-/// Every collection the qmd index holds now. A running `qmd mcp` asked
-/// for no collection searches the ones it read at startup, and would miss
-/// a source added since. With no index yet the scope stays open, and the
-/// daemon says the index is missing.
-async fn every_collection(root: &std::path::Path) -> anyhow::Result<CollectionScope> {
-    let Some(reader) = QmdIndexReader::open(root)
-        .await
-        .context("open the qmd index for its collections")?
-    else {
-        return Ok(CollectionScope::All);
-    };
-    let names = reader
-        .collections()
-        .await
-        .context("read the qmd index's collections");
-    reader.close().await;
-    Ok(CollectionScope::Only(names?))
 }
 
 /// The rows qmd ranks for `parsed` that its structured terms also match,
@@ -1392,6 +1372,7 @@ mod tests {
                 render_version: 1,
                 rows: vec![row],
                 sections: Vec::new(),
+                search_terms: Vec::new(),
                 edges: Vec::new(),
                 contacts: Vec::new(),
                 problems: Vec::new(),
@@ -1404,44 +1385,6 @@ mod tests {
         pool.close().await;
     }
 
-    /// An unscoped search names every collection the index holds, so a
-    /// running qmd searches a source added after it started; with no
-    /// index yet it stays unscoped, and the daemon says the index is
-    /// missing.
-    #[tokio::test]
-    async fn an_unscoped_search_names_every_collection_the_index_holds() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(
-            every_collection(tmp.path()).await.unwrap(),
-            CollectionScope::All
-        );
-        let path = datalib_unified_index::qmd::qmd_index_path(tmp.path());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(
-                sqlx::sqlite::SqliteConnectOptions::new()
-                    .filename(datalib_runtime::plain_sqlite::uri(&path))
-                    .create_if_missing(true),
-            )
-            .await
-            .unwrap();
-        sqlx::query(
-            "CREATE TABLE store_collections (name TEXT PRIMARY KEY); \
-             INSERT INTO store_collections VALUES ('slack'), ('claude-api')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        pool.close().await;
-        assert_eq!(
-            every_collection(tmp.path()).await.unwrap(),
-            CollectionScope::Only(vec!["claude-api".into(), "slack".into()])
-        );
-    }
-
     /// What the `grid_index` step does after its pass.
     async fn sync_terms(root: &std::path::Path) {
         let pool = datalib_etl_render::grid_index::open_index(
@@ -1449,13 +1392,16 @@ mod tests {
         )
         .await
         .unwrap();
-        datalib_etl_render::grid_terms::sync(&pool, &datalib_runtime::layout::grid_terms_db(root))
-            .await
-            .unwrap();
+        datalib_etl_render::search_terms::sync(
+            &pool,
+            &datalib_runtime::layout::search_terms_db(root),
+        )
+        .await
+        .unwrap();
         pool.close().await;
     }
 
-    /// A pasted uuid or address is answered from the terms file, never by
+    /// A pasted uuid or address is answered from the search terms file, never by
     /// qmd. This root has no qmd index, so a search that asked qmd says so,
     /// which is what the same search did before the terms were written.
     #[tokio::test]

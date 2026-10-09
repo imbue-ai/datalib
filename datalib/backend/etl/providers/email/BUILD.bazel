@@ -2,8 +2,6 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 load("//tools:live.bzl", "live_run")
 
-exports_files(["Cargo.toml"])
-
 # Checked-in JSON fixtures used by render + playback tests.
 filegroup(
     name = "fixtures",

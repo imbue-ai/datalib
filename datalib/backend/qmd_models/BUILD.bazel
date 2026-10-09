@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Puts qmd's pinned GGUF models in place and verifies them, so qmd never
 # reaches HuggingFace on its own. Linked by the `embed` step and the
 # search applet — NOT by //datalib/backend/qmd_indexer, which is an

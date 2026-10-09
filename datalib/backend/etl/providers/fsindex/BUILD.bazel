@@ -1,8 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 
-exports_files(["Cargo.toml"])
-
 # TNG-themed synthetic directory tree used as a scan root by the fsindex
 # e2e test and dropped into the dev/e2e data root (as `fsindex_scan/`) by
 # `//tests/fixtures:materialize_tng_root`. The leading-dot `.fsindex.yaml`

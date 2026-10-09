@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library")
 
-exports_files(["Cargo.toml"])
-
 # The `BulkUpsertable` row-write contract, alone in a leaf crate.
 #
 # `deps` is `sqlx` and nothing else, and that is load-bearing rather

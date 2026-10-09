@@ -4,13 +4,12 @@
 # it, and a free port.
 
 # The library a run opens: the argument, else the one the desktop app
-# opens first. Not the Datalib folder itself: the app reads a library
-# there as one to move into Default. A leading `~` is expanded here
-# because a quoted argument reaches us with it intact.
+# opens first. A leading `~` is expanded here because a quoted argument
+# reaches us with it intact.
 dev_library_root() {
   local arg="${1:-}"
   case "$arg" in
-    "")    echo "$HOME/Documents/Datalib/Default" ;;
+    "")    echo "$HOME/Datalib/Default" ;;
     "~")   echo "$HOME" ;;
     "~/"*) echo "$HOME/${arg#\~/}" ;;
     *)     echo "$arg" ;;

@@ -64,6 +64,7 @@ pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str
         .chain(EDGES_DDL.iter())
         .chain(SOURCE_CONTACTS_DDL.iter())
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter())
+        .chain(datalib_schema::supplied_search_terms::DDL.iter())
         .chain(PROBLEMS_DDL.iter())
         .chain(MEASUREMENTS_DDL.iter())
         .chain(RENDER_CURSOR_DDL.iter())
@@ -814,6 +815,23 @@ where
     Ok(by_doc)
 }
 
+fn supplied_search_term(
+    row: datalib_schema::supplied_search_terms::SuppliedSearchTermRow,
+) -> Result<datalib_schema::search_terms::SuppliedSearchTerm> {
+    let kind =
+        datalib_schema::search_terms::SearchTermKind::parse(&row.kind).with_context(|| {
+            format!(
+                "{} holds a search term of a kind this build does not know: {:?}",
+                row.markdown_uuid, row.kind
+            )
+        })?;
+    Ok(datalib_schema::search_terms::SuppliedSearchTerm {
+        uuid: row.uuid,
+        kind,
+        value: row.value,
+    })
+}
+
 /// Delete a rendered document's file, and the per-document directory it sat
 /// in once that is empty (`<source>/render_markdown/<uuid>/all.md` is the usual
 /// shape, and leaving the empty parent behind makes a deleted conversation
@@ -1133,6 +1151,10 @@ impl IndexedMarkdownStore {
                         SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
                           FROM dolt_diff_source_contacts
                          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                        UNION
+                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
+                          FROM dolt_diff_supplied_search_terms
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     )
                     WHERE markdown_uuid IS NOT NULL
                 ",
@@ -1211,6 +1233,17 @@ impl IndexedMarkdownStore {
                 )
                 .await
                 .context("read source contacts")?;
+            let mut terms_by_doc =
+                group_by_document::<datalib_schema::supplied_search_terms::SuppliedSearchTermRow>(
+                    &self.pool,
+                    "SELECT * FROM supplied_search_terms \
+                      WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
+                      ORDER BY markdown_uuid, uuid, kind, value",
+                    "markdown_uuid",
+                    &wanted,
+                )
+                .await
+                .context("read supplied search terms")?;
             let mut out = Vec::with_capacity(mds.len());
             for md in mds {
                 let rows = rows_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
@@ -1224,6 +1257,12 @@ impl IndexedMarkdownStore {
                             format!("source contact {} of {}", r.contact_key, r.markdown_uuid)
                         })
                     })
+                    .collect::<Result<Vec<_>>>()?;
+                let search_terms = terms_by_doc
+                    .remove(&md.markdown_uuid)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(supplied_search_term)
                     .collect::<Result<Vec<_>>>()?;
                 // `renderer_version` is `"<index>.<render>"`; the render
                 // half is what the renderer declared.
@@ -1247,6 +1286,7 @@ impl IndexedMarkdownStore {
                     sections: Vec::new(),
                     edges,
                     contacts,
+                    search_terms,
                     problems: Vec::new(),
                 });
             }
@@ -1332,6 +1372,7 @@ mod tests {
             &[
                 "DELETE FROM grid_rows WHERE markdown_uuid = ?",
                 "DELETE FROM edges WHERE src_markdown_uuid = ?",
+                "DELETE FROM supplied_search_terms WHERE markdown_uuid = ?",
                 "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?",
             ],
         ));
@@ -1466,6 +1507,7 @@ mod tests {
             render_version: 7,
             rows: vec![row(markdown_uuid, markdown_uuid)],
             sections: Vec::new(),
+            search_terms: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
             problems,

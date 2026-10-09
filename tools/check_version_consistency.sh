@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Asserts that the version declared in datalib/backend/Cargo.toml's
-# [workspace.package] section matches:
+# [package] section matches:
 #   * the `version = "..."` attribute in each BUILD.bazel that stamps one
 #     (dag's datalib_dag_bin rust_binary; http's rust_library, which
 #     feeds /api/health and, via the bundled binary, the desktop app;
@@ -8,7 +8,7 @@
 #     `_datalib_meta` as the build that wrote it).
 #
 # Why this exists: Cargo.toml is the canonical source of truth for the
-# project version (all member crates use `version.workspace = true`).
+# project version.
 # rules_rust does NOT read Cargo.toml — it needs a `version` attr to
 # populate CARGO_PKG_VERSION for the bazel-built crate, and those
 # copies will rot unless something enforces parity. This test enforces
@@ -30,13 +30,11 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
 cargo_toml="$(rlocation _main/datalib/backend/Cargo.toml)"
 [[ -f "$cargo_toml" ]] || { echo "ERROR: Cargo.toml not found at $cargo_toml" >&2; exit 1; }
 
-# Pull the version literal from [workspace.package]. The match is
-# anchored to lines that look like `version = "X.Y.Z"`; the workspace's
-# member crates use `version.workspace = true` so there's only one such
-# line in the file.
+# Pull the version literal from [package]: the one line in the file
+# that is exactly `version = "X.Y.Z"` (a dependency's version is inline).
 cargo_version="$(grep -E '^version = "[^"]+"$' "$cargo_toml" | head -n1 | sed -E 's/^version = "([^"]+)"$/\1/')"
 if [[ -z "$cargo_version" ]]; then
-    echo "ERROR: could not find a workspace [workspace.package] version line in $cargo_toml" >&2
+    echo "ERROR: could not find a [package] version line in $cargo_toml" >&2
     exit 1
 fi
 
@@ -56,7 +54,7 @@ for pkg in dag http runtime; do
         cat >&2 <<EOF
 Version mismatch — Cargo.toml is the canonical source of truth.
 
-  datalib/backend/Cargo.toml             [workspace.package].version = "$cargo_version"
+  datalib/backend/Cargo.toml             [package].version = "$cargo_version"
   datalib/backend/$pkg/BUILD.bazel       version = "$bazel_version"
 
 Bump both to the same value (typically: edit Cargo.toml first, then

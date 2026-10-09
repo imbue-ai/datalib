@@ -31,7 +31,7 @@ const RENAMED_COLUMNS: [(&str, &str, &str); 3] = [
     ("steps", "paused_by", "turned_off_by"),
 ];
 
-const DDL: [&str; 3] = [
+const DDL: [&str; 4] = [
     "CREATE TABLE IF NOT EXISTS requests (
         id TEXT PRIMARY KEY,
         roots TEXT NOT NULL,
@@ -57,6 +57,18 @@ const DDL: [&str; 3] = [
         build TEXT PRIMARY KEY,
         finished_at_utc TEXT NOT NULL,
         tz_offset TEXT NOT NULL
+    )",
+    // `targets` is a JSON list: step ids for a reset, group ids for a
+    // purge. `error` is set when it closed without being done.
+    "CREATE TABLE IF NOT EXISTS wipes (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        targets TEXT NOT NULL,
+        opened_by TEXT NOT NULL,
+        opened_at_utc TEXT NOT NULL,
+        tz_offset TEXT NOT NULL,
+        closed_at_utc TEXT,
+        error TEXT
     )",
 ];
 
@@ -94,6 +106,52 @@ impl RequestOutcome {
     pub fn parse(s: &str) -> Option<Self> {
         s.parse().ok()
     }
+}
+
+/// What a wipe does: a reset empties what steps wrote, a purge deletes
+/// the trees of groups the config no longer names.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum WipeKind {
+    Reset,
+    Purge,
+}
+
+impl WipeKind {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+/// A reset or purge someone asked for. The loop carries it out as soon as
+/// the steps it touches have stopped, and closes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WipeRow {
+    pub id: String,
+    /// `None` for a kind a newer build wrote.
+    pub kind: Option<WipeKind>,
+    pub targets: Vec<String>,
+    pub opened_by: String,
+    /// `None` while it is open; then `Some(None)` if it was done, or the
+    /// reason it was not.
+    pub closed: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,6 +507,86 @@ impl Store {
             .map(|r| Ok((r.try_get("step")?, r.try_get("turned_off_by")?)))
             .collect()
     }
+
+    pub async fn open_wipe(&self, kind: WipeKind, targets: &[String], by: &str) -> Result<String> {
+        let id = uuid::Uuid::now_v7().to_string();
+        let (now, tz_offset) = now_split();
+        sqlx::query(
+            "INSERT INTO wipes (id, kind, targets, opened_by, opened_at_utc, tz_offset) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(kind.as_str())
+        .bind(serde_json::to_string(targets)?)
+        .bind(by)
+        .bind(now)
+        .bind(tz_offset)
+        .execute(&self.pool)
+        .await?;
+        self.announce(&format!("wipe opened {id}"));
+        Ok(id)
+    }
+
+    /// The loop's to call, and only the loop's. `error` is why it was not
+    /// done; `None` when it was.
+    pub async fn close_wipe(&self, id: &str, error: Option<&str>) -> Result<()> {
+        let (now, _) = now_split();
+        sqlx::query(
+            "UPDATE wipes SET closed_at_utc = ?, error = ? WHERE id = ? AND closed_at_utc IS NULL",
+        )
+        .bind(now)
+        .bind(error)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        self.announce(&format!("wipe closed {id}"));
+        Ok(())
+    }
+
+    pub async fn open_wipes(&self) -> Result<Vec<WipeRow>> {
+        let rows = sqlx::query(
+            "SELECT id, kind, targets, opened_by, closed_at_utc, error \
+             FROM wipes WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(wipe_of).collect()
+    }
+
+    /// Open and closed, oldest first.
+    pub async fn wipes(&self) -> Result<Vec<WipeRow>> {
+        let rows = sqlx::query(
+            "SELECT id, kind, targets, opened_by, closed_at_utc, error \
+             FROM wipes ORDER BY opened_at_utc, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(wipe_of).collect()
+    }
+
+    pub async fn wipe(&self, id: &str) -> Result<Option<WipeRow>> {
+        let row = sqlx::query(
+            "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM wipes WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(wipe_of).transpose()
+    }
+}
+
+fn wipe_of(r: &sqlx::sqlite::SqliteRow) -> Result<WipeRow> {
+    let kind: String = r.try_get("kind")?;
+    let targets: String = r.try_get("targets")?;
+    let closed_at: Option<String> = r.try_get("closed_at_utc")?;
+    let error: Option<String> = r.try_get("error")?;
+    Ok(WipeRow {
+        id: r.try_get("id")?,
+        kind: WipeKind::parse(&kind),
+        targets: serde_json::from_str(&targets).context("a wipe's targets")?,
+        opened_by: r.try_get("opened_by")?,
+        closed: closed_at.map(|_| error),
+    })
 }
 
 fn request_of(r: &sqlx::sqlite::SqliteRow) -> Result<RequestRow> {
@@ -661,5 +799,31 @@ mod tests {
             assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
             assert_eq!(RequestOutcome::parse(v.as_str()), Some(v));
         }
+        for &v in WipeKind::VARIANTS {
+            let json = serde_json::to_string(&v).unwrap();
+            assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
+            assert_eq!(WipeKind::parse(v.as_str()), Some(v));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_wipe_opens_and_closes_once_with_why_it_was_not_done() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let id = store
+            .open_wipe(WipeKind::Purge, &["gone".into()], "ui")
+            .await
+            .unwrap();
+        let open = store.open_wipes().await.unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(
+            (open[0].kind, open[0].targets.as_slice(), &open[0].closed),
+            (Some(WipeKind::Purge), &["gone".to_string()][..], &None)
+        );
+        store.close_wipe(&id, Some("refused")).await.unwrap();
+        store.close_wipe(&id, None).await.unwrap();
+        let row = store.wipe(&id).await.unwrap().unwrap();
+        assert_eq!(row.closed, Some(Some("refused".into())), "closed once");
+        assert!(store.open_wipes().await.unwrap().is_empty());
     }
 }

@@ -21,6 +21,7 @@ const SET_ONLY = {
   registered: true,
   cli: "/opt/datalib/bin/latchkey",
   error: null,
+  account_naming: "chosen",
 };
 
 const WITH_BROWSER = { ...SET_ONLY, auth_options: ["browser", "set"] };
@@ -53,11 +54,10 @@ test("a set-only chatgpt service is shown the token-capture conversion", async (
   expect(connectCalls).toBe(0);
 });
 
-/// A token capture reads the token off a page that is already signed
-/// in, so unlike a cookie capture it must *not* throw latchkey's saved
-/// session away: with a fresh profile the person signs in again for
-/// nothing, and chatgpt.com's sign-in is the one most likely to stall
-/// on a bot check.
+/// Signing in again to the one account latchkey holds keeps its saved
+/// session: with a fresh profile the person signs in again for nothing,
+/// and chatgpt.com's sign-in is the one most likely to stall on a bot
+/// check.
 test("the browser login keeps latchkey's saved session", async ({ page }) => {
   await openChatgpt(page, WITH_BROWSER);
 
@@ -70,4 +70,25 @@ test("the browser login keeps latchkey's saved session", async ({ page }) => {
 
   await expect.poll(() => connectBody?.account).toBe("");
   await expect.poll(() => connectBody?.ephemeral_browser).toBe(false);
+});
+
+/// A second account must not start from the saved session: it is still
+/// signed in as the first, and latchkey cannot tell whose token
+/// chatgpt.com hands back, so the first account's would be filed under
+/// the second name.
+test("a second account's login starts signed out", async ({ page }) => {
+  await openChatgpt(page, WITH_BROWSER);
+  await wizard(page)
+    .getByRole("combobox", { name: "ChatGPT account" })
+    .fill("riker@enterprise.gov");
+
+  let connectBody: { account?: string; ephemeral_browser?: boolean } | null = null;
+  await page.route("**/api/latchkey/chatgpt/connect", (route) => {
+    connectBody = route.request().postDataJSON();
+    return route.fulfill({ json: { id: "a1", status: "running", output: "" } });
+  });
+  await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
+
+  await expect.poll(() => connectBody?.account).toBe("riker@enterprise.gov");
+  await expect.poll(() => connectBody?.ephemeral_browser).toBe(true);
 });

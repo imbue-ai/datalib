@@ -80,6 +80,10 @@ database per source, at
     contact-common adds a card's own. Like edges they belong to the
     document, and the index answers "who is this handle" from them
     (`unified_index`'s `POST /people`).
+  - `supplied_search_terms` — what its rows answer to in search beyond
+    their own columns: an email's To and Cc by handle, and its labels.
+    chat-common supplies them; the index copies them into the search
+    terms file (`etl/render/src/search_terms.rs`).
   - `problems` — what render could not do getting there (§4).
   - `render_inputs` and `render_cursor` — what each bucket was rendered
     from, and how far into the raw store the last run got (§5).

@@ -4,8 +4,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # it and what shape it is in. A leaf crate so that every store owner can
 # write it — the ingest framework for raw, blob and render stores, the
 # app server for its three, the run store for itself — and any reader
-# can read it without linking an owner. Bazel-only, no `Cargo.toml`, like
-# `datalib_problems`. See src/lib.rs and
+# can read it without linking an owner. See src/lib.rs and
 # docs/dev/plans/schema_migrations.md §3.1.
 rust_library(
     name = "datalib_store_meta",

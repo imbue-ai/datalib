@@ -481,7 +481,10 @@ changed. `datalib-step` deletes every row of the tree's store in one
 commit, keeping the tables, plus a render tree's documents; the run log
 and the rest are still in the history. Keeping the tables is what lets
 a reader take the emptiness in as ordinary deletions: the app's Reset
-then syncs what reads the step, so its documents leave the grid. A reset
+then syncs what reads the step, so its documents leave the grid. The app
+does not wait for a sync to end: the loop stops the step if it runs and
+resets it there and then (`datalib/backend/dag/README.md` §"Resets and
+purges"). A reset
 also reports the metrics a run would (`problems`, and `documents` for a
 render step), counted off the emptied store: the Manage row shows a
 step's newest sample, and the reset step itself does not run again

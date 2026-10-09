@@ -136,16 +136,6 @@ impl QmdIndexReader {
         Ok(out)
     }
 
-    /// Every collection the index holds now, by name. A search names them
-    /// all rather than leave the choice to `qmd mcp`, which would search
-    /// only the ones it read when it started
-    /// (`docs/dev/qmd_behaviour.md`, "How a running `qmd mcp` behaves").
-    pub async fn collections(&self) -> Result<Vec<String>, sqlx::Error> {
-        sqlx::query_scalar("SELECT name FROM store_collections ORDER BY name")
-            .fetch_all(&self.pool)
-            .await
-    }
-
     /// The documents qmd's keyword index ranks for `query`, best first by
     /// BM25, at most `limit`, from `collections` or every one. Read from
     /// `documents_fts` itself rather than through `qmd mcp`, which takes
@@ -630,25 +620,6 @@ mod tests {
         assert_eq!(
             crate::qmd::mapping::snippet_match_line(&hits[0].snippet),
             Some(6)
-        );
-    }
-
-    #[tokio::test]
-    async fn the_collections_are_the_registry_as_it_is_now() {
-        let td = tempfile::tempdir().unwrap();
-        let pool = qmd_shaped_db(td.path()).await;
-        let r = QmdIndexReader::from_pool(pool.clone());
-        assert_eq!(r.collections().await.unwrap(), Vec::<String>::new());
-        for name in ["slack_imbue", "claude_personal"] {
-            sqlx::query("INSERT INTO store_collections (name) VALUES (?)")
-                .bind(name)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        assert_eq!(
-            r.collections().await.unwrap(),
-            ["claude_personal", "slack_imbue"]
         );
     }
 

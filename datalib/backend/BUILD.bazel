@@ -13,7 +13,7 @@ exports_files([
 ])
 
 # Enforces that every copy of the project version matches
-# [workspace.package].version in datalib/backend/Cargo.toml (the single
+# [package].version in datalib/backend/Cargo.toml (the single
 # source of truth): the `rust_binary version = "..."` attrs in dag's and
 # http's BUILD.bazel. Picked up by `bazelisk test //...`; fails with a
 # diff that names both files so the bump is obvious.
@@ -30,8 +30,8 @@ sh_test(
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
-# Asserts every `datalib-*` workspace crate in Cargo.lock is pinned
-# to the version declared by [workspace.package].version in Cargo.toml.
+# Asserts the `datalib-crates` entry in Cargo.lock is pinned
+# to the version declared by [package].version in Cargo.toml.
 # Catches the common drift where `CARGO_BAZEL_REPIN=1 bazel test //...`
 # cache-hits every target after a version bump and Cargo.lock silently
 # stays at the old version. Failure message points at //tools:repin_cargo.sh

@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Shared timestamp utilities. Every `now()` and every inbound-string
 # parse in the workspace funnels through here so the architectural
 # rules ("keep the offset; a table keeps it beside the UTC stamp", "never

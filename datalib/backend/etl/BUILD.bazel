@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Framework crate. Provider-specific Extract/Translate code lives in
 # sibling crates under providers/<name>/ (see providers/slack/BUILD.bazel).
 rust_library(

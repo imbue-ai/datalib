@@ -249,7 +249,8 @@ mod tests {
         assert!(garmin_js.contains("name = 'garmin';"));
         assert!(garmin_js.contains("getSession(appNamePrefix)"));
         assert!(garmin_js.contains("getCredentialsNoCurl(noCurlArguments)"));
-        // What `connect::plugin_service_info` reports as `AccountNaming::Service`.
+        // latchkey's `detectsLoginAccount`, which `connect::plugin_service_info`
+        // reports as `AccountNaming::Service` before the plugin is in.
         assert!(garmin_js.contains("async getAccount(apiCredentials)"));
         let example = GARMIN.set_example.replace("garmin", "${serviceName}");
         assert!(garmin_js.contains(&format!("return `{example}`;")));

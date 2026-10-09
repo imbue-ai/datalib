@@ -407,6 +407,66 @@ fn an_empty_collection_list_is_unscoped() {
     server.stop();
 }
 
+/// Why an unscoped search sends `[]` rather than every collection's name:
+/// an empty list reaches a collection registered after the server
+/// started, which no list at all does not.
+#[test]
+fn an_empty_collection_list_reaches_a_collection_added_after_start() {
+    let root = Root::new();
+    root.write(
+        "bridge",
+        "log-1.md",
+        "# Log\n\nThe Enterprise departs Farpoint.\n",
+    );
+    root.keyword_index(&["bridge"]);
+    let mut server = root.serve();
+    root.write(
+        "sickbay",
+        "report-1.md",
+        "# Report\n\nPolywater intoxication.\n",
+    );
+    root.keyword_index(&["sickbay"]);
+    assert_eq!(
+        server.lex("Polywater", 10, Some(&[])),
+        ["sickbay/sickbay/render_markdown/report-1.md"]
+    );
+    server.stop();
+}
+
+/// Why an unscoped search never names several collections: qmd ranks each
+/// named collection apart and merges the lists by rank alone, the first
+/// named list counting double, so a poor match in the first collection
+/// outranks the best match in the next. With `[]` it is one list, best
+/// match first.
+#[test]
+fn naming_several_collections_ranks_each_apart_and_merges_by_rank() {
+    let root = Root::new();
+    root.write(
+        "aft",
+        "log-1.md",
+        "# Cargo\n\nThe cargo manifest lists forty crates of grain, two crates of \
+         spare parts, medical supplies, and one note about the warp schedule.\n",
+    );
+    root.write(
+        "bridge",
+        "log-1.md",
+        "# Warp\n\nWarp drive, warp core, warp field.\n",
+    );
+    root.keyword_index(&["aft", "bridge"]);
+    let mut server = root.serve();
+    let first = |hits: Vec<String>| collection_of(&hits[0]).to_string();
+    assert_eq!(
+        first(server.lex("warp", 10, Some(&["aft", "bridge"]))),
+        "aft"
+    );
+    assert_eq!(
+        first(server.lex("warp", 10, Some(&["bridge", "aft"]))),
+        "bridge"
+    );
+    assert_eq!(first(server.lex("warp", 10, Some(&[]))), "bridge");
+    server.stop();
+}
+
 /// Why `source_id:` scopes qmd rather than filtering its answer: the
 /// scope applies before the limit, so a collection whose hits rank below
 /// another's still fills the answer.

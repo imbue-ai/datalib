@@ -1,20 +1,20 @@
-//! Searches answered from the grid's terms file rather than qmd: the
+//! Searches answered from the grid's search terms file rather than qmd: the
 //! Fields tab, and a search made only of identifiers (a uuid, an email
 //! address, a handle) whichever tab asks. Every row that answers to each
 //! word, best match first. The file and what it holds:
-//! `datalib_etl_render::grid_terms`.
+//! `datalib_etl_render::search_terms`.
 
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_handle::Handle;
-use datalib_schema::terms::{TermKind, META_GRID_COMMIT};
+use datalib_schema::search_terms::{SearchTermKind, META_GRID_COMMIT};
 use datalib_unified_index::query::{extract_uuid_suffix, is_uuid_shape};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
 
-/// What a search asks the terms file: FTS5 expressions over the terms'
+/// What a search asks the search terms file: FTS5 expressions over the terms'
 /// values, each of which a row must answer to, and those it must not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
@@ -71,7 +71,7 @@ fn phrase(s: &str) -> String {
 
 fn identifier(word: &str) -> Option<String> {
     // A quoted word is a phrase for qmd, and a quote would end the
-    // terms file's own phrase early.
+    // search terms file's own phrase early.
     if word.contains('"') {
         return None;
     }
@@ -95,7 +95,7 @@ fn identifier(word: &str) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct Hit {
     pub uuid: String,
-    /// A [`TermKind`] code.
+    /// A [`SearchTermKind`] code.
     pub kind: i64,
     pub value: String,
     pub touched_at_utc: Option<String>,
@@ -103,7 +103,7 @@ pub struct Hit {
 
 /// The rows every included expression matched and no excluded one did,
 /// each at its best match: the most telling kind first
-/// (`TermKind::affinity`), then newest. The score is that affinity, and the
+/// (`SearchTermKind::affinity`), then newest. The score is that affinity, and the
 /// words shown are the kind and the value matched.
 pub fn rank(found: &Found) -> Vec<(String, (f64, String))> {
     let excluded: std::collections::HashSet<&str> = found
@@ -113,8 +113,8 @@ pub fn rank(found: &Found) -> Vec<(String, (f64, String))> {
         .map(|h| h.uuid.as_str())
         .collect();
     let per_identifier = &found.included;
-    let affinity = |h: &Hit| TermKind::from_code(h.kind).map_or(0, TermKind::affinity);
-    let kind = |h: &Hit| TermKind::from_code(h.kind).map_or("term", TermKind::as_str);
+    let affinity = |h: &Hit| SearchTermKind::from_code(h.kind).map_or(0, SearchTermKind::affinity);
+    let kind = |h: &Hit| SearchTermKind::from_code(h.kind).map_or("term", SearchTermKind::as_str);
     let Some((first, rest)) = per_identifier.split_first() else {
         return Vec::new();
     };
@@ -149,7 +149,7 @@ pub fn rank(found: &Found) -> Vec<(String, (f64, String))> {
         .collect()
 }
 
-/// What the terms file says about a [`Match`], read in one transaction:
+/// What the search terms file says about a [`Match`], read in one transaction:
 /// the hits of each expression, in its order.
 #[derive(Debug, Default)]
 pub struct Found {
@@ -160,9 +160,9 @@ pub struct Found {
     pub grid_commit: Option<String>,
 }
 
-/// `None` when the root has no terms file yet.
+/// `None` when the root has no search terms file yet.
 pub async fn lookup(root: &Path, m: &Match) -> Result<Option<Found>> {
-    let path = datalib_runtime::layout::grid_terms_db(root);
+    let path = datalib_runtime::layout::search_terms_db(root);
     if !path.exists() {
         return Ok(None);
     }
@@ -206,7 +206,7 @@ pub async fn lookup(root: &Path, m: &Match) -> Result<Option<Found>> {
         anyhow::Ok(found)
     }
     .await
-    .context("read the terms file");
+    .context("read the search terms file");
     conn.close().await.ok();
     read.map(Some)
 }
@@ -271,7 +271,7 @@ mod tests {
     fn hit(uuid: &str, kind: &str, touched: &str) -> Hit {
         Hit {
             uuid: uuid.into(),
-            kind: i64::from(TermKind::parse(kind).expect("a kind").code()),
+            kind: i64::from(SearchTermKind::parse(kind).expect("a kind").code()),
             value: "v".into(),
             touched_at_utc: Some(touched.into()),
         }

@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # What the time-series providers' render crates share: the sensor
 # page, the Plotly page, the quantity/metric vocabulary, the series type
 # and the text helpers. A provider's render crate contributes its metric

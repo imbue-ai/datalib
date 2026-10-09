@@ -1759,9 +1759,10 @@ async fn step_turn_on(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/reset` — empty what the targets wrote, keeping the history,
-/// and sync what reads them so the emptiness reaches the grid. Answers
-/// once the targets are empty; refused while a sync runs.
+/// `POST /api/reset` — empty what the targets wrote and sync what reads
+/// them, so the emptiness reaches the grid. 204 once the targets are
+/// empty; 202 when they have not stopped yet, and the loop empties them
+/// once they have; 409, with the reason, for one it cannot reset.
 async fn reset_steps(
     State(s): State<AppState>,
     Json(req): Json<ResetRequest>,
@@ -1770,24 +1771,25 @@ async fn reset_steps(
         return Err((StatusCode::BAD_REQUEST, "nothing to reset".into()));
     }
     let by = req.by.unwrap_or_else(|| "ui".to_string());
-    s.sync
-        .reset(&req.targets, &by)
-        .await
-        .map_err(|e| (StatusCode::CONFLICT, e))?;
-    Ok(StatusCode::NO_CONTENT)
+    wiped(s.sync.reset(&req.targets, &by).await)
 }
 
 /// `POST /api/purge` — delete the trees of groups gone from the config.
-/// 204 once they are gone; 202 when a sync in progress holds the delete
-/// until it is over; 409, with the reason, for a group still configured.
+/// 204 once they are gone; 202 when their steps have not stopped yet, and
+/// the loop deletes them once they have; 409, with the reason, for a
+/// group still configured.
 async fn purge_groups(
     State(s): State<AppState>,
     Json(req): Json<PurgeRequest>,
 ) -> Result<StatusCode, Refusal> {
     let by = req.by.unwrap_or_else(|| "ui".to_string());
-    match s.sync.purge(&req.groups, &by).await {
-        Ok(supervisor::PurgeAnswer::Done) => Ok(StatusCode::NO_CONTENT),
-        Ok(supervisor::PurgeAnswer::Queued) => Ok(StatusCode::ACCEPTED),
+    wiped(s.sync.purge(&req.groups, &by).await)
+}
+
+fn wiped(answer: Result<supervisor::WipeAnswer, String>) -> Result<StatusCode, Refusal> {
+    match answer {
+        Ok(supervisor::WipeAnswer::Done) => Ok(StatusCode::NO_CONTENT),
+        Ok(supervisor::WipeAnswer::Queued) => Ok(StatusCode::ACCEPTED),
         Err(why) => Err((StatusCode::CONFLICT, why)),
     }
 }

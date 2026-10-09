@@ -13,7 +13,7 @@ published from a local machine — the tag is the trigger.
 
 ## Versioning
 
-- Single source of truth: `[workspace.package].version` in
+- Single source of truth: `[package].version` in
   `datalib/backend/Cargo.toml`.
 - Must match the `version = "..."` fields in
   `datalib/backend/dag/BUILD.bazel`,

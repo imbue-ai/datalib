@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # TNG-themed Codex rollouts in the layout `~/.codex` has: two threads
 # under `sessions/<YYYY>/<MM>/<DD>/`, one of them the parent of a spawned
 # sub-agent thread. Used by :codex_tests and the central fixture

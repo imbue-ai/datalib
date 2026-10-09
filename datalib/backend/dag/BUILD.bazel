@@ -4,7 +4,6 @@ load("//tools:insta.bzl", "insta_update")
 
 exports_files([
     "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
-    "Cargo.toml",
 ])
 
 # Prototype DAG runner (see /dag-runner.md): step contract, edge
@@ -70,7 +69,7 @@ rust_binary(
     srcs = ["src/bin/datalib_dag.rs"],
     crate_name = "datalib_dag",
     edition = "2021",
-    # Must match [workspace.package].version in datalib/backend/Cargo.toml;
+    # Must match [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
     version = "0.41.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml

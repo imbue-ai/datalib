@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Checked-in tiny TEI fixture (3 sections across 1 book / 1 chapter)
 # consumed by the translate test. Big enough to exercise both
 # languages + book / chapter / section nesting; small enough to read

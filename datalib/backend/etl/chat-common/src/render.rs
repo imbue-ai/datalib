@@ -63,6 +63,7 @@ use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
+use datalib_schema::search_terms::{SearchTermKind, SuppliedSearchTerm};
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_render::front_matter::yaml_scalar;
@@ -282,6 +283,7 @@ fn render_one(
         source_id,
         &mut problems,
     );
+    let search_terms = supplied_search_terms(doc, &rows);
 
     let items_rendered = doc
         .items
@@ -299,6 +301,7 @@ fn render_one(
         render_version: profile.render_version,
         rows,
         sections,
+        search_terms,
         edges: Vec::new(),
         contacts: crate::people::document_contacts(
             source_id,
@@ -999,6 +1002,45 @@ fn build_grid_rows(
     rows
 }
 
+/// Who each message was addressed to and where it is filed, as search
+/// terms on its own row: the people by handle (one with no handle has
+/// nothing to match exactly), every one of them however many. Only for a
+/// row the document kept.
+fn supplied_search_terms(doc: &NormalizedDoc, rows: &[GridRow]) -> Vec<SuppliedSearchTerm> {
+    let kept: std::collections::HashSet<&str> = rows.iter().map(|r| r.uuid.as_str()).collect();
+    let mut out: Vec<SuppliedSearchTerm> = Vec::new();
+    for item in doc
+        .items
+        .iter()
+        .filter(|i| kept.contains(i.message_uuid.as_str()))
+    {
+        let people = item.recipients.iter().filter_map(|r| {
+            let kind = match r.role {
+                crate::types::RecipientRole::To => SearchTermKind::To,
+                crate::types::RecipientRole::Cc => SearchTermKind::Cc,
+            };
+            r.handle.as_ref().map(|h| (kind, h.as_str().to_string()))
+        });
+        let labels = item
+            .labels
+            .iter()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .map(|l| (SearchTermKind::Label, l.to_string()));
+        for (kind, value) in people.chain(labels) {
+            let term = SuppliedSearchTerm {
+                uuid: item.message_uuid.clone(),
+                kind,
+                value,
+            };
+            if !out.contains(&term) {
+                out.push(term);
+            }
+        }
+    }
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 fn reaction_row(
     profile: &RenderProfile,
@@ -1170,6 +1212,49 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    /// An email's To and Cc reach the search by handle, and its labels as
+    /// written; a recipient with no handle has nothing to match exactly.
+    #[test]
+    fn a_messages_recipients_and_labels_are_its_search_terms() {
+        use crate::types::{Recipient, RecipientRole};
+        let mut chat = mk_chat();
+        let item = &mut chat.buckets[0].items[0];
+        item.recipients = vec![
+            Recipient {
+                role: RecipientRole::To,
+                display: "Deanna Troi".into(),
+                handle: datalib_handle::Handle::email("Troi@Enterprise.org"),
+            },
+            Recipient {
+                role: RecipientRole::Cc,
+                display: "Ship's counsel".into(),
+                handle: None,
+            },
+            Recipient {
+                role: RecipientRole::Cc,
+                display: "Worf".into(),
+                handle: datalib_handle::Handle::email("worf@enterprise.org"),
+            },
+        ];
+        item.labels = vec!["Inbox".into(), " ".into(), "Away team".into()];
+        let rows = rows_of(&test_profile(), &chat);
+        let supplied = supplied_search_terms(&chat.buckets[0], &rows);
+        let terms: Vec<(&str, &str, &str)> = supplied
+            .iter()
+            .map(|t| (t.uuid.as_str(), t.kind.as_str(), t.value.as_str()))
+            .collect();
+        let message = "33333333-3333-3333-3333-333333333333";
+        assert_eq!(
+            terms,
+            [
+                (message, "to", "email:troi@enterprise.org"),
+                (message, "cc", "email:worf@enterprise.org"),
+                (message, "label", "Inbox"),
+                (message, "label", "Away team"),
+            ]
+        );
     }
 
     /// One unusable message must cost that message and nothing else.

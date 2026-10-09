@@ -54,7 +54,7 @@ pub fn materialize_root_with_grid(dst: &Path) {
     copy_grid_index(dst);
 }
 
-/// The fixture's grid index and its terms file, where a root keeps them.
+/// The fixture's grid index and its search terms file, where a root keeps them.
 pub fn copy_grid_index(dst: &Path) {
     let db = datalib_runtime::layout::grid_index_db(dst);
     std::fs::create_dir_all(db.parent().expect("a grid index has a directory"))
@@ -62,8 +62,8 @@ pub fn copy_grid_index(dst: &Path) {
     for (from, to) in [
         ("ingested/backend_index.doltlite_db", db),
         (
-            "ingested/backend_terms.sqlite",
-            datalib_runtime::layout::grid_terms_db(dst),
+            "ingested/backend_search_terms.sqlite",
+            datalib_runtime::layout::search_terms_db(dst),
         ),
     ] {
         std::fs::copy(fixture(from), &to).expect("copy the grid index");

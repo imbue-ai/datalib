@@ -356,8 +356,8 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
 
   /// Empty what these rows wrote, keeping the history. A render is
   /// rebuilt from what it reads at once; a download is not refilled, but
-  /// what reads it catches up, so its documents leave the grid. The
-  /// server runs it once no sync is running, and refuses it while one is.
+  /// what reads it catches up, so its documents leave the grid. Whatever
+  /// else is syncing, the rows' own steps are stopped and emptied at once.
   async function resetRows(targets: R[]) {
     const ids = resetTargets(targets);
     const names = targets.map((t) => t.name.label).join(", ");
@@ -376,8 +376,13 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
     if (!(await confirmAction(what))) return;
     await act(async () => {
       h.say(true, `Resetting ${names}…`);
-      await h.api.resetSteps(ids);
-      h.say(true, `Reset ${names}.`);
+      const done = await h.api.resetSteps(ids);
+      h.say(
+        true,
+        done === "done"
+          ? `Reset ${names}.`
+          : `Resetting ${names}: it is emptied as soon as it has stopped.`,
+      );
       await h.reload(true);
     });
   }

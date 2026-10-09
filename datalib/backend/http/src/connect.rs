@@ -119,9 +119,10 @@ pub enum AccountNaming {
     /// accepts `--account` only for an account it already holds. Every
     /// built-in service and plugin datalib signs in to with a browser.
     Service,
-    /// `--account` decides, a new name included: a service registered
-    /// with `latchkey services register`, which has no identity to
-    /// report, and one with no browser login, which only a paste reaches.
+    /// `--account` decides, a new name included: a service whose login
+    /// cannot tell who signed in (every one registered with `latchkey
+    /// services register`), and one with no browser login, which only a
+    /// paste reaches.
     Chosen,
 }
 
@@ -133,16 +134,18 @@ impl AccountNaming {
     pub fn parse(s: &str) -> Option<Self> {
         s.parse().ok()
     }
-    /// From what `latchkey services info` reports: its `type` stands in
-    /// for the rule until latchkey reports it (imbue-ai/latchkey#169), and
-    /// a plugin reports `built-in`. A service with no browser login is
-    /// named by whoever pastes its credential.
-    fn of_service(service_type: Option<&str>, auth_options: &[String]) -> Self {
+    /// From `latchkey services info`'s `capabilities.detectsLoginAccount`.
+    /// The flag is about a browser login, and latchkey says `true` for
+    /// `fastmail-dav`, which has none, so the browser login is checked
+    /// here. A gateway running a latchkey older than 3.18 reports no
+    /// flag; the box then stays free to type in, as when latchkey cannot
+    /// be asked at all.
+    fn of_service(detects_login_account: Option<bool>, auth_options: &[String]) -> Self {
         let has_browser_login = auth_options.iter().any(|o| o == "browser");
-        match service_type {
-            Some("user-registered") => AccountNaming::Chosen,
-            _ if !has_browser_login => AccountNaming::Chosen,
-            _ => AccountNaming::Service,
+        if has_browser_login && detects_login_account == Some(true) {
+            AccountNaming::Service
+        } else {
+            AccountNaming::Chosen
         }
     }
 }
@@ -290,8 +293,11 @@ fn parse_service_info(service: &str, v: &Value) -> ServiceInfo {
         .unwrap_or_default();
     // A map has no order; the picker should not shuffle between loads.
     accounts.sort_by(|a, b| a.account.cmp(&b.account));
-    let account_naming =
-        AccountNaming::of_service(v.get("type").and_then(Value::as_str), &auth_options);
+    let account_naming = AccountNaming::of_service(
+        v.pointer("/capabilities/detectsLoginAccount")
+            .and_then(Value::as_bool),
+        &auth_options,
+    );
     ServiceInfo {
         service: service.to_string(),
         auth_options,
@@ -324,9 +330,7 @@ pub struct ConnectRequest {
     /// account.
     #[serde(default)]
     pub register: Option<ServiceRegistration>,
-    /// Run the login without latchkey's saved browser session. Set for
-    /// a cookie capture, which cannot see a cookie an already
-    /// signed-in session does not re-send — see
+    /// Run the login without latchkey's saved browser session — see
     /// [`EPHEMERAL_BROWSER_ENV`].
     #[serde(default)]
     pub ephemeral_browser: bool,
@@ -762,22 +766,11 @@ pub async fn connect_status(
 
 // shared
 
-/// A browser login that must observe a *fresh* sign-in, so latchkey
-/// must not restore the session it saved last time.
-///
-/// Cookie capture reads the `Set-Cookie` headers that arrive while
-/// someone signs in. latchkey otherwise seeds the browser with its own
-/// persisted state, which lands you already signed in — and a site that
-/// sees an established session issues no new cookie, so the capture
-/// waits for something that can never arrive and the login hangs with
-/// nothing on screen to say why (imbue-ai/latchkey#150). Ephemeral mode
-/// neither loads nor saves that state.
-///
-/// Only for cookie capture. An OAuth login *benefits* from the saved
-/// session — it has an identity to re-derive either way, and being
-/// already signed in is one less password. Whether token capture needs
-/// it is open (imbue-ai/latchkey#152); until it is shown to, a sign-in
-/// every time is a cost nobody asked for.
+/// A browser login that neither loads nor saves latchkey's one saved
+/// browser session, which every service and account shares. The wizard
+/// asks for it when the login could otherwise file whoever is still
+/// signed in under the wrong account (`freshBrowser` in
+/// `ui/src/config/accountNaming.ts`).
 const EPHEMERAL_BROWSER_ENV: &str = "LATCHKEY_EPHEMERAL_BROWSER";
 
 async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
@@ -1089,16 +1082,16 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The exact shape `latchkey services info <name>` prints, as
-    /// captured from latchkey 3.11.0 (unchanged through 3.14.0). If it changes, this test
-    /// is what says so — the handler itself would just start returning
-    /// an empty account list.
+    /// The shape `latchkey services info <name>` printed in 3.18.0. A
+    /// literal, so it cannot notice latchkey changing; `e2e_auth`'s
+    /// `accounts.spec.ts` asks the real one.
     #[test]
-    fn reads_a_real_services_info_payload() {
+    fn reads_a_services_info_payload() {
         let v = json!({
             "type": "built-in",
             "baseApiUrls": ["https://gmail.googleapis.com/"],
             "authOptions": ["browser", "set"],
+            "capabilities": { "detectsLoginAccount": true },
             "credentials": {
                 "thad@imbue.com": {
                     "credentialType": "oauth",
@@ -1152,24 +1145,43 @@ mod tests {
         );
     }
 
-    /// A service the wizard registered names no accounts, so the name in
-    /// the box is the one a browser login stores under.
+    /// A login that cannot tell who signed in stores under the name in
+    /// the box: every registered service, and built-ins like `openrouter`.
     #[test]
-    fn a_registered_service_lets_the_person_name_the_account() {
-        let v = json!({ "type": "user-registered", "authOptions": ["browser", "set"] });
+    fn a_login_that_cannot_tell_who_signed_in_lets_the_person_name_the_account() {
+        let v = json!({
+            "type": "user-registered",
+            "authOptions": ["browser", "set"],
+            "capabilities": { "detectsLoginAccount": false },
+        });
         assert_eq!(
             parse_service_info("claude-ai", &v).account_naming,
             AccountNaming::Chosen
         );
     }
 
-    /// `fastmail-dav`, `notion` and `gitlab` are built in but have no
-    /// browser login, so a pasted credential is the only way in and the
-    /// person names it. Reading them as `Service` told the wizard to say
-    /// the service names the account.
+    /// A gateway on a latchkey older than 3.18 reports no capabilities;
+    /// the box stays free to type in rather than claim the service
+    /// names the account.
+    #[test]
+    fn no_capabilities_lets_the_person_name_the_account() {
+        let v = json!({ "type": "built-in", "authOptions": ["browser", "set"] });
+        assert_eq!(
+            parse_service_info("slack", &v).account_naming,
+            AccountNaming::Chosen
+        );
+    }
+
+    /// `fastmail-dav`, `notion` and `gitlab` have no browser login, so a
+    /// pasted credential is the only way in and the person names it —
+    /// though latchkey reports `detectsLoginAccount: true` for them.
     #[test]
     fn a_built_in_service_without_a_browser_login_lets_the_person_name_it() {
-        let v = json!({ "type": "built-in", "authOptions": ["set"] });
+        let v = json!({
+            "type": "built-in",
+            "authOptions": ["set"],
+            "capabilities": { "detectsLoginAccount": true },
+        });
         assert_eq!(
             parse_service_info("fastmail-dav", &v).account_naming,
             AccountNaming::Chosen

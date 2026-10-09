@@ -312,6 +312,7 @@ pub fn render_diff_source(
                 render_version: base.md.render_version,
                 rows: diff.rows,
                 sections: diff.sections,
+                search_terms: Vec::new(),
                 edges: base.md.edges.clone(),
                 // The people are the source's; a diff row only compares.
                 contacts: Vec::new(),
@@ -604,6 +605,7 @@ mod tests {
                         render_version: 1,
                         rows: vec![],
                         sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],
+                        search_terms: Vec::new(),
                         edges: vec![],
                         contacts: Vec::new(),
                         problems: vec![],
@@ -683,6 +685,7 @@ mod tests {
             render_version: 1,
             rows: vec![],
             sections: vec![],
+            search_terms: Vec::new(),
             edges: vec![],
             contacts: Vec::new(),
             problems: vec![],

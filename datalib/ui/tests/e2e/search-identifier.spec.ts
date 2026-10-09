@@ -1,4 +1,4 @@
-// A pasted uuid is answered from the grid's terms file, which the
+// A pasted uuid is answered from the grid's search terms file, which the
 // fixture's own `grid_index` step wrote, not from qmd: the row comes back
 // first, saying it matched as its own id.
 

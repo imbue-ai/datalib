@@ -211,8 +211,11 @@ the facts are about qmd and not about our daemon.
    `dist/mcp/server.js`). A collection registered later is searched
    only when a query names it.
 4. **An empty `collections` list is no scope at all.** qmd answers it
-   from every collection, which is why the daemon answers an empty
-   scope itself and never asks.
+   from every collection the index holds, one registered after the
+   server started included, as a single search with no collection
+   filter. So the daemon sends `[]` for an unscoped search, and
+   answers an empty *scope* (no source can match) itself, never
+   asking.
 5. **A scope applies before the limit.** With room for one hit, a
    query scoped to a collection gets that collection's best hit even
    when another collection's ranks above it. This is why `source_id:`
@@ -235,12 +238,28 @@ the facts are about qmd and not about our daemon.
    a search reaches 20 per source per sub-query. On a real root with 11
    sources a hybrid search for one common word went from 40 hits to
    224, in the same time. One source never answers with more than 20 a
-   sub-query; nothing in the MCP arguments moves that.
+   sub-query; nothing in the MCP arguments moves that. An unscoped
+   search, sent as `[]` (fact 4), is one collection's worth: 20 a
+   sub-query in all.
+8. **Several named collections are ranked apart and merged by rank
+   alone.** `structuredSearch` runs each sub-query once per named
+   collection and fuses the lists with reciprocal rank fusion, which
+   sees only each document's place in its own list, and weighs the
+   first list double. So every collection's best document scores
+   alike, the first collection named leads whatever its match, and the
+   answer is each collection's best, then each one's second, in the
+   order the collections were named. On the TNG fixture, a vector
+   search for each document's own opening words put that document in
+   its top ten 56 times in 139 with every collection named, and never
+   for any source after the tenth alphabetically; with `[]`, 135
+   times.
 
-What follows for our side. By fact 3, the applet names the collections
-on every query: an unscoped search names every collection
-`store_collections` holds now (`every_collection` in
-`applets/src/unified_index/mod.rs`). Then by fact 1 a write into the
+What follows for our side. By facts 3, 4 and 8, an unscoped search
+sends `collections: []` (`query_arguments` in
+`unified_index/src/qmd/daemon.rs`): it reaches every collection,
+however new, and ranks them as one list, at the price of fact 7's
+depth, 20 documents a sub-query in all. Only `source_id:` names a
+collection, and only one. Then by fact 1 a write into the
 index needs no new `qmd mcp`, so `QmdDaemon` starts another only when
 `index.sqlite` is a different file than the one its child opened (its
 device and inode), not when its mtime moves, which every keyword and

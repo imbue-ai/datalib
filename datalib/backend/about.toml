@@ -22,5 +22,5 @@ accepted = [
     "0BSD",
 ]
 
-# The workspace's own crates: MIT, ../../LICENSE.
+# Our own `datalib-crates`: MIT, ../../LICENSE.
 private = { ignore = true }

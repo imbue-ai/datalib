@@ -925,3 +925,121 @@ async fn a_step_that_fails_after_being_asked_to_stop_is_a_failure_not_a_stop() {
     assert_eq!(h.closed(&sync).await, RequestOutcome::Failed);
     h.finish().await;
 }
+
+/// A reset asked for mid-sync stops only its own step, empties it at
+/// once rather than when the sync ends, and runs what reads it; the rest
+/// of the sync goes on, and the reset step is not downloaded again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reset_mid_sync_stops_only_its_step_and_is_done_at_once() {
+    let mut h = Harness::new(&[source("a"), source("b"), reads("c", &["a"])]).await;
+    let sync = h.sync(&["a", "b"]).await;
+    h.started("a").await;
+    h.started("b").await;
+    h.run("a", "stall").await;
+    let reset = h.reset(&["a"]).await;
+    h.ack("a", "sigint").await;
+    h.ack("a", "reset").await;
+    h.run("a", "ok r1").await;
+    assert_eq!(h.wiped(&reset).await, None);
+    let version = h.state().await.version("a").map(str::to_string);
+    assert!(
+        version.as_deref().is_some_and(|v| v.ends_with(":r1")),
+        "{version:?}"
+    );
+    // What reads the emptied step runs while b is still downloading.
+    h.started("c").await;
+    h.run("c", "ok c1").await;
+    assert_eq!(h.state().await.outcome(&sync), None, "b still runs");
+    h.run("b", "ok v1").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    assert_eq!(h.state().await.started("a"), 1, "a is not downloaded again");
+    h.finish().await;
+}
+
+/// A reset with nothing running starts a busy period of its own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reset_while_idle_empties_the_step_and_runs_what_reads_it() {
+    let mut h = Harness::new(&[source("a"), reads("c", &["a"])]).await;
+    let sync = h.sync(&["a"]).await;
+    h.started("a").await;
+    h.run("a", "ok v1").await;
+    h.started("c").await;
+    h.run("c", "ok c1").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+
+    let reset = h.reset(&["a"]).await;
+    h.ack("a", "reset").await;
+    h.run("a", "ok r1").await;
+    assert_eq!(h.wiped(&reset).await, None);
+    h.started("c").await;
+    h.run("c", "ok c2").await;
+    h.ended("c", 2).await;
+    let version = h.state().await.version("a").map(str::to_string);
+    assert!(
+        version.as_deref().is_some_and(|v| v.ends_with(":r1")),
+        "{version:?}"
+    );
+    h.finish().await;
+}
+
+/// A purge of a group the config dropped while its step was running
+/// stops that step and deletes its tree at once, rather than waiting for
+/// the step or the sync; the other source's sync goes on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_purge_mid_sync_stops_the_groups_step_and_deletes_its_tree_at_once() {
+    let mut h = Harness::new(&[source("a"), source("b")]).await;
+    let sync = h.sync(&["a", "b"]).await;
+    h.started("a").await;
+    h.started("b").await;
+    h.run("a", "write x").await;
+    h.run("a", "stall").await;
+    let tree = h.root.path().join("a");
+    assert!(tree.exists());
+
+    h.edit_config(&[source("b")]);
+    let purge = h.purge(&["a"]).await;
+    h.ack("a", "sigint").await;
+    assert_eq!(h.wiped(&purge).await, None);
+    assert!(!tree.exists(), "a's tree is deleted");
+    assert!(!h.state().await.record.steps.contains_key("a"));
+    assert_eq!(h.state().await.outcome(&sync), None, "b still runs");
+    h.run("b", "ok v1").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    h.finish().await;
+}
+
+/// What a wipe may not touch it is refused, and says why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wipe_of_what_the_config_still_runs_or_lacks_is_refused() {
+    let mut h = Harness::new(&[source("a")]).await;
+    let purge = h.purge(&["a"]).await;
+    let why = h.wiped(&purge).await.expect("refused");
+    assert!(why.contains("still has \"a\""), "{why}");
+    let reset = h.reset(&["nope"]).await;
+    let why = h.wiped(&reset).await.expect("refused");
+    assert!(why.contains("no step \"nope\""), "{why}");
+    h.finish().await;
+}
+
+/// A step a sync reaches through what it reads, not as a root, is still
+/// stopped for a reset, and rebuilt once it is empty.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reset_stops_a_step_a_sync_reaches_downstream() {
+    let mut h = Harness::new(&[source("a"), source("b"), reads("c", &["a"])]).await;
+    let sync = h.sync(&["a", "b"]).await;
+    h.started("a").await;
+    h.started("b").await;
+    h.run("a", "ok v1").await;
+    h.started("c").await;
+    h.run("c", "stall").await;
+    let reset = h.reset(&["c"]).await;
+    h.ack("c", "sigint").await;
+    h.ack("c", "reset").await;
+    h.run("c", "ok r1").await;
+    assert_eq!(h.wiped(&reset).await, None);
+    h.started("c").await;
+    h.run("c", "ok c2").await;
+    h.run("b", "ok v1").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    h.finish().await;
+}

@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Pinned first-use fetches: a URL, the sha256 the caller already knows,
 # and nothing kept unless the bytes hash as expected. Two users: qmd's
 # GGUF models (`datalib_qmd_models`) and the Node runtime a release

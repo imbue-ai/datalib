@@ -267,6 +267,7 @@ pub fn write_page(
         render_version,
         rows,
         sections: Vec::new(),
+        search_terms: Vec::new(),
         edges: Vec::new(),
         contacts: Vec::new(),
         problems,

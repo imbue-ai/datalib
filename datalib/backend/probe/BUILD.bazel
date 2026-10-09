@@ -4,8 +4,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # `ProbeReport`, what a probe is asked, its progress — and nothing else. Its own crate, not part of `source_common`, so
 # that a change here rebuilds the four providers that can be probed
 # rather than everything that composes a config (135 test targets
-# behind source_common, measured 2026-09-11). Bazel-only by design (no
-# Cargo.toml), like the `<p>_config` crates.
+# behind source_common, measured 2026-09-11).
 rust_library(
     name = "datalib_probe",
     srcs = glob(["src/**/*.rs"]),

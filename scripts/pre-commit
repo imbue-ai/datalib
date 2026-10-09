@@ -2,7 +2,7 @@
 # Pre-commit hook for datalib
 # Runs fast, auto-fixing lint/format on staged files before commits.
 #
-# The expensive gates (pyright, vue-tsc, cargo fmt, bazel clippy, rust
+# The expensive gates (pyright, vue-tsc, bazel rustfmt + clippy, rust
 # unit-test coverage) used to live here too, but paying that cost on
 # every commit was wasteful — they now run in scripts/pre-push instead.
 # This hook keeps only the cheap ruff pass, whose auto-format + re-stage

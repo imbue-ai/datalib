@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Checked-in ST:TNG-themed fixture, consumed by:
 #   * the per-crate `beeper_tng_e2e` integration test (data = below)
 #   * the unified //tests/fixtures:ingested_tng genrule that builds

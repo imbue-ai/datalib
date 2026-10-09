@@ -1,8 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 
-exports_files(["Cargo.toml"])
-
 # Filegroup for the checked-in TNG-themed fixture used by both Rust
 # integration tests here and the Python fixture-build pipeline at
 # //tests/fixtures:ingested_tng.

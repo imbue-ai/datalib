@@ -35,7 +35,7 @@ FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# cmake + perl + pkg-config + libssl-dev   protobuf-src's build script.
+# perl + pkg-config + libssl-dev   native crates' build scripts (ring, onig_sys).
 # lld               rustc on Linux defaults to the deprecated gold
 #                   linker and warns; lld present means we can opt in.
 # git               workspace_status.sh, crate fetches that vendor from git.
@@ -49,7 +49,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
-        cmake \
         curl \
         gdb \
         git \
@@ -83,7 +82,7 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && test "$(node --version)" = "v${NODE_VERSION}" \
     || { echo "node is $(node --version), not v${NODE_VERSION}: NODE_IMAGE_DIGEST and NODE_VERSION moved apart" >&2; exit 1; } \
     && npm --version
-ARG LATCHKEY_VERSION=3.16.2
+ARG LATCHKEY_VERSION=3.18.0
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}" && npm cache clean --force
 
 # bun — qmd's own dev workflow (`bun install`, `bun src/cli/qmd.ts`).

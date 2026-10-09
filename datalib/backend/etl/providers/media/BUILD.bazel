@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # Tiny synthetic media corpus. Generated rather than encoded so the
 # inputs are reviewable and byte-deterministic: see
 # //tests/fixtures/make_media_fixtures.py for what each file tests.

@@ -5,7 +5,8 @@
 //! take the next invocation's instructions with it when this one ends. It
 //! acks each on `$PUPPET_DIR/acks` as `<step> <pid> <what>` once it is
 //! done. It keeps nothing of its own: the versions the loop tracks are the
-//! ones it reports.
+//! ones it reports. Invoked with `--reset`, it acks `reset` after
+//! `started`, and then obeys like any other invocation.
 //!
 //! Instructions: `write <text>`, `fill <bytes>` (incidental IO in its
 //! tree); `seal <version> [rows]`; `streams`; `metric <name> <value>`;
@@ -242,6 +243,9 @@ fn main() {
     let fifo = format!("{dir}/{}.in", puppet.step.replace('/', "__"));
     let instructions = open(&fifo, libc::O_RDONLY);
     puppet.ack(&format!("started {attempt}"));
+    if std::env::args().any(|a| a == "--reset") {
+        puppet.ack("reset");
+    }
     while let Some(line) = read_line(instructions) {
         puppet.obey(&line);
     }

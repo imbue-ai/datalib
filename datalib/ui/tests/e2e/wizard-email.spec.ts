@@ -381,9 +381,9 @@ test("the account follows the login, not the box", async ({ page }) => {
   );
 
   await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
-  // An OAuth login keeps latchkey's saved browser session — arriving
-  // already signed in is one less password, and the identity is
-  // re-derived either way. Only a cookie capture needs it discarded.
+  // A service that names its own accounts keeps latchkey's saved
+  // browser session: arriving already signed in is one less password,
+  // and the login files the credential under whoever that is.
   await expect.poll(() => connectBody?.ephemeral_browser).toBe(false);
   // The config gets who signed in, not the address that was picked,
   // even though the list this stub keeps returning lacks it.

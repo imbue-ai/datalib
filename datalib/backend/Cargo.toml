@@ -1,250 +1,152 @@
-[workspace]
-resolver = "2"
-members = [
-    "schema",
-    "table",
-    "app_schema",
-    "unified_index",
-    "embedding_map",
-    "core",
-    "runtime",
-    "qmd_models",
-    "fetch",
-    "dag",
-    "dirtree_diff",
-    "http",
-    "obs",
-    "status_line",
-    "time",
-    "id",
-    "etl",
-    "etl/render",
-    "etl/timeseries_render",
-    "etl/macros",
-    "etl/providers/claude",
-    "etl/providers/claude_render",
-    "etl/providers/beeper",
-    "etl/providers/beeper_render",
-    "etl/providers/chatgpt",
-    "etl/providers/chatgpt_render",
-    "etl/providers/contacts",
-    "etl/providers/contacts_render",
-    "etl/providers/github",
-    "etl/providers/github_render",
-    "etl/providers/google_takeout",
-    "etl/providers/google_takeout_render",
-    "etl/providers/gitlab",
-    "etl/providers/gitlab_render",
-    "etl/providers/email",
-    "etl/providers/email_render",
-    "etl/providers/facebook",
-    "etl/providers/facebook_render",
-    "etl/providers/garmin",
-    "etl/providers/garmin_render",
-    "etl/providers/linkedin",
-    "etl/providers/linkedin_render",
-    "etl/providers/airvisual",
-    "etl/providers/airvisual_render",
-    "etl/providers/fsindex",
-    "etl/providers/apple_messages",
-    "etl/providers/apple_messages_render",
-    "etl/providers/apple_photos",
-    "etl/providers/lightroom",
-    "etl/sqlite_mirror",
-    "etl/providers/media",
-    "etl/providers/notion",
-    "etl/providers/notion_render",
-    "etl/providers/pdf",
-    "etl/providers/pdf_render",
-    "etl/providers/perseus",
-    "etl/providers/perseus_render",
-    "etl/providers/signal",
-    "etl/providers/signal_render",
-    "etl/providers/slack",
-    "etl/providers/slack_render",
-    "etl/providers/claude_code",
-    "etl/providers/claude_code_render",
-    "etl/providers/codex",
-    "etl/providers/codex_render",
-    "etl/providers/sms_backup_restore",
-    "etl/providers/sms_backup_restore_render",
-    "etl/providers/yolink",
-    "etl/providers/yolink_render",
-    "qmd_indexer",
-    "signal-backup",
-    "whatsapp-backup",
-    "etl/providers/whatsapp",
-    "etl/providers/whatsapp_render",
-    "etl/chat-common",
-    "etl/contact-common",
-    "etl/calendar-common",
-    "applets",
-    # NOTE: datalib_migrate_config, source_common, and the provider
-    # *_config crates are bazel-only (no Cargo.toml). This workspace
-    # exists for crate_universe's third-party resolution and is not
-    # cargo-compilable end to end: those crates are consumed in code via
-    # BUILD.bazel deps that have no cargo counterpart. The
-    # tauri shell no longer links the backend (it spawns the bazel-built
-    # datalib-http binary), so nothing cargo-builds these crates.
-]
+# Every third-party crate the backend uses, in one list. Bazel builds
+# the backend; this manifest is not a build. It is the input to
+# crate_universe (`crate.from_cargo` in MODULE.bazel), which turns each
+# entry here into an `@datalib_crates//:<name>` target, and to the two
+# tools that read a Cargo lockfile: `cargo deny` (the PR's license and
+# advisory gate) and `cargo about` (the release's notices).
+#
+# The first-party crates have no Cargo.toml; their BUILD.bazel is the
+# whole truth about what they link. To use a new crate, add it here and
+# to the BUILD.bazel deps that take it, then run tools/repin_cargo.sh.
+# `//:lint_repo` refuses an entry here that no BUILD.bazel names.
+#
+# `version` is the project's version, the one every release is tagged
+# with; tools/check_version_consistency.sh holds the BUILD.bazel copies
+# to it.
 
-[workspace.package]
+[package]
+name = "datalib-crates"
 version = "0.41.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false
 license = "MIT"
 
-[workspace.dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-# The config file format, everywhere: the DAG config and every step's
-# `params` subtree.
-toml = "1"
-# YAML survives in exactly one place, and it is not the config the
-# pipeline reads: fsindex's per-directory `.fsindex.yaml` breadcrumbs.
-serde_yaml = "0.9"
+# Cargo needs a target to read a package; nothing compiles it.
+[lib]
+path = "crates.rs"
+
+# Its own workspace, so cargo never goes looking for one further up.
+[workspace]
+
+[dependencies]
+aes = "0.9"
 anyhow = "1.0"
-thiserror = "2.0"
-chrono = { version = "0.4", features = ["serde"] }
-# IANA zones for chrono: resolves a calendar event's `TZID`.
-chrono-tz = "0.10"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
-axum = "0.8"
-tower-http = { version = "0.7.1", features = ["cors", "fs"] }
-# sqlx is the SQLite client driving DoltRepo against a single file at
-# `<data_root>/<dolt.db_filename>`. The file is a *doltlite* file with
-# the full version-control superpowers (`SELECT dolt_commit(...)` etc.);
-# `datalib-core::dolt_repo` probes `pragma_function_list` at connect
-# time and short-circuits cleanly when (in cargo-only / non-Bazel
-# builds) the linked libsqlite3 happens to be stock SQLite.
-#
-# We use sqlx's `sqlite` feature (NOT `sqlite-unbundled`). Under Bazel,
-# the `crate.annotation` on `libsqlite3-sys` in MODULE.bazel points its
-# build script at the doltlite archive built by
-# `//third-party/doltlite:sqlite3` (via `SQLITE3_LIB_DIR` +
-# `SQLITE3_STATIC=1`), and the patch it applies makes the script take
-# the linked path when that variable is set — the `bundled` feature
-# would otherwise compile stock SQLite beside it and leave the linker to
-# choose. So what's statically linked is doltlite, and only doltlite.
-#
-# `sqlite-unbundled` was a holdover that caused sqlx-sqlite to emit
-# `cargo:rustc-link-lib=dylib=sqlite3` on its own — producing a release
-# binary that statically embedded doltlite but ALSO declared a spurious
-# DT_NEEDED on `libsqlite3.so`, so it refused to launch on minimal Linux
-# hosts (e.g. the Docker base image) that didn't have a system libsqlite3
-# installed. The `sqlite` feature has no such side-emission; the binary
-# is fully self-contained.
-#
-# Features:
-#   runtime-tokio        — async runtime
-#   tls-none             — no TLS stack at all. sqlx 0.9 split the old
-#                          combined `runtime-tokio-rustls` feature into a
-#                          runtime and a TLS choice, which forced the
-#                          question this crate never actually had an
-#                          answer for: we drive SQLite over a local file
-#                          and never open a socket, so rustls was only
-#                          ever dead weight linked into every binary.
-#   sqlite               — bundled libsqlite3-sys; under Bazel the
-#                          crate annotation swaps the amalgamation for
-#                          our doltlite archive
-#   macros               — `query!` / `query_as!` (not yet used; cheap)
-#   chrono               — map ISO-8601 strings to/from chrono types
-#   uuid                 — `feedback_uuid` primary keys
-sqlx = { version = "0.9", default-features = false, features = [
-    "runtime-tokio",
-    "tls-none",
-    "sqlite",
-    "macros",
-    "chrono",
-    "uuid",
-] }
-uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
-# Gitignore-style path matcher used by datalib-etl-fsindex's
-# walker for per-directory `.fsindex.yaml` ignore rules. Same crate
-# ripgrep and watchexec rely on; correct gitignore semantics out of
-# the box.
-ignore = "0.4"
-
-# PDF → Markdown for the `pdf` provider. MIT, pure Rust in the default
-# feature set (the `ocr` feature, which we do NOT enable, is what pulls
-# PDFium + ONNX Runtime). Benchmarks best-in-class among local non-model
-# parsers on reading order and tables.
-pdf-inspector = { version = "1.17", default-features = false }
-
-# RFC-8089 `file://` URL construction for the `pdf` provider's
-# `grid_rows.source_url`. Hand-rolling this is where you get `#` in a
-# filename (which truncates the URL), spaces, non-ASCII, and Windows
-# drive letters subtly wrong.
-url = "2"
-
-# Low-level PDF object access for the `pdf` provider's identity columns
-# (trailer `/ID`, the XMP metadata stream). pdf-inspector exposes
-# neither.
-lopdf = { version = "0.44", default-features = false }
-
-# Audio tags + audio properties for the `media` provider: ID3v2, Vorbis
-# comments, MP4 `ilst` atoms and RIFF INFO behind one API, plus
-# bitrate/sample-rate/channel/duration. Pure Rust, no build.rs. We read
-# tags only — `media` never writes to the tree it scans.
-#
-# It deliberately does NOT cover the payload hash: no tagging library
-# exposes "the byte ranges that are not metadata", which is the whole
-# point of `media_items.payload_blake3`. That walk is ours
-# (`download/payload/`), and it is why this crate is a convenience and
-# not the foundation.
-lofty = "0.25"
-
-# EXIF/TIFF metadata for the `media` provider's image and video rows.
-# The `exif` crate name is `kamadak-exif` on crates.io. Pure Rust, one
-# dependency, and it parses the TIFF IFD structure that JPEG APP1, PNG
-# `eXIf`, and DNG/TIFF all embed — so one reader covers every stills
-# format we index.
-kamadak-exif = "0.6"
 async-trait = "0.1"
-# `StrEnum` for Rust: the derives that turn a unit-only enum into its
-# wire spelling and back — `IntoStaticStr` (as_str), `EnumString`
-# (parse), `Display`, and `VariantArray` (VARIANTS, so nothing has to
-# re-list the values). Every string vocabulary this tree mints goes
-# through one of these enums; see AGENTS.md's "Name a closed set of
-# strings".
-strum = { version = "0.28", features = ["derive"] }
-# Prost runtime. Codegen is driven by Bazel's `rust_prost_library`
-# (see //tools/prost_toolchain), so we don't depend on `prost-build`
-# here — only the runtime. `protoc-gen-prost` is pulled in via the
-# toolchain wiring, not as a direct crate dep.
+axum = "0.8"
+base64 = "0.22"
+blake3 = { version = "1", default-features = false, features = ["mmap", "pure", "rayon", "std"] }
+candle-core = "0.10"
+candle-nn = "0.10"
+candle-transformers = "0.10"
+cbc = { version = "0.2", features = ["block-padding"] }
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+cipher = { version = "0.5", features = ["block-padding"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+csv = "1"
+ctr = "0.10"
+emojis = "0.6"
+flate2 = "1.0"
+futures = "0.3"
+# GHASH and AES-CTR, composed by whatsapp-backup into a hand-rolled GCM
+# decrypt: crypt15 uses a 16-byte IV, and `aes-gcm` does not derive J0
+# from one the way WhatsApp does. The crypto crates (aes, cbc, cipher,
+# ctr, ghash, hkdf, hmac, sha2) move as one generation (#258).
+ghash = "0.6"
+hex = "0.4"
+# rustls, never native-tls, here and on reqwest and tokenizers: native-tls
+# is openssl on Linux, and openssl cannot be linked into the fully static
+# musl release binaries. The roots come bundled, so no /etc/ssl either.
+hf-hub = { version = "0.4.3", default-features = false, features = ["rustls-tls", "tokio"] }
+hkdf = "0.13"
+hmac = "0.13"
+htmd = "0.5"
+ignore = "0.4"
+indicatif = "0.18"
+kamadak-exif = "0.6"
+libc = "0.2"
+lofty = "0.25"
+lopdf = { version = "0.44", default-features = false }
+mail-parser = "0.10"
+md-5 = "0.10"
+mime_guess = "2"
+ndarray = "0.17"
+# Default features: FSEvents on macOS, inotify on Linux.
+notify = "8"
+once_cell = "1.20"
+opentelemetry = "0.27"
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "trace"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+# Not the `ocr` feature, which pulls PDFium and ONNX Runtime.
+pdf-inspector = { version = "1.17", default-features = false }
+proc-macro2 = "1"
+process-wrap = { version = "10", default-features = false, features = ["process-group", "tokio1"] }
 prost = "0.14"
 prost-types = "0.14"
+# Nothing links it: //tools/prost_toolchain runs its binary, which
+# crate_universe only generates for a crate in this list.
 protoc-gen-prost = "0.5"
-# Crypto + compression for the Signal backup container.
-#
-# These eight move as ONE generation and cannot be bumped piecemeal:
-# `ghash` 0.6 switched from `generic-array::GenericArray` to
-# `hybrid-array::Array`, and `whatsapp-backup/src/crypto.rs` feeds the
-# same array values to both `ghash` and `aes` in one function. Taking
-# `ghash` alone would put two array crates in one file. See #258.
-hkdf = "0.13"
+quick-xml = { version = "0.41", features = ["escape-html"] }
+quote = "1"
+rayon = "1.10"
+regex = "1.11"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+runfiles = "0.2"
+# `debug-embed`: without it a debug build reads the UI from the
+# compile-time path at run time, which a Bazel-built binary cannot.
+rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Only fsindex's per-directory `.fsindex.yaml`; the config is TOML.
+serde_yaml = "0.9"
 sha2 = "0.11"
-hmac = "0.13"
+shlex = "1"
+similar = "2"
+# `sqlite`, not `sqlite-unbundled`: under Bazel the libsqlite3-sys
+# annotation in MODULE.bazel links doltlite in place of the bundled
+# amalgamation, and `sqlite-unbundled` would add a dynamic libsqlite3
+# that minimal Linux hosts lack. `tls-none`: we only open local files.
+sqlx = { version = "0.9", default-features = false, features = [
+    "chrono",
+    "macros",
+    "runtime-tokio",
+    "sqlite",
+    "tls-none",
+    "uuid",
+] }
+strum = { version = "0.28", features = ["derive"] }
 subtle = "2.6"
-aes = "0.9"
-cbc = { version = "0.2", features = ["block-padding"] }
-ctr = "0.10"
-cipher = { version = "0.5", features = ["block-padding"] }
-flate2 = "1.0"
+syn = { version = "2", features = ["full"] }
 tar = "0.4"
-# GHASH (the universal hash inside GCM) and AES-CTR primitives,
-# composed by `datalib-whatsapp-backup` into a hand-rolled
-# GCM decrypt. We can't use the `aes-gcm` crate here: WhatsApp's
-# crypt15 uses a 16-byte IV, and `aes-gcm` 0.10's `AesGcm<_, U16>`
-# does not produce the NIST-spec J0 = GHASH(H, IV || 0^s || lenBits)
-# that pycryptodome (and WhatsApp Android) actually use — verified
-# empirically against a real msgstore.db.crypt15 backup.
-ghash = "0.6"
-# WhatsApp provider walks the Media/ tree to register attachment
-# files in `wa_media_files`. Used by `etl/providers/whatsapp` only.
+tempfile = "3"
+thiserror = "2.0"
+tokenizers = { version = "0.21", default-features = false, features = ["http", "onig", "rustls-tls"] }
+tokio = { version = "1", features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
+toml = "1"
+tracing = "0.1"
+tracing-indicatif = "0.3"
+tracing-opentelemetry = "0.28"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+umap-rs = "0.4.5"
+url = "2"
+urlencoding = "2"
+uuid = { version = "1", features = ["serde", "v4", "v5", "v7"] }
 walkdir = "2"
-# MD5 for the trailing integrity checksum the crypt15 *file* format
-# stamps after the GCM tag. Not cryptographic; only used by the
-# fixture-generation encrypt path.
-md-5 = "0.10"
+webbrowser = "1"
+zip = { version = "7", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+insta = { version = "1.41", features = ["json", "redactions", "yaml"] }
+tower = { version = "0.5", features = ["util"] }

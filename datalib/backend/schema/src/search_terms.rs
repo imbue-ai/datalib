@@ -1,10 +1,11 @@
 // What a grid row answers to beyond its own columns' search keys: its ids,
-// the people it names, its title, its names. One row of the terms file per
-// term, so a pasted id or address is one lookup, whatever column holds it.
-// The file, and why it is plain SQLite beside the grid index rather than a
-// table in it: `docs/dev/plans/search_tabs.md` § "The search terms".
+// the people it names, its title, its names. One row of the search terms
+// file per term, so a pasted id or address is one lookup, whatever column
+// holds it. The file, and why it is plain SQLite beside the grid index
+// rather than a table in it: `docs/dev/plans/search_tabs.md` §
+// "The search terms".
 
-/// What a term is to its row. Stored as its [`code`](TermKind::code).
+/// What a term is to its row. Stored as its [`code`](SearchTermKind::code).
 #[derive(
     Debug,
     Clone,
@@ -18,7 +19,7 @@
 )]
 #[strum(serialize_all = "snake_case")]
 #[repr(u8)]
-pub enum TermKind {
+pub enum SearchTermKind {
     /// The row's own uuid.
     Id = 1,
     /// The uuid of something the row is in: its conversation, its
@@ -30,9 +31,15 @@ pub enum TermKind {
     Title = 4,
     /// A name the row shows: its author, its channel, its account.
     Name = 5,
+    /// The handle of someone the row was addressed to: an email's To.
+    To = 6,
+    /// The handle of someone copied on the row: an email's Cc.
+    Cc = 7,
+    /// Where the row is filed upstream: an email's mailboxes and labels.
+    Label = 8,
 }
 
-impl TermKind {
+impl SearchTermKind {
     pub fn as_str(self) -> &'static str {
         self.into()
     }
@@ -42,7 +49,7 @@ impl TermKind {
         s.parse().ok()
     }
 
-    /// What the terms file stores. A code, once given, keeps its kind.
+    /// What the search terms file stores. A code, once given, keeps its kind.
     pub fn code(self) -> u8 {
         self as u8
     }
@@ -57,22 +64,47 @@ impl TermKind {
     }
 
     /// How strongly a match in this kind says the row is the one meant:
-    /// its own id beats its author, which beats what contains it, its
-    /// title, and last a name it shows.
+    /// its own id beats its author or addressee, which beat someone
+    /// copied and what contains it, then its title and labels, and last a
+    /// name it shows.
     pub fn affinity(self) -> u8 {
         match self {
-            TermKind::Id => 5,
-            TermKind::From => 4,
-            TermKind::Container => 3,
-            TermKind::Title => 2,
-            TermKind::Name => 1,
+            SearchTermKind::Id => 5,
+            SearchTermKind::From | SearchTermKind::To => 4,
+            SearchTermKind::Cc | SearchTermKind::Container => 3,
+            SearchTermKind::Title | SearchTermKind::Label => 2,
+            SearchTermKind::Name => 1,
+        }
+    }
+
+    /// Whether the value is a person's handle, in some role on the row.
+    pub fn is_person(self) -> bool {
+        match self {
+            SearchTermKind::From | SearchTermKind::To | SearchTermKind::Cc => true,
+            SearchTermKind::Id
+            | SearchTermKind::Container
+            | SearchTermKind::Title
+            | SearchTermKind::Name
+            | SearchTermKind::Label => false,
         }
     }
 }
 
+/// A term a render supplies for one of its rows, beyond what
+/// [`search_terms_of`] derives from the row's columns: who it was
+/// addressed to, where it is filed. Stored in the render store and the
+/// grid index as a `supplied_search_terms` row
+/// (`crate::supplied_search_terms`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuppliedSearchTerm {
+    pub uuid: String,
+    pub kind: SearchTermKind,
+    pub value: String,
+}
+
 /// The columns of a `grid_rows` row its terms come from.
 #[derive(Debug, Clone, Default, PartialEq, Eq, sqlx::FromRow)]
-pub struct TermSource {
+pub struct SearchTermSource {
     pub uuid: String,
     pub conversation_uuid: String,
     pub markdown_uuid: Option<String>,
@@ -85,22 +117,22 @@ pub struct TermSource {
     pub touched_at_utc: Option<String>,
 }
 
-impl TermSource {
+impl SearchTermSource {
     /// The `SELECT` list that reads one from `grid_rows`.
     pub const COLUMNS: &'static str = "uuid, conversation_uuid, markdown_uuid, notion_page_uuid, \
          author_handle, conversation_name, author, channel, account, touched_at_utc";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Term {
-    pub kind: TermKind,
+pub struct SearchTerm {
+    pub kind: SearchTermKind,
     pub value: String,
 }
 
 /// Every term `row` answers to, each `(kind, value)` once and in kind
 /// order. An id is a `Container` only when it is not the row's own, and
 /// an empty value is no term.
-pub fn terms_of(row: &TermSource) -> Vec<Term> {
+pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
     let containers = [
         Some(row.conversation_uuid.as_str()),
         row.markdown_uuid.as_deref(),
@@ -111,29 +143,29 @@ pub fn terms_of(row: &TermSource) -> Vec<Term> {
         row.channel.as_deref(),
         row.account.as_deref(),
     ];
-    let candidates = std::iter::once((TermKind::Id, Some(row.uuid.as_str())))
+    let candidates = std::iter::once((SearchTermKind::Id, Some(row.uuid.as_str())))
         .chain(
             containers
                 .into_iter()
                 .filter(|id| *id != Some(row.uuid.as_str()))
-                .map(|id| (TermKind::Container, id)),
+                .map(|id| (SearchTermKind::Container, id)),
         )
         .chain(std::iter::once((
-            TermKind::From,
+            SearchTermKind::From,
             row.author_handle.as_deref(),
         )))
         .chain(std::iter::once((
-            TermKind::Title,
+            SearchTermKind::Title,
             row.conversation_name.as_deref(),
         )))
-        .chain(names.into_iter().map(|name| (TermKind::Name, name)));
-    let mut out: Vec<Term> = Vec::new();
+        .chain(names.into_iter().map(|name| (SearchTermKind::Name, name)));
+    let mut out: Vec<SearchTerm> = Vec::new();
     for (kind, value) in candidates {
         let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
             continue;
         };
         if !out.iter().any(|t| t.kind == kind && t.value == value) {
-            out.push(Term {
+            out.push(SearchTerm {
                 kind,
                 value: value.to_string(),
             });
@@ -142,12 +174,12 @@ pub fn terms_of(row: &TermSource) -> Vec<Term> {
     out
 }
 
-/// What [`terms_of`] derives and how the file lays it out. A file built
-/// under another shape is rebuilt whole, so change it whenever either
-/// changes.
-pub const TERMS_SHAPE: &str = "2";
+/// What [`search_terms_of`] derives, which kinds renders supply, and how
+/// the file lays it out. A file built under another shape is rebuilt
+/// whole, so change it whenever any of them changes.
+pub const TERMS_SHAPE: &str = "3";
 
-/// The terms file's tables, dictionary-encoded: each grid row once in
+/// The search terms file's tables, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three
 /// integers. The FTS5 index covers `vals` alone, linked by rowid, and
 /// keeps `@ . - _ + : /` inside a token so an id or a handle is one
@@ -173,8 +205,8 @@ pub const META_SHAPE: &str = "shape";
 mod tests {
     use super::*;
 
-    fn row() -> TermSource {
-        TermSource {
+    fn row() -> SearchTermSource {
+        SearchTermSource {
             uuid: "m-1".into(),
             conversation_uuid: "c-1".into(),
             markdown_uuid: Some("c-1".into()),
@@ -182,11 +214,11 @@ mod tests {
             conversation_name: Some("Away team roster".into()),
             author: Some("Ann".into()),
             channel: Some("".into()),
-            ..TermSource::default()
+            ..SearchTermSource::default()
         }
     }
 
-    fn pairs(terms: &[Term]) -> Vec<(&str, &str)> {
+    fn pairs(terms: &[SearchTerm]) -> Vec<(&str, &str)> {
         terms
             .iter()
             .map(|t| (t.kind.as_str(), t.value.as_str()))
@@ -196,7 +228,7 @@ mod tests {
     #[test]
     fn a_message_answers_to_its_id_its_conversation_its_author_and_its_title() {
         assert_eq!(
-            pairs(&terms_of(&row())),
+            pairs(&search_terms_of(&row())),
             [
                 ("id", "m-1"),
                 ("container", "c-1"),
@@ -211,40 +243,46 @@ mod tests {
     /// id, not three.
     #[test]
     fn a_document_row_is_not_its_own_container() {
-        let doc = TermSource {
+        let doc = SearchTermSource {
             uuid: "c-1".into(),
             ..row()
         };
-        let terms = terms_of(&doc);
+        let terms = search_terms_of(&doc);
         assert_eq!(
             terms.iter().filter(|t| t.value == "c-1").count(),
             1,
             "{terms:?}"
         );
-        assert_eq!(terms[0].kind, TermKind::Id);
+        assert_eq!(terms[0].kind, SearchTermKind::Id);
     }
 
     #[test]
     fn every_kind_reads_back_by_its_spelling_and_its_code() {
         use strum::VariantArray;
-        for kind in TermKind::VARIANTS {
-            assert_eq!(TermKind::parse(kind.as_str()), Some(*kind));
-            assert_eq!(TermKind::from_code(i64::from(kind.code())), Some(*kind));
+        for kind in SearchTermKind::VARIANTS {
+            assert_eq!(SearchTermKind::parse(kind.as_str()), Some(*kind));
+            assert_eq!(
+                SearchTermKind::from_code(i64::from(kind.code())),
+                Some(*kind)
+            );
         }
-        assert_eq!(TermKind::parse("bcc"), None);
-        assert_eq!(TermKind::from_code(0), None);
+        assert_eq!(SearchTermKind::parse("reactor"), None);
+        assert_eq!(SearchTermKind::from_code(0), None);
     }
 
     /// A stored code is a promise: a kind keeps its number, or every file
     /// written before reads its terms as another kind.
     #[test]
     fn the_codes_are_the_ones_files_hold() {
-        let codes: Vec<(TermKind, u8)> = [
-            TermKind::Id,
-            TermKind::Container,
-            TermKind::From,
-            TermKind::Title,
-            TermKind::Name,
+        let codes: Vec<(SearchTermKind, u8)> = [
+            SearchTermKind::Id,
+            SearchTermKind::Container,
+            SearchTermKind::From,
+            SearchTermKind::Title,
+            SearchTermKind::Name,
+            SearchTermKind::To,
+            SearchTermKind::Cc,
+            SearchTermKind::Label,
         ]
         .into_iter()
         .map(|k| (k, k.code()))
@@ -252,11 +290,14 @@ mod tests {
         assert_eq!(
             codes,
             [
-                (TermKind::Id, 1),
-                (TermKind::Container, 2),
-                (TermKind::From, 3),
-                (TermKind::Title, 4),
-                (TermKind::Name, 5)
+                (SearchTermKind::Id, 1),
+                (SearchTermKind::Container, 2),
+                (SearchTermKind::From, 3),
+                (SearchTermKind::Title, 4),
+                (SearchTermKind::Name, 5),
+                (SearchTermKind::To, 6),
+                (SearchTermKind::Cc, 7),
+                (SearchTermKind::Label, 8),
             ]
         );
     }

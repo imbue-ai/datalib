@@ -19,9 +19,9 @@ on without picking keeps the old behaviour, a value matched as text.
 - **There is no `from:`, `to:` or `cc:`.** The author's handle is
   `author_handle:`, exact. The grammar has AND and a `-` per term, and
   no OR.
-- **The search terms hold one person per row**, its author (`TermKind::From`),
+- **The search terms hold one person per row**, its author (`SearchTermKind::From`),
   and are read by the Fields tab and for a query made entirely of
-  identifiers (`applets/src/unified_index/terms.rs`). Recipients, mentions and
+  identifiers (`applets/src/unified_index/search_terms.rs`). Recipients, mentions and
   participants are `search_tabs.md` step 4, not built.
 - **Two search bars search the grid**: the toolbar's `CommandBox.vue`,
   which opens a search card, and the card's own input in
@@ -64,7 +64,7 @@ together, and `term_round_trips_through_parse` covers it.
 
 `with:` is a person in any role. A person kind is `from`, `to`, `cc`,
 `bcc`, `participant`, `mention` or `reactor`; which kinds count is one
-pure function beside `TermKind::affinity`. Typing `@` at the start of a
+pure function beside `SearchTermKind::affinity`. Typing `@` at the start of a
 word opens the same people suggestions and writes `with:` with the
 value picked.
 

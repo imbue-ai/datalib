@@ -72,17 +72,17 @@ pub async fn run(
     );
 
     // After the pass has sealed: the terms follow the grid, never lead it.
-    let terms = datalib_etl_render::grid_terms::sync(
+    let terms = datalib_etl_render::search_terms::sync(
         &pool,
-        &datalib_core::layout::grid_terms_db(data_root),
+        &datalib_core::layout::search_terms_db(data_root),
     )
     .await
-    .context("bring the terms file to the index's head")?;
+    .context("bring the search terms file to the index's head")?;
     tracing::info!(
         plan = terms.plan,
         rows = terms.rows,
         terms = terms.terms,
-        "the terms file is current"
+        "the search terms file is current"
     );
 
     // What this pass did, not a running total: the next pass reports
@@ -93,7 +93,7 @@ pub async fn run(
         ("last_pass_markdowns_removed", summary.markdowns_removed),
         ("last_pass_rows_inserted", summary.rows_inserted),
         ("last_pass_problems_copied", summary.problems_copied),
-        ("last_pass_terms_written", terms.terms),
+        ("last_pass_search_terms_written", terms.terms),
     ] {
         progress.metric(name, &[], n as i64);
     }

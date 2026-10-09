@@ -1319,14 +1319,15 @@ export async function turnOnStep(id: string): Promise<void> {
 }
 
 /// Empty what the targets wrote, keeping the history, and sync what reads
-/// them; answers once they are empty. Refused while a sync runs.
-export async function resetSteps(targets: string[]): Promise<void> {
-  await post("/api/reset", { targets });
+/// them. The loop stops any of them running and empties them at once,
+/// whatever else is syncing; "queued" when one has not stopped yet.
+export async function resetSteps(targets: string[]): Promise<"done" | "queued"> {
+  const r = await post("/api/reset", { targets });
+  return r.status === 202 ? "queued" : "done";
 }
 
 /// Delete the trees of groups already gone from the config, and forget
-/// their steps ran. "queued" when a sync in progress holds the delete
-/// until it is over.
+/// their steps ran. "queued" when one of their steps has not stopped yet.
 export async function purgeGroups(groups: string[]): Promise<"done" | "queued"> {
   const r = await post("/api/purge", { groups });
   return r.status === 202 ? "queued" : "done";

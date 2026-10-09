@@ -108,6 +108,7 @@ fn render_one(
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
         sections,
+        search_terms: Vec::new(),
         edges: edges(event),
         contacts: Vec::new(),
         problems,

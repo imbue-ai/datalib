@@ -2,7 +2,12 @@
 // accounts when `--account` names one it does not hold yet, before any
 // browser opens. These keep the wizard from ever asking for that.
 import { describe, expect, it } from "vitest";
-import { NAME_IT_HELP, loginAccount, nameLeftToService } from "../src/config/accountNaming";
+import {
+  NAME_IT_HELP,
+  freshBrowser,
+  loginAccount,
+  nameLeftToService,
+} from "../src/config/accountNaming";
 import { CATALOG } from "../src/config/catalog";
 import { fieldsFor } from "../src/config/sourceSteps";
 
@@ -31,6 +36,28 @@ describe("nameLeftToService", () => {
     expect(nameLeftToService("service", ["picard"], "picard")).toBe(false);
     expect(nameLeftToService("service", [], "")).toBe(false);
     expect(nameLeftToService("chosen", [], "riker")).toBe(false);
+  });
+});
+
+/// latchkey's saved browser session is still signed in as whoever used
+/// it last, and a login that cannot tell who that is files it under the
+/// name it was given — so a second Claude or ChatGPT account must not
+/// start from it.
+describe("freshBrowser", () => {
+  it("reuses the saved session for a first sign-in or the one account held", () => {
+    expect(freshBrowser("chosen", [], "")).toBe(false);
+    expect(freshBrowser("chosen", [], "riker")).toBe(false);
+    expect(freshBrowser("chosen", ["picard"], "picard")).toBe(false);
+  });
+
+  it("starts signed out when another account could be the one signed in", () => {
+    expect(freshBrowser("chosen", ["picard"], "riker")).toBe(true);
+    expect(freshBrowser("chosen", [""], "riker")).toBe(true);
+    expect(freshBrowser("chosen", ["", "picard"], "picard")).toBe(true);
+  });
+
+  it("never for a service that files the login under whoever signed in", () => {
+    expect(freshBrowser("service", ["picard", "riker"], "")).toBe(false);
   });
 });
 

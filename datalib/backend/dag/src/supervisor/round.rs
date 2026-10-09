@@ -10,11 +10,12 @@ use tokio::task::JoinSet;
 
 use super::announce::{Listener, CONFIG_CHANGED};
 use super::record::{InvocationEnd, InvocationRow};
-use super::store::{RequestOutcome, Store};
+use super::store::{RequestOutcome, Store, WipeKind, WipeRow};
 use super::tick::{
     tick, Attempt, Consumed, Facts, Intent, LockShape, Outcome, Request, Running, Seq, Shape,
     StepFacts, StepShape, StepState as Row, Tick, Wait,
 };
+use super::wipe;
 use crate::artifact::ArtifactPath;
 use crate::events::{Event, PlannedStep, StepProgress};
 use crate::graph::Graph;
@@ -247,6 +248,7 @@ impl Runner {
         let mut facts = facts_of(graph, &state);
         let mut open: Vec<Open> = Vec::new();
         let mut turned_off: BTreeMap<usize, String> = BTreeMap::new();
+        let mut wipes: Vec<WipeRow> = Vec::new();
         let mut seq = 0u64;
         let mut slots: Vec<Slot> = graph.steps.iter().map(|_| Slot::default()).collect();
         // A step may seal and end several passes in one round; the summary
@@ -265,6 +267,7 @@ impl Runner {
             &mut mailbox,
             &mut open,
             &mut turned_off,
+            &mut wipes,
             &mut seq,
             &mut slots,
         )
@@ -404,14 +407,54 @@ impl Runner {
                     &mut mailbox,
                     &mut open,
                     &mut turned_off,
+                    &mut wipes,
                     &mut seq,
                     &mut slots,
                 )
                 .await?;
+                let opened = self
+                    .carry_out_wipes(
+                        graph,
+                        next_graph.as_ref(),
+                        store,
+                        &mut record,
+                        &mut state,
+                        &mut wipes,
+                        &mut facts,
+                        &mut slots,
+                    )
+                    .await?;
+                if opened {
+                    // The loop's own write does not move what `refresh`
+                    // watches.
+                    mailbox.seen = None;
+                    self.refresh(
+                        graph,
+                        &mut mailbox,
+                        &mut open,
+                        &mut turned_off,
+                        &mut wipes,
+                        &mut seq,
+                        &mut slots,
+                    )
+                    .await?;
+                }
             }
+            let wiping = wiping(graph, &wipes);
+            // A step being wiped leaves the requests that named it: a reset
+            // does not refill a download, and the config that drops a
+            // purged group is not waited on. A request left with nothing is
+            // stopped.
+            open.retain_mut(|o| {
+                o.request.roots.retain(|r| !wiping.contains_key(r));
+                if o.request.roots.is_empty() {
+                    mailbox.stopped.push(o.id.clone());
+                }
+                !o.request.roots.is_empty()
+            });
             let intent = Intent {
                 requests: open.iter().map(|o| o.request.clone()).collect(),
-                turned_off: turned_off.keys().copied().collect(),
+                turned_off: turned_off.keys().chain(wiping.keys()).copied().collect(),
             };
             let t = tick(&shape, &intent, &facts);
             for scope in &t.scopes {
@@ -525,6 +568,7 @@ impl Runner {
                     .map(|(_, o)| o.id.clone())
                     .collect()
             });
+            say_wiping(graph, &mut state, &t, &wiping);
             record_deferred(graph, &mut state, &mailbox.deferred);
 
             for start in t.starts {
@@ -586,11 +630,14 @@ impl Runner {
             }
             if open.is_empty() && set.is_empty() {
                 // A config waiting on what just ended may bring requests
-                // of its own, which this loop takes on rather than the next.
+                // of its own, which this loop takes on rather than the next;
+                // and a purge waits for the config that lets its groups go.
                 if next_graph.is_some() {
                     continue;
                 }
-                break;
+                if wipes.is_empty() {
+                    break;
+                }
             }
             let listening = !cancelled;
             anyhow::ensure!(
@@ -613,10 +660,11 @@ impl Runner {
                 }
                 Some(()) = wait_for_stop(&mut stop_rx), if !cancelled => {
                     // The host is going: stop what runs and take nothing
-                    // new. The store's requests stay open, for whoever runs
-                    // the loop next.
+                    // new. The store's requests and wipes stay open, for
+                    // whoever runs the loop next.
                     cancelled = true;
                     open.clear();
+                    wipes.clear();
                 }
                 heard = listener.next(), if listening => {
                     config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
@@ -719,9 +767,9 @@ impl Runner {
         Ok(report)
     }
 
-    /// Bring `open` and `turned_off` up to what the mailbox says. A request
-    /// the loop has not seen before is opened now, so only an invocation
-    /// started after this counts as serving it.
+    /// Bring `open`, `turned_off` and `wipes` up to what the mailbox says.
+    /// A request the loop has not seen before is opened now, so only an
+    /// invocation started after this counts as serving it.
     #[allow(clippy::too_many_arguments)]
     async fn refresh(
         &self,
@@ -729,6 +777,7 @@ impl Runner {
         mailbox: &mut Mailbox<'_>,
         open: &mut Vec<Open>,
         turned_off: &mut BTreeMap<usize, String>,
+        wipes: &mut Vec<WipeRow>,
         seq: &mut u64,
         slots: &mut [Slot],
     ) -> Result<()> {
@@ -834,7 +883,120 @@ impl Runner {
                     admit(row.id, roots, open);
                 }
                 *turned_off = turned_off_of(graph, &all_turned_off);
+                *wipes = store.open_wipes().await?;
             }
+        }
+        Ok(())
+    }
+
+    /// Each wipe whose steps have stopped, done; each that cannot be done,
+    /// closed with why. The rest wait, their steps held. Whether a reset
+    /// opened a request for what reads what it emptied.
+    #[allow(clippy::too_many_arguments)]
+    async fn carry_out_wipes(
+        &self,
+        graph: &Graph,
+        next_graph: Option<&Graph>,
+        store: &Store,
+        record: &mut Recorded<'_>,
+        state: &mut Record,
+        wipes: &mut Vec<WipeRow>,
+        facts: &mut Facts,
+        slots: &mut [Slot],
+    ) -> Result<bool> {
+        if wipes.is_empty() {
+            return Ok(false);
+        }
+        // Read now rather than when announced: the config that drops a
+        // purged group is written just before the purge is asked for.
+        let fresh = self.reload.as_ref().and_then(|s| s.load().ok());
+        let latest = fresh.as_ref().or(next_graph).unwrap_or(graph);
+        let mut opened = false;
+        for w in std::mem::take(wipes) {
+            let Some(kind) = w.kind else {
+                store
+                    .close_wipe(&w.id, Some("a kind of wipe this build does not know"))
+                    .await?;
+                continue;
+            };
+            if let Some(why) = wipe::refusal(latest, kind, &w.targets) {
+                store.close_wipe(&w.id, Some(&why)).await?;
+                continue;
+            }
+            let held = wipe::held(graph, kind, &w.targets);
+            let stopped = held
+                .iter()
+                .all(|&i| facts.steps[i].running.is_none() && slots[i].live.is_none());
+            // A purge waits for the config swap too: a step the graph
+            // still has would be written back into the record.
+            let ready = match kind {
+                WipeKind::Reset => stopped,
+                WipeKind::Purge => held.is_empty(),
+            };
+            if !ready {
+                wipes.push(w);
+                continue;
+            }
+            for &i in &held {
+                if let Some(e) = slots[i].ended.take() {
+                    let s = &mut slots[i];
+                    self.finish(
+                        graph,
+                        state,
+                        &mut s.status,
+                        i,
+                        e.status,
+                        e.error,
+                        e.exit,
+                        e.attempts,
+                    );
+                }
+            }
+            let done = match kind {
+                WipeKind::Reset => self.reset_in_loop(graph, &w.targets, state, facts).await,
+                WipeKind::Purge => delete_trees(&self.data_root, &w.targets)
+                    .await
+                    .map(|()| wipe::forget_groups(state, &w.targets)),
+            };
+            record.save(state).await?;
+            match done {
+                Ok(()) => {
+                    let roots = match kind {
+                        WipeKind::Reset => wipe::after_reset(graph, &w.targets),
+                        WipeKind::Purge => Vec::new(),
+                    };
+                    if !roots.is_empty() {
+                        store.open_request(&roots, &w.opened_by).await?;
+                        opened = true;
+                    }
+                    store.close_wipe(&w.id, None).await?;
+                }
+                Err(e) => store.close_wipe(&w.id, Some(&format!("{e:#}"))).await?,
+            }
+        }
+        Ok(opened)
+    }
+
+    /// Each target invoked with `--reset store` and recorded emptied, so
+    /// what reads it sees a new version.
+    async fn reset_in_loop(
+        &self,
+        graph: &Graph,
+        targets: &[String],
+        state: &mut Record,
+        facts: &mut Facts,
+    ) -> Result<()> {
+        for step in targets {
+            let (i, version) = self.reset_one(graph, step).await?;
+            state.steps.insert(
+                step.clone(),
+                wipe::emptied(state.steps.get(step), version.clone()),
+            );
+            facts.sinks[i] = Some(version);
+            facts.steps[i] = StepFacts {
+                streams_output: graph.steps[i].streams_output,
+                ..Default::default()
+            };
         }
         Ok(())
     }
@@ -1100,6 +1262,52 @@ impl Runner {
             }
         }
     }
+}
+
+/// Step index → the wipe holding it, for the steps this graph has.
+fn wiping(graph: &Graph, wipes: &[WipeRow]) -> BTreeMap<usize, WipeKind> {
+    wipes
+        .iter()
+        .filter_map(|w| Some((w.kind?, w)))
+        .flat_map(|(kind, w)| {
+            wipe::held(graph, kind, &w.targets)
+                .into_iter()
+                .map(move |i| (i, kind))
+        })
+        .collect()
+}
+
+/// A held step reads as off, which is not what a person did: say why.
+fn say_wiping(graph: &Graph, state: &mut Record, t: &Tick, wiping: &BTreeMap<usize, WipeKind>) {
+    for (&i, kind) in wiping {
+        let why = match kind {
+            WipeKind::Reset => "being reset",
+            WipeKind::Purge => "being deleted",
+        };
+        if let Some(entry) = state.steps.get_mut(&graph.steps[i].id) {
+            entry.state_detail = Some(match t.states[i] {
+                Row::Running => format!("stopping: {why}"),
+                _ => why.to_string(),
+            });
+        }
+    }
+}
+
+/// The trees of `groups` under the data root. One already gone is not an
+/// error: the record still needs forgetting.
+async fn delete_trees(root: &std::path::Path, groups: &[String]) -> Result<()> {
+    for group in groups {
+        let tree = root.join(group);
+        let removed = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(tree))
+            .await
+            .context("the delete panicked")?;
+        match removed {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => anyhow::bail!("delete {group}/: {e}"),
+        }
+    }
+    Ok(())
 }
 
 /// Step index → who turned it off, for the steps this graph has.

@@ -105,11 +105,17 @@ fn version() -> &'static str {
 fn launcher_state(app: AppHandle) -> serde_json::Value {
     let dir = libraries_dir(&app);
     let home = home_dir(&app).unwrap_or_default();
+    // TODO(after 2026-12-09): drop `legacy` and `move_from_documents`
+    // with `launcher::move_from_documents`.
+    let old_dir = documents_libraries_dir(&app);
+    let legacy = old_dir.as_deref().map_or_else(Vec::new, |old| {
+        launcher::libraries_in_documents(&launcher::recents_file(&home), old)
+    });
     let libraries: Vec<serde_json::Value> =
         launcher::libraries(&launcher::recents_file(&home), &dir)
             .into_iter()
             .map(|l| {
-                // A library in the Datalib folder is known by its name; only
+                // A library in the libraries folder is known by its name; only
                 // one somewhere else shows where it is.
                 let elsewhere = l.path.parent() != Some(dir.as_path());
                 serde_json::json!({
@@ -118,30 +124,38 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
                     "shown_path": elsewhere.then(|| launcher::tilde(&l.path, &home)),
                     "forgettable": launcher::forgettable(&l.path, &dir),
                     "found": l.found,
+                    "legacy": legacy.contains(&l.path),
                     "summary": launcher::summary(&l.path),
                 })
             })
             .collect();
-    // TODO(after 2026-11-01): drop `legacy` with `launcher::move_legacy`.
-    let legacy = launcher::legacy_root(&dir).map(|root| {
+    let move_from = old_dir.filter(|_| !legacy.is_empty()).map(|old| {
         serde_json::json!({
-            "shown_path": launcher::tilde(&root, &home),
-            "target": launcher::tilde(&root.join(launcher::DEFAULT_NAME), &home),
+            "count": legacy.len(),
+            "from": launcher::tilde(&old, &home),
+            "to": launcher::tilde(&dir, &home),
         })
     });
     serde_json::json!({
         "libraries": libraries,
         "libraries_dir": launcher::tilde(&dir, &home),
+        "move_from_documents": move_from,
         "suggested_name": launcher::suggested_name(&dir),
-        "legacy": legacy,
     })
 }
 
-/// Move the library at the Datalib folder into `Datalib/Default`. Only
-/// from the libraries screen, where no library is open.
-// TODO(after 2026-11-01): remove, with `launcher::move_legacy`.
+// TODO(after 2026-12-09): remove, with `launcher::move_from_documents`.
+fn documents_libraries_dir(app: &AppHandle) -> Option<PathBuf> {
+    let documents = app.path().document_dir().ok()?;
+    Some(launcher::documents_libraries_dir(&documents))
+}
+
+/// Move the recent libraries in the Documents folder into the
+/// libraries folder; how many moved. Only from the libraries screen,
+/// where no library is open.
+// TODO(after 2026-12-09): remove, with `launcher::move_from_documents`.
 #[tauri::command]
-fn launcher_move_legacy(app: AppHandle) -> Result<(), String> {
+fn launcher_move_from_documents(app: AppHandle) -> Result<usize, String> {
     if app
         .state::<DataRoot>()
         .0
@@ -152,9 +166,10 @@ fn launcher_move_legacy(app: AppHandle) -> Result<(), String> {
         return Err("Close the open library first.".into());
     }
     let home = home_dir(&app).ok_or("No home directory.")?;
-    launcher::move_legacy(&launcher::recents_file(&home), &libraries_dir(&app))
-        .map(|_| ())
-        .map_err(|e| format!("Could not move the library: {e}"))
+    let old = documents_libraries_dir(&app).ok_or("No Documents folder.")?;
+    launcher::move_from_documents(&launcher::recents_file(&home), &old, &libraries_dir(&app))
+        .map(|moved| moved.len())
+        .map_err(|e| format!("Could not move the libraries: {e}"))
 }
 
 /// What the new-library field names: the folder, as the popover shows
@@ -166,7 +181,7 @@ fn launcher_resolve(app: AppHandle, input: String) -> serde_json::Value {
         Some(root) => serde_json::json!({
             "shown_path": launcher::tilde(&root, &home),
             "path": root.to_string_lossy(),
-            "target": launcher::classify(&root, &libraries_dir(&app)).as_str(),
+            "target": launcher::classify(&root).as_str(),
         }),
         None => serde_json::Value::Null,
     }
@@ -178,11 +193,10 @@ fn launcher_resolve(app: AppHandle, input: String) -> serde_json::Value {
 #[tauri::command]
 fn launcher_create(app: AppHandle, input: String) -> Result<(), String> {
     let home = home_dir(&app).unwrap_or_default();
-    let dir = libraries_dir(&app);
-    let root = launcher::resolve_new(&input, &home, &dir)
+    let root = launcher::resolve_new(&input, &home, &libraries_dir(&app))
         .ok_or("Type a name for the library, or a folder.")?;
     let shown = launcher::tilde(&root, &home);
-    match launcher::classify(&root, &dir) {
+    match launcher::classify(&root) {
         launcher::Target::Library => {
             tauri::async_runtime::spawn(boot(app, root, false));
         }
@@ -196,9 +210,6 @@ fn launcher_create(app: AppHandle, input: String) -> Result<(), String> {
             ))
         }
         launcher::Target::NotAFolder => return Err(format!("{shown} is a file, not a folder.")),
-        launcher::Target::InsideLegacy => {
-            return Err("Move your library into Default first (above the list).".into())
-        }
     }
     Ok(())
 }
@@ -254,7 +265,7 @@ async fn launcher_pick(app: AppHandle) -> Result<bool, String> {
 }
 
 /// Take a library off the list; its folder is not touched. One in the
-/// Datalib folder is always listed while it is there, so it cannot be
+/// libraries folder is always listed while it is there, so it cannot be
 /// forgotten.
 #[tauri::command]
 fn launcher_forget(app: AppHandle, path: String) -> Result<(), String> {
@@ -442,13 +453,8 @@ fn home_dir(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn libraries_dir(app: &AppHandle) -> PathBuf {
-    let documents = app
-        .path()
-        .document_dir()
-        .ok()
-        .or_else(|| Some(home_dir(app)?.join("Documents")))
-        .unwrap_or_else(|| PathBuf::from("Documents"));
-    launcher::libraries_dir(&documents)
+    let home = home_dir(app).expect("the platform names a home directory");
+    launcher::libraries_dir(&home)
 }
 
 fn main() {
@@ -497,7 +503,7 @@ fn main() {
             launcher_pick,
             launcher_forget,
             launcher_open_folder,
-            launcher_move_legacy,
+            launcher_move_from_documents,
             library_menu,
             library_switch,
             libraries_show,

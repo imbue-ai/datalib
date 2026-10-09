@@ -87,11 +87,12 @@ export async function startFakeInternet(sites = FAKE_SITES) {
   const holds = [];
   /** @type {Map<string, (r: any) => any>} */
   const overrides = new Map();
+  let signsInAs = "picard";
   const server = https.createServer(cert(), async (req, res) => {
     const host = (req.headers.host ?? "").replace(/:\d+$/, "");
     const url = new URL(req.url ?? "/", `https://${host}`);
     const body = await readBody(req);
-    const seen = { host, method: req.method, path: url.pathname, query: url.search, headers: req.headers, body };
+    const seen = { host, method: req.method, path: url.pathname, query: url.search, headers: req.headers, body, signsInAs };
     requests.push(seen);
     for (const hold of holds.filter((h) => h.matches(seen))) await hold.released;
     const site = overrides.get(host) ?? sites[host];
@@ -122,6 +123,9 @@ export async function startFakeInternet(sites = FAKE_SITES) {
     /// Answer every request to `host` with `handler` instead of its
     /// fake site — how a spec makes one service misbehave.
     override: (host, handler) => overrides.set(host, handler),
+    /// Who a site's login page signs in when the browser has no session
+    /// there: a key of `CREW` in fake_sites.mjs.
+    signInAs: (name) => (signsInAs = name),
     hold: (matches) => {
       let release = () => {};
       const released = new Promise((resolve) => (release = resolve));

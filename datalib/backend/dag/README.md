@@ -198,7 +198,8 @@ empties what a step wrote and records the tree's new version, forgetting
 that the step ever succeeded. The app then opens a request: a reset
 step that reads something is rebuilt at once, and a reset download is
 not refilled — what reads it runs instead, so its documents leave the
-grid, and its next Sync downloads everything again. The design is
+grid, and its next Sync downloads everything again. The app's reset
+does not wait for a sync to end (§"Resets and purges"). The design is
 [`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
 
 ## Upgrading a root
@@ -428,7 +429,8 @@ naming no step) looks exactly like one it did.
   anything is announced, its release included, in case that loop ends
   first (`docs/dev/plans/supervisor.md` §2.8). Only `--reset`, which empties
   stores, needs the root to itself and is refused while a loop runs —
-  always, with the app up; the app runs its own resets between syncs.
+  always, with the app up; the app's resets are rows the loop carries out
+  (§"Resets and purges").
 - **One server per data root** (`system/lock`), which `datalib-http`
   takes for its own reasons (the API token, the feedback, usage and
   remote-media stores).
@@ -551,10 +553,39 @@ A `datalib-dag` running the loop with no server up has nobody watching
 the config, so it takes an edit on at its next busy period, not mid-sync.
 
 The loop's idle side lives once, in `supervisor::host::run_idle`: a busy
-period whenever a request is open, requests asked to stop before any
-period took them closed as `stopped`, the record settled when the
-switches or the config move, then a wait for an announcement, a nudge (in-memory work such as a
-reset) or the host's stop. The server's host and the tests both run it.
+period whenever a request or a wipe is open, requests asked to stop
+before any period took them closed as `stopped`, the record settled when
+the switches or the config move, then a wait for an announcement or the
+host's stop. The server's host and the tests both run it.
+
+## Resets and purges
+
+A **wipe** is a row in the mailbox's `wipes` table: a reset (empty what
+these steps wrote) or a purge (delete the trees of groups the config no
+longer names, and forget their steps ran). The loop carries one out as
+soon as the steps it touches have stopped, whatever else is syncing; it
+does not wait for the sync to end. What it decides is in
+`supervisor/wipe.rs`, and the loop does it (`round.rs`,
+`carry_out_wipes`):
+
+- **It holds its steps.** A step being wiped is treated as turned off for
+  as long as the wipe is open: stopped if it runs, not started, and its
+  row says `being reset` or `being deleted`. It leaves the requests that
+  named it as a root, so a reset does not refill a download, and a purged
+  group's config change is not waited on; a request left with nothing is
+  stopped.
+- **Then it does it, in the loop.** A reset invokes each step with
+  `--reset store` and records it emptied in the loop's own record, then
+  opens a request for what reads it (`wipe::after_reset`). A purge waits
+  until the loop has taken on the config without the group, then deletes
+  `<root>/<group>/` and forgets the group's steps.
+- **Refused, with why**, against the config on disk: a reset of a step it
+  lacks, a purge of a group it still has or of anything that is not a
+  group id. The row closes with the reason in `error`.
+
+The server's `POST /api/reset` and `POST /api/purge` write the row and
+wait up to ten seconds for it to close: 204 once done, 202 when its steps
+have not stopped yet, 409 with the reason when refused.
 
 ## The record
 
@@ -562,8 +593,9 @@ The loop's memory is its **record**, in `system/supervisor.sqlite`
 (`supervisor/record.rs`), beside the mailbox anyone writes
 (`supervisor/store.rs`): `requests` (its `roots`, `opened_by`, a
 `stop_requested_by`, and once closed its `outcome` — `done`, `failed`
-or `stopped` — and `failed_step`) and `turned_off` (`step`,
-`turned_off_by`). It is plain SQLite in
+or `stopped` — and `failed_step`), `turned_off` (`step`,
+`turned_off_by`) and `wipes` (`kind`, `targets`, `opened_by`, and once
+closed the `error` that stopped it, if any). It is plain SQLite in
 rollback-journal mode, so any `sqlite3` reads it, and only the holder of
 `runner-lock` writes it. `supervisor_contention_test` runs seven
 processes on one store (people opening requests, the loop saving, the

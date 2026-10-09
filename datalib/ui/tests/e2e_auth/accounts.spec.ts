@@ -9,35 +9,88 @@ import { reviewToml, showSignIn } from "../e2e/wizard-helpers";
 /// reach; with four workers busy that has taken ~50s.
 const LOGIN = { timeout: 90_000 };
 
-/// latchkey stores a browser login under a name it has never seen —
-/// imbue-ai/latchkey#148 filed every one under the unnamed default, and
-/// the backend once seeded a placeholder to get past it. Two names, two
-/// credentials, and a check that runs as the one in the box.
-test("Claude: two accounts by browser login, checked as the one chosen", async ({
-  page,
-  world,
-}) => {
-  await pickTile(page, TILE.claude);
-  const box = wizard(page).getByRole("combobox", { name: "Claude account" });
-  for (const name of ["picard", "riker"]) {
-    await showSignIn(page);
-    await box.fill(name);
-    await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
-    await expect(wizard(page).locator(".wiz-probe-ok")).toBeVisible(LOGIN);
-  }
-  const stored = JSON.parse(world.latchkey("auth", "list", "--offline"))["claude-ai"];
-  expect(Object.keys(stored).sort()).toEqual(["picard", "riker"]);
+/// The two services whose login cannot tell who signed in, so latchkey
+/// files it under the name in the box.
+const NAMED_BY_THE_BOX = [
+  {
+    tile: TILE.claude,
+    label: "Claude account",
+    service: "claude-ai",
+    host: "claude.ai",
+    login: "/login",
+  },
+  {
+    tile: TILE.chatgpt,
+    label: "ChatGPT account",
+    service: "chatgpt",
+    host: "chatgpt.com",
+    login: "/auth/login",
+  },
+];
 
-  await showSignIn(page);
-  await box.fill("riker");
-  await wizard(page).getByRole("button", { name: "Check connection" }).click();
-  await expect(wizard(page).locator(".wiz-probe-ok")).toBeVisible();
-  const runs: { args: string[] }[] = world.latchkeyRuns();
-  const check = [...runs].reverse().find((r) => subcommand(r) === "curl");
-  expect(check?.args.slice(0, 2)).toEqual(["--account", "riker"]);
-  // The source copies the account it was checked as.
-  await expect(await reviewToml(page)).toContainText('account = "riker"');
-});
+for (const { tile, label, service, host, login } of NAMED_BY_THE_BOX) {
+  /// latchkey's saved browser session is one for every service and
+  /// account, still signed in as whoever used it last. A second account
+  /// started from it got the first person's credential under the second
+  /// name, and every check of it reached the first person.
+  test(`${label}: a second account is a second person`, async ({ page, world, internet }) => {
+    await pickTile(page, tile);
+    const box = wizard(page).getByRole("combobox", { name: label });
+    for (const name of ["picard", "riker"]) {
+      internet.signInAs(name);
+      await showSignIn(page);
+      await box.fill(name);
+      await wizard(page).getByRole("button", { name: "Sign in with browser" }).click();
+      await expect(wizard(page).locator(".wiz-probe-ok")).toContainText(
+        `${name}@enterprise.test`,
+        LOGIN,
+      );
+    }
+    const stored = JSON.parse(world.latchkey("auth", "list", "--offline"))[service];
+    expect(Object.keys(stored).sort()).toEqual(["picard", "riker"]);
+
+    for (const name of ["picard", "riker"]) {
+      await showSignIn(page);
+      await box.fill(name);
+      await wizard(page).getByRole("button", { name: "Check connection" }).click();
+      await expect(wizard(page).locator(".wiz-probe-ok")).toContainText(`${name}@enterprise.test`);
+      const runs: { args: string[] }[] = world.latchkeyRuns();
+      const check = [...runs].reverse().find((r) => subcommand(r) === "curl");
+      expect(check?.args.slice(0, 2)).toEqual(["--account", name]);
+    }
+    // The source copies the account it was checked as.
+    await expect(await reviewToml(page)).toContainText('account = "riker"');
+  });
+
+  /// Signing in again to the one account latchkey holds starts from the
+  /// saved session, which the site sends straight on with no new cookie;
+  /// latchkey takes the cookie from the browser (imbue-ai/latchkey#150).
+  /// The site would sign in Riker if asked, so a fresh sign-in shows.
+  test(`${label}: signing in again keeps the saved session`, async ({ page, world, internet }) => {
+    await pickTile(page, tile);
+    const signIn = wizard(page).getByRole("button", { name: "Sign in with browser" });
+    await signIn.click();
+    await expect(wizard(page).locator(".wiz-probe-ok")).toContainText(
+      "picard@enterprise.test",
+      LOGIN,
+    );
+
+    // A login is checked at once, so one more `curl` is the second
+    // login done; the first one's result is still on screen until then.
+    const checks = () =>
+      world.latchkeyRuns().filter((r: { args: string[] }) => subcommand(r) === "curl").length;
+    const checksBefore = checks();
+    internet.signInAs("riker");
+    await showSignIn(page);
+    await signIn.click();
+    await expect.poll(checks, LOGIN).toBeGreaterThan(checksBefore);
+    await expect(wizard(page).locator(".wiz-probe-ok")).toContainText("picard@enterprise.test");
+    expect(
+      internet.to(host, login).at(-1)?.headers.cookie,
+      "the second login should arrive signed in",
+    ).toBeTruthy();
+  });
+}
 
 /// Slack had no account box at all. A pasted token goes under the name
 /// in it, and a second name is a second workspace login.

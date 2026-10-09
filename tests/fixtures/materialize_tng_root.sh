@@ -45,13 +45,13 @@ OUT_ROOT="${1:-}"
 
 APPLET_BIN="$(rlocation _main/datalib/backend/applets/datalib_applet)"
 DB_FILE="$(rlocation _main/tests/fixtures/ingested/backend_index.doltlite_db)"
-TERMS_FILE="$(rlocation _main/tests/fixtures/ingested/backend_terms.sqlite)"
+TERMS_FILE="$(rlocation _main/tests/fixtures/ingested/backend_search_terms.sqlite)"
 QMD_TAR="$(rlocation _main/tests/fixtures/ingested/qmd.tar)"
 QMD_INDEX_TAR="$(rlocation _main/tests/fixtures/ingested/qmd-index.tar)"
 CONFIG_BODY="$(rlocation _main/tests/fixtures/ingested/config_body.toml)"
 [[ -x "$APPLET_BIN" ]]    || { echo "ERROR: datalib_applet not found at $APPLET_BIN" >&2; exit 1; }
 [[ -f "$DB_FILE" ]]       || { echo "ERROR: backend_index.doltlite_db not found at $DB_FILE" >&2; exit 1; }
-[[ -f "$TERMS_FILE" ]]    || { echo "ERROR: backend_terms.sqlite not found at $TERMS_FILE" >&2; exit 1; }
+[[ -f "$TERMS_FILE" ]]    || { echo "ERROR: backend_search_terms.sqlite not found at $TERMS_FILE" >&2; exit 1; }
 [[ -f "$QMD_TAR" ]]       || { echo "ERROR: qmd.tar not found at $QMD_TAR" >&2; exit 1; }
 [[ -f "$QMD_INDEX_TAR" ]] || { echo "ERROR: qmd-index.tar not found at $QMD_INDEX_TAR" >&2; exit 1; }
 [[ -f "$CONFIG_BODY" ]]   || { echo "ERROR: config_body.toml not found at $CONFIG_BODY" >&2; exit 1; }
@@ -72,8 +72,8 @@ tar -xf "$QMD_INDEX_TAR" -C "$OUT_ROOT" --strip-components=1
 mkdir -p "$OUT_ROOT/unified_index/grid_index"
 cp "$DB_FILE" "$OUT_ROOT/unified_index/grid_index/db.doltlite_db"
 chmod u+w "$OUT_ROOT/unified_index/grid_index/db.doltlite_db"
-cp "$TERMS_FILE" "$OUT_ROOT/unified_index/grid_index/terms.sqlite"
-chmod u+w "$OUT_ROOT/unified_index/grid_index/terms.sqlite"
+cp "$TERMS_FILE" "$OUT_ROOT/unified_index/grid_index/search_terms.sqlite"
+chmod u+w "$OUT_ROOT/unified_index/grid_index/search_terms.sqlite"
 
 # The grid is served by the `unified_index` applet, so the config has to
 # declare it or the app comes up with no search. An absolute command

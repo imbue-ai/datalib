@@ -3,7 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # What the forge providers' downloads (github, gitlab) share: the REST
 # client, and the sync that discovers the change requests a person is
 # on and fetches each one. Ingest side: it does not know
-# `datalib_schema`. Bazel-only (no Cargo.toml).
+# `datalib_schema`..
 rust_library(
     name = "datalib_etl_forge_ingest_common",
     srcs = glob(["src/**/*.rs"]),

@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       latchkey:
-        specifier: 3.16.2
-        version: 3.16.2
+        specifier: 3.18.0
+        version: 3.18.0
 
 packages:
 
@@ -111,8 +111,8 @@ packages:
     resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
     engines: {node: '>=20'}
 
-  latchkey@3.16.2:
-    resolution: {integrity: sha512-PXOfUvxpi8nHLoyZnUJDMerrmc/2IeJB8GotekFJbUA8X7TWB+M9NFDy/nNEAKWTryGWvJEb3OCCty5zF/ZqlA==}
+  latchkey@3.18.0:
+    resolution: {integrity: sha512-qypmYO1tPzhwXe+HXxSNPgyfjE/7crMRr++f6H+PTGkChWztPyscJYWxARh8B0Kg2cd4SAt1pXa0NLLYcKTALQ==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -198,7 +198,7 @@ snapshots:
 
   commander@14.0.3: {}
 
-  latchkey@3.16.2:
+  latchkey@3.18.0:
     dependencies:
       '@imbue-ai/detent': 1.15.2
       '@napi-rs/keyring': 1.3.0

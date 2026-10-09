@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # The render half of the framework: the per-source render store, the
 # unified-index load, and the render run context.
 #

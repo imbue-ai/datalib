@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 rust_library(
     name = "datalib_schema",
     srcs = [
@@ -9,7 +7,8 @@ rust_library(
         "src/grid_rows.rs",
         "src/grid_rows_builder.rs",
         "src/edges.rs",
-        "src/terms.rs",
+        "src/search_terms.rs",
+        "src/supplied_search_terms.rs",
         "src/markdowns.rs",
         "src/providers.rs",
         "src/source_cursors.rs",

@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # The embedding map's layout: nearest neighbours, a start seeded from the
 # previous map, UMAP (`umap-rs`), and a fit back onto the previous
 # map's frame. Pure computation; `datalib_step`'s `embedding_map`

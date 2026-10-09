@@ -34,6 +34,8 @@ instead from `bazel run //:precommit` and as a plain step in
      and that the README's source grid uses rather than a copy.
  14. No first-party Rust outside a test renames a temp file into place
      by hand: `datalib_runtime::atomic` is the one write-then-rename.
+ 15. Every crate datalib/backend/Cargo.toml lists is named by some
+     BUILD.bazel, so the list cannot keep a crate nothing links.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -324,6 +326,7 @@ def main() -> int:
     rc |= _check_pools_never_recycle(root)
     rc |= _check_icons(root)
     rc |= _check_no_hand_rolled_atomic_write(root)
+    rc |= _check_cargo_manifest_crates_used(root)
     return rc
 
 
@@ -975,6 +978,42 @@ def _check_no_hand_rolled_atomic_write(root: Path) -> int:
         + "\n".join(hits)
         + "\n\n  Use `datalib_runtime::atomic::write` (or `write_with` to stream,\n"
         "  `write_owner_only` for credentials). See lint_repo.py check 14.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 15: every crate the Cargo manifest lists is used -------------
+#
+# The first-party crates have no Cargo.toml; datalib/backend/Cargo.toml is
+# one list of the third-party crates, which crate_universe turns into
+# `@datalib_crates//:<name>`. Bazel already fails on a target that names a
+# crate the list lacks. This is the other direction: a crate nothing names
+# any more still costs a resolve, a lockfile entry and a license review.
+_CARGO_MANIFEST = "datalib/backend/Cargo.toml"
+# `<crate>__<binary>` is the label crate_universe gives a crate's binary.
+_CRATE_LABEL = re.compile(
+    r"@datalib_crates//:([A-Za-z0-9_.-]+?)(?:__[A-Za-z0-9_.-]+)?\""
+)
+
+
+def _check_cargo_manifest_crates_used(root: Path) -> int:
+    manifest = tomllib.loads((root / _CARGO_MANIFEST).read_text(encoding="utf-8"))
+    listed = set(manifest.get("dependencies", {})) | set(
+        manifest.get("dev-dependencies", {})
+    )
+    named: set[str] = set()
+    for rel in _git_ls_files(root, "*BUILD.bazel") + _git_ls_files(root, "*.bzl"):
+        named.update(_CRATE_LABEL.findall((root / rel).read_text(encoding="utf-8")))
+    unused = sorted(listed - named)
+    if not unused:
+        print(f"OK: every crate {_CARGO_MANIFEST} lists is named by a BUILD.bazel.")
+        return 0
+    print(
+        f"ERROR: {_CARGO_MANIFEST} lists crates no BUILD.bazel names:\n\n"
+        + "\n".join(f"  {name}" for name in unused)
+        + "\n\n  Delete them from the manifest and run tools/repin_cargo.sh.\n"
+        "  See lint_repo.py check 15.",
         file=sys.stderr,
     )
     return 1

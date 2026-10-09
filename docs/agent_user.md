@@ -42,7 +42,7 @@ write the one index file under `unified_index/qmd_aggregator/`):
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
-│   ├── grid_index/terms.sqlite     # each row's ids, handles and names, full-text (plain SQLite)
+│   ├── grid_index/search_terms.sqlite     # each row's ids, people, labels and names, full-text (plain SQLite)
 │   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
     ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
@@ -200,11 +200,12 @@ goes, and the doltlite history keeps them; its attachments stay in
 `blobs.sqlite`, which nothing resets. Then what reads it runs, so its documents leave the grid,
 and its next sync downloads everything again from nothing. Resetting a
 render step (`slack/render_markdown`) instead rebuilds its documents
-from what is downloaded, at once. It needs the
-root to itself, so it runs only when nothing is syncing. With the app
-up, use `POST /api/reset {"targets": ["slack/ingest"], "by":
-"claude"}`: it answers once the store is empty, opens the request that
-carries the emptiness downstream, and refuses while a sync runs. The
+from what is downloaded, at once. With the app up, use `POST /api/reset
+{"targets": ["slack/ingest"], "by": "claude"}`: whatever else is syncing,
+the step is stopped if it runs and emptied at once, and the request that
+carries the emptiness downstream is opened. It answers 204 once the
+store is empty, or 202 if the step had not stopped within ten seconds and
+is emptied once it has. The
 Manage screen's row menu offers the same. With no app up,
 `datalib-dag --reset slack/ingest` empties the store alone; add
 `--sync slack/ingest` to download it again at once.
@@ -309,14 +310,16 @@ Pick the surface that fits the question:
   `-is:document` for the rows inside them. A key the search does not
   have is refused by name, in `refused`, rather than ignored. Free text
   made only of uuids and handles (an email address, `tel:+…`,
-  `slack:T…/U…`) is looked up in `grid_index/terms.sqlite`, not sent to
+  `slack:T…/U…`) is looked up in `grid_index/search_terms.sqlite`, not sent to
   qmd: every row that answers to each one, best match first, with
-  `score` saying how (5 its own id, 4 its author, 3 what it is in,
-  2 its title, 1 a name it shows) and `snippet` naming the match.
+  `score` saying how (5 its own id, 4 its author or an addressee,
+  3 someone copied or what it is in, 2 its title or a label, 1 a name
+  it shows) and `snippet` naming the match.
   `tab=` picks how free text is answered, each its own list:
-  `fields` (that terms file, any word as the start of one), `words`
+  `fields` (the search terms file, any word as the start of one), `words`
   (every document's text by BM25, from qmd's keyword index) or
-  `meaning` (qmd's vectors alone); with no `tab`, the free text goes to
+  `meaning` (qmd's vectors alone: the 20 nearest documents across every
+  source, or within one under `source_id:`); with no `tab`, the free text goes to
   qmd's hybrid query, identifiers aside. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
   columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`

@@ -109,12 +109,15 @@ contains it, which Fields already found.
 Fields pages without limit through the grid's existing SQL paging.
 
 Words and Meaning are ranked lists, so each is cut somewhere. The
-daemon now sends `candidateLimit`, which lifted the merged cut of 40
-for free (a hybrid search for one common word went from 40 hits to 224
-on a real root). What remains is qmd's own: each sub-query takes the
-best 20 documents of each collection, hard-coded and out of reach of
-the MCP arguments (fact 7 in `qmd_behaviour.md`). That is a fair depth
-for Meaning, where nearness past the first few is noise. It is too
+daemon sends `candidateLimit`, which lifts the merged cut of 40. What
+remains is qmd's own: each sub-query takes the best 20 documents of
+each collection it searches, hard-coded and out of reach of the MCP
+arguments (fact 7 in `qmd_behaviour.md`), and an unscoped search is
+one search over every collection, so Meaning is the 20 nearest
+documents in all, or 20 of one source under `source_id:`. Naming every
+collection would reach 20 of each, but ranked by source rather than
+by nearness (fact 8). Twenty is a fair depth for Meaning, where
+nearness past the first few is noise. It is too
 shallow for Words, where a keyword match far down the list is still a
 real match: the Words tab should read qmd's own FTS5 table
 (`documents_fts` in `index.sqlite`, plain SQLite that doltlite reads,
@@ -139,7 +142,7 @@ vals_fts  USING fts5(value, content='', contentless_delete=1,
                      tokenize="unicode61 tokenchars '@.-_+:/'")
 ```
 
-`kind` is the `TermKind` enum's code. The FTS5 index covers the
+`kind` is the `SearchTermKind` enum's code. The FTS5 index covers the
 distinct values alone, linked to `vals` by rowid. The tokenizer keeps
 `@ . - _ + : /` inside a word, so a uuid, an email address or
 `slack:T…/U…` is one token, matched exactly. On a real root the
@@ -147,7 +150,7 @@ dictionary took the file from 131 MB (a uuid, a value and a timestamp
 on every term) to 58 MB: there are 4.6 terms per distinct value.
 
 **The terms live in a plain SQLite file beside the grid index,** not
-in it: `unified_index/grid_index/terms.sqlite`, written by `grid_index`
+in it: `unified_index/grid_index/search_terms.sqlite`, written by `grid_index`
 and attached read-only by each reader of a grid commit. Nobody needs
 the terms' history, and a doltlite store keeps it: with 732k terms, 200
 one-document replaces each committed grew a store 35.5 MB and a plain
@@ -171,7 +174,7 @@ test are in [`doltlite.md`](../doltlite.md) § "Full-text search
   `grid_rows` cannot give again, so a missing or damaged one is
   rebuilt, not migrated.
 
-**`kind` is an enum**, `TermKind`, with the usual strum pair, and a
+**`kind` is an enum**, `SearchTermKind`, with the usual strum pair, and a
 new kind is new data, never a schema change. Built: `id`, `container`,
 `from`, `title`, `name`. Planned: the person kinds `to`, `cc`, `bcc`,
 `participant`, `mention` and `reactor`, and `label`; and, if the terms
@@ -258,12 +261,15 @@ and could fold in later too.
 
 ## Making qmd's tabs fast in themselves
 
-1. **Name the collections on every request.** An unscoped query
+1. **Reach every collection, as one list.** An unscoped query
    searches the collections the server read at startup (fact 3 in
-   `qmd_behaviour.md`), so the daemon sends the configured list.
-   `source_id:` already scopes a query to its source's collection,
-   which is what makes a scoped vector query take under a second.
-   Built: the applet names every collection `store_collections` holds.
+   `qmd_behaviour.md`), and naming them all ranks each apart and
+   interleaves them by rank (fact 8). Built: an unscoped search sends
+   `collections: []`, every collection the index holds ranked
+   together (fact 4); `source_id:` scopes a query to its source's
+   collection, which is what makes a scoped vector query take under a
+   second. Found by the fixture test in which every document searches
+   for itself (`search_finds_itself_tests.rs`).
 2. **Restart only when the index file is replaced.** Watch its inode,
    not its mtime; a new collection is covered by step 1. Built, with 1.
 3. **Map only the hits.** Built: the rows behind the paths qmd returned
@@ -280,15 +286,15 @@ and could fold in later too.
 
 0. **The doltlite facts FTS5 needs.** Done in imbue-ai/datalib#1107:
    the facts in `doltlite_facts_test`, the write cost in
-   `doltlite.md`, and the attached terms file beside a sealing writer
+   `doltlite.md`, and the attached search terms file beside a sealing writer
    in `doltlite_two_process_test`.
 1. **The search terms, derived terms only.** Built in this step's PR,
    with one narrowing: only a query made entirely of identifiers is
    answered from the terms; words still go to qmd until the tabs give
    their answer a place. On a real root (122,579 rows) the first pass
    wrote 674,672 terms, 58 MB, with the whole step taking 4.3 s, and a
-   pasted uuid's lookup took 1.5 ms. The terms file, the
-   `TermKind` enum, the derivation in `grid_index`, and bare words and
+   pasted uuid's lookup took 1.5 ms. The search terms file, the
+   `SearchTermKind` enum, the derivation in `grid_index`, and bare words and
    identifiers searched through it. An identifier-only query does not
    ask qmd. Test: a uuid search answers without asking qmd at all (the
    applet tests can give it a daemon that fails on any request).
@@ -297,7 +303,7 @@ and could fold in later too.
    for anything new we rely on.
 3. **Tabs.** Built. The API: `tab=fields|words|meaning` on the search
    and groups endpoints, each tab its own list in the results cache.
-   Fields reads the terms file with any word as the start of one; Words
+   Fields reads the search terms file with any word as the start of one; Words
    reads qmd's `documents_fts` with BM25 (1,000 deep, scoped by
    `source_id:`, each hit placed on the message where its first word
    is); Meaning is qmd's vector query alone. The UI: a small tab strip
@@ -307,8 +313,14 @@ and could fold in later too.
    the open tab (`grid/searchTabs.ts`, `search-tabs.spec.ts`). "Meaning
    only" stays until the search predicate autocomplete work lands, then
    goes.
-4. **Terms from renders,** and the `to:`, `cc:`, `from:` and `label:`
-   keys: the email renders first, then the chat ones.
+4. **Terms from renders.** Built for chat-common, so every email
+   source: a message's To and Cc by handle and its labels, as `to`,
+   `cc` and `label` terms on its own row, carried in each render
+   store's `supplied_search_terms` and copied by `grid_index`. Still
+   to come: `bcc` (no email source keeps it yet), `participant`, and
+   `mention` where a source marks one up. The keys that read them
+   (`to:`, `cc:`, `from:`, `with:`, `label:`) belong to the search
+   autocomplete plan.
 5. **More identifier kinds** if wanted: an upstream URL
    (`chatgpt.com/c/…`) as an `id` term.
 

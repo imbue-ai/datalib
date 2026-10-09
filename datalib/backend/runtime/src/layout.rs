@@ -23,7 +23,7 @@ pub const CURATED_DIR: &str = "datalib_curated";
 /// The doltlite database file inside [`GRID_DIR`].
 pub const GRID_DB: &str = "db.doltlite_db";
 /// The grid's terms index, beside its store.
-pub const GRID_TERMS_DB: &str = "terms.sqlite";
+pub const SEARCH_TERMS_DB: &str = "search_terms.sqlite";
 /// The qmd index's directory, relative to [`UNIFIED_INDEX_DIR`]: the
 /// `qmd_aggregator` step's tree, so its size is counted against that
 /// step. Every qmd step writes the one index under it, which qmd lays
@@ -106,12 +106,12 @@ pub fn grid_index_db(data_root: &Path) -> PathBuf {
     grid_index_dir(data_root).join(GRID_DB)
 }
 
-/// `data_root/unified_index/grid_index/terms.sqlite` — every id, person,
+/// `data_root/unified_index/grid_index/search_terms.sqlite` — every id, person,
 /// title and name a grid row answers to, as a full-text index. Plain
 /// SQLite: written by the `grid_index` step after each pass, read by the
 /// applet beside its grid commit.
-pub fn grid_terms_db(data_root: &Path) -> PathBuf {
-    grid_index_dir(data_root).join(GRID_TERMS_DB)
+pub fn search_terms_db(data_root: &Path) -> PathBuf {
+    grid_index_dir(data_root).join(SEARCH_TERMS_DB)
 }
 
 pub fn qmd_dir(data_root: &Path) -> PathBuf {
@@ -168,7 +168,7 @@ mod runs_layout_tests {
 
 /// Create `data_root` readable by its owner only, if it does not exist.
 /// Missing parents are created with the process's default mode: they
-/// are the user's own tree (`~/Documents/...`), and only the root holds
+/// are not ours to restrict, and only the root holds
 /// the mirror. The mode is not re-applied to a root that already exists.
 pub fn create_data_root(data_root: &Path) -> std::io::Result<()> {
     if data_root.is_dir() {

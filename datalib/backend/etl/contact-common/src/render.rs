@@ -148,6 +148,7 @@ fn render_one(
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
         sections,
+        search_terms: Vec::new(),
         edges: Vec::new(),
         // The page is about this person, so it carries them: the index
         // can then say who any of their handles is, and where their

@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # TNG-themed Facebook export (the JSON flavour) used by the e2e test and
 # the central fixture pipeline. Same file layout and record shapes as a
 # real "Download your information" export.

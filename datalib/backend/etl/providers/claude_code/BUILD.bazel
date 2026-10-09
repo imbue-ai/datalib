@@ -1,7 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # TNG-themed Claude Code transcripts in the layout `~/.claude/projects`
 # has: two sessions under one project directory, one with a subagent
 # transcript. Used by :claude_code_fixture_e2e and the central fixture

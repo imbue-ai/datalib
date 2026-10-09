@@ -178,13 +178,10 @@ fn query_arguments(
         "candidateLimit": limit,
         "rerank": false,
     });
-    // Scoping happens *inside* retrieval: qmd searches each named
-    // collection and merges, so a source's hits cannot be crowded out of a
-    // global top-N by a larger one. Filtering the results afterwards
-    // returns nothing at all whenever that crowding happens.
-    if let Some(names) = scope.names() {
-        arguments["collections"] = serde_json::json!(names);
-    }
+    // A source scope applies inside retrieval, so its hits cannot be
+    // crowded out of a global top-N by a larger source's. An unscoped
+    // search is `[]`, every collection ranked as one list (`CollectionScope`).
+    arguments["collections"] = serde_json::json!(scope.names().unwrap_or_default());
     arguments
 }
 
@@ -798,7 +795,7 @@ mod tests {
         let args = query_arguments(serde_json::json!([]), 1000, &CollectionScope::All);
         assert_eq!(args["limit"], 1000);
         assert_eq!(args["candidateLimit"], 1000);
-        assert!(args.get("collections").is_none());
+        assert_eq!(args["collections"], serde_json::json!([]));
         let scoped = query_arguments(
             serde_json::json!([]),
             10,
