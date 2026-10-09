@@ -443,9 +443,10 @@ takes the loop over when it ends.
 Whoever runs the loop owns its steps' processes. Each step holds a pipe
 from that process (`DATALIB_PARENT_PIPE`) and stops itself when the pipe
 closes, however the process died. A step the loop stops gets SIGINT on
-its process group and SIGKILL on it fifteen seconds later if it is still
-there (`subprocess::stop_ladder`, `step::STOP_GRACE`), so one that
-ignores its SIGINT cannot hold its store for good. A loop that died
+its process group and SIGKILL on it fifteen seconds later if it, or
+anything it left in the group, is still there (`subprocess::stop_ladder`,
+`step::STOP_GRACE`), so one that ignores its SIGINT cannot hold its
+store for good, and a child it left behind cannot hold the run open. A loop that died
 holding the lock leaves its run and its invocations open in the record
 and the run store; the next process to take the lock closes them
 (`supervisor::host::take_over`). Its requests are still open rows, and

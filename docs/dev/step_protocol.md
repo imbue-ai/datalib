@@ -539,7 +539,9 @@ committed stands, and the next run resumes from your cursor. **Never
 commit from the signal handler itself** — a commit made wherever the
 signal happened to land publishes a half-written batch to every
 reader. If you do nothing, you are killed at the grace, and the next
-writer's `open` discards whatever you wrote after your last commit.
+writer's `open` discards whatever you wrote after your last commit. So
+is anything you spawned that is still in your process group, even once
+you have exited: stop your children before you exit.
 
 `datalib-step` does this for the built-in ingests: SIGINT raises a
 stop flag (`datalib_etl::stop::StopFlag`, on `DownloadControl`) that

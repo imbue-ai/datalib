@@ -156,6 +156,14 @@ async function run() {
 // apart already, and this is what says so if something else did not.
 const { tryAcquireEmbedLock, embedLockPathForDb } = await load("dist/cli/embed-lock.js");
 const lock = verb === "embed" ? tryAcquireEmbedLock(embedLockPathForDb(dbPath)) : { release() {} };
+// The step reading our stdout has gone, so nobody wants the answer. Left
+// unhandled, the EPIPE crashes node with a stack trace, and that trace
+// becomes the step's recorded error.
+process.stdout.on("error", (err) => {
+  lock?.release();
+  process.stderr.write(`qmd_sdk: stdout is closed (${err.code}); its reader is gone, so stopping\n`);
+  process.exit(1);
+});
 if (!lock) {
   emit({ event: "busy" });
   process.exitCode = 75;

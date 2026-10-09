@@ -186,6 +186,13 @@ does not carry over to `createStore()` without being re-measured.
     through the SDK rewrites `index.yml` whole, and two of those at once
     would lose one's collection.
 
+13. **A keyword update does not hear SIGINT until it is nearly done.**
+    node runs a signal handler only between turns of its event loop,
+    and `update` takes none while it hashes and indexes. Measured on
+    20,000 small files, where a whole update took 15.5s: a SIGINT 3s in
+    reached the script's handler 7.9s later. On a real mailbox a
+    stopped `keyword_index` ran on for 16s.
+
 ## How a running `qmd mcp` behaves
 
 What the search (`QmdDaemon`, `unified_index/src/qmd/daemon.rs`)
@@ -282,6 +289,12 @@ Finding 6 is fixed rather than looped around: the script calls
 until it embeds nothing would never end on a document with a chunk that
 always fails, because `removeIncompleteEmbeddings` drops that
 document's good chunks at the end of each pass.
+
+Finding 13 is why a stopped step kills the script outright
+(`qmd_indexer::kill_on_stop`) rather than waiting for it to hear its
+SIGINT. Nothing is lost: SQLite rolls back the unfinished write, finding
+7 keeps the finished batches of an embed, and finding 5's PID check
+takes over the lock a killed embed leaves.
 
 The alternative that was built and closed unmerged — a loop over `qmd
 embed -c <g>` re-reading pending between calls, and a Rust writer for

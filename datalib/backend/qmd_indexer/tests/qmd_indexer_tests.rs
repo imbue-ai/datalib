@@ -81,6 +81,35 @@ fn by_name(index: &Index) -> Vec<(String, u64, u64)> {
 
 fn quiet(_: UpdateProgress) {}
 
+/// The regression: a step that exited before its script left node
+/// writing to a pipe nobody read, and node died on the unhandled EPIPE.
+/// Its stack trace became the step's recorded error.
+#[test]
+fn a_script_whose_reader_is_gone_says_so_in_one_line() {
+    let root = tempfile::tempdir().unwrap();
+    let mut child = std::process::Command::new(runfile("QMD_TEST_NODE_RLOC"))
+        .arg(runfile("QMD_TEST_SDK_RLOC"))
+        .arg(runfile("QMD_TEST_PACKAGE_RLOC"))
+        .arg(root.path().join("index.sqlite"))
+        .arg("status")
+        .arg("{}")
+        .env("XDG_CACHE_HOME", root.path())
+        .env("XDG_CONFIG_HOME", root.path())
+        .env("NO_COLOR", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Closed before node has loaded anything, so its one line hits it.
+    drop(child.stdout.take());
+    let out = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "nobody got the answer: {stderr}");
+    assert!(!stderr.contains("Unhandled 'error' event"), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.contains("stdout is closed"), "{stderr}");
+}
+
 /// The point of a per-source step: one source's keyword update fills its
 /// own collection and leaves every other one as it was.
 #[test]

@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
+use datalib_etl::stop::StopFlag;
 use datalib_qmd_indexer::{EmbedProgress, Index, Qmd, UpdateProgress};
 
 use crate::events::{Emitter, OutputClaim};
@@ -48,8 +49,9 @@ pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
     out.into_iter().collect()
 }
 
-fn open_index(root: &Path) -> Result<Index> {
-    Index::open(root, Qmd::pinned()?)
+fn open_index(root: &Path, stop: &StopFlag) -> Result<Index> {
+    let stop = stop.clone();
+    Ok(Index::open(root, Qmd::pinned()?)?.stop_when(move || stop.requested()))
 }
 
 /// One call on a [`Progress`] handle. Named so the translation below can
@@ -191,13 +193,15 @@ pub async fn run_aggregator(
     data_root: &Path,
     env: &StepEnv,
     emitter: &Emitter,
+    stop: &StopFlag,
 ) -> Result<Vec<OutputClaim>> {
     let progress = emitter.progress();
     progress.set_message("aggregating the qmd index");
     let groups = groups_from_inputs(&env.inputs);
     let root = data_root.to_path_buf();
+    let stop = stop.clone();
     let (retired, collections) = tokio::task::spawn_blocking(move || {
-        let index = open_index(&root)?;
+        let index = open_index(&root, &stop)?;
         let retired = index.register(&groups)?;
         anyhow::Ok((retired, index.collections()?))
     })
@@ -236,14 +240,16 @@ pub async fn run_keyword(
     data_root: &Path,
     env: &StepEnv,
     emitter: &Emitter,
+    stop: &StopFlag,
 ) -> Result<Vec<OutputClaim>> {
     let progress = emitter.progress();
     progress.set_message("keyword index");
     let sink = update_progress_sink(progress.clone());
     let root = data_root.to_path_buf();
     let group = env.group.clone();
+    let stop = stop.clone();
     let updated = tokio::task::spawn_blocking(move || {
-        open_index(&root)?.keyword_index(&[group], sink.as_ref())
+        open_index(&root, &stop)?.keyword_index(&[group], sink.as_ref())
     })
     .await
     .context("qmd task panicked")??;
@@ -257,14 +263,16 @@ pub async fn run_embed(
     env: &StepEnv,
     models_dir: Option<PathBuf>,
     emitter: &Emitter,
+    stop: &StopFlag,
 ) -> Result<Vec<OutputClaim>> {
     let progress = emitter.progress();
     progress.set_message("embedding");
     let sink = embed_progress_sink(progress.clone());
     let root = data_root.to_path_buf();
     let group = env.group.clone();
+    let stop = stop.clone();
     let embedded = tokio::task::spawn_blocking(move || {
-        let index = open_index(&root)?;
+        let index = open_index(&root, &stop)?;
         provision_embed_model(&index, &root, models_dir)?;
         index.embed(&[group], sink.as_ref())
     })

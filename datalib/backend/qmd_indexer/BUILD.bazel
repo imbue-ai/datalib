@@ -38,6 +38,7 @@ rust_test(
     size = "medium",
     srcs = ["tests/qmd_indexer_tests.rs"],
     data = [
+        "src/js/qmd_sdk.mjs",
         "@nodejs_host//:node_bin",
         "//third-party/qmd/runtime:qmd_package_dir",
         "//third-party/qmd/runtime:qmd_tree",
@@ -48,6 +49,7 @@ rust_test(
         "QMD_TEST_EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
         "QMD_TEST_NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
         "QMD_TEST_PACKAGE_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
+        "QMD_TEST_SDK_RLOC": "$(rlocationpath src/js/qmd_sdk.mjs)",
     },
     deps = [
         ":datalib_qmd_indexer",
