@@ -267,5 +267,10 @@ answered from the search terms.
 
 - A group contact (an address two people share): does
   `with:contact:<group>` reach its members' handles too, or only its
-  own?
-- Does a reaction count as being involved, for `with:`?
+  own? The lean is its own: the shared address is what the group was
+  reached by.
+
+Decided: **a reaction is not being involved** (Thad, 2026-10-09).
+`with:` reads every kind `SearchTermKind::is_person()` names, so a
+`reactor` kind, when one is added, answers false there, or `with:`
+names its kinds instead of reading `is_person()`.

@@ -177,10 +177,13 @@ test are in [`doltlite.md`](../doltlite.md) § "Full-text search
 
 **`kind` is an enum**, `SearchTermKind`, with the usual strum pair, and a
 new kind is new data, never a schema change. Built: `id`, `container`,
-`from`, `title`, `name` (a channel, an account), `to`, `cc`, `label`,
-and `author`, the name a row's author was shown under, split from
-`name` so `from:` finds an author with no handle. Planned: the person
-kinds `bcc`, `participant`, `mention` and `reactor`; and, if the terms
+`from`, `title`, `name` (a channel, an account), `to`, `cc`, `bcc`,
+`mention`, `label`, and `author`, the name a row's author was shown
+under, split from `name` so `from:` finds an author with no handle.
+Planned: `participant`, and `reactor`, which `with:` does not read (a
+reaction is not being involved,
+[`search_autocomplete.md`](search_autocomplete.md) §"Open questions");
+and, if the terms
 come to serve the `channel:` and `account:` keys, `name` split into one
 kind for each ([`search_autocomplete.md`](search_autocomplete.md)
 §"The wide columns and the tall search terms"). Each kind has an affinity, a
