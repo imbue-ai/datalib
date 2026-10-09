@@ -74,7 +74,7 @@ org_name:
   checked: claude-api 70, slack 35, slack-diff 13
   never: beeper, chatgpt-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-takeout, linkedin, notion, ship-air, signal, sms-backup-restore, tng_calendar, tng_contacts, tng_contacts-diff, tng_email, tng_pdfs, whatsapp, yolink
 phone:
-  checked: tng_contacts 6, tng_contacts-diff 2
+  checked: tng_contacts 7, tng_contacts-diff 3
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_email, tng_pdfs, whatsapp, yolink
 project:
   checked: beeper 12, claude-api 16, claude-code 29, codex 40, github 10, gitlab 9, google-takeout 31, sms-backup-restore 12

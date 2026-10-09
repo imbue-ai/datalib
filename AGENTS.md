@@ -418,7 +418,9 @@ dependency:
 - **Nothing copyleft gets vendored or ported**, however small. A GPL or
   AGPL project may be a test oracle or a source of facts about a wire
   format (`whatsapp-backup/src/key.rs`, `signal-backup/proto/`), never
-  a source of code.
+  a source of code. The one exception is an image in a test fixture
+  (the TNG contacts' photos), which may be CC BY-SA beside the
+  permissive ones, credited where it is used.
 - **Say where it came from.** Ported MIT/BSD code names the project and
   its copyright line in the file header. Vendored code keeps its
   `LICENSE` and a README naming the upstream commit

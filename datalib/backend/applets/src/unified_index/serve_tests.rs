@@ -151,7 +151,11 @@ fn people_by_handle_gives_each_sources_account() {
         .map(|c| c["source_id"].as_str().unwrap())
         .collect();
     sources.sort();
-    assert_eq!(sources, ["google-takeout", "slack", "tng_email"], "{body}");
+    assert_eq!(
+        sources,
+        ["google-takeout", "slack", "tng_contacts", "tng_email"],
+        "{body}"
+    );
     for c in people[picard].as_array().unwrap() {
         assert_eq!(c["names"][0], "Jean-Luc Picard", "{body}");
     }

@@ -16,3 +16,6 @@ The fixture pipeline (`tests/fixtures/run_sync_pipeline.py`) ingests
 and renders a `diff` group between the two raw commits — one add, three
 deletes (Data and the Maquis book) and one edit, so every row of the
 diff's table is exercised.
+
+The photos, Worf's included, are credited in `../carddav_tng/README.md`
+§"The photos".

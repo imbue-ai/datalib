@@ -997,8 +997,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "every source that rendered must also have measured itself",
         )
         # Who a handle is, as each source that mentions it says: the
-        # rows a chip reads. One address, three sources, one name — Slack's
-        # through its profile, which ties his Slack user to the address.
+        # rows a chip reads. One address, four sources, one name — Slack's
+        # through its profile, which ties his Slack user to the address, and
+        # the address book's, whose photo is what his chips draw.
         self.assertEqual(
             self._query(
                 self._index_db,
@@ -1010,6 +1011,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [
                 "google-takeout|Jean-Luc Picard",
                 "slack|Jean-Luc Picard",
+                "tng_contacts|Jean-Luc Picard",
                 "tng_email|Jean-Luc Picard",
             ],
             "the people the index knows by Picard's address",
@@ -1134,18 +1136,19 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         # A card's photo is written beside its page and the index holds
         # where the app serves it from, so a chip can draw it; a card
-        # without one carries no URL. Only `Bridge.vcf`'s two cards have one.
+        # without one carries no URL. The Borg cards, from a Google export, have
+        # none.
         self.assertEqual(
             self._query(
                 self._index_db,
                 "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url') "
                 "  = '/applet/unified_index/asset/' || c.markdown_uuid || '/blobs/' "
-                "    || c.markdown_uuid || '.png', 'none') "
+                "    || c.markdown_uuid || '.jpg', 'none') "
                 "FROM source_contacts c JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
                 "WHERE m.source_id = 'tng_contacts' "
-                "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Worf') ORDER BY 1;",
+                "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Hugh') ORDER BY 1;",
             ),
-            ["Jean-Luc Picard|1", "William T. Riker|1", "Worf|none"],
+            ["Hugh|none", "Jean-Luc Picard|1", "William T. Riker|1"],
             "a card's photo, as the URL the index serves it at",
         )
         # Signal ties a number to an ACI: Riker's account carries both,
