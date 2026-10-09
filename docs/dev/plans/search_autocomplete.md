@@ -118,7 +118,9 @@ the contacts store and matching any of them. The `unified_index`
 applet opens the store read-only at its head (a reader, under the one
 writer rule; `../../AGENTS.md` §"Doltlite"), reads the contact's
 handles, stopped ones included since they still name the person in old
-messages, and follows `merged_into` to the survivor.
+messages, and follows `merged_into` to the survivor. A group contact
+brings its members' handles too, and theirs if a member is a group,
+each contact read once (§"Open questions").
 
 - **Live.** A link made a moment ago changes the next search, as it
   changes chips at once. Nothing in the index moves when a link does.
@@ -265,7 +267,15 @@ answered from the search terms.
 
 ## Open questions
 
-- A group contact (an address two people share): does
-  `with:contact:<group>` reach its members' handles too, or only its
-  own?
-- Does a reaction count as being involved, for `with:`?
+None open. Decided (Thad, 2026-10-09):
+
+- **A group contact reaches its members.** A group contact stands for
+  the people who share an address (a household's landline, a team's
+  mailbox), and `with:contact:<group>` matches the group's own handles
+  and every member's, a member that is itself a group included, each
+  contact read once. Whoever searches for a group is looking for its
+  people.
+- **A reaction is not being involved.** `with:` reads every kind
+  `SearchTermKind::is_person()` names, so a `reactor` kind, when one is
+  added, answers false there, or `with:` names its kinds instead of
+  reading `is_person()`.
