@@ -188,8 +188,10 @@ does not carry over to `createStore()` without being re-measured.
 
 ## How a running `qmd mcp` behaves
 
-What the search (`QmdDaemon`, `unified_index/src/qmd/daemon.rs`)
-relies on. Each is a test in `qmd_facts_test`, which builds a small
+What the hybrid search (`QmdDaemon`, `unified_index/src/qmd/daemon.rs`)
+relies on. The Meaning tab does not go through `qmd mcp`: it asks
+qmd's SDK only to embed the query and scores the stored vectors
+itself. Each is a test in `qmd_facts_test`, which builds a small
 index through `Index` and talks to the pinned `qmd mcp` directly, so
 the facts are about qmd and not about our daemon.
 

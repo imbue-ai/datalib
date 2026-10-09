@@ -2,7 +2,10 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "datalib_qmd_indexer",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/lib.rs",
+        "src/query_embedder.rs",
+    ],
     # `include_str!`'d into the crate: the script that drives qmd's
     # SDK. Not a `srcs` entry — it is data the compiler reads,
     # not Rust to compile.

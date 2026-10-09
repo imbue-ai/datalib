@@ -1851,14 +1851,15 @@ function submit() {
                         <div v-if="f.probe && canProbe" class="wiz-load">
                           <template v-if="listLoad(f.probe).state === 'running'">
                             <progress
+                              v-if="listLoad(f.probe).progress?.total != null"
                               class="wiz-load-bar"
-                              :value="
-                                listLoad(f.probe).progress?.total != null
-                                  ? listLoad(f.probe).progress?.done
-                                  : undefined
-                              "
+                              :value="listLoad(f.probe).progress?.done"
                               :max="listLoad(f.probe).progress?.total ?? undefined"
                             />
+                            <!-- No bound `value`: Vue re-applies one on every
+                                 render, which restarts the indeterminate
+                                 animation each time the text beside it moves. -->
+                            <progress v-else class="wiz-load-bar" />
                             <small class="wiz-help wiz-load-status" role="status">{{
                               loadingLine(f.probe)
                             }}</small>

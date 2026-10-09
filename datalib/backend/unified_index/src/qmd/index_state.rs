@@ -192,6 +192,17 @@ impl QmdIndexReader {
             .collect())
     }
 
+    /// See [`crate::qmd::vectors::nearest_documents`].
+    pub async fn nearest_documents(
+        &self,
+        query: &crate::qmd::vectors::QueryVector<'_>,
+        collections: Option<&[String]>,
+        among: Option<&std::collections::HashSet<String>>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<QmdHit>> {
+        crate::qmd::vectors::nearest_documents(&self.pool, query, collections, among, limit).await
+    }
+
     pub async fn summary(&self) -> Result<QmdIndexSummary, sqlx::Error> {
         let row = sqlx::query(
             "SELECT COUNT(*) AS documents, \

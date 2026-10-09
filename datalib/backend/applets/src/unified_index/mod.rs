@@ -64,6 +64,9 @@ struct Index {
     /// an error, and searches once the first sync builds one, with no
     /// restart.
     qmd: Arc<QmdDaemon>,
+    /// Embeds a Meaning search's text, so the model loads once; the
+    /// vectors themselves are scored here, never by qmd.
+    embedder: Arc<datalib_qmd_indexer::QueryEmbedder>,
     qmd_summary: Arc<SummaryCache>,
     results: Arc<results::ResultCache>,
 }
@@ -92,6 +95,11 @@ pub fn serve(port: u16) -> Result<()> {
             .with_context(|| format!("open the grid index under {}", root.display()))?;
         let state = Index {
             qmd: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
+            embedder: Arc::new(datalib_qmd_indexer::QueryEmbedder::new(
+                &root,
+                None,
+                datalib_unified_index::qmd::daemon::QMD_ANSWER_DEADLINE,
+            )),
             qmd_summary: Arc::new(SummaryCache::default()),
             results: Arc::new(results::ResultCache::default()),
             repo: Arc::new(repo),
@@ -695,11 +703,7 @@ async fn ranked(
             }
         },
         (Some(SearchTab::Words), None) => (words_ranking(s, parsed).await?, None),
-        (Some(SearchTab::Meaning), None) => {
-            let mut by_meaning = parsed.clone();
-            by_meaning.free_text_mode = FreeTextMode::Vsearch;
-            (qmd_or_no_index(s, &by_meaning).await?, None)
-        }
+        (Some(SearchTab::Meaning), None) => (meaning_ranking(s, parsed).await?, None),
         (None, None) => (qmd_or_no_index(s, parsed).await?, None),
     };
     let uuids: Vec<String> = ranking.iter().map(|(uuid, _)| uuid.clone()).collect();
@@ -770,6 +774,82 @@ async fn words_ranking(
     rows_of_hits(&s.root, &s.repo, &hits, parsed)
         .await
         .map_err(|e| SearchFailure::Qmd(format!("{e:#}")))
+}
+
+/// The Meaning tab: the documents nearest the free text by cosine, scored
+/// here over qmd's stored vectors. Structured terms narrow the documents
+/// before any is scored, so a filter never empties a ranking cut too
+/// shallow to hold its rows; qmd only embeds the query.
+async fn meaning_ranking(
+    s: &Index,
+    parsed: &ParsedQuery,
+) -> Result<Vec<(String, (f64, String))>, SearchFailure> {
+    use datalib_unified_index::qmd::lex::{has_lex_syntax, strip_lex_syntax};
+    let qmd = |e: anyhow::Error| SearchFailure::Qmd(format!("{e:#}"));
+    let text = if has_lex_syntax(&parsed.free_text) {
+        strip_lex_syntax(&parsed.free_text)
+    } else {
+        parsed.free_text.clone()
+    };
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(reader) = QmdIndexReader::open(&s.root)
+        .await
+        .map_err(|e| SearchFailure::Qmd(format!("open the qmd index: {e}")))?
+    else {
+        return Err(SearchFailure::NoIndex);
+    };
+    let started = std::time::Instant::now();
+    let embedder = s.embedder.clone();
+    let query = tokio::task::spawn_blocking(move || embedder.embed(&text))
+        .await
+        .map_err(|e| SearchFailure::Qmd(format!("query embedder task: {e}")))?
+        .map_err(qmd)?;
+    let embedded = started.elapsed();
+    let among = if narrows_documents(parsed) {
+        Some(s.repo.matching_qmd_paths(parsed).await.map_err(index)?)
+    } else {
+        None
+    };
+    let narrowed = started.elapsed();
+    let scope = collection_scope(parsed);
+    let hits = reader
+        .nearest_documents(
+            &datalib_unified_index::qmd::vectors::QueryVector {
+                model: &query.model,
+                vector: &query.vector,
+            },
+            scope.names(),
+            among.as_ref(),
+            QMD_DEPTH,
+        )
+        .await;
+    reader.close().await;
+    let hits = hits.map_err(qmd)?;
+    tracing::info!(
+        embed_ms = embedded.as_millis() as u64,
+        narrow_ms = (narrowed - embedded).as_millis() as u64,
+        score_ms = (started.elapsed() - narrowed).as_millis() as u64,
+        among = among.as_ref().map(|a| a.len()),
+        hits = hits.len(),
+        "ranked a search by meaning"
+    );
+    rows_of_hits(&s.root, &s.repo, &hits, parsed)
+        .await
+        .map_err(qmd)
+}
+
+/// Whether a search's structured terms narrow it below whole sources,
+/// which `collection_scope` already does for a positive `source_id:`.
+fn narrows_documents(parsed: &ParsedQuery) -> bool {
+    let scoped = collection_scope(parsed);
+    parsed.terms.iter().any(|t| {
+        let scopes = matches!(t.field, Field::Column(k) if k.column == GridRowColumn::SourceId)
+            && !t.negate
+            && scoped.names().is_some_and(|n| n.contains(&t.value));
+        !scopes
+    })
 }
 
 /// The identifiers a search is made of, when it is made of nothing else
@@ -1652,6 +1732,11 @@ mod tests {
                     .unwrap(),
             ),
             qmd: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
+            embedder: Arc::new(datalib_qmd_indexer::QueryEmbedder::new(
+                &root,
+                None,
+                datalib_unified_index::qmd::daemon::QMD_ANSWER_DEADLINE,
+            )),
             qmd_summary: Arc::new(SummaryCache::default()),
             results: Arc::new(results::ResultCache::default()),
             root,

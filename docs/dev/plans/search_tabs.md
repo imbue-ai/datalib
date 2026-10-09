@@ -108,16 +108,17 @@ contains it, which Fields already found.
 
 Fields pages without limit through the grid's existing SQL paging.
 
-Words and Meaning are ranked lists, so each is cut somewhere. The
-daemon sends `candidateLimit`, which lifts the merged cut of 40. What
-remains is qmd's own: each sub-query takes the best 20 documents of
-each collection it searches, hard-coded and out of reach of the MCP
-arguments (fact 7 in `qmd_behaviour.md`), and an unscoped search is
-one search over every collection, so Meaning is the 20 nearest
-documents in all, or 20 of one source under `source_id:`. Naming every
-collection would reach 20 of each, but ranked by source rather than
-by nearness (fact 8). Twenty is a fair depth for Meaning, where
-nearness past the first few is noise. It is too
+Words and Meaning are ranked lists, so each is cut somewhere. Meaning
+no longer goes through qmd's search: qmd only embeds the query, and the
+applet scores qmd's stored vectors itself (`nearest_documents` in
+`unified_index/src/qmd/vectors.rs`), exactly, over the documents the
+search's structured terms leave, and keeps the 1,000 nearest. A filter
+therefore narrows what is scored instead of what is kept. The hybrid
+search with no tab still goes through `qmd mcp`, whose cut is qmd's
+own: each sub-query takes the best 20 documents of each collection it
+searches, hard-coded and out of reach of the MCP arguments (fact 7 in
+`qmd_behaviour.md`), so a filter applied afterwards keeps whatever of
+those 20 it matches. That depth is too
 shallow for Words, where a keyword match far down the list is still a
 real match: the Words tab should read qmd's own FTS5 table
 (`documents_fts` in `index.sqlite`, plain SQLite that doltlite reads,
@@ -281,10 +282,18 @@ and could fold in later too.
    every `-`/`_` dropped (qmd folds both), then kept only where the path
    matches exactly. On a real root, 40 hits took 2.8 ms against
    1.5–1.9 s for reading every row; building the index took 1.5 s once.
-4. **The vector scan itself.** Each big source is a scan of every
-   vector. Splitting the vectors per collection, or a smaller vector
-   type, is a change in qmd, not here; note it upstream and measure
-   again after 1 to 3.
+4. **The vector scan itself.** Built, for Meaning, by not asking qmd
+   to scan. qmd's `searchVec` reads every vector in the file, live or
+   not, for a source over 20,000 chunks, and for a smaller one looks
+   its vectors up 400 keys at a time in a way that scans the table per
+   batch; on a real root (188,603 vectors, 34,587 of them live, the
+   rest left by re-downloads) a vector query over every source took
+   ~10 s. The applet now reads only the live chunks of the documents
+   in scope from sqlite-vec's storage tables and scores them with a
+   SIMD dot product: 0.3–0.6 s warm for the same root unfiltered, less
+   when the structured terms narrow it. qmd keeps the model warm in a
+   long-lived `serve` run of our SDK script (`QueryEmbedder` in
+   `qmd_indexer`), 15–40 ms a query.
 
 ## Order of work
 
@@ -310,7 +319,7 @@ and could fold in later too.
    Fields reads the search terms file with any word as the start of one; Words
    reads qmd's `documents_fts` with BM25 (1,000 deep, scoped by
    `source_id:`, each hit placed on the message where its first word
-   is); Meaning is qmd's vector query alone. The UI: a small tab strip
+   is); Meaning scores qmd's vectors in the applet (item 4 above). The UI: a small tab strip
    at the start of the source chips' row, all three asked at once, the
    first with rows opening, a dot on a tab that came back while another
    was open, and the list, table, groups and source chips all showing

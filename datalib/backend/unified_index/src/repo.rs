@@ -164,6 +164,13 @@ pub trait IndexRepo: Send + Sync {
         q: &ParsedQuery,
     ) -> Result<std::collections::HashSet<String>, RepoError>;
 
+    /// The `qmd_path` behind every row a query's structured terms match,
+    /// `norm_path`ed: the documents a vector search may score.
+    async fn matching_qmd_paths(
+        &self,
+        q: &ParsedQuery,
+    ) -> Result<std::collections::HashSet<String>, RepoError>;
+
     /// List outgoing edges originating from `markdown_uuid`. Each
     /// returned [`EdgeRowOut`] pairs the raw edge with whatever
     /// destination metadata the UI needs to render an "outgoing

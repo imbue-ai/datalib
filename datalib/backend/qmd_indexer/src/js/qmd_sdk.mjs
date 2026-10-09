@@ -8,6 +8,7 @@
 //   update    {config, root, collections: [{name, glob}]}  registers them first
 //   embed     {collections: [name]}                        in one process: one model load
 //   status    {}
+//   serve     {}   long-lived: embeds search queries, one per stdin line
 //
 // Why the SDK and not the CLI: `qmd update` cannot be scoped to one
 // collection, and `qmd embed` reports progress only to a terminal
@@ -132,6 +133,32 @@ async function status(store) {
   emit({ event: "done", collections });
 }
 
+// Embeds search queries for as long as stdin stays open, so the model
+// loads once per process. Each stdin line is `{id, text}`; each answer is
+// one `embedding` line `{id, model, vector}` or an `error` line with the
+// same id. `ready` names the model first: the caller scores only vectors
+// that model wrote. The index is never opened; scoring is the caller's.
+async function serve() {
+  const { createInterface } = await import("node:readline");
+  const { getDefaultLlamaCpp, formatQueryForEmbedding } = await load("dist/llm.js");
+  const llm = getDefaultLlamaCpp();
+  const model = llm.embedModelName;
+  emit({ event: "ready", model });
+  for await (const line of createInterface({ input: process.stdin })) {
+    if (!line.trim()) continue;
+    let id = null;
+    try {
+      const req = JSON.parse(line);
+      id = req.id;
+      const r = await llm.embed(formatQueryForEmbedding(req.text, model), { model, isQuery: true });
+      if (!r?.embedding) throw new Error("the model returned no embedding");
+      emit({ event: "embedding", id, model, vector: Array.from(r.embedding) });
+    } catch (err) {
+      emit({ event: "error", id, message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+}
+
 const VERBS = {
   register: { run: register, withConfig: true },
   update: { run: update, withConfig: true },
@@ -155,6 +182,16 @@ async function run() {
 // embeds race on vectors_vec's UNIQUE constraint; the runner keeps them
 // apart already, and this is what says so if something else did not.
 const { tryAcquireEmbedLock, embedLockPathForDb } = await load("dist/cli/embed-lock.js");
+if (verb === "serve") {
+  try {
+    await serve();
+  } catch (err) {
+    emit({ event: "error", message: err instanceof Error ? err.message : String(err) });
+    process.exitCode = 1;
+  }
+  // node-llama-cpp keeps handles open; stdin closing is the signal to go.
+  process.exit();
+}
 const lock = verb === "embed" ? tryAcquireEmbedLock(embedLockPathForDb(dbPath)) : { release() {} };
 if (!lock) {
   emit({ event: "busy" });

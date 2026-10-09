@@ -1,4 +1,5 @@
-//! One embedding per document, read out of the qmd index.
+//! qmd's stored vectors, read out of its index: one embedding per
+//! document for the map, and the documents nearest a query for search.
 //!
 //! qmd keeps its vectors in a sqlite-vec `vec0` table, `vectors_vec`, one
 //! row per chunk keyed `<content hash>_<seq>`. A `vec0` table can only be
@@ -19,9 +20,10 @@
 //! agrees to the last digit.
 //!
 //! qmd's vectors are not unit length, so each chunk is normalised before
-//! a document's chunks are averaged, and the average normalised again.
+//! a document's chunks are averaged, and the average normalised again;
+//! a search divides each chunk's dot product by its length instead.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 
@@ -29,7 +31,8 @@ use anyhow::{bail, Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-use crate::qmd::qmd_index_path;
+use crate::qmd::mapping::norm_path;
+use crate::qmd::{qmd_index_path, QmdHit};
 
 /// Every active document with at least one embedded chunk: its qmd path
 /// (`<group>/render_markdown/…`, the data-root-relative path the grid's
@@ -190,6 +193,185 @@ fn add_chunk(
     Ok(())
 }
 
+/// The `limit` documents nearest `query` by cosine, each at its nearest
+/// chunk: an exact score of every chunk `query.model` wrote for the
+/// active documents in `collections` (all when `None`) whose path is in
+/// `among` (all when `None`, else `norm_path`ed qmd paths). Not qmd's
+/// own vector search, which cannot take a document set and reads every
+/// vector in the file, live or not, to answer.
+pub async fn nearest_documents(
+    pool: &SqlitePool,
+    query: &QueryVector<'_>,
+    collections: Option<&[String]>,
+    among: Option<&HashSet<String>>,
+    limit: usize,
+) -> Result<Vec<QmdHit>> {
+    let create: Option<String> = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vectors_vec'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    let Some(create) = create else {
+        return Ok(Vec::new());
+    };
+    check_version(pool).await?;
+    let dim = dims_of(&create)
+        .with_context(|| format!("no `float[N]` column in `vectors_vec`: {create}"))?;
+    if query.vector.len() != dim {
+        bail!(
+            "the query's embedding has {} dimensions and the index's {dim}",
+            query.vector.len()
+        );
+    }
+    let mut q = query.vector.to_vec();
+    if !unit(&mut q) {
+        bail!("the query's embedding is all zeros");
+    }
+
+    let wanted = serde_json::to_string(&collections.unwrap_or_default())?;
+    let documents: Vec<(String, String)> = sqlx::query_as(
+        "SELECT path, hash FROM documents \
+          WHERE active = 1 AND (NOT ?1 OR collection IN (SELECT value FROM json_each(?2)))",
+    )
+    .bind(collections.is_some())
+    .bind(wanted)
+    .fetch_all(pool)
+    .await?;
+    let documents: Vec<(String, String)> = match among {
+        Some(among) => documents
+            .into_iter()
+            .filter(|(path, _)| among.contains(&norm_path(path)))
+            .collect(),
+        None => documents,
+    };
+    let mut hashes: Vec<&str> = documents.iter().map(|(_, h)| h.as_str()).collect();
+    hashes.sort_unstable();
+    hashes.dedup();
+
+    // Where each chunk of those contents sits in the vector storage.
+    let chunks: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT cv.hash, cv.pos, r.chunk_id, r.chunk_offset \
+           FROM content_vectors cv \
+           JOIN vectors_vec_rowids r ON r.id = cv.hash || '_' || cv.seq \
+          WHERE cv.model = ?1 AND cv.hash IN (SELECT value FROM json_each(?2))",
+    )
+    .bind(query.model)
+    .bind(serde_json::to_string(&hashes)?)
+    .fetch_all(pool)
+    .await?;
+    let mut in_chunk: HashMap<i64, Vec<(usize, usize)>> = HashMap::new();
+    for (i, (_, _, chunk, offset)) in chunks.iter().enumerate() {
+        in_chunk
+            .entry(*chunk)
+            .or_default()
+            .push((usize::try_from(*offset)?, i));
+    }
+    let storage_chunks: Vec<i64> = in_chunk.keys().copied().collect();
+    let validity: HashMap<i64, Vec<u8>> = sqlx::query_as(
+        "SELECT chunk_id, validity FROM vectors_vec_chunks \
+          WHERE chunk_id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(serde_json::to_string(&storage_chunks)?)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .collect();
+
+    // hash → (score, pos) of its nearest chunk.
+    let mut best: HashMap<&str, (f32, i64)> = HashMap::new();
+    for &storage_chunk in &storage_chunks {
+        let blob: Vec<u8> =
+            sqlx::query_scalar("SELECT vectors FROM vectors_vec_vector_chunks00 WHERE rowid = ?")
+                .bind(storage_chunk)
+                .fetch_one(pool)
+                .await
+                .with_context(|| format!("read vector chunk {storage_chunk}"))?;
+        let bitmap = validity
+            .get(&storage_chunk)
+            .with_context(|| format!("vector chunk {storage_chunk} has no validity bitmap"))?;
+        let floats = floats_of(&blob);
+        for &(offset, i) in &in_chunk[&storage_chunk] {
+            if !is_live(bitmap, offset) {
+                continue;
+            }
+            let v = floats
+                .get(offset * dim..(offset + 1) * dim)
+                .with_context(|| {
+                    format!("slot {offset} is past the end of vector chunk {storage_chunk}")
+                })?;
+            let (dot, norm2) = dot_and_norm(v, &q);
+            if norm2 == 0.0 || !norm2.is_finite() {
+                continue;
+            }
+            let score = dot / norm2.sqrt();
+            let (hash, pos, _, _) = &chunks[i];
+            let entry = best.entry(hash.as_str()).or_insert((f32::MIN, *pos));
+            if score > entry.0 {
+                *entry = (score, *pos);
+            }
+        }
+    }
+
+    let mut ranked: Vec<(&str, &str, f32, i64)> = documents
+        .iter()
+        .filter_map(|(path, hash)| {
+            let &(score, pos) = best.get(hash.as_str())?;
+            Some((path.as_str(), hash.as_str(), score, pos))
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(b.0)));
+    ranked.truncate(limit);
+
+    let shown: Vec<&str> = ranked.iter().map(|r| r.1).collect();
+    let bodies: HashMap<String, String> = sqlx::query_as(
+        "SELECT hash, doc FROM content WHERE hash IN (SELECT value FROM json_each(?))",
+    )
+    .bind(serde_json::to_string(&shown)?)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .collect();
+    Ok(ranked
+        .into_iter()
+        .map(|(path, hash, score, pos)| QmdHit {
+            path: path.to_string(),
+            score: f64::from(score),
+            snippet: bodies
+                .get(hash)
+                .map(|body| chunk_snippet(body, pos))
+                .unwrap_or_default(),
+            docid: String::new(),
+            title: String::new(),
+        })
+        .collect())
+}
+
+/// A query's embedding and the model that made it.
+pub struct QueryVector<'a> {
+    pub model: &'a str,
+    pub vector: &'a [f32],
+}
+
+/// The lines a chunk starts with, under the header `snippet_match_line`
+/// reads, so the hit lands on the message the chunk starts in. `pos` is
+/// where qmd's chunker cut, in UTF-16 units of the body as JavaScript
+/// held it.
+pub fn chunk_snippet(body: &str, pos: i64) -> String {
+    let pos = usize::try_from(pos).unwrap_or(0);
+    let mut units = 0;
+    let at = body
+        .char_indices()
+        .find(|(_, c)| {
+            let here = units >= pos;
+            units += c.len_utf16();
+            here
+        })
+        .map_or(body.len(), |(i, _)| i);
+    let line = 1 + body[..at].matches('\n').count();
+    let text: Vec<&str> = body[at..].lines().take(12).collect();
+    format!("@@ -{line},1 @@ (0 before, 0 after)\n{}", text.join("\n"))
+}
+
 async fn check_version(pool: &SqlitePool) -> Result<()> {
     let info: HashMap<String, String> = sqlx::query(
         "SELECT key, CAST(value AS TEXT) AS value FROM vectors_vec_info \
@@ -229,6 +411,58 @@ pub fn dims_of(create_sql: &str) -> Option<usize> {
 pub fn split_hash_seq(id: &str) -> Option<(&str, u32)> {
     let (hash, seq) = id.rsplit_once('_')?;
     Some((hash, seq.parse().ok()?)).filter(|(h, _)| !h.is_empty())
+}
+
+/// A storage chunk's slots as floats, one after another.
+fn floats_of(blob: &[u8]) -> Vec<f32> {
+    blob.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
+        .collect()
+}
+
+/// `(v·q, v·v)`, in one pass. On x86_64 the same loop is compiled a
+/// second time for AVX2 and taken when the CPU has it; the baseline
+/// target there has only SSE2. ARM's baseline NEON needs no second copy.
+pub fn dot_and_norm(v: &[f32], q: &[f32]) -> (f32, f32) {
+    #[cfg(target_arch = "x86_64")]
+    if std::is_x86_feature_detected!("avx2") {
+        // SAFETY: the CPU was just found to have AVX2.
+        return unsafe { dot_and_norm_avx2(v, q) };
+    }
+    dot_and_norm_portable(v, q)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+fn dot_and_norm_avx2(v: &[f32], q: &[f32]) -> (f32, f32) {
+    dot_and_norm_portable(v, q)
+}
+
+/// Sixteen running sums of each, so the compiler can keep them in SIMD
+/// registers: one sum would fix the order of every addition, and with
+/// it a scalar loop (measured 6x slower on 768 dimensions).
+#[inline(always)]
+fn dot_and_norm_portable(v: &[f32], q: &[f32]) -> (f32, f32) {
+    const LANES: usize = 16;
+    let mut dot = [0f32; LANES];
+    let mut norm = [0f32; LANES];
+    let (vs, v_rest) = v.as_chunks::<LANES>();
+    let (qs, q_rest) = q.as_chunks::<LANES>();
+    for (a, b) in vs.iter().zip(qs) {
+        for i in 0..LANES {
+            dot[i] += a[i] * b[i];
+            norm[i] += a[i] * a[i];
+        }
+    }
+    let mut d: f32 = dot.iter().sum();
+    let mut n: f32 = norm.iter().sum();
+    for (a, b) in v_rest.iter().zip(q_rest) {
+        d += a * b;
+        n += a * a;
+    }
+    (d, n)
 }
 
 pub fn is_live(validity: &[u8], offset: usize) -> bool {
@@ -296,6 +530,35 @@ mod tests {
         assert!(is_live(&bitmap, 227));
         assert!(!is_live(&bitmap, 228));
         assert!(!is_live(&bitmap, 5000));
+    }
+
+    /// `pos` counts UTF-16 units, as qmd's chunker did in JavaScript: an
+    /// emoji before the cut is two of them.
+    #[test]
+    fn a_chunk_snippet_starts_on_the_line_the_chunk_starts_on() {
+        let body = "# t\n\u{1F600} one\ntwo\nthree";
+        let pos = "# t\n\u{1F600} one\n".encode_utf16().count() as i64;
+        assert_eq!(
+            chunk_snippet(body, pos),
+            "@@ -3,1 @@ (0 before, 0 after)\ntwo\nthree"
+        );
+        assert_eq!(
+            chunk_snippet(body, 0),
+            "@@ -1,1 @@ (0 before, 0 after)\n# t\n\u{1F600} one\ntwo\nthree"
+        );
+    }
+
+    /// Lengths on either side of the sixteen-wide body, the tail
+    /// included, agree with the plain sums.
+    #[test]
+    fn dot_and_norm_agrees_with_the_plain_sums() {
+        for len in [0, 1, 15, 16, 17, 768, 771] {
+            let v: Vec<f32> = (0..len).map(|i| (i % 7) as f32 - 3.0).collect();
+            let q: Vec<f32> = (0..len).map(|i| (i % 5) as f32 * 0.5).collect();
+            let dot: f32 = v.iter().zip(&q).map(|(a, b)| a * b).sum();
+            let norm: f32 = v.iter().map(|a| a * a).sum();
+            assert_eq!(dot_and_norm(&v, &q), (dot, norm), "len {len}");
+        }
     }
 
     #[test]

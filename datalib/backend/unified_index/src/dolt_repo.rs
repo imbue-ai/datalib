@@ -987,6 +987,39 @@ impl IndexRepo for DoltRepo {
             .collect())
     }
 
+    async fn matching_qmd_paths(
+        &self,
+        q: &ParsedQuery,
+    ) -> Result<std::collections::HashSet<String>, RepoError> {
+        let (where_sql, params) = build_where(q);
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Default::default());
+        };
+        let clause = if where_sql.is_empty() {
+            " WHERE qmd_path IS NOT NULL".to_string()
+        } else {
+            format!("{where_sql} AND qmd_path IS NOT NULL")
+        };
+        // Audited: as `matching_documents`.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT DISTINCT qmd_path FROM {}{clause}",
+            at.grid_rows
+        )));
+        for p in &params {
+            query = query.bind(p);
+        }
+        let rows = match query.fetch_all(&mut *at.tx).await {
+            Ok(rows) => rows,
+            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Default::default()),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| r.try_get::<String, _>("qmd_path").ok())
+            .map(|p| crate::qmd::mapping::norm_path(&p))
+            .collect())
+    }
+
     async fn grid_row_refs_for_hits(
         &self,
         hit_paths: &[String],

@@ -10,6 +10,9 @@
 //! differ, and which of its operations may overlap — is
 //! `docs/dev/qmd_behaviour.md`. Read it before changing how qmd is driven.
 
+mod query_embedder;
+pub use query_embedder::{QueryEmbedder, QueryEmbedding};
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -705,7 +705,8 @@ pub(crate) struct RunEnd<'a> {
 pub(crate) struct Sealed {
     pub(crate) stored: usize,
     pub(crate) removed: usize,
-    /// Buckets whose documents stayed though the run produced none.
+    /// Buckets whose documents stayed though the run produced none. A
+    /// kept bucket that holds no document is not one.
     pub(crate) kept: usize,
 }
 
@@ -761,8 +762,12 @@ pub(crate) fn seal_run(
             .filter(|(_, e)| matches!(e.fate, Fate::Kept(_)))
             .map(|(bucket, _)| bucket.as_str())
             .collect();
-        sealed.kept = kept.len();
         let held_by_kept = store.documents_for_buckets(&kept)?;
+        sealed.kept = held_by_kept
+            .iter()
+            .map(|(bucket, _)| bucket)
+            .collect::<BTreeSet<_>>()
+            .len();
         let mut problems = Vec::with_capacity(held_by_kept.len());
         for (bucket, uuid) in &held_by_kept {
             problems.extend(kept_problem(end.source_id, uuid, &end.buckets[bucket]));
@@ -1317,6 +1322,10 @@ mod plan_tests {
     }
 
     fn write_doc(root: &Path, uuid: &str) {
+        write_doc_in(root, uuid, None);
+    }
+
+    fn write_doc_in(root: &Path, uuid: &str, bucket_key: Option<&str>) {
         let store = IndexedMarkdownStore::open(root).unwrap();
         let row = datalib_schema::grid_rows::GridRow::builder()
             .uuid(uuid)
@@ -1338,7 +1347,7 @@ mod plan_tests {
                     markdown_uuid: uuid.to_string(),
                     source_id: "src".into(),
                     upstream_cursor: None,
-                    bucket_key: None,
+                    bucket_key: bucket_key.map(String::from),
                     md_path: root.join(uuid).join("all.md"),
                     render_version: 5,
                     rows: vec![row],
@@ -1484,6 +1493,46 @@ mod plan_tests {
             store.cursor().unwrap().map(|c| c.raw_commit).as_deref(),
             Some("raw-head")
         );
+        store.close();
+    }
+
+    /// Only a kept bucket that holds a document is counted as keeping
+    /// one. Claude declares each id under both its conversation and its
+    /// project uuid, and the shape that never had a page used to make the
+    /// warning name every rendered bucket.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_kept_bucket_with_no_document_is_not_counted_as_keeping_one() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("src/render_markdown");
+        write_doc_in(&root, "doc", Some("held"));
+
+        let store = IndexedMarkdownStore::open(&root).unwrap();
+        let unexplained = || Ending {
+            fate: Fate::Kept(Kept::Unexplained),
+            inputs_unwritten: true,
+            render_version: None,
+        };
+        let buckets: BTreeMap<String, Ending> = [
+            ("held".to_string(), unexplained()),
+            ("never-had-a-page".to_string(), unexplained()),
+        ]
+        .into_iter()
+        .collect();
+        let sealed = seal_run(
+            &store,
+            td.path(),
+            RunEnd {
+                source_id: "src",
+                sweep: false,
+                keep: &BTreeSet::new(),
+                buckets: &buckets,
+                storage: None,
+                cursor: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(sealed.kept, 1);
+        assert_eq!(store.all_document_uuids().unwrap(), vec!["doc".to_string()]);
         store.close();
     }
 
