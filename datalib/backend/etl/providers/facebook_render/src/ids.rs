@@ -21,7 +21,6 @@ pub const KIND_FEED_YEAR: &str = "feed_year";
 pub const KIND_COMMENT: &str = "comment";
 pub const KIND_REACTION: &str = "reaction";
 pub const KIND_FRIEND: &str = "friend";
-pub const KIND_FRIENDS_GROUP: &str = "friends_group";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
@@ -87,10 +86,6 @@ pub fn friend(source_id: &str, row_id: &str) -> Identity {
     IDS.mint(source_id, KIND_FRIEND, row_id.to_string(), None)
 }
 
-pub fn friends_group(source_id: &str) -> Identity {
-    IDS.mint(source_id, KIND_FRIENDS_GROUP, "friends".to_string(), None)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,7 +106,6 @@ mod tests {
             comment("src", "r3", MS),
             reaction("src", &["r4", "r5"], MS),
             friend("src", "r6"),
-            friends_group("src"),
         ] {
             assert_eq!(
                 got.uuid,

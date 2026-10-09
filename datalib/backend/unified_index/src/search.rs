@@ -77,6 +77,16 @@ pub struct SearchRow {
     /// fields above; never read from the index.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_ref: Option<datalib_columns::Identity>,
+    /// On a contact's own row, who it is about; `None` elsewhere.
+    pub contact: Option<String>,
+    /// A contact's first email address and phone number, as written.
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    /// The Contact cell: `contact` for its label, and where the contact
+    /// has an address or a number that makes a handle, that handle as a
+    /// URI for its id. Resolved by the applet; never read from the index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_ref: Option<datalib_columns::Identity>,
     /// What a `from:` term names this row's author by: the handle where
     /// there is one, else the name shown. What the Author cell's Keep
     /// only writes. Resolved by the applet; never read from the index.

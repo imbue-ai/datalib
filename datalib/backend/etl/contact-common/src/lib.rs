@@ -5,5 +5,5 @@
 pub mod render;
 pub mod types;
 
-pub use render::{render_all, table_rows, ContactRenderProfile, RenderSummary};
+pub use render::{chip_handle, render_all, table_rows, ContactRenderProfile, RenderSummary};
 pub use types::ContactDoc;

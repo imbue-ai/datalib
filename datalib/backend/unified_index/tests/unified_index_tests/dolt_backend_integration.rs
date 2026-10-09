@@ -637,6 +637,9 @@ async fn every_wire_field_survives_the_round_trip() {
         .modified_at(Some("2026-06-03T09:30:00-07:00".to_string()))
         .author(Some("Jean-Luc Picard".to_string()))
         .author_handle(Some("email:picard@enterprise.org".to_string()))
+        .contact(Some("Jean-Luc Picard".to_string()))
+        .email(Some("picard@enterprise.org".to_string()))
+        .phone(Some("+1 202 555 0101".to_string()))
         .account(Some("acct-1701".to_string()))
         .project(Some("proj-1701".to_string()))
         .org_uuid(Some("org-1701".to_string()))
@@ -674,7 +677,13 @@ async fn every_wire_field_survives_the_round_trip() {
     let wire = serde_json::to_value(&rows[0]).unwrap();
     // Filled by the applet from the config, or only by a free-text
     // search: absent from a repo's own answer by design.
-    let not_the_repos: [&str; 4] = ["source_ref", "author_ref", "author_term", "score"];
+    let not_the_repos: [&str; 5] = [
+        "source_ref",
+        "author_ref",
+        "author_term",
+        "contact_ref",
+        "score",
+    ];
     for key in not_the_repos {
         assert!(wire.get(key).is_none(), "{key}: {wire}");
     }
@@ -704,6 +713,10 @@ const SCANS: &[&str] = &[
     "byte_size",
     "item_count",
     "diff_changed_columns",
+    // Filled only on a contact's own row, and narrowed by from that row.
+    "contact",
+    "email",
+    "phone",
 ];
 
 /// A key the search bar offers must be served by an index in the order

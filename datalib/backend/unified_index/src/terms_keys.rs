@@ -14,8 +14,8 @@ pub const ATTACHED_AS: &str = "search_terms";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kinds {
     These(&'static [Kind]),
-    /// A person in any role, or an author by the name they were shown
-    /// under.
+    /// A person in any role, an author by the name they were shown
+    /// under, or the person a contact's card is about.
     AnyPerson,
 }
 
@@ -38,7 +38,7 @@ impl TermsKey {
             Kinds::AnyPerson => Kind::VARIANTS
                 .iter()
                 .copied()
-                .filter(|k| k.is_person() || *k == Kind::Author)
+                .filter(|k| k.is_person() || matches!(k, Kind::Author | Kind::About))
                 .collect(),
         }
     }
@@ -142,12 +142,14 @@ mod tests {
         assert_eq!(key("channel"), None);
     }
 
-    /// `with:` is every person kind, and an author by name.
+    /// `with:` is every person kind, an author by name, and who a
+    /// contact's card is about; `from:` is not the card.
     #[test]
     fn with_reads_every_person_kind() {
         let kinds = key("with").unwrap().kinds();
         assert!(kinds.contains(&Kind::From) && kinds.contains(&Kind::Cc));
-        assert!(kinds.contains(&Kind::Author));
+        assert!(kinds.contains(&Kind::Author) && kinds.contains(&Kind::About));
+        assert!(!key("from").unwrap().kinds().contains(&Kind::About));
         assert!(!kinds.contains(&Kind::Label) && !kinds.contains(&Kind::Name));
         assert!(kinds.contains(&Kind::Bcc) && kinds.contains(&Kind::Mention));
         assert_eq!(

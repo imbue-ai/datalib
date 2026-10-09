@@ -53,8 +53,8 @@ pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<ContactD
             ContactDoc {
                 contact: person,
                 doc_uuid: id.uuid,
-                group_uuid: ids::friends_group(&owner.source_id).uuid,
                 group_label: GROUP_LABEL.to_string(),
+                member_handles: Vec::new(),
                 upstream_account: None,
                 inputs: inputs.declared(),
             }

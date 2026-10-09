@@ -110,6 +110,9 @@ const SEARCH_ROW_COLUMNS: &[GridRowColumn] = {
         G::IsDocument,
         G::Author,
         G::AuthorHandle,
+        G::Contact,
+        G::Email,
+        G::Phone,
         G::Account,
         G::Project,
         G::OrgUuid,
@@ -211,6 +214,19 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .ok()
             .flatten(),
         author_ref: None,
+        contact: r
+            .try_get::<Option<String>, _>(G::Contact.as_str())
+            .ok()
+            .flatten(),
+        email: r
+            .try_get::<Option<String>, _>(G::Email.as_str())
+            .ok()
+            .flatten(),
+        phone: r
+            .try_get::<Option<String>, _>(G::Phone.as_str())
+            .ok()
+            .flatten(),
+        contact_ref: None,
         author_term: None,
         channel: r.try_get(G::Channel.as_str()).unwrap_or_default(),
         source_url: r.try_get(G::SourceUrl.as_str()).unwrap_or_default(),

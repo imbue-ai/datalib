@@ -163,6 +163,9 @@ pub struct GridRowBuilder {
     is_document: bool,
     author: Option<String>,
     author_handle: Option<String>,
+    contact: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
     account: Option<String>,
     project: Option<String>,
     org_uuid: Option<String>,
@@ -234,6 +237,9 @@ impl GridRowBuilder {
     opt_setter!(touched_at);
     opt_setter!(author);
     opt_setter!(author_handle);
+    opt_setter!(contact);
+    opt_setter!(email);
+    opt_setter!(phone);
     opt_setter!(account);
     opt_setter!(project);
     opt_setter!(org_uuid);
@@ -379,6 +385,9 @@ impl GridRowBuilder {
             is_document: self.is_document,
             author: self.author,
             author_handle: self.author_handle,
+            contact: self.contact,
+            email: self.email,
+            phone: self.phone,
             account: self.account,
             project: self.project,
             org_uuid: self.org_uuid,

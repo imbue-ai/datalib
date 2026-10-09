@@ -12,6 +12,8 @@ import { iconUrl } from "@/config/icons";
 import { formatRelative } from "@/config/timeFormat";
 import { documentView } from "./libs/documentView";
 import { markWords } from "./search";
+import { chipCell, people } from "./contacts";
+import { handleFromUri } from "./chipLinks";
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -149,6 +151,25 @@ function title(row: SearchRow): string {
   return row.conversation_name || row.channel || row.kind || "Untitled";
 }
 
+// A contact's row is titled by its chip: the photo and the name your
+// contacts give them. `people` answering redraws it.
+const peopleAnswered = ref(0);
+const stopPeople = people.subscribe(() => peopleAnswered.value++);
+
+function contactHandle(row: SearchRow): string | null {
+  return row.contact_ref ? handleFromUri(row.contact_ref.id) : null;
+}
+
+function drawContact(el: unknown, row: SearchRow) {
+  const handle = contactHandle(row);
+  if (!(el instanceof HTMLElement) || !handle) return;
+  const chip = chipCell(handle, row.contact_ref!.label, people.lookup(handle), false);
+  // The row is picked by a click anywhere on it, the chip included; the
+  // chip's href is for a copy, never to be followed from here.
+  chip.addEventListener("click", (e) => e.preventDefault());
+  el.replaceChildren(chip);
+}
+
 function when(iso: string | null): string {
   if (!iso) return "";
   return formatRelative(iso, now);
@@ -177,6 +198,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   stop?.();
+  stopPeople();
   inflight?.abort();
   teardown?.();
 });
@@ -206,7 +228,13 @@ onBeforeUnmount(() => {
             />
             <span class="sc-text">
               <span class="sc-line">
-                <strong class="sc-title">{{ title(r) }}</strong>
+                <strong
+                  v-if="contactHandle(r)"
+                  :ref="(el) => drawContact(el, r)"
+                  class="sc-title"
+                  :data-answered="peopleAnswered"
+                />
+                <strong v-else class="sc-title">{{ title(r) }}</strong>
                 <span class="sc-when">{{ when(r.touched_at) }}</span>
               </span>
               <span class="sc-snippet"
@@ -237,7 +265,13 @@ onBeforeUnmount(() => {
             :src="iconUrl(picked.source_ref?.icon)!"
             alt=""
           />
-          <strong class="sc-title">{{ title(picked) }}</strong>
+          <strong
+            v-if="contactHandle(picked)"
+            :ref="(el) => drawContact(el, picked!)"
+            class="sc-title"
+            :data-answered="peopleAnswered"
+          />
+          <strong v-else class="sc-title">{{ title(picked) }}</strong>
           <button class="sc-link" :disabled="!picked.markdown_uuid" @click="openPicked">
             Open as card
           </button>

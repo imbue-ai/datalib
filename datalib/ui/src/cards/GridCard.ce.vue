@@ -308,14 +308,14 @@ function refreshQmdState() {
   else void askQmdState([]);
 }
 
-// Who the Author chips are comes from `people`, the one resolver every
+// Who the Author and Contact chips are comes from `people`, the one resolver every
 // document and grid asks (docs/dev/chips.md § Resolving): a
 // cell that draws a handle asks as it draws, and when an answer changes —
 // it lands, or a link made anywhere forgets it — the cells are drawn again.
 // The Source cells are group chips, answered by `entities` the same way.
-const AUTHOR_COLUMN = "author_ref";
+const PERSON_COLUMNS = ["author_ref", "contact_ref"];
 const SOURCE_COLUMN = "source_ref";
-const stopPeople = people.subscribe(() => refreshCells(AUTHOR_COLUMN));
+const stopPeople = people.subscribe(() => PERSON_COLUMNS.forEach(refreshCells));
 const stopEntities = entities.subscribe(() => refreshCells(SOURCE_COLUMN));
 
 function refreshCells(columnId: string) {
@@ -1234,7 +1234,9 @@ function tryRestoreSelection() {
 // This list is what the rule may *reveal*, so it is deliberately not
 // "every optional column": a column named here appears in the default
 // grid whenever its values vary, which is exactly what `hidden` on a
-// definition is there to prevent. It stays the set it has always been.
+// definition is there to prevent. Contact is the one hidden column
+// here: it varies only when contacts are among the results, and then it
+// is the only cell that says whose card a row is.
 /// Column id → the row field it reads.
 const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
   score: "score",
@@ -1242,6 +1244,7 @@ const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
   channel: "channel",
   touched_at: "touched_at",
   author_ref: "author",
+  contact_ref: "contact",
   account: "account",
 };
 
@@ -1465,6 +1468,9 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
   kind: { width: 110 },
   conversation_name: { width: 200 },
   channel: { width: 130 },
+  contact_ref: { width: 180 },
+  email: { width: 200 },
+  phone: { width: 130 },
   snippet: {
     // Room for the default columns beside it in a 1440px window.
     width: 480,

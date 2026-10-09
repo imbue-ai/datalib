@@ -225,7 +225,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert!(reaction_rows.iter().any(|r| r.source_url.as_deref()
             == Some("https://www.facebook.com/will.riker/posts/pfbid0RIKER")));
 
-        // Friends: three contacts in one group.
+        // Friends: three contacts, filed under one channel.
         let friends: Vec<_> = docs
             .iter()
             .filter(|d| d.rows.iter().any(|r| r.kind == "Contact"))
@@ -234,7 +234,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert!(friends.iter().all(|d| d
             .rows
             .iter()
-            .all(|r| r.conversation_name.as_deref() == Some("Friends"))));
+            .all(|r| r.channel.as_deref() == Some("Friends"))));
 
         // Every document declares the rows it read, so a change to any of
         // them renders it again; every one includes the profile row.

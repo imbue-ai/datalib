@@ -10,7 +10,6 @@ pub const ID_NAMESPACE: IdNamespace = IdNamespace::Linkedin;
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
 pub const KIND_CONNECTION: &str = "connection";
-pub const KIND_CONNECTIONS_GROUP: &str = "connections_group";
 pub const KIND_CONVERSATION: &str = "conversation";
 pub const KIND_MESSAGE: &str = "message";
 pub const KIND_POST: &str = "post";
@@ -35,15 +34,6 @@ pub fn connection_without_url(source_id: &str, name: &str, company: &str) -> Ide
         source_id,
         KIND_CONNECTION,
         composite_key(&[name, company]),
-        None,
-    )
-}
-
-pub fn connections_group(source_id: &str) -> Identity {
-    IDS.mint(
-        source_id,
-        KIND_CONNECTIONS_GROUP,
-        "connections".to_string(),
         None,
     )
 }
@@ -97,7 +87,6 @@ mod tests {
         for got in [
             connection("src", "https://www.linkedin.com/in/x"),
             connection_without_url("src", "Ann", "Acme"),
-            connections_group("src"),
             conversation("src", "messages", "c1"),
             message("src", "messages", "r1", MS),
             post("src", "https://www.linkedin.com/posts/x"),

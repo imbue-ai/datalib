@@ -46,6 +46,9 @@ pub enum SearchTermKind {
     /// The name the row's author was shown under: what `from:` matches
     /// for an author with no handle, an AI model or an account label.
     Author = 11,
+    /// Who a contact's own row is about: each of the card's handles, and
+    /// the names it gives. What `with:` finds a contact's card by.
+    About = 12,
 }
 
 impl SearchTermKind {
@@ -79,7 +82,7 @@ impl SearchTermKind {
     pub fn affinity(self) -> u8 {
         match self {
             SearchTermKind::Id => 5,
-            SearchTermKind::From | SearchTermKind::To => 4,
+            SearchTermKind::From | SearchTermKind::To | SearchTermKind::About => 4,
             SearchTermKind::Cc
             | SearchTermKind::Bcc
             | SearchTermKind::Mention
@@ -102,6 +105,7 @@ impl SearchTermKind {
             | SearchTermKind::Title
             | SearchTermKind::Name
             | SearchTermKind::Author
+            | SearchTermKind::About
             | SearchTermKind::Label => false,
         }
     }
