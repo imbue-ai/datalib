@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 pub use datalib_contact_schema::ContactKind;
+
+pub mod read;
 use datalib_contact_schema::{ContactHandle, Medium, NormalizedContact};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw;
@@ -277,6 +279,39 @@ pub struct ContactSummary {
     pub kind: String,
 }
 
+/// [`Store::search`], over any open of the store, the writer's or a
+/// reader's ([`read::ContactsReader`]).
+pub(crate) async fn search_in(
+    pool: &SqlitePool,
+    q: &str,
+    limit: u32,
+) -> Result<Vec<ContactSummary>> {
+    let pattern = format!(
+        "%{}%",
+        q.replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
+    let rows = sqlx::query(
+        "SELECT contact_id, name, kind FROM contacts \
+          WHERE merged_into IS NULL AND name LIKE ? ESCAPE '\\' \
+          ORDER BY name COLLATE NOCASE LIMIT ?",
+    )
+    .bind(pattern)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("search contacts")?;
+    Ok(rows
+        .iter()
+        .map(|r| ContactSummary {
+            contact_id: r.get("contact_id"),
+            name: r.get("name"),
+            kind: r.get("kind"),
+        })
+        .collect())
+}
+
 /// What linking a handle to a contact comes to, given who holds it now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LinkPlan {
@@ -358,30 +393,7 @@ impl Store {
     /// Contacts whose name contains `q`, ignoring case; every contact
     /// for an empty `q`. Merged-away contacts are left out.
     pub async fn search(&self, q: &str, limit: u32) -> Result<Vec<ContactSummary>> {
-        let pattern = format!(
-            "%{}%",
-            q.replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_")
-        );
-        let rows = sqlx::query(
-            "SELECT contact_id, name, kind FROM contacts \
-              WHERE merged_into IS NULL AND name LIKE ? ESCAPE '\\' \
-              ORDER BY name COLLATE NOCASE LIMIT ?",
-        )
-        .bind(pattern)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await
-        .context("search contacts")?;
-        Ok(rows
-            .iter()
-            .map(|r| ContactSummary {
-                contact_id: r.get("contact_id"),
-                name: r.get("name"),
-                kind: r.get("kind"),
-            })
-            .collect())
+        search_in(&self.pool, q, limit).await
     }
 
     pub async fn contact(&self, contact_id: &str) -> Result<Option<NormalizedContact>> {
@@ -500,6 +512,37 @@ impl Store {
     }
 
     /// Returns whether the handle was linked to anyone.
+    /// `member_id` a member of the group contact `group_id`. Refused for a
+    /// contact that is not a group, or a member the store lacks.
+    pub async fn add_member(&self, group_id: &str, member_id: &str) -> Result<()> {
+        let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
+        let mut tx = self.pool.begin().await?;
+        let kind: Option<String> =
+            sqlx::query_scalar("SELECT kind FROM contacts WHERE contact_id = ?")
+                .bind(group_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        match kind.as_deref().and_then(ContactKind::parse) {
+            Some(ContactKind::Group) => {}
+            Some(_) => bail!("{group_id} is not a group"),
+            None => bail!("no contact {group_id}"),
+        }
+        let name = name_of_existing(&mut tx, member_id).await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO members (group_id, member_id, added_at_utc, tz_offset) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(group_id)
+        .bind(member_id)
+        .bind(&now)
+        .bind(&tz)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        self.seal(&format!("contacts: {name:?} joins {group_id}"))
+            .await
+    }
+
     pub async fn unlink(&self, handle: &Handle) -> Result<bool> {
         let done = sqlx::query("DELETE FROM handles WHERE handle = ?")
             .bind(handle.as_str())

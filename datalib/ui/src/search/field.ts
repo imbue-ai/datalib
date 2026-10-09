@@ -38,6 +38,9 @@ import { personSource, searchSource } from "@/cards/cardSources";
 import {
   canLinkHandles,
   chipCell,
+  contactCell,
+  contactLook,
+  contactsById,
   chipLook,
   chipMenu,
   composeUri,
@@ -57,12 +60,14 @@ import {
 } from "@/cards/entities";
 import { copyToClipboard } from "@/clipboard";
 import { openExternal } from "@/externalLinks";
+import { filterToken } from "@/grid/query";
 import { pushToast } from "@/toasts";
 import { fieldChipMenu, toggleNegate, type FieldMenuEntry, type FieldMenuId } from "./chipMenu";
 import {
   chipFor,
   chipKey,
   chipWords,
+  CONTACT,
   completingAt,
   keyNamed,
   termValue,
@@ -174,16 +179,29 @@ function onChipMouse(view: EditorView, chip: HTMLElement, e: MouseEvent) {
 /// What a chip draws from, asked of its resolver as it draws: the answer
 /// so far, and the question if nobody has asked.
 function answerOf(chip: ChipRef): unknown {
-  return chip.kind === "entity" ? entities.lookup(chip.uri) : people.lookup(chip.handle);
+  switch (chip.kind) {
+    case "entity":
+      return entities.lookup(chip.uri);
+    case "person":
+      return people.lookup(chip.handle);
+    case "contact":
+      return contactsById.lookup(chip.id);
+  }
 }
 
 /// A chip as every surface draws it (docs/dev/chips.md), from what is
-/// known now. `shown` is the value as typed.
+/// known now. `shown` is the value as typed, or a contact's name.
 function chipDom(chip: ChipRef, shown: string): HTMLAnchorElement {
   const a =
     chip.kind === "entity"
       ? entityCell(chip.uri, shown, entities.get(chip.uri), null)
-      : chipCell(chip.handle, handleValue(chip.handle), people.get(chip.handle), canLinkHandles());
+      : chip.kind === "person"
+        ? chipCell(chip.handle, handleValue(chip.handle), people.get(chip.handle), canLinkHandles())
+        : contactCell(
+            chip.id,
+            shown.startsWith(CONTACT) ? "a contact" : shown,
+            contactsById.get(chip.id),
+          );
   // A chip's href is never followed (docs/dev/chips.md § "Clicks").
   a.addEventListener("click", (e) => e.preventDefault());
   a.draggable = false;
@@ -242,7 +260,11 @@ const chips = ViewPlugin.fromClass(
           view.dispatch({ effects: redraw.of(null) });
         }
       };
-      this.unsubscribe = [entities.subscribe(answered), people.subscribe(answered)];
+      this.unsubscribe = [
+        entities.subscribe(answered),
+        people.subscribe(answered),
+        contactsById.subscribe(answered),
+      ];
     }
     update(u: ViewUpdate) {
       const asked = u.transactions.some((t: Transaction) =>
@@ -284,6 +306,16 @@ function chipNamed(chip: ChipRef, value: string): { name: string; own: FieldMenu
   if (chip.kind === "entity") {
     const name = entities.get(chip.uri)?.label || value;
     return { name, own: entityMenu(chip.uri, name) };
+  }
+  if (chip.kind === "contact") {
+    const name = contactLook("a contact", contactsById.get(chip.id)).text;
+    return {
+      name,
+      own: [
+        { id: "copy-name", label: `Copy “${name}”` },
+        { id: "search", label: `Everything from ${name}`, separator: true },
+      ],
+    };
   }
   const who = people.get(chip.handle) ?? NOBODY;
   const shown = handleValue(chip.handle);
@@ -332,6 +364,7 @@ async function runMenu(view: EditorView, id: FieldMenuId, w: Word, chip: ChipRef
   };
   const person = chip.kind === "person" ? chip.handle : null;
   const uri = chip.kind === "entity" ? chip.uri : null;
+  const contact = chip.kind === "contact" ? chip.id : null;
   switch (id) {
     case "edit-text":
       editChip(view, w);
@@ -365,6 +398,8 @@ async function runMenu(view: EditorView, id: FieldMenuId, w: Word, chip: ChipRef
     }
     case "search":
       if (person) hooks?.openCard(searchSource(searchQueryFor(person)));
+      if (contact)
+        hooks?.openCard(searchSource(filterToken("from", `${CONTACT}${contact}`, false)));
       break;
     case "edit":
       break;
@@ -428,26 +463,32 @@ function completions(base: () => string) {
     const refs = values.map((v) => chipFor(spec.values, v.value));
     const named = (kind: ChipRef["kind"]) =>
       refs.filter((r): r is ChipRef => r?.kind === kind).map(chipKey);
-    await Promise.all([entities.ask(named("entity")), people.ask(named("person"))]);
+    await Promise.all([
+      entities.ask(named("entity")),
+      people.ask(named("person")),
+      contactsById.ask(named("contact")),
+    ]);
     const atEnd = at.to >= query.length;
     const options: ChipCompletion[] = values.map((v, i) => ({
       label: v.value,
+      shown: v.label ?? v.value,
       chip: refs[i] ?? undefined,
       detail: v.count === undefined ? undefined : v.count.toLocaleString(),
-      // A name picked is matched whole; a chip is a handle, whole bare.
-      apply: termValue(v.value, spec.partial && !refs[i]) + (atEnd ? " " : ""),
+      // A name picked is matched whole; a chip is a handle or a contact,
+      // whole bare. `@rik` is written as `with:` and the value.
+      apply: (at.prefix ?? "") + termValue(v.value, spec.partial && !refs[i]) + (atEnd ? " " : ""),
     }));
     return { from: at.from, to: at.to, options, filter: false };
   };
 }
 
-type ChipCompletion = Completion & { chip?: ChipRef };
+type ChipCompletion = Completion & { chip?: ChipRef; shown?: string };
 
-/// A suggestion naming a source, a group, a step or a person, drawn as
-/// the chip the field will show once it is picked.
+/// A suggestion naming a source, a group, a step, a person or a contact,
+/// drawn as the chip the field will show once it is picked.
 const chipOption = {
   position: 45,
-  render: (c: ChipCompletion): Node | null => (c.chip ? chipDom(c.chip, c.label) : null),
+  render: (c: ChipCompletion): Node | null => (c.chip ? chipDom(c.chip, c.shown ?? c.label) : null),
 };
 
 /// Tab takes the chosen suggestion, or the first when none is chosen; with

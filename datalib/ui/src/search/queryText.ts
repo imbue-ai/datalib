@@ -87,7 +87,19 @@ function unquote(s: string): string {
  *  start a key. */
 export type Completing =
   | { kind: "key"; from: number; to: number; typed: string }
-  | { kind: "value"; key: string; from: number; to: number; typed: string; rest: string };
+  | {
+      kind: "value";
+      key: string;
+      from: number;
+      to: number;
+      typed: string;
+      rest: string;
+      /** Written before the value picked: `@rik` becomes `with:<value>`. */
+      prefix?: string;
+    };
+
+/** The key `@` at the start of a word picks a person for: in any role. */
+export const AT_KEY = "with";
 
 const KEY_START = /^[A-Za-z_][\w.]*$/;
 
@@ -97,6 +109,18 @@ export function completingAt(query: string, pos: number): Completing | null {
   const bodyFrom = query[w.from] === "-" && w.to - w.from > 1 ? w.from + 1 : w.from;
   const body = query.slice(bodyFrom, w.to);
   const colon = termColon(body);
+  const rest = () => `${query.slice(0, w.from)}${query.slice(w.to)}`.replace(/\s+/g, " ").trim();
+  if (body.startsWith("@") && colon === null) {
+    return {
+      kind: "value",
+      key: AT_KEY,
+      from: bodyFrom,
+      to: w.to,
+      typed: query.slice(bodyFrom + 1, pos),
+      rest: rest(),
+      prefix: `${AT_KEY}:`,
+    };
+  }
   if (colon === null || pos <= bodyFrom + colon) {
     const typed = query.slice(bodyFrom, pos);
     if (!KEY_START.test(typed)) return null;
@@ -105,8 +129,7 @@ export function completingAt(query: string, pos: number): Completing | null {
   }
   const from = bodyFrom + colon + 1;
   const typed = query.slice(from, pos).replace(/^"/, "");
-  const rest = `${query.slice(0, w.from)}${query.slice(w.to)}`.replace(/\s+/g, " ").trim();
-  return { kind: "value", key: body.slice(0, colon), from, to: w.to, typed, rest };
+  return { kind: "value", key: body.slice(0, colon), from, to: w.to, typed, rest: rest() };
 }
 
 /** A term's value as the query spells it: bare when it reads back as
@@ -125,11 +148,25 @@ export function keyNamed(keys: SearchKeySpec[], typed: string): SearchKeySpec | 
 
 /** What a chip names: a source, group or step by its entity URI, or a
  *  person by their handle. */
-export type ChipRef = { kind: "entity"; uri: string } | { kind: "person"; handle: string };
+export type ChipRef =
+  | { kind: "entity"; uri: string }
+  | { kind: "person"; handle: string }
+  | { kind: "contact"; id: string };
+
+/** The prefix of a person value naming one of your contacts:
+ *  `from:contact:<id>`. Mirrors `terms_keys::CONTACT`. */
+export const CONTACT = "contact:";
 
 /** The resolver key a chip is asked about by. */
 export function chipKey(chip: ChipRef): string {
-  return chip.kind === "entity" ? chip.uri : chip.handle;
+  switch (chip.kind) {
+    case "entity":
+      return chip.uri;
+    case "person":
+      return chip.handle;
+    case "contact":
+      return chip.id;
+  }
 }
 
 /** The chip a value of a key with these values names; null for a value
@@ -143,6 +180,7 @@ export function chipFor(values: KeyValues, value: string): ChipRef | null {
     case "step":
       return { kind: "entity", uri: uriFromEntity("step", value) };
     case "person":
+      if (value.startsWith(CONTACT)) return { kind: "contact", id: value.slice(CONTACT.length) };
       return handleKind(value) ? { kind: "person", handle: value } : null;
     default:
       return null;

@@ -308,10 +308,20 @@ impl DoltRepo {
 }
 
 /// The values the search terms of `kinds` hold, holding one bound `LIKE`
-/// pattern, among the rows `where_sql` keeps in `grid_rows` (its values
-/// bound after the pattern): each with how many rows hold it, most first.
-pub fn term_values_sql(grid_rows: &str, where_sql: &str, kinds: &[u8]) -> String {
+/// pattern (or, `by_name`, a handle seen under a name holding it, the
+/// pattern bound again), among the rows `where_sql` keeps in `grid_rows`
+/// (its values bound after the patterns): each with how many rows hold
+/// it, most first.
+pub fn term_values_sql(grid_rows: &str, where_sql: &str, kinds: &[u8], by_name: bool) -> String {
     let s = ATTACHED_AS;
+    let names = if by_name {
+        format!(
+            " OR v.value IN (SELECT handle FROM {s}.names \
+             WHERE LOWER(name) LIKE ? ESCAPE '\\')"
+        )
+    } else {
+        String::new()
+    };
     let codes: Vec<String> = kinds.iter().map(u8::to_string).collect();
     let among = if where_sql.is_empty() {
         String::new()
@@ -324,7 +334,7 @@ pub fn term_values_sql(grid_rows: &str, where_sql: &str, kinds: &[u8]) -> String
     format!(
         "SELECT v.value, count(DISTINCT t.row_id) FROM {s}.terms t \
          JOIN {s}.vals v ON v.val_id = t.val_id \
-         WHERE t.kind IN ({}) AND LOWER(v.value) LIKE ? ESCAPE '\\'{among} \
+         WHERE t.kind IN ({}) AND (LOWER(v.value) LIKE ? ESCAPE '\\'{names}){among} \
          GROUP BY v.val_id ORDER BY 2 DESC, 1 LIMIT {MAX_VALUES}",
         codes.join(", ")
     )
@@ -718,6 +728,7 @@ impl IndexRepo for DoltRepo {
         q: &ParsedQuery,
         kinds: &[u8],
         typed: &str,
+        by_name: bool,
     ) -> Result<Vec<(String, u64)>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
@@ -726,10 +737,14 @@ impl IndexRepo for DoltRepo {
             return Ok(Vec::new());
         }
         let (where_sql, params) = where_within(q, &[]);
-        let sql = term_values_sql(at.grid_rows, &where_sql, kinds);
+        let sql = term_values_sql(at.grid_rows, &where_sql, kinds, by_name);
         // Audited: the kinds are the enum's codes, the table names are
         // `&'static str`, and every value is bound.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(like_pattern(typed));
+        let pattern = like_pattern(typed);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&pattern);
+        if by_name {
+            query = query.bind(&pattern);
+        }
         for p in &params {
             query = query.bind(p);
         }

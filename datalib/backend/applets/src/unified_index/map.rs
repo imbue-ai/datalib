@@ -127,6 +127,13 @@ async fn matching(s: &Index, q: &str, errors: &mut Vec<String>) -> HashSet<Strin
         errors.push(why);
         return HashSet::new();
     }
+    let parsed = match super::with_contacts(&s.root, q, parsed).await {
+        Ok((parsed, _)) => parsed,
+        Err(why) => {
+            errors.push(why);
+            return HashSet::new();
+        }
+    };
     let found = if parsed.free_text.is_empty() {
         s.repo.matching_documents(&parsed).await
     } else {
