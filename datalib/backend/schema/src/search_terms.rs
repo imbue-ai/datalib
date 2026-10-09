@@ -37,6 +37,12 @@ pub enum SearchTermKind {
     Cc = 7,
     /// Where the row is filed upstream: an email's mailboxes and labels.
     Label = 8,
+    /// The handle of someone sent a blind copy: an email's Bcc, which only
+    /// its sender's copy holds.
+    Bcc = 9,
+    /// The handle of someone the row's text names where its source marks
+    /// the name up as a person: Slack's `<@U…>`, an email's `@` link.
+    Mention = 10,
 }
 
 impl SearchTermKind {
@@ -65,13 +71,16 @@ impl SearchTermKind {
 
     /// How strongly a match in this kind says the row is the one meant:
     /// its own id beats its author or addressee, which beat someone
-    /// copied and what contains it, then its title and labels, and last a
-    /// name it shows.
+    /// copied or named in it and what contains it, then its title and
+    /// labels, and last a name it shows.
     pub fn affinity(self) -> u8 {
         match self {
             SearchTermKind::Id => 5,
             SearchTermKind::From | SearchTermKind::To => 4,
-            SearchTermKind::Cc | SearchTermKind::Container => 3,
+            SearchTermKind::Cc
+            | SearchTermKind::Bcc
+            | SearchTermKind::Mention
+            | SearchTermKind::Container => 3,
             SearchTermKind::Title | SearchTermKind::Label => 2,
             SearchTermKind::Name => 1,
         }
@@ -80,7 +89,11 @@ impl SearchTermKind {
     /// Whether the value is a person's handle, in some role on the row.
     pub fn is_person(self) -> bool {
         match self {
-            SearchTermKind::From | SearchTermKind::To | SearchTermKind::Cc => true,
+            SearchTermKind::From
+            | SearchTermKind::To
+            | SearchTermKind::Cc
+            | SearchTermKind::Bcc
+            | SearchTermKind::Mention => true,
             SearchTermKind::Id
             | SearchTermKind::Container
             | SearchTermKind::Title
@@ -174,9 +187,10 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
     out
 }
 
-/// What [`search_terms_of`] derives, which kinds renders supply, and how
-/// the file lays it out. A file built under another shape is rebuilt
-/// whole, so change it whenever any of them changes.
+/// What [`search_terms_of`] derives and how the file lays it out. A file
+/// built under another shape is rebuilt whole, so change it whenever
+/// either changes. A kind a render starts to supply needs no change: it
+/// reaches the file through the diff of `supplied_search_terms`.
 pub const TERMS_SHAPE: &str = "3";
 
 /// The search terms file's tables, dictionary-encoded: each grid row once in
@@ -283,6 +297,8 @@ mod tests {
             SearchTermKind::To,
             SearchTermKind::Cc,
             SearchTermKind::Label,
+            SearchTermKind::Bcc,
+            SearchTermKind::Mention,
         ]
         .into_iter()
         .map(|k| (k, k.code()))
@@ -298,6 +314,8 @@ mod tests {
                 (SearchTermKind::To, 6),
                 (SearchTermKind::Cc, 7),
                 (SearchTermKind::Label, 8),
+                (SearchTermKind::Bcc, 9),
+                (SearchTermKind::Mention, 10),
             ]
         );
     }

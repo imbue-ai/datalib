@@ -28,6 +28,7 @@
     { "chat_id": 100, "author_id": 3, "date_sent": 12442118880000, "text": "Hailing frequencies open, sir.",           "outgoing": false },
     { "chat_id": 100, "author_id": 1, "date_sent": 12442118940000, "text": "Make it so.",                              "outgoing": true  },
     { "chat_id": 100, "author_id": 8, "date_sent": 12442119000000, "text": "Mon capitaine, you are so predictable.",  "outgoing": false },
-    { "chat_id": 100, "author_id": 9, "date_sent": 12442119060000, "text": "Ten Forward is open, if you need it.",    "outgoing": false }
+    { "chat_id": 100, "author_id": 9, "date_sent": 12442119060000, "text": "\uFFFC, Ten Forward is open, if you need it.", "outgoing": false,
+      "mentions": ["0195683a-d140-87f9-bdf6-234da6d6880c"] }
   ]
 }

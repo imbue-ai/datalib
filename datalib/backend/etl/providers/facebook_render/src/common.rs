@@ -177,6 +177,7 @@ pub fn chat_item(
         branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
+        mentions: Vec::new(),
         problems: Vec::new(),
     }
 }

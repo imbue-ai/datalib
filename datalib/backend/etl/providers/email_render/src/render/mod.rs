@@ -3,6 +3,7 @@
 //! attachment blobs materialized at `<thread>/blobs/<safe_filename>`.
 
 pub mod ids;
+pub mod mentions;
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not
 // an accident: the directory is the pipeline STAGE (mirroring

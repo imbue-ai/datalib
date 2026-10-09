@@ -25,6 +25,7 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:htmd",
         "@datalib_crates//:mail-parser",
+        "@datalib_crates//:regex",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",

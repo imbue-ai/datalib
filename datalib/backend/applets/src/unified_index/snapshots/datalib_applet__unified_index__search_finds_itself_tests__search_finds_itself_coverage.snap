@@ -27,6 +27,9 @@ created_at:
 diff_changed_columns:
   checked: slack-diff 3, tng_contacts-diff 1
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-takeout, linkedin, notion, ship-air, signal, slack, sms-backup-restore, tng_calendar, tng_contacts, tng_email, tng_pdfs, whatsapp, yolink
+fields: bcc
+  checked: tng_email 1
+  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
 fields: cc
   checked: tng_email 2
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
@@ -41,6 +44,9 @@ fields: id
 fields: label
   checked: tng_email 11
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
+fields: mention
+  checked: signal 1, slack 1, tng_email 1
+  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-takeout, linkedin, notion, ship-air, slack-diff, sms-backup-restore, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
 fields: name
   checked: beeper 46, chatgpt-api 94, claude-api 204, claude-code 55, codex 76, facebook 72, garmin 2, github 10, gitlab 9, google-takeout 58, linkedin 39, notion 8, ship-air 2, signal 24, slack 93, slack-diff 36, sms-backup-restore 14, tng_calendar 14, tng_contacts 18, tng_contacts-diff 10, tng_email 26, tng_pdfs 7, whatsapp 47, yolink 4
   never: datalib

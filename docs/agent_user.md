@@ -313,7 +313,7 @@ Pick the surface that fits the question:
   `slack:T…/U…`) is looked up in `grid_index/search_terms.sqlite`, not sent to
   qmd: every row that answers to each one, best match first, with
   `score` saying how (5 its own id, 4 its author or an addressee,
-  3 someone copied or what it is in, 2 its title or a label, 1 a name
+  3 someone copied or mentioned, or what it is in, 2 its title or a label, 1 a name
   it shows) and `snippet` naming the match.
   `tab=` picks how free text is answered, each its own list:
   `fields` (the search terms file, any word as the start of one), `words`

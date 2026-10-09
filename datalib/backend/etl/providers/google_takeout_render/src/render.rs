@@ -467,6 +467,7 @@ fn build_chats(
                     branch: Vec::new(),
                     unread: false,
                     recipients: Vec::new(),
+                    mentions: Vec::new(),
                     problems,
                 }
             })
@@ -730,6 +731,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 branch: Vec::new(),
                 unread: false,
                 recipients: Vec::new(),
+                mentions: Vec::new(),
                 problems: problems.clone(),
             }
         }
@@ -765,6 +767,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 branch: Vec::new(),
                 unread: false,
                 recipients: Vec::new(),
+                mentions: Vec::new(),
                 problems: problems.clone(),
             }
         }
@@ -795,6 +798,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 branch: Vec::new(),
                 unread: false,
                 recipients: Vec::new(),
+                mentions: Vec::new(),
                 problems: problems.clone(),
             }
         }

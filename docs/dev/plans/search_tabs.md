@@ -322,12 +322,15 @@ and could fold in later too.
    the open tab (`grid/searchTabs.ts`, `search-tabs.spec.ts`). "Meaning
    only" stays until the search predicate autocomplete work lands, then
    goes.
-4. **Terms from renders.** Built for chat-common, so every email
-   source: a message's To and Cc by handle and its labels, as `to`,
-   `cc` and `label` terms on its own row, carried in each render
-   store's `supplied_search_terms` and copied by `grid_index`. Still
-   to come: `bcc` (no email source keeps it yet), `participant`, and
-   `mention` where a source marks one up. The keys that read them
+4. **Terms from renders.** Built for chat-common: a message's To, Cc
+   and Bcc by handle, the people it mentions and its labels, as `to`,
+   `cc`, `bcc`, `mention` and `label` terms on its own row, carried in
+   each render store's `supplied_search_terms` and copied by
+   `grid_index`. Bcc comes from the sender's copy of an email; mentions
+   from email (an `@` `mailto:` link), Slack (`<@U…>`) and Signal (a
+   `mentionAci` range). Still to come: `participant`, and mentions in
+   Google Chat, WhatsApp and Messages, whose markup is not yet checked
+   on real data. The keys that read them
    (`to:`, `cc:`, `from:`, `with:`, `label:`) belong to the search
    autocomplete plan.
 5. **More identifier kinds** if wanted: an upstream URL

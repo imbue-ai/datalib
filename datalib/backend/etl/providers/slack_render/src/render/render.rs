@@ -19,7 +19,7 @@ use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_handle::Handle;
 
-use super::mrkdwn::{emojize_shortcodes, resolve_mentions, to_commonmark, Labels};
+use super::mrkdwn::{emojize_shortcodes, mentioned_users, resolve_mentions, to_commonmark, Labels};
 use super::{ids, slack_link, ts_to_ms, Message, ParsedSlack};
 use datalib_etl_render::inputs::Lookup;
 use datalib_schema::providers::Provider;
@@ -306,6 +306,7 @@ fn build_item(
         branch: Vec::new(),
         unread,
         recipients: Vec::new(),
+        mentions: mentioned_users(&m.text, &m.team_id),
         problems,
     }
 }

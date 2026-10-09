@@ -353,6 +353,7 @@ fn build_chat(
                 branch: branch.clone(),
                 unread: false,
                 recipients: Vec::new(),
+                mentions: Vec::new(),
                 problems: block_problems,
             });
         }
@@ -388,6 +389,7 @@ fn build_chat(
             branch: branch.clone(),
             unread: false,
             recipients: Vec::new(),
+            mentions: Vec::new(),
             problems: msg_problems,
         });
     }
@@ -526,6 +528,7 @@ fn build_project_page(
             branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
+            mentions: Vec::new(),
             problems: Vec::new(),
         });
     }
@@ -619,6 +622,7 @@ fn project_item(
         branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
+        mentions: Vec::new(),
         problems: Vec::new(),
     }
 }

@@ -72,6 +72,20 @@ pub fn resolve_mentions(text: &str, labels: Labels<'_>) -> String {
     decode_entities(&emojize_shortcodes(&replaced))
 }
 
+/// The people a message's text mentions (`<@U…>`), each once, in the
+/// order first mentioned, as handles in `team_id`'s workspace.
+pub fn mentioned_users(text: &str, team_id: &str) -> Vec<Handle> {
+    let mut out: Vec<Handle> = Vec::new();
+    for caps in USER_REF.captures_iter(text) {
+        if let Some(handle) = Handle::slack(team_id, &caps[1]) {
+            if !out.contains(&handle) {
+                out.push(handle);
+            }
+        }
+    }
+    out
+}
+
 /// The three entities Slack escapes in message text (per its
 /// Formatting reference), back to the characters typed.
 fn decode_entities(text: &str) -> String {
@@ -521,6 +535,24 @@ mod tests {
             resolve_mentions("hi <@U_Q> and <@U_X|a&amp;b>", lbl),
             "hi @[Q](https://e.test) * and @a&b",
             "a thread title is plain text; Title escapes it"
+        );
+    }
+
+    /// The people a message mentions are searched as `mention` terms:
+    /// users only, never a channel or `@here`, each once.
+    #[test]
+    fn a_messages_mentions_are_its_users_each_once() {
+        let named: Vec<String> = mentioned_users(
+            "<@U_DATA|Data> and <@W_WORF>, then <@U_DATA> again; not <#C1|bridge> or <!here>",
+            "T01",
+        )
+        .iter()
+        .map(|h| h.as_str().to_string())
+        .collect();
+        assert_eq!(named, ["slack:T01/U_DATA", "slack:T01/W_WORF"]);
+        assert!(
+            mentioned_users("<@U_DATA>", "").is_empty(),
+            "no workspace, no handle"
         );
     }
 
