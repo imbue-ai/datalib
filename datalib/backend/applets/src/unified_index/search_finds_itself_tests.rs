@@ -174,6 +174,28 @@ async fn terms_of(root: &std::path::Path) -> BTreeMap<(String, String), BTreeSet
     out
 }
 
+/// Each handle with the names it was seen under, from the search terms
+/// file.
+async fn names_of(root: &std::path::Path) -> HashMap<String, Vec<String>> {
+    let path = datalib_runtime::layout::search_terms_db(root);
+    let mut terms = SqliteConnectOptions::new()
+        .filename(datalib_runtime::plain_sqlite::uri(&path))
+        .read_only(true)
+        .connect()
+        .await
+        .unwrap();
+    let read: Vec<(String, String)> = sqlx::query_as("SELECT handle, name FROM names")
+        .fetch_all(&mut terms)
+        .await
+        .unwrap();
+    terms.close().await.unwrap();
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for (handle, name) in read {
+        out.entry(handle).or_default().push(name);
+    }
+    out
+}
+
 /// The words a document's text holds, cut where qmd's tokenizer cuts
 /// them (at anything not a letter or digit), keeping the ones of four or
 /// more letters and nothing else, lowercased.
@@ -253,9 +275,11 @@ async fn every_row_is_found_by_what_it_holds() {
     // A key that reads the search terms, given a value whole, finds
     // exactly the rows holding it in one of its kinds, case-blind; a
     // handle-shaped value its handle's rows too (`+1701…` shown as a name
-    // is the `tel:` handle). A bare value matches in part, which the
+    // is the `tel:` handle), and a name the rows of every handle seen
+    // under it. A bare value matches in part, which the
     // applet's own tests pin down.
     let terms = terms_of(root.path()).await;
+    let names = names_of(root.path()).await;
     for key in TERMS_KEYS {
         let kinds: Vec<&str> = key.kinds().iter().map(|k| k.as_str()).collect();
         let mut by_value: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
@@ -274,12 +298,21 @@ async fn every_row_is_found_by_what_it_holds() {
                 .into_iter()
                 .map(|r| r.uuid)
                 .collect();
-            let TermsValue::Exact(whole) = terms_keys::value_of(key, value, true, "*") else {
+            let TermsValue::Exact { values, by_name } = terms_keys::value_of(key, value, true, "*")
+            else {
                 panic!("a quoted value is matched whole: {q}");
+            };
+            // A name also reaches the handles seen under it.
+            let seen_under = |handle: &str| {
+                by_name.as_deref().is_some_and(|name| {
+                    names
+                        .get(handle)
+                        .is_some_and(|ns| ns.iter().any(|n| n.eq_ignore_ascii_case(name)))
+                })
             };
             let expected: BTreeSet<String> = by_value
                 .iter()
-                .filter(|(v, _)| whole.iter().any(|w| w.eq_ignore_ascii_case(v)))
+                .filter(|(v, _)| values.iter().any(|w| w.eq_ignore_ascii_case(v)) || seen_under(v))
                 .flat_map(|(_, rows)| rows.iter().cloned())
                 .collect();
             let missing: BTreeSet<&str> = expected.difference(&got).map(String::as_str).collect();

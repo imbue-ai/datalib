@@ -100,8 +100,89 @@ async fn sync_open(grid: &SqlitePool, terms: &SqlitePool, head: &str) -> Result<
         .acquire()
         .await
         .context("acquire the search terms file")?;
-    let recorded = meta(&mut conn, META_GRID_COMMIT).await?;
-    let shape = meta(&mut conn, META_SHAPE).await?;
+    let synced = sync_terms(grid, &mut conn, head).await?;
+    if synced.plan != "current" {
+        write_names(grid, &mut conn).await?;
+    }
+    Ok(synced)
+}
+
+/// Each handle with every name it was seen under: the author a grid row
+/// shows beside its handle, and every name a source's record of a person
+/// (`source_contacts`) gives for each handle it ties to them. Written
+/// whole on each pass that moves the terms: it is a few thousand rows.
+async fn write_names(grid: &SqlitePool, conn: &mut SqliteConnection) -> Result<usize> {
+    let authors: Vec<(String, String)> = sqlx::query_as(
+        "SELECT DISTINCT author_handle, author FROM grid_rows \
+         WHERE author_handle IS NOT NULL AND author_handle != '' \
+         AND author IS NOT NULL AND author != ''",
+    )
+    .fetch_all(grid)
+    .await
+    .context("read the grid's authors")?;
+    let contacts: Vec<(String, String)> = sqlx::query_as(
+        "SELECT h.handle, c.contact_json FROM source_contact_handles h \
+         JOIN source_contacts c \
+         ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key",
+    )
+    .fetch_all(grid)
+    .await
+    .context("read the source contacts")?;
+    let names = names_seen_under(authors, &contacts);
+    let mut tx = sqlx::Connection::begin(&mut *conn).await?;
+    sqlx::query("DELETE FROM names").execute(&mut *tx).await?;
+    let pairs: Vec<&(String, String)> = names.iter().collect();
+    for chunk in pairs.chunks(CHUNK) {
+        // Audited: a placeholder pair per name, every value bound.
+        let sql = format!(
+            "INSERT INTO names (handle, name) VALUES {}",
+            placeholders(chunk.len(), 2)
+        );
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for (handle, name) in chunk {
+            q = q.bind(handle).bind(name);
+        }
+        q.execute(&mut *tx).await.context("write the names")?;
+    }
+    tx.commit().await?;
+    Ok(names.len())
+}
+
+/// The `(handle, name)` pairs [`write_names`] keeps: the grid's authors,
+/// then each source contact's names (`NormalizedContact::names`) for each
+/// of its handles. A record this build cannot read gives no names.
+pub fn names_seen_under(
+    authors: Vec<(String, String)>,
+    contacts: &[(String, String)],
+) -> std::collections::BTreeSet<(String, String)> {
+    let mut out: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+    let mut unread = 0usize;
+    for (handle, name) in authors {
+        out.insert((handle, name.trim().to_string()));
+    }
+    for (handle, json) in contacts {
+        match serde_json::from_str::<datalib_contact_schema::NormalizedContact>(json) {
+            Ok(contact) => {
+                for name in contact.names {
+                    out.insert((handle.clone(), name.trim().to_string()));
+                }
+            }
+            Err(_) => unread += 1,
+        }
+    }
+    if unread > 0 {
+        tracing::warn!(
+            unread,
+            "source contacts this build cannot read gave no names"
+        );
+    }
+    out.retain(|(_, name)| !name.is_empty());
+    out
+}
+
+async fn sync_terms(grid: &SqlitePool, conn: &mut SqliteConnection, head: &str) -> Result<Synced> {
+    let recorded = meta(&mut *conn, META_GRID_COMMIT).await?;
+    let shape = meta(&mut *conn, META_SHAPE).await?;
     match plan(recorded.as_deref(), shape.as_deref(), head) {
         Plan::Current => Ok(Synced {
             plan: "current",
@@ -116,7 +197,7 @@ async fn sync_open(grid: &SqlitePool, terms: &SqlitePool, head: &str) -> Result<
                     uuids.dedup();
                     let rows = rows_by_uuid(grid, &uuids).await?;
                     let supplied = supplied_by_uuid(grid, &uuids).await?;
-                    let terms = write(&mut conn, Some(&uuids), &rows, &supplied, head).await?;
+                    let terms = write(conn, Some(&uuids), &rows, &supplied, head).await?;
                     Ok(Synced {
                         plan: "since",
                         rows: uuids.len(),
@@ -132,11 +213,11 @@ async fn sync_open(grid: &SqlitePool, terms: &SqlitePool, head: &str) -> Result<
                         "could not diff the grid index from the commit the terms \
                          reflect; building the search terms file whole"
                     );
-                    whole(grid, &mut conn, head).await
+                    whole(grid, conn, head).await
                 }
             }
         }
-        Plan::Whole => whole(grid, &mut conn, head).await,
+        Plan::Whole => whole(grid, conn, head).await,
     }
 }
 
@@ -443,6 +524,39 @@ mod tests {
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
     use datalib_schema::search_terms::SearchTermKind;
+
+    /// A handle is known by every name it was seen under: what its rows
+    /// show as their author, and each name a source's record of the person
+    /// gives; a blank name, or a record this build cannot read, adds none.
+    #[test]
+    fn a_handle_is_known_by_every_name_it_was_seen_under() {
+        use datalib_contact_schema::{ContactKind, NormalizedContact};
+        let mut riker = NormalizedContact::new("slack", "U_RIKER", ContactKind::Person);
+        riker.names = vec!["Will Riker".into(), "  ".into(), "Number One".into()];
+        let json = serde_json::to_string(&riker).unwrap();
+        let names = names_seen_under(
+            vec![("email:riker@e.org".into(), "William Riker".into())],
+            &[
+                ("slack:T/U_RIKER".into(), json.clone()),
+                ("email:riker@e.org".into(), json),
+                ("email:x@e.org".into(), "{not a contact".into()),
+            ],
+        );
+        let pairs: Vec<(&str, &str)> = names
+            .iter()
+            .map(|(h, n)| (h.as_str(), n.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("email:riker@e.org", "Number One"),
+                ("email:riker@e.org", "Will Riker"),
+                ("email:riker@e.org", "William Riker"),
+                ("slack:T/U_RIKER", "Number One"),
+                ("slack:T/U_RIKER", "Will Riker"),
+            ]
+        );
+    }
 
     /// A document of one row: its uuid, its author's handle, its title.
     fn doc(root: &Path, uuid: &str, handle: &str, title: &str) -> RenderedMarkdown {

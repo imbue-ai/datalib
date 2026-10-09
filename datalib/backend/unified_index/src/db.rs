@@ -140,24 +140,64 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
     let codes: Vec<String> = key.kinds().iter().map(|k| k.code().to_string()).collect();
     let (matched, bound) = match terms_keys::value_of(key, &term.value, term.quoted, ANY_VALUE) {
         TermsValue::Any => (String::new(), Vec::new()),
-        // `vals_nocase` serves each `=`: a whole value, case-blind.
-        TermsValue::Exact(values) => {
-            let any: Vec<&str> = values.iter().map(|_| "value = ? COLLATE NOCASE").collect();
+        // `vals_nocase` and `names_by_name` serve each `=`: a whole value,
+        // case-blind.
+        TermsValue::Exact { values, by_name } => {
+            let mut any: Vec<String> = values
+                .iter()
+                .map(|_| "value = ? COLLATE NOCASE".to_string())
+                .collect();
+            let mut bound = values;
+            if let Some(name) = by_name {
+                any.push(format!(
+                    "value IN (SELECT handle FROM {s}.names WHERE name = ? COLLATE NOCASE)"
+                ));
+                bound.push(name);
+            }
             (
                 format!(
                     " AND t.val_id IN (SELECT val_id FROM {s}.vals WHERE {})",
                     any.join(" OR ")
                 ),
-                values,
+                bound,
             )
         }
-        TermsValue::Partial(v) => (
-            format!(
-                " AND t.val_id IN (SELECT val_id FROM {s}.vals \
-                 WHERE LOWER(value) LIKE ? ESCAPE '\\')"
-            ),
-            vec![like_pattern(&v)],
-        ),
+        TermsValue::Partial { text, by_name } => {
+            let pattern = like_pattern(&text);
+            let names = if by_name {
+                format!(
+                    " OR value IN (SELECT handle FROM {s}.names \
+                     WHERE LOWER(name) LIKE ? ESCAPE '\\')"
+                )
+            } else {
+                String::new()
+            };
+            let bound = if by_name {
+                vec![pattern.clone(), pattern]
+            } else {
+                vec![pattern]
+            };
+            (
+                format!(
+                    " AND t.val_id IN (SELECT val_id FROM {s}.vals \
+                     WHERE LOWER(value) LIKE ? ESCAPE '\\'{names})"
+                ),
+                bound,
+            )
+        }
+        // A contact is its handles, read from the contacts store before the
+        // query runs; none read is no row (`IN ()`), and the applet refuses
+        // a contact it could not read before it gets here.
+        TermsValue::Contact(_) => {
+            let handles = term.handles.clone().unwrap_or_default();
+            (
+                format!(
+                    " AND t.val_id IN (SELECT val_id FROM {s}.vals WHERE value IN ({}))",
+                    vec!["?"; handles.len()].join(", ")
+                ),
+                handles,
+            )
+        }
     };
     let not = if term.negate { "NOT " } else { "" };
     (
@@ -294,13 +334,29 @@ mod tests {
         assert_eq!(params, ["email:ann@example.com", "Ann@Example.com"]);
 
         let (sql, params) = build_where(&parse_query(r#"author:"Data""#));
-        assert!(sql.ends_with("WHERE value = ? COLLATE NOCASE))"), "{sql}");
-        assert_eq!(params, ["Data"]);
+        assert!(
+            sql.ends_with(
+                "WHERE value = ? COLLATE NOCASE OR value IN (SELECT handle FROM \
+                 search_terms.names WHERE name = ? COLLATE NOCASE)))"
+            ),
+            "{sql}"
+        );
+        assert_eq!(params, ["Data", "Data"]);
+
+        let mut q = parse_query("with:contact:c-1");
+        q.terms[0].handles = Some(vec!["email:a@b.c".into(), "tel:+1555".into()]);
+        let (sql, params) = build_where(&q);
+        assert!(sql.ends_with("WHERE value IN (?, ?)))"), "{sql}");
+        assert_eq!(params, ["email:a@b.c", "tel:+1555"]);
 
         let (sql, params) = build_where(&parse_query("-author:riker"));
         assert!(sql.starts_with(" WHERE uuid NOT IN ("), "{sql}");
         assert!(sql.contains("LOWER(value) LIKE ?"), "{sql}");
-        assert_eq!(params, ["%riker%"]);
+        assert!(
+            sql.contains("search_terms.names WHERE LOWER(name) LIKE ?"),
+            "{sql}"
+        );
+        assert_eq!(params, ["%riker%", "%riker%"]);
 
         let (sql, params) = build_where(&parse_query("recipient:*"));
         assert!(sql.contains("t.kind IN (6, 7, 9))"), "{sql}");

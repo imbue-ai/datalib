@@ -1,10 +1,13 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
   EVERY_ROW,
+  GRID,
   selectRowByUuid,
   gridSettled,
   inDocFrame,
   searchAndSettle,
+  shownCards,
+  typeInto,
 } from "./grid-helpers";
 
 // The contacts app end to end, on a root that has it (`contactsRoot` in
@@ -127,4 +130,41 @@ test("two handles from two sources linked to one contact show it in documents an
   expect(renamed.ok()).toBeTruthy();
   await expect(gridChip(page, EMAIL)).toHaveText(/Will Riker$/, { timeout: 15_000 });
   await expect(await chipIn(page, EMAIL)).toHaveText(/Will Riker$/);
+});
+
+/// One of your contacts in the search bar: `@` and a few letters of its
+/// name offer it, picking it writes `with:contact:<id>` drawn as the
+/// contact's chip, and the search finds what reached any handle linked
+/// to it. Picard's address, which the other test leaves alone.
+test("a contact picked with @ finds everything that reached its handles", async ({
+  page,
+  request,
+}) => {
+  const picard = "email:picard@enterprise.starfleet";
+  const made = await request.post("/applet/datalib_contacts/contacts", {
+    data: { name: "Jean-Luc", handles: [picard] },
+  });
+  expect(made.ok(), await made.text()).toBeTruthy();
+  const { contact_id: id } = (await made.json()) as { contact_id: string };
+
+  const total = async (q: string) => {
+    const r = await request.get(`/applet/unified_index/search?q=${encodeURIComponent(q)}&limit=1`);
+    expect(r.ok()).toBeTruthy();
+    const body = (await r.json()) as { total: number; refused?: string[] };
+    expect(body.refused ?? []).toEqual([]);
+    return body.total;
+  };
+  const byHandle = await total(`with:${picard}`);
+  expect(byHandle, "the fixture names Picard's address").toBeGreaterThan(0);
+
+  await page.goto(GRID);
+  const field = shownCards(page).getByTestId("search-input");
+  await typeInto(field, "@jean");
+  const offered = shownCards(page).locator(`.cm-tooltip-autocomplete a.chip[data-contact="${id}"]`);
+  await expect(offered).toBeVisible();
+  await expect(offered).toContainText("Jean-Luc");
+  await field.press("Tab");
+  await expect(field).toHaveAttribute("data-query", `with:contact:${id} `);
+  await expect(field.locator(`a.chip[data-contact="${id}"]`)).toContainText("Jean-Luc");
+  expect(await total(`with:contact:${id}`)).toBe(byHandle);
 });

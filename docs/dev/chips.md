@@ -153,7 +153,7 @@ The two instances:
 | keyed by | handle (`email:…`) | entity URI (`datalib:group/…`) |
 | asks | the unified index's `POST /people` and the contacts app's `POST /resolve` | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads) |
 | answer | each source's record of the person, and the contact a person made | label, icon token, detail, status |
-| goes stale when | a person edits a contact (create, link, unlink, no longer works): in this page the call forgets the handles it changed; from anywhere else — another window, an agent — the contacts app's commit reaches every page as a `curated` frame, on which `people` revalidates (`movesPeople`), as on a resync | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
+| goes stale when | a person edits a contact (create, link, unlink, no longer works): in this page the call forgets the handles it changed; from anywhere else — another window, an agent — the contacts app's commit reaches every page as a `curated` frame, on which `people` and `contactsById` revalidate (`movesPeople`), as on a resync | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
 
 Why the viewer joins this itself rather than the producer sending
 finished chips: the producer still resolves what only it can (the name
@@ -201,11 +201,12 @@ The search field (`ui/src/search/`) draws the value of a term whose key
 names a source, a group or a step (`source_id:slack`, the log's
 `step:slack/ingest`) as that entity's chip, and a person key's value
 that is a handle (`from:email:riker@enterprise.org`) as the person's
-chip, in the text where it was typed; its menu draws the values it
+chip, and one that names a contact (`from:contact:<id>`) as the
+contact's, in the text where it was typed; its menu draws the values it
 offers the same way. The chip is a CodeMirror widget whose DOM is
-`entityCell`'s or `chipCell`'s, resolved through `entities` or
-`people` and redrawn when either answers; the query text under it is
-unchanged. The field's host includes `chip.css`.
+`entityCell`'s, `chipCell`'s or `contactCell`'s, resolved through
+`entities`, `people` or `contactsById` and redrawn when one answers;
+the query text under it is unchanged. The field's host includes `chip.css`.
 
 Its clicks are a text field's: a click selects the chip whole, a
 double-click opens it as text to be edited, the one place a
