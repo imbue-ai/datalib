@@ -27,6 +27,7 @@ import {
   type NormalizedContact,
   type Who,
   chipMenu,
+  composeUri,
   copyText,
   handleValue,
   searchQueryFor,
@@ -51,6 +52,7 @@ import {
 import { personSource } from "./cardSources";
 import HandlePopover from "./HandlePopover.ce.vue";
 import { copyToClipboard } from "@/clipboard";
+import { openExternal } from "@/externalLinks";
 import { pushToast } from "@/toasts";
 import { renderDocument } from "./renderDocument";
 import { isBrowserClick, linkFromClick, type ClickedLink } from "./chatLink";
@@ -268,8 +270,12 @@ function onChipDblClick(ev: MouseEvent) {
   if (!chip || isBrowserClick(ev)) return;
   ev.preventDefault();
   ev.stopPropagation();
+  openPersonCard(chip.dataset.handle ?? "");
+}
+
+function openPersonCard(handle: string) {
   chipTarget.value = null;
-  emit("open-card", personSource(chip.dataset.handle ?? "", { seenIn: props.sourceId ?? null }));
+  emit("open-card", personSource(handle, { seenIn: props.sourceId ?? null }));
 }
 
 type ChipMenuAt = {
@@ -349,6 +355,14 @@ async function onChipMenuPick(id: ChipMenuId | EntityMenuId) {
     return;
   }
   switch (id as ChipMenuId) {
+    case "open":
+      openPersonCard(handle);
+      break;
+    case "compose": {
+      const mailto = composeUri(handle);
+      if (mailto) void openExternal(mailto);
+      break;
+    }
     case "copy-name":
       await copy(name);
       break;
@@ -572,6 +586,8 @@ function onFrameLoad() {
     onFrameLinkClick(ev);
   });
   on("auxclick", (ev) => {
+    // A right button's auxclick belongs to the context menu, not the link.
+    if (ev.button === 2) return;
     onEntityChipClick(ev);
     onFrameLinkClick(ev);
   });

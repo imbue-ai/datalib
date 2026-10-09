@@ -58,6 +58,7 @@ import {
   chipCell,
   chipLook,
   chipMenu,
+  composeUri,
   handleKind,
   searchQueryFor,
   copyText as copyHandleText,
@@ -1794,9 +1795,18 @@ const chipEntry = (id: ChipMenuEntry["id"], run: (m: MenuScope) => void) =>
   entry(`chip-${id}`, (m) => m.chip?.entries.find((e) => e.id === id)?.label ?? null, run);
 
 const menuItems: (MenuCommandItem | "divider")[] = [
-  chipEntry("copy-name", (m) => void copyToClipboard(m.chip!.name)),
+  chipEntry("open", (m) =>
+    props.ctx.host.openCards(personSource(m.chip!.handle, { seenIn: m.anchor?.source_id || null })),
+  ),
+  dividerAfter((m) => m.chip !== null),
+  chipEntry("compose", (m) => {
+    const mailto = composeUri(m.chip!.handle);
+    if (mailto) void openExternal(mailto);
+  }),
   chipEntry("copy-id", (m) => void copyToClipboard(handleValue(m.chip!.handle))),
+  chipEntry("copy-name", (m) => void copyToClipboard(m.chip!.name)),
   chipEntry("copy-both", (m) => void copyToClipboard(copyHandleText(m.chip!.handle, m.chip!.name))),
+  dividerAfter((m) => m.chip !== null),
   chipEntry("search", (m) => appendFilterToQuery(searchQueryFor(m.chip!.handle))),
   dividerAfter((m) => m.chip !== null),
   entityEntry("copy-name", (m) => void copyToClipboard(m.entity!.name)),

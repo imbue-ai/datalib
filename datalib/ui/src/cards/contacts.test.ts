@@ -8,6 +8,7 @@ import chipCss from "./chip.css?inline";
 import {
   chipLook,
   chipMenu,
+  composeUri,
   copyText,
   drawChip,
   chipTooltip,
@@ -129,23 +130,48 @@ describe("chipLook", () => {
 });
 
 describe("chipMenu", () => {
-  it("offers the copies, the search, and a link only with a contacts app", () => {
+  /** The person's card leads, as the double-click does; an email address
+   *  can be written to; the copies, the search and, with a contacts app,
+   *  the link follow. */
+  it("opens the card first, then compose, the copies, the search, and a link", () => {
     const ids = (entries: { id: string }[]) => entries.map((e) => e.id);
     const unlinked = chipMenu("email:riker@enterprise.org", "Will Riker", NOBODY, true);
-    expect(ids(unlinked)).toEqual(["copy-name", "copy-id", "copy-both", "search", "edit"]);
+    expect(ids(unlinked)).toEqual([
+      "open",
+      "compose",
+      "copy-id",
+      "copy-name",
+      "copy-both",
+      "search",
+      "edit",
+    ]);
     expect(unlinked.map((e) => e.label)).toEqual([
-      "Copy “Will Riker”",
+      "Open contact",
+      "Compose mail to riker@enterprise.org",
       "Copy riker@enterprise.org",
+      "Copy “Will Riker”",
       "Copy “Will Riker <riker@enterprise.org>”",
       "Everything from Will Riker",
       "Link to a contact…",
     ]);
-    expect(unlinked.filter((e) => e.separator).map((e) => e.id)).toEqual(["search", "edit"]);
+    expect(unlinked.filter((e) => e.separator).map((e) => e.id)).toEqual([
+      "compose",
+      "search",
+      "edit",
+    ]);
     const mine = contact("datalib_contacts", "Will Riker", [[TEL, null]]);
     expect(chipMenu(TEL, "+1 555", { mine, sourceContacts: [] }, true).at(-1)?.label).toBe(
       "Edit contact link…",
     );
-    expect(ids(chipMenu(TEL, "+15550123456", NOBODY, false))).toEqual(["copy-id", "search"]);
+    const phone = chipMenu(TEL, "+15550123456", NOBODY, false);
+    expect(ids(phone)).toEqual(["open", "copy-id", "search"]);
+    expect(phone.filter((e) => e.separator).map((e) => e.id)).toEqual(["copy-id", "search"]);
+  });
+
+  it("composes mail only to an email address", () => {
+    expect(composeUri("email:riker@enterprise.org")).toBe("mailto:riker@enterprise.org");
+    expect(composeUri(TEL)).toBeNull();
+    expect(composeUri("slack:T01/U02")).toBeNull();
   });
 
   /** By the handle, not the name shown: a name is any author holding it. */

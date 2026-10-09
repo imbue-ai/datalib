@@ -3,9 +3,10 @@ import { EVERY_ROW, selectRowByUuid, inDocFrame, stubClipboard } from "./grid-he
 
 // A person in a document is a chip (docs/dev/chips.md). Right-click
 // on one opens the chip's own menu rather than the document's; its
-// entries copy the name or the identifier and open a search for
-// everything from that person; a double-click opens the person's card,
-// led by this document's source. The fixture has no contacts app, so
+// entries open the person's card, write to an email address, copy the
+// name or the identifier and open a search for everything from that
+// person; a double-click opens the person's card, led by this
+// document's source. The fixture has no contacts app, so
 // the chips are unresolved and the menu has no link entry — the copies,
 // the search and the card are what every root has.
 
@@ -18,15 +19,17 @@ const SEARCH_INPUT = '.ct-card[data-card-source*="searchView({"] [data-testid="s
 async function openADocumentWithAChip(
   page: import("@playwright/test").Page,
   request: import("@playwright/test").APIRequestContext,
+  // Slack's authors all carry a handle, so any of its messages has a chip;
+  // an email's author is an email address.
+  source = "slack",
 ) {
-  // Slack's authors all carry a handle, so any of its messages has a chip.
-  const resp = await request.get("/applet/unified_index/search?q=source_id%3Aslack&limit=200");
+  const resp = await request.get(`/applet/unified_index/search?q=source_id%3A${source}&limit=200`);
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
   const message = rows.find(
     (r) => !/(Chat|Thread|Reaction)$/.test(r.kind) && r.message_index != null && r.author,
   );
-  expect(message, "the slack fixture must have a message row with an author").toBeTruthy();
+  expect(message, `the ${source} fixture must have a message row with an author`).toBeTruthy();
   await page.goto(EVERY_ROW);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
   await selectRowByUuid(page, message!.uuid);
@@ -45,11 +48,20 @@ test("right-click on a chip opens its menu, and the copies carry name and identi
   const value = handle.slice(handle.indexOf(":") + 1);
   await stubClipboard(page);
 
-  // The menu is drawn in the app's window, over the frame.
+  // The menu is drawn in the app's window, over the frame, where the
+  // click was. Without its stylesheet in the card's shadow root it still
+  // counts as visible, as unstyled lines below the document.
   await chip.click({ button: "right" });
   const menu = page.locator(".chip-menu");
-  await expect(menu).toBeVisible();
-  await expect(menu.locator(".chip-menu-item")).toContainText([/^Copy /, /^Everything from /]);
+  await expect(menu).toBeInViewport();
+  const at = (await chip.boundingBox())!;
+  const drawn = (await menu.boundingBox())!;
+  expect(Math.abs(drawn.y - (at.y + at.height / 2)), "menu top vs the click").toBeLessThan(40);
+  await expect(menu.locator(".chip-menu-item")).toContainText([
+    /^Open contact$/,
+    /^Copy /,
+    /^Everything from /,
+  ]);
   await menu.locator(".chip-menu-item", { hasText: `Copy ${value}` }).click();
   await expect(menu).toBeHidden();
   await expect
@@ -84,6 +96,45 @@ test("a chip's mark or photo stays the size of a letter, hovered or not", async 
     expect(h, `lead height in ems, hovered: ${hovered}`).toBeLessThanOrEqual(1.5);
     expect(w, `lead width in ems, hovered: ${hovered}`).toBeLessThanOrEqual(1.5);
   }
+});
+
+test("the menu's first entry opens the person's card", async ({ page, request }) => {
+  const chip = await openADocumentWithAChip(page, request);
+  await chip.click({ button: "right" });
+  const first = page.locator(".chip-menu .chip-menu-item").first();
+  await expect(first).toHaveText("Open contact");
+  await first.click();
+  const card = page.locator(".person");
+  await expect(card.locator(".person-name")).not.toHaveText("", { timeout: 10_000 });
+  await expect(card.locator(".person-section").first()).toHaveClass(/person-seen-here/);
+});
+
+test("compose hands an email address to the mail app", async ({ page, request }) => {
+  const chip = await openADocumentWithAChip(page, request, "tng_email");
+  const value = (await chip.getAttribute("data-handle"))!.replace(/^email:/, "");
+  // In a browser the mail app is reached through window.open.
+  await page.evaluate(() => {
+    const w = window as unknown as { __opened?: string[] };
+    w.__opened = [];
+    window.open = (url?: string | URL) => {
+      w.__opened!.push(String(url));
+      return null;
+    };
+  });
+  // The right-click itself opens nothing: its auxclick once handed the
+  // chip's mailto: to the mail app.
+  await chip.click({ button: "right" });
+  const compose = page.locator(".chip-menu .chip-menu-item", {
+    hasText: `Compose mail to ${value}`,
+  });
+  await expect(compose).toBeInViewport();
+  expect(
+    await page.evaluate(() => (window as unknown as { __opened?: string[] }).__opened),
+  ).toEqual([]);
+  await compose.click();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __opened?: string[] }).__opened))
+    .toEqual([`mailto:${value}`]);
 });
 
 test("the menu's search opens everything from the person", async ({ page, request }) => {
