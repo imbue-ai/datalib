@@ -228,6 +228,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
+        mentions: Vec::new(),
         problems: Vec::new(),
     };
     let reaction = |uuid: &str, emoji: String, who: String| NormalizedReaction {

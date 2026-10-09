@@ -208,6 +208,7 @@ fn build_chat(
             branch: branch.clone(),
             unread: false,
             recipients: Vec::new(),
+            mentions: Vec::new(),
             problems,
         });
     }

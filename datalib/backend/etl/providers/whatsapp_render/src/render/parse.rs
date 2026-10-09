@@ -555,6 +555,7 @@ fn build_item(
         branch: Vec::new(),
         unread,
         recipients: Vec::new(),
+        mentions: Vec::new(),
         problems: Vec::new(),
     }
 }

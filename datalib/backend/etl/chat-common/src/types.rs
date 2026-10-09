@@ -96,6 +96,8 @@ pub struct Recipient {
 pub enum RecipientRole {
     To,
     Cc,
+    /// Only the sender's own copy of an email names them.
+    Bcc,
 }
 
 impl RecipientRole {
@@ -104,6 +106,7 @@ impl RecipientRole {
         match self {
             Self::To => "To",
             Self::Cc => "Cc",
+            Self::Bcc => "Bcc",
         }
     }
 }
@@ -116,9 +119,14 @@ pub struct NormalizedChatItem {
     /// Stable per-item UUID minted by the provider. Used as the section
     /// anchor (`id="m-{uuid}"`) and the message-level grid_row PK.
     pub message_uuid: String,
-    /// Who it was addressed to, where the source says: an email's To and
-    /// Cc. Empty for a chat, whose members are the conversation's.
+    /// Who it was addressed to, where the source says: an email's To, Cc
+    /// and Bcc. Empty for a chat, whose members are the conversation's.
     pub recipients: Vec<Recipient>,
+    /// Who the text names where the source marks a name up as a person
+    /// (Slack's `<@U…>`, a Signal mention), never a name or address
+    /// merely written in it: quoted replies repeat those. Searched as
+    /// `mention` terms.
+    pub mentions: Vec<datalib_handle::Handle>,
     /// Who said it, as an identifier a contact can be linked to — an
     /// email address, a phone number, a Slack user. `None` where the
     /// provider has no such identifier for the author (yet), or the

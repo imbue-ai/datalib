@@ -87,6 +87,7 @@ fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
         branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
+        mentions: Vec::new(),
         problems: Vec::new(),
     }
 }

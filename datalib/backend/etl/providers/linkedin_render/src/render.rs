@@ -213,6 +213,7 @@ fn build_chats(
                     branch: Vec::new(),
                     unread: false,
                     recipients: Vec::new(),
+                    mentions: Vec::new(),
                     problems,
                 }
             })

@@ -142,6 +142,11 @@ pub struct ParsedChatItem {
     /// `StandardMessage.attachments` repeated field (matches the
     /// `slot` we stored at download time).
     pub attachments: Vec<ParsedAttachment>,
+    /// The ACI of each person the text mentions, in the order of the
+    /// `U+FFFC` placeholders that stand for them in `text`; `None` for
+    /// one whose ACI this build could not read, so the rest keep their
+    /// places.
+    pub mentions: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -514,6 +519,7 @@ async fn load_buckets(
             outgoing,
             unread,
             attachments,
+            mentions,
         } = decode_chat_item(&payload);
         docs[idx].items.push(ParsedChatItem {
             item_pk,
@@ -523,6 +529,7 @@ async fn load_buckets(
             outgoing,
             unread,
             attachments,
+            mentions,
         });
     }
     Ok(docs)
@@ -535,6 +542,7 @@ struct Decoded {
     outgoing: bool,
     unread: bool,
     attachments: Vec<ParsedAttachment>,
+    mentions: Vec<Option<String>>,
 }
 
 /// Parse a `chat_items.payload` JSON string (a `Frame::ChatItem`
@@ -554,6 +562,7 @@ fn decode_chat_item(payload: &str) -> Decoded {
         matches!(&ci.directional_details, Some(DirectionalDetails::Incoming(d)) if !d.read);
     match ci.item {
         Some(backup::chat_item::Item::StandardMessage(sm)) => {
+            let mentions = sm.text.as_ref().map(mentioned_acis).unwrap_or_default();
             let text = sm.text.and_then(|t| {
                 if t.body.is_empty() {
                     None
@@ -571,6 +580,7 @@ fn decode_chat_item(payload: &str) -> Decoded {
                 outgoing,
                 unread,
                 attachments,
+                mentions,
             }
         }
         _ => Decoded {
@@ -579,6 +589,25 @@ fn decode_chat_item(payload: &str) -> Decoded {
             ..Decoded::default()
         },
     }
+}
+
+/// The ACIs a message's text mentions, in the order they appear: each
+/// is a `mentionAci` body range over the `U+FFFC` that stands for it.
+fn mentioned_acis(text: &backup::Text) -> Vec<Option<String>> {
+    use backup::body_range::AssociatedValue;
+    let mut ranges: Vec<&backup::BodyRange> = text
+        .body_ranges
+        .iter()
+        .filter(|r| matches!(r.associated_value, Some(AssociatedValue::MentionAci(_))))
+        .collect();
+    ranges.sort_by_key(|r| r.start);
+    ranges
+        .into_iter()
+        .map(|r| match &r.associated_value {
+            Some(AssociatedValue::MentionAci(bytes)) => uuid_of(bytes),
+            _ => None,
+        })
+        .collect()
 }
 
 fn attachment_from_message(att: &backup::MessageAttachment) -> Option<ParsedAttachment> {
@@ -648,6 +677,50 @@ mod tests {
             OutgoingMessageDetails::default(),
         )));
         assert!(outgoing.outgoing && !outgoing.unread);
+    }
+
+    /// The mentions come in the order of their placeholders whatever the
+    /// order of the ranges, a style range is none, and an ACI that is not
+    /// one keeps its place as `None`.
+    #[test]
+    fn a_messages_mentions_are_its_mention_ranges_in_text_order() {
+        use backup::body_range::AssociatedValue;
+        let range = |start, value| backup::BodyRange {
+            start,
+            length: 1,
+            associated_value: Some(value),
+        };
+        let aci = |last: u8| {
+            let mut b = vec![0u8; 16];
+            b[15] = last;
+            b
+        };
+        let payload = serde_json::to_string(&backup::ChatItem {
+            item: Some(backup::chat_item::Item::StandardMessage(
+                backup::StandardMessage {
+                    text: Some(backup::Text {
+                        body: "\u{FFFC}, \u{FFFC} and \u{FFFC}".into(),
+                        body_ranges: vec![
+                            range(6, AssociatedValue::MentionAci(vec![1, 2, 3])),
+                            range(0, AssociatedValue::Style(1)),
+                            range(10, AssociatedValue::MentionAci(aci(0xb))),
+                            range(0, AssociatedValue::MentionAci(aci(0xa))),
+                        ],
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            decode_chat_item(&payload).mentions,
+            [
+                Some("00000000-0000-0000-0000-00000000000a".to_string()),
+                None,
+                Some("00000000-0000-0000-0000-00000000000b".to_string()),
+            ]
+        );
     }
 }
 

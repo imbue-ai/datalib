@@ -202,6 +202,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
             branch: Vec::new(),
             unread: false,
             recipients: Vec::new(),
+            mentions: Vec::new(),
             problems: Vec::new(),
         };
     }
@@ -228,6 +229,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         branch: Vec::new(),
         unread: false,
         recipients: Vec::new(),
+        mentions: Vec::new(),
         problems: Vec::new(),
     }
 }
