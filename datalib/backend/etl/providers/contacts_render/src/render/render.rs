@@ -8,7 +8,9 @@ use anyhow::Result;
 
 use datalib_contact_schema::{ContactHandle, ContactKind, Detail, NormalizedContact, Photo};
 use datalib_etl::progress::Progress;
-use datalib_etl_contact_common::{render_all as cc_render_all, ContactDoc, ContactRenderProfile};
+use datalib_etl_contact_common::{
+    chip_handle, render_all as cc_render_all, ContactDoc, ContactRenderProfile,
+};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{keys_reading, Bucket, Buckets, RawRange};
 
@@ -31,7 +33,10 @@ use datalib_schema::providers::Provider;
 /// stopped having a handle; to 12 when a card's photo reached the index
 /// as the URL the app serves it at.
 /// 13: a photo no browser draws has no URL.
-pub const RENDER_VERSION: u32 = 13;
+/// 14: a card is its own conversation, filed under its address book as
+/// the channel alone, with its first address and number in columns and
+/// a group's members drawn as chips.
+pub const RENDER_VERSION: u32 = 14;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
@@ -162,15 +167,23 @@ fn normalize(
     let mut seen = std::collections::HashSet::new();
     group_names.retain(|name| seen.insert(name.clone()));
     person.groups = group_names;
+    let mut member_handles = Vec::new();
     for member in &contact.members {
         let uid = member_uid(member).unwrap_or(member);
         let card = cards.get(&(contact.addressbook.as_str(), uid));
-        // The member's name is part of this page, so its card is an input.
+        // The member's name and handle are part of this page, so its card
+        // is an input.
         inputs.extend(card.iter().flat_map(|c| c.inputs.iter().cloned()));
         let name = card
             .and_then(|c| c.display_name.clone())
             .unwrap_or_else(|| member.clone());
         person.members.push(name);
+        member_handles.push(card.and_then(|c| {
+            chip_handle(
+                c.emails.first().map(|e| e.value.as_str()),
+                c.phones.first().map(|p| p.value.as_str()),
+            )
+        }));
     }
     person.names = contact.display_name.iter().cloned().collect();
     person.org = (!contact.org.is_empty()).then(|| contact.org.join(" — "));
@@ -220,8 +233,8 @@ fn normalize(
     ContactDoc {
         contact: person,
         doc_uuid: id.uuid,
-        group_uuid: ids::addressbook(source_id, &contact.addressbook).uuid,
         group_label: contact.addressbook.clone(),
+        member_handles,
         upstream_account: None,
         inputs,
     }
@@ -319,10 +332,6 @@ mod tests {
             n.doc_uuid,
             ids::contact("tng_contacts", "Bridge", "tng-picard").uuid
         );
-        assert_eq!(
-            n.group_uuid,
-            ids::addressbook("tng_contacts", "Bridge").uuid
-        );
         assert_eq!(n.group_label, "Bridge");
         assert_eq!(n.contact.name(), Some("Jean-Luc Picard"));
         assert_eq!(n.contact.key, "Bridge#tng-picard");
@@ -382,12 +391,14 @@ mod tests {
             .expect("normalized modified_at must satisfy GridRow's RFC 3339 contract");
     }
 
-    /// A group card lists its members by name, and a renamed member
+    /// A group card lists its members by name, each with the handle its
+    /// chip is drawn by where its card has one, and a renamed member
     /// re-renders the group because the member's row is its input.
     #[test]
     fn a_group_names_its_members_and_reads_their_rows() {
         let picard = ParsedContact {
             inputs: vec![Input::new("contacts", "row-picard")],
+            emails: vec![prop("jlp@enterprise.test", Some("WORK"))],
             ..sample()
         };
         let group = ParsedContact {
@@ -410,13 +421,13 @@ mod tests {
         };
         let cards: Cards = [(("Bridge", "tng-picard"), &picard)].into_iter().collect();
         let n = normalize(&group, "tng_contacts", &cards, &Groups::new());
-        let rows = table_rows(&n.contact);
-        let members: Vec<(&str, &str)> =
-            rows.iter().map(|(l, v)| (l.as_str(), v.as_str())).collect();
-        assert_eq!(
-            members,
-            vec![("Member", "Jean-Luc Picard"), ("Member", "urn:uuid:tng-q")]
-        );
+        assert_eq!(n.contact.members, ["Jean-Luc Picard", "urn:uuid:tng-q"]);
+        let handles: Vec<Option<&str>> = n
+            .member_handles
+            .iter()
+            .map(|h| h.as_ref().map(|h| h.as_str()))
+            .collect();
+        assert_eq!(handles, [Some("email:jlp@enterprise.test"), None]);
         assert_eq!(
             n.contact.created_at.as_deref(),
             Some("2370-01-01T00:00:00+00:00")

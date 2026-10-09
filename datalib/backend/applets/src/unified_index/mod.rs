@@ -1796,6 +1796,45 @@ mod tests {
         }
     }
 
+    /// A contact's card is about its person: `with:` finds it by any of
+    /// its handles or names, and `from:` does not, since nobody wrote it.
+    #[tokio::test]
+    async fn with_finds_the_card_about_a_person_and_from_does_not() {
+        use datalib_schema::search_terms::SearchTermKind::About;
+        let tmp = tempfile::tempdir().unwrap();
+        let card = document_row("card-ann", "2026-01-01T09:00:00+00:00", "Contact")
+            .contact(Some("Ann Example".to_string()))
+            .build()
+            .unwrap();
+        let message = document_row("m-ann", "2026-01-02T09:00:00+00:00", "Email")
+            .author(Some("Ann".to_string()))
+            .author_handle(Some("email:ann@example.com".to_string()))
+            .build()
+            .unwrap();
+        index_rows_with_terms(
+            tmp.path(),
+            vec![
+                (
+                    card,
+                    vec![(About, "email:ann@example.com"), (About, "Ann Example")],
+                ),
+                (message, Vec::new()),
+            ],
+        )
+        .await;
+        sync_terms(tmp.path()).await;
+        let s = index_over(tmp.path()).await;
+        for (q, want) in [
+            ("with:ann@example.com", vec!["m-ann", "card-ann"]),
+            (r#"with:"Ann Example""#, vec!["card-ann"]),
+            ("from:ann@example.com", vec!["m-ann"]),
+        ] {
+            let r = search(&s, q, None, 10, None).await;
+            assert!(r.refused.is_empty() && r.errors.is_empty(), "{q}: {r:?}");
+            assert_eq!(uuids(&r), want, "{q}");
+        }
+    }
+
     /// A person key's values come from the search terms of its kinds,
     /// most rows first, among the rows the rest of the query keeps.
     #[tokio::test]

@@ -244,6 +244,19 @@ resolve against". A source with no login at all (a PDF folder, a
 login lives inside, where the provider has one (Claude's org, Slack's
 workspace).
 
+### `contact`, `email`, `phone`
+
+**Null on every row but a contact's own**: an address-book card, a
+LinkedIn connection, a Facebook friend, all written by
+`contact-common`. `contact` is who the row is about, the person or the
+group, and `email` and `phone` are the card's first address and number
+as the source wrote them, a number with or without its country code.
+The grid's Contact column is drawn from the three
+([`chips.md`](chips.md) §"In a grid"). Such a row is its own
+conversation, so `conversation_name` is the contact's name too, and
+`channel` holds the address book or list it is filed in and is the
+only column that does. `author` stays null: nobody wrote a contact.
+
 ### `conversation_uuid`, `preview`, `content_hash`
 
 `conversation_uuid` is the row's own `uuid` for a document row and the

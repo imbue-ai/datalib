@@ -455,8 +455,8 @@ fn contacts(scratch: &Path) -> Result<Vec<Document>> {
     let doc = ContactDoc {
         contact,
         doc_uuid: "00000000-0000-8000-8000-0000000000f1".into(),
-        group_uuid: "00000000-0000-8000-8000-0000000000f2".into(),
         group_label: f.hostile("contact group"),
+        member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),
     };

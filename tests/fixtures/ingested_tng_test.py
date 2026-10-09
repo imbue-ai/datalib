@@ -498,8 +498,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
 
     def _diff_shape(self, group: str) -> dict[str, tuple[str, str]]:
-        """A diff group's rows: author → (status, changed columns), for a
-        group whose rows have one author each.
+        """A contacts diff group's rows: contact → (status, changed columns).
 
         The contacts diff is one add, one delete and one edit, which is
         every row of the table in docs/dev/plans/completed/diff_renderer.md; the
@@ -510,14 +509,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """
         rows = self._query(
             self._index_db,
-            "SELECT g.author || '|' || g.diff_status || '|' || coalesce(g.diff_changed_columns, '') "
+            "SELECT g.contact || '|' || g.diff_status || '|' || coalesce(g.diff_changed_columns, '') "
             "FROM grid_rows g JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
-            f"WHERE m.source_id = '{group}' ORDER BY g.author;",
+            f"WHERE m.source_id = '{group}' ORDER BY g.contact;",
         )
         out: dict[str, tuple[str, str]] = {}
         for row in rows:
-            author, status, changed = row.split("|", 2)
-            out[author] = (status, changed)
+            contact, status, changed = row.split("|", 2)
+            out[contact] = (status, changed)
         return out
 
     def _diff_fates(self, group: str) -> dict[str, int]:
@@ -549,6 +548,16 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "SELECT DISTINCT g.qmd_path FROM grid_rows g JOIN markdowns m "
             "ON g.markdown_uuid = m.markdown_uuid "
             f"WHERE m.source_id = '{group}' AND g.preview LIKE '%{needle}%';",
+        )
+        return (self.workspace / qmd_path).read_text()
+
+    def _contact_markdown(self, group: str, contact: str) -> str:
+        """A contacts group's page for `contact`, off the tree."""
+        qmd_path = self._scalar(
+            self._index_db,
+            "SELECT DISTINCT g.qmd_path FROM grid_rows g JOIN markdowns m "
+            "ON g.markdown_uuid = m.markdown_uuid "
+            f"WHERE m.source_id = '{group}' AND g.contact = '{contact}';",
         )
         return (self.workspace / qmd_path).read_text()
 
@@ -988,8 +997,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "every source that rendered must also have measured itself",
         )
         # Who a handle is, as each source that mentions it says: the
-        # rows a chip reads. One address, three sources, one name — Slack's
-        # through its profile, which ties his Slack user to the address.
+        # rows a chip reads. One address, four sources, one name — Slack's
+        # through its profile, which ties his Slack user to the address, and
+        # the address book's, whose photo is what his chips draw.
         self.assertEqual(
             self._query(
                 self._index_db,
@@ -1001,6 +1011,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [
                 "google-takeout|Jean-Luc Picard",
                 "slack|Jean-Luc Picard",
+                "tng_contacts|Jean-Luc Picard",
                 "tng_email|Jean-Luc Picard",
             ],
             "the people the index knows by Picard's address",
@@ -1125,18 +1136,19 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         # A card's photo is written beside its page and the index holds
         # where the app serves it from, so a chip can draw it; a card
-        # without one carries no URL. Only `Bridge.vcf`'s two cards have one.
+        # without one carries no URL. The Borg cards, from a Google export, have
+        # none.
         self.assertEqual(
             self._query(
                 self._index_db,
                 "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url') "
                 "  = '/applet/unified_index/asset/' || c.markdown_uuid || '/blobs/' "
-                "    || c.markdown_uuid || '.png', 'none') "
+                "    || c.markdown_uuid || '.jpg', 'none') "
                 "FROM source_contacts c JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
                 "WHERE m.source_id = 'tng_contacts' "
-                "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Worf') ORDER BY 1;",
+                "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Hugh') ORDER BY 1;",
             ),
-            ["Jean-Luc Picard|1", "William T. Riker|1", "Worf|none"],
+            ["Hugh|none", "Jean-Luc Picard|1", "William T. Riker|1"],
             "a card's photo, as the URL the index serves it at",
         )
         # Signal ties a number to an ACI: Riker's account carries both,
@@ -1200,10 +1212,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT coalesce(g.author, '') || '|' || g.channel FROM grid_rows g "
+                "SELECT coalesce(g.contact, '') || '|' || g.channel FROM grid_rows g "
                 "JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
                 "WHERE m.source_id = 'tng_contacts' "
-                "AND g.channel IN ('Borg', 'Maquis') ORDER BY g.author;",
+                "AND g.channel IN ('Borg', 'Maquis') ORDER BY g.contact;",
             ),
             [
                 "Hugh|Borg",
@@ -1223,7 +1235,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "0",
             "diff_status is NULL on every real source's rows",
         )
-        picard = self._markdown(CONTACTS_DIFF_GROUP, "Jean-Luc Picard")
+        picard = self._contact_markdown(CONTACTS_DIFF_GROUP, "Jean-Luc Picard")
         self.assertIn('<div class="diff-modified">', picard)
         self.assertIn("<del>NCC-1701-D</del><ins>NCC-1701-E</ins>", picard)
         self.assertIn(
@@ -1231,10 +1243,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self.assertIn(
             '<div class="diff-removed">',
-            self._markdown(CONTACTS_DIFF_GROUP, "Data"),
+            self._contact_markdown(CONTACTS_DIFF_GROUP, "Data"),
         )
         self.assertIn(
-            '<div class="diff-added">', self._markdown(CONTACTS_DIFF_GROUP, "Worf")
+            '<div class="diff-added">',
+            self._contact_markdown(CONTACTS_DIFF_GROUP, "Worf"),
         )
 
         # The Slack diff, which is chat-common under a diff: three #bridge
