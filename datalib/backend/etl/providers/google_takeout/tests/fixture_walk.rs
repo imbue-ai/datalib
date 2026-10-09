@@ -1230,7 +1230,7 @@ async fn rung_1_reads_the_feeds_whose_reader_changed_again() {
     e.sync().await;
     assert_eq!(
         e.schema_version().await,
-        "1",
+        "2",
         "a new store starts at the top"
     );
     assert_eq!(e.sync().await.gemini_activity, 0, "nothing changed");
@@ -1238,7 +1238,7 @@ async fn rung_1_reads_the_feeds_whose_reader_changed_again() {
     e.exec("UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'")
         .await;
     let s = e.sync().await;
-    assert_eq!(e.schema_version().await, "1");
+    assert_eq!(e.schema_version().await, "2");
     assert_eq!(
         (
             s.maps_photos,
@@ -1250,10 +1250,72 @@ async fn rung_1_reads_the_feeds_whose_reader_changed_again() {
         "{s:?}"
     );
     assert_eq!(
-        (s.maps_reviews, s.youtube_subscriptions, s.chat_messages),
-        (0, 0, 0),
+        (s.maps_reviews, s.youtube_subscriptions),
+        (0, 0),
         "a feed whose reader did not change is not read again: {s:?}"
     );
+}
+
+/// Rung 2 forgets the files whose timestamps name a zone, and only those.
+#[tokio::test(flavor = "multi_thread")]
+async fn rung_2_reads_the_feeds_with_zoned_timestamps_again() {
+    let e = Export::new();
+    e.sync().await;
+    e.exec("UPDATE _datalib_meta SET value = '1' WHERE key = 'schema_version'")
+        .await;
+    let s = e.sync().await;
+    assert_eq!(e.schema_version().await, "2");
+    assert_eq!(
+        (s.youtube_watch_history, s.gemini_activity, s.chat_messages),
+        (3, 3, 2),
+        "{s:?}"
+    );
+    assert_eq!(
+        (
+            s.maps_photos,
+            s.maps_saved_places,
+            s.maps_reviews,
+            s.youtube_subscriptions
+        ),
+        (0, 0, 0, 0),
+        "a feed whose reader did not change is not read again: {s:?}"
+    );
+}
+
+/// An export from an English locale outside North America names its zone
+/// `CEST`. The Gemini file read as a layout the reader did not know, and
+/// every YouTube watch landed with no time.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_export_dated_in_central_european_time_lands_its_times() {
+    let e = Export::new();
+    let to_cest = |html: String| html.replace(" PDT", " CEST");
+    e.rewrite(GEMINI, to_cest);
+    e.rewrite(WATCH_HISTORY, to_cest);
+    let s = e.sync().await;
+    assert_eq!(
+        (s.gemini_activity, s.youtube_watch_history),
+        (3, 3),
+        "{s:?}"
+    );
+    assert_eq!(s.feeds_failed, 0, "{s:?}");
+    for table in ["gemini_activity", "youtube_watch_history"] {
+        assert_eq!(e.count_timed(table).await, 3, "{table}");
+    }
+}
+
+impl Export {
+    async fn count_timed(&self, table: &str) -> i64 {
+        let db = RawDb::open(&self.db_path).await.unwrap();
+        // `table` is a literal at every callsite.
+        let n = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM {table} WHERE when_ts LIKE '%+02:00'"
+        )))
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        db.close().await;
+        n
+    }
 }
 
 const VOICE_TEXT: &str = "Voice/Calls/Jean-Luc Picard - Text - 2364-03-01T09_00_00Z.html";
