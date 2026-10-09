@@ -7,7 +7,8 @@
 use datalib_query::table::{self, Column, FreeText, SearchKey, SearchTable};
 use datalib_schema::grid_rows::GridRowColumn;
 
-use crate::terms_keys::{TermsKey, TERMS_KEYS};
+use crate::db::ANY_VALUE;
+use crate::terms_keys::{self, TermsKey, TermsValue, TERMS_KEYS};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Field<C: 'static> {
@@ -65,6 +66,9 @@ pub struct FilterTerm<C: 'static> {
     pub negate: bool,
     /// The value was quoted: a key that matches in part matches it whole.
     pub quoted: bool,
+    /// For a `contact:<id>` value, the handles the contact reaches, read
+    /// from the contacts store when the search runs.
+    pub handles: Option<Vec<String>>,
 }
 
 /// How free-text should be evaluated. Bare search-bar text defaults to
@@ -137,6 +141,7 @@ impl<C: Column> ParsedQuery<C> {
                         value: t.value,
                         negate: t.negate,
                         quoted: t.quoted,
+                        handles: None,
                     }),
                     Err(why) => {
                         refusal.get_or_insert(why);
@@ -174,6 +179,34 @@ impl<C: Column> ParsedQuery<C> {
             .fold(None, |_, t| Some(!t.negate))
     }
 
+    /// The contacts the query names (`from:contact:<id>`), each once, in
+    /// the order they appear.
+    pub fn contact_ids(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for t in &self.terms {
+            if let Some(id) = contact_of(t) {
+                if !out.iter().any(|seen| seen == id) {
+                    out.push(id.to_string());
+                }
+            }
+        }
+        out
+    }
+
+    /// Each `contact:` term given the handles its contact reaches, read
+    /// from the contacts store; a contact `reached` lacks reaches none.
+    pub fn with_contact_handles(
+        mut self,
+        reached: &std::collections::HashMap<String, Vec<String>>,
+    ) -> Self {
+        for t in &mut self.terms {
+            if let Some(id) = contact_of(t).map(str::to_string) {
+                t.handles = Some(reached.get(&id).cloned().unwrap_or_default());
+            }
+        }
+        self
+    }
+
     /// The first positive `before:` or `after:`, as typed.
     pub fn bound(&self, field: Field<C>) -> Option<&str> {
         self.terms
@@ -188,6 +221,17 @@ impl ParsedQuery<GridRowColumn> {
     /// the rows inside documents.
     pub fn documents(&self) -> Option<bool> {
         self.flag(GridRowColumn::IsDocument)
+    }
+}
+
+/// The contact a term names, when it is a person key's `contact:<id>`.
+fn contact_of<C>(t: &FilterTerm<C>) -> Option<&str> {
+    match t.field {
+        Field::Terms(key) => match terms_keys::value_of(key, &t.value, t.quoted, ANY_VALUE) {
+            TermsValue::Contact(_) => t.value.strip_prefix(terms_keys::CONTACT),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -275,6 +319,28 @@ mod tests {
             .filter(|t| t.field == field && !t.negate)
             .map(|t| t.value.as_str())
             .collect()
+    }
+
+    /// A contact named twice is read once, and each of its terms takes
+    /// the handles read for it; one the store lacks reaches nothing.
+    #[test]
+    fn a_contact_value_takes_the_handles_read_for_it() {
+        let q = parse_query("from:contact:c-1 -with:contact:c-1 to:contact:c-2 label:contact:x");
+        assert_eq!(q.contact_ids(), ["c-1", "c-2"]);
+        let reached =
+            std::collections::HashMap::from([("c-1".to_string(), vec!["email:a@b.c".to_string()])]);
+        let q = q.with_contact_handles(&reached);
+        let handles: Vec<Option<Vec<String>>> = q.terms.iter().map(|t| t.handles.clone()).collect();
+        assert_eq!(
+            handles,
+            [
+                Some(vec!["email:a@b.c".to_string()]),
+                Some(vec!["email:a@b.c".to_string()]),
+                Some(vec![]),
+                None,
+            ],
+            "a label is never a contact"
+        );
     }
 
     #[test]

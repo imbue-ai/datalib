@@ -61,6 +61,21 @@ describe("completingAt", () => {
     expect(at("channel:|")).toMatchObject({ kind: "value", key: "channel", typed: "" });
   });
 
+  /** `@` at the start of a word picks a person in any role. */
+  it("reads @ as a person for with:", () => {
+    expect(at("budget @rik|")).toEqual({
+      kind: "value",
+      key: "with",
+      from: 7,
+      to: 11,
+      typed: "rik",
+      rest: "budget",
+      prefix: "with:",
+    });
+    expect(at("-@|")).toMatchObject({ kind: "value", from: 1, typed: "", prefix: "with:" });
+    expect(at("ann@x.c|")).toBeNull();
+  });
+
   it("offers nothing between words or for what cannot start a key", () => {
     expect(at("a | b")).toBeNull();
     expect(at("|")).toBeNull();
@@ -90,6 +105,12 @@ describe("chipWords", () => {
       ["slack/ingest", { kind: "entity", uri: "datalib:step/slack/ingest" }],
     ]);
     expect(chipWords("nope:slack", KEYS)).toEqual([]);
+  });
+
+  it("draws one of your contacts as its chip", () => {
+    expect(chipWords("from:contact:c-1", KEYS).map(({ chip }) => chip)).toEqual([
+      { kind: "contact", id: "c-1" },
+    ]);
   });
 
   /** A person is a chip only by a handle: a name matches in part. */

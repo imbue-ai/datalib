@@ -341,12 +341,19 @@ async fn search_handler(
 ) -> Json<SearchResponse> {
     let q = p.q.unwrap_or_default();
     let parsed = parse_query(&q);
-    if let Some(why) = refusal(&s.root, &parsed) {
-        return Json(SearchResponse {
+    let refused = |why| {
+        Json(SearchResponse {
             refused: vec![why],
             ..SearchResponse::unread(Vec::new())
-        });
+        })
+    };
+    if let Some(why) = refusal(&s.root, &parsed) {
+        return refused(why);
     }
+    let (parsed, q) = match with_contacts(&s.root, &q, parsed).await {
+        Ok(read) => read,
+        Err(why) => return refused(why),
+    };
     let limit = p.limit.unwrap_or(200).min(results::MAX_PAGE);
     let mut errors: Vec<String> = Vec::new();
     let sort = match p.sort.as_deref().map(view::order::<GridColumn>).transpose() {
@@ -480,6 +487,13 @@ async fn groups_handler(
         out.refused.push(why);
         return Json(out);
     }
+    let (parsed, q) = match with_contacts(&s.root, &q, parsed).await {
+        Ok(read) => read,
+        Err(why) => {
+            out.refused.push(why);
+            return Json(out);
+        }
+    };
     let by = match grouping::parse_by::<GridColumn>(&p.by) {
         Ok(by) => by,
         Err(e) => {
@@ -1148,6 +1162,87 @@ pub fn refusal(root: &std::path::Path, parsed: &ParsedQuery) -> Option<String> {
     })
 }
 
+/// `parsed` with each `contact:` value given the handles its contact
+/// reaches, read from the contacts store now (a detached read: the
+/// `datalib_contacts` applet stays its one writer), and the key its
+/// results are cached under: the query and those handles, so a search
+/// after a link is made or undone is a new search. Refused, saying why,
+/// when the query names a contact and the root has no contacts store, or
+/// the store has no such contact.
+pub async fn with_contacts(
+    root: &std::path::Path,
+    q: &str,
+    parsed: ParsedQuery,
+) -> Result<(ParsedQuery, String), String> {
+    let ids = parsed.contact_ids();
+    if ids.is_empty() {
+        return Ok((parsed, q.to_string()));
+    }
+    let reader = datalib_contacts::read::ContactsReader::open(root)
+        .await
+        .map_err(|e| format!("read the contacts app's store: {e:#}"))?
+        .ok_or_else(|| {
+            "`contact:` reads the contacts app, which this library does not have".to_string()
+        })?;
+    let mut reached: std::collections::HashMap<String, Vec<String>> = Default::default();
+    let mut failed: Option<String> = None;
+    for id in &ids {
+        match reader.handles(id).await {
+            Ok(Some(handles)) => {
+                reached.insert(id.clone(), handles.into_iter().collect());
+            }
+            Ok(None) => {
+                failed = Some(format!("the contacts app has no contact `{id}`"));
+                break;
+            }
+            Err(e) => {
+                failed = Some(format!("read contact `{id}`: {e:#}"));
+                break;
+            }
+        }
+    }
+    reader.close().await;
+    if let Some(why) = failed {
+        return Err(why);
+    }
+    let key = ids.iter().fold(q.to_string(), |key, id| {
+        format!("{key}\u{1f}{id}={}", reached[id].join(","))
+    });
+    Ok((parsed.with_contact_handles(&reached), key))
+}
+
+/// The contacts whose name holds `typed`, as `contact:<id>` values
+/// labelled with the name; none on a root without a contacts app.
+async fn contacts_named(
+    root: &std::path::Path,
+    typed: &str,
+) -> Result<Vec<datalib_columns::ValueSuggestion>, String> {
+    let Some(reader) = datalib_contacts::read::ContactsReader::open(root)
+        .await
+        .map_err(|e| format!("{e:#}"))?
+    else {
+        return Ok(Vec::new());
+    };
+    let found = reader.search(typed, CONTACTS_OFFERED).await;
+    reader.close().await;
+    Ok(found
+        .map_err(|e| format!("{e:#}"))?
+        .into_iter()
+        .map(|c| datalib_columns::ValueSuggestion {
+            value: format!(
+                "{}{}",
+                datalib_unified_index::terms_keys::CONTACT,
+                c.contact_id
+            ),
+            count: None,
+            label: Some(c.name),
+        })
+        .collect())
+}
+
+/// The most contacts one suggestion answer leads with.
+const CONTACTS_OFFERED: u32 = 8;
+
 /// The keys the search bar offers as a person types.
 async fn search_keys() -> Json<Vec<datalib_columns::SearchKeySpec>> {
     Json(columns::grid_keys())
@@ -1162,18 +1257,29 @@ async fn search_values(
     Query(p): Query<columns::ValuesParams>,
 ) -> Result<Json<Vec<datalib_columns::ValueSuggestion>>, (StatusCode, String)> {
     if let Some(key) = datalib_unified_index::terms_keys::key(&p.key) {
-        let kinds: Vec<u8> = key.kinds().iter().map(|k| k.code()).collect();
-        return s
-            .repo
-            .term_value_counts(&parse_query(&p.q), &kinds, &p.typed)
+        let (narrowed, _) = with_contacts(&s.root, &p.q, parse_query(&p.q))
             .await
-            .map(|v| Json(columns::counted(v)))
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("suggest values: {e}"),
-                )
-            });
+            .map_err(|why| (StatusCode::BAD_REQUEST, why))?;
+        let failed = |e: String| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("suggest values: {e}"),
+            )
+        };
+        // Your contacts first: one picked reaches every handle linked to it.
+        let mut out = if key.person {
+            contacts_named(&s.root, &p.typed).await.map_err(failed)?
+        } else {
+            Vec::new()
+        };
+        let kinds: Vec<u8> = key.kinds().iter().map(|k| k.code()).collect();
+        let values = s
+            .repo
+            .term_value_counts(&narrowed, &kinds, &p.typed, key.person)
+            .await
+            .map_err(|e| failed(e.to_string()))?;
+        out.extend(columns::counted(values));
+        return Ok(Json(out));
     }
     let suggested = match columns::value_source::<GridRow>(&p.key) {
         columns::ValueSource::Words(words) => Ok(columns::words_holding(&words, &p.typed)),
@@ -1765,6 +1871,174 @@ mod tests {
             values("to", "", "from:bo@example.com").await,
             ["email:ann@example.com"]
         );
+    }
+
+    /// Picard writes as "Jean-Luc" by email and Slack; Riker, as "Will",
+    /// writes to Picard's address; Troi writes to Riker.
+    async fn bridge(root: &std::path::Path) {
+        use datalib_schema::search_terms::SearchTermKind::To;
+        let from = |uuid: &str, at: &str, name: &str, handle: &str| {
+            document_row(uuid, at, "Email")
+                .author(Some(name.to_string()))
+                .author_handle(Some(handle.to_string()))
+                .build()
+                .unwrap()
+        };
+        index_rows_with_terms(
+            root,
+            vec![
+                (
+                    from(
+                        "b-1",
+                        "2026-01-01T09:00:00+00:00",
+                        "Jean-Luc",
+                        "email:jlp@e.org",
+                    ),
+                    Vec::new(),
+                ),
+                (
+                    from(
+                        "b-2",
+                        "2026-01-02T09:00:00+00:00",
+                        "Jean-Luc",
+                        "slack:T1/U_JLP",
+                    ),
+                    Vec::new(),
+                ),
+                (
+                    from(
+                        "b-3",
+                        "2026-01-03T09:00:00+00:00",
+                        "Will",
+                        "email:wtr@e.org",
+                    ),
+                    vec![(To, "email:jlp@e.org")],
+                ),
+                (
+                    from(
+                        "b-4",
+                        "2026-01-04T09:00:00+00:00",
+                        "Deanna",
+                        "email:troi@e.org",
+                    ),
+                    vec![(To, "email:wtr@e.org")],
+                ),
+            ],
+        )
+        .await;
+        sync_terms(root).await;
+    }
+
+    /// A name reaches the handles seen under it: Picard is "Jean-Luc" on
+    /// his rows, so `to:jean` finds what was sent to his address, though
+    /// the address itself holds no "jean".
+    #[tokio::test]
+    async fn a_name_finds_the_handles_seen_under_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        bridge(tmp.path()).await;
+        let s = index_over(tmp.path()).await;
+        for (q, want) in [
+            ("to:jean", vec!["b-3"]),
+            (r#"to:"Jean-Luc""#, vec!["b-3"]),
+            (r#"to:"Jean""#, vec![]),
+            ("with:will", vec!["b-4", "b-3"]),
+            ("from:jean", vec!["b-2", "b-1"]),
+        ] {
+            let r = search(&s, q, None, 10, None).await;
+            assert!(r.refused.is_empty() && r.errors.is_empty(), "{q}: {r:?}");
+            assert_eq!(uuids(&r), want, "{q}");
+        }
+    }
+
+    /// A contact is every handle linked to it, a merged-away contact's and
+    /// a group's members' too, read when the search runs: a link made after
+    /// a search changes the next one. A contact the store lacks, or a root
+    /// with no contacts app, is refused by name.
+    #[tokio::test]
+    async fn a_contact_is_every_handle_linked_to_it() {
+        use datalib_contacts::{store_path, ContactKind, Store};
+        let tmp = tempfile::tempdir().unwrap();
+        bridge(tmp.path()).await;
+        let s = index_over(tmp.path()).await;
+        let refused = search(&s, "from:contact:nobody", None, 10, None).await;
+        assert!(
+            refused.refused.iter().any(|r| r.contains("contacts app")),
+            "{:?}",
+            refused.refused
+        );
+
+        let email = |s: &str| datalib_handle::Handle::email(s).unwrap();
+        let store = Store::open(&store_path(tmp.path())).await.unwrap();
+        let picard = store
+            .create("Captain", ContactKind::Person, &[email("jlp@e.org")])
+            .await
+            .unwrap();
+        let couple = store
+            .create("Riker and Troi", ContactKind::Group, &[])
+            .await
+            .unwrap();
+        let riker = store
+            .create("Riker", ContactKind::Person, &[email("wtr@e.org")])
+            .await
+            .unwrap();
+        store.add_member(&couple, &riker).await.unwrap();
+        store.close().await;
+
+        let found = |q: String| {
+            let s = s.clone();
+            async move {
+                let r = search(&s, &q, None, 10, None).await;
+                assert!(r.refused.is_empty() && r.errors.is_empty(), "{q}: {r:?}");
+                uuids(&r).iter().map(|u| u.to_string()).collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(found(format!("from:contact:{picard}")).await, ["b-1"]);
+        assert_eq!(
+            found(format!("with:contact:{picard}")).await,
+            ["b-3", "b-1"]
+        );
+        assert_eq!(
+            found(format!("with:contact:{couple}")).await,
+            ["b-4", "b-3"],
+            "a group reaches its members"
+        );
+
+        // Linking his Slack handle widens the next search at once.
+        let store = Store::open(&store_path(tmp.path())).await.unwrap();
+        store
+            .link(
+                &datalib_handle::Handle::slack("T1", "U_JLP").unwrap(),
+                &picard,
+            )
+            .await
+            .unwrap();
+        store.close().await;
+        assert_eq!(
+            found(format!("from:contact:{picard}")).await,
+            ["b-2", "b-1"]
+        );
+
+        let unknown = search(&s, "from:contact:no-such-id", None, 10, None).await;
+        assert!(
+            unknown
+                .refused
+                .iter()
+                .any(|r| r.contains("no contact `no-such-id`")),
+            "{:?}",
+            unknown.refused
+        );
+
+        let params = columns::ValuesParams {
+            key: "from".into(),
+            typed: "capt".into(),
+            q: String::new(),
+        };
+        let offered = search_values(State(s.clone()), Query(params))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(offered[0].value, format!("contact:{picard}"));
+        assert_eq!(offered[0].label.as_deref(), Some("Captain"));
     }
 
     pub(super) async fn index_over(root: &std::path::Path) -> Index {

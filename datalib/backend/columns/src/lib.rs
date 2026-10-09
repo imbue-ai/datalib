@@ -151,6 +151,10 @@ pub struct ValueSuggestion {
     pub value: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<u64>,
+    /// What to show for a value that is an id: a contact's name for its
+    /// `contact:<id>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

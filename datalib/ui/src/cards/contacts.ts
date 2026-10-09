@@ -417,6 +417,67 @@ export const people = new Resolver<Who>(
   (e) => pushToast(`Contacts: ${e.message}`),
 );
 
+/** Each contact by its id, as the contacts app answers `GET /contact/{id}`;
+ *  one it does not have, or a root with no contacts app, is absent. */
+export async function contactsFor(ids: string[]): Promise<Map<string, NormalizedContact>> {
+  const out = new Map<string, NormalizedContact>();
+  await Promise.all(
+    ids.map(async (id) => {
+      const r = await fetch(`${CONTACTS_APPLET}/contact/${encodeURIComponent(id)}`);
+      const text = await r.text();
+      if (r.status === 404 || isAbsent(r.status, text)) return;
+      if (!r.ok) throw new Error(`contact → ${r.status}: ${text}`);
+      out.set(id, JSON.parse(text) as NormalizedContact);
+    }),
+  );
+  return out;
+}
+
+/** Each contact a chip names by its id (`from:contact:<id>`), for the
+ *  whole app, asked again when the contacts app publishes an edit. */
+export const contactsById = new Resolver<NormalizedContact>(
+  async (ids) => {
+    followLive();
+    return contactsFor(ids);
+  },
+  (e) => pushToast(`Contacts: ${e.message}`),
+);
+
+/** How a chip naming one of your contacts looks: its name, initial and
+ *  photo, and its handles on hover. `shown` is the name until the
+ *  contact is read. */
+export function contactLook(shown: string, contact: NormalizedContact | undefined): ChipLook {
+  const name = contact ? nameOf(contact) : shown;
+  const handles = (contact?.handles ?? []).map((h) => h.value);
+  const group = contact?.kind === "group";
+  return {
+    text: name,
+    ariaLabel: group ? `${name}, a group of your contacts` : `${name}, your contact`,
+    classes: ["handle-chip", "handle-resolved", "contact-chip"],
+    initial: [...name.trim()][0]?.toUpperCase() ?? "?",
+    icon: null,
+    photo: contact?.photo_url ?? null,
+    title: [
+      group ? `${name} (a group)` : name,
+      ...(handles.length > 0 ? [`Linked: ${handles.join(", ")}`] : []),
+    ].join("\n"),
+  };
+}
+
+/** A chip for one of your contacts, by its id. */
+export function contactCell(
+  contactId: string,
+  shown: string,
+  contact: NormalizedContact | undefined,
+): HTMLAnchorElement {
+  const a = document.createElement("a");
+  a.className = "chip";
+  a.dataset.contact = contactId;
+  a.dataset.shownAs = shown;
+  drawChip(a, contactLook(shown, contact));
+  return a;
+}
+
 /** Whether a live frame can have moved who a handle is: the contacts
  *  app published an edit, from this window or any other, or an agent. */
 export function movesPeople(e: RootEvent): boolean {
@@ -432,9 +493,15 @@ function followLive() {
   following = true;
   subscribeLive({
     root: (e) => {
-      if (movesPeople(e)) people.revalidate();
+      if (movesPeople(e)) {
+        people.revalidate();
+        contactsById.revalidate();
+      }
     },
-    resync: () => people.revalidate(),
+    resync: () => {
+      people.revalidate();
+      contactsById.revalidate();
+    },
   });
 }
 

@@ -521,7 +521,8 @@ export type KeyValues = {
 };
 
 /// `datalib_columns::ValueSuggestion`.
-export type ValueSuggestion = { value: string; count?: number };
+/// `label`: what to show for a value that is an id, a contact's name.
+export type ValueSuggestion = { value: string; count?: number; label?: string };
 
 /// The keys the search bar at `base` takes: `${base}/keys`, for `base` a
 /// table's search (`/applet/unified_index/search`, `/api/log`).

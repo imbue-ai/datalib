@@ -1,7 +1,7 @@
 # Search autocomplete: a person, a source, a value as a chip
 
-*Proposal (2026-10-09). Steps 1 to 3 of the order of work are built,
-but for `@`. It builds on the search terms
+*Proposal (2026-10-09). Steps 1 to 4 of the order of work are built;
+the index audit is not. It builds on the search terms
 file from [`search_tabs.md`](search_tabs.md) §"The search terms" and changes
 what that plan says the search terms hold; the facts it cites about the tree
 were read that day.*
@@ -93,23 +93,23 @@ cell, are written quoted (`partial` on a key's spec and on a column's
 `quoted` on a term (`datalib_query::Term`), and the column keys, which
 compare whole values either way, ignore it.
 
-**Where a name is headed: contacts.** `from:<name>` reaches an author
-by the name the row shows (the `author` kind) today. That is the floor,
-and stays: an author with no handle at all (an AI model, a Facebook or
-LinkedIn post, a Beeper bridge) has nothing else to be found by. With
-the names table and `contact:` values (below), a plain-text person
-value will match the union of three, partly or, quoted, whole:
+**A name finds every handle seen under it.** A plain-text person
+value matches, partly or, quoted, whole:
 
-- the names rows show, the `author` kind, as now;
-- the handles whose names seen under hold it (`source_contacts`);
-- the handles of your contacts whose name holds it.
+- the names rows show, the `author` kind: an author with no handle at
+  all (an AI model, a Facebook or LinkedIn post, a Beeper bridge) has
+  nothing else to be found by;
+- the handles whose names seen under hold it: the search terms file's
+  `names` table (`handle`, `name`), filled by `grid_index` from each
+  row's author and its handle and from every source's contacts
+  (`source_contacts`), so `from:"Number One"` finds Riker's Slack
+  messages though Slack showed him as "William T. Riker".
 
-So `from:Riker` will find him by every handle linked to a contact named
-Riker, whatever each source showed, and a chip picked for a contact is
-`from:contact:<id>`.
+Your own contacts' names are not in that union: a contact is picked as
+a chip, `from:contact:<id>`, and the suggestions offer it first.
 
-Not built: typing `@` at the start of a word to open the people
-suggestions and write `with:`.
+**`@` picks a person in any role.** A word starting with `@` opens the
+people suggestions; the pick is written `with:<value>`.
 
 ## Contacts: expanded when the search runs
 
@@ -118,14 +118,19 @@ the contacts store and matching any of them. The `unified_index`
 applet opens the store read-only at its head (a reader, under the one
 writer rule; `../../AGENTS.md` §"Doltlite"), reads the contact's
 handles, stopped ones included since they still name the person in old
-messages, and follows `merged_into` to the survivor.
+messages, and follows `merged_into` both ways: a contact merged away
+and its survivor are one person. A group contact brings its members'
+handles too, and theirs if a member is a group, each contact read once
+(§"Open questions"). The reader is `datalib_contacts::read`, a detached
+read of the store's head; `unified_index::with_contacts` puts its
+answer on the term.
 
 - **Live.** A link made a moment ago changes the next search, as it
   changes chips at once. Nothing in the index moves when a link does.
-- **The results cache** (`results::Key`) adds the contacts store's head
-  for a query that names a contact, or a cached page outlives the link.
-- **No contacts app configured**: `contact:` is refused, saying so,
-  never matched against nothing.
+- **The results cache** keys a query that names a contact by the
+  handles read for it, so a cached page never outlives the link.
+- **No contacts app configured**, or no such contact: `contact:` is
+  refused, saying so, never matched against nothing.
 
 This replaces the `contact:` filter of
 [`contact_linking.md`](contact_linking.md) §"Search", which found a
@@ -141,7 +146,7 @@ routes beside its search, and the field is handed only that base:
 
 | route | answers |
 |---|---|
-| `<base>/keys` | each key, its aliases, and what its values are (`datalib_columns::KeyValues`: `text`, `words`, `source`, `group`, `step`, `stamp`; `person` comes with step 2) |
+| `<base>/keys` | each key, its aliases, and what its values are (`datalib_columns::KeyValues`: `text`, `words`, `source`, `group`, `step`, `stamp`, `person`) |
 | `<base>/values?key=&typed=&q=` | the key's values holding `typed` (case-blind), among the rows the rest of the query `q` keeps, most rows first, with their counts; a closed set's words, in their own order |
 
 The bases are `/applet/unified_index/search` and
@@ -158,15 +163,12 @@ search terms: the values of its kinds holding `typed` (a `LIKE` over
 the dictionary of values), counted by the rows that hold them among the
 rows the rest of the query keeps (`dolt_repo.rs::term_values_sql`).
 They are handles, drawn as the person's chip, and the names authors
-were shown under, as text; picking a name is a partial match on it.
-On a real root, measure the `LIKE` against a 50 ms budget per keystroke
-before reaching for a trigram index.
-
-Still to come: your contacts whose name holds `typed`, first (the
-contacts app's `GET /search`, each with its handles), with the
-`contact:` values below; and the names each handle was seen under
-(`source_contacts`), so "Will" offers `email:riker@…` itself rather
-than only the name it was shown under.
+were shown under, as text, written quoted when picked. A handle seen
+under a name holding `typed` is offered too, so "number" offers
+`slack:…/U_RIKER` itself. Before them all come your contacts whose name
+holds `typed` (`ContactsReader::search`), each a `contact:<id>` value
+with its name as the label. On a real root, measure the `LIKE` against
+a 50 ms budget per keystroke before reaching for a trigram index.
 
 ## The field
 
@@ -259,13 +261,23 @@ answered from the search terms.
    kind: a name shown is a term of its own.
 3. **The person keys.** Built: `to:`, `cc:`, `bcc:`, `mention:`,
    `recipient:`, `with:` and `involves:`, `label:`; quoted values
-   whole; person chips in the field and its menu. Not yet `@`.
-4. **`contact:` values**, expanded when the search runs.
+   whole; person chips in the field and its menu.
+4. **`contact:` values, `@`, and names seen under.** Built: a contact
+   expanded when the search runs, members and merges followed; contact
+   chips in the field; `@` writes `with:`; the `names` table.
 5. **The index audit**, measured, then the identity indexes dropped.
 
 ## Open questions
 
-- A group contact (an address two people share): does
-  `with:contact:<group>` reach its members' handles too, or only its
-  own?
-- Does a reaction count as being involved, for `with:`?
+None open. Decided (Thad, 2026-10-09):
+
+- **A group contact reaches its members.** A group contact stands for
+  the people who share an address (a household's landline, a team's
+  mailbox), and `with:contact:<group>` matches the group's own handles
+  and every member's, a member that is itself a group included, each
+  contact read once. Whoever searches for a group is looking for its
+  people.
+- **A reaction is not being involved.** `with:` reads every kind
+  `SearchTermKind::is_person()` names, so a `reactor` kind, when one is
+  added, answers false there, or `with:` names its kinds instead of
+  reading `is_person()`.

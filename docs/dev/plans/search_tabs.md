@@ -177,15 +177,27 @@ test are in [`doltlite.md`](../doltlite.md) § "Full-text search
 
 **`kind` is an enum**, `SearchTermKind`, with the usual strum pair, and a
 new kind is new data, never a schema change. Built: `id`, `container`,
-`from`, `title`, `name` (a channel, an account), `to`, `cc`, `label`,
-and `author`, the name a row's author was shown under, split from
-`name` so `from:` finds an author with no handle. Planned: the person
-kinds `bcc`, `participant`, `mention` and `reactor`; and, if the terms
+`from`, `title`, `name` (a channel, an account), `to`, `cc`, `bcc`,
+`mention`, `label`, and `author`, the name a row's author was shown
+under, split from `name` so `from:` finds an author with no handle.
+Planned: `participant`, and `reactor`, which `with:` does not read (a
+reaction is not being involved,
+[`search_autocomplete.md`](search_autocomplete.md) §"Open questions");
+and, if the terms
 come to serve the `channel:` and `account:` keys, `name` split into one
 kind for each ([`search_autocomplete.md`](search_autocomplete.md)
 §"The wide columns and the tall search terms"). Each kind has an affinity, a
 pure function in code (`affinity(kind)`): a row's own id outranks a
 `to`, a `to` outranks a `cc`, a `title` outranks a `name`.
+
+**The names each handle went by** are a table of their own beside the
+terms, `names (handle, name)`, with an index on the name, case-blind.
+`grid_index` fills it from each row's author and author handle and from
+every source's record of a person (`source_contacts`), rewritten whole
+when the terms are. It is what lets a name reach a handle no row ever
+showed under that name: `from:"Number One"` finds Riker's Slack
+messages ([`search_autocomplete.md`](search_autocomplete.md) §"The
+keys").
 
 **Which rows carry a person, and in what role:**
 
