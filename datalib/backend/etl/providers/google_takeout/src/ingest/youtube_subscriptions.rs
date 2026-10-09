@@ -17,7 +17,7 @@ use super::db::RawDb;
 use super::schema_raw::YoutubeSubscriptionRow;
 use datalib_etl::doltlite_raw::WirePayload;
 
-const FILE_REL: &str = "YouTube and YouTube Music/subscriptions/subscriptions.csv";
+pub(crate) const FILE_REL: &str = "YouTube and YouTube Music/subscriptions/subscriptions.csv";
 const SCOPE: &str = "google_takeout/youtube_subscriptions";
 
 pub async fn ingest(

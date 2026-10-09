@@ -1480,3 +1480,168 @@ async fn a_maps_photo_sidecar_that_will_not_open_keeps_its_row() {
     e.sync().await;
     assert_eq!(e.keys().await, Vec::<String>::new());
 }
+
+// ── An export left zipped ───────────────────────────────────────────
+
+/// Every fixture file as `(Takeout/<rel>, path)`, for packing into parts.
+fn fixture_entries() -> Vec<(String, PathBuf)> {
+    fn walk(dir: &Path, rel: &str, out: &mut Vec<(String, PathBuf)>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().into_string().unwrap();
+            let rel = format!("{rel}/{name}");
+            if entry.file_type().unwrap().is_dir() {
+                walk(&entry.path(), &rel, out);
+            } else {
+                out.push((rel, entry.path()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&fixture_root(), "Takeout", &mut out);
+    out.sort();
+    out
+}
+
+/// The fixture as Google would send it in two parts: Chat and Maps in a
+/// `.zip`, the rest in a `.tgz`.
+fn pack_fixture(dir: &Path) {
+    use std::io::Write;
+    let (first, rest): (Vec<_>, Vec<_>) = fixture_entries().into_iter().partition(|(rel, _)| {
+        rel.starts_with("Takeout/Google Chat/") || rel.starts_with("Takeout/Maps")
+    });
+    let mut zip = zip::ZipWriter::new(
+        std::fs::File::create(dir.join("takeout-23640301T090000Z-1-001.zip")).unwrap(),
+    );
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for (rel, path) in &first {
+        zip.start_file(rel.as_str(), opts).unwrap();
+        zip.write_all(&std::fs::read(path).unwrap()).unwrap();
+    }
+    zip.finish().unwrap();
+    let gz = flate2::write::GzEncoder::new(
+        std::fs::File::create(dir.join("takeout-23640301T090000Z-2-001.tgz")).unwrap(),
+        flate2::Compression::fast(),
+    );
+    let mut tar = tar::Builder::new(gz);
+    for (rel, path) in &rest {
+        tar.append_path_with_name(path, rel).unwrap();
+    }
+    tar.into_inner().unwrap().finish().unwrap();
+}
+
+/// What a fetch landed, less how the export was packed.
+fn landed(summary: &ingest::FetchSummary) -> serde_json::Value {
+    let mut v = serde_json::to_value(summary).unwrap();
+    let obj = v.as_object_mut().unwrap();
+    obj.remove("archives");
+    obj.remove("unpacked");
+    v
+}
+
+async fn fetch_from(work: &Path, input: &Path, sync: SyncFlags) -> ingest::FetchSummary {
+    let db = RawDb::open(&work.join("gt.doltlite_db")).await.unwrap();
+    let mut o = opts(work, &db, sync).await;
+    o.input_path = input.to_path_buf();
+    let summary = ingest::fetch(o).await.unwrap();
+    db.commit_all("test").await.unwrap();
+    db.close().await;
+    summary
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_zipped_export_lands_what_the_unpacked_one_does() {
+    let (_tree_work, from_tree, _) = run_all().await;
+    let work = tempfile::tempdir().unwrap();
+    let parts = work.path().join("export");
+    std::fs::create_dir(&parts).unwrap();
+    pack_fixture(&parts);
+
+    let first = fetch_from(work.path(), &parts, SyncFlags::all()).await;
+    assert_eq!(first.archives, 2);
+    assert!(first.unpacked > 0, "{first:?}");
+    assert_eq!(landed(&first), landed(&from_tree));
+}
+
+/// Unchanged parts are not unpacked again, and no fingerprint of the
+/// temporary directory is left in the host cache.
+#[tokio::test(flavor = "multi_thread")]
+async fn unchanged_parts_are_not_unpacked_again() {
+    let work = tempfile::tempdir().unwrap();
+    let parts = work.path().join("export");
+    std::fs::create_dir(&parts).unwrap();
+    pack_fixture(&parts);
+    fetch_from(work.path(), &parts, SyncFlags::all()).await;
+
+    let again = fetch_from(work.path(), &parts, SyncFlags::all()).await;
+    assert_eq!(again.archives, 2);
+    assert_eq!(again.unpacked, 0, "{again:?}");
+    assert_eq!(landed(&again), landed(&ingest::FetchSummary::default()));
+
+    let cache = FingerprintCache::open(&work.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
+    let rows: Vec<String> = sqlx::query_scalar("SELECT abs_path FROM fingerprints")
+        .fetch_all(cache.pool())
+        .await
+        .unwrap();
+    assert!(
+        rows.iter().all(|p| p.contains("/export/takeout-")),
+        "only the parts are fingerprinted: {rows:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_feed_turned_on_later_unpacks_the_parts_again() {
+    let work = tempfile::tempdir().unwrap();
+    let parts = work.path().join("export");
+    std::fs::create_dir(&parts).unwrap();
+    pack_fixture(&parts);
+    let chat = SyncFlags {
+        google_chat: true,
+        ..SyncFlags::default()
+    };
+    let first = fetch_from(work.path(), &parts, chat.clone()).await;
+    assert_eq!(first.chat_messages, 2);
+    assert_eq!(first.voice_bills, 0);
+
+    let with_voice = SyncFlags {
+        google_voice: true,
+        ..chat
+    };
+    let second = fetch_from(work.path(), &parts, with_voice).await;
+    assert!(second.unpacked > 0, "{second:?}");
+    assert!(second.voice_bills > 0, "{second:?}");
+    assert_eq!(second.chat_messages, 0, "Chat's files are unchanged");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rewritten_part_is_unpacked_and_read_again() {
+    let work = tempfile::tempdir().unwrap();
+    let parts = work.path().join("export");
+    std::fs::create_dir(&parts).unwrap();
+    pack_fixture(&parts);
+    fetch_from(work.path(), &parts, SyncFlags::all()).await;
+
+    // The same export, with Chat and Maps moved into the .tgz.
+    std::fs::remove_dir_all(&parts).unwrap();
+    std::fs::create_dir(&parts).unwrap();
+    let gz = flate2::write::GzEncoder::new(
+        std::fs::File::create(parts.join("takeout-23640301T090000Z-1-001.tgz")).unwrap(),
+        flate2::Compression::fast(),
+    );
+    let mut tar = tar::Builder::new(gz);
+    for (rel, path) in fixture_entries() {
+        tar.append_path_with_name(path, rel).unwrap();
+    }
+    tar.into_inner().unwrap().finish().unwrap();
+
+    let again = fetch_from(work.path(), &parts, SyncFlags::all()).await;
+    assert!(again.unpacked > 0, "{again:?}");
+    assert_eq!(again.removed, 0, "the same files hold the same records");
+    assert_eq!(
+        again.chat_messages, 0,
+        "an unchanged file is not read again"
+    );
+}

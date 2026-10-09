@@ -11,22 +11,24 @@ pub mod maps_saved_places;
 pub mod mdl_html;
 pub mod schema_raw;
 pub mod time;
+pub mod unpack;
 pub mod youtube_subscriptions;
 pub mod youtube_watch_history;
 
 pub use db::{db_path_for, RawDb};
 
 use datalib_etl::download_problems::RunProblemKind;
-use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan;
-use std::path::PathBuf;
+use datalib_etl_files::fingerprint_cache::{abs_key, canonical_root, FingerprintCache};
+use datalib_etl_files::{file_checkpoint, fsscan};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{info, warn};
 
 /// One switch per Takeout feed. Defaults are all `false` — a fresh
 /// user has to enable each feed consciously; INGEST.md says why
@@ -72,10 +74,9 @@ pub struct FetchOptions {
     /// (`datalib/backend/etl/README.md` § "One writer per file, by
     /// construction").
     pub db: RawDb,
-    /// Root of the user's Takeout export (the directory that contains
-    /// `Maps (your places)/`, `YouTube and YouTube Music/`,
-    /// `Google Chat/`, etc.). May or may not be the literal
-    /// `Takeout/` subdirectory of a Takeout zip.
+    /// Root of the user's Takeout export: the unpacked `Takeout/` folder
+    /// (the one holding `Maps (your places)/`, `Google Chat/` and the
+    /// rest), or a folder holding the `.zip` or `.tgz` parts of one export.
     pub input_path: PathBuf,
     /// Host-wide fingerprint cache: the shared answer to "did this
     /// file change?". Every feed's resume cursor is a content hash
@@ -112,6 +113,11 @@ pub struct FetchSummary {
     pub removed: usize,
     /// Export files that are gone since the last run, in the feeds read.
     pub files_removed: usize,
+    /// The archive parts the export came as; 0 for an unpacked one.
+    pub archives: usize,
+    /// Files unpacked from them. 0 with parts means nothing in them
+    /// changed since a run last finished reading them, so none was read.
+    pub unpacked: usize,
 }
 
 /// Whether the export holds `product_dir` at all. Only a product that is
@@ -129,27 +135,125 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 }
 
 async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
+    let parts = unpack::parts_in(&opts.input_path)?;
+    if parts.is_empty() {
+        let (summary, _) = read_tree(&opts, &opts.input_path, &found).await?;
+        return Ok(summary);
+    }
+    read_archives(&opts, &parts, &found).await
+}
+
+/// Hash the parts (a `stat` each once the cache has them), and unless the
+/// feeds that are on already finished reading these very parts, unpack what
+/// they read into a temporary directory and read that.
+async fn read_archives(
+    opts: &FetchOptions,
+    parts: &[String],
+    found: &RunProblems,
+) -> Result<FetchSummary> {
+    let names: BTreeSet<&str> = parts.iter().map(String::as_str).collect();
+    let scan_opts = fsscan::ScanOptions {
+        max_depth: Some(1),
+        progress: opts.progress.clone(),
+        ..Default::default()
+    };
+    let hashed = fsscan::scan(&opts.cache, &opts.input_path, &scan_opts, |p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| names.contains(n))
+    })
+    .await?;
+    if hashed.files.len() != parts.len() {
+        let read: BTreeSet<&str> = hashed.files.iter().map(|f| f.rel.as_str()).collect();
+        let missing: Vec<&str> = names.difference(&read).copied().collect();
+        bail!(
+            "{} of the export's {} parts could not be read: {}",
+            missing.len(),
+            parts.len(),
+            missing.join(", ")
+        );
+    }
+
+    let pool = opts.db.pool();
+    let stamps = unpack::stamps(&opts.sync, &hashed.files);
+    let prev = file_checkpoint::load_cursor(pool, unpack::SCOPE).await?;
+    if unpack::unchanged(&opts.sync, &prev, &stamps) {
+        info!(
+            event = "takeout_archives_unchanged",
+            parts = parts.len(),
+            "the export's parts are the ones last read; nothing to read"
+        );
+        return Ok(FetchSummary {
+            archives: parts.len(),
+            ..FetchSummary::default()
+        });
+    }
+
+    let tmp = tempfile::tempdir().context("create a directory to unpack the export into")?;
+    let root = tmp.path().join("Takeout");
+    std::fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
+    opts.progress
+        .set_message(&format!("unpacking {} parts of the export", parts.len()));
+    let unpacked = {
+        let paths: Vec<PathBuf> = hashed.files.iter().map(|f| f.path.clone()).collect();
+        let (sync, dest, stop) = (opts.sync.clone(), root.clone(), opts.control.stop.clone());
+        tokio::task::spawn_blocking(move || unpack::unpack(&paths, &sync, &dest, &stop))
+            .await
+            .context("unpack task panicked")??
+    };
+    let read = read_tree(opts, &root, found).await;
+    forget_fingerprints_under(&opts.cache, &root).await?;
+    let (mut summary, scan) = read?;
+
+    let finished =
+        !opts.control.stop.requested() && summary.feeds_failed == 0 && scan.errors.is_empty();
+    if finished {
+        file_checkpoint::clear_scope(pool, unpack::SCOPE).await?;
+        for stamp in &stamps {
+            file_checkpoint::record_file_pool(pool, unpack::SCOPE, stamp).await?;
+        }
+    }
+    summary.archives = parts.len();
+    summary.unpacked = unpacked;
+    Ok(summary)
+}
+
+/// The host-wide cache keeps a fingerprint per path, and a temporary
+/// directory's paths are never seen again.
+async fn forget_fingerprints_under(cache: &FingerprintCache, root: &Path) -> Result<()> {
+    let root = canonical_root(root);
+    let cached = cache.load_under(&root).await?;
+    let keys: Vec<String> = cached.paths().map(|rel| abs_key(&root, rel)).collect();
+    cache.forget(&keys).await?;
+    Ok(())
+}
+
+/// Every feed that is on, over the unpacked export at `root`.
+async fn read_tree(
+    opts: &FetchOptions,
+    root: &Path,
+    found: &RunProblems,
+) -> Result<(FetchSummary, fsscan::Scan)> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
-    let root = &opts.input_path;
     let progress = &opts.progress;
     // One scan of the export, up front, so the walk and the hashing happen
     // once rather than nine times in nine slightly different shapes. The first
     // run hashes everything; later runs are `stat`-only, and a feed enabled
     // later costs nothing extra because its files are already in the cache.
-    let scan = fsscan::scan(&opts.cache, root, &fsscan::ScanOptions::default(), |_| true).await?;
-    for e in &scan.errors {
+    let walked = fsscan::scan(&opts.cache, root, &fsscan::ScanOptions::default(), |_| true).await?;
+    for e in &walked.errors {
         warn!(event = "takeout_walk_error", path = %e.path.display(), error = %e.error, "an entry of the export could not be walked");
     }
-    let scan = &scan;
-    scan.report_problems(&found, "files");
+    let scan = &walked;
+    scan.report_problems(found, "files");
 
     if opts.sync.maps_reviews {
         if let Some(n) = found
             .run_phase(
                 "maps_reviews",
-                maps_reviews::ingest(&db, scan, progress, &found),
+                maps_reviews::ingest(&db, scan, progress, found),
             )
             .await
         {
@@ -161,7 +265,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         if let Some(n) = found
             .run_phase(
                 "maps_saved_places",
-                maps_saved_places::ingest(&db, scan, progress, &found),
+                maps_saved_places::ingest(&db, scan, progress, found),
             )
             .await
         {
@@ -173,7 +277,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         if let Some(s) = found
             .run_phase(
                 "maps_photos",
-                maps_photos::ingest(&db, scan, progress, &found),
+                maps_photos::ingest(&db, scan, progress, found),
             )
             .await
         {
@@ -187,7 +291,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         if let Some(n) = found
             .run_phase(
                 "youtube_watch_history",
-                youtube_watch_history::ingest(&db, scan, progress, &found),
+                youtube_watch_history::ingest(&db, scan, progress, found),
             )
             .await
         {
@@ -199,7 +303,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         if let Some(n) = found
             .run_phase(
                 "youtube_subscriptions",
-                youtube_subscriptions::ingest(&db, scan, progress, &found),
+                youtube_subscriptions::ingest(&db, scan, progress, found),
             )
             .await
         {
@@ -211,7 +315,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         if let Some(s) = found
             .run_phase(
                 "google_chat",
-                google_chat::ingest(&db, scan, progress, &found),
+                google_chat::ingest(&db, scan, progress, found),
             )
             .await
         {
@@ -228,7 +332,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         if let Some(s) = found
             .run_phase(
                 "gemini_apps",
-                gemini_apps::ingest(&db, scan, progress, &found),
+                gemini_apps::ingest(&db, scan, progress, found),
             )
             .await
         {
@@ -244,7 +348,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
             scan,
             opts.sync.google_voice_include_spam,
             progress,
-            &found,
+            found,
         );
         if let Some(s) = found.run_phase("google_voice", voice).await {
             summary.voice_messages += s.messages;
@@ -259,7 +363,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     }
     summary.feeds_failed = found.count(RunProblemKind::Phase);
 
-    Ok(summary)
+    Ok((summary, walked))
 }
 
 /// A file that is not in the layout its reader knows: `what` says how.

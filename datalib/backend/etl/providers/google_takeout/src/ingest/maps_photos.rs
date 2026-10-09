@@ -21,7 +21,7 @@ use super::db::RawDb;
 use super::schema_raw::MapsPhotoRow;
 use datalib_etl::doltlite_raw::WirePayload;
 
-const DIR_REL: &str = "Maps/Photos and videos";
+pub(crate) const DIR_REL: &str = "Maps/Photos and videos";
 const SCOPE: &str = "google_takeout/maps_photos";
 const TABLE: &str = "maps_photos";
 

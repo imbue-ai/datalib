@@ -14,7 +14,7 @@ use super::db::RawDb;
 use super::schema_raw::{ns_id, MapsReviewRow};
 use datalib_etl::doltlite_raw::WirePayload;
 
-const FILE_REL: &str = "Maps (your places)/Reviews.json";
+pub(crate) const FILE_REL: &str = "Maps (your places)/Reviews.json";
 const SCOPE: &str = "google_takeout/maps_reviews";
 
 pub async fn ingest(

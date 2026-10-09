@@ -25,14 +25,19 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
+        "@datalib_crates//:flate2",
         "@datalib_crates//:quick-xml",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:tar",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:url",
         "@datalib_crates//:uuid",
+        "@datalib_crates//:zip",
     ],
 )
 
@@ -49,10 +54,13 @@ rust_test(
         ":datalib_etl_google_takeout",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/files:datalib_etl_files",
+        "@datalib_crates//:flate2",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:tar",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:zip",
     ],
 )
 
@@ -62,7 +70,4 @@ rust_test(
     crate = ":datalib_etl_google_takeout",
     edition = "2021",
     data = [":tng_fixture"],
-    deps = [
-        "@datalib_crates//:tempfile",
-    ],
 )

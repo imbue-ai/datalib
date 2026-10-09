@@ -1,10 +1,39 @@
 # The `google_takeout` source
 
-An unpacked [Google Takeout](https://takeout.google.com) export, read
-off `export.path` (the directory holding `Takeout/`); the feed switches
-sit beside it in the same table. There is no API and no network: the
-download step walks a directory tree the user exported and unzipped
-themselves.
+A [Google Takeout](https://takeout.google.com) export, read off
+`export.path`: either the unpacked `Takeout/` folder, or a folder holding
+the `.zip` or `.tgz` parts of one export as Google sent them. The feed
+switches sit beside it in the same table. There is no API and no
+network: the download step walks files the user exported themselves.
+
+## Zipped exports
+
+`src/ingest/unpack.rs`. When `export.path` holds archive parts directly
+(`takeout-<stamp>-<n>-<nnn>.zip`, `.tgz` or `.tar.gz`), they are the
+export, and anything else in the folder, an unpacked `Takeout/`
+included, is ignored. Parts of two exports in one folder are refused:
+they are two snapshots, and read as one they would hide what the newer
+one deleted.
+
+Each run hashes the parts through the fingerprint cache, so an unchanged
+part costs a `stat`. The `google_takeout/archives` cursor holds the
+parts each feed last finished reading, keyed `<feed>/<part>`. If every
+feed that is on finished reading these very parts, the run reads
+nothing. Otherwise the files those feeds read, and nothing else (no
+Drive, no Photos, no YouTube uploads, no `Voice/Spam/` unless asked
+for), are unpacked into a temporary directory, which is walked like an
+unpacked export and deleted at the end of the run, its paths forgotten
+by the fingerprint cache. The feeds' own cursors are keyed by the path
+under `Takeout/`, so a feed whose file is unchanged reads nothing, and
+switching between a zipped and an unpacked copy of one export changes
+nothing.
+
+The cursor is written only by a run that finished: not stopped, no feed
+failed, no walk error. A failed feed's parts are unpacked again next
+run, so it is retried. A file a feed stamped with its problem is not
+read again until its part changes, which for the same bytes would fail
+the same way. A rung that has feeds read their files again
+(`read_again`, below) also clears this cursor.
 
 ## A config turns each feed on; the form ticks them all
 
@@ -153,3 +182,6 @@ Maps, YouTube, Chat and Gemini feed, the rows that land — counts, a
 sample of the parsed content, the CAS digest for the photo feed — and
 that a second walk over an unchanged tree ingests nothing. Google
 Voice's parser and walk are tested in `src/ingest/google_voice/`.
+The same file packs the fixture into a `.zip` and a `.tgz` part and
+asserts they land what the unpacked tree does, and are not unpacked
+again until a part or the feeds change.
