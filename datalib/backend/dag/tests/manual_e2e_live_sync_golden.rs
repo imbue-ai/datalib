@@ -1637,12 +1637,14 @@ fn contacts_for_snapshot(mut dump: Value, contacts: &[MadeContact]) -> Value {
 
 /// Whole-table bookkeeping that legitimately changes across a reset, so it
 /// is excluded from the content-stability comparison: the store's record
-/// of itself, of its runs and cursors, and of the files or scans a
+/// of itself, of its runs and cursors, of the spans a walk has looked at
+/// (whose newest end is the run's clock), and of the files or scans a
 /// file-backed ingest has already been through.
 const NON_CONTENT_TABLES: &[&str] = &[
     "_datalib_meta",
     "sync_runs",
     "sync_scope_state",
+    "coverage",
     "problems",
     "ingested_files",
     "scan_meta",
