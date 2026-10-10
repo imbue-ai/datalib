@@ -1,11 +1,9 @@
 # What a cancel leaves behind, and what the log says about it
 
-**Status: PRs 1 to 4, 6 and 8 landed (#682, #686, #692, #697, #700,
-#1171), with the event-tape half of 7; 5 is void, and what is left
-of 7 (`disk_usage` retention) is issue #1158. PRs 3 to 6 and 8 were
-none of them what this doc first said they were — each says so in its
-own section. PRs 6 and 7 last read against the tree 2026-10-10, the
-rest 2026-09-23.** §1 is what a real data root actually contained — every
+**Status: PRs 1 to 4 and 6 to 8 landed (#682, #686, #692, #697, #700,
+#1171, #1177); 5 is void. PRs 3 to 6 and 8 were none of them what this
+doc first said they were — each says so in its own section. PRs 6 and 7
+last read against the tree 2026-10-10, the rest 2026-09-23.** §1 is what a real data root actually contained — every
 number in it was read out of `/Users/thad/datalib/z14` at build
 `787c1a4c`, not inferred. §2 is the work, one section per change.
 Where this doc and the tree disagree, the tree wins.
@@ -434,13 +432,18 @@ not meaningfully exist yet, or run the guard after the stores are made.
 - The floor on `/api/manage/rows` landed separately in #781, as the
   watch's `manage_rows_every` (one second).
 
-### PR 7 — Bound the two growing stores — **half done**
+### PR 7 — Bound the two growing stores — **done**
 
-- **Done:** the Slack event tape defaults to **off**. A config that sets
-  `common.event_tape` keeps what it says; one that leaves it unset stops
-  writing the tape. An `events/` directory already on disk stays until
-  someone deletes it; nothing reads it.
-- **Open, now issue #1158:** `disk_usage` retention.
+- **Done (#1171):** the Slack event tape defaults to **off**. A config
+  that sets `common.event_tape` keeps what it says; one that leaves it
+  unset stops writing the tape. An `events/` directory already on disk
+  stays until someone deletes it; nothing reads it.
+- **Done (#1177), as the knob:** `[run_history] disk_usage_days`, default
+  30 (as long as a run is kept, so every run the dashboard lists keeps
+  its disk chart). It bounds both tables of `system/disk_stats.sqlite`,
+  which #1170 had made plain SQLite, so the pages a delete frees are
+  reused. Each series keeps its newest sample before the cutoff, the
+  value a later chart opens with. Nothing is downsampled.
 
 ### PR 8 — A step outlives no runner, however the runner died — **done**
 

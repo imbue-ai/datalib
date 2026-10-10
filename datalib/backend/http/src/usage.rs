@@ -2,7 +2,9 @@
 //!
 //! One background task walks the data root and keeps the newest measurement
 //! of every tree, plus a short window of samples for the sparklines. The same
-//! samples are appended to `system/disk_stats.sqlite`, which nothing prunes.
+//! samples are appended to `system/disk_stats.sqlite`, which keeps them, and
+//! the free-space samples beside them, for `[run_history] disk_usage_days`:
+//! older ones are dropped when the server starts and whenever a run ends.
 //!
 //! **It walks only while a run is in flight, and has no timer.** Nothing else
 //! writes the data root, so between runs there is nothing to find, and an
@@ -493,6 +495,35 @@ pub async fn sample_on_demand(
     sample_once(monitor, repo, root, Some(arrived), events).await;
 }
 
+/// The stamp before which a sample is dropped: `days` before `now`, in the
+/// store's UTC form, so text order is instant order.
+fn retention_cutoff(now: &datalib_time::IsoOffsetTimestamp, days: u32) -> String {
+    now.bump_micros(-i64::from(days) * 86_400 * 1_000_000)
+        .to_utc_and_offset()
+        .0
+}
+
+/// The config's `disk_usage_days`, read at each use so an edit takes effect
+/// at the next run's end; the default when the config cannot be read, which
+/// is reported where it is edited.
+fn disk_usage_days_of(config_path: &Path) -> u32 {
+    std::fs::read_to_string(config_path)
+        .ok()
+        .and_then(|text| datalib_dag::config::parse_graded(&text).0.run_history)
+        .unwrap_or_default()
+        .disk_usage_days
+}
+
+async fn forget_old_samples(repo: &DynAppRepo, root: &Path) {
+    let days = disk_usage_days_of(&datalib_dag::config::root_config_path(root));
+    let cutoff = retention_cutoff(&datalib_time::IsoOffsetTimestamp::now_local(), days);
+    match repo.forget_disk_stats_before(&cutoff).await {
+        Ok(0) => {}
+        Ok(n) => tracing::debug!("usage: dropped {n} sample(s) older than {days} days"),
+        Err(e) => tracing::warn!("usage: could not drop samples older than {days} days: {e}"),
+    }
+}
+
 fn should_walk(running: bool, was_running: bool, since_last_walk: Duration) -> bool {
     let started = running && !was_running;
     let ended = !running && was_running;
@@ -507,6 +538,7 @@ pub async fn run(
     events: crate::watch::RootTx,
     sync: crate::supervisor::SyncControl,
 ) {
+    forget_old_samples(&repo, &root).await;
     match repo.recent_disk_usage(SEED_ROWS).await {
         Ok(rows) => monitor.seed(rows).await,
         Err(e) => tracing::warn!("usage: could not read the recorded history: {e}"),
@@ -537,6 +569,9 @@ pub async fn run(
         if should_walk(running, was_running, last_walk.elapsed()) {
             sample_once(&monitor, &repo, root.clone(), None, &events).await;
             last_walk = Instant::now();
+        }
+        if was_running && !running {
+            forget_old_samples(&repo, &root).await;
         }
         was_running = running;
     }
@@ -734,6 +769,36 @@ command = "my-step"
         assert!(!snap.outputs[0].present);
         assert!(snap.outputs[0].history.is_empty());
         assert_eq!(snap.measured_at_utc, None, "no walk has happened yet");
+    }
+
+    /// The cutoff is `days` whole days before the moment given, in UTC,
+    /// whatever offset the clock is in.
+    #[test]
+    fn the_retention_cutoff_is_days_before_now_in_utc() {
+        let now = datalib_time::parse_strict("2026-09-30T10:00:00-07:00").unwrap();
+        assert_eq!(
+            retention_cutoff(&now, 30),
+            "2026-08-31T17:00:00.000000+00:00"
+        );
+        assert_eq!(
+            retention_cutoff(&now, 0),
+            "2026-09-30T17:00:00.000000+00:00"
+        );
+    }
+
+    /// No config, or one with no `disk_usage_days`, keeps the default; one
+    /// that names it is read.
+    #[test]
+    fn disk_usage_days_comes_from_run_history() {
+        let td = tempfile::tempdir().unwrap();
+        let config = td.path().join("config.toml");
+        let default = datalib_dag::config::RunHistory::default().disk_usage_days;
+        assert_eq!(default, 30);
+        assert_eq!(disk_usage_days_of(&config), default);
+        std::fs::write(&config, "[run_history]\nmax_runs = 5\n").unwrap();
+        assert_eq!(disk_usage_days_of(&config), default);
+        std::fs::write(&config, "[run_history]\ndisk_usage_days = 7\n").unwrap();
+        assert_eq!(disk_usage_days_of(&config), 7);
     }
 
     /// When the loop walks, stated as a table.
