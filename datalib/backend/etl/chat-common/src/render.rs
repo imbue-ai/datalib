@@ -34,7 +34,9 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// a conversation left fold in as `<details class="branch">`.
 /// v14: an email's Bcc shows on its recipients line, and it and each
 /// message's mentions are `supplied_search_terms` rows.
-pub const LAYOUT_VERSION: u32 = 14;
+/// v15: a chat's conversation name is its subject alone; `channel` is
+/// left to sources that file a row somewhere else.
+pub const LAYOUT_VERSION: u32 = 15;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -866,7 +868,6 @@ fn build_grid_rows(
             .org_uuid(chat.org_uuid.clone())
             .org_name(chat.org_name.clone())
             .project(chat.project.clone())
-            .channel(conversation_name.clone())
             .conversation_name(conversation_name.clone())
             .conversation_uuid(chat.chat_uuid.clone())
             .entire_chat(entire_chat.clone())
@@ -951,7 +952,6 @@ fn build_grid_rows(
                 .org_uuid(chat.org_uuid.clone())
                 .org_name(chat.org_name.clone())
                 .project(chat.project.clone())
-                .channel(conversation_name.clone())
                 .conversation_name(conversation_name.clone())
                 .conversation_uuid(chat.chat_uuid.clone())
                 .message_index(Some(idx as i64))
@@ -1075,7 +1075,6 @@ fn reaction_row(
         .org_uuid(chat.org_uuid.clone())
         .org_name(chat.org_name.clone())
         .project(chat.project.clone())
-        .channel(conversation_name.clone())
         .conversation_name(conversation_name.clone())
         .conversation_uuid(chat.chat_uuid.clone())
         .entire_chat(entire_chat.to_string())

@@ -451,7 +451,19 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // the terms keys, never in part and never case-blind.
         ("kind:Email", vec!["riker-email"]),
         (r#"kind:"Email Thread""#, vec!["riker-thread"]),
-        ("channel:#bridge", vec!["bridge-thread", "worf-slack"]),
+        // A chat's conversation is its subject: `subject:` finds it by
+        // name, its rows and the thread's own, and `conversation:` is
+        // the same key. Channel is where a row is filed when that is not
+        // its subject (an address book, below), so a chat has none.
+        ("subject:#bridge", vec!["bridge-thread", "worf-slack"]),
+        (
+            r#"subject:"Away team roster""#,
+            vec!["riker-email", "riker-thread"],
+        ),
+        (
+            r#"conversation:"Away team roster""#,
+            vec!["riker-email", "riker-thread"],
+        ),
         (
             r#"channel:"Address Book""#,
             vec!["picard-card", "senior-staff-card"],
@@ -495,6 +507,8 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // `email:` is that column, not a person's address: Riker has no
         // card. His address is found with from: or with:.
         "email:riker@enterprise.org",
+        // A chat's conversation is not its channel.
+        "channel:#bridge",
         // Troi's one role on the email is Cc.
         "with:troi kind:Email -cc:troi",
     ] {

@@ -46,6 +46,19 @@ pub fn author_identity(author: &str, handle: Option<&str>) -> Option<Identity> {
     })
 }
 
+/// The Subject cell away from a contact's row: the conversation's name,
+/// plain. `None` for a row with no conversation name.
+fn subject_identity(name: &str) -> Option<Identity> {
+    let name = name.trim();
+    (!name.is_empty()).then(|| Identity {
+        id: name.to_string(),
+        label: name.to_string(),
+        icon: None,
+        detail: None,
+        entity: None,
+    })
+}
+
 /// The Contact cell: the contact's name, a chip where its first address,
 /// else its first number, makes a handle, and plain text where neither
 /// does (a group, a number with no country code). Only a contact's own
@@ -249,6 +262,10 @@ fn declared() -> Vec<ColumnSpec> {
         // Second, so what a row says is on screen at any width.
         ColumnSpec::new("snippet", "Contents", ColumnType::Text),
         ColumnSpec::new("kind", "Type", ColumnType::Text),
+        ColumnSpec::new("subject_ref", "Subject", ColumnType::Identity).describe(
+            "What the row belongs to: its conversation, thread, page or event, by name, \
+             or on a contact's own row the contact, as a chip. `subject:` finds it by name.",
+        ),
         ColumnSpec::new("conversation_name", "Conversation", ColumnType::Text).hidden(),
         ColumnSpec::new("project", "Project", ColumnType::Text)
             .describe(
@@ -396,6 +413,10 @@ impl Sources {
             row.email.as_deref(),
             row.phone.as_deref(),
         );
+        row.subject_ref = row
+            .contact_ref
+            .clone()
+            .or_else(|| subject_identity(&row.conversation_name));
         row.author_term = row
             .author_handle
             .clone()
@@ -597,6 +618,7 @@ mod tests {
             email: Some("riker@enterprise.org".into()),
             phone: Some("+1 202 555 0101".into()),
             contact_ref: None,
+            subject_ref: None,
             author_term: None,
             channel: "#c".into(),
             source_url: "https://x".into(),

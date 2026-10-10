@@ -5,11 +5,9 @@ description: "Each row's search-key columns (and the author its from and author 
 bridge-thread
   columns
     kind           Slack Thread
-    channel        #bridge
   terms
     id         bridge-thread                            derived
     title      #bridge                                  derived
-    name       #bridge                                  derived
 
 picard-card
   columns
@@ -28,7 +26,6 @@ picard-card
 riker-email
   columns
     kind           Email
-    channel        Away team roster
     account        picard@enterprise.org
     author         William Riker
     author_handle  email:riker@enterprise.org
@@ -37,7 +34,6 @@ riker-email
     container  riker-thread                             derived
     from       email:riker@enterprise.org               derived
     title      Away team roster                         derived
-    name       Away team roster                         derived
     name       picard@enterprise.org                    derived
     to         email:picard@enterprise.org              supplied
     cc         email:troi@enterprise.org                supplied
@@ -48,12 +44,10 @@ riker-email
 riker-thread
   columns
     kind           Email Thread
-    channel        Away team roster
     account        picard@enterprise.org
   terms
     id         riker-thread                             derived
     title      Away team roster                         derived
-    name       Away team roster                         derived
     name       picard@enterprise.org                    derived
 
 senior-staff-card
@@ -72,7 +66,6 @@ senior-staff-card
 worf-slack
   columns
     kind           Slack Message
-    channel        #bridge
     author         Worf
     author_handle  slack:T1701/U0000003
   terms
@@ -80,6 +73,5 @@ worf-slack
     container  bridge-thread                            derived
     from       slack:T1701/U0000003                     derived
     title      #bridge                                  derived
-    name       #bridge                                  derived
     mention    slack:T1701/U0000002                     supplied
     author     Worf                                     derived
