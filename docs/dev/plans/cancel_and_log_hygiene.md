@@ -1,9 +1,10 @@
 # What a cancel leaves behind, and what the log says about it
 
-**Status: PRs 1 to 4 and 8 landed (#682, #686, #692, #697, #700); 5 is
-void and 6 and 7 are open. PRs 3, 4, 5 and 8 were none of them what this
-doc first said they were — each says so in its own section. Last read
-against the tree 2026-09-23.** §1 is what a real data root actually contained — every
+**Status: PRs 1 to 4 and 8 landed (#682, #686, #692, #697, #700), and
+the `disk_usage` half of 7 (#1177); 5 is void, and 6 and 7's event-tape
+half are open. PRs 3, 4, 5 and 8 were none of them what this doc first
+said they were — each says so in its own section. PR 7 last read against
+the tree 2026-10-10, the rest 2026-09-23.** §1 is what a real data root actually contained — every
 number in it was read out of `/Users/thad/datalib/z14` at build
 `787c1a4c`, not inferred. §2 is the work, one section per change.
 Where this doc and the tree disagree, the tree wins.
@@ -429,11 +430,15 @@ not meaningfully exist yet, or run the guard after the stores are made.
 - Optional, and a judgment call: a floor of about a second on
   `/api/manage/rows` while a run is in flight.
 
-### PR 7 — Bound the two growing stores
+### PR 7 — Bound the two growing stores — **half done**
 
 - Default the Slack event tape to **off**. It is a debugging tool.
-- Give `disk_usage` a retention knob beside the others in
-  `[run_history]`, or downsample anything older than a day.
+- **Done (#1177), as the knob:** `[run_history] disk_usage_days`, default
+  30 (as long as a run is kept, so every run the dashboard lists keeps
+  its disk chart). It bounds both tables of `system/disk_stats.sqlite`,
+  which #1170 had made plain SQLite, so the pages a delete frees are
+  reused. Each series keeps its newest sample before the cutoff, the
+  value a later chart opens with. Nothing is downsampled.
 
 ### PR 8 — A step outlives no runner, however the runner died — **done**
 
