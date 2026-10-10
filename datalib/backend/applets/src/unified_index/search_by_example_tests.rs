@@ -382,9 +382,12 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ("from:riker", vec!["riker-email"]),
         ("from:riker@enterprise.org", vec!["riker-email"]),
         ("from:email:riker@enterprise.org", vec!["riker-email"]),
-        // Unquoted, any part of a name or handle; quoted, the whole name,
-        // case-blind.
+        // Unquoted, any part of a name or handle, not only the start of a
+        // word: the start of his first name, the middle of his last, part
+        // of his address. Quoted, the whole name, case-blind.
         ("from:will", vec!["riker-email"]),
+        ("from:iker", vec!["riker-email"]),
+        ("from:enterprise.org", vec!["riker-email"]),
         (r#"from:"william riker""#, vec!["riker-email"]),
         ("to:picard@enterprise.org", vec!["riker-email"]),
         // A name also reaches every handle a source showed under it, so a
@@ -406,6 +409,9 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
             vec!["picard-card", "riker-email"],
         ),
         ("with:troi", vec!["riker-email"]),
+        // The middle of a word, in the card's name and the email's To
+        // handle alike.
+        ("with:icard", vec!["picard-card", "riker-email"]),
         // Troi has no card: the email itself showed her address under
         // that name.
         (r#"with:"Deanna Troi""#, vec!["riker-email"]),
@@ -502,6 +508,8 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // The two ids that start with it, and riker-email's author too.
         ("rik", vec!["riker-email", "riker-thread"]),
         ("riker", vec!["riker-email", "riker-thread"]),
+        // Only the start of a word here, where from:iker finds Riker.
+        ("iker", vec![]),
         // Riker's name, not the ids it begins.
         (r#""riker""#, vec!["riker-email"]),
         (r#""rik""#, vec![]),
