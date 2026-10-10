@@ -73,6 +73,7 @@ fn chat(
     item: NormalizedChatItem,
 ) -> NormalizedChat {
     NormalizedChat {
+        named_after: Vec::new(),
         id: uuid.into(),
         chat_uuid: uuid.into(),
         display: display.into(),

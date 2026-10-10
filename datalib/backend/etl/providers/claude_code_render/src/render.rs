@@ -241,6 +241,7 @@ fn build_chat(
     let id = ids::transcript(source_id, session_id, agent_id);
     debug_assert_eq!(id.uuid, chat_uuid_of(source_id, tid));
     NormalizedChat {
+        named_after: Vec::new(),
         path_prefix: None,
         id: tid.to_string(),
         chat_uuid: id.uuid.clone(),

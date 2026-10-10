@@ -417,6 +417,7 @@ fn build_chat(
     inputs.read("users", &conv.account_uuid);
     let project_names = inputs.lookup("projects", project_names);
     NormalizedChat {
+        named_after: Vec::new(),
         path_prefix: None,
         id: chat_uuid.clone(),
         chat_uuid: chat_uuid.clone(),
@@ -550,6 +551,7 @@ fn build_project_page(
         project.inputs.read("users", viewer);
     }
     NormalizedChat {
+        named_after: Vec::new(),
         path_prefix: None,
         id: page_uuid.clone(),
         chat_uuid: page_uuid.clone(),

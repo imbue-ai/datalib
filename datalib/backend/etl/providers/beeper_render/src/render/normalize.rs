@@ -123,6 +123,7 @@ fn to_chat(source_id: &str, room: &Room, doc: &DocBucket, inputs: &Inputs) -> No
         .collect();
 
     NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: inputs.declared(),
         id: bundle_key(doc),

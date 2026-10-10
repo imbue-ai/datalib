@@ -239,9 +239,12 @@ moment it was posted and the last the text it has now — in the
 names the post or comment it is a version of. `edits.rs` ties each
 version to the most alike post or comment made no later than it
 (`similar`'s ratio at least 0.6), keeping versions that share an `fbid`
-together. On the page, the earlier versions fold into one
-"✎ Another version" just above the text they became; the version that
-is the text now is not shown twice. An edit no post or comment matches
+together. A post's text, for this, is what it says and a life event's
+description; a mention counts the same with its `@[…]` markup or
+without, since an edit writes it one way and the post the other. On
+the page, the earlier versions fold into one "✎ Another version" just
+above the text they became; the version that is the text now is not
+shown twice. An edit no post or comment matches
 is of one the export no longer has: a post of its own, or a comment at
 its own time, with its last version shown and a note saying so. Every
 post (and the comments feed) reads every edit row, since a new edit
@@ -261,8 +264,9 @@ against the keys it reads, and each key it does not read is a warning
 row in `problems`, on the document and at the item's own section
 (`item_uuid`), with the field, its JSON pointer and — never the value —
 its shape: `int`, `string(12 chars)`, `object{a,b}`. A `label_values`
-entry whose label render does not use is `label_values:<label>`. Beside
-those:
+entry whose label render does not use is `label_values:<label>`; a
+label-less `timestamp_value` that repeats the record's own `timestamp`
+is read. Beside those:
 
 | row | severity | means |
 |---|---|---|

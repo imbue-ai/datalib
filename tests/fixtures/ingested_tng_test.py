@@ -154,15 +154,6 @@ FACEBOOK_VIDEO_NOT_IN_EXPORT = (
 # Facebook's render reports every field it leaves unread, by its shape
 # alone, on the document and at the item's section, so a run over a real
 # export says what it left out (INGEST.md §"What render reports").
-FACEBOOK_OTHER_PAGE_POST = "00000000-0000-8ba6-97c6-f48500bf8e47"  # its document
-FACEBOOK_OTHER_PAGE_POST_ITEM = "0b752b10-cb00-884d-9f04-a02d1c74c917"
-FACEBOOK_UNREAD_LABELS = [
-    f"{problem_uuid}|warning|parse|markdown|{FACEBOOK_OTHER_PAGE_POST}"
-    f"|{FACEBOOK_OTHER_PAGE_POST_ITEM}|label_values:{label}|uncovered_type|{shape}"
-    for problem_uuid, label, shape in [
-        ("dd6c6c4b-5913-505a-b250-ed5b355c8bdd", "", "object{timestamp_value}"),
-    ]
-]
 FACEBOOK_CALL_DURATION_UNREAD = (
     "01212325-894c-5374-87de-1d1815eeceb2"
     "|warning|parse|markdown"
@@ -235,7 +226,6 @@ EXPECTED_PROBLEMS = {
             FACEBOOK_DELETED_ACCOUNTS_TOGETHER,
             FACEBOOK_EDIT_OF_A_DELETED_POST,
             FACEBOOK_GROUP_LEFT_SINCE,
-            *FACEBOOK_UNREAD_LABELS,
         ]
     ),
     "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],

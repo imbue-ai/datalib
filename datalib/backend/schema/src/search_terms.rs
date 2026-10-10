@@ -55,6 +55,11 @@ pub enum SearchTermKind {
     /// `with:` finds a conversation by, so `is:document with:…` lists
     /// the conversations someone was in.
     Participant = 13,
+    /// Who a conversation with no title of its own is named after, on its
+    /// document's own row: a direct message's other party, a group's
+    /// members, by handle where the source has one, else by the name
+    /// shown. What the grid's Subject cell draws as chips.
+    Subject = 14,
 }
 
 impl SearchTermKind {
@@ -93,7 +98,7 @@ impl SearchTermKind {
             | SearchTermKind::Bcc
             | SearchTermKind::Mention
             | SearchTermKind::Container => 3,
-            SearchTermKind::Title | SearchTermKind::Label => 2,
+            SearchTermKind::Title | SearchTermKind::Subject | SearchTermKind::Label => 2,
             SearchTermKind::Author | SearchTermKind::Name | SearchTermKind::Participant => 1,
         }
     }
@@ -113,6 +118,7 @@ impl SearchTermKind {
             | SearchTermKind::Author
             | SearchTermKind::About
             | SearchTermKind::Participant
+            | SearchTermKind::Subject
             | SearchTermKind::Label => false,
         }
     }

@@ -306,6 +306,7 @@ export const WIDTH: Record<ColumnType, number> = {
   timeseries: 170,
   quantity: 80,
   identity: 120,
+  identities: 220,
   status: 150,
   chips: 260,
   actions: 116,

@@ -38,9 +38,11 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// (`participant` terms), so `is:document with:…` finds conversations.
 /// v16: a chat's conversation name is its subject alone; `channel` is
 /// left to sources that file a row somewhere else.
-/// v17: participants are who wrote a message, never a tool call or a
+/// v17: a chat named by its people names them on its document's own row
+/// (`subject` terms), so the Subject cell draws them as chips.
+/// v18: participants are who wrote a message, never a tool call or a
 /// stand-in label ("Me", "Unknown"; `AuthorKind`).
-pub const LAYOUT_VERSION: u32 = 17;
+pub const LAYOUT_VERSION: u32 = 18;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -291,7 +293,7 @@ fn render_one(
         source_id,
         &mut problems,
     );
-    let search_terms = supplied_search_terms(doc, &rows);
+    let search_terms = supplied_search_terms(chat, doc, &rows);
 
     let items_rendered = doc
         .items
@@ -1012,7 +1014,11 @@ fn build_grid_rows(
 /// filed, as search terms on its own row: the people by handle (one with
 /// no handle has nothing to match exactly), every one of them however
 /// many. Only for a row the document kept.
-fn supplied_search_terms(doc: &NormalizedDoc, rows: &[GridRow]) -> Vec<SuppliedSearchTerm> {
+fn supplied_search_terms(
+    chat: &NormalizedChat,
+    doc: &NormalizedDoc,
+    rows: &[GridRow],
+) -> Vec<SuppliedSearchTerm> {
     let kept: std::collections::HashSet<&str> = rows.iter().map(|r| r.uuid.as_str()).collect();
     let mut out: Vec<SuppliedSearchTerm> = Vec::new();
     for item in doc
@@ -1050,10 +1056,18 @@ fn supplied_search_terms(doc: &NormalizedDoc, rows: &[GridRow]) -> Vec<SuppliedS
         }
     }
     if kept.contains(doc.markdown_uuid.as_str()) {
-        for value in participants(doc, &kept) {
+        let participants = participants(doc, &kept)
+            .into_iter()
+            .map(|value| (SearchTermKind::Participant, value));
+        let named_after = chat
+            .named_after
+            .iter()
+            .filter_map(|p| person_term(p.handle.as_ref(), &p.shown))
+            .map(|value| (SearchTermKind::Subject, value));
+        for (kind, value) in participants.chain(named_after) {
             let term = SuppliedSearchTerm {
                 uuid: doc.markdown_uuid.clone(),
-                kind: SearchTermKind::Participant,
+                kind,
                 value,
             };
             if !out.contains(&term) {
@@ -1064,19 +1078,23 @@ fn supplied_search_terms(doc: &NormalizedDoc, rows: &[GridRow]) -> Vec<SuppliedS
     out
 }
 
+/// A person as a term's value: their handle, else the name shown.
+fn person_term(handle: Option<&datalib_handle::Handle>, shown: &str) -> Option<String> {
+    handle
+        .map(|h| h.as_str().to_string())
+        .or_else(|| Some(shown.trim().to_string()).filter(|s| !s.is_empty()))
+}
+
 /// Everyone who took part in a document's kept messages — who wrote
 /// each, who it was addressed to, who it mentions, who reacted — by
 /// handle, else by the name shown: the document row's `participant`
 /// terms. In first-seen order, each once. A tool call or a system note
 /// is not a message, and a stand-in label names nobody.
 fn participants(doc: &NormalizedDoc, kept: &std::collections::HashSet<&str>) -> Vec<String> {
-    let person = |handle: Option<&datalib_handle::Handle>, shown: &str, kind: AuthorKind| {
-        let name = || Some(shown.trim().to_string()).filter(|s| !s.is_empty());
-        match (handle, kind) {
-            (Some(h), _) => Some(h.as_str().to_string()),
-            (None, AuthorKind::Named) => name(),
-            (None, AuthorKind::Account | AuthorKind::Unknown) => None,
-        }
+    let person = |handle: Option<&datalib_handle::Handle>, shown: &str, kind: AuthorKind| match kind
+    {
+        AuthorKind::Named => person_term(handle, shown),
+        AuthorKind::Account | AuthorKind::Unknown => person_term(handle, ""),
     };
     let mut out: Vec<String> = Vec::new();
     for item in doc
@@ -1236,6 +1254,7 @@ mod tests {
 
     fn mk_chat() -> NormalizedChat {
         NormalizedChat {
+            named_after: Vec::new(),
             contacts: Vec::new(),
             inputs: Vec::new(),
             id: "100".to_string(),
@@ -1316,7 +1335,7 @@ mod tests {
         ];
         item.labels = vec!["Inbox".into(), " ".into(), "Away team".into()];
         let rows = rows_of(&test_profile(), &chat);
-        let supplied = supplied_search_terms(&chat.buckets[0], &rows);
+        let supplied = supplied_search_terms(&chat, &chat.buckets[0], &rows);
         let terms: Vec<(&str, &str, &str)> = supplied
             .iter()
             .map(|t| (t.uuid.as_str(), t.kind.as_str(), t.value.as_str()))
@@ -1367,12 +1386,48 @@ mod tests {
         me_by_handle.reactions.clear();
         chat.buckets[0].items = vec![picard, tool, me, me_by_handle];
         let rows = rows_of(&test_profile(), &chat);
-        let participants: Vec<String> = supplied_search_terms(&chat.buckets[0], &rows)
+        let participants: Vec<String> = supplied_search_terms(&chat, &chat.buckets[0], &rows)
             .into_iter()
             .filter(|t| t.kind == SearchTermKind::Participant)
             .map(|t| t.value)
             .collect();
         assert_eq!(participants, ["Picard", "Will Riker", "tel:+15550100001"]);
+    }
+
+    /// A chat named by its people names them on its document's own row,
+    /// by handle else by name, for the Subject cell to draw; a chat with
+    /// a title names nobody.
+    #[test]
+    fn a_chat_named_by_its_people_names_them_on_its_document_row() {
+        use crate::types::NamedPerson;
+        let subject_terms = |chat: &NormalizedChat| -> Vec<(String, String)> {
+            let rows = rows_of(&test_profile(), chat);
+            supplied_search_terms(chat, &chat.buckets[0], &rows)
+                .into_iter()
+                .filter(|t| t.kind == SearchTermKind::Subject)
+                .map(|t| (t.uuid, t.value))
+                .collect()
+        };
+        let mut chat = mk_chat();
+        assert!(subject_terms(&chat).is_empty());
+        chat.named_after = vec![
+            NamedPerson {
+                shown: "Will Riker".into(),
+                handle: datalib_handle::Handle::email("riker@enterprise.org"),
+            },
+            NamedPerson {
+                shown: "Q".into(),
+                handle: None,
+            },
+        ];
+        let document = "22222222-2222-2222-2222-222222222222";
+        assert_eq!(
+            subject_terms(&chat),
+            [
+                (document.into(), "email:riker@enterprise.org".into()),
+                (document.into(), "Q".into()),
+            ]
+        );
     }
 
     /// One unusable message must cost that message and nothing else.

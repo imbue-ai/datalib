@@ -100,6 +100,14 @@ pub struct NormalizedReaction {
     pub source_ref: Option<UpstreamRef>,
 }
 
+/// Someone a chat with no title of its own is named after.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NamedPerson {
+    /// As the source showed them in the chat's name.
+    pub shown: String,
+    pub handle: Option<datalib_handle::Handle>,
+}
+
 /// Someone an item was addressed to.
 #[derive(Debug, Clone, Serialize)]
 pub struct Recipient {
@@ -384,6 +392,12 @@ pub struct NormalizedChat {
     pub path_prefix: Option<String>,
     /// Buckets sorted by period_key.
     pub buckets: Vec<NormalizedDoc>,
+    /// Who `display` names, when the chat has no title of its own and is
+    /// called by its people instead: a direct message's other party, a
+    /// group's members. Empty for a chat with a title. Each document's own
+    /// row carries them as `subject` terms, and the grid's Subject cell
+    /// draws them as chips in place of the name.
+    pub named_after: Vec<NamedPerson>,
     /// The provider's own account of people in this chat: what only its
     /// raw tables know, such as a Slack profile's title and email. Each
     /// document carries the ones whose handles its authors wrote under,
