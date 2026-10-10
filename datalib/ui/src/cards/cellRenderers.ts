@@ -107,12 +107,14 @@ function sparkSvg(value: number, samples: Sample[], windowMs: number): SVGSVGEle
 /// A series drawn as a sparkline with its present value and its change
 /// over the window laid over it. The Manage table's cells and the
 /// status bar's data-root total are both this, so they read alike.
-/// `change` says the movement in words, for the hover.
+/// `change` says the movement in words, for the hover; `suffix` follows
+/// the present value ("12 GB free").
 export function sparkTrack(
   value: number,
   unit: string,
   samples: Sample[],
   windowSecs: number,
+  suffix = "",
 ): { el: HTMLElement; change: string } {
   const windowMs = windowSecs * 1000;
   const track = document.createElement("span");
@@ -125,7 +127,7 @@ export function sparkTrack(
   label.className = "tg-plot-label";
   const now = document.createElement("span");
   now.className = "tg-plot-value";
-  now.textContent = formatUnit(value, unit);
+  now.textContent = formatUnit(value, unit) + suffix;
   label.appendChild(now);
   const moved = windowDelta(value, samples, Date.now(), windowMs);
   if (moved) {

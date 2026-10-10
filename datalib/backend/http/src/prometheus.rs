@@ -74,6 +74,7 @@ pub struct Inputs<'a> {
     pub records: &'a BTreeMap<String, StepRecord>,
     pub trees: &'a [OutputStorage],
     pub root_bytes: u64,
+    pub disk: &'a crate::disk_free::DiskFree,
 }
 
 /// A name as Prometheus allows one: `[a-zA-Z_:][a-zA-Z0-9_:]*`, anything
@@ -234,7 +235,50 @@ pub fn families(inputs: &Inputs<'_>) -> Vec<Family> {
             value: inputs.root_bytes as f64,
         },
     );
+    let disk = inputs.disk;
+    if let (Some(free), Some(total)) = (disk.available_bytes, disk.total_bytes) {
+        for (name, help, value) in [
+            (
+                "datalib_disk_free_bytes",
+                "Bytes still writable on the data root's disk, as last looked at.",
+                free,
+            ),
+            (
+                "datalib_disk_size_bytes",
+                "The size of the data root's disk.",
+                total,
+            ),
+        ] {
+            add(name.into(), help.into(), Kind::Gauge, gauge(value as f64));
+        }
+    }
+    for (name, help, value) in [
+        (
+            "datalib_disk_pause_below_bytes",
+            "The config's [disk_space] pause line: under it every step is held.",
+            disk.pause_below_bytes as f64,
+        ),
+        (
+            "datalib_disk_resume_at_bytes",
+            "The config's [disk_space] resume line: held steps run again from it.",
+            disk.resume_at_bytes as f64,
+        ),
+        (
+            "datalib_disk_low",
+            "1 while the steps are held for want of disk space, else 0.",
+            if disk.low { 1.0 } else { 0.0 },
+        ),
+    ] {
+        add(name.into(), help.into(), Kind::Gauge, gauge(value));
+    }
     out.into_values().collect()
+}
+
+fn gauge(value: f64) -> Sample {
+    Sample {
+        labels: Vec::new(),
+        value,
+    }
 }
 
 /// The text exposition format: per family, `# HELP`, `# TYPE`, then its
@@ -291,12 +335,18 @@ pub async fn get_metrics(State(s): State<AppState>) -> impl IntoResponse {
             &crate::usage::measured_trees(&config_path),
         )
         .await;
+    let disk = s
+        .usage
+        .free
+        .snapshot(crate::disk_free::floor_of(&config_path))
+        .await;
     let body = render(&families(&Inputs {
         steps: &steps,
         metrics: &metrics,
         records: &records,
         trees: &storage.outputs,
         root_bytes: storage.root.bytes,
+        disk: &disk,
     }));
     ([(header::CONTENT_TYPE, CONTENT_TYPE)], body)
 }
@@ -332,7 +382,20 @@ mod tests {
             records: &BTreeMap::new(),
             trees: &[],
             root_bytes: 1000,
+            disk: &disk(),
         }))
+    }
+
+    fn disk() -> crate::disk_free::DiskFree {
+        crate::disk_free::DiskFree {
+            available_bytes: Some(9_000_000_000),
+            total_bytes: Some(500_000_000_000),
+            pause_below_bytes: 10_000_000_000,
+            resume_at_bytes: 15_000_000_000,
+            low: true,
+            history: Vec::new(),
+            window_secs: 300,
+        }
     }
 
     #[test]
@@ -359,6 +422,23 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("datalib_root_bytes 1000\n"), "{text}");
+    }
+
+    /// The disk the root lives on, and the floor the loop holds steps
+    /// under, so an alert can fire before syncs stop rather than after.
+    #[test]
+    fn the_disk_and_its_floor_are_gauges() {
+        let text = scrape(&[]);
+        for line in [
+            "# TYPE datalib_disk_free_bytes gauge\n",
+            "datalib_disk_free_bytes 9000000000\n",
+            "datalib_disk_size_bytes 500000000000\n",
+            "datalib_disk_pause_below_bytes 10000000000\n",
+            "datalib_disk_resume_at_bytes 15000000000\n",
+            "datalib_disk_low 1\n",
+        ] {
+            assert!(text.contains(line), "{line:?} missing from:\n{text}");
+        }
     }
 
     /// A family's samples sit together under one `# TYPE`, which a
@@ -424,6 +504,7 @@ mod tests {
             records: &records,
             trees: &[],
             root_bytes: 0,
+            disk: &disk(),
         }));
         assert!(
             text.contains("datalib_step_state{step=\"s\",state=\"running\"} 1\n"),

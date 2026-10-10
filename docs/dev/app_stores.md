@@ -128,7 +128,11 @@ deliberately has no samples there, and a change made from outside
 datalib carries the instant it was next *measured*. Reading it is
 `SELECT path, measured_at_utc, bytes FROM disk_usage`; it is compacted
 (no repeated value, nothing closer than five seconds), so carry the last
-value forward rather than assuming a fixed interval.
+value forward rather than assuming a fixed interval. Beside it,
+`disk_free` holds the free space on the root's disk, looked at every ten
+seconds whether or not a run is going and recorded when it moves by
+10 MB or more (`SELECT measured_at_utc, available_bytes, total_bytes
+FROM disk_free`).
 
 **Remote media.** A rendered document's images on remote
 hosts are held back by the UI until a person lets them load, because
