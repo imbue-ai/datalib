@@ -39,6 +39,12 @@ impl SourceRender for PerseusRender {
         crate::render::RENDER_VERSION
     }
 
+    // Perseus records no cursor, so every run renders every document and
+    // this changes nothing yet; it is here so that stays true once it does.
+    fn render_params(&self) -> serde_json::Value {
+        serde_json::json!({ "alignment_pairs": self.pairs })
+    }
+
     async fn run(&self, input_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{align, parse, render};
         let parsed = parse::parse(input_path)
