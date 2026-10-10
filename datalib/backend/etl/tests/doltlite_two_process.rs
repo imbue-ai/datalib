@@ -1347,23 +1347,39 @@ fn what_a_reader_sees_while_a_writer_deletes_and_reloads() {
         "20",
         "--ready-out",
         &t.path("reader-ready"),
+        "--sampled-out",
+        &t.path("sampled"),
         "--out",
         &t.path("watch.json"),
     ]);
     t.await_file("reader-ready", &mut reader);
 
     t.phase("before");
-    std::thread::sleep(SETTLE);
-    t.step(&mut writer, "delete-when", "deleted", "deleted");
-    t.step(&mut writer, "reload-when", "reloaded", "reloaded");
+    t.await_samples(&mut reader, "before");
     t.step(
         &mut writer,
+        &mut reader,
+        "delete-when",
+        "deleted",
+        "deleted",
+    );
+    t.step(
+        &mut writer,
+        &mut reader,
+        "reload-when",
+        "reloaded",
+        "reloaded",
+    );
+    t.step(
+        &mut writer,
+        &mut reader,
         "sql-commit-when",
         "sql-committed",
         "sql_committed",
     );
     let commit = t.step(
         &mut writer,
+        &mut reader,
         "dolt-commit-when",
         "dolt-committed",
         "dolt_committed",
@@ -1424,8 +1440,9 @@ fn what_a_reader_sees_while_a_writer_deletes_and_reloads() {
 /// `RELOAD_ROWS`.
 const RELOAD_ROWS: i64 = 5;
 
-/// How long the reader is left sampling in each phase.
-const SETTLE: Duration = Duration::from_millis(300);
+/// How many samples wholly inside each phase the reader takes before the
+/// writer moves on.
+const SAMPLES_PER_PHASE: u64 = 3;
 
 /// One thing the reader saw: the phase it was in, and what the bare
 /// table, HEAD and the count at HEAD answered.
@@ -1615,11 +1632,19 @@ impl Scratch {
     /// Poll for a rendezvous file, failing fast if the process that was
     /// supposed to write it has already exited.
     fn await_file(&self, name: &str, child: &mut Child) -> String {
+        self.await_content(name, child, |_| true)
+    }
+
+    /// Poll a rendezvous file until what it says satisfies `done`.
+    fn await_content(&self, name: &str, child: &mut Child, done: impl Fn(&str) -> bool) -> String {
         let path = self.dir.path().join(name);
         let deadline = Instant::now() + Duration::from_secs(120);
         while Instant::now() < deadline {
             if path.exists() {
-                return std::fs::read_to_string(&path).expect("read rendezvous file");
+                let content = std::fs::read_to_string(&path).expect("read rendezvous file");
+                if done(&content) {
+                    return content;
+                }
             }
             if let Some(status) = child.try_wait().expect("try_wait") {
                 panic!("the child exited ({status}) before writing {name}");
@@ -1627,6 +1652,16 @@ impl Scratch {
             std::thread::sleep(Duration::from_millis(25));
         }
         panic!("timed out waiting for {name}");
+    }
+
+    /// Wait until the `watch` reader has taken `SAMPLES_PER_PHASE` samples
+    /// that began and ended inside `phase`.
+    fn await_samples(&self, reader: &mut Child, phase: &str) {
+        self.await_content("sampled", reader, |s| {
+            s.rsplit_once(' ').is_some_and(|(p, n)| {
+                p == phase && n.parse::<u64>().is_ok_and(|n| n >= SAMPLES_PER_PHASE)
+            })
+        });
     }
 
     fn wait(&self, who: &str, child: &mut Child) {
@@ -1651,15 +1686,22 @@ impl Scratch {
         std::fs::write(self.dir.path().join(name), b"go").expect("write go-file");
     }
 
-    /// Have the `hold` writer take one step, then leave the reader
-    /// sampling in the state it left behind. Returns what the writer
-    /// reported for the step.
-    fn step(&self, writer: &mut Child, go: &str, done: &str, phase: &str) -> String {
+    /// Have the `hold` writer take one step, then wait for the reader to
+    /// sample the state it left behind. Returns what the writer reported
+    /// for the step.
+    fn step(
+        &self,
+        writer: &mut Child,
+        reader: &mut Child,
+        go: &str,
+        done: &str,
+        phase: &str,
+    ) -> String {
         self.phase(TRANSITION);
         self.go(go);
         let reported = self.await_file(done, writer);
         self.phase(phase);
-        std::thread::sleep(SETTLE);
+        self.await_samples(reader, phase);
         reported
     }
 
