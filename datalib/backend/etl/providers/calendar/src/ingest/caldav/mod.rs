@@ -196,7 +196,7 @@ pub(crate) async fn reach(
         .unwrap_or("caldav")
         .to_string();
     summary.requests += 1;
-    let listing = dav::propfind(&found.home_url, "1", dav::BODY_LIST_CALENDARS, lk)
+    let listing = dav::list_members(&found.home_url, dav::BODY_LIST_CALENDARS, lk)
         .await
         .map_err(|e| anyhow::anyhow!("list calendars: {e}"))?;
     let calendars = calendars_in(&account_id, &found.home_url, &listing);
