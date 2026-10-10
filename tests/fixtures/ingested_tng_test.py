@@ -1267,6 +1267,25 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "a Facebook person by name, a deleted one by its conversation",
         )
+        # A LinkedIn member is their profile: the connection and the
+        # message sender meet on one `linkedin:` handle, so Riker and Data,
+        # who share no address, are chips too.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT h.handle || '|' || c.name "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'linkedin' AND h.handle LIKE 'linkedin:%' ORDER BY 1;",
+            ),
+            [
+                "linkedin:datasoong|Data Soong",
+                "linkedin:jlpicard|Jean-Luc Picard",
+                "linkedin:wriker|William Riker",
+            ],
+            "a LinkedIn connection and a message sender by their profile",
+        )
         # A Slack mention is a chip link: the viewer resolves the href to
         # the person, and any other markdown viewer shows a link whose
         # title says who it names (docs/dev/plans/chips.md).

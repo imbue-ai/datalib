@@ -251,8 +251,9 @@ LinkedIn connection, a Facebook friend, all written by
 `contact-common`. `contact` is who the row is about, the person or the
 group, and `email` and `phone` are the card's first address and number
 as the source wrote them, a number with or without its country code.
-The grid's Contact column is drawn from the three
-([`chips.md`](chips.md) §"In a grid"). Such a row is its own
+The grid's Contact column is drawn from the three, and from the
+contact's handles in `source_contact_handles` where neither the address
+nor the number makes one ([`chips.md`](chips.md) §"In a grid"). Such a row is its own
 conversation, so `conversation_name` is the contact's name too, and
 `channel` holds the address book or list it is filed in and is the
 only column that does. `author` stays null: nobody wrote a contact.
