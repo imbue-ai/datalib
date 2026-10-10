@@ -1,7 +1,7 @@
 # What a cancel leaves behind, and what the log says about it
 
 **Status: PRs 1 to 4, 6 and 8 landed (#682, #686, #692, #697, #700,
-PR_NUMBER), with the event-tape half of 7; 5 is void, and what is left
+#1171), with the event-tape half of 7; 5 is void, and what is left
 of 7 (`disk_usage` retention) is issue #1158. PRs 3 to 6 and 8 were
 none of them what this doc first said they were — each says so in its
 own section. PRs 6 and 7 last read against the tree 2026-10-10, the
