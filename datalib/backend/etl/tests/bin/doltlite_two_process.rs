@@ -73,6 +73,7 @@ async fn main() -> Result<()> {
 
 /// Open read-write and keep committing until told to stop, so the reader's
 /// whole window is covered by a writer that is actively committing.
+/// `--commits-out` says how many commits it has sealed so far.
 async fn write(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let started = Instant::now();
@@ -128,6 +129,7 @@ async fn write(args: &Args) -> Result<Value> {
     let interval = Duration::from_millis(args.num("interval-ms", 100));
     let max_commits = args.num("max-commits", 0) as usize;
     let txn = Duration::from_millis(args.num("txn-ms", 0));
+    let commits_out = args.opt_path("commits-out");
     let mut commits: Vec<Value> = Vec::new();
     for i in 0..max_commits {
         if until.as_deref().is_some_and(Path::exists) {
@@ -140,11 +142,16 @@ async fn write(args: &Args) -> Result<Value> {
             commit_a_chunk_in_a_held_transaction(&pool, i, txn).await
         };
         match sealed {
-            Ok(hash) => commits.push(json!({
-                "hash": hash,
-                "at_ms": now_ms(),
-                "ms": started.elapsed().as_millis() as u64,
-            })),
+            Ok(hash) => {
+                commits.push(json!({
+                    "hash": hash,
+                    "at_ms": now_ms(),
+                    "ms": started.elapsed().as_millis() as u64,
+                }));
+                if let Some(path) = &commits_out {
+                    write_atomic(path, commits.len().to_string().as_bytes())?;
+                }
+            }
             Err(e) => errors.push(format!("{e:#}")),
         }
         // The terms follow the seal, as `grid_index` would write them: the
@@ -578,7 +585,9 @@ async fn count_on(conn: &mut sqlx::SqliteConnection) -> Result<i64> {
 /// bare table), `dolt_hashof('HEAD')`, and the count at that HEAD through
 /// `dolt_at_`. Each sample is tagged with the phase the test says the
 /// writer is in, read from `--phase-file`, so the test can say what a
-/// reader sees at each point of the writer's pass.
+/// reader sees at each point of the writer's pass. `--sampled-out` says
+/// how many samples so far began and ended in the current phase, so the
+/// test can wait for them rather than for the clock.
 async fn watch(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     // Unpinned on purpose: the working-set count is one of the things
@@ -589,9 +598,11 @@ async fn watch(args: &Args) -> Result<Value> {
     write_atomic(&args.path("ready-out")?, b"ready")?;
     let phase_file = args.path("phase-file")?;
     let until = args.path("until")?;
+    let sampled_out = args.path("sampled-out")?;
     let interval = Duration::from_millis(args.num("interval-ms", 25));
 
     let mut samples: Vec<Value> = Vec::new();
+    let mut whole_in: HashMap<String, u64> = HashMap::new();
     while !until.exists() {
         let phase = std::fs::read_to_string(&phase_file).unwrap_or_default();
         let started = Instant::now();
@@ -634,6 +645,11 @@ async fn watch(args: &Args) -> Result<Value> {
             "pinned": pinned.as_ref().ok(),
             "pinned_error": pinned.as_ref().err(),
         }));
+        if phase == phase_after {
+            let n = whole_in.entry(phase.clone()).or_default();
+            *n += 1;
+            write_atomic(&sampled_out, format!("{phase} {n}").as_bytes())?;
+        }
         tokio::time::sleep(interval).await;
     }
     pool.close().await;
