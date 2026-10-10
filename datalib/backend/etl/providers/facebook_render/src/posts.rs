@@ -4,7 +4,9 @@
 
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{NormalizedChat, NormalizedChatItem, NormalizedDoc};
-use datalib_etl_facebook::ingest::schema_raw::{OTHER_POSTS_TABLE, POSTS_TABLE, POST_EDITS_TABLE};
+use datalib_etl_facebook::ingest::schema_raw::{
+    GROUPS_JOINED_TABLE, GROUP_POSTS_TABLE, OTHER_POSTS_TABLE, POSTS_TABLE, POST_EDITS_TABLE,
+};
 use datalib_etl_render::inputs::Input;
 
 use crate::edits::{histories, version_items, Target, Version};
@@ -69,21 +71,43 @@ impl Body {
 /// Rows as `(row id, record)` from the two post tables and the edits
 /// file. Each post's earlier versions fold in above its text; an edit of
 /// a post the export no longer has is a post of its own.
-pub fn build_posts(
-    posts: &[(String, Value)],
-    other_posts: &[(String, Value)],
-    edits: &[(String, Value)],
-    owner: &Owner,
-) -> Vec<NormalizedChat> {
+pub fn build_posts(rows: &PostRows<'_>, owner: &Owner) -> Vec<NormalizedChat> {
+    let PostRows {
+        posts,
+        other_posts,
+        group_posts,
+        edits,
+        ..
+    } = *rows;
+    let groups = rows.group_names();
     let mut chats: Vec<NormalizedChat> = posts
         .iter()
-        .map(|(id, v)| timeline_post(id, v, owner))
+        .map(|(id, v)| timeline_post(POSTS_TABLE, id, v, owner))
         .collect();
     chats.extend(
         other_posts
             .iter()
             .map(|(id, v)| other_page_post(id, v, owner)),
     );
+    chats.extend(group_posts.iter().map(|(id, v)| {
+        let mut chat = timeline_post(GROUP_POSTS_TABLE, id, v, owner);
+        let group = group_of(v, &groups);
+        if group.is_none() {
+            if let Some(item) = chat.buckets[0].items.last_mut() {
+                item.problems.push(noted(
+                    "title",
+                    "a group post whose group the membership file does not name",
+                ));
+            }
+        }
+        chat.project = Some(group.unwrap_or("Facebook group").to_string());
+        chat.inputs.extend(
+            rows.groups_joined
+                .iter()
+                .map(|(id, _)| Input::new(GROUPS_JOINED_TABLE, id)),
+        );
+        chat
+    }));
 
     let texts: Vec<(String, Option<i64>)> = posts
         .iter()
@@ -92,6 +116,11 @@ pub fn build_posts(
             let text = label_value(v, "Message").and_then(|lv| str_field(lv, "value"));
             (text.unwrap_or("").to_string(), ts_ms(v, "timestamp"))
         }))
+        .chain(
+            group_posts
+                .iter()
+                .map(|(_, v)| (timeline_text(v), ts_ms(v, "timestamp"))),
+        )
         .collect();
     let targets: Vec<Target<'_>> = texts
         .iter()
@@ -122,6 +151,7 @@ pub fn build_posts(
             all(POST_EDITS_TABLE, edits),
             all(POSTS_TABLE, posts),
             all(OTHER_POSTS_TABLE, other_posts),
+            all(GROUP_POSTS_TABLE, group_posts),
         ]
         .concat()
     };
@@ -150,6 +180,44 @@ pub fn build_posts(
 }
 
 const POST_VERSION: &str = "Facebook Post Version";
+
+/// The raw rows the posts feed reads, as `(row id, record)`.
+#[derive(Clone, Copy, Default)]
+pub struct PostRows<'a> {
+    pub posts: &'a [(String, Value)],
+    pub other_posts: &'a [(String, Value)],
+    pub group_posts: &'a [(String, Value)],
+    pub edits: &'a [(String, Value)],
+    /// `groups/your_group_membership_activity.json`: the groups joined,
+    /// by name.
+    pub groups_joined: &'a [(String, Value)],
+}
+
+impl PostRows<'_> {
+    fn group_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .groups_joined
+            .iter()
+            .flat_map(|(_, v)| data_values(v, "name"))
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .collect();
+        // The longest first, so a group named inside another's name is
+        // not taken for it.
+        names.sort_by_key(|n| std::cmp::Reverse(n.len()));
+        names.dedup();
+        names
+    }
+}
+
+/// A group post names its group only in Facebook's sentence about it
+/// ("X posted in Ten Forward Regulars."); the group is the joined one
+/// that sentence names.
+fn group_of<'a>(v: &Value, groups: &[&'a str]) -> Option<&'a str> {
+    let title = str_field(v, "title")?;
+    groups.iter().copied().find(|g| title.contains(g))
+}
 
 fn timeline_text(v: &Value) -> String {
     data_values(v, "post")
@@ -204,9 +272,9 @@ fn edited_post_not_in_export(
     chat
 }
 
-fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
+fn timeline_post(table: &str, row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let inputs = Inputs::default();
-    inputs.read(POSTS_TABLE, row_id);
+    inputs.read(table, row_id);
     let mut body = Body::default();
     for post in data_values(v, "post").filter_map(Value::as_str) {
         body.typed(strip_mentions(post));
@@ -480,7 +548,13 @@ mod tests {
             "data": [{"post": "Tea, Earl Grey, hot."}, {}],
             "title": "Jean-Luc Picard was at Ten Forward.",
         });
-        let chats = build_posts(&[("r1".to_string(), post)], &[], &[], &owner());
+        let chats = build_posts(
+            &PostRows {
+                posts: &[("r1".to_string(), post)],
+                ..Default::default()
+            },
+            &owner(),
+        );
         assert_eq!(chats.len(), 1);
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::Text);
@@ -506,7 +580,13 @@ mod tests {
             }}]}],
             "data": [{"post": "<script>x</script> & co"}],
         });
-        let chats = build_posts(&[("r1".to_string(), post)], &[], &[], &owner());
+        let chats = build_posts(
+            &PostRows {
+                posts: &[("r1".to_string(), post)],
+                ..Default::default()
+            },
+            &owner(),
+        );
         assert_eq!(
             chats[0].buckets[0].items[0].text.as_deref(),
             Some(
@@ -528,7 +608,13 @@ mod tests {
             "data": [{}],
             "title": "Jean-Luc Picard added 2 new photos.",
         });
-        let chats = build_posts(&[("r1".to_string(), post)], &[], &[], &owner());
+        let chats = build_posts(
+            &PostRows {
+                posts: &[("r1".to_string(), post)],
+                ..Default::default()
+            },
+            &owner(),
+        );
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(item.attachments.len(), 2);
@@ -555,7 +641,13 @@ mod tests {
             "data": [{"backdated_timestamp": 5}, {}],
             "title": "Jean-Luc Picard added a life event: Took command",
         });
-        let chats = build_posts(&[("r1".to_string(), post)], &[], &[], &owner());
+        let chats = build_posts(
+            &PostRows {
+                posts: &[("r1".to_string(), post)],
+                ..Default::default()
+            },
+            &owner(),
+        );
         let text = chats[0].buckets[0].items[0].text.as_deref().unwrap();
         assert_eq!(
             text,
@@ -580,7 +672,13 @@ mod tests {
             ],
             "fbid": "400000000000001",
         });
-        let chats = build_posts(&[], &[("400000000000001".to_string(), post)], &[], &owner());
+        let chats = build_posts(
+            &PostRows {
+                other_posts: &[("400000000000001".to_string(), post)],
+                ..Default::default()
+            },
+            &owner(),
+        );
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(
