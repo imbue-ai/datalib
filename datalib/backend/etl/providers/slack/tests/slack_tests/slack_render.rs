@@ -130,9 +130,12 @@ fn renders_tng_fixture_grid_rows() {
         field(thread_row, "conversation_name").as_deref(),
         Some("#bridge")
     );
-    assert!(field(thread_row, "source_url")
-        .unwrap_or_default()
-        .contains("slack.com/archives/C_BRIDGE"));
+    // On the workspace's own host, which `auth.test` named: a bare
+    // slack.com link opens in whichever workspace the browser is in.
+    assert_eq!(
+        field(thread_row, "source_url").as_deref(),
+        Some("https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000100000100")
+    );
 
     // The root message row keeps its own message uuid + index 0.
     let root_msg = rows
@@ -150,9 +153,22 @@ fn renders_tng_fixture_grid_rows() {
         field(root_msg, "uuid").as_deref(),
         Some(picard_thread_uuid.as_str())
     );
-    assert!(field(root_msg, "source_url")
-        .unwrap_or_default()
-        .contains("slack.com/archives/C_BRIDGE"));
+    assert_eq!(
+        field(root_msg, "source_url").as_deref(),
+        Some("https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000100000100")
+    );
+    let reply_uuid = ids::message("slack_api", "T_NCC1701D", "C_BRIDGE", "12604000200.000200").uuid;
+    let reply = rows
+        .iter()
+        .find(|r| field(r, "uuid").as_deref() == Some(&reply_uuid))
+        .expect("the thread's first reply row");
+    assert_eq!(
+        field(reply, "source_url").as_deref(),
+        Some(
+            "https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000200000200\
+             ?thread_ts=12604000100.000100&cid=C_BRIDGE"
+        )
+    );
 
     rows.sort_by_key(|v| {
         (
