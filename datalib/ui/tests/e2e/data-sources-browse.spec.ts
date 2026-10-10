@@ -115,14 +115,14 @@ test("a source's row opens that source, with its type's columns", async ({ page 
   // Every row came from this source, and every row is a document: one
   // per thread, not the messages inside them. Both facts leave one
   // value in their column — Source, Kind — and the adaptive rule drops
-  // a column with one value, so neither is on screen; the channel is,
+  // a column with one value, so neither is on screen; the subject is,
   // and every one of them is a Slack channel or DM. The storage rows sit
   // in this source's directory but are filed under datalib, so a browse
   // of the source is the source's data — see docs/dev/grid_rows.md.
   await expect
     .poll(async () => {
-      const channels = await columnValues(page, "channel");
-      return channels.length > 0 && channels.every((c) => /^[#@]/.test(c.trim()));
+      const subjects = await columnValues(page, "subject_ref");
+      return subjects.length > 0 && subjects.every((c) => /^[#@]/.test(c.trim()));
     })
     .toBe(true);
   await expect(searchHeader(page, "kind")).toHaveCount(0);
@@ -139,10 +139,11 @@ test("a source's row opens that source, with its type's columns", async ({ page 
   expect(await columnValues(page, "kind")).toContain("Slack Message");
   await expect(name).toHaveText(/ documents$/);
 
-  // Slack's preset: a channel and an author, and no Project — Slack has
-  // no such thing, and a column of empty cells is what a preset exists
-  // to prevent.
-  await expect(searchHeader(page, "channel")).toBeVisible();
+  // Slack's preset: the subject (a channel or DM) and an author, and no
+  // Project or Channel — a chat is filed nowhere but its conversation,
+  // and a column of empty cells is what a preset exists to prevent.
+  await expect(searchHeader(page, "subject_ref")).toBeVisible();
+  await expect(searchHeader(page, "channel")).toHaveCount(0);
   await expect(searchHeader(page, "author_ref")).toBeVisible();
   await expect(searchHeader(page, "project")).toHaveCount(0);
 });

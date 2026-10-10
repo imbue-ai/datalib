@@ -24,6 +24,7 @@ import {
   syncStatusView,
 } from "./dashboardSections";
 import { personView } from "./personView";
+import { contactsView } from "./contactsView";
 
 // The names in scope when card source is evaluated (cardSource.ts).
 export const viewLibs: ViewLibs = {
@@ -51,4 +52,5 @@ export const viewLibs: ViewLibs = {
   umapView,
   syncDashboardView,
   personView,
+  contactsView,
 };

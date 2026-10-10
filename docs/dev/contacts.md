@@ -373,6 +373,7 @@ is a 409 with the store's words; a handle that does not parse is a
 |---|---|
 | `POST /resolve` | `{handles}` → `{resolved: {<handle>: NormalizedContact}}`, each handle's contact; a handle nobody holds is absent |
 | `GET /search?q=` | contacts whose name contains `q`, for the popover's typeahead |
+| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle; the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
 | `POST /contacts` | create, with `name`, optional `kind`, and the `handles` to link at once |
 | `GET /contact/{id}` | one contact, working handles first |
 | `POST /link`, `POST /unlink` | one handle to or from a contact |
@@ -456,6 +457,12 @@ Everything is in `datalib/ui/src/cards/`:
   linked offers *Link its other handles to <your contact>* (one link
   per handle; one someone else holds is left alone and says whose it
   is), and an unlinked handle offers *Create contact*.
+- `ContactsCard.ce.vue` (`contactsView()`) is the contacts app's own
+  table: every contact, read live from the app's `GET /contacts`, never
+  through the index, so it needs no sync and shows an edit made
+  anywhere as soon as the `curated` frame arrives. Browse on the app's
+  Manage row opens it. Your contacts are not in the search grid: the
+  index holds what sources render, and nothing renders this store.
 - The grid's Author column is a chip too: `grid_rows.author_handle`
   (which `from:` finds through the search terms) comes with each
   message's row and each reaction's, and
@@ -471,7 +478,7 @@ Everything is in `datalib/ui/src/cards/`:
   the number, by the rule `contact-common::chip_handle` writes the
   members' chips by), and the search list titles such a row with the
   same chip (`SearchList.ce.vue`). Browsing an address book opens on
-  Contact, Phone, Email, Contents (the note first), Touched, Type and
+  Subject (the contact's chip), Phone, Email, Contents (the note first), Touched, Type and
   then Channel (`config/browsePresets.ts`).
 
 A chip ranks what it hears: your contact first, then the source

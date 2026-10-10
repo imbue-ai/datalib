@@ -378,3 +378,15 @@
   border-top: 1px solid var(--datalib-border);
 }
 .slick-menu-content.menu-danger { color: var(--datalib-log-error); }
+
+/* The grid's theme colours every link in a cell as a link; a chip is not
+   one, and keeps chip.css's colours (grey text as the cell's, a linked
+   one's dark on pale blue). */
+.slickgrid-container .grid-canvas .slick-cell a.chip,
+.slickgrid-container .grid-canvas .slick-cell a.chip:visited {
+  color: inherit;
+}
+.slickgrid-container .grid-canvas .slick-cell a.chip.handle-resolved,
+.slickgrid-container .grid-canvas .slick-cell a.chip.handle-resolved:visited {
+  color: var(--datalib-chip-linked-fg, #0b2a5e);
+}

@@ -29,7 +29,7 @@ export type BrowseColumn = keyof SearchRow;
 /// is what tells a live thread from a dead one. Unlike Modified, Touched
 /// is never empty on a row that has a stamp at all. A type can swap the
 /// stamp (`STAMP`) or leave a column out (`OMIT`).
-const ALWAYS: BrowseColumn[] = ["kind", "conversation_name", "snippet", "touched_at"];
+const ALWAYS: BrowseColumn[] = ["kind", "subject_ref", "snippet", "touched_at"];
 
 /// The stamp a type shows in place of `touched_at`.
 const STAMP: Record<string, BrowseColumn> = {
@@ -40,28 +40,29 @@ const STAMP: Record<string, BrowseColumn> = {
 
 /// Extra columns per source type, after `ALWAYS`.
 const EXTRA: Record<string, BrowseColumn[]> = {
-  // Channelled group chat: who said it, and where.
-  slack: ["channel", "author_ref"],
-  whatsapp: ["channel", "author_ref"],
-  signal: ["channel", "author_ref"],
-  beeper: ["channel", "author_ref", "account", "project"],
-  google_takeout: ["channel", "author_ref", "project"],
-  sms_backup_restore: ["channel", "author_ref", "project"],
-  apple_messages: ["channel", "author_ref"],
-  linkedin: ["contact_ref", "email", "channel", "author_ref", "account"],
+  // Chat: who said it. Where is the subject, the conversation.
+  slack: ["author_ref"],
+  whatsapp: ["author_ref"],
+  signal: ["author_ref"],
+  beeper: ["author_ref", "account", "project"],
+  google_takeout: ["author_ref", "project"],
+  sms_backup_restore: ["author_ref", "project"],
+  apple_messages: ["author_ref"],
+  // A connection's row is filed in the connections list, its channel.
+  linkedin: ["email", "channel", "author_ref", "account"],
   // Posts, albums, comments, reactions and friends, all the owner's own:
   // `author` is who wrote it, `account` whose export it is.
-  facebook: ["contact_ref", "author_ref", "account"],
+  facebook: ["author_ref", "account"],
 
-  // Mail: a correspondent and a mailbox.
-  email: ["channel", "author_ref", "account"],
+  // Mail: a correspondent; the thread is the subject.
+  email: ["author_ref", "account"],
   // A calendar and the organizer.
   calendar: ["channel", "author_ref", "account"],
 
   // Assistant chats. `project` is Claude's project name and `org_name`
   // is the owning Anthropic organization — the only provider with one.
   claude: ["project", "org_name", "account", "author_ref"],
-  chatgpt: ["channel", "account", "author_ref"],
+  chatgpt: ["account", "author_ref"],
 
   // Code review: `project` is the repo (GitHub) or the project path
   // (GitLab). Neither has a channel.
@@ -83,18 +84,14 @@ const EXTRA: Record<string, BrowseColumn[]> = {
 /// A type whose browse is not a list of things that say something, so
 /// `ALWAYS` does not fit it: its columns whole, in order.
 const WHOLE: Record<string, BrowseColumn[]> = {
-  // An address book: who, how to reach them, what the card says. The
-  // address book a card is filed in is the channel, last, and shown only
-  // when there is more than one.
-  contacts: ["contact_ref", "phone", "email", "snippet", "touched_at", "kind", "channel"],
+  // An address book: who (the subject, a chip), how to reach them, what
+  // the card says. The address book a card is filed in is the channel,
+  // last, and shown only when there is more than one.
+  contacts: ["subject_ref", "phone", "email", "snippet", "touched_at", "kind", "channel"],
 };
 
 /// Columns of `ALWAYS` a source type leaves out.
-const OMIT: Record<string, BrowseColumn[]> = {
-  // A thread's conversation name is its channel's name again
-  // (`#general`, `@Picard`), so Channel alone says where it is.
-  slack: ["conversation_name"],
-};
+const OMIT: Record<string, BrowseColumn[]> = {};
 
 /// Every source type this file names a preset for. Exists so a test can
 /// check them against the catalog: a key misspelled here is not an
@@ -136,7 +133,7 @@ const DIFF_COLUMNS: BrowseColumn[] = [
   "diff_status",
   "diff_changed_columns",
   "kind",
-  "conversation_name",
+  "subject_ref",
   "snippet",
   "channel",
   "author_ref",
