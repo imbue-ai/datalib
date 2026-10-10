@@ -419,6 +419,7 @@ async fn parse_async(
             });
         }
         out.push(NormalizedChat {
+            named_after: Vec::new(),
             // Each author's address-book entry, read the way their label was.
             contacts: ch
                 .person_jids

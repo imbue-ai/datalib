@@ -266,6 +266,7 @@ fn build_chats(
 
         let conversation = ids::conversation(source_id, &id);
         chats.push(NormalizedChat {
+            named_after: Vec::new(),
             contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,

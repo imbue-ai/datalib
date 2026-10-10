@@ -70,6 +70,7 @@ pub fn to_chats(
             .collect();
 
         chats.push(NormalizedChat {
+            named_after: Vec::new(),
             path_prefix: None,
             id: bundle_key.clone(),
             chat_uuid: chat_id.uuid,

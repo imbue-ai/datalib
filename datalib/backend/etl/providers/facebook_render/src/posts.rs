@@ -233,6 +233,7 @@ fn edited_post_not_in_export(
     edit_inputs: &[Input],
     owner: &Owner,
 ) -> NormalizedChat {
+    named_after: Vec::new(),
     let (shown, earlier) = versions.split_last().expect("a history has a version");
     let inputs = Inputs::default();
     for input in edit_inputs {
@@ -267,6 +268,7 @@ fn edited_post_not_in_export(
 }
 
 fn timeline_post(table: &str, row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
+    named_after: Vec::new(),
     let inputs = Inputs::default();
     inputs.read(table, row_id);
     let mut body = Body::default();
@@ -390,6 +392,7 @@ const OTHER_PAGE_LABELS: &[&str] = &[
 /// A post on someone else's page or profile: the `label_values` shape,
 /// keyed by Facebook's own `fbid`.
 fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
+    named_after: Vec::new(),
     let inputs = Inputs::default();
     inputs.read(OTHER_POSTS_TABLE, row_id);
     let mut body = Body::default();
@@ -486,11 +489,13 @@ fn one_item_chat(
     item: NormalizedChatItem,
     owner: &Owner,
 ) -> NormalizedChat {
+    named_after: Vec::new(),
     for input in &owner.inputs {
         inputs.read(&input.table, &input.id);
     }
     let post = ids::post(&owner.source_id, row_id);
     NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,

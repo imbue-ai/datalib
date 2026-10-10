@@ -137,6 +137,7 @@ fn conversation(
     mut messages: Vec<(&str, &Value)>,
     owner: &Owner,
 ) -> NormalizedChat {
+    named_after: Vec::new(),
     let thread = t.get("thread").unwrap_or(&Value::Null);
     let participants: Vec<&str> = thread
         .get("participants")
@@ -190,6 +191,7 @@ fn conversation(
 
     let chat = ids::conversation(&owner.source_id, row_id);
     NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,

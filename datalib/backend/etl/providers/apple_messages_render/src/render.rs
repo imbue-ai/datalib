@@ -406,6 +406,7 @@ struct Tapback {
 
 impl ChatBuild {
     fn finish(mut self, source_id: &str, period: Period) -> NormalizedChat {
+        named_after: Vec::new(),
         // Tapbacks, in date order: an add lands on its message, a
         // removal takes the same person's same tapback off it again.
         let index: HashMap<String, usize> = self
@@ -460,6 +461,7 @@ impl ChatBuild {
             .or(self.identifier)
             .unwrap_or_else(|| self.guid.clone());
         NormalizedChat {
+            named_after: Vec::new(),
             contacts: Vec::new(),
             inputs: self.inputs.declared(),
             path_prefix: None,

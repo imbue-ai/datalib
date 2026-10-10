@@ -122,6 +122,7 @@ fn build_chat(
     parsed: &ParsedChatGPTApi,
     source_id: &str,
 ) -> NormalizedChat {
+    named_after: Vec::new(),
     let conv = &shredded.conv;
     let conv_id = conv.conversation_id.clone();
 
@@ -220,6 +221,7 @@ fn build_chat(
         .unwrap_or_else(|| "(untitled)".to_string());
     let chat_uuid = ids::conversation(source_id, &conv_id).uuid;
     NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: Vec::new(),
         path_prefix: None,

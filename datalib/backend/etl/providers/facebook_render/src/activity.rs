@@ -342,6 +342,7 @@ fn yearly_chat(
     inputs: Inputs,
     owner: &Owner,
 ) -> NormalizedChat {
+    named_after: Vec::new(),
     groups.sort_by_key(|g| g.at);
     let mut years: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
     for g in groups {
@@ -352,6 +353,7 @@ fn yearly_chat(
     }
     let feed = ids::feed(&owner.source_id, id);
     NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,
