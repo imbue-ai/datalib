@@ -67,6 +67,7 @@ fn one_thread(
             scan_elapsed: None,
         },
         unparsed: Vec::new(),
+        emls: None,
     }
 }
 
