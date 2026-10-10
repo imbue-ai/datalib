@@ -14,6 +14,7 @@ pub enum GridColumn {
     SourceRef,
     Kind,
     ConversationName,
+    SubjectRef,
     Project,
     Channel,
     CreatedAt,
@@ -54,6 +55,12 @@ impl View for GridColumn {
             GridColumn::SourceRef => same(G::SourceId),
             GridColumn::Kind => same(G::Kind),
             GridColumn::ConversationName => (
+                SortBy::Column(G::ConversationName),
+                Some(G::ConversationUuid),
+            ),
+            // The Subject cell is an identity, the conversation's name or
+            // a card's chip: sorted by the name, kept to its conversation.
+            GridColumn::SubjectRef => (
                 SortBy::Column(G::ConversationName),
                 Some(G::ConversationUuid),
             ),
@@ -137,6 +144,7 @@ mod tests {
                 ("project", none, "project", true),
                 ("org_name", none, "org_name", false),
                 ("channel", none, "channel", false),
+                ("subject", &["conversation"], "conversation_name", false),
                 ("convo", none, "conversation_uuid", true),
                 ("source_id", none, "source_id", false),
                 ("notion_page", none, "notion_page_uuid", true),

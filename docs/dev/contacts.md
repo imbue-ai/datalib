@@ -473,7 +473,7 @@ Everything is in `datalib/ui/src/cards/`:
   members' chips by, else any handle the index holds for the contact in
   `source_contact_handles`, read beside the row), and the search list titles such a row with the
   same chip (`SearchList.ce.vue`). Browsing an address book opens on
-  Contact, Phone, Email, Contents (the note first), Touched, Type and
+  Subject (the contact's chip), Phone, Email, Contents (the note first), Touched, Type and
   then Channel (`config/browsePresets.ts`).
 
 A chip ranks what it hears: your contact first, then the source
