@@ -57,6 +57,16 @@ async fn run(playback: &Path, store: &Path) -> FetchSummary {
 }
 
 async fn run_in(playback: &Path, store: &Path, window: Option<Window>) -> FetchSummary {
+    try_run_in(playback, store, window)
+        .await
+        .expect("google fetch under playback")
+}
+
+async fn try_run_in(
+    playback: &Path,
+    store: &Path,
+    window: Option<Window>,
+) -> anyhow::Result<FetchSummary> {
     std::env::set_var(PLAYBACK_ENV, playback);
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
     let summary = google::fetch(google::FetchOptions {
@@ -74,7 +84,7 @@ async fn run_in(playback: &Path, store: &Path, window: Option<Window>) -> FetchS
     }
     db.close().await;
     std::env::remove_var(PLAYBACK_ENV);
-    summary.expect("google fetch under playback")
+    summary
 }
 
 async fn ids(store: &Path) -> Vec<String> {
@@ -498,4 +508,79 @@ async fn a_calendar_the_list_no_longer_names_goes_with_its_events() {
         "{second:?}"
     );
     assert!(ids(&store).await.is_empty());
+}
+
+async fn calendar_count(store: &Path) -> i64 {
+    let db = RawDb::open(&db_path_for(store)).await.unwrap();
+    let n = sqlx::query_scalar("SELECT count(*) FROM calendars")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+    n
+}
+
+/// The account's list may delete a calendar it does not name only if it
+/// could read every entry. A reply with no `items` read as an account
+/// with no calendars, and an entry with no `id` was skipped; either way
+/// every calendar it did not name went with its events (#991). Now the
+/// first fails the run and the second keeps every calendar, each
+/// deleting nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_calendar_list_it_cannot_fully_read_deletes_no_calendar() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, three, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("three"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    calendar_list(&one);
+    let away = json!({"id": "away01", "status": "confirmed", "summary": "Away mission: Rigel VII",
+        "start": {"dateTime": "2026-10-01T08:00:00-07:00"}, "end": {"dateTime": "2026-10-01T18:00:00-07:00"}});
+    fixture(
+        &one,
+        &events_url(PRIMARY, None, None),
+        page(json!([]), None, Some("s1")),
+    );
+    fixture(
+        &one,
+        &events_url(AWAY, None, None),
+        page(json!([away]), None, Some("a1")),
+    );
+    fixture(
+        &two,
+        &calendar_list_url(None),
+        json_response(&json!({"kind": "calendar#calendarList"})),
+    );
+    fixture(
+        &three,
+        &calendar_list_url(None),
+        json_response(&json!({"kind": "calendar#calendarList", "items": [
+            {"id": PRIMARY, "summary": PRIMARY, "primary": true, "accessRole": "owner"},
+            {"summary": "Away team", "accessRole": "reader"}
+        ]})),
+    );
+    fixture(
+        &three,
+        &events_url(PRIMARY, Some("s1"), None),
+        page(json!([]), None, Some("s1")),
+    );
+
+    run(&one, &store).await;
+    let stored = ids(&store).await;
+    assert_eq!(stored, vec![format!("{AWAY}#away01")]);
+    assert_eq!(calendar_count(&store).await, 2);
+
+    let second = try_run_in(&two, &store, None).await;
+    assert!(second.is_err(), "{second:?}");
+    assert_eq!(calendar_count(&store).await, 2);
+    assert_eq!(ids(&store).await, stored);
+
+    let third = run(&three, &store).await;
+    assert_eq!(third.events_deleted, 0, "{third:?}");
+    assert_eq!(calendar_count(&store).await, 2);
+    assert_eq!(ids(&store).await, stored);
+    assert_eq!(problem_keys(&store).await, vec!["listing:calendars"]);
 }

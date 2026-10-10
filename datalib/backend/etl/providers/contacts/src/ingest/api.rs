@@ -117,6 +117,14 @@ pub async fn propfind(
     webdav::propfind(HTTP_SERVICE, url, depth, body, latchkey).await
 }
 
+pub async fn list_members(
+    url: &str,
+    body: &str,
+    latchkey: &LatchkeySettings,
+) -> Result<Multistatus, DavError> {
+    webdav::list_members(HTTP_SERVICE, url, body, latchkey).await
+}
+
 // vCard utility helpers
 
 /// Split a `.vcf` body into individual `BEGIN:VCARD…END:VCARD`
