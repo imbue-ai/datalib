@@ -36,6 +36,7 @@ async fn fetch_with_headers(path: &str) -> (StatusCode, axum::http::HeaderMap, S
         // is in.
         usage: Default::default(),
         newer_root: Vec::new(),
+        shutting_down: Default::default(),
         applets: Arc::new(datalib_http::applets::AppletRegistry::build(
             Vec::new(),
             (*root).clone(),

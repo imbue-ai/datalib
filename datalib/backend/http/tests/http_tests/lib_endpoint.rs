@@ -86,6 +86,7 @@ async fn app_for(root: &Path) -> axum::Router {
         // is in.
         usage: Default::default(),
         newer_root: Vec::new(),
+        shutting_down: Default::default(),
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::build(Vec::new(), (*root).clone(), None)),
     })

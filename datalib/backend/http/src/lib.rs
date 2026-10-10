@@ -90,6 +90,36 @@ pub struct AppState {
     /// store is open, no loop runs, and `app_ready` is false
     /// (`datalib_store_meta::guard`).
     pub newer_root: Vec<datalib_store_meta::NewerBuild>,
+    /// Fired when the server starts shutting down; see [`ShuttingDown`].
+    pub shutting_down: ShuttingDown,
+}
+
+/// Set when the server begins shutting down. Graceful
+/// shutdown waits for every response to finish, and a response that
+/// never ends on its own — the `/api/sync/stream` tail every open tab
+/// holds — ends on this instead, so the wait is over in milliseconds
+/// and the applets and the loop's steps get stopped properly.
+#[derive(Clone)]
+pub struct ShuttingDown(Arc<tokio::sync::watch::Sender<bool>>);
+
+impl Default for ShuttingDown {
+    fn default() -> Self {
+        Self(Arc::new(tokio::sync::watch::channel(false).0))
+    }
+}
+
+impl ShuttingDown {
+    pub fn fire(&self) {
+        self.0.send_replace(true);
+    }
+
+    /// Resolves once [`Self::fire`] has been called, however long before.
+    pub fn fired(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let mut rx = self.0.subscribe();
+        async move {
+            let _ = rx.wait_for(|down| *down).await;
+        }
+    }
 }
 
 impl AppState {
@@ -1832,6 +1862,7 @@ async fn sync_stream(
             }
         }
     });
+    let stream = futures::StreamExt::take_until(stream, s.shutting_down.fired());
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 

@@ -167,8 +167,12 @@ async fn main() -> anyhow::Result<()> {
     // on the way out.
     let applets = state.applets.clone();
     let sync = state.sync.clone();
+    let shutting_down = state.shutting_down.clone();
     axum::serve(listener, router(state))
-        .with_graceful_shutdown(terminated(signals, parent_gone))
+        .with_graceful_shutdown(async move {
+            terminated(signals, parent_gone).await;
+            shutting_down.fire();
+        })
         .await?;
     tracing::info!("datalib-http: shutting down, stopping applets and syncs");
     applets.shutdown();
@@ -183,10 +187,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Graceful shutdown waits for every open connection to end, and the
-/// `/api/sync/stream` SSE tail a browser tab holds never does on its own
-/// (the UI reconnects when it drops). So a shutdown that is still running
-/// this long after its cause is a hang, and the process exits instead.
+/// Graceful shutdown waits for every open connection to end. The
+/// `/api/sync/stream` tail an open tab holds ends on `ShuttingDown`, so
+/// one still open this long after the cause is something else stuck — a
+/// request that never finished arriving, a hung proxied call — and the
+/// process exits instead. Exiting here skips stopping the applets and
+/// the loop's steps; they notice their parent pipe close.
 const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
 /// How much of [`SHUTDOWN_DEADLINE`] the loop gets to see its steps go.
 const SYNC_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
