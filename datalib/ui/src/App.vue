@@ -10,7 +10,7 @@ import NewerRootView from "@/views/NewerRootView.vue";
 import UpgradingView from "@/views/UpgradingView.vue";
 import RerenderDialog from "@/components/RerenderDialog.vue";
 import { fetchConfig, openRequest, type ConfigResponse } from "@/api";
-import { subscribeLive } from "@/live";
+import { newestAnswer, subscribeLive } from "@/live";
 import CommandBox from "@/components/CommandBox.vue";
 import LibraryCrumb from "@/components/LibraryCrumb.vue";
 import { isDesktopApp } from "@/desktop";
@@ -53,27 +53,23 @@ watch(
 );
 
 /// Only the newest answer is kept: an older "not ready" landing after a
-/// newer "ready" would put the gate up over a config that is fine.
-let asked = 0;
-async function refresh() {
-  const mine = ++asked;
-  let next: ConfigResponse | null = null;
-  try {
-    next = await fetchConfig();
-  } catch {
-    next = null;
-  }
-  if (mine !== asked) return;
-  config.value = next;
-  checked.value = true;
-}
+/// newer "ready" would put the gate up over a config that is fine. One
+/// fetch at a time: a launch's migrate pass sends an `upgrade_changed`
+/// per step, milliseconds apart.
+const refresh = newestAnswer(
+  () => fetchConfig().catch(() => null),
+  (next) => {
+    config.value = next;
+    checked.value = true;
+  },
+);
 
 // Initializing just wrote the config, so drop the gate on the click
 // rather than on the round trip after it — `refresh` then replaces this
 // guess with the truth, and `config_changed` would have anyway.
 function onInitialized() {
   if (config.value) config.value = { ...config.value, exists: true, app_ready: true };
-  void refresh();
+  refresh();
 }
 
 // The launch's re-render offer, asked once per page: a launch of the
@@ -94,12 +90,12 @@ async function onRerender(yes: boolean) {
 
 let stop: (() => void) | null = null;
 onMounted(() => {
-  void refresh();
+  refresh();
   stop = subscribeLive({
     root: (e) => {
-      if (e.kind === "config_changed" || e.kind === "upgrade_changed") void refresh();
+      if (e.kind === "config_changed" || e.kind === "upgrade_changed") refresh();
     },
-    resync: () => void refresh(),
+    resync: refresh,
   });
 });
 onUnmounted(() => stop?.());
