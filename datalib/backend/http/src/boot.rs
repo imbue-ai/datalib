@@ -60,6 +60,7 @@ pub async fn build_state(
             api_token,
             usage: Arc::new(usage::UsageMonitor::new()),
             newer_root,
+            shutting_down: Default::default(),
         });
     }
 
@@ -142,6 +143,7 @@ pub async fn build_state(
         api_token,
         usage: monitor,
         newer_root: Vec::new(),
+        shutting_down: Default::default(),
     })
 }
 

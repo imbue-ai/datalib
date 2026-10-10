@@ -46,6 +46,7 @@ async fn post_feedback_inserts_row() {
         // is in.
         usage: Default::default(),
         newer_root: Vec::new(),
+        shutting_down: Default::default(),
         // These endpoints must keep working in a data root that
         // declares no applets, which is every data root by default.
         applets: Arc::new(datalib_http::applets::AppletRegistry::build(
