@@ -22,7 +22,9 @@
                                                   on one; written only by the
                                                   `datalib_contacts` applet
 <data_root>/system/feedback.doltlite_db           filed feedback
-<data_root>/system/usage.doltlite_db              bytes-on-disk over time
+<data_root>/system/disk_stats.sqlite              bytes on disk, and free space on
+                                                  the disk, over time (plain SQLite;
+                                                  any sqlite3 opens it)
 <data_root>/system/remote_media.doltlite_db       what remote media a person let a document
                                                   load, and the URLs fetched for it
 <data_root>/system/remote_media/<sha256>          the download CAS those URLs' bytes land in
@@ -101,6 +103,7 @@ Who writes which line of it, how to add one, and how to read it is
 
 ## The three stores `datalib-http` owns
 
+Feedback and remote media are doltlite; disk stats is plain SQLite.
 `datalib-http` opens each through `sqlx::sqlite::SqlitePool` and wraps
 them in `AppStore` (`datalib/backend/core/src/app_store.rs`), the
 implementation of the `AppRepo` trait in `repo.rs`. The same pool serves
@@ -120,10 +123,10 @@ is why feedback has a file of its own with one writer. The row's `git_hash` is t
 commit as `datalib_runtime::build_id::git_hash` finds it at run time
 ([`logging.md`](logging.md) § "Every line has an author").
 
-**Usage** is the one store nothing ever commits. It is a timeseries —
-`datalib-http` walks the root every five seconds *while a run holds it*
-and appends a row per tree whose size moved — so the rows *are* the
-history. Between runs nothing writes the root, so the series
+**Disk stats** is plain SQLite, because nothing ever committed it: it
+is a timeseries — `datalib-http` walks the root every five seconds
+*while a run holds it* and appends a row per tree whose size moved — so
+the rows *are* the history. Between runs nothing writes the root, so the series
 deliberately has no samples there, and a change made from outside
 datalib carries the instant it was next *measured*. Reading it is
 `SELECT path, measured_at_utc, bytes FROM disk_usage`; it is compacted
@@ -132,7 +135,11 @@ value forward rather than assuming a fixed interval. Beside it,
 `disk_free` holds the free space on the root's disk, looked at every ten
 seconds whether or not a run is going and recorded when it moves by
 10 MB or more (`SELECT measured_at_utc, available_bytes, total_bytes
-FROM disk_free`).
+FROM disk_free`). A root from before this store kept both tables in the
+doltlite `system/usage.doltlite_db`; the first open by a newer build
+copies its rows across and removes it, or, if it cannot read it, logs
+that at ERROR and tries again next time
+(`core/src/app_store_migrate.rs`).
 
 **Remote media.** A rendered document's images on remote
 hosts are held back by the UI until a person lets them load, because

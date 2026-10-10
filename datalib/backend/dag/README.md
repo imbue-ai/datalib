@@ -243,8 +243,8 @@ can read lower than Finder. A disk that cannot be measured holds
 nothing back, and says so once at ERROR. The floor is part of the
 graph, so an edit to it reaches a loop already running. The app's
 status bar draws the same number beside the root's size and raises a
-toast while the steps are held, and keeps the samples in the usage
-store's `disk_free` table (`http/src/disk_free.rs`).
+toast while the steps are held, and keeps the samples in
+`system/disk_stats.sqlite`'s `disk_free` table (`http/src/disk_free.rs`).
 
 ## Upgrading a root
 

@@ -396,7 +396,7 @@ number exists. The amalgamation could walk a table's chunks
 (`doltlite_chunk_walk.c`), but none of that is exposed to SQL.
 
 **Scope is `<name>/ingest`, not the whole tree.** `render_markdown` is
-datalib's own output, `system/usage.doltlite_db` already tracks it per
+datalib's own output, `system/disk_stats.sqlite` already tracks it per
 step, and measuring it from inside the thing that writes it would grow
 the store it just measured on every run.
 
@@ -415,6 +415,5 @@ field* idea in another shape: the bytes are signal, so they are
 
 So read `byte_size` on a storage row as **how big the raw store was
 the last time this source's contents changed**, not as how big it is
-now. For bytes on their own cadence, `system/usage.doltlite_db` keeps a
-per-step series and commits nothing, which is what lets it sample
-freely.
+now. For bytes on their own cadence, `system/disk_stats.sqlite` keeps a
+per-step series in plain SQLite, which is what lets it sample freely.
