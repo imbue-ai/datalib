@@ -12,7 +12,8 @@ use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::ENTITY_KIND_CONVERSATION;
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, Recipient, RecipientRole,
+    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, NormalizedReaction, Recipient,
+    RecipientRole,
 };
 use datalib_etl_chat_common::{RecordStampPrecision, RenderProfile, TextFormat};
 use datalib_etl_contact_common::{ContactDoc, ContactRenderProfile};
@@ -140,7 +141,8 @@ fn riker_email() -> NormalizedChat {
     )
 }
 
-/// Worf asks Data, by an @-mention, for a diagnostic.
+/// Worf asks Data, by an @-mention, for a diagnostic; Q, whom the
+/// source knows by name alone, reacts.
 fn worf_slack() -> NormalizedChat {
     let mut item = message(
         "worf-slack",
@@ -150,6 +152,14 @@ fn worf_slack() -> NormalizedChat {
         "@Data, run a level-one diagnostic on the warp core.",
     );
     item.mentions = vec![slack_user("U0000002")];
+    item.reactions = vec![NormalizedReaction {
+        reaction_uuid: "q-reaction".into(),
+        reactor_handle: None,
+        reactor_display: "Q".into(),
+        emoji: "🫡".into(),
+        date_ms: Some(T0 + 2 * HOUR),
+        source_ref: None,
+    }];
     chat("bridge-thread", "#bridge", None, item)
 }
 
@@ -398,36 +408,59 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ("cc:troi", vec!["riker-email"]),
         ("recipient:troi", vec!["riker-email"]),
         ("mention:slack:T1701/U0000002", vec!["worf-slack"]),
-        // with: is any role on a message, or who a card is about.
-        ("with:picard", vec!["picard-card", "riker-email"]),
+        // with: is any role on a message, taking part in a conversation
+        // (on its document's own row), or who a card is about.
+        (
+            "with:picard",
+            vec!["picard-card", "riker-email", "riker-thread"],
+        ),
         (
             "with:picard@enterprise.org",
-            vec!["picard-card", "riker-email"],
+            vec!["picard-card", "riker-email", "riker-thread"],
         ),
         (
             r#"with:"Jean-Luc Picard""#,
-            vec!["picard-card", "riker-email"],
+            vec!["picard-card", "riker-email", "riker-thread"],
         ),
-        ("with:troi", vec!["riker-email"]),
+        ("with:troi", vec!["riker-email", "riker-thread"]),
         // The middle of a word, in the card's name and the email's To
         // handle alike.
-        ("with:icard", vec!["picard-card", "riker-email"]),
+        (
+            "with:icard",
+            vec!["picard-card", "riker-email", "riker-thread"],
+        ),
         // Troi has no card: the email itself showed her address under
         // that name.
-        (r#"with:"Deanna Troi""#, vec!["riker-email"]),
+        (r#"with:"Deanna Troi""#, vec!["riker-email", "riker-thread"]),
+        // So a document search finds the conversations someone was in,
+        // whatever their role: Picard addressed, Troi copied, Data only
+        // mentioned.
+        (
+            "is:document with:picard",
+            vec!["picard-card", "riker-thread"],
+        ),
+        ("is:document with:troi", vec!["riker-thread"]),
+        (
+            "is:document with:slack:T1701/U0000002",
+            vec!["bridge-thread"],
+        ),
+        // A reactor takes part too, by name where the source has no handle.
+        (r#"is:document with:"Q""#, vec!["bridge-thread"]),
         // The card's second address is in its `about` terms and nowhere
         // else; the email column holds only the first.
         ("with:jean-luc@chateau-picard.example", vec!["picard-card"]),
         // A group's card is about the group: its members are not its
         // terms, so with:troi above does not find it.
         (r#"with:"Senior Staff""#, vec!["senior-staff-card"]),
-        // Any person at all. A thread's own row has none: its people
-        // are on its messages.
+        // Any person at all: every row here has one.
         (
             "with:*",
             vec![
+                "bridge-thread",
                 "picard-card",
+                "q-reaction",
                 "riker-email",
+                "riker-thread",
                 "senior-staff-card",
                 "worf-slack",
             ],
@@ -436,7 +469,7 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
             "-with:picard",
             vec![
                 "bridge-thread",
-                "riker-thread",
+                "q-reaction",
                 "senior-staff-card",
                 "worf-slack",
             ],
@@ -444,14 +477,20 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ("label:away", vec!["riker-email"]),
         (r#"label:"Away Missions""#, vec!["riker-email"]),
         // A pasted address with no key is looked up as a handle in every
-        // role. The mailbox's account is a `name` term, not a handle, so
-        // riker-thread is not found.
-        ("picard@enterprise.org", vec!["picard-card", "riker-email"]),
+        // role: the thread finds it as a participant. The mailbox's
+        // account is a `name` term, not a handle, and plays no part.
+        (
+            "picard@enterprise.org",
+            vec!["picard-card", "riker-email", "riker-thread"],
+        ),
         // A column key is the whole value as stored, case and all: unlike
         // the terms keys, never in part and never case-blind.
         ("kind:Email", vec!["riker-email"]),
         (r#"kind:"Email Thread""#, vec!["riker-thread"]),
-        ("channel:#bridge", vec!["bridge-thread", "worf-slack"]),
+        (
+            "channel:#bridge",
+            vec!["bridge-thread", "q-reaction", "worf-slack"],
+        ),
         (
             r#"channel:"Address Book""#,
             vec!["picard-card", "senior-staff-card"],

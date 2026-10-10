@@ -38,7 +38,9 @@ impl TermsKey {
             Kinds::AnyPerson => Kind::VARIANTS
                 .iter()
                 .copied()
-                .filter(|k| k.is_person() || matches!(k, Kind::Author | Kind::About))
+                .filter(|k| {
+                    k.is_person() || matches!(k, Kind::Author | Kind::About | Kind::Participant)
+                })
                 .collect(),
         }
     }
