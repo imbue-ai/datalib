@@ -37,7 +37,9 @@ your_facebook_activity/
   posts/your_posts__check_ins__photos_and_videos_1.json
   posts/your_uncategorized_photos.json
   posts/your_videos.json
-  messages/…              (settings only, on the account we have)
+  messages/inbox/<name>_<id>/message_1.json, photos/…
+  messages/filtered_threads/…, message_requests/…, e2ee_cutover/…
+  messages/stickers_used/…, messaging_settings.json, …
 ```
 
 Three record shapes recur across the files:
@@ -58,13 +60,27 @@ Three record shapes recur across the files:
   `media` list instead of a `value`, some nesting a `dict` list under a
   `title`. These records carry Facebook's own id in `fbid`.
 - **One object** (`album/0.json`, `profile_information.json`).
+- **A Messenger conversation**, `messages/<folder>/<dir>/message_<n>.json`:
+  `participants[{name}]`, `title`, `thread_path`, `is_still_participant`
+  (and `is_pending` in `message_requests/`, `joinable_mode` in some
+  groups), and `messages[]`, **newest first**. A message has a
+  `sender_name` and a `timestamp_ms` — milliseconds, where every other
+  file counts seconds — and any of `content`, `photos[{uri}]`,
+  `share{link, share_text}`, `sticker{uri}`, `reactions[{actor,
+  reaction, timestamp?}]` and `is_unsent`. Nothing in it has an id. The
+  folder is where Facebook filed the conversation: `inbox`,
+  `filtered_threads` (what it took for spam), `message_requests`,
+  `e2ee_cutover` (moved to end-to-end encryption). The directory is the
+  other side's name squashed to lowercase, `_`, and the conversation's
+  id (`williamriker_1000000001`); a deleted account's is
+  `facebookuser_<id>`, or the bare id when the export names nobody.
 
 Every `media` object names its file by an export-relative `uri`
 (`your_facebook_activity/posts/media/…`) and carries a
 `creation_timestamp`, an optional `title` (an album photo's title is the
 album's name) and an optional `description` (the caption).
 
-Two things every file does that a reader has to know:
+Three things every file does that a reader has to know:
 
 - **Non-ASCII text is mis-encoded.** Facebook writes each UTF-8 *byte* as
   its own `\u00XX` escape, so ✊ arrives as `â`. The
@@ -74,6 +90,9 @@ Two things every file does that a reader has to know:
   as UTF-8, which leaves correct text — and genuine latin-1 — alone.
 - **A tagged person is markup.** `@[<id>:2048:<Name>]` in a caption or
   description; render shows the name.
+- **A person is a name.** No file gives a person an id. An account
+  deleted since is written `Facebook user` or as an empty name, and a
+  group can hold several of them, indistinguishable.
 
 ## What ingest does
 
@@ -86,8 +105,22 @@ chunk belongs in the one table
 `your_facebook_activity_posts_album`). Each record is one row: `id` is
 the record's `fbid` when it has one, else a uuidv5 over the table and
 the record's canonical JSON; `payload` is the record. `schema_raw.rs`
-names the seven tables render reads and pins each to the path it comes
-from.
+names the tables render reads and pins each to the path it comes from.
+
+Messenger is the exception (`ingest/messenger.rs`): every conversation
+lands in two tables, not a table each. `messenger_threads` has a row
+per conversation, keyed by the digits its directory ends in, holding
+`{thread_id, folder, thread}` — the file without its messages.
+`messenger_messages` has a row per message, keyed
+`<thread id>:<timestamp_ms>:<n>`, holding `{thread_id, message}`; `n`
+counts messages of one millisecond from the oldest, so a key stays put
+as newer messages arrive. A message's media edges are its own.
+
+A store written before the Messenger tables held each conversation file
+as one row of a table named for its path. Rung 1 of `schema_raw::LADDER`
+splits those rows into the two tables, moves each media edge (and the
+bytes it names) to the message that sent the file, and drops the old
+tables.
 
 The whole run is one snapshot in one transaction: every row is upserted,
 then every row of each table the export no longer holds is deleted. A
@@ -151,8 +184,8 @@ that the next run which reads the thing clears:
 
 ## What render does
 
-One open of the store per pass, loading the seven tables and diffing
-them against the render cursor, then five feeds:
+One open of the store per pass, loading the nine tables and diffing
+them against the render cursor, then six feeds:
 
 | feed | table | one document per |
 |---|---|---|
@@ -160,7 +193,8 @@ them against the render cursor, then five feeds:
 | albums | `…posts_album` | album: the description first, then every photo in creation order, captioned where the photo has one of its own |
 | comments | `…comments_and_reactions_comments` | year: the comment, with Facebook's sentence about it in italics beneath, and any photo attached |
 | reactions | `…comments_and_reactions_likes_and_reactions` | year: `👍 X liked Y's post.`, the URL as the header's `↗` |
-| friends | `connections_friends_your_friends` | friend, as a contact in one "Friends" group with a "Friends since" field |
+| friends | `connections_friends_your_friends` | friend, as a contact in one "Friends" group with a "Friends since" field, and their name as their handle |
+| Messenger | `messenger_threads` + `messenger_messages` | year of a conversation: each message with its photos, sticker, shared link (`🔗`) and reactions; an unsent one as a note. The project says which folder (`Messenger`, `Messenger · requests`, …) |
 
 Comments and reactions are bucketed by year because the export does not
 say which post they were left on in any form we can resolve: a comment
@@ -181,17 +215,49 @@ full name; every item is written under the full name. Every document
 declares the profile row beside its own, so a name change re-renders
 everything, which is what it should do.
 
+A person on Messenger is their name, written as a `facebook:name/`
+handle; a friend carries the same one, so the contacts app finds them
+as one person. An account deleted since (`Facebook user`, or an empty
+name) is `facebook:deleted/<conversation id>` where the conversation
+lists it as its one deleted account, the case of a one-to-one
+conversation. Where a group lists several, each message and reaction
+from one says `Facebook user (one of N deleted accounts here)` and has
+no handle: nothing in the export tells them apart.
+`docs/dev/contacts.md` has the handle's rules.
+
+### What render reports
+
+Facebook adds fields without notice, and a field render does not read
+would otherwise vanish without a word. So render checks every Messenger
+message and conversation, every post (both shapes) and every comment
+against the keys it reads, and each key it does not read is a warning
+row in `problems`, on the document and at the item's own section
+(`item_uuid`), with the field, its JSON pointer and — never the value —
+its shape: `int`, `string(12 chars)`, `object{a,b}`. A `label_values`
+entry whose label render does not use is `label_values:<label>`. Beside
+those:
+
+| row | severity | means |
+|---|---|---|
+| `timestamp_ms`, `CoercionFailed` | warning | a message with no usable time |
+| `uri` / `reaction`, `UncoveredType` | warning | a media entry with no file, a reaction with no emoji |
+| `is_geoblocked_for_viewer`, `is_unsent_image_by_messenger_kid_parent` | warning | the export withholds the message |
+| `message`, `Noted` | info | a message with nothing to show; the sample lists its keys |
+| `participants`, `Noted` | info | several deleted accounts in one conversation |
+| `sender_name`, `Noted` | info | a sender the participants do not list, once per sender |
+
+Counting them over a real export says what to build next:
+
+```sh
+datalib-doltlite -readonly <root>/unified_index/grid_index/db.doltlite_db \
+  "SELECT severity, field, sample, count(*) FROM problems
+   WHERE source_id = '<the source id>' GROUP BY 1,2,3 ORDER BY 4 DESC"
+```
+
 `RENDER_VERSION` is in `facebook_render/src/common.rs`.
 
 ## Not built
 
-- **Messenger.** `your_facebook_activity/messages/inbox/<thread>/
-  message_1.json` is the most valuable part of a real account's export
-  and the test account has none: its `messages/` holds settings files
-  only. The files are mirrored to the raw store like any other JSON, but
-  nothing renders them, and no shape is pinned here because none has
-  been seen. Building it wants an export from an account that has
-  actually sent a message.
 - Photos and videos outside posts and albums
   (`your_uncategorized_photos.json`, `your_videos.json`), places, search
   history: in the raw store, not rendered.

@@ -1,6 +1,6 @@
 //! The render wave for the `facebook` source: one read of the raw store,
-//! then five feeds — posts, albums, comments, reactions, friends — each
-//! rendered through the shared chat or contact renderer.
+//! then six feeds — posts, albums, comments, reactions, Messenger,
+//! friends — each rendered through the shared chat or contact renderer.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -14,8 +14,8 @@ use datalib_etl_chat_common::render::render_all as chat_render_all;
 use datalib_etl_chat_common::types::NormalizedChat;
 use datalib_etl_contact_common::{render_all as contact_render_all, ContactDoc};
 use datalib_etl_facebook::ingest::schema_raw::{
-    ALBUMS_TABLE, COMMENTS_TABLE, FRIENDS_TABLE, OTHER_POSTS_TABLE, POSTS_TABLE, PROFILE_TABLE,
-    REACTIONS_TABLE,
+    ALBUMS_TABLE, COMMENTS_TABLE, FRIENDS_TABLE, MESSENGER_MESSAGES_TABLE, MESSENGER_THREADS_TABLE,
+    OTHER_POSTS_TABLE, POSTS_TABLE, PROFILE_TABLE, REACTIONS_TABLE,
 };
 use datalib_etl_facebook::ingest::{db_path_for, RawDb};
 use datalib_etl_facebook_config::FacebookRenderConfig;
@@ -28,6 +28,7 @@ use crate::activity::{build_comments, build_reactions, comments_profile, reactio
 use crate::albums::{albums_profile, build_albums};
 use crate::common::{str_field, RENDER_VERSION};
 use crate::friends::{build_friends, friends_profile};
+use crate::messenger::{build_conversations, messenger_profile};
 use crate::posts::{build_posts, posts_profile};
 
 pub fn plan_render(
@@ -113,6 +114,8 @@ const ALL_TABLES: &[&str] = &[
     REACTIONS_TABLE,
     FRIENDS_TABLE,
     PROFILE_TABLE,
+    MESSENGER_THREADS_TABLE,
+    MESSENGER_MESSAGES_TABLE,
 ];
 
 /// Everything one pass reads off the store, built while it is open.
@@ -122,6 +125,7 @@ struct Loaded {
     albums: Vec<NormalizedChat>,
     comments: Vec<NormalizedChat>,
     reactions: Vec<NormalizedChat>,
+    conversations: Vec<NormalizedChat>,
     friends: Vec<ContactDoc>,
     /// Per chat id, the media bytes its attachments reference.
     blobs: HashMap<String, BlobBundle>,
@@ -166,10 +170,21 @@ pub fn render_source(
             let mut albums = build_albums(rows(ALBUMS_TABLE), &owner);
             let mut comments = build_comments(rows(COMMENTS_TABLE), &owner);
             let mut reactions = build_reactions(rows(REACTIONS_TABLE), &owner);
+            let mut conversations = build_conversations(
+                rows(MESSENGER_THREADS_TABLE),
+                rows(MESSENGER_MESSAGES_TABLE),
+                &owner,
+            );
             let mut friends = build_friends(rows(FRIENDS_TABLE), &owner);
 
             let mut buckets = Buckets::new();
-            for chats in [&mut posts, &mut albums, &mut comments, &mut reactions] {
+            for chats in [
+                &mut posts,
+                &mut albums,
+                &mut comments,
+                &mut reactions,
+                &mut conversations,
+            ] {
                 buckets.extend(narrow_chats(chats, changed.as_ref(), range));
             }
             buckets.extend(narrow_contacts(&mut friends, changed.as_ref(), range));
@@ -180,6 +195,7 @@ pub fn render_source(
                     .iter()
                     .chain(&albums)
                     .chain(&comments)
+                    .chain(&conversations)
                     .map(|chat| (chat.id.clone(), attachment_refs(chat)));
                 blobs = BlobBundle::load_many(db.pool(), Some(cas.pool()), MEDIA_PROJECTION, refs)
                     .await
@@ -193,6 +209,7 @@ pub fn render_source(
                 albums,
                 comments,
                 reactions,
+                conversations,
                 friends,
                 blobs,
                 buckets,
@@ -214,6 +231,7 @@ pub fn render_source(
         (albums_profile(), &loaded.albums, &loaded.blobs),
         (comments_profile(), &loaded.comments, &loaded.blobs),
         (reactions_profile(), &loaded.reactions, &no_blobs),
+        (messenger_profile(), &loaded.conversations, &loaded.blobs),
     ] {
         let s = chat_render_all(
             &profile,

@@ -11,6 +11,7 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_facebook::ingest::schema_raw::MediaBlobRow;
 use datalib_etl_render::inputs::Inputs;
 use datalib_id::Identity;
+use datalib_schema::problems::{Problem, Reason, Severity};
 use datalib_schema::providers::Provider;
 use serde_json::Value;
 
@@ -21,7 +22,9 @@ use serde_json::Value;
 /// v4: the comments and reactions feeds are one document per year.
 /// v5: a friend is their own conversation, and the friends list is the
 ///     channel alone.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: Messenger conversations, one document per year; a comment's link;
+///     a problem row for every field render leaves unread.
+pub const RENDER_VERSION: u32 = 6;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
@@ -201,6 +204,127 @@ fn mime_for(uri: &str) -> Option<String> {
     Some(mime.to_string())
 }
 
+/// A warning for each key of `v` this render does not read, so a run over
+/// a real export says what it left out. The sample is the value's JSON
+/// shape, never its content: these rows are read to learn the export's
+/// shapes, and the export is private.
+pub fn unread_keys(v: &Value, read: &[&str], path: &str) -> Vec<Problem> {
+    let Some(map) = v.as_object() else {
+        return Vec::new();
+    };
+    map.iter()
+        .filter(|(k, _)| !read.contains(&k.as_str()))
+        .map(|(k, v)| {
+            Problem::field(k.clone(), Reason::UncoveredType, &shape_of(v))
+                .at(format!("{path}/{k}"))
+                .severity(Severity::Warning)
+        })
+        .collect()
+}
+
+/// The keys of a `media` object this render reads or leaves out on
+/// purpose (`media_metadata` is the camera's EXIF and the upload IP).
+pub const MEDIA_KEYS: &[&str] = &[
+    "uri",
+    "creation_timestamp",
+    "title",
+    "description",
+    "media_metadata",
+    "dubbing_info",
+    "media_variants",
+    "ai_stickers",
+    "backup_uri",
+];
+
+/// The `attachments[].data[]` entries of a record, each checked against
+/// what render reads of its one key: `media`, `place`, `life_event`,
+/// `external_context` and `text`, and nothing else.
+pub fn unread_attachment_keys(record: &Value) -> Vec<Problem> {
+    let mut out = Vec::new();
+    let attachments = record.get("attachments").and_then(Value::as_array);
+    for (a, attachment) in attachments.into_iter().flatten().enumerate() {
+        let path = format!("/attachments/{a}");
+        out.extend(unread_keys(attachment, &["data"], &path));
+        let entries = attachment.get("data").and_then(Value::as_array);
+        for (e, entry) in entries.into_iter().flatten().enumerate() {
+            let path = format!("{path}/data/{e}");
+            out.extend(unread_keys(
+                entry,
+                &["media", "place", "life_event", "external_context", "text"],
+                &path,
+            ));
+            let nested: [(&str, &[&str]); 4] = [
+                ("media", MEDIA_KEYS),
+                ("place", &["name", "url", "address", "coordinate"]),
+                (
+                    "life_event",
+                    &["title", "description", "place", "start_date"],
+                ),
+                ("external_context", &["name", "url", "source"]),
+            ];
+            for (key, read) in nested {
+                if let Some(v) = entry.get(key) {
+                    out.extend(unread_keys(v, read, &format!("{path}/{key}")));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The `label_values` entries whose `label` (or a section's `title`)
+/// render does not read, each reported under `label_values:<label>` by
+/// the shape of its entry.
+pub fn unread_labels(record: &Value, read: &[&str]) -> Vec<Problem> {
+    let entries = record.get("label_values").and_then(Value::as_array);
+    entries
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(i, lv)| {
+            // A section of nested entries has a `title` where an entry
+            // has its `label`.
+            let label = lv
+                .get("label")
+                .or_else(|| lv.get("title"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            (!read.contains(&label)).then(|| {
+                Problem::field(
+                    format!("label_values:{label}"),
+                    Reason::UncoveredType,
+                    &shape_of(lv),
+                )
+                .at(format!("/label_values/{i}"))
+                .severity(Severity::Warning)
+            })
+        })
+        .collect()
+}
+
+/// What a value is, without what it says: `string(12 chars)`,
+/// `array(3)`, `object{a,b}`, `int`, `bool:true`.
+pub fn shape_of(v: &Value) -> String {
+    match v {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => format!("bool:{b}"),
+        Value::Number(n) if n.is_i64() || n.is_u64() => "int".to_string(),
+        Value::Number(_) => "float".to_string(),
+        Value::String(s) => format!("string({} chars)", s.chars().count()),
+        Value::Array(a) => format!("array({})", a.len()),
+        Value::Object(m) => {
+            let keys: Vec<&str> = m.keys().map(String::as_str).collect();
+            format!("object{{{}}}", keys.join(","))
+        }
+    }
+}
+
+/// A finding about a record that cost it nothing, worth counting on a
+/// real export.
+pub fn noted(field: &str, explanation: &str) -> Problem {
+    Problem::explained(Reason::Noted, Some(field.to_string()), explanation).severity(Severity::Info)
+}
+
 pub fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -258,6 +382,35 @@ mod tests {
         );
         let d = json!({"uri": "a/b.jpg", "title": "T", "description": "Guinan @[1:2048:Guinan]"});
         assert_eq!(media_caption(&d, None).as_deref(), Some("Guinan Guinan"));
+    }
+
+    #[test]
+    fn an_unread_key_is_reported_by_its_shape_alone() {
+        let v = json!({"content": "private words", "call_duration": 42, "x": {"a": 1}});
+        let problems = unread_keys(&v, &["content"], "/message");
+        let mut got: Vec<(String, String, String)> = problems
+            .iter()
+            .map(|p| {
+                (
+                    p.field.clone().unwrap(),
+                    p.sample.clone(),
+                    p.path.clone().unwrap(),
+                )
+            })
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                (
+                    "call_duration".into(),
+                    "int".into(),
+                    "/message/call_duration".into()
+                ),
+                ("x".into(), "object{a}".into(), "/message/x".into()),
+            ]
+        );
+        assert_eq!(shape_of(&json!("private words")), "string(13 chars)");
     }
 
     #[test]

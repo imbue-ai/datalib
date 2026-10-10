@@ -1,0 +1,30 @@
+{
+  "participants": [
+    {
+      "name": "Facebook user"
+    },
+    {
+      "name": "Jean-Luc Picard"
+    }
+  ],
+  "messages": [
+    {
+      "sender_name": "Jean-Luc Picard",
+      "timestamp_ms": 12600001060000,
+      "content": "Of course. Boothby's garden, wasn't it?",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "Facebook user",
+      "timestamp_ms": 12600001000000,
+      "content": "We met at the Academy reunion, Jean-Luc.",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    }
+  ],
+  "title": "Facebook user",
+  "is_still_participant": true,
+  "thread_path": "inbox/facebookuser_1000000002",
+  "magic_words": []
+}

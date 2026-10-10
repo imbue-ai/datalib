@@ -68,7 +68,7 @@ tree does for a person.
 
 | word | means |
 |---|---|
-| **handle** | one identifier in one namespace, normalized: `email:riker@enterprise.org`, `tel:+12025550101`, `slack:T01/U02`, `signal_aci:<uuid>`. `datalib_handle` makes them; the UI's `chipLinks.js` mirrors its rules by hand. |
+| **handle** | one identifier in one namespace, normalized: `email:riker@enterprise.org`, `tel:+12025550101`, `slack:T01/U02`, `signal_aci:<uuid>`, `facebook:name/Will Riker`. `datalib_handle` makes them; the UI's `chipLinks.js` mirrors its rules by hand. |
 | **render** | the pipeline's render step: it writes a source's documents (markdown files) and grid rows into its render store during a sync, and the index and qmd read them from there. "Renders again" means those stored documents are rewritten. |
 | **draw** | what the UI does with a chip when it is shown: it asks who the handle is and paints the name, photo and mark. Nothing is stored. |
 | **chip link** | how a document names a person: a markdown link whose href is the handle as a URI, `[Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>")`. The viewer draws it as a chip. |
@@ -118,6 +118,16 @@ number. What that costs:
 | `tel` | E.164, `+` and digits | `Handle::tel` (a number written with its `+` and country code, any separators; `Handle::whatsapp_jid` for a `<number>@s.whatsapp.net`) | `tel:<number>` |
 | `slack` | `<team_id>/<user_id>` | `Handle::slack` | `slack://user?team=<team>&id=<user>` |
 | `signal_aci` | a Signal account id, a lowercase dashed UUID | `Handle::signal_aci` | `datalib:handle/signal_aci/<uuid>` |
+| `facebook` | `name/<the name shown>`, its whitespace collapsed; or `deleted/<conversation id>` | `Handle::facebook_name`, `Handle::facebook_deleted` | `datalib:handle/facebook/<value>`, percent-encoded but for its `/`s |
+
+A Facebook export names people and never numbers them, so a
+`facebook:name/` handle is a name: two people of one name are one
+handle, and nothing in the export can tell them apart. An account
+deleted since is written `Facebook user`, or with no name at all, and
+gets a handle only in a Messenger conversation that lists it as its one
+deleted account: `facebook:deleted/<that conversation's id>`. The same
+deleted person in two conversations is two handles; several in one
+group are none.
 
 `Handle::parse` reads back exactly what `as_str` wrote and refuses any
 other spelling, which is what every store and every wire format goes
@@ -200,7 +210,7 @@ What each source has today:
 | Google Chat and Voice, SMS backup | the address or number; a group MMS, which does not say which number sent it, has none | |
 | address books | | a card's numbers and addresses, in the source contact |
 | LinkedIn | | a connection's email address, in the source contact |
-| Facebook | | none: a friend is a name, so `/people` never returns one |
+| Facebook | a Messenger message's sender, by name; a deleted account by its conversation, where it is that conversation's only one | each Messenger reaction's; a friend's name, in the source contact |
 | Beeper | none yet: a Matrix user id has no kind | |
 
 The AI chats, calendar, GitHub, GitLab and Notion write no handles.
@@ -562,7 +572,8 @@ unresolved handles, a
 handle for a number without its country code, a handle that stopped
 working in some apps but not others, mentions in Google Chat,
 WhatsApp and Messages (each marks them up, in a shape not yet checked
-on real data) and in Facebook and Beeper (no handle kind for their
+on real data), in Facebook (a tag is `@[<id>:2048:<Name>]` in a post,
+not yet written as a handle) and in Beeper (no handle kind for its
 users), and a handle for a Beeper (Matrix) user: [`plans/contact_linking.md`](plans/contact_linking.md),
 [`plans/contact_editing.md`](plans/contact_editing.md) and
 [`plans/search_autocomplete.md`](plans/search_autocomplete.md),

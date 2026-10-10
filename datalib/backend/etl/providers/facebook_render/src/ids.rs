@@ -3,7 +3,8 @@
 //! carries one, else a hash of the record — and those are unique across
 //! the export, so the scope is provider-global. The feeds datalib
 //! composes (the comments and reactions timelines, the friends list)
-//! are keyed on their names.
+//! are keyed on their names. A Messenger message is stamped at the
+//! millisecond its file gives; everything else at the second.
 
 use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
@@ -21,8 +22,15 @@ pub const KIND_FEED_YEAR: &str = "feed_year";
 pub const KIND_COMMENT: &str = "comment";
 pub const KIND_REACTION: &str = "reaction";
 pub const KIND_FRIEND: &str = "friend";
+pub const KIND_CONVERSATION: &str = "conversation";
+pub const KIND_CONVERSATION_YEAR: &str = "conversation_year";
+pub const KIND_MESSAGE: &str = "message";
+pub const KIND_MESSAGE_REACTION: &str = "message_reaction";
+
+pub const MESSENGER_STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Millis;
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
+const MESSENGER_IDS: Minter = Minter::new(ID_NAMESPACE, MESSENGER_STAMP_PRECISION);
 
 pub fn post(source_id: &str, row_id: &str) -> Identity {
     IDS.mint(source_id, KIND_POST, row_id.to_string(), None)
@@ -86,6 +94,42 @@ pub fn friend(source_id: &str, row_id: &str) -> Identity {
     IDS.mint(source_id, KIND_FRIEND, row_id.to_string(), None)
 }
 
+/// A Messenger conversation, by the id its directory ends in.
+pub fn conversation(source_id: &str, thread_id: &str) -> Identity {
+    MESSENGER_IDS.mint(source_id, KIND_CONVERSATION, thread_id.to_string(), None)
+}
+
+pub fn conversation_year(source_id: &str, thread_id: &str, period_key: &str) -> Identity {
+    MESSENGER_IDS.mint(
+        source_id,
+        KIND_CONVERSATION_YEAR,
+        composite_key(&[thread_id, period_key]),
+        None,
+    )
+}
+
+/// A message, by the row id the ingest keyed it on.
+pub fn message(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
+    MESSENGER_IDS.mint(source_id, KIND_MESSAGE, row_id.to_string(), date_ms)
+}
+
+/// A reaction has no id of its own; one person reacts to one message
+/// once with each emoji.
+pub fn message_reaction(
+    source_id: &str,
+    message_row_id: &str,
+    actor: &str,
+    emoji: &str,
+    date_ms: Option<i64>,
+) -> Identity {
+    MESSENGER_IDS.mint(
+        source_id,
+        KIND_MESSAGE_REACTION,
+        composite_key(&[message_row_id, actor, emoji]),
+        date_ms,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +150,10 @@ mod tests {
             comment("src", "r3", MS),
             reaction("src", &["r4", "r5"], MS),
             friend("src", "r6"),
+            conversation("src", "1000000001"),
+            conversation_year("src", "1000000001", "2369"),
+            message("src", "1000000001:12600000360000:0", MS),
+            message_reaction("src", "1000000001:12600000360000:0", "Worf", "👍", MS),
         ] {
             assert_eq!(
                 got.uuid,

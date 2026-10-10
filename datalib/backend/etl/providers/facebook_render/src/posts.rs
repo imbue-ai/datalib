@@ -13,7 +13,8 @@ use serde_json::Value;
 
 use crate::common::{
     attachment_entries, chat_item, data_values, first_line, label_value, media_attachment,
-    media_caption, profile, str_field, strip_mentions, truncate, ts_ms,
+    media_caption, profile, str_field, strip_mentions, truncate, ts_ms, unread_attachment_keys,
+    unread_keys, unread_labels,
 };
 use crate::processor::Owner;
 
@@ -151,20 +152,40 @@ fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let date_ms = ts_ms(v, "timestamp");
     let display = display_for(title.as_deref(), body.opening_words(), "Facebook post");
     let item_id = ids::post_text(&owner.source_id, row_id, date_ms);
-    one_item_chat(
-        row_id,
-        inputs,
-        display,
-        None,
-        chat_item(
-            item_id,
-            owner.name.clone(),
-            date_ms,
-            (!text.is_empty()).then_some(text),
-            attachments,
-        ),
-        owner,
-    )
+    let mut item = chat_item(
+        item_id,
+        owner.name.clone(),
+        date_ms,
+        (!text.is_empty()).then_some(text),
+        attachments,
+    );
+    item.problems = timeline_post_unread(v);
+    one_item_chat(row_id, inputs, display, None, item, owner)
+}
+
+/// What render does not read of a timeline post. `update_timestamp` is
+/// read and left out: on a real export it is the post's own time on all
+/// but one post in sixty-three, so it says nothing about an edit.
+fn timeline_post_unread(v: &Value) -> Vec<datalib_schema::problems::Problem> {
+    let mut out = unread_keys(
+        v,
+        &["timestamp", "attachments", "data", "title", "tags"],
+        "",
+    );
+    let data = v.get("data").and_then(Value::as_array);
+    for (i, d) in data.into_iter().flatten().enumerate() {
+        out.extend(unread_keys(
+            d,
+            &["post", "update_timestamp", "backdated_timestamp"],
+            &format!("/data/{i}"),
+        ));
+    }
+    let tags = v.get("tags").and_then(Value::as_array);
+    for (i, t) in tags.into_iter().flatten().enumerate() {
+        out.extend(unread_keys(t, &["name"], &format!("/tags/{i}")));
+    }
+    out.extend(unread_attachment_keys(v));
+    out
 }
 
 /// A post on someone else's page or profile: the `label_values` shape,
@@ -200,20 +221,17 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let display = display_for(None, body.opening_words(), "Facebook post on another page");
     let date_ms = ts_ms(v, "timestamp");
     let item_id = ids::post_text(&owner.source_id, row_id, date_ms);
-    one_item_chat(
-        row_id,
-        inputs,
-        display,
-        None,
-        chat_item(
-            item_id,
-            owner.name.clone(),
-            date_ms,
-            (!text.is_empty()).then_some(text),
-            attachments,
-        ),
-        owner,
-    )
+    let mut item = chat_item(
+        item_id,
+        owner.name.clone(),
+        date_ms,
+        (!text.is_empty()).then_some(text),
+        attachments,
+    );
+    item.problems = unread_keys(v, &["fbid", "label_values", "media", "timestamp"], "");
+    item.problems
+        .extend(unread_labels(v, &["Message", "Media", "Feeling/activity"]));
+    one_item_chat(row_id, inputs, display, None, item, owner)
 }
 
 /// `📍 Name — address`, once per place: a check-in carries the same place

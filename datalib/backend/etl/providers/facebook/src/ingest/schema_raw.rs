@@ -1,9 +1,12 @@
 //! Raw-store schema for the Facebook export provider: how an export file
 //! becomes a table name, the one CAS edge table, and the uuid namespace.
 //! Every JSON file in the export lands as its own table (one row per
-//! record), so the table names are mechanical rather than a manifest.
+//! record), so the table names are mechanical rather than a manifest —
+//! except Messenger's, whose conversations all land in two tables
+//! (`messenger.rs`).
 
 use datalib_etl_macros::CasEdgeRow;
+use datalib_store_meta::Migration;
 use uuid::Uuid;
 
 /// The tables the render side reads, each pinned by a test to the
@@ -17,6 +20,20 @@ pub const REACTIONS_TABLE: &str =
     "your_facebook_activity_comments_and_reactions_likes_and_reactions";
 pub const FRIENDS_TABLE: &str = "connections_friends_your_friends";
 pub const PROFILE_TABLE: &str = "personal_information_profile_information_profile_information";
+
+/// One row per Messenger conversation, keyed by its id; and one per
+/// message, keyed `<thread id>:<timestamp_ms>:<n>`. No export path names
+/// these, so no `canonical_table` can collide with them.
+pub const MESSENGER_THREADS_TABLE: &str = "messenger_threads";
+pub const MESSENGER_MESSAGES_TABLE: &str = "messenger_messages";
+
+/// Each rung runs once on a store from before it; the README beside the
+/// etl crate (§"The migration ladder") has the rules.
+pub const LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "Messenger conversations move to messenger_threads and messenger_messages",
+    apply: |conn| Box::pin(super::migrate::messenger_tables(conn)),
+}];
 
 /// `media_blobs` — the CAS edge from a record to each media file it
 /// references by `uri`. Owning entity: the record's row id. Ref: the

@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_facebook::ingest::schema_raw::{
-    ALBUMS_TABLE, COMMENTS_TABLE, FRIENDS_TABLE, POSTS_TABLE, PROFILE_TABLE, REACTIONS_TABLE,
+    ALBUMS_TABLE, COMMENTS_TABLE, FRIENDS_TABLE, MESSENGER_MESSAGES_TABLE, MESSENGER_THREADS_TABLE,
+    POSTS_TABLE, PROFILE_TABLE, REACTIONS_TABLE,
 };
 use datalib_etl_facebook::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_facebook_render::processor::{render_source, Source};
@@ -56,12 +57,14 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         .context("fetch")?;
         datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: facebook fetch").await?;
 
-        // 11 JSON files; `no-data.txt` and the HTML are not files to us.
-        assert_eq!(summary.files, 11, "json files ingested");
+        // 18 JSON files, seven of them Messenger conversations;
+        // `no-data.txt` and the HTML are not files to us.
+        assert_eq!(summary.files, 18, "json files ingested");
         assert_eq!(summary.parse_errors, 0);
-        // Four PNGs, each stored once however many records point at it;
-        // the video the export left out is counted, not fatal.
-        assert_eq!(summary.media_stored, 4, "distinct media files stored");
+        // Six PNGs (four posted, a Messenger photo and a sticker), each
+        // stored once however many records point at it; the video the
+        // export left out is counted, not fatal.
+        assert_eq!(summary.media_stored, 6, "distinct media files stored");
         assert_eq!(summary.media_missing, 1, "the missing video");
 
         assert_eq!(rows(&db, POSTS_TABLE).await.len(), 4, "timeline posts");
@@ -134,8 +137,9 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         }
 
         // 5 posts (4 timeline + 1 on another page) + 1 album + a year of
-        // comments + a year of reactions + 3 friends.
-        assert_eq!(docs.len(), 5 + 1 + 1 + 1 + 3, "documents rendered");
+        // comments + a year of reactions + 3 friends + a year each of 7
+        // Messenger conversations.
+        assert_eq!(docs.len(), 5 + 1 + 1 + 1 + 3 + 7, "documents rendered");
         let all_rows: Vec<_> = docs.iter().flat_map(|d| d.rows.iter()).collect();
         assert!(
             all_rows
@@ -210,10 +214,12 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert!(md.contains("Guinan's synthehol never disappoints. 🍸"), "{md}");
         assert!(md.contains("*Jean-Luc Picard commented on his own album.*"), "{md}");
 
-        // Reactions: two events from four rows, each with its linkout.
+        // Reactions: two events from four rows, each with its linkout. A
+        // Messenger conversation has reactions too; this is the feed.
         let reactions: Vec<_> = docs
             .iter()
             .filter(|d| d.rows.iter().any(|r| r.kind == "Facebook Reaction"))
+            .filter(|d| d.rows.iter().all(|r| r.kind != "Facebook Conversation"))
             .collect();
         assert_eq!(reactions.len(), 1, "two months of reactions, one year");
         let reaction_rows: Vec<_> = reactions
@@ -236,6 +242,132 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .iter()
             .all(|r| r.channel.as_deref() == Some("Friends"))));
 
+        // Messenger: a conversation is a chat, its people chips by name.
+        let conversation = |name: &str| {
+            let d = docs
+                .iter()
+                .find(|d| {
+                    d.rows.iter().any(|r| {
+                        r.kind == "Facebook Conversation"
+                            && r.conversation_name.as_deref() == Some(name)
+                    })
+                })
+                .unwrap_or_else(|| panic!("conversation {name} rendered"));
+            (d, fs::read_to_string(&d.md_path).unwrap())
+        };
+        let (riker, md) = conversation("William Riker");
+        assert!(
+            md.contains("(datalib:handle/facebook/name/William%20Riker"),
+            "Riker is a chip: {md}"
+        );
+        assert!(md.contains("Tea, Earl Grey, hot? ☕"), "{md}");
+        assert!(md.contains("🔗 [The Picard Maneuver"), "the share: {md}");
+        assert!(md.contains("Unsent"), "the unsent message: {md}");
+        assert_eq!(md.matches("blobs/").count(), 2, "the photo and the sticker: {md}");
+        assert!(md.find("Engage.") < md.find("Now."), "the older first: {md}");
+        assert!(riker.rows.iter().any(|r| r.kind == "Facebook Reaction"));
+        assert_eq!(riker.md_path.file_name().unwrap(), "2369.md");
+
+        // What render could not use is a problem row on the document,
+        // at the message's own section, and says what it was by its
+        // shape alone, never by what it said.
+        let call = riker
+            .problems
+            .iter()
+            .find(|p| p.field.as_deref() == Some("call_duration"))
+            .unwrap_or_else(|| panic!("the unread field is a problem: {:?}", riker.problems));
+        assert_eq!(call.scope_key, riker.markdown_uuid);
+        assert_eq!(call.sample, "int");
+        assert_eq!(call.path.as_deref(), Some("/message/call_duration"));
+        let section = call.item_uuid.as_deref().expect("a message's own section");
+        let call_row = riker
+            .rows
+            .iter()
+            .find(|r| r.uuid == section)
+            .expect("the section is a row of the document");
+        assert!(call_row.preview.contains("started a video chat"));
+        assert!(md.contains(&format!("data-section-uuid=\"{section}\"")));
+
+        let (_, md) = conversation("Facebook user · 1000000002");
+        assert!(
+            md.contains("(datalib:handle/facebook/deleted/1000000002"),
+            "the one deleted account is its conversation's: {md}"
+        );
+        let (_, md) = conversation("Facebook user · 1000000003");
+        assert!(
+            md.contains("(datalib:handle/facebook/deleted/1000000003"),
+            "an empty name is a deleted account too: {md}"
+        );
+        let (ten_forward, md) = conversation("Ten Forward");
+        assert_eq!(
+            md.matches("Facebook user (one of 3 deleted accounts here)").count(),
+            4,
+            "three messages and a reaction from accounts that cannot be told apart: {md}"
+        );
+        assert!(!md.contains("facebook/deleted/"), "{md}");
+        let noted: Vec<(&str, &str)> = ten_forward
+            .problems
+            .iter()
+            .filter_map(|p| Some((p.field.as_deref()?, p.sample.as_str())))
+            .collect();
+        assert!(
+            noted.contains(&(
+                "participants",
+                "3 deleted accounts among 7 participants; their messages cannot be told apart"
+            )),
+            "{noted:?}"
+        );
+        assert_eq!(
+            noted.iter().filter(|(f, _)| *f == "sender_name").count(),
+            1,
+            "Wesley, who left, is noted once: {noted:?}"
+        );
+        assert!(
+            md.contains("(datalib:handle/facebook/name/Wesley%20Crusher"),
+            "one who left is still named: {md}"
+        );
+        assert!(ten_forward
+            .rows
+            .iter()
+            .all(|r| r.project.as_deref() == Some("Messenger")));
+        let (requests, _) = conversation("Lwaxana Troi");
+        assert!(requests
+            .rows
+            .iter()
+            .all(|r| r.project.as_deref() == Some("Messenger · requests")));
+
+        // Every field render leaves unread is a problem, by its shape
+        // alone, so a run over a real export says what it left out.
+        let mut found: Vec<String> = docs
+            .iter()
+            .flat_map(|d| &d.problems)
+            .map(|p| {
+                format!(
+                    "{} {} {} = {}",
+                    p.severity.as_str(),
+                    p.field.as_deref().unwrap_or("-"),
+                    p.path.as_deref().unwrap_or("-"),
+                    p.sample
+                )
+            })
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                "info participants - = 3 deleted accounts among 7 participants; \
+                 their messages cannot be told apart",
+                "info sender_name - = a sender the conversation's participants do not \
+                 list (left the conversation?)",
+                "warning call_duration /message/call_duration = int",
+                "warning label_values: /label_values/7 = object{timestamp_value}",
+                "warning label_values:Attachments /label_values/5 = object{dict,title}",
+                "warning label_values:Detected dialect /label_values/4 = object{label,value}",
+                "warning label_values:Last modified /label_values/1 = \
+                 object{label,timestamp_value}",
+                "warning label_values:Target /label_values/3 = object{label}",
+            ]
+        );
         // Every document declares the rows it read, so a change to any of
         // them renders it again; every one includes the profile row.
         for d in &docs {
@@ -569,7 +701,7 @@ async fn a_file_named_again_after_a_flush_takes_the_key_its_bytes_went_in_under(
 
     let s = e.sync().await;
     assert_eq!(
-        s.media_stored, 4,
+        s.media_stored, 6,
         "read once, not again after the flush: {s:?}"
     );
     let edges: Vec<(String, Option<String>)> =
@@ -583,4 +715,238 @@ async fn a_file_named_again_after_a_flush_takes_the_key_its_bytes_went_in_under(
     for (owner, blake3) in &edges {
         assert_eq!(blake3.as_deref(), Some(key.as_str()), "{owner}");
     }
+}
+
+// ── Messenger ──────────────────────────────────────────────────────
+
+const RIKER_PHOTO: &str =
+    "your_facebook_activity/messages/inbox/williamriker_1000000001/photos/300000000000001.png";
+
+async fn message(db: &RawDb, id: &str) -> serde_json::Value {
+    let payload: String =
+        sqlx::query_scalar("SELECT json(payload) FROM messenger_messages WHERE id = ?")
+            .bind(id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap_or_else(|e| panic!("no message {id}: {e}"));
+    serde_json::from_str(&payload).unwrap()
+}
+
+/// Every conversation, from every folder Facebook files one under, lands
+/// in the two Messenger tables — not a table per conversation — keyed by
+/// the conversation's id and each message's time.
+#[tokio::test(flavor = "multi_thread")]
+async fn messenger_conversations_land_as_threads_and_messages() {
+    let e = Export::new().await;
+    e.sync().await;
+
+    let threads = rows(&e.db, MESSENGER_THREADS_TABLE).await;
+    let mut folders: Vec<(String, String)> = threads
+        .iter()
+        .map(|t| {
+            (
+                t["thread_id"].as_str().unwrap().to_string(),
+                t["folder"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    folders.sort();
+    assert_eq!(
+        folders,
+        [
+            ("1000000001", "inbox"),
+            ("1000000002", "inbox"),
+            ("1000000003", "inbox"),
+            ("1000000004", "inbox"),
+            ("1000000005", "filtered_threads"),
+            ("1000000006", "message_requests"),
+            ("1000000007", "e2ee_cutover"),
+        ]
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+    );
+    assert!(
+        threads
+            .iter()
+            .all(|t| t["thread"].get("messages").is_none()),
+        "a thread row holds the conversation, not its messages"
+    );
+    assert_eq!(rows(&e.db, MESSENGER_MESSAGES_TABLE).await.len(), 25);
+
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%messages_inbox%'",
+    )
+    .fetch_all(e.db.pool())
+    .await
+    .unwrap();
+    assert!(tables.is_empty(), "no table per conversation: {tables:?}");
+
+    // Two in one millisecond: the older is 0, as the file lists it last.
+    let engage = message(&e.db, "1000000001:12600000360000:0").await;
+    assert_eq!(engage["message"]["content"], "Engage.");
+    assert_eq!(
+        message(&e.db, "1000000001:12600000360000:1").await["message"]["content"],
+        "Now."
+    );
+    // Mojibake undone, in the text and in a reaction.
+    let tea = message(&e.db, "1000000001:12600000300000:0").await;
+    assert_eq!(tea["message"]["content"], "Tea, Earl Grey, hot? ☕");
+    assert_eq!(tea["message"]["reactions"][0]["reaction"], "❤");
+    // An unsent message is kept, flag and all.
+    assert_eq!(
+        message(&e.db, "1000000001:12600000420000:0").await["message"]["is_unsent"],
+        true
+    );
+    // A deleted account with no name at all, in a directory that is its id.
+    assert_eq!(
+        message(&e.db, "1000000003:12600002000000:0").await["message"]["sender_name"],
+        ""
+    );
+
+    // The photo's edge is owned by the message that sent it.
+    let owners: Vec<String> = sqlx::query_scalar("SELECT owner_id FROM media_blobs WHERE uri = ?")
+        .bind(RIKER_PHOTO)
+        .fetch_all(e.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(owners, ["1000000001:12600000120000:0"]);
+    e.db.clone().close().await;
+}
+
+/// A store written before the Messenger tables held each conversation
+/// file as one row of a table named for its path. Rung 1 of the ladder
+/// splits it into the two tables, moves the photo's edge (and the bytes
+/// it names) to the message that sent it, and drops the old table; the
+/// next sync then finds nothing new to read.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_store_from_before_the_messenger_tables_is_migrated_on_open() {
+    use datalib_etl::doltlite_raw as dr;
+
+    const OLD_TABLE: &str = "your_facebook_activity_messages_inbox_williamriker_1000000001_message";
+    const OLD_ID: &str = "0b4e2f1a-0000-5000-8000-000000000001";
+    const KEPT_BLAKE3: &str = "the-bytes-an-earlier-run-stored";
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("export");
+    copy_tree(&fixture(), &root);
+    let path = db_path_for(&tmp.path().join("raw"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file: serde_json::Value =
+        serde_json::from_slice(
+            &fs::read(root.join(
+                "your_facebook_activity/messages/inbox/williamriker_1000000001/message_1.json",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+    {
+        let pool = dr::open(&path, &[]).await.unwrap();
+        for ddl in [
+            dr::wire_payload_table_ddl(OLD_TABLE, &[]),
+            "CREATE TABLE media_blobs (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, \
+             uri TEXT NOT NULL, blake3 TEXT NULL)"
+                .to_string(),
+            dr::bookkeeping_ddl_for("media_blobs"),
+            datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
+        ] {
+            sqlx::query(sqlx::AssertSqlSafe(ddl))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let old_edge = format!("{OLD_ID}#{RIKER_PHOTO}");
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "INSERT INTO {OLD_TABLE} (id, payload) VALUES (?, jsonb(?))"
+        )))
+        .bind(OLD_ID)
+        .bind(file.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO media_blobs (id, owner_id, uri, blake3) VALUES (?, ?, ?, ?)")
+            .bind(&old_edge)
+            .bind(OLD_ID)
+            .bind(RIKER_PHOTO)
+            .bind(KEPT_BLAKE3)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO media_blobs_bookkeeping (id, fetched_at_utc, attempt_count) \
+             VALUES (?, '2369-01-01T00:00:00Z', 1)",
+        )
+        .bind(&old_edge)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO ingested_files (scope, rel_path, blake3, size_bytes, last_finished_at_utc) \
+             VALUES (?, 'x', 'y', 1, '2369-01-01T00:00:00Z')",
+        )
+        .bind(format!("facebook/{OLD_TABLE}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        dr::commit_run(&pool, "an earlier build").await.unwrap();
+        pool.close().await;
+    }
+
+    let db = RawDb::open(&path).await.expect("the rung carries it");
+    let names: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+            .bind(OLD_TABLE)
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    assert!(names.is_empty(), "the old table is gone");
+    assert_eq!(rows(&db, MESSENGER_THREADS_TABLE).await.len(), 1);
+    assert_eq!(rows(&db, MESSENGER_MESSAGES_TABLE).await.len(), 10);
+    let sender = "1000000001:12600000120000:0";
+    let edges: Vec<(String, String, Option<String>)> =
+        sqlx::query_as("SELECT id, owner_id, blake3 FROM media_blobs")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        edges,
+        [(
+            format!("{sender}#{RIKER_PHOTO}"),
+            sender.to_string(),
+            Some(KEPT_BLAKE3.to_string())
+        )]
+    );
+    let stamped: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM media_blobs_bookkeeping WHERE fetched_at_utc IS NOT NULL",
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(stamped, [format!("{sender}#{RIKER_PHOTO}")]);
+    let scopes: Vec<String> = sqlx::query_scalar("SELECT scope FROM ingested_files")
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+    assert!(scopes.is_empty(), "{scopes:?}");
+
+    // The next sync keys the same rows the rung wrote, and takes the
+    // photo's bytes from the edge it moved rather than reading it again.
+    let summary = ingest::fetch(FetchOptions {
+        db: db.clone(),
+        input_path: root.clone(),
+        progress: Progress::noop(),
+        control: Default::default(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(rows(&db, MESSENGER_MESSAGES_TABLE).await.len(), 25);
+    let photo_edges: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT blake3 FROM media_blobs WHERE uri = ?")
+            .bind(RIKER_PHOTO)
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(photo_edges, [Some(KEPT_BLAKE3.to_string())]);
+    assert_eq!(
+        summary.media_stored, 5,
+        "every PNG but the one already held"
+    );
+    db.close().await;
 }

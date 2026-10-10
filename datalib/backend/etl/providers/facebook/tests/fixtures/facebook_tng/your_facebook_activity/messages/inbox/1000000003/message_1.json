@@ -1,0 +1,30 @@
+{
+  "participants": [
+    {
+      "name": ""
+    },
+    {
+      "name": "Jean-Luc Picard"
+    }
+  ],
+  "messages": [
+    {
+      "sender_name": "Jean-Luc Picard",
+      "timestamp_ms": 12600002060000,
+      "content": "Who is this?",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "",
+      "timestamp_ms": 12600002000000,
+      "content": "Do you still have my copy of Shakespeare?",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    }
+  ],
+  "title": "",
+  "is_still_participant": true,
+  "thread_path": "inbox/1000000003",
+  "magic_words": []
+}

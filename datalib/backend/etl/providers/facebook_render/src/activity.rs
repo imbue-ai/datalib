@@ -10,7 +10,8 @@ use datalib_etl_chat_common::types::{
     NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_facebook::ingest::schema_raw::{COMMENTS_TABLE, REACTIONS_TABLE};
-use datalib_etl_render::html::{escape_md_block, escape_md_inline};
+use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_link_dest};
+use datalib_schema::problems::Problem;
 
 use crate::ids;
 use datalib_etl_render::inputs::Inputs;
@@ -18,7 +19,7 @@ use serde_json::Value;
 
 use crate::common::{
     attachment_entries, chat_item, data_values, label_value, media_attachment, profile, str_field,
-    strip_mentions, ts_ms,
+    strip_mentions, ts_ms, unread_attachment_keys, unread_keys,
 };
 use crate::processor::Owner;
 
@@ -70,17 +71,47 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             .filter_map(|e| e.get("media"))
             .filter_map(|m| media_attachment(m, row_id, &inputs))
             .collect();
+        for url in attachment_entries(v)
+            .filter_map(|e| e.get("external_context"))
+            .filter_map(|c| str_field(c, "url"))
+        {
+            if !text.is_empty() {
+                text.push_str("\n\n");
+            }
+            text.push_str(&format!("🔗 <{}>", md_link_dest(url)));
+        }
         let date_ms = ts_ms(v, "timestamp");
         let item_id = ids::comment(&owner.source_id, row_id, date_ms);
-        items.push(chat_item(
+        let mut item = chat_item(
             item_id,
             author,
             date_ms,
             (!text.is_empty()).then_some(text),
             attachments,
-        ));
+        );
+        item.problems = comment_unread(v);
+        items.push(item);
     }
     vec![yearly_chat(COMMENTS_CHAT, "Comments", items, inputs, owner)]
+}
+
+/// What render does not read of a comment record.
+fn comment_unread(v: &Value) -> Vec<Problem> {
+    let mut out = unread_keys(v, &["timestamp", "data", "title", "attachments"], "");
+    let data = v.get("data").and_then(Value::as_array);
+    for (i, d) in data.into_iter().flatten().enumerate() {
+        let path = format!("/data/{i}");
+        out.extend(unread_keys(d, &["comment"], &path));
+        if let Some(c) = d.get("comment") {
+            out.extend(unread_keys(
+                c,
+                &["author", "comment", "timestamp"],
+                &format!("{path}/comment"),
+            ));
+        }
+    }
+    out.extend(unread_attachment_keys(v));
+    out
 }
 
 /// The export ships reactions in two shapes, sometimes both for one

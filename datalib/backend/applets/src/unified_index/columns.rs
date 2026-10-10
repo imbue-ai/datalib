@@ -78,6 +78,7 @@ fn handle_mark(kind: HandleKind) -> &'static str {
         HandleKind::Tel => "sms",
         HandleKind::Slack => "slack",
         HandleKind::SignalAci => "signal",
+        HandleKind::Facebook => "facebook",
     }
 }
 

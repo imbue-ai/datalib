@@ -1,0 +1,96 @@
+{
+  "participants": [
+    {
+      "name": "Jean-Luc Picard"
+    },
+    {
+      "name": "Data"
+    },
+    {
+      "name": "Worf"
+    },
+    {
+      "name": "Guinan"
+    },
+    {
+      "name": "Facebook user"
+    },
+    {
+      "name": "Facebook user"
+    },
+    {
+      "name": ""
+    }
+  ],
+  "messages": [
+    {
+      "sender_name": "Wesley Crusher",
+      "timestamp_ms": 12600003360000,
+      "content": "I'm off to Starfleet Academy! Goodbye, everyone.",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "",
+      "timestamp_ms": 12600003300000,
+      "content": "Is the poker game still on?",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "Facebook user",
+      "timestamp_ms": 12600003240000,
+      "content": "Same for me.",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "Facebook user",
+      "timestamp_ms": 12600003180000,
+      "content": "Save me a seat by the window.",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "Worf",
+      "timestamp_ms": 12600003120000,
+      "content": "Prune juice. A warrior's drink.",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "Data",
+      "timestamp_ms": 12600003060000,
+      "content": "I will attend. I am attempting to understand humour.",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "Guinan",
+      "timestamp_ms": 12600003000000,
+      "content": "The usual table is free tonight.",
+      "reactions": [
+        {
+          "reaction": "\u00f0\u009f\u0091\u008d",
+          "actor": "Worf",
+          "timestamp": 12600003010
+        },
+        {
+          "reaction": "\u00f0\u009f\u0091\u008d",
+          "actor": "Facebook user",
+          "timestamp": 12600003020
+        }
+      ],
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    }
+  ],
+  "title": "Ten Forward",
+  "is_still_participant": true,
+  "thread_path": "inbox/tenforward_1000000004",
+  "magic_words": [],
+  "joinable_mode": {
+    "mode": 1,
+    "link": ""
+  }
+}

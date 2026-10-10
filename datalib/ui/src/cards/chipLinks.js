@@ -8,7 +8,7 @@
 // exactly; the Rust tests and `chip_links.test.ts` run the same cases.
 
 /** The handle kinds this build knows; `datalib_handle::HandleKind`. */
-const KINDS = new Set(["email", "tel", "slack", "signal_aci"]);
+const KINDS = new Set(["email", "tel", "slack", "signal_aci", "facebook"]);
 
 /** The handle (`email:…`, `tel:…`, `slack:T/U`) a URI names, or null
  *  when it names none this build knows.
@@ -35,7 +35,13 @@ export function handleFromUri(href) {
     const slash = rest.indexOf("/");
     if (slash <= 0) return null;
     const kind = rest.slice(0, slash);
-    const value = rest.slice(slash + 1);
+    let value;
+    try {
+      value = decodeURIComponent(rest.slice(slash + 1));
+    } catch {
+      return null;
+    }
+    if (kind === "facebook") return facebookHandle(value);
     if (kind === "signal_aci") {
       // A Signal account id: a UUID, spelled lowercase with dashes
       // (`Handle::signal_aci`).
@@ -71,7 +77,38 @@ export function uriFromHandle(handle) {
     return `slack://user?team=${team}&id=${user}`;
   }
   if (kind === "signal_aci") return `datalib:handle/signal_aci/${value}`;
+  if (kind === "facebook") return `datalib:handle/facebook/${percentEncode(value)}`;
   return null;
+}
+
+/** A Facebook person, `name/<name>` with its whitespace collapsed or
+ *  `deleted/<conversation id>` (`Handle::facebook_name`,
+ *  `Handle::facebook_deleted`).
+ *  @param {string} value
+ *  @returns {string | null} */
+function facebookHandle(value) {
+  const slash = value.indexOf("/");
+  const form = value.slice(0, slash);
+  const rest = value.slice(slash + 1);
+  if (slash > 0 && form === "name") {
+    const name = rest.trim().split(/\s+/).join(" ");
+    // eslint-disable-next-line no-control-regex
+    return name && !/[\u0000-\u001f\u007f-\u009f]/.test(name) ? `facebook:name/${name}` : null;
+  }
+  if (slash > 0 && form === "deleted") {
+    const id = rest.trim();
+    return /^\d+$/.test(id) ? `facebook:deleted/${id}` : null;
+  }
+  return null;
+}
+
+/** Every byte but an unreserved one and `/` as `%XX`, as `to_uri` does.
+ *  @param {string} value
+ *  @returns {string} */
+function percentEncode(value) {
+  return encodeURIComponent(value)
+    .replace(/%2F/g, "/")
+    .replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 /** The group or step a `datalib:group/<id>` or `datalib:step/<id>` URI

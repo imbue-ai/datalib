@@ -16,6 +16,12 @@ describe("handleFromUri / uriFromHandle", () => {
         "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c",
         "datalib:handle/signal_aci/0195683a-d140-87f9-bdf6-234da6d6880c",
       ],
+      ["facebook:name/Jean-Luc Picard", "datalib:handle/facebook/name/Jean-Luc%20Picard"],
+      [
+        "facebook:name/Beverly Crusher-Howard ☕",
+        "datalib:handle/facebook/name/Beverly%20Crusher-Howard%20%E2%98%95",
+      ],
+      ["facebook:deleted/1000000002", "datalib:handle/facebook/deleted/1000000002"],
     ]) {
       expect(uriFromHandle(handle)).toBe(uri);
       expect(handleFromUri(uri)).toBe(handle);
@@ -33,6 +39,10 @@ describe("handleFromUri / uriFromHandle", () => {
       "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c",
     );
     expect(handleFromUri("datalib:handle/signal_aci/0195683a")).toBeNull();
+    expect(handleFromUri("datalib:handle/facebook/name/Q%2")).toBeNull();
+    expect(handleFromUri("datalib:handle/facebook/name/%20%20")).toBeNull();
+    expect(handleFromUri("datalib:handle/facebook/deleted/12a")).toBeNull();
+    expect(handleFromUri("datalib:handle/facebook/other/Q")).toBeNull();
     expect(handleFromUri("mailto:not an address")).toBeNull();
     expect(uriFromHandle("fax:+15550123456")).toBeNull();
   });

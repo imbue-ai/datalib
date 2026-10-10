@@ -3,6 +3,8 @@
 //! record points at goes into the CAS. The HTML flavour of the export is
 //! not read — ask Facebook for JSON.
 
+pub mod messenger;
+mod migrate;
 pub mod mojibake;
 pub mod schema_raw;
 
@@ -30,7 +32,11 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use uuid::Uuid;
 
-use schema_raw::{canonical_table, facebook_ns, store_ddl, MediaBlobRow};
+use messenger::ThreadFile;
+use schema_raw::{
+    canonical_table, facebook_ns, store_ddl, MediaBlobRow, MESSENGER_MESSAGES_TABLE,
+    MESSENGER_THREADS_TABLE,
+};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -63,7 +69,7 @@ impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
         let ddl = store_ddl();
         let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &ddl).await?;
+        let pool = dr::open_migrating(db_path, &ddl, schema_raw::LADDER).await?;
         let cas = BlobCas::open(&cas_path_for(db_path)).await?;
         Ok(Self {
             pool,
@@ -171,29 +177,25 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
 
     for path in export.with_extension("json") {
         let rel = relative(&opts.input_path, path);
-        let table = canonical_table(&rel);
         present.insert(rel.clone());
         match read_records(path, &rel) {
             Ok((records, file)) => {
                 summary.files += 1;
-                chunks.entry(table.clone()).or_default().push(file);
-                let rows = by_table.entry(table.clone()).or_default();
-                for record in records {
-                    let id = row_id(&table, &record);
-                    rows.insert(id, record);
+                for table in tables_of(&rel) {
+                    chunks.entry(table).or_default().push(file.clone());
                 }
-                opts.progress.set_message(&format!(
-                    "{table}: {} rows ({} files)",
-                    rows.len(),
-                    summary.files
-                ));
+                for r in records {
+                    by_table.entry(r.table).or_default().insert(r.id, r.payload);
+                }
+                opts.progress
+                    .set_message(&format!("{rel}: read ({} files)", summary.files));
             }
             Err(e) => {
                 problems.push(RunProblem::listing(
                     &format!("file {rel}"),
                     format!("{e:#}"),
                 ));
-                unread_tables.insert(table);
+                unread_tables.extend(tables_of(&rel));
                 summary.parse_errors += 1;
             }
         }
@@ -314,14 +316,10 @@ async fn upsert_and_prune(
     rows: &BTreeMap<String, Value>,
     prune: bool,
 ) -> Result<Vec<String>> {
-    let ddl = dr::wire_payload_table_ddl(table, &[]);
-    // Audited: `table` is `canonical_table`'s output — ASCII alphanumerics
-    // and `_` only — so it is safe as an identifier; rows are bound.
-    sqlx::query(sqlx::AssertSqlSafe(ddl))
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("create table {table}"))?;
-
+    upsert_rows(tx, table, rows).await?;
+    // Audited: `table` is `canonical_table`'s output or a Messenger table
+    // constant — ASCII alphanumerics and `_` only — so it is safe as an
+    // identifier; ids are bound.
     let existing: Vec<String> = if prune {
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table}")))
             .fetch_all(&mut **tx)
@@ -346,7 +344,20 @@ async fn upsert_and_prune(
             .await
             .with_context(|| format!("prune {table}"))?;
     }
+    Ok(gone.into_iter().cloned().collect())
+}
 
+/// Create `table` if it is new and upsert `rows` into it. `table` is
+/// `canonical_table`'s output or a Messenger table constant.
+async fn upsert_rows(
+    conn: &mut sqlx::SqliteConnection,
+    table: &str,
+    rows: &BTreeMap<String, Value>,
+) -> Result<()> {
+    sqlx::query(sqlx::AssertSqlSafe(dr::wire_payload_table_ddl(table, &[])))
+        .execute(&mut *conn)
+        .await
+        .with_context(|| format!("create table {table}"))?;
     let rows: Vec<(&String, String)> = rows.iter().map(|(id, v)| (id, v.to_string())).collect();
     for chunk in rows.chunks(INSERT_CHUNK) {
         let mut sql = format!("INSERT INTO {table} (id, payload) VALUES ");
@@ -361,11 +372,11 @@ async fn upsert_and_prune(
         for (id, payload) in chunk {
             q = q.bind((*id).clone()).bind(payload.clone());
         }
-        q.execute(&mut **tx)
+        q.execute(&mut *conn)
             .await
             .with_context(|| format!("insert into {table}"))?;
     }
-    Ok(gone.into_iter().cloned().collect())
+    Ok(())
 }
 
 /// The `ingested_files` scope naming the chunk files a table was read from.
@@ -500,12 +511,28 @@ fn looks_like_export_path(s: &str) -> bool {
     !s.is_empty() && !s.contains("://") && !s.starts_with('/') && !s.contains("..")
 }
 
-/// Parse one export file into its records: an array is one record per
-/// element, an object wrapping a single array (`{"comments_v2": […]}`)
-/// likewise, and anything else — an album, the profile — is one record.
-/// Every string is passed through [`mojibake::fix`] on the way in. The
-/// file comes back as what to stamp once its rows are stored.
-fn read_records(path: &Path, rel: &str) -> Result<(Vec<Value>, ScannedFile)> {
+/// The tables one export file's records land in.
+fn tables_of(rel: &str) -> Vec<String> {
+    match ThreadFile::of(rel) {
+        Some(_) => vec![
+            MESSENGER_THREADS_TABLE.to_string(),
+            MESSENGER_MESSAGES_TABLE.to_string(),
+        ],
+        None => vec![canonical_table(rel)],
+    }
+}
+
+/// One record of an export file, and the table and row it lands in.
+pub struct Record {
+    pub table: String,
+    pub id: String,
+    pub payload: Value,
+}
+
+/// One export file's records. Every string is
+/// passed through [`mojibake::fix`] on the way in. The file comes back as
+/// what to stamp once its rows are stored.
+fn read_records(path: &Path, rel: &str) -> Result<(Vec<Record>, ScannedFile)> {
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let mut v: Value =
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
@@ -516,9 +543,27 @@ fn read_records(path: &Path, rel: &str) -> Result<(Vec<Value>, ScannedFile)> {
         size: bytes.len() as i64,
         blake3: *blake3::hash(&bytes).as_bytes(),
     };
-    Ok((split_records(v), file))
+    Ok((records_of(rel, v)?, file))
 }
 
+fn records_of(rel: &str, v: Value) -> Result<Vec<Record>> {
+    if let Some(at) = ThreadFile::of(rel) {
+        return at.rows(v);
+    }
+    let table = canonical_table(rel);
+    Ok(split_records(v)
+        .into_iter()
+        .map(|payload| Record {
+            table: table.clone(),
+            id: row_id(&table, &payload),
+            payload,
+        })
+        .collect())
+}
+
+/// An array is one record per element, an object wrapping a single array
+/// (`{"comments_v2": […]}`) likewise, and anything else — an album, the
+/// profile — is one record.
 fn split_records(v: Value) -> Vec<Value> {
     match v {
         Value::Array(items) => items,

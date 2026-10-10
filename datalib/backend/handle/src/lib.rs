@@ -37,6 +37,11 @@ pub enum HandleKind {
     /// A Signal account's id (ACI): the one identifier a Signal backup
     /// has for a person whose number it does not know.
     SignalAci,
+    /// A person on Facebook, whose export names people and never numbers
+    /// them: `name/<the name shown>`, or `deleted/<conversation id>` for
+    /// an account deleted since, which only its one-to-one conversation
+    /// tells apart from the others.
+    Facebook,
 }
 
 impl HandleKind {
@@ -168,6 +173,25 @@ impl Handle {
         Some(Self::of(HandleKind::SignalAci, &dashed))
     }
 
+    /// A person on Facebook by the name the export shows, its whitespace
+    /// trimmed and collapsed. Two people of one name are one handle: the
+    /// export has nothing else to tell them apart by. Whether a name is a
+    /// person at all — not Facebook's `Facebook user` for an account
+    /// deleted since — is the caller's to decide.
+    pub fn facebook_name(name: &str) -> Option<Self> {
+        let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!name.is_empty() && !name.chars().any(char::is_control))
+            .then(|| Self::of(HandleKind::Facebook, &format!("name/{name}")))
+    }
+
+    /// The deleted account on the other side of the one-to-one Messenger
+    /// conversation `conversation_id` (the digits its directory ends in).
+    pub fn facebook_deleted(conversation_id: &str) -> Option<Self> {
+        let id = conversation_id.trim();
+        (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| Self::of(HandleKind::Facebook, &format!("deleted/{id}")))
+    }
+
     /// A handle as written by [`Handle::as_str`]. `None` for an unknown
     /// kind or a value its kind would not have produced.
     pub fn parse(s: &str) -> Option<Self> {
@@ -188,6 +212,11 @@ impl Handle {
                 Self::slack(team, user)
             }
             HandleKind::SignalAci => Self::signal_aci(value),
+            HandleKind::Facebook => match value.split_once('/')? {
+                ("name", name) => Self::facebook_name(name),
+                ("deleted", id) => Self::facebook_deleted(id),
+                _ => None,
+            },
         }
     }
 
@@ -206,8 +235,9 @@ impl Handle {
 
     /// The handle as a URI another app can follow: `mailto:` and `tel:`
     /// as the standards spell them, a Slack user as Slack's own deep
-    /// link, and a kind with no scheme of its own (a Signal account id)
-    /// as `datalib:handle/<kind>/<value>`. This is the href of a chip
+    /// link, and a kind with no scheme of its own (a Signal account id, a
+    /// Facebook person) as `datalib:handle/<kind>/<value>`, the value
+    /// percent-encoded but for its `/`s. This is the href of a chip
     /// link; [`Handle::from_uri`] reads it back, and
     /// `ui/src/cards/chipLinks.js` mirrors both.
     pub fn to_uri(&self) -> String {
@@ -220,8 +250,12 @@ impl Handle {
             }
             // No app follows a link to a Signal account id, so it takes
             // the spelling for a kind with no scheme of its own.
-            HandleKind::SignalAci => {
-                format!("datalib:handle/{}/{}", self.kind().as_str(), self.value())
+            HandleKind::SignalAci | HandleKind::Facebook => {
+                format!(
+                    "datalib:handle/{}/{}",
+                    self.kind().as_str(),
+                    percent_encode(self.value())
+                )
             }
         }
     }
@@ -241,7 +275,7 @@ impl Handle {
         }
         if let Some(rest) = strip_prefix_ignore_case(uri, "datalib:handle/") {
             let (kind, value) = rest.split_once('/')?;
-            return Self::rebuild(&format!("{kind}:{value}"));
+            return Self::rebuild(&format!("{kind}:{}", percent_decode(value)?));
         }
         let query = strip_prefix_ignore_case(uri, "slack://user?")?;
         let (mut team, mut user) = (None, None);
@@ -268,13 +302,47 @@ impl Handle {
         match self.kind() {
             HandleKind::Email => format!("{shown} <{}>", self.value()),
             HandleKind::Tel => format!("{shown} ({})", self.value()),
-            HandleKind::Slack | HandleKind::SignalAci => format!("{shown} ({})", self.as_str()),
+            HandleKind::Slack | HandleKind::SignalAci | HandleKind::Facebook => {
+                format!("{shown} ({})", self.as_str())
+            }
         }
     }
 
     fn of(kind: HandleKind, value: &str) -> Self {
         Self(format!("{}:{value}", kind.as_str()))
     }
+}
+
+/// Every byte but an unreserved one (RFC 3986) and `/` as `%XX`, so a
+/// name's spaces and accents survive a markdown link's href.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// [`percent_encode`] undone; `None` for a malformed escape or bytes that
+/// are not UTF-8.
+fn percent_decode(s: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(s.len());
+    let mut rest = s.as_bytes();
+    while let Some((&b, tail)) = rest.split_first() {
+        if b == b'%' {
+            let hex = std::str::from_utf8(tail.get(..2)?).ok()?;
+            bytes.push(u8::from_str_radix(hex, 16).ok()?);
+            rest = &tail[2..];
+        } else {
+            bytes.push(b);
+            rest = tail;
+        }
+    }
+    String::from_utf8(bytes).ok()
 }
 
 fn strip_prefix_ignore_case<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
@@ -571,6 +639,18 @@ mod tests {
                 Handle::signal_aci("0195683ad14087f9bdf6234da6d6880c").unwrap(),
                 "datalib:handle/signal_aci/0195683a-d140-87f9-bdf6-234da6d6880c",
             ),
+            (
+                Handle::facebook_name("Jean-Luc Picard").unwrap(),
+                "datalib:handle/facebook/name/Jean-Luc%20Picard",
+            ),
+            (
+                Handle::facebook_name("Beverly Crusher-Howard ☕").unwrap(),
+                "datalib:handle/facebook/name/Beverly%20Crusher-Howard%20%E2%98%95",
+            ),
+            (
+                Handle::facebook_deleted("1000000002").unwrap(),
+                "datalib:handle/facebook/deleted/1000000002",
+            ),
         ] {
             assert_eq!(h.to_uri(), uri);
             assert_eq!(Handle::from_uri(uri), Some(h));
@@ -622,5 +702,35 @@ mod tests {
             aci.describe("Q"),
             "Q (signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f)"
         );
+        let deleted = Handle::facebook_deleted("42").unwrap();
+        assert_eq!(
+            deleted.describe("Facebook user"),
+            "Facebook user (facebook:deleted/42)"
+        );
+    }
+
+    #[test]
+    fn a_facebook_name_is_its_words_and_nothing_else() {
+        let riker = Handle::facebook_name("William Riker").unwrap();
+        assert_eq!(riker.as_str(), "facebook:name/William Riker");
+        assert_eq!(
+            Handle::facebook_name("  William \t Riker\n"),
+            Some(riker.clone())
+        );
+        assert_eq!(Handle::parse("facebook:name/William Riker"), Some(riker));
+        assert_eq!(Handle::parse("facebook:name/William  Riker"), None);
+        for bad in ["", "   ", "Q\u{0}"] {
+            assert_eq!(Handle::facebook_name(bad), None, "{bad:?}");
+        }
+        assert_eq!(Handle::facebook_deleted("12a"), None);
+        assert_eq!(Handle::facebook_deleted(""), None);
+        assert_eq!(Handle::parse("facebook:Q"), None);
+        assert_eq!(Handle::parse("facebook:other/Q"), None);
+    }
+
+    #[test]
+    fn a_malformed_escape_names_no_handle() {
+        assert_eq!(Handle::from_uri("datalib:handle/facebook/name/Q%2"), None);
+        assert_eq!(Handle::from_uri("datalib:handle/facebook/name/Q%FF"), None);
     }
 }
