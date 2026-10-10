@@ -123,9 +123,9 @@ fn renders_tng_fixture_grid_rows() {
         field(thread_row, "uuid").as_deref(),
         Some(picard_thread_uuid.as_str())
     );
-    // chat-common drives both `channel` and `conversation_name` from the
-    // single `display` ("#bridge").
-    assert_eq!(field(thread_row, "channel").as_deref(), Some("#bridge"));
+    // chat-common writes the single `display` ("#bridge") as the subject
+    // alone; a chat is filed nowhere else, so it has no channel.
+    assert_eq!(field(thread_row, "channel"), None);
     assert_eq!(
         field(thread_row, "conversation_name").as_deref(),
         Some("#bridge")

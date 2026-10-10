@@ -251,17 +251,18 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // 1 chat-level row + 4 message-level rows = 5 grid rows.
     assert_eq!(doc.rows.len(), 5, "1 chat row + 4 message rows");
 
-    // Channel column: every row — chat-level and message-level — carries
-    // the bare chat name (the recipient display), mirroring WhatsApp
-    // where `channel` == the chat's display name. This is what drives the
-    // "Channel" field in the UI grid; the "Signal · …" prefix lives only
-    // in the title/conversation_name, never in `channel`.
+    // Subject: every row — chat-level and message-level — carries the
+    // bare chat name (the recipient display); a chat is filed nowhere
+    // else, so `channel` stays empty.
     assert!(
         doc.rows
             .iter()
-            .all(|r| r.channel.as_deref() == Some("Will Riker")),
-        "every Signal grid row should set channel to the chat name, got: {:?}",
-        doc.rows.iter().map(|r| &r.channel).collect::<Vec<_>>()
+            .all(|r| r.conversation_name.as_deref() == Some("Will Riker") && r.channel.is_none()),
+        "every Signal grid row's subject is the chat name, and none has a channel, got: {:?}",
+        doc.rows
+            .iter()
+            .map(|r| (&r.conversation_name, &r.channel))
+            .collect::<Vec<_>>()
     );
 
     // ── Second pass: prove the docs_skipped path works ─────────────

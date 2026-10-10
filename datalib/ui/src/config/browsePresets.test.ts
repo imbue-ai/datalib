@@ -21,15 +21,7 @@ describe("browseColumns", () => {
   /// address book's row is a person, and who they are and how to reach
   /// them is what it is called.
   it("shows the contents right after the row's kind and name", () => {
-    const naming = [
-      "kind",
-      "conversation_name",
-      "diff_status",
-      "diff_changed_columns",
-      "contact_ref",
-      "phone",
-      "email",
-    ];
+    const naming = ["kind", "subject_ref", "diff_status", "diff_changed_columns", "phone", "email"];
     for (const type of [...browsePresetTypes(), "some_type_we_never_heard_of", "diff"]) {
       const cols = browseColumns(type)!;
       const before = cols.slice(0, cols.indexOf("snippet"));
@@ -48,12 +40,12 @@ describe("browseColumns", () => {
     }
   });
 
-  /// An address book reads as one: the contact as a chip, how to reach
-  /// them, what the card says, and the address book it is filed in last,
-  /// as the channel — never as the name of the row.
+  /// An address book reads as one: the contact as a chip (its subject),
+  /// how to reach them, what the card says, and the address book it is
+  /// filed in last, as the channel — never as the name of the row.
   it("browses an address book by who", () => {
     expect(browseColumns("contacts")).toEqual([
-      "contact_ref",
+      "subject_ref",
       "phone",
       "email",
       "snippet",
@@ -119,11 +111,16 @@ describe("browseColumns", () => {
     }
   });
 
-  /// A Slack thread's conversation name is its channel's name.
-  it("gives Slack one place", () => {
-    const slack = browseColumns("slack")!;
-    expect(slack).toContain("channel");
-    expect(slack).not.toContain("conversation_name");
+  /// A chat's conversation is its subject, and nothing else repeats it:
+  /// no Channel, no Conversation, no Contact beside the Subject.
+  it("names a chat once, by its subject", () => {
+    for (const type of ["slack", "whatsapp", "signal", "email", "facebook", "linkedin"]) {
+      const cols = browseColumns(type)!;
+      expect(cols).toContain("subject_ref");
+      expect(cols).not.toContain("conversation_name");
+      expect(cols).not.toContain("contact_ref");
+      if (type !== "linkedin") expect(cols).not.toContain("channel");
+    }
   });
 });
 
