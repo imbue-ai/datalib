@@ -1126,7 +1126,7 @@ onMounted(async () => {
       root: (e) => {
         if (changed(e, "log") && live.value) void load(false);
         // A step's new attempt is a new process for the picker to offer.
-        if (changed(e, "runs")) void loadProcesses(runId.value);
+        if (changed(e, "processes")) void loadProcesses(runId.value);
       },
       resync: () => {
         void loadRuns();
