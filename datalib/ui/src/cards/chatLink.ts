@@ -1,6 +1,9 @@
 // Links clicked in a rendered markdown body: which link, and whether it
 // is one of the internal `/chat/<uuid>` links renderers emit. The
-// document card decides where each goes.
+// document card decides where each goes. Also the link a copied 🆔
+// button becomes.
+
+import { chatDeeplink } from "@/router/deeplink";
 
 // Accepts the three internal-link shapes our renderers emit:
 //   /chat/<uuid>       — bare path (older claude / chatgpt / etc.)
@@ -43,4 +46,21 @@ export function linkFromClick(ev: MouseEvent): ClickedLink | null {
 export function chatUuidFromHref(href: string): string | null {
   const m = CHAT_HREF_RE.exec(href);
   return m ? m[1] : null;
+}
+
+/** A copied 🆔 button (`chatSections.js`) becomes the same 🆔 as a
+ *  `datalib://` link to what it names: the document, or the section
+ *  within it. */
+export function rewriteIdButtonsForCopy(
+  fragment: DocumentFragment | Element,
+  markdownUuid: string,
+): boolean {
+  const buttons = Array.from(fragment.querySelectorAll<HTMLElement>("button.copy-uuid[data-uuid]"));
+  for (const btn of buttons) {
+    const a = btn.ownerDocument.createElement("a");
+    a.href = chatDeeplink(markdownUuid, btn.dataset.uuid ?? "");
+    a.textContent = btn.textContent;
+    btn.replaceWith(a);
+  }
+  return buttons.length > 0;
 }

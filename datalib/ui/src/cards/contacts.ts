@@ -628,13 +628,19 @@ function selectionWithin(root: HTMLElement): Range | null {
 }
 
 /** A copy from the document: chips become `Name <identifier>` in the
- *  plain text and a link with the handle's URI in the HTML. A selection
- *  with no chip in it is left to the browser. */
-export function copyWithHandles(ev: ClipboardEvent, root: HTMLElement): void {
+ *  plain text and a link with the handle's URI in the HTML, and
+ *  `rewriteMore` makes the caller's own changes. A selection neither
+ *  changes is left to the browser. */
+export function copyWithHandles(
+  ev: ClipboardEvent,
+  root: HTMLElement,
+  rewriteMore: (fragment: DocumentFragment) => boolean = () => false,
+): void {
   const range = selectionWithin(root);
   if (!range || !ev.clipboardData) return;
   const fragment = range.cloneContents();
-  if (!rewriteChipsForCopy(fragment)) return;
+  const chipsChanged = rewriteChipsForCopy(fragment);
+  if (!rewriteMore(fragment) && !chipsChanged) return;
   // `innerText` keeps line breaks only for a laid-out element, so the
   // copy is laid out off-screen for the moment it is read.
   const holder = root.ownerDocument.createElement("div");

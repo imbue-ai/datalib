@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chatUuidFromHref, linkFromClick } from "../src/cards/chatLink";
+import { chatUuidFromHref, linkFromClick, rewriteIdButtonsForCopy } from "../src/cards/chatLink";
 
 // Forge a MouseEvent-shaped object whose `target` is an `<a>` carrying
 // the given href (or an arbitrary descendant of it). jsdom's
@@ -86,5 +86,27 @@ describe("chatUuidFromHref", () => {
   it("ignores a card stack and an off-site link", () => {
     expect(chatUuidFromHref("/gridView()/documentView(%22abc%22)")).toBeNull();
     expect(chatUuidFromHref("https://claude.ai/chat/abc")).toBeNull();
+  });
+});
+
+describe("rewriteIdButtonsForCopy", () => {
+  /** A selection copied across a 🆔 keeps the 🆔, as a `datalib://`
+   *  link to its section, or to the document for the page title's. */
+  it("turns each copied 🆔 button into a link to what it names", () => {
+    const root = document.createElement("div");
+    root.innerHTML =
+      `<h1 data-page-title-uuid="doc-1">Title <button type="button" class="copy-uuid" data-uuid="doc-1">🆔</button></h1>` +
+      `<div data-section-uuid="sec-2"><button type="button" class="copy-uuid" data-uuid="sec-2">🆔</button> hello</div>`;
+    expect(rewriteIdButtonsForCopy(root, "doc-1")).toBe(true);
+    expect(root.querySelector("button")).toBeNull();
+    const links = Array.from(root.querySelectorAll("a"), (a) => [
+      a.getAttribute("href"),
+      a.textContent,
+    ]);
+    expect(links).toEqual([
+      ["datalib://chat/doc-1", "🆔"],
+      ["datalib://chat/doc-1?msg=sec-2", "🆔"],
+    ]);
+    expect(rewriteIdButtonsForCopy(root, "doc-1")).toBe(false);
   });
 });

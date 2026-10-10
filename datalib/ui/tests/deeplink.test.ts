@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parse, toHash, toDeeplink, type Route } from "../src/router/deeplink";
+import { chatDeeplink, parse, toHash, toDeeplink, type Route } from "../src/router/deeplink";
 import fixtures from "./deeplink-fixtures.json";
 
 interface Fixture {
@@ -33,5 +33,12 @@ describe("deeplink", () => {
   });
   it("rejects chat without uuid", () => {
     expect(() => parse("#chat/")).toThrow();
+  });
+
+  /** The 🆔 button's link: a section names its document and itself, the
+   *  page title only the document. */
+  it("builds the 🆔 button's link", () => {
+    expect(chatDeeplink("abc-123", "def-456")).toBe("datalib://chat/abc-123?msg=def-456");
+    expect(chatDeeplink("abc-123", "abc-123")).toBe("datalib://chat/abc-123");
   });
 });
