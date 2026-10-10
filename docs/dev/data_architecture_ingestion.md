@@ -172,7 +172,7 @@ If we had to, we could return to plain-old-sqlite, with these options:
 - Implement "what changed since moment X" ourselves
 
 ## Wire-event tape (JSONL)
-But doltlite is also a binary file you need a tool to open. So alongside the doltlite raw store, Slack's download also writes a **plain-text, append-only JSONL log of what came off the wire, for debugging. It can be safely deleted.** It is the only provider that does; the `common.event_tape.enabled` config key (default on) turns it off.
+But doltlite is also a binary file you need a tool to open. So alongside the doltlite raw store, Slack's download can also write a **plain-text, append-only JSONL log of what came off the wire, for debugging. It can be safely deleted.** It is the only provider that does, and only when its config asks: the tape is off unless the ingest step's params set `common.event_tape.enabled = true`. An `events/` directory an earlier run left behind stays where it is until you delete it.
 
 This is the simplest view of the raw data: one event per line, in the order the downloader saw it. No schema, no migrations — just a tape you can `tail -f`, `grep`, `jq`, or open in any editor.
 

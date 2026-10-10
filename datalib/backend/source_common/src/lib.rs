@@ -11,14 +11,13 @@ pub use download_params::DownloadParams;
 pub use glob::glob_match;
 
 /// Append a JSONL line per upsert into `<raw_path>/events/<table>.jsonl`.
-/// Write-only mirror of the raw store, never read by the pipeline. See
-/// `docs/dev/data_architecture_ingestion.md` § "Wire-event tape (JSONL)" — the
-/// tape is intended to be always present so a human can `tail -f` the wire
-/// payload off any source without opening doltlite.
+/// Write-only mirror of the raw store, never read by the pipeline: a
+/// debugging aid, off unless a config asks for it. See
+/// `docs/dev/data_architecture_ingestion.md` § "Wire-event tape (JSONL)".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventTapeConfig {
-    /// Tape is on unless explicitly disabled.
+    /// Writing the table asks for the tape; `enabled = false` keeps it off.
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -55,7 +54,7 @@ pub struct SourceCommon {
     /// Rate-limit give-up bounds for this source's download step.
     #[serde(default, alias = "extract_params")]
     pub download_params: DownloadParams,
-    /// Wire-event tape config. `None` = enabled (the default).
+    /// Wire-event tape config. `None` = off (the default).
     #[serde(default)]
     pub event_tape: Option<EventTapeConfig>,
 }
@@ -100,7 +99,7 @@ impl SourceCommon {
     }
 
     pub fn event_tape_enabled(&self) -> bool {
-        self.event_tape.as_ref().map(|e| e.enabled).unwrap_or(true)
+        self.event_tape.as_ref().is_some_and(|e| e.enabled)
     }
 }
 
@@ -383,7 +382,25 @@ mod tests {
             common.download_params.maximum_sequential_failed_requests,
             Some(100) // source wins
         );
-        assert!(common.event_tape_enabled()); // None → enabled
+        assert!(!common.event_tape_enabled()); // None → off
+    }
+
+    /// An unset tape is off; a config that says what it wants, on the
+    /// source or in the defaults, gets it.
+    #[test]
+    fn the_event_tape_is_off_unless_a_config_asks_for_it() {
+        let parse = |json: &str| -> SourceCommon { serde_json::from_str(json).unwrap() };
+        assert!(!parse("{}").event_tape_enabled());
+        assert!(parse(r#"{"event_tape": {"enabled": true}}"#).event_tape_enabled());
+        assert!(parse(r#"{"event_tape": {}}"#).event_tape_enabled());
+        assert!(!parse(r#"{"event_tape": {"enabled": false}}"#).event_tape_enabled());
+
+        let mut from_defaults = SourceCommon::default();
+        from_defaults.fold_defaults(&Defaults {
+            event_tape: Some(EventTapeConfig { enabled: true }),
+            ..Default::default()
+        });
+        assert!(from_defaults.event_tape_enabled());
     }
 
     #[test]

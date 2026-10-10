@@ -4,8 +4,8 @@
 
 use datalib_runs::{
     log_after, log_query, log_values, process_log_after, processes, runs, snapshot, versions,
-    LogCursor, LogQuery, LogRow, MetricRow, Process, ProcessLogWriter, Retention, RunWriter,
-    StepRunRow, StorePart,
+    LogCursor, LogQuery, LogRow, MetricRow, Process, ProcessLogWriter, ProcessRow, Retention,
+    RunWriter, StepRunRow, StorePart,
 };
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
@@ -1061,6 +1061,7 @@ async fn each_part_of_the_store_counts_its_own_writes() {
         StorePart::StepRuns,
         StorePart::Metrics,
         StorePart::RunLog,
+        StorePart::Processes,
     ] {
         assert!(
             after_run.get(&part).is_some_and(|v| *v > 0),
@@ -1094,4 +1095,44 @@ async fn each_part_of_the_store_counts_its_own_writes() {
             "{part:?} moved for a server line"
         );
     }
+}
+
+/// A step's progress message is written about once a second while it
+/// runs. The log panel's process picker refetches on `processes`, so a
+/// progress tick must leave that part alone and a new attempt must move
+/// it.
+#[tokio::test]
+async fn a_progress_tick_moves_the_steps_and_not_the_processes() {
+    let td = tempfile::tempdir().unwrap();
+    let w = start(td.path(), "run-1");
+    let attempt = |n: i64| ProcessRow {
+        process_id: format!("step-a-{n}"),
+        process: Process::Step.as_str().into(),
+        step: Some("a".into()),
+        attempt: Some(n),
+        started_at_utc: T0.into(),
+        ..Default::default()
+    };
+    w.process(attempt(1));
+    w.step(at("a", "running", "loaded 0/10"));
+    w.flush().await;
+    let before = versions(td.path()).await;
+
+    w.step(at("a", "running", "loaded 5/10"));
+    w.flush().await;
+    let ticked = versions(td.path()).await;
+    assert!(ticked[&StorePart::StepRuns] > before[&StorePart::StepRuns]);
+    assert_eq!(
+        ticked.get(&StorePart::Processes),
+        before.get(&StorePart::Processes),
+        "a progress tick moved the processes"
+    );
+
+    w.process(attempt(2));
+    w.flush().await;
+    let retried = versions(td.path()).await;
+    assert!(
+        retried[&StorePart::Processes] > ticked[&StorePart::Processes],
+        "a new attempt did not move the processes: {retried:?}"
+    );
 }

@@ -95,6 +95,12 @@ pub enum Table {
     #[serde(rename = "runs")]
     #[strum(serialize = "runs")]
     Runs,
+    /// `GET /api/processes`: a process started or ended — a step's new
+    /// attempt, a runner, a page. Not a step's progress, which moves
+    /// several times a second while it runs.
+    #[serde(rename = "processes")]
+    #[strum(serialize = "processes")]
+    Processes,
     /// `GET /api/log` and a run's log: any line, from either writer.
     #[serde(rename = "log")]
     #[strum(serialize = "log")]
@@ -234,6 +240,7 @@ fn tables_of(part: StorePart) -> &'static [Table] {
         StorePart::Metrics => &[Table::ManageRows],
         StorePart::RunLog => &[Table::Log, Table::ManageRows],
         StorePart::ProcessLog => &[Table::Log],
+        StorePart::Processes => &[Table::Processes],
     }
 }
 
@@ -1089,6 +1096,28 @@ mod tests {
             .flat_map(|p| tables_of(p).iter().copied())
             .collect();
         assert_eq!(tables, HashSet::from([Table::Log, Table::ManageRows]));
+    }
+
+    /// A step's progress tick is a `step_runs` write, about once a
+    /// second while it runs. The log panel refetches a run's whole
+    /// process list on `processes`, so a tick must not send one; a
+    /// process starting or ending must.
+    #[test]
+    fn a_step_progress_tick_does_not_wake_the_process_list() {
+        let mut seen = BTreeMap::from([(StorePart::StepRuns, 3), (StorePart::Processes, 2)]);
+        let now = BTreeMap::from([(StorePart::StepRuns, 4), (StorePart::Processes, 2)]);
+        let tables: HashSet<Table> = moved_parts(&now, &mut seen)
+            .into_iter()
+            .flat_map(|p| tables_of(p).iter().copied())
+            .collect();
+        assert!(!tables.contains(&Table::Processes), "{tables:?}");
+
+        let now = BTreeMap::from([(StorePart::StepRuns, 4), (StorePart::Processes, 3)]);
+        let tables: HashSet<Table> = moved_parts(&now, &mut seen)
+            .into_iter()
+            .flat_map(|p| tables_of(p).iter().copied())
+            .collect();
+        assert_eq!(tables, HashSet::from([Table::Processes]));
     }
 
     /// The reason the directory watch filters by name at all: `system/`

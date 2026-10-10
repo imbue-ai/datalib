@@ -15009,7 +15009,7 @@ expression: snapshot
   "storage_rows": [
     {
       "kind": "Source Size",
-      "members_sha": "sha256:41fed116f1a9577f652221791a74b6f242b5d26534e6059878cb09f47cc3ea0b",
+      "members_sha": "sha256:ea6e940c22de731ae6a007a0cf8583b00b278ab19b0576bd6f6f290c7d426043",
       "rows": 22,
       "source": ""
     },

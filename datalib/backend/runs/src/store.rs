@@ -1436,7 +1436,9 @@ pub fn now_split() -> (String, Option<String>) {
 /// them.
 async fn begin(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    insert_process(&mut tx, &scope.process).await?;
+    if insert_process(&mut tx, &scope.process).await? {
+        bump(&mut tx, StorePart::Processes).await?;
+    }
     if let Some(run) = &scope.run {
         begin_run(&mut tx, run, scope.retention).await?;
     }
@@ -1447,11 +1449,12 @@ async fn begin(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
 /// Idempotent, and called again with every batch of lines: a process
 /// that outlives the age cutoff and has no lines left in the store
 /// is pruned, and must not then write lines that name no process.
+/// True when the row is new: a watcher hears of that, not of a repeat.
 async fn insert_process(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     p: &ProcessRow,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+) -> Result<bool, sqlx::Error> {
+    let inserted = sqlx::query(
         "INSERT OR IGNORE INTO processes \
            (process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
             exit_code, signal, tz_offset, git_hash) \
@@ -1466,8 +1469,10 @@ async fn insert_process(
     .bind(&p.tz_offset)
     .bind(&p.git_hash)
     .execute(&mut **tx)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected()
+        > 0;
+    Ok(inserted)
 }
 
 /// A step's process, as the runner reports it: the whole row at start,
@@ -1730,11 +1735,12 @@ fn days_before(at: datalib_time::IsoOffsetTimestamp, days: u32) -> String {
 }
 
 /// The process is over, and its run with it. Counted as a change to
-/// the runs so a watcher redraws a run that just finished; a launch
-/// ending is nobody's live question. By now the runner has settled
-/// every step a request reached, so a step still `pending` is one no
-/// request asked for: it was not part of this run, and its row goes
-/// rather than reading as waiting forever.
+/// the runs and the processes so a watcher redraws a run that just
+/// finished, and its runner in the log's picker; a launch ending is
+/// nobody's live question. By now the runner has settled every step a
+/// request reached, so a step still `pending` is one no request asked
+/// for: it was not part of this run, and its row goes rather than
+/// reading as waiting forever.
 async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
     let (finished_at_utc, _) = now_split();
     let mut tx = pool.begin().await?;
@@ -1744,6 +1750,7 @@ async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
         .execute(&mut *tx)
         .await?;
     if let Some(run) = &scope.run {
+        bump(&mut tx, StorePart::Processes).await?;
         sqlx::query("UPDATE runs SET finished_at_utc = ? WHERE run_id = ?")
             .bind(&finished_at_utc)
             .bind(&run.run_id)
@@ -1815,11 +1822,12 @@ async fn flush(
         )
         .await?;
     }
+    let mut processes_moved = !batch.processes.is_empty();
     if !batch.steps.is_empty() {
         bump(&mut tx, StorePart::StepRuns).await?;
     }
     if !batch.logs.is_empty() {
-        insert_process(&mut tx, &scope.process).await?;
+        processes_moved |= insert_process(&mut tx, &scope.process).await?;
         let part = match scope.run {
             Some(_) => StorePart::RunLog,
             None => StorePart::ProcessLog,
@@ -1828,6 +1836,9 @@ async fn flush(
     }
     if !batch.metrics.is_empty() {
         bump(&mut tx, StorePart::Metrics).await?;
+    }
+    if processes_moved {
+        bump(&mut tx, StorePart::Processes).await?;
     }
     for s in batch.steps.values() {
         sqlx::query(

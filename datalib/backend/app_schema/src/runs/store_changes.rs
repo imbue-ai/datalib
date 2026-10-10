@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 /// The parts of the store a reader can depend on separately. `log` is
 /// two of them: a run's lines feed the Manage screen's rows (error
 /// counts, how long since a step last spoke), the server's own lines
-/// feed nothing but the log grid.
+/// feed nothing but the log grid. `processes` moves when a process row
+/// appears or ends, and not on a step's progress, which is `step_runs`.
 #[derive(
     Debug,
     Clone,
@@ -32,6 +33,7 @@ pub enum StorePart {
     Metrics,
     RunLog,
     ProcessLog,
+    Processes,
 }
 
 impl StorePart {
