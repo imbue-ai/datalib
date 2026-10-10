@@ -1,0 +1,22 @@
+{
+  "groups_joined_v2": [
+    {
+      "timestamp": 12590000000,
+      "title": "Jean-Luc Picard became a member of Starfleet Academy Alumni.",
+      "data": [
+        {
+          "name": "Starfleet Academy Alumni"
+        }
+      ]
+    },
+    {
+      "timestamp": 12591000000,
+      "title": "Jean-Luc Picard became a member of Ten Forward Regulars.",
+      "data": [
+        {
+          "name": "Ten Forward Regulars"
+        }
+      ]
+    }
+  ]
+}
