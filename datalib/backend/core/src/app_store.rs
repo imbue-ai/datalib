@@ -256,11 +256,12 @@ impl AppRepo for AppStore {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut conn = self
+        // One transaction per walk: an autocommit per row costs a sync each.
+        let mut tx = self
             .disk_stats_pool
-            .acquire()
+            .begin()
             .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+            .map_err(|e| RepoError::Internal(format!("begin: {e}")))?;
         for row in rows {
             // INSERT OR REPLACE, not plain INSERT: the key is
             // (path, measured_at_utc) and the sampler stamps one instant per
@@ -275,12 +276,43 @@ impl AppRepo for AppStore {
             .bind(&row.measured_at_utc)
             .bind(&row.tz_offset)
             .bind(row.bytes)
-            .execute(&mut *conn)
+            .execute(&mut *tx)
             .await
             .map_err(|e| RepoError::Internal(format!("insert disk_usage: {e}")))?;
         }
-        // Plain SQLite: the rows are the history.
-        Ok(())
+        tx.commit()
+            .await
+            .map_err(|e| RepoError::Internal(format!("commit disk_usage: {e}")))
+    }
+
+    async fn forget_disk_stats_before(&self, before_utc: &str) -> Result<u64, RepoError> {
+        let internal = |e: sqlx::Error| RepoError::Internal(format!("forget disk stats: {e}"));
+        let mut tx = self.disk_stats_pool.begin().await.map_err(internal)?;
+        // A row before the cutoff goes only when a later row of its series
+        // is also at or before it. That later one is the series' value from
+        // the cutoff on: the carry-in any range after it opens with
+        // (`disk_usage_between`), for a tree that has not moved since.
+        let usage = sqlx::query(
+            "DELETE FROM disk_usage WHERE measured_at_utc < ? AND EXISTS ( \
+               SELECT 1 FROM disk_usage AS later WHERE later.path = disk_usage.path \
+               AND later.measured_at_utc > disk_usage.measured_at_utc \
+               AND later.measured_at_utc <= ?)",
+        )
+        .bind(before_utc)
+        .bind(before_utc)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+        let free = sqlx::query(
+            "DELETE FROM disk_free WHERE measured_at_utc < ( \
+               SELECT MAX(measured_at_utc) FROM disk_free WHERE measured_at_utc <= ?)",
+        )
+        .bind(before_utc)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
+        tx.commit().await.map_err(internal)?;
+        Ok(usage.rows_affected() + free.rows_affected())
     }
 
     async fn recent_disk_usage(&self, limit: usize) -> Result<Vec<DiskUsageRow>, RepoError> {
@@ -659,6 +691,82 @@ mod tests {
             .map(|r| r.bytes)
             .collect();
         assert_eq!(root, vec![180, 100]);
+    }
+
+    /// Retention drops the samples of both series from before the cutoff,
+    /// but keeps each series' newest one at or before it: a tree that has
+    /// not moved since is still drawn, from that value, in a later run's
+    /// chart. The cutoff is passed in, so no clock is read.
+    #[tokio::test]
+    async fn disk_stats_before_the_cutoff_are_forgotten_but_the_carry_in_stays() {
+        let td = tempfile::tempdir().unwrap();
+        let store = AppStore::open(td.path()).await.unwrap();
+        store
+            .record_disk_usage(&[
+                sample(ROOT_PATH, "2026-08-01T00:00:00.000000+00:00", 1),
+                sample(ROOT_PATH, "2026-08-31T23:59:59.999999+00:00", 2),
+                sample(ROOT_PATH, "2026-09-20T00:00:00.000000+00:00", 3),
+                sample("a/ingest", "2026-08-01T00:00:00.000000+00:00", 10),
+                sample("a/ingest", "2026-08-15T00:00:00.000000+00:00", 11),
+                sample("b/ingest", "2026-07-01T00:00:00.000000+00:00", 20),
+                sample("c/ingest", "2026-08-01T00:00:00.000000+00:00", 30),
+                sample("c/ingest", "2026-09-01T00:00:00.000000+00:00", 31),
+            ])
+            .await
+            .unwrap();
+        for (at, available) in [
+            ("2026-08-01T00:00:00.000000+00:00", 50),
+            ("2026-08-20T00:00:00.000000+00:00", 40),
+            ("2026-09-10T00:00:00.000000+00:00", 30),
+        ] {
+            store
+                .record_disk_free(&DiskFreeRow {
+                    measured_at_utc: at.into(),
+                    tz_offset: Some("+00:00".into()),
+                    available_bytes: available,
+                    total_bytes: 100,
+                })
+                .await
+                .unwrap();
+        }
+
+        let gone = store
+            .forget_disk_stats_before("2026-09-01T00:00:00.000000+00:00")
+            .await
+            .unwrap();
+        assert_eq!(gone, 4);
+
+        let mut kept: Vec<(String, i64)> = store
+            .recent_disk_usage(50)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.path, r.bytes))
+            .collect();
+        kept.sort();
+        let want = [
+            (ROOT_PATH, 2),
+            (ROOT_PATH, 3),
+            ("a/ingest", 11),
+            ("b/ingest", 20),
+            ("c/ingest", 31),
+        ]
+        .map(|(p, b)| (p.to_string(), b));
+        assert_eq!(kept, want);
+        let free: Vec<i64> = store
+            .recent_disk_free(10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.available_bytes)
+            .collect();
+        assert_eq!(free, [30, 40]);
+
+        let again = store
+            .forget_disk_stats_before("2026-09-01T00:00:00.000000+00:00")
+            .await
+            .unwrap();
+        assert_eq!(again, 0, "a second pass over the same cutoff drops nothing");
     }
 
     /// A data root from before the stamps moved to `<x>_at_utc` +

@@ -125,8 +125,8 @@ commit as `datalib_runtime::build_id::git_hash` finds it at run time
 
 **Disk stats** is plain SQLite, because nothing ever committed it: it
 is a timeseries — `datalib-http` walks the root every five seconds
-*while a run holds it* and appends a row per tree whose size moved — so
-the rows *are* the history. Between runs nothing writes the root, so the series
+*while a run holds it* and appends a row per tree whose size moved, one
+transaction per walk — so the rows *are* the history. Between runs nothing writes the root, so the series
 deliberately has no samples there, and a change made from outside
 datalib carries the instant it was next *measured*. Reading it is
 `SELECT path, measured_at_utc, bytes FROM disk_usage`; it is compacted
@@ -135,7 +135,18 @@ value forward rather than assuming a fixed interval. Beside it,
 `disk_free` holds the free space on the root's disk, looked at every ten
 seconds whether or not a run is going and recorded when it moves by
 10 MB or more (`SELECT measured_at_utc, available_bytes, total_bytes
-FROM disk_free`). A root from before this store kept both tables in the
+FROM disk_free`).
+
+Both tables keep `disk_usage_days` from `[run_history]` (default 30,
+the same as `max_age_days`, so every run the dashboard still lists
+keeps its disk chart). `datalib-http` drops older samples when it
+starts and whenever a run ends, except each series' newest one at or
+before the cutoff: the series is compacted, so that row is what an
+unmoved tree still weighs, and a later range opens with it. Plain
+SQLite reuses the freed pages, so the file stops growing once the
+window is full.
+
+A root from before this store kept both tables in the
 doltlite `system/usage.doltlite_db`; the first open by a newer build
 copies its rows across and removes it, or, if it cannot read it, logs
 that at ERROR and tries again next time

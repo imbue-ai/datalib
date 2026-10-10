@@ -56,7 +56,9 @@ Retention is `[run_history]` in `config.toml`
 ([`configs/dag_example.toml`](../../configs/dag_example.toml)):
 `max_runs` / `max_age_days` for runs and everything that belongs to
 one, `process_log_days` / `process_log_lines` for the lines outside
-any run — the server's and the pages'. The store is not load-bearing:
+any run — the server's and the pages'. One more key, `disk_usage_days`,
+is for the disk samples rather than this store
+([`app_stores.md`](app_stores.md) § "Disk stats"). The store is not load-bearing:
 one that will not open is emptied and remade, and a schema bump does
 the same. The old file is copied first to `runs.bak_<UTC stamp>.sqlite`
 beside it, so its lines can still be read with `sqlite3`; nothing

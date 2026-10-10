@@ -79,7 +79,8 @@ pub struct DagConfig {
 
 /// The retention rule for `system/runs/runs.sqlite`, as a person writes it in
 /// `config.toml`. Both run limits apply; the app server's own log
-/// lines, which belong to no run, have their own two.
+/// lines, which belong to no run, have their own two. The disk samples in
+/// `system/disk_stats.sqlite` have one more.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunHistory {
@@ -95,6 +96,9 @@ pub struct RunHistory {
     /// Keep at most this many server log lines, newest first.
     #[serde(default = "RunHistory::default_process_log_lines")]
     pub process_log_lines: u32,
+    /// Drop a disk-usage or free-space sample older than this many days.
+    #[serde(default = "RunHistory::default_disk_usage_days")]
+    pub disk_usage_days: u32,
 }
 
 impl Default for RunHistory {
@@ -105,6 +109,7 @@ impl Default for RunHistory {
             max_age_days: r.max_age_days,
             process_log_days: r.process_log_days,
             process_log_lines: r.process_log_lines,
+            disk_usage_days: Self::default_disk_usage_days(),
         }
     }
 }
@@ -121,6 +126,11 @@ impl RunHistory {
     }
     fn default_process_log_lines() -> u32 {
         datalib_runs::Retention::default().process_log_lines
+    }
+    /// As long as a run is kept, so every run the dashboard still offers
+    /// keeps its disk chart.
+    fn default_disk_usage_days() -> u32 {
+        datalib_runs::Retention::default().max_age_days
     }
 
     pub fn retention(self) -> datalib_runs::Retention {
