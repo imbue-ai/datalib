@@ -18,9 +18,22 @@
 .handle-linkable {
   cursor: pointer;
 }
+/* A person chip says at a glance whether it is linked to one of your
+   contacts: pale blue when it is, grey while it is not (theme.css's
+   `--datalib-chip-*`). A chip link not yet drawn (the render preview, or
+   before the answer lands) is the grey; `:where` keeps that rule from
+   outranking the blue. */
+:where(a.chip[data-handle]),
+.handle-unresolved,
 .handle-resolved {
-  padding: 0 0.5rem 0 0.15rem;
-  background: var(--datalib-hover, #f0f0f0);
+  border-radius: 999px;
+  padding: 0 0.5em 0 0.2em;
+  background: var(--datalib-chip-unlinked-bg, rgba(110, 110, 115, 0.16));
+}
+a.chip.handle-resolved,
+.handle-resolved {
+  background: var(--datalib-chip-linked-bg, #d3e3fd);
+  color: var(--datalib-chip-linked-fg, #0b2a5e);
 }
 .handle-stale {
   opacity: 0.7;

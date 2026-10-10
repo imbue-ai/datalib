@@ -23,6 +23,7 @@ use datalib_etl_facebook_config::FacebookRenderConfig;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Buckets, Input, RawRange};
 use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use datalib_handle::Handle;
 use serde_json::Value;
 
 use crate::activity::{build_comments, build_reactions, comments_profile, reactions_profile};
@@ -52,6 +53,9 @@ pub struct Owner {
     /// The source's group id — a component of every id minted here.
     pub source_id: String,
     pub name: String,
+    /// The owner by name, as Messenger writes them; none for a store
+    /// with no profile, whose owner is only "Me".
+    pub handle: Option<Handle>,
     pub account: Option<String>,
     pub inputs: Vec<Input>,
 }
@@ -77,10 +81,16 @@ impl Owner {
             .filter(|s| !s.is_empty());
         Owner {
             source_id: source_id.to_string(),
+            handle: name.as_deref().and_then(Handle::facebook_name),
             name: name.clone().unwrap_or_else(|| "Me".to_string()),
             account: datalib_etl_chat_common::account_label("", email, name.as_deref()),
             inputs,
         }
+    }
+
+    /// The owner as the author of what they posted, commented or reacted.
+    pub fn author(&self) -> (String, Option<Handle>) {
+        (self.name.clone(), self.handle.clone())
     }
 }
 

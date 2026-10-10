@@ -70,7 +70,8 @@ failing.
 Who writes chips today: chat-common for a message's author,
 recipients and reactors (`chat-common/README.md` §"The message
 header"); Slack for a `<@U…>` mention in a body; contact-common for
-each member of a group of contacts that has a handle; the storage report
+the person a contact's page is about, as its heading, and for each
+member of a group of contacts that has a handle; the storage report
 (`datalib_step/src/introspect.rs`) for its group in the heading and
 each store's step in a column.
 
@@ -101,7 +102,8 @@ What goes into the look is each kind's own rule, pure and unit-tested:
   contact's name if a person linked one, else the best-ranked source's
   name, else what the source showed; the kind's mark while it is not
   linked to a contact, and a quiet "+" when a contacts app is there to
-  link it. [`contacts.md`](contacts.md)
+  link it. A chip linked to one of your contacts is blue, and one that
+  is not is grey (`chip.css`). [`contacts.md`](contacts.md)
   §"In the UI" has the ranking.
 - **A group or a step** — `entityLook` and `entityTitle` in
   `entities.ts`: the name the config gives it now (a step is named
@@ -212,7 +214,7 @@ Its clicks are a text field's: a click selects the chip whole, a
 double-click opens it as text to be edited, the one place a
 double-click does not open what the chip names. The right-click menu
 is the field's (Edit as text, Exclude) followed by `entityMenu`'s or
-`chipMenu`'s, so the dashboard, the log or "Everything from" is still a
+`chipMenu`'s, so the dashboard, the log or "Everything with" is still a
 right-click away; linking a handle stays the popover's
 (`ui/src/search/chipMenu.ts`).
 
@@ -222,7 +224,7 @@ right-click away; linking a handle stays the popover's
 |---|---|---|---|
 | **click** | the link popover, where a contacts app is configured | nothing; the href is never followed | nothing; the href is never followed |
 | **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the group's sync dashboard | the step's log |
-| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything from them; link to a contact or edit the link | `entityMenu`: copy the name, the id or both; open its dashboard; browse its documents | `entityMenu`: copy; show its log |
+| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityMenu`: copy the name, the id or both; open its dashboard; browse its documents | `entityMenu`: copy; show its log |
 | **hover** | the tooltip: who, the identifier, what each source calls them, their other handles | the tooltip: name and id, its type, its status | the same |
 | **copy** | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML | `Work Slack (datalib:group/slack)`, and the link | the same |
 

@@ -396,8 +396,7 @@ fn message(
         ));
     }
     let id = ids::message(&owner.source_id, row_id, date_ms);
-    let mut item = chat_item(id, author, date_ms, text, attachments);
-    item.author_handle = handle;
+    let mut item = chat_item(id, (author, handle), date_ms, text, attachments);
     // A message the export carries nothing of still happened: say so
     // rather than draw a bare header.
     if empty {
@@ -457,6 +456,7 @@ mod tests {
         Owner {
             source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
+            handle: datalib_handle::Handle::facebook_name("Jean-Luc Picard"),
             account: None,
             inputs: Vec::new(),
         }

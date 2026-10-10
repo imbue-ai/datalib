@@ -11,6 +11,8 @@ export type PersonSection = {
   contact: NormalizedContact;
   /** The source the chip that opened the card was seen in. */
   seenHere: boolean;
+  /** Why the record is on the card: the card's handles it holds. */
+  via: string[];
 };
 
 export type PersonModel = {
@@ -51,10 +53,12 @@ export function personModel(
       const id = `${contact.source_id}\u0000${contact.key}`;
       if (seen.has(id)) continue;
       seen.add(id);
+      const held = new Set(contact.handles.flatMap((ch) => (ch.handle ? [ch.handle] : [])));
       sections.push({
         sourceId: contact.source_id,
         contact,
         seenHere: seenIn !== null && contact.source_id === seenIn,
+        via: handles.filter((x) => held.has(x)),
       });
     }
   }
@@ -88,4 +92,45 @@ export function sectionLines(
     out.push({ label: "Seen", value: `${items}${last}` });
   }
   return out;
+}
+
+/** Where one handle stands against the card's contact: linked to it,
+ *  linked to someone else, or to nobody. */
+export type LinkState = "this" | "other" | "none";
+
+export function linkState(
+  handle: string,
+  mine: NormalizedContact | null,
+  whoOf: (handle: string) => Who | undefined,
+): LinkState {
+  const owner = whoOf(handle)?.mine;
+  if (!owner) return "none";
+  return mine && owner.key === mine.key ? "this" : "other";
+}
+
+/** The handles a source's record holds that no contact has: what its
+ *  "Link to …" button links to the card's contact. A handle someone else
+ *  holds is left alone, since linking it would take it from them. */
+export function linkableHandles(
+  section: PersonSection,
+  mine: NormalizedContact | null,
+  whoOf: (handle: string) => Who | undefined,
+): string[] {
+  if (!mine) return [];
+  const out: string[] = [];
+  for (const h of section.contact.handles) {
+    if (h.handle && !out.includes(h.handle) && linkState(h.handle, mine, whoOf) === "none") {
+      out.push(h.handle);
+    }
+  }
+  return out;
+}
+
+/** Every handle any section holds, for asking who each belongs to. */
+export function sectionHandles(model: PersonModel): string[] {
+  const out = new Set<string>();
+  for (const s of model.sections) {
+    for (const h of s.contact.handles) if (h.handle) out.add(h.handle);
+  }
+  return [...out];
 }

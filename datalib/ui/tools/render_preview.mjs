@@ -15,9 +15,13 @@
 // and the light/dark switch below) is new.
 //
 // Usage: node render_preview.mjs --md <dir-of-md> --out <file.html> [--ui <ui-root>]
+//          [--only <text>] [--title <title>]
+//
+// `--only` keeps the documents whose markdown holds that text: the
+// contact preview is every page contact-common wrote.
 
-import { readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname, extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
@@ -36,6 +40,8 @@ const outFile = resolve(arg("out"));
 // from wherever this script actually sits, which under `bazel run` is
 // the rules_js-linked node_modules rather than a host `pnpm install`.
 const uiRoot = resolve(arg("ui", join(import.meta.dirname, "..")));
+const only = arg("only", "");
+const pageTitle = arg("title", "Render preview");
 const pkgRoot = resolve(import.meta.dirname, "..");
 
 /** Every `<style>` block of a .vue file, concatenated. */
@@ -117,6 +123,16 @@ const sectionsModule = readFileSync(
 // hooks and drives selection from a grid-row click; here a plain click
 // stands in, so the selected styling is part of what gets reviewed.
 const PREVIEW_SCRIPT = String.raw`
+// Nothing resolves a chip here, so every person chip draws grey, as one
+// not linked to a contact; the switch draws them all as linked, blue.
+document.getElementById("linked").addEventListener("click", (ev) => {
+  const on = ev.target.getAttribute("aria-pressed") !== "true";
+  ev.target.setAttribute("aria-pressed", String(on));
+  for (const a of document.querySelectorAll("a.chip[data-handle]")) {
+    a.classList.toggle("handle-chip", on);
+    a.classList.toggle("handle-resolved", on);
+  }
+});
 for (const body of document.querySelectorAll(".chat-body")) {
   injectCopyUuidButtons(body);
   decorateLongMessages(body);
@@ -168,6 +184,31 @@ const md = new MarkdownIt({
 });
 md.use(chipLinks);
 
+// A photo or attachment beside a page (`blobs/x.svg`) is inlined, so the
+// page shows it wherever the preview is opened. The fixture's markdown
+// tar carries no blobs, so one that is not there draws as a grey disc.
+const MISSING = `data:image/svg+xml;base64,${Buffer.from(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="#94a3b8"/></svg>',
+).toString("base64")}`;
+const IMAGE_TYPES = { ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
+const renderImage = md.renderer.rules.image;
+md.renderer.rules.image = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const src = token.attrGet("src") ?? "";
+  if (env?.dir && src && !/^[a-z][a-z0-9+.-]*:|^\//i.test(src)) {
+    const file = join(env.dir, src);
+    const type = IMAGE_TYPES[extname(file).toLowerCase()];
+    token.attrSet(
+      "src",
+      type && existsSync(file)
+        ? `data:${type};base64,${readFileSync(file).toString("base64")}`
+        : MISSING,
+    );
+  }
+  return renderImage(tokens, idx, options, env, self);
+};
+
 /** Drop the YAML frontmatter the backend strips before serving. */
 function stripFrontmatter(text) {
   if (!text.startsWith("---\n")) return text;
@@ -197,6 +238,7 @@ function redactVolatileSizes(rel, text) {
 
 const mdFiles = readdirSync(mdDir, { recursive: true })
   .filter((f) => typeof f === "string" && f.endsWith(".md"))
+  .filter((f) => !only || readFileSync(join(mdDir, f), "utf8").includes(only))
   .sort();
 if (mdFiles.length === 0) throw new Error(`no .md files under ${mdDir}`);
 
@@ -222,6 +264,7 @@ ${rels
 <h3 class="preview-name">${rel}</h3>
 <div class="chat-body markdown-body">${md.render(
       redactVolatileSizes(rel, stripFrontmatter(readFileSync(join(mdDir, rel), "utf8"))),
+      { dir: dirname(join(mdDir, rel)) },
     )}</div>
 </div>`,
   )
@@ -235,13 +278,14 @@ const jumpList = [...bySource.keys()]
   .join("");
 
 const html = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Render preview</title>
+<html><head><meta charset="utf-8"><title>${pageTitle}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${css}</style></head>
 <body>
 <div class="preview-bar">
-  <strong>Render preview</strong>
+  <strong>${pageTitle}</strong>
   <button id="theme" type="button">Dark theme</button>
+  <button id="linked" type="button" aria-pressed="false">Draw chips as linked</button>
   <button id="expand" type="button">Expand / collapse all</button>
   <span>Click a message to select it.</span>
 </div>

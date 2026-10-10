@@ -7,6 +7,7 @@ import chipCss from "./chip.css?inline";
 
 import {
   chipLook,
+  identifierLook,
   chipMenu,
   composeUri,
   copyText,
@@ -151,7 +152,7 @@ describe("chipMenu", () => {
       "Copy riker@enterprise.org",
       "Copy “Will Riker”",
       "Copy “Will Riker <riker@enterprise.org>”",
-      "Everything from Will Riker",
+      "Everything with Will Riker",
       "Link to a contact…",
     ]);
     expect(unlinked.filter((e) => e.separator).map((e) => e.id)).toEqual([
@@ -176,8 +177,8 @@ describe("chipMenu", () => {
 
   /** By the handle, not the name shown: a name is any author holding it. */
   it("searches by the handle itself", () => {
-    expect(searchQueryFor("email:riker@enterprise.org")).toBe("from:email:riker@enterprise.org");
-    expect(searchQueryFor(TEL)).toBe(`from:${TEL}`);
+    expect(searchQueryFor("email:riker@enterprise.org")).toBe("with:email:riker@enterprise.org");
+    expect(searchQueryFor(TEL)).toBe(`with:${TEL}`);
   });
 });
 
@@ -353,5 +354,25 @@ describe("movesPeople", () => {
     expect(movesPeople({ kind: "table_changed", table: "curated" })).toBe(true);
     expect(movesPeople({ kind: "table_changed", table: "manage.rows" })).toBe(false);
     expect(movesPeople({ kind: "index_changed" })).toBe(false);
+  });
+});
+
+/** A list of one person's handles (the person card, a contact page's
+ *  fields) shows each handle, not the name again, in the same colours. */
+describe("identifierLook", () => {
+  it("shows the identifier, with the kind's mark, blue only when linked", () => {
+    const mine = contact("datalib_contacts", "Will Riker", [["email:riker@enterprise.org", null]]);
+    const linked = identifierLook(
+      "email:riker@enterprise.org",
+      "Riker@Enterprise.org",
+      { mine, sourceContacts: [] },
+      true,
+    );
+    expect(linked.text).toBe("Riker@Enterprise.org");
+    expect(linked.classes).toContain("handle-resolved");
+    expect([linked.initial, linked.photo, linked.icon]).toEqual([null, null, "email"]);
+    const loose = identifierLook(TEL, "", NOBODY, true);
+    expect(loose.text).toBe("+15550123456");
+    expect(loose.classes).toContain("handle-unresolved");
   });
 });

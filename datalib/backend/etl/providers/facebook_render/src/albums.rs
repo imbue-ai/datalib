@@ -49,7 +49,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         let item_id = ids::album_description(&owner.source_id, row_id, date_ms);
         items.push(chat_item(
             item_id,
-            owner.name.clone(),
+            owner.author(),
             date_ms,
             Some(strip_mentions(description)),
             Vec::new(),
@@ -66,7 +66,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
             kind_label: Some("Facebook Photo".to_string()),
             ..chat_item(
                 item_id,
-                owner.name.clone(),
+                owner.author(),
                 date_ms,
                 media_caption(photo, Some(name)),
                 vec![att],
@@ -126,6 +126,7 @@ mod tests {
         let owner = Owner {
             source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
+            handle: datalib_handle::Handle::facebook_name("Jean-Luc Picard"),
             account: None,
             inputs: Vec::new(),
         };

@@ -80,6 +80,7 @@ mod tests {
         let owner = Owner {
             source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
+            handle: datalib_handle::Handle::facebook_name("Jean-Luc Picard"),
             account: Some("picard@enterprise.starfleet".to_string()),
             inputs: Vec::new(),
         };
