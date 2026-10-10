@@ -1137,16 +1137,27 @@ impl RowCtx<'_> {
         // A step under a group takes its group's Browse once the group
         // row is built (`inherit_browse`); this is the answer for one
         // outside any group.
-        let browse = browse_action(
-            "Browse this data",
-            "Open this source\u{2019}s rows in the grid.",
-            Some(match e {
-                Entry::Step(_) => "A step outside any group has no source to browse.".to_string(),
-                Entry::Applet(_) => {
-                    "An applet serves endpoints; it has no rows of its own.".to_string()
-                }
-            }),
-        );
+        let browse = match e {
+            // The contacts app's rows are its own: Browse opens its table,
+            // read live from the app (`contactsView()` in the UI).
+            Entry::Applet(a) if a.id == crate::CONTACTS_APPLET => browse_action(
+                "Browse your contacts",
+                "Open every contact in the contacts app.",
+                None,
+            ),
+            _ => browse_action(
+                "Browse this data",
+                "Open this source\u{2019}s rows in the grid.",
+                Some(match e {
+                    Entry::Step(_) => {
+                        "A step outside any group has no source to browse.".to_string()
+                    }
+                    Entry::Applet(_) => {
+                        "An applet serves endpoints; it has no rows of its own.".to_string()
+                    }
+                }),
+            ),
+        };
         let (sync, stop_request_ids) = self.sync_action(&id, sync_offer);
         let dashboard = (matches!(e, Entry::Step(_)) && group.is_some()).then(dashboard_action);
         let turned_off_by = self.step(&id).and_then(|st| st.turned_off_by.clone());

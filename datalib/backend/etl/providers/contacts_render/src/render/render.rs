@@ -36,7 +36,7 @@ use datalib_schema::providers::Provider;
 /// 14: a card is its own conversation, filed under its address book as
 /// the channel alone, with its first address and number in columns and
 /// a group's members drawn as chips.
-pub const RENDER_VERSION: u32 = 14;
+pub const RENDER_VERSION: u32 = 15;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
@@ -198,13 +198,20 @@ fn normalize(
         contact
             .phones
             .iter()
-            .map(|p| ContactHandle::phone(p.label(), p.value.clone())),
+            .map(|p| ContactHandle::phone(p.label(), phone_number(&p.value))),
     );
     for a in &contact.addresses {
-        // ADR is `;`-separated: PO box; ext; street; locality; region; postcode; country
+        // ADR is `;`-separated: PO box; ext; street; locality; region;
+        // postcode; country. Most cards leave most of them empty.
+        let parts: Vec<String> = a
+            .text_list(';')
+            .into_iter()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
         person.details.push(Detail::new(
             field_label("Address", &a.label()),
-            a.text_list(';').join(", "),
+            parts.join(", "),
         ));
     }
     person.note = contact.note.clone();
@@ -251,6 +258,16 @@ fn category_name(category: &str) -> Option<String> {
     }
 }
 
+/// A vCard 4 `TEL;VALUE=uri:tel:+1-…` carries the number as a URI; the
+/// card means the number.
+fn phone_number(value: &str) -> String {
+    let v = value.trim();
+    match v.get(..4) {
+        Some(scheme) if scheme.eq_ignore_ascii_case("tel:") => v[4..].to_string(),
+        _ => v.to_string(),
+    }
+}
+
 fn field_label(base: &str, label: &Option<String>) -> String {
     match label {
         Some(s) if !s.is_empty() => format!("{base} ({s})"),
@@ -289,7 +306,7 @@ fn humanize_source_label(source_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl_contact_common::table_rows;
+    use datalib_etl_contact_common::field_rows;
     use datalib_etl_contacts::ingest::api::VcardProp;
     use datalib_etl_render::inputs::Input;
 
@@ -342,20 +359,39 @@ mod tests {
             Some("2370-04-15T00:00:00Z")
         );
         // Org `;` becomes ` — `; address `;` becomes `, `; typed labels.
-        let rows = table_rows(&n.contact);
-        let labels: Vec<&str> = rows.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(n.contact.org.as_deref(), Some("Starfleet — USS Enterprise"));
+        let rows = field_rows(&n.contact);
+        let labels: Vec<(&str, Option<&str>)> = rows
+            .iter()
+            .map(|r| (r.label.as_str(), r.qualifier.as_deref()))
+            .collect();
         assert_eq!(
             labels,
             vec![
-                "Org",
-                "Title",
-                "Email (work)",
-                "Phone (work)",
-                "Address (work)",
-                "Note"
+                ("Email", Some("work")),
+                ("Phone", Some("work")),
+                ("Address", Some("work")),
+                ("Note", None)
             ]
         );
-        assert_eq!(rows[0].1, "Starfleet — USS Enterprise");
+        assert_eq!(
+            rows[2].value, "Ready Room, Deck 1",
+            "empty parts are left out"
+        );
+    }
+
+    /// A vCard 4 number written as a URI (`TEL;VALUE=uri:tel:+1-…`) is
+    /// the number: it reads and links as one.
+    #[test]
+    fn a_tel_uri_is_its_number() {
+        let mut c = sample();
+        c.phones = vec![prop("tel:+1-202-555-0101", Some("cell"))];
+        let n = normalize(&c, "tng_contacts", &Cards::new(), &Groups::new());
+        assert_eq!(n.contact.handles[1].value, "+1-202-555-0101");
+        assert_eq!(
+            n.contact.handles[1].handle.as_ref().map(|h| h.as_str()),
+            Some("tel:+12025550101")
+        );
     }
 
     /// A card's text goes to contact-common as the card has it, markup
@@ -460,16 +496,7 @@ mod tests {
         ];
         let groups = groups_by_member(&contacts);
         let n = normalize(&contacts[0], "tng_contacts", &Cards::new(), &groups);
-        let rows = table_rows(&n.contact);
-        let listed: Vec<(&str, &str)> = rows
-            .iter()
-            .take(2)
-            .map(|(l, v)| (l.as_str(), v.as_str()))
-            .collect();
-        assert_eq!(
-            listed,
-            vec![("Group", "Away Team"), ("Group", "Senior Staff")]
-        );
+        assert_eq!(n.contact.groups, vec!["Away Team", "Senior Staff"]);
         let rows: Vec<&str> = n.inputs.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(rows, vec!["row-picard", "row-g1", "row-g2"]);
     }

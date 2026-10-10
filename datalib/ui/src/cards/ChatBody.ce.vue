@@ -135,7 +135,7 @@ const emit = defineEmits<{
   /** A right-click in a framed body, with the frame's window (whose
    *  selection it is) and where the frame sits in this one. */
   (e: "frame-contextmenu", ev: MouseEvent, view: { win: Window; dx: number; dy: number }): void;
-  /** A chip asked for everything from its person: the search to open. */
+  /** A chip asked for everything with its person: the search to open. */
   (e: "open-search", q: string): void;
   /** A chip asked to open its card — a person's, a group's or a
    *  step's: the card source. */

@@ -313,7 +313,7 @@ function chipNamed(chip: ChipRef, value: string): { name: string; own: FieldMenu
       name,
       own: [
         { id: "copy-name", label: `Copy “${name}”` },
-        { id: "search", label: `Everything from ${name}`, separator: true },
+        { id: "search", label: `Everything with ${name}`, separator: true },
       ],
     };
   }
@@ -399,7 +399,7 @@ async function runMenu(view: EditorView, id: FieldMenuId, w: Word, chip: ChipRef
     case "search":
       if (person) hooks?.openCard(searchSource(searchQueryFor(person)));
       if (contact)
-        hooks?.openCard(searchSource(filterToken("from", `${CONTACT}${contact}`, false)));
+        hooks?.openCard(searchSource(filterToken("with", `${CONTACT}${contact}`, false)));
       break;
     case "edit":
       break;

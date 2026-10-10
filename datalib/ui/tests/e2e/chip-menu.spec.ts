@@ -4,7 +4,7 @@ import { EVERY_ROW, selectRowByUuid, inDocFrame, stubClipboard } from "./grid-he
 // A person in a document is a chip (docs/dev/chips.md). Right-click
 // on one opens the chip's own menu rather than the document's; its
 // entries open the person's card, write to an email address, copy the
-// name or the identifier and open a search for everything from that
+// name or the identifier and open a search for everything with that
 // person; a double-click opens the person's card, led by this
 // document's source. The fixture has no contacts app, so
 // the chips are unresolved and the menu has no link entry — the copies,
@@ -12,7 +12,7 @@ import { EVERY_ROW, selectRowByUuid, inDocFrame, stubClipboard } from "./grid-he
 
 type Row = { uuid: string; kind: string; message_index: number | null; author: string };
 
-// The search box of the Search card an "everything from" opens (its source
+// The search box of the Search card an "everything with" opens (its source
 // names a query), not that of the search the page opened on.
 const SEARCH_INPUT = '.ct-card[data-card-source*="searchView({"] [data-testid="search-input"]';
 
@@ -60,7 +60,7 @@ test("right-click on a chip opens its menu, and the copies carry name and identi
   await expect(menu.locator(".chip-menu-item")).toContainText([
     /^Open contact$/,
     /^Copy /,
-    /^Everything from /,
+    /^Everything with /,
   ]);
   await menu.locator(".chip-menu-item", { hasText: `Copy ${value}` }).click();
   await expect(menu).toBeHidden();
@@ -137,14 +137,14 @@ test("compose hands an email address to the mail app", async ({ page, request })
     .toEqual([`mailto:${value}`]);
 });
 
-test("the menu's search opens everything from the person", async ({ page, request }) => {
+test("the menu's search opens everything with the person", async ({ page, request }) => {
   const chip = await openADocumentWithAChip(page, request);
   await expect(page.locator(SEARCH_INPUT)).toHaveCount(0);
 
   await chip.click({ button: "right" });
-  await page.locator(".chip-menu .chip-menu-item", { hasText: /^Everything from / }).click();
+  await page.locator(".chip-menu .chip-menu-item", { hasText: /^Everything with / }).click();
   // By the handle itself, which the search bar draws as the person's chip.
-  await expect(page.locator(SEARCH_INPUT)).toHaveAttribute("data-query", /^from:slack:/, {
+  await expect(page.locator(SEARCH_INPUT)).toHaveAttribute("data-query", /^with:slack:/, {
     timeout: 10_000,
   });
 });
@@ -159,16 +159,18 @@ test("a double-click opens the person's card, led by the document's source", asy
 
   const card = page.locator(".person");
   await expect(card.locator(".person-name")).not.toHaveText("", { timeout: 10_000 });
-  await expect(card.locator(".person-about")).toContainText("not linked to a contact");
+  await expect(card.locator(".person-about")).toContainText(/not linked to a contact/i);
+  // The heading is the person's chip, grey: no contacts app, so not linked.
+  await expect(card.locator(".person-name a.chip")).toHaveClass(/handle-unresolved/);
   // Slack's record of its own author, from the document's source.
   const first = card.locator(".person-section").first();
   await expect(first).toHaveClass(/person-seen-here/);
   await expect(first.locator(".person-badge")).toHaveText("seen here");
 
-  // Everything from them is a search, opened beside the card.
-  await card.getByRole("button", { name: "Everything from them" }).click();
+  // Everything with them is a search, opened beside the card.
+  await card.getByRole("button", { name: "Everything with them" }).click();
   // By the handle itself, which the search bar draws as the person's chip.
-  await expect(page.locator(SEARCH_INPUT)).toHaveAttribute("data-query", /^from:slack:/, {
+  await expect(page.locator(SEARCH_INPUT)).toHaveAttribute("data-query", /^with:slack:/, {
     timeout: 10_000,
   });
 });

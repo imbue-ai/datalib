@@ -24,7 +24,6 @@ import { oneAtATime, subscribeLive } from "@/live";
 import ChatBody from "./ChatBody.ce.vue";
 import { absoluteRemote, type RemoteRef } from "./remoteMedia";
 import { renderDocument } from "./renderDocument";
-import FeedbackButton from "@/components/FeedbackButton.ce.vue";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import {
   buildContext,
@@ -75,7 +74,7 @@ function onFrameLink(link: ClickedLink) {
   else void openExternal(url);
 }
 
-/// A chip asked for everything from its person: a search card on that
+/// A chip asked for everything with its person: a search card on that
 /// query, beside this one.
 function onOpenSearch(q: string) {
   props.ctx.host.openCards(`searchView(${JSON.stringify({ q })})`);
@@ -550,22 +549,6 @@ watch(
     <p v-else-if="loading && !chat" class="empty">loading…</p>
     <p v-else-if="error" class="error">error: {{ error }}</p>
     <template v-else-if="chat">
-      <header class="chat-header">
-        <!-- Title block (with copy-id button and source-URL arrow) is
-             rendered inline at the top of the body by the cross-provider
-             `Title` helper. The header here only carries the
-             non-title chrome: the feedback button. No date: a message
-             shows its own, and a document's other stamps are in its
-             frontmatter. The "open this column alone" affordance lives
-             in the host's column chrome. -->
-        <p class="meta">
-          <FeedbackButton
-            :entity-uuid="chat.markdown_uuid"
-            entity-kind="conversation"
-            label="Conversation"
-          />
-        </p>
-      </header>
       <ul v-if="problems.length || problemErrors.length" class="problems">
         <li v-for="e in problemErrors" :key="e" class="problem problem-error">
           <span class="problem-severity">error</span>
@@ -764,18 +747,12 @@ watch(
   margin: 0 -1rem -0.75rem;
 }
 .chat-preview > .empty,
-.chat-preview > .error,
-.chat-header {
+.chat-preview > .error {
   padding-top: 0.75rem;
 }
-.chat-header h2 {
-  margin: 0 0 0.25rem;
-  font-size: 1.1rem;
-}
-.meta {
-  font-size: 0.8rem;
-  color: var(--datalib-muted);
-  margin: 0 0 0.25rem;
+.chat-preview > .problems:first-child,
+.chat-preview > .remote-banner:first-child {
+  margin-top: 0.75rem;
 }
 .empty,
 .error {

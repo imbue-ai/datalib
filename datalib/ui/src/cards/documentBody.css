@@ -531,3 +531,97 @@
   opacity: 1;
   filter: none;
 }
+
+/* A contact's page (contact-common): the person as a card — photo,
+   their chip as the heading, role and groups — then what the source
+   says about them as a two-column list. */
+.chat-body .contact-head {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 0.25rem 0 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: calc(var(--datalib-radius) + 4px);
+  background: var(--datalib-card-bg, #fafafa);
+}
+.chat-body .contact-photo p {
+  margin: 0;
+}
+.chat-body .contact-photo img {
+  display: block;
+  width: 5.5rem;
+  height: 5.5rem;
+  max-height: none;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.chat-body .contact-who {
+  min-width: 0;
+}
+.chat-body .contact-who h1 {
+  font-size: 1.4rem;
+  line-height: 1.3;
+  margin: 0;
+  border: none;
+  padding: 0;
+}
+.chat-body .contact-role {
+  margin: 0.2rem 0 0;
+  color: var(--datalib-muted, #94a3b8);
+}
+.chat-body .contact-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.45rem 0 0;
+}
+.chat-body .contact-group {
+  font-size: 0.75rem;
+  padding: 0.05rem 0.5rem;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+  color: var(--datalib-muted, #94a3b8);
+}
+.chat-body .contact-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.35rem 1.25rem;
+  margin: 0 0 1rem;
+  padding: 0 1rem;
+}
+.chat-body .contact-fields dt {
+  color: var(--datalib-muted, #94a3b8);
+  text-align: right;
+}
+.chat-body .contact-fields dd {
+  margin: 0;
+}
+/* A handle's value is a chip in a paragraph of its own (markdown makes
+   the chip link); the paragraph keeps no margin, so its row is as tall
+   as a plain one. */
+.chat-body .contact-fields dd > p {
+  margin: 0;
+}
+.chat-body .contact-qualifier {
+  font-size: 0.8em;
+  font-style: italic;
+}
+.chat-body .contact-members h2 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--datalib-muted, #94a3b8);
+  margin: 0 0 0.4rem;
+  padding: 0 1rem;
+  border: none;
+}
+.chat-body .contact-members ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  list-style: none;
+  margin: 0;
+  padding: 0 1rem;
+}

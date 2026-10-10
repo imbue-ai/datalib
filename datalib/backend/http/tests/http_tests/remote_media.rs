@@ -383,6 +383,7 @@ async fn app() -> (PathBuf, axum::Router) {
         root_tx: tokio::sync::broadcast::channel(16).0,
         usage: Default::default(),
         newer_root: Vec::new(),
+        shutting_down: Default::default(),
         applets: Arc::new(datalib_http::applets::AppletRegistry::build(
             Vec::new(),
             (*root).clone(),
