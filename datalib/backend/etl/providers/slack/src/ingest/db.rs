@@ -479,6 +479,13 @@ impl RawDb {
         }
     }
 
+    pub async fn count_messages(&self) -> Result<i64> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE payload IS NOT NULL")
+            .fetch_one(self.pool())
+            .await
+            .context("count messages")
+    }
+
     pub async fn load_messages(&self) -> Result<Vec<LoadedMessage>> {
         let rows = sqlx::query(
             "SELECT id, team_id, channel_id, ts, thread_ts, is_thread_root, user_id,

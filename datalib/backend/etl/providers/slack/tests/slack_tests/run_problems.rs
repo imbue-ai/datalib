@@ -276,3 +276,33 @@ async fn a_channel_listing_that_fails_with_nothing_stored_fails_the_run() {
         "{err:#}"
     );
 }
+
+/// #1049: every channel answering with an empty page leaves an empty
+/// mirror that Slack calls a success, so the run says so in a warning.
+/// The first run that stores a message clears it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_empty_mirror_after_a_clean_walk_is_a_warning_until_a_message_arrives() {
+    let d = tempdir().unwrap();
+    let out = d.path().join("out_raw");
+    let channels = json!([channel("C1", "bridge"), channel("C2", "engineering")]);
+
+    let api1 = d.path().join("api1");
+    record_listings(&api1, channels.clone());
+    History::cold("C1").record(&api1, json!([])).unwrap();
+    History::cold("C2").record(&api1, json!([])).unwrap();
+    serve(&api1, &d.path().join("playback1"));
+    fetch_into(&out, |o| o).await.unwrap();
+    assert_eq!(stored_ts(&out), Vec::<String>::new());
+    assert_eq!(problems(&out).await, [row("silent:channels", "warning")]);
+
+    let api2 = d.path().join("api2");
+    record_listings(&api2, channels);
+    History::cold("C1")
+        .record(&api2, json!([msg(A, "status report")]))
+        .unwrap();
+    History::cold("C2").record(&api2, json!([])).unwrap();
+    serve(&api2, &d.path().join("playback2"));
+    fetch_into(&out, |o| o).await.unwrap();
+    assert_eq!(stored_ts(&out), [A]);
+    assert_eq!(problems(&out).await, [], "the mirror holds a message now");
+}
