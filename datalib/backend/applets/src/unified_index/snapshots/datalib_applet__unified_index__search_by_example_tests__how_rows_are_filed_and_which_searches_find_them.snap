@@ -10,6 +10,9 @@ bridge-thread
     id         bridge-thread                            derived
     title      #bridge                                  derived
     name       #bridge                                  derived
+    participant Q                                        supplied
+    participant slack:T1701/U0000002                     supplied
+    participant slack:T1701/U0000003                     supplied
 
 picard-card
   columns
@@ -24,6 +27,18 @@ picard-card
     about      Jean-Luc Picard                          supplied
     about      email:jean-luc@chateau-picard.example    supplied
     about      email:picard@enterprise.org              supplied
+
+q-reaction
+  columns
+    kind           Slack Reaction
+    channel        #bridge
+    author         Q
+  terms
+    id         q-reaction                               derived
+    container  bridge-thread                            derived
+    title      #bridge                                  derived
+    name       #bridge                                  derived
+    author     Q                                        derived
 
 riker-email
   columns
@@ -55,6 +70,9 @@ riker-thread
     title      Away team roster                         derived
     name       Away team roster                         derived
     name       picard@enterprise.org                    derived
+    participant email:picard@enterprise.org              supplied
+    participant email:riker@enterprise.org               supplied
+    participant email:troi@enterprise.org                supplied
 
 senior-staff-card
   columns

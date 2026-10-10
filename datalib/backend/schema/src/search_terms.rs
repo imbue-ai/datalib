@@ -49,6 +49,12 @@ pub enum SearchTermKind {
     /// Who a contact's own row is about: each of the card's handles, and
     /// the names it gives. What `with:` finds a contact's card by.
     About = 12,
+    /// Who took part in a conversation, on its document's own row: every
+    /// author, recipient, mention and reactor of the messages it holds,
+    /// by handle where the source has one, else by the name shown. What
+    /// `with:` finds a conversation by, so `is:document with:…` lists
+    /// the conversations someone was in.
+    Participant = 13,
 }
 
 impl SearchTermKind {
@@ -88,7 +94,7 @@ impl SearchTermKind {
             | SearchTermKind::Mention
             | SearchTermKind::Container => 3,
             SearchTermKind::Title | SearchTermKind::Label => 2,
-            SearchTermKind::Author | SearchTermKind::Name => 1,
+            SearchTermKind::Author | SearchTermKind::Name | SearchTermKind::Participant => 1,
         }
     }
 
@@ -106,6 +112,7 @@ impl SearchTermKind {
             | SearchTermKind::Name
             | SearchTermKind::Author
             | SearchTermKind::About
+            | SearchTermKind::Participant
             | SearchTermKind::Label => false,
         }
     }
