@@ -11,7 +11,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -324,19 +324,22 @@ fn user_items(
     if text.trim().is_empty() {
         return;
     }
-    let (label, author, aside) = if is_meta {
-        ("Harness Message", "Claude Code", true)
+    let (label, author, author_kind, aside) = if is_meta {
+        ("Harness Message", "Claude Code", AuthorKind::Named, true)
     } else {
-        ("User Input", "User", false)
+        ("User Input", "User", AuthorKind::Account, false)
     };
-    out.push(item(
-        ids::record(source_id, uuid, ms.map(|m| m + n as i64)),
-        author.to_string(),
-        ms.map(|m| m + n as i64),
-        text,
-        label,
-        aside,
-    ));
+    out.push(NormalizedChatItem {
+        author_kind,
+        ..item(
+            ids::record(source_id, uuid, ms.map(|m| m + n as i64)),
+            author.to_string(),
+            ms.map(|m| m + n as i64),
+            text,
+            label,
+            aside,
+        )
+    });
 }
 
 fn assistant_items(

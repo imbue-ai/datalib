@@ -6,7 +6,7 @@ use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::BulkUpsertable as _;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChatItem, UpstreamRef,
+    AuthorKind, ItemKind, NormalizedAttachment, NormalizedChatItem, UpstreamRef,
 };
 use datalib_etl_facebook::ingest::schema_raw::MediaBlobRow;
 use datalib_etl_render::inputs::Inputs;
@@ -158,7 +158,7 @@ pub fn media_caption(media: &Value, album_name: Option<&str>) -> Option<String> 
 /// text one.
 pub fn chat_item(
     item_id: Identity,
-    (author_display, author_handle): (String, Option<Handle>),
+    (author_display, author_handle, author_kind): (String, Option<Handle>, AuthorKind),
     date_ms: Option<i64>,
     text: Option<String>,
     attachments: Vec<NormalizedAttachment>,
@@ -166,6 +166,7 @@ pub fn chat_item(
     NormalizedChatItem {
         message_uuid: item_id.uuid,
         author_handle,
+        author_kind,
         author_display,
         date_ms,
         text,

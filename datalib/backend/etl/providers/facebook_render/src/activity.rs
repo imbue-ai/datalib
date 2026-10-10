@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use datalib_etl_chat_common::period::year_of;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    AuthorKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_facebook::ingest::schema_raw::GROUP_COMMENTS_TABLE;
 use datalib_etl_facebook::ingest::schema_raw::{
@@ -74,7 +74,11 @@ pub fn build_comments(
         let raw = comment.and_then(|c| str_field(c, "comment")).unwrap_or("");
         texts.push((raw.to_string(), ts_ms(v, "timestamp")));
         let author = match comment.and_then(|c| str_field(c, "author")) {
-            Some(name) => (name.to_string(), Handle::facebook_name(name)),
+            Some(name) => (
+                name.to_string(),
+                Handle::facebook_name(name),
+                AuthorKind::Named,
+            ),
             None => owner.author(),
         };
         let mut text = comment
@@ -393,6 +397,7 @@ mod tests {
         Owner {
             source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
+            name_kind: AuthorKind::Named,
             handle: datalib_handle::Handle::facebook_name("Jean-Luc Picard"),
             account: None,
             inputs: Vec::new(),

@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use datalib_etl_chat_common::period::by_year;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::inputs::Inputs;
@@ -72,6 +72,7 @@ pub fn item(
     NormalizedChatItem {
         message_uuid: id.uuid,
         author_handle: None,
+        author_kind: AuthorKind::Named,
         author_display: author.to_string(),
         date_ms,
         text: None,
@@ -89,6 +90,19 @@ pub fn item(
         recipients: Vec::new(),
         mentions: Vec::new(),
         problems,
+    }
+}
+
+/// An item of the account's own, under the "Me" that stands in for it.
+pub fn own_item(
+    id: Identity,
+    date_ms: Option<i64>,
+    kind_label: &str,
+    problems: Vec<Problem>,
+) -> NormalizedChatItem {
+    NormalizedChatItem {
+        author_kind: AuthorKind::Account,
+        ..item(id, ME, date_ms, kind_label, problems)
     }
 }
 

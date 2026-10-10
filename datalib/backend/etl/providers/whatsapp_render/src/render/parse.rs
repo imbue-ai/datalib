@@ -16,7 +16,7 @@ use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::blob_cas::{self, BlobBundle};
 use datalib_etl::doltlite_raw::table_exists;
 use datalib_etl::periodize::Period;
-use datalib_etl_chat_common::types::UpstreamRef;
+use datalib_etl_chat_common::types::{AuthorKind, UpstreamRef};
 use datalib_etl_chat_common::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,
@@ -324,9 +324,9 @@ async fn parse_async(
         });
         let emoji: Option<String> = r.get("reaction");
         let timestamp: Option<i64> = r.get("timestamp");
-        let reactor_display = match reactor.as_deref() {
-            Some(j) => names.label(j, inputs),
-            None => "Me".to_string(),
+        let (reactor_display, reactor_kind) = match reactor.as_deref() {
+            Some(j) => (names.label(j, inputs), AuthorKind::Named),
+            None => ("Me".to_string(), AuthorKind::Account),
         };
         // A NULL `timestamp` column is "we don't know when", which is a
         // null `created_at` — not 1970.
@@ -337,6 +337,7 @@ async fn parse_async(
             .push(NormalizedReaction {
                 reaction_uuid: id.uuid,
                 reactor_handle: reactor.as_deref().and_then(|j| names.handle(j)),
+                reactor_kind,
                 reactor_display,
                 source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                 emoji: emoji.unwrap_or_else(|| "?".to_string()),
@@ -491,6 +492,11 @@ fn build_item(
     let message_type: Option<i64> = r.get("message_type");
     let text_data: Option<String> = r.get("text_data");
 
+    let author_kind = if key.from_me == 1 {
+        AuthorKind::Account
+    } else {
+        AuthorKind::Named
+    };
     let author_display = if key.from_me == 1 {
         "Me".to_string()
     } else if let Some(j) = sender_jid.as_deref() {
@@ -537,6 +543,7 @@ fn build_item(
     NormalizedChatItem {
         message_uuid: id.uuid,
         author_handle,
+        author_kind,
         author_display,
         // A NULL `timestamp` column is "we don't know when", which is a
         // null `created_at` — not 1970. See

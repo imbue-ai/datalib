@@ -108,7 +108,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl_chat_common::types::ItemKind;
+    use datalib_etl_chat_common::types::{AuthorKind, ItemKind};
     use serde_json::json;
 
     #[test]
@@ -126,6 +126,7 @@ mod tests {
         let owner = Owner {
             source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
+            name_kind: AuthorKind::Named,
             handle: datalib_handle::Handle::facebook_name("Jean-Luc Picard"),
             account: None,
             inputs: Vec::new(),

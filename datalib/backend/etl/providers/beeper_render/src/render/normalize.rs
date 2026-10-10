@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction, OrphanReactions, UpstreamRef,
 };
 use datalib_etl_chat_common::RenderProfile;
@@ -187,6 +187,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         return NormalizedChatItem {
             message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
             author_handle: None,
+            author_kind: AuthorKind::Named,
             author_display: m.sender_label.clone().unwrap_or_default(),
             date_ms: Some(m.timestamp_ms),
             text: None,
@@ -210,6 +211,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
     NormalizedChatItem {
         message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
         author_handle: None,
+        author_kind: AuthorKind::Named,
         author_display: m.sender_label.clone().unwrap_or_default(),
         date_ms: Some(m.timestamp_ms),
         text: body,
@@ -264,6 +266,10 @@ fn to_reaction(source_id: &str, r: &Event) -> NormalizedReaction {
         // A Matrix user id has no handle kind yet (contact_linking.md's table
         // lists `beeper` as a later one).
         reactor_handle: None,
+        reactor_kind: match r.sender_label {
+            Some(_) => AuthorKind::Named,
+            None => AuthorKind::Unknown,
+        },
         reactor_display: r.sender_label.clone().unwrap_or_else(|| "?".into()),
         emoji: r.reaction_emoji.clone().unwrap_or_else(|| "?".into()),
         date_ms: Some(r.timestamp_ms),

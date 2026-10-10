@@ -19,7 +19,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::changed_chats;
 use datalib_etl_chat_common::render::{RenderProfile, ENTITY_KIND_CONVERSATION};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
@@ -286,16 +286,18 @@ async fn load(
             chat.inputs.read("handle", &handle_id.to_string());
         }
         let from_me: i64 = r.get("is_from_me");
-        let (author_handle, author_display) = if from_me == 1 {
-            (None, "Me".to_string())
+        let (author_handle, author_display, author_kind) = if from_me == 1 {
+            (None, "Me".to_string(), AuthorKind::Account)
         } else {
-            let id = handles
-                .get(&handle_id)
-                .or(chat.identifier.as_ref())
-                .cloned()
-                .unwrap_or_else(|| "?".to_string());
-            // A Messages handle is a phone number or an Apple ID email.
-            (Handle::tel(&id).or_else(|| Handle::email(&id)), id)
+            match handles.get(&handle_id).or(chat.identifier.as_ref()) {
+                // A Messages handle is a phone number or an Apple ID email.
+                Some(id) => (
+                    Handle::tel(id).or_else(|| Handle::email(id)),
+                    id.clone(),
+                    AuthorKind::Named,
+                ),
+                None => (None, "?".to_string(), AuthorKind::Unknown),
+            }
         };
         let guid: String = r.get("guid");
         let date_ms = apple_date_ms(r.get("date"));
@@ -310,6 +312,7 @@ async fn load(
                 reaction: NormalizedReaction {
                     reaction_uuid: uuid(source_id, KIND_REACTION, &guid, date_ms),
                     reactor_handle: author_handle,
+                    reactor_kind: author_kind,
                     reactor_display: author_display,
                     emoji: tapback_emoji(tapback % 1000, r.get("associated_message_emoji")),
                     date_ms,
@@ -333,6 +336,7 @@ async fn load(
         chat.items.push(NormalizedChatItem {
             message_uuid: message_uuid(source_id, &guid, date_ms),
             author_handle,
+            author_kind,
             author_display,
             date_ms,
             text: body_text(r.get("text"), r.get("attributedBody"), &guid),

@@ -10,7 +10,8 @@ use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    UpstreamRef,
 };
 use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -312,6 +313,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
             NormalizedChatItem {
                 message_uuid,
                 author_handle: None,
+                author_kind: AuthorKind::Named,
                 author_display: display.to_string(),
                 date_ms,
                 text: None,
@@ -372,6 +374,11 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
             NormalizedChatItem {
                 message_uuid,
                 author_handle,
+                author_kind: if is_me {
+                    AuthorKind::Account
+                } else {
+                    AuthorKind::Named
+                },
                 author_display,
                 date_ms,
                 text,
@@ -583,6 +590,11 @@ mod tests {
             .find(|i| i.source_ref.as_ref().unwrap().native_id == "m2")
             .unwrap();
         assert_eq!(me.author_display, "Me");
+        assert_eq!(
+            me.author_kind,
+            AuthorKind::Account,
+            "a stand-in, not a name"
+        );
     }
 
     #[test]

@@ -19,7 +19,7 @@ use datalib_time::RecordStampPrecision;
 
 use crate::render::{render_all, RenderProfile, TextFormat, ENTITY_KIND_CONVERSATION};
 use crate::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,
 };
 
@@ -72,6 +72,7 @@ fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: uuid.to_string(),
         author_handle: None,
+        author_kind: AuthorKind::Named,
         author_display: author.to_string(),
         date_ms: Some(at),
         text: Some(body.to_string()),
@@ -208,6 +209,7 @@ fn group_chat() -> NormalizedChat {
             reaction_uuid: "s2-react-1".to_string(),
             reactor_handle: datalib_handle::Handle::email("riker@enterprise.org"),
             reactor_display: "Will Riker".to_string(),
+            reactor_kind: AuthorKind::Named,
             emoji: "🫡".to_string(),
             date_ms: Some(T0 + 60000),
             source_ref: None,
@@ -216,6 +218,7 @@ fn group_chat() -> NormalizedChat {
             reaction_uuid: "s2-react-2".to_string(),
             reactor_handle: None,
             reactor_display: "Deanna Troi".to_string(),
+            reactor_kind: AuthorKind::Named,
             emoji: "👍".to_string(),
             date_ms: Some(T0 + 90000),
             source_ref: None,
