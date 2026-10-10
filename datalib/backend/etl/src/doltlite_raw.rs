@@ -91,13 +91,14 @@ pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String 
 // the content payload makes every re-download look like a change.
 
 /// Steps from the payload root down to a field to split out. A step is an
-/// object key, or [`EVERY_ELEMENT`] for each element of an array.
-/// `&["updated"]` is top-level; `&["topic", "last_set"]` is nested;
-/// `&["blocks", "*", "block_id"]` is the `block_id` of every block. The
-/// last step must be a key.
+/// object key, or [`EVERY_ELEMENT`] for each element of an array or each
+/// value of an object. `&["updated"]` is top-level; `&["topic",
+/// "last_set"]` is nested; `&["blocks", "*", "block_id"]` is the
+/// `block_id` of every block. The last step must be a key.
 pub type VolatilePath<'a> = &'a [&'a str];
 
-/// The [`VolatilePath`] step that descends into every element of an array.
+/// The [`VolatilePath`] step that descends into every element of an
+/// array, or every value of an object keyed by ids.
 pub const EVERY_ELEMENT: &str = "*";
 
 /// Partition `payload` into `(base, volatile)`. `volatile` is `None` when
@@ -105,7 +106,8 @@ pub const EVERY_ELEMENT: &str = "*";
 /// that would descend through the wrong kind of value — is skipped, so
 /// declaring a volatile field some objects lack is harmless. Under an array
 /// the volatile half is positional: one object per element, `{}` for an
-/// element that gave up nothing.
+/// element that gave up nothing. Under an object it is keyed the same way,
+/// naming only the values that gave something up.
 pub fn split_volatile(payload: &Value, paths: &[VolatilePath]) -> (Value, Option<Value>) {
     let mut base = payload.clone();
     let mut volatile: Option<Value> = None;
@@ -176,8 +178,16 @@ fn take_path(value: &mut Value, path: &[&str]) -> Option<Value> {
         if rest.is_empty() {
             return None;
         }
-        let Value::Array(items) = value else {
-            return None;
+        let items = match value {
+            Value::Array(items) => items,
+            Value::Object(m) => {
+                let taken: serde_json::Map<String, Value> = m
+                    .iter_mut()
+                    .filter_map(|(k, v)| Some((k.clone(), take_path(v, rest)?)))
+                    .collect();
+                return (!taken.is_empty()).then_some(Value::Object(taken));
+            }
+            _ => return None,
         };
         let taken: Vec<Option<Value>> = items.iter_mut().map(|i| take_path(i, rest)).collect();
         if taken.iter().all(Option::is_none) {
@@ -3238,6 +3248,48 @@ mod tests {
             json!({ "rows": [{ "a": 1, "b": 2, "cells": [{ "id": "c1" }, {}] }, { "b": 3 }] })
         );
         assert_eq!(overlay(&base, &volatile), payload);
+    }
+
+    /// A `*` step under an object reaches the field in every value, as a
+    /// ChatGPT conversation's `mapping` of message nodes keyed by node id
+    /// needs. The volatile half names only the values that gave one up,
+    /// and a value that is null or lacks the field stays where it was.
+    #[test]
+    fn split_overlay_roundtrip_through_object_values() {
+        let deny = |slug: &str| json!([{ "slug": slug, "reason": "unavailable" }]);
+        let payload = json!({ "mapping": {
+            "root": { "message": null, "children": ["n1"] },
+            "n1": { "message": { "metadata": { "model_slug": "m-1",
+                                               "model_switcher_deny": deny("m-2") } } },
+            "n2": { "message": { "metadata": { "model_slug": "m-1" } } },
+            "n3": { "message": { "metadata": { "model_switcher_deny": deny("m-3") } } },
+        }});
+        let paths: &[VolatilePath] =
+            &[&["mapping", "*", "message", "metadata", "model_switcher_deny"]];
+
+        let (base, volatile) = split_volatile(&payload, paths);
+
+        assert_eq!(
+            base,
+            json!({ "mapping": {
+                "root": { "message": null, "children": ["n1"] },
+                "n1": { "message": { "metadata": { "model_slug": "m-1" } } },
+                "n2": { "message": { "metadata": { "model_slug": "m-1" } } },
+                "n3": { "message": { "metadata": {} } },
+            }})
+        );
+        let volatile = volatile.expect("two nodes carry the field");
+        assert_eq!(
+            volatile,
+            json!({ "mapping": {
+                "n1": { "message": { "metadata": { "model_switcher_deny": deny("m-2") } } },
+                "n3": { "message": { "metadata": { "model_switcher_deny": deny("m-3") } } },
+            }})
+        );
+        assert_eq!(overlay(&base, &volatile), payload);
+
+        let none = json!({ "mapping": { "root": { "message": null } } });
+        assert_eq!(split_volatile(&none, paths), (none.clone(), None));
     }
 
     #[tokio::test]
