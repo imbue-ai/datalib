@@ -153,6 +153,14 @@ pub async fn propfind(
     webdav::propfind(HTTP_SERVICE, url, depth, body, latchkey).await
 }
 
+pub async fn list_members(
+    url: &str,
+    body: &str,
+    latchkey: &LatchkeySettings,
+) -> Result<Multistatus, DavError> {
+    webdav::list_members(HTTP_SERVICE, url, body, latchkey).await
+}
+
 pub fn http_request(
     method: HttpMethod,
     url: &str,

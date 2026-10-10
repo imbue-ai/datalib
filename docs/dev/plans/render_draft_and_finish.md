@@ -1,8 +1,8 @@
 # Render: a document goes only when its rows did
 
 **Status: steps 0 (#1066), 1 (#1073) and 2 are built; the `DocDraft`
-reshape (§3 and step 3) is dropped; steps 4 and 5 are open.** The render
-half of the 2026-10-05 audit
+reshape (§3 and step 3) is dropped; step 4 is open; step 5 is built
+another way (#1087).** The render half of the 2026-10-05 audit
 ([`audits/2026-10-05_loose_ends.md`](../audits/2026-10-05_loose_ends.md)
 §3.2, §4, and the short version's item 4), checked against the tree at
 `6188afdd7`. Line numbers are at that commit.
@@ -164,6 +164,15 @@ bug it closes.
 - **Step 4. Problems:** fetch problems through `render_inputs`; parse
   problems by stage and by entity; the lint.
 - **Step 5. Params from the config.**
+  *Built as:* no derivation. Beeper's `period`, claude's
+  `max_project_doc_bytes` and perseus's `alignment_pairs` joined their
+  processors' `render_params`, and `every_render_knob_is_a_render_param`
+  (`datalib_step/src/dispatch.rs`) plans every render config with each
+  of its keys changed and fails when the params do not move, so a new
+  knob cannot be missed. Deriving them from the serialized config would
+  have changed the stored params of email, signal, codex and claude_code,
+  re-rendering each once for nothing, and read a reordered label list as
+  a change.
 
 ## 7. What this costs a person
 

@@ -145,6 +145,17 @@ async fn run_with(
     window: Option<datalib_etl_calendar::ingest::Window>,
     control: datalib_etl::control::DownloadControl,
 ) -> FetchSummary {
+    try_run_with(playback, store, window, control)
+        .await
+        .expect("caldav fetch under playback")
+}
+
+async fn try_run_with(
+    playback: &Path,
+    store: &Path,
+    window: Option<datalib_etl_calendar::ingest::Window>,
+    control: datalib_etl::control::DownloadControl,
+) -> anyhow::Result<FetchSummary> {
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
     let download = caldav::fetch(caldav::FetchOptions {
         db: db.clone(),
@@ -161,7 +172,7 @@ async fn run_with(
         db.commit_all("test").await.expect("commit");
     }
     db.close().await;
-    summary.expect("caldav fetch under playback")
+    summary
 }
 
 async fn scalar(store: &Path, sql: &'static str) -> Option<String> {
@@ -728,4 +739,47 @@ async fn a_calendar_the_server_no_longer_lists_goes_with_its_events() {
     ] {
         assert_eq!(scalar(&store, sql).await.as_deref(), Some("0"), "{sql}");
     }
+}
+
+/// A home listing that names nothing is not an empty home: a `Depth: 1`
+/// PROPFIND always answers for the home itself. A 200 with an empty body
+/// parsed to no calendars, and every stored calendar and its events was
+/// deleted (#991). Now the run fails and deletes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_home_listing_that_names_nothing_deletes_no_calendar() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    account_fixtures(&one);
+    first_listing(&one);
+    account_fixtures(&two);
+    fixture(
+        &two,
+        HttpMethod::Propfind,
+        &format!("{HOST}{HOME}"),
+        "1",
+        dav::BODY_LIST_CALENDARS,
+        xml(200, ""),
+    );
+
+    let first = run(&one, &store).await;
+    assert_eq!(first.events_new, 2, "{first:?}");
+    let second = try_run_with(&two, &store, None, Default::default()).await;
+    assert!(second.is_err(), "{second:?}");
+    assert_eq!(
+        scalar(&store, "SELECT CAST(count(*) AS TEXT) FROM calendars")
+            .await
+            .as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        scalar(&store, "SELECT CAST(count(*) AS TEXT) FROM dav_resources")
+            .await
+            .as_deref(),
+        Some("2")
+    );
 }

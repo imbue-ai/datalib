@@ -16,6 +16,7 @@ mod feedback_endpoint;
 mod feedback_loop;
 mod lib_endpoint;
 mod manage_rows;
+mod pipeline_disk;
 mod pipeline_history;
 mod pipeline_storage;
 mod record_json;

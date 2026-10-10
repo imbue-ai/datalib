@@ -727,3 +727,56 @@ async fn an_address_book_the_server_no_longer_lists_goes_with_its_cards() {
         assert_eq!(scalar(&store, sql).await.as_deref(), Some("0"), "{sql}");
     }
 }
+
+/// A home listing that names nothing is not an empty home: a `Depth: 1`
+/// PROPFIND always answers for the home itself. A 200 with an empty body
+/// parsed to no address books, and every stored book and its cards was
+/// deleted (#991). Now the run fails and deletes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_home_listing_that_names_nothing_deletes_no_address_book() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    account_fixtures(&one);
+    let v1 = cards(BRIDGE_V1);
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &format!("{HOST}{BOOK}"),
+        "0",
+        &api::body_sync_collection(""),
+        xml(
+            207,
+            &multistatus(&format!(
+                "{}<sync-token>data:,1</sync-token>",
+                resource("tng-picard", "\"p1\"", card(&v1, "tng-picard")),
+            )),
+        ),
+    );
+    account_fixtures(&two);
+    fixture(
+        &two,
+        HttpMethod::Propfind,
+        &format!("{HOST}{HOME}"),
+        "1",
+        api::BODY_LIST_ADDRESSBOOKS,
+        xml(200, ""),
+    );
+
+    let first = run_named(&one, &store, Default::default(), &[])
+        .await
+        .expect("first run");
+    assert_eq!(first.contacts_new, 1, "{first:?}");
+    let second = run_named(&two, &store, Default::default(), &[]).await;
+    assert!(second.is_err(), "{second:?}");
+    for sql in [
+        "SELECT CAST(count(*) AS TEXT) FROM addressbooks",
+        "SELECT CAST(count(*) AS TEXT) FROM dav_resources",
+    ] {
+        assert_eq!(scalar(&store, sql).await.as_deref(), Some("1"), "{sql}");
+    }
+}

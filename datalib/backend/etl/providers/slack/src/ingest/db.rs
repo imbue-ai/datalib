@@ -390,6 +390,56 @@ impl RawDb {
         Ok(pruned)
     }
 
+    /// One `search.messages` page, in one transaction: the thread roots
+    /// read again because the page found a reply newer than the one they
+    /// listed, and the stretch of reply time the page settled, for each
+    /// conversation it searched.
+    pub async fn store_reply_search_page(
+        &self,
+        roots: &[MessageInput],
+        scopes: &[String],
+        covered: Option<&Span>,
+    ) -> Result<()> {
+        let page = prepare(roots)?;
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin reply search page")?;
+        write_messages(&mut tx, &page).await?;
+        if let Some(span) = covered {
+            for scope in scopes {
+                coverage::cover(&mut tx, scope, span.clone()).await?;
+            }
+        }
+        tx.commit().await.context("commit reply search page")?;
+        self.tape_messages(&page);
+        Ok(())
+    }
+
+    /// The `latest_reply` each stored thread root lists, by the root's
+    /// key. A key with no stored root is absent.
+    pub async fn root_latest_replies(
+        &self,
+        keys: &[String],
+    ) -> Result<HashMap<String, Option<String>>> {
+        let mut out = HashMap::new();
+        for key in keys {
+            let row: Option<(String, Option<String>)> = sqlx::query_as(
+                "SELECT id, json_extract(payload, '$.latest_reply') FROM messages \
+                 WHERE id = ? AND is_thread_root = 1",
+            )
+            .bind(key)
+            .fetch_optional(self.pool())
+            .await
+            .with_context(|| format!("read the root {key}"))?;
+            if let Some((id, latest_reply)) = row {
+                out.insert(id, latest_reply);
+            }
+        }
+        Ok(out)
+    }
+
     /// The threads of `channel_id` with replies, each at the version its
     /// stored root lists: the root's `latest_reply`, keyed like the root.
     /// Every stored root is listed, not only the ones this run's walk
@@ -477,6 +527,13 @@ impl RawDb {
                 "the messages are stored, but the event tape is missing their lines"
             );
         }
+    }
+
+    pub async fn count_messages(&self) -> Result<i64> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE payload IS NOT NULL")
+            .fetch_one(self.pool())
+            .await
+            .context("count messages")
     }
 
     pub async fn load_messages(&self) -> Result<Vec<LoadedMessage>> {
@@ -767,6 +824,12 @@ pub fn history_scope(channel_id: &str) -> String {
     format!("history:{channel_id}")
 }
 
+/// The `coverage` scope of the reply time searched in one conversation,
+/// as `ts` keys.
+pub fn replies_scope(channel_id: &str) -> String {
+    format!("replies:{channel_id}")
+}
+
 /// A stretch of a channel one `conversations.history` page listed whole,
 /// as message `ts`es: a stored top-level message inside it that the page
 /// did not return is gone upstream.
@@ -843,7 +906,7 @@ async fn write_messages(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>])
         .collect();
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     bulk_upsert_in_tx(tx, &rows, &now).await?;
-    dr::set_volatile_payloads_in_tx(tx, MessageRow::TABLE, &volatile).await?;
+    dr::merge_volatile_payloads_in_tx(tx, MessageRow::TABLE, &volatile).await?;
     for p in page {
         let message_uuid = &p.row.id_and_payload.id;
         let files = p.payload.get("files").and_then(Value::as_array);
@@ -1352,6 +1415,78 @@ mod tests {
         read_thread(&db, "1.0", "3.0").await;
         assert!(problems().await.is_empty());
         assert!(owed_threads(&db).await.is_empty());
+    }
+
+    fn with_block_id(mut message: MessageInput, block_id: &str) -> MessageInput {
+        message.payload["blocks"] = json!([{
+            "type": "rich_text", "block_id": block_id,
+            "elements": [{"type": "rich_text_section",
+                          "elements": [{"type": "text", "text": "status report"}]}],
+        }]);
+        message
+    }
+
+    async fn message_payload_and_volatile(db: &RawDb, ts: &str) -> (String, Option<Value>) {
+        let key = slack_message_key("T1", "C1", ts);
+        let payload: String = sqlx::query_scalar("SELECT json(payload) FROM messages WHERE id = ?")
+            .bind(&key)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let volatile: Option<String> = sqlx::query_scalar(
+            "SELECT json(volatile_payload) FROM messages_bookkeeping WHERE id = ?",
+        )
+        .bind(&key)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        (payload, volatile.map(|v| serde_json::from_str(&v).unwrap()))
+    }
+
+    /// Slack mints a fresh `block_id` for a rich-text block on every
+    /// read, so a message read twice must store the same content row.
+    #[tokio::test]
+    async fn a_re_minted_block_id_is_not_a_change_to_the_message() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
+        db.upsert_messages(&[with_block_id(root("1.0", 0, None), "Ab1")])
+            .await
+            .unwrap();
+        let (first, _) = message_payload_and_volatile(&db, "1.0").await;
+
+        db.upsert_messages(&[with_block_id(root("1.0", 0, None), "Zz9")])
+            .await
+            .unwrap();
+        let (second, volatile) = message_payload_and_volatile(&db, "1.0").await;
+
+        assert_eq!(first, second);
+        assert!(!second.contains("block_id"), "{second}");
+        assert_eq!(volatile.unwrap()["blocks"][0]["block_id"], "Zz9");
+    }
+
+    /// The history copy of a followed root has block ids to split but no
+    /// read mark; storing it after the replies copy (a refresh does) must
+    /// not take the mark away from the thread.
+    #[tokio::test]
+    async fn the_history_copy_of_a_followed_root_keeps_its_read_mark() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
+        let mut replies_copy = with_block_id(root("1.0", 1, Some("2.0")), "Ab1");
+        replies_copy.payload["last_read"] = json!("1.0");
+        replies_copy.payload["subscribed"] = json!(true);
+        db.upsert_messages(&[replies_copy]).await.unwrap();
+        let (first, _) = message_payload_and_volatile(&db, "1.0").await;
+
+        let history_copy = with_block_id(root("1.0", 1, Some("2.0")), "Zz9");
+        db.upsert_messages(&[history_copy]).await.unwrap();
+        let (second, volatile) = message_payload_and_volatile(&db, "1.0").await;
+
+        assert_eq!(first, second);
+        assert_eq!(
+            volatile.unwrap(),
+            json!({"last_read": "1.0", "subscribed": true,
+                   "blocks": [{"block_id": "Zz9"}]})
+        );
     }
 
     fn with_file(ts: &str, file: Value) -> MessageInput {

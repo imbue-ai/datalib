@@ -36,7 +36,9 @@ instead from `bazel run //:precommit` and as a plain step in
      by hand: `datalib_runtime::atomic` is the one write-then-rename.
  15. Every crate datalib/backend/Cargo.toml lists is named by some
      BUILD.bazel, so the list cannot keep a crate nothing links.
- 16. No Rust test points playback at a tape through the environment:
+ 16. A `?` list is sized by a chunk, never by a whole set: SQLite
+     refuses a statement that binds more than 32,766 values.
+ 17. No Rust test points playback at a tape through the environment:
      a test binary runs its tests in parallel, and the variable is
      every test's at once.
 
@@ -330,6 +332,7 @@ def main() -> int:
     rc |= _check_icons(root)
     rc |= _check_no_hand_rolled_atomic_write(root)
     rc |= _check_cargo_manifest_crates_used(root)
+    rc |= _check_bound_lists_are_chunked(root)
     rc |= _check_no_playback_set_var(root)
     return rc
 
@@ -1023,7 +1026,78 @@ def _check_cargo_manifest_crates_used(root: Path) -> int:
     return 1
 
 
-# --- Check 16: playback is scoped, not set in the environment -----------
+# --- Check 16: a `?` run is sized by a chunk, never by a whole set ------
+#
+# SQLite refuses a statement that binds more than 32,766 values. A `?,?,…`
+# list sized from a load set passes every test, whose sets are small, and
+# fails on the person with the big mailbox: email render's
+# `thread_id IN (…)` did, on a full render of a JMAP account (#1156). So a
+# list of values to match is bound as one JSON array,
+# `IN (SELECT value FROM json_each(?))`, which has no limit; and a `?` run
+# is sized from `chunk.len()` of a `.chunks(N)` loop, which is what a
+# multi-row `VALUES` needs. `datalib/backend/etl/README.md` §"Binding a set
+# of values" has the rule.
+# Where a `?` run is built; the size expression follows.
+_PLACEHOLDER_RUN = re.compile(
+    r"""repeat_n\(\s*"\?"\s*,|vec!\[\s*"\?"\s*;|"\?,?\s*"\.repeat\("""
+    r"""|push_placeholder_list\(\s*&mut\s+\w+\s*,|push_placeholders\(\s*&mut\s+\w+\s*,"""
+    r"""|(?<!fn )\bplaceholders\("""
+)
+
+# `?` runs sized by something that is not data, with the reason.
+_RUN_ALLOWED: dict[tuple[str, str], str] = {
+    ("datalib/backend/applets/src/unified_index/problems.rs", "columns.len()"): (
+        "one row's VALUES, one `?` per column of a table the code declares"
+    ),
+    ("datalib/backend/etl/render/src/search_terms.rs", "per_row"): (
+        "the helper's own `(?, ?)` tuple; its callers are checked"
+    ),
+}
+
+
+def _size_expression(text: str, at: int) -> str:
+    """The argument starting at `at`, up to its `,`, `)` or `]` at depth 0."""
+    depth = 0
+    for i in range(at, len(text)):
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return text[at:i].strip()
+            depth -= 1
+        elif c in ",;" and depth == 0:
+            return text[at:i].strip()
+    return text[at:].strip()
+
+
+def _check_bound_lists_are_chunked(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        if "/tests/" in rel:
+            continue
+        text = _without_test_module((root / rel).read_text(encoding="utf-8"))
+        for m in _PLACEHOLDER_RUN.finditer(text):
+            size = " ".join(_size_expression(text, m.end()).split())
+            if size == "chunk.len()" or (rel, size) in _RUN_ALLOWED:
+                continue
+            lineno = text.count("\n", 0, m.start()) + 1
+            hits.append(f"  {rel}:{lineno}: a `?` run sized by `{size}`")
+    if not hits:
+        print("OK: every `?` run is sized by a chunk.")
+        return 0
+    print(
+        "ERROR: a `?` run sized by something other than a chunk:\n\n"
+        + "\n".join(hits)
+        + "\n\n  Bind the set as one JSON array, `IN (SELECT value FROM json_each(?))`,\n"
+        "  or size the run from `chunk.len()` in a `.chunks(N)` loop. See\n"
+        "  lint_repo.py check 16.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 17: playback is scoped, not set in the environment -----------
 #
 # `DATALIB_HTTP_PLAYBACK` and its siblings select the tape for a whole
 # process: a step launched by a test, the fixture pipeline, an e2e
@@ -1054,7 +1128,7 @@ def _check_no_playback_set_var(root: Path) -> int:
         + "\n".join(hits)
         + "\n\n  Run the future under `datalib_etl_web::playback::scope(<tape>, …)`;\n"
         "  `Playback::delay`, `hold` and `hold_sealed` set the rest.\n"
-        "  See lint_repo.py check 16.",
+        "  See lint_repo.py check 17.",
         file=sys.stderr,
     )
     return 1

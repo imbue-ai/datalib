@@ -1,12 +1,15 @@
 <script setup lang="ts">
 // The whole data root, in the status bar: its path, how much of the
-// disk it takes, and how that has moved over the last few minutes.
-// Not the sum of the sources — it includes `system/`, the
-// stores, the served attachments, and anything a deleted step left
-// behind. Read from `GET /api/pipeline/storage`, which the backend
-// walks on a tick *while a sync runs* and otherwise on request.
+// disk it takes, how much of the disk is left, and how both have moved
+// over the last few minutes. The size is not the sum of the sources — it
+// includes `system/`, the stores, the served attachments, and anything a
+// deleted step left behind. Read from `GET /api/pipeline/storage`, which
+// the backend walks on a tick *while a sync runs* and otherwise on
+// request. The free space is `GET /api/pipeline/disk`, looked at every
+// ten seconds; while the config's `[disk_space]` floor holds the steps it
+// turns red and a toast says syncs are paused.
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { type PipelineStorage } from "@/api";
+import { type DiskFree, type PipelineStorage } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { formatBytes } from "@/config/bytes";
 import { sparkTrack } from "@/cards/cellRenderers";
@@ -16,10 +19,11 @@ import "@/cards/tableGrid.css";
 import { changed, subscribeLive } from "@/live";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { copyToClipboard } from "@/clipboard";
-import { pushToast } from "@/toasts";
+import { dismissToast, pushToast } from "@/toasts";
+import { CLEARED_MESSAGE, diskCrossing, diskTitle, lowDiskMessage } from "@/config/diskFree";
 import { PATH_GLYPHS } from "@/config/glyphs";
 
-const { fetchPipelineStorage } = useApi();
+const { fetchPipelineStorage, fetchPipelineDisk } = useApi();
 
 const storage = ref<PipelineStorage | null>(null);
 const canReveal = isDesktopApp();
@@ -58,6 +62,52 @@ function paint() {
 }
 watch([storage, sparkHost], paint, { flush: "post" });
 
+const disk = ref<DiskFree | null>(null);
+const freeTitle = ref("Measuring the free space…");
+const freeHost = ref<HTMLElement | null>(null);
+let wasLow: boolean | null = null;
+let lowToast: number | null = null;
+
+async function loadDisk() {
+  try {
+    disk.value = await fetchPipelineDisk();
+  } catch {
+    return;
+  }
+  const crossing = diskCrossing(wasLow, disk.value);
+  wasLow = disk.value.low;
+  if (crossing === "low") {
+    // Sticky: it stands for as long as the syncs are held.
+    lowToast = pushToast(lowDiskMessage(disk.value), "warn", null);
+  } else if (crossing === "cleared") {
+    if (lowToast !== null) dismissToast(lowToast);
+    lowToast = null;
+    pushToast(CLEARED_MESSAGE, "info");
+  }
+}
+
+function paintFree() {
+  const host = freeHost.value;
+  if (!host) return;
+  host.replaceChildren();
+  const d = disk.value;
+  if (d?.available_bytes == null) {
+    freeTitle.value = "Measuring the free space…";
+    host.textContent = "—";
+    return;
+  }
+  const track = sparkTrack(
+    d.available_bytes,
+    "bytes",
+    d.history.map((h) => ({ at: h.at, value: h.bytes })),
+    d.window_secs,
+    " free",
+  );
+  freeTitle.value = diskTitle(d, track.change);
+  host.appendChild(track.el);
+}
+watch([disk, freeHost], paintFree, { flush: "post" });
+
 async function reveal() {
   if (storage.value) await revealInFileManager(storage.value.root.abs);
 }
@@ -73,13 +123,18 @@ onMounted(() => {
   // Fresh on the first paint: the backend only walks on its own while
   // a run holds the root, so on an idle root its last answer can be old.
   void load(true);
+  void loadDisk();
   unsubscribe = subscribeLive({
     root: (e) => {
-      // The sampler says when it has walked; there is nothing new to
-      // read between its samples.
+      // The samplers say when they have looked; there is nothing new to
+      // read between their samples.
       if (changed(e, "storage")) void load();
+      if (changed(e, "disk")) void loadDisk();
     },
-    resync: () => void load(true),
+    resync: () => {
+      void load(true);
+      void loadDisk();
+    },
   });
 });
 onBeforeUnmount(() => unsubscribe?.());
@@ -113,6 +168,13 @@ onBeforeUnmount(() => unsubscribe?.());
       </button>
     </span>
     <span class="root-bar-spark" ref="sparkHost" :title="title"></span>
+    <span
+      class="root-bar-spark root-bar-free"
+      :class="{ 'root-bar-low': disk?.low }"
+      ref="freeHost"
+      :title="freeTitle"
+      data-testid="disk-free"
+    ></span>
   </div>
 </template>
 
@@ -148,7 +210,15 @@ onBeforeUnmount(() => unsubscribe?.());
 .root-bar-spark {
   flex: 0 0 auto;
   display: flex;
-  width: 200px;
+  width: 140px;
+}
+/* Under the config's floor: the syncs are held, and this is why. */
+.root-bar-low :deep(.tg-plot) {
+  background: var(--datalib-error-bg);
+  box-shadow: inset 0 0 0 1px var(--datalib-error-border);
+}
+.root-bar-low :deep(.tg-plot-value) {
+  color: var(--datalib-error-fg);
 }
 .root-bar-icon {
   flex: 0 0 auto;

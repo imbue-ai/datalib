@@ -192,7 +192,7 @@
     ]
   },
   "email": {
-    "schema_hash": "4b6d399137d6249bfce7af1721511d91c45b0fd2267fc204fb6e25139156b33d",
+    "schema_hash": "947ab34f73bd035590912d0e2c0fae08166198892330732c8cec5a0874f46cbd",
     "schema_version": 3,
     "shared_schema_version": 1,
     "sql": [
@@ -203,8 +203,10 @@
       "CREATE INDEX email_blobs_by_blob_id ON email_blobs(blob_id, blake3)",
       "CREATE INDEX email_blobs_by_email_id ON email_blobs(email_id)",
       "CREATE TABLE email_keywords( id TEXT PRIMARY KEY, email_id TEXT NOT NULL, keyword TEXT NOT NULL)",
+      "CREATE INDEX email_keywords_by_email ON email_keywords(email_id)",
       "CREATE INDEX email_keywords_by_keyword ON email_keywords(keyword)",
       "CREATE TABLE email_mailboxes( id TEXT PRIMARY KEY, email_id TEXT NOT NULL, mailbox_id TEXT NOT NULL)",
+      "CREATE INDEX email_mailboxes_by_email ON email_mailboxes(email_id)",
       "CREATE INDEX email_mailboxes_by_mailbox ON email_mailboxes(mailbox_id)",
       "CREATE TABLE emails( id TEXT PRIMARY KEY, payload TEXT NULL, account_id TEXT NOT NULL, thread_id TEXT NOT NULL, blob_id TEXT NOT NULL, message_id TEXT NULL, in_reply_to TEXT NULL, references_header TEXT NULL, received_at TEXT NULL, sent_at TEXT NULL, size INTEGER NULL, subject TEXT NULL, from_json TEXT NULL, to_json TEXT NULL, cc_json TEXT NULL, has_attachment INTEGER NULL)",
       "CREATE TABLE emails_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",

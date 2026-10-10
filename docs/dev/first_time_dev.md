@@ -303,7 +303,7 @@ edit the struct directly:
 
 - render-schema tables (`grid_rows` / `edges` / `markdowns`) in
   `datalib/backend/schema/src/`,
-- app-state tables (`feedback` / `disk_usage` / `remote_media` and the
+- app-state tables (`feedback` / `disk_usage` / `disk_free` / `remote_media` and the
   run store's) in `datalib/backend/app_schema/src/`.
 
 Give each field a `#[col(sql = "…")]` portable type;

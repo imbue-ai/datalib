@@ -991,6 +991,30 @@ export function fetchPipelineStorage(
   return getJson<PipelineStorage>(`/api/pipeline/storage${q}`, signal);
 }
 
+/// Free space on the data root's disk (`GET /api/pipeline/disk`). The
+/// backend looks every ten seconds whatever is running, and says so with
+/// a `disk` live frame when the number moves or the steps are held or
+/// let go.
+export type DiskFree = {
+  /// Null before the first look, or when the volume can't be measured
+  /// — never a zero, which would read as a full disk.
+  available_bytes: number | null;
+  total_bytes: number | null;
+  /// The config's `[disk_space]` lines, defaults filled in: under the
+  /// pause line every step is held, until the resume line.
+  pause_below_bytes: number;
+  resume_at_bytes: number;
+  /// Held: no step starts, and running ones are stopped.
+  low: boolean;
+  /// Compacted like `OutputStorage.history`.
+  history: UsageSample[];
+  window_secs: number;
+};
+
+export function fetchPipelineDisk(signal?: AbortSignal): Promise<DiskFree> {
+  return getJson<DiskFree>("/api/pipeline/disk", signal);
+}
+
 // `system` is the one row the config never named: `system/`, the run
 // log and the app's own stores.
 export type ManageRowKind = "group" | "step" | "applet" | "system";

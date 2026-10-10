@@ -329,7 +329,7 @@ async fn list_addressbooks(
     latchkey: &LatchkeySettings,
 ) -> Result<Vec<Book>> {
     summary.requests += 1;
-    let ms = api::propfind(home_set_url, "1", api::BODY_LIST_ADDRESSBOOKS, latchkey)
+    let ms = api::list_members(home_set_url, api::BODY_LIST_ADDRESSBOOKS, latchkey)
         .await
         .map_err(|e| anyhow::anyhow!("propfind list-addressbooks: {e}"))?;
     let mut out = Vec::new();

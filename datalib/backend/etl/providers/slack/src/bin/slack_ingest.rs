@@ -97,6 +97,7 @@ async fn main() -> Result<()> {
         dms: args.dms,
         dm_conversations: (!args.dm_conversations.is_empty())
             .then(|| args.dm_conversations.clone()),
+        search_replies: true,
         ..FetchOptions::new(db.clone())
     };
 

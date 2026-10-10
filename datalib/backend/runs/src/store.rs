@@ -1621,26 +1621,18 @@ async fn close_abandoned_run_in(
         .iter()
         .map(|s| s.as_str())
         .collect();
-    let holes = std::iter::repeat_n("?", live.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    // Audited: the only interpolation is `holes`, which is placeholders
-    // built from a count; every value below is bound.
-    let sql = format!(
+    let q = sqlx::query(
         "UPDATE step_runs SET state = ?, finished_at_utc = coalesce(finished_at_utc, ?), \
            error = coalesce(error, ?), updated_at_utc = ?, tz_offset = coalesce(tz_offset, ?) \
-         WHERE run_id = ? AND state IN ({holes})"
-    );
-    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .bind(step_state)
-        .bind(&at)
-        .bind(why)
-        .bind(&at)
-        .bind(&tz_offset)
-        .bind(run_id);
-    for state in &live {
-        q = q.bind(*state);
-    }
+         WHERE run_id = ? AND state IN (SELECT value FROM json_each(?))",
+    )
+    .bind(step_state)
+    .bind(&at)
+    .bind(why)
+    .bind(&at)
+    .bind(&tz_offset)
+    .bind(run_id)
+    .bind(serde_json::Value::from(live).to_string());
     let steps_closed = q.execute(&mut *tx).await?.rows_affected();
 
     if run_was_open {

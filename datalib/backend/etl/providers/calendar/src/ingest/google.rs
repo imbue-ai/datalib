@@ -74,8 +74,19 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     .await?;
     let rows: Vec<CalendarRow> = list.iter().filter_map(calendar_row).collect();
     db.upsert_calendars(&rows).await?;
-    let listed: Vec<String> = rows.iter().map(|c| c.id.clone()).collect();
-    summary.events_deleted += db.delete_calendars_not_in("google", &listed).await?;
+    let unidentified = list.len() - rows.len();
+    if unidentified == 0 {
+        let listed: Vec<String> = rows.iter().map(|c| c.id.clone()).collect();
+        summary.events_deleted += db.delete_calendars_not_in("google", &listed).await?;
+    } else {
+        found.listing(
+            "calendars",
+            format!(
+                "the account's list named {unidentified} calendar(s) with no id, which could be \
+                 any stored calendar, so none it did not name was deleted"
+            ),
+        );
+    }
 
     let selected = select_calendars(
         &found,
@@ -120,11 +131,16 @@ pub(crate) async fn list_calendars(
         let url = calendar_list_url(page.as_deref());
         summary.requests += 1;
         let v = get_json(&url, lk).await.context("list calendars")?;
+        // As with events, Google sends `items` on every reply; without it
+        // this is not a listing, and reading it as one would delete every
+        // stored calendar.
+        let items = v
+            .get("items")
+            .and_then(Value::as_array)
+            .context("the calendar list reply carried no `items` list")?;
         out.extend(
-            v.get("items")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
+            items
+                .iter()
                 .filter(|c| c.get("deleted").and_then(Value::as_bool) != Some(true))
                 .cloned(),
         );

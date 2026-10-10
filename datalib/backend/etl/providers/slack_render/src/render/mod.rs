@@ -161,18 +161,91 @@ impl Message {
 
 pub use mrkdwn::{resolve_mentions, Labels};
 
-/// A Slack message permalink. With `thread_ts` (and when it differs from
-/// `ts`) the reply-in-thread params are appended so the link deep-links
-/// to the threaded message rather than the channel root.
-pub fn slack_link(team_id: &str, channel_id: &str, ts: &str, thread_ts: Option<&str>) -> String {
+/// A Slack message permalink, in the shape `chat.getPermalink` returns:
+/// `<team_url>/archives/<channel>/p<ts without its dot>`, with
+/// `thread_ts` and `cid` for a reply in a thread. Only the workspace's own
+/// host opens in that workspace; without `team_url` the link is on bare
+/// `slack.com` with `?team=`, which opens in whichever workspace the
+/// browser is signed into.
+pub fn slack_link(
+    team_url: Option<&str>,
+    team_id: &str,
+    channel_id: &str,
+    ts: &str,
+    thread_ts: Option<&str>,
+) -> String {
     let ts_no_dot: String = ts.chars().filter(|c| *c != '.').collect();
-    let mut url = format!("https://slack.com/archives/{channel_id}/p{ts_no_dot}?team={team_id}");
-    if let Some(tts) = thread_ts {
-        if tts != ts {
-            url.push_str(&format!("&thread_ts={tts}&cid={channel_id}"));
+    let mut params = Vec::new();
+    let origin = match workspace_origin(team_url) {
+        Some(origin) => origin,
+        None => {
+            params.push(format!("team={team_id}"));
+            "https://slack.com"
         }
+    };
+    if let Some(tts) = thread_ts.filter(|tts| *tts != ts) {
+        params.push(format!("thread_ts={tts}"));
+        params.push(format!("cid={channel_id}"));
+    }
+    let mut url = format!("{origin}/archives/{channel_id}/p{ts_no_dot}");
+    if !params.is_empty() {
+        url.push('?');
+        url.push_str(&params.join("&"));
     }
     url
+}
+
+/// `auth.test`'s `url` (`https://<workspace>.slack.com/`) without its
+/// trailing slash, or `None` for anything that is not an https origin.
+fn workspace_origin(team_url: Option<&str>) -> Option<&str> {
+    let origin = team_url?.trim().trim_end_matches('/');
+    let host = origin.strip_prefix("https://")?;
+    (!host.is_empty() && !host.contains(['/', '?', '#'])).then_some(origin)
+}
+
+#[cfg(test)]
+mod slack_link_tests {
+    use super::slack_link;
+
+    const WS: Option<&str> = Some("https://enterprise-d.slack.com/");
+
+    /// The regression: a link on bare slack.com opened in whichever
+    /// workspace the browser was signed into, not the one that holds
+    /// the message.
+    #[test]
+    fn a_known_workspace_links_on_its_own_host() {
+        assert_eq!(
+            slack_link(WS, "T1", "C1", "12604000100.000100", None),
+            "https://enterprise-d.slack.com/archives/C1/p12604000100000100"
+        );
+    }
+
+    #[test]
+    fn a_reply_names_its_thread_as_slack_does() {
+        assert_eq!(
+            slack_link(WS, "T1", "C1", "2.000200", Some("1.000100")),
+            "https://enterprise-d.slack.com/archives/C1/p2000200?thread_ts=1.000100&cid=C1"
+        );
+        assert_eq!(
+            slack_link(WS, "T1", "C1", "1.000100", Some("1.000100")),
+            "https://enterprise-d.slack.com/archives/C1/p1000100"
+        );
+    }
+
+    #[test]
+    fn an_unknown_workspace_keeps_the_team_parameter() {
+        for unknown in [
+            None,
+            Some(""),
+            Some("enterprise-d.slack.com"),
+            Some("https://enterprise-d.slack.com/archives/"),
+        ] {
+            assert_eq!(
+                slack_link(unknown, "T1", "C1", "2.000200", Some("1.000100")),
+                "https://slack.com/archives/C1/p2000200?team=T1&thread_ts=1.000100&cid=C1"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

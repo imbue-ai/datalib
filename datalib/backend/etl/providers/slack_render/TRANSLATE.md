@@ -22,6 +22,14 @@ store keys messages and threads by `{team}#{channel}#{ts}`, the
 upstream's own key, never an entity id. The document's `external_id`
 is `{channel_id}#{thread_ts}` and its link is the thread's permalink.
 
+A permalink is built the way Slack's `chat.getPermalink` answers, on
+the workspace's own host from `auth.test`'s `url` (the `workspaces`
+row): `https://<workspace>.slack.com/archives/<channel>/p<ts without
+its dot>`, and for a reply `?thread_ts=<root ts>&cid=<channel>`. A
+link on bare `slack.com` opens in whichever workspace the browser is
+signed into, so that form, with `?team=<T…>`, is only for a store with
+no workspace URL. `render::slack_link` is the one place either is built.
+
 ## mrkdwn
 
 `src/render/mrkdwn.rs` converts Slack's mrkdwn dialect to CommonMark:
