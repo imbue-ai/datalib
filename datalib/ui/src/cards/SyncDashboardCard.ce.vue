@@ -276,10 +276,6 @@ onUnmounted(() => {
       </header>
       <dl class="sd-stats">
         <div>
-          <dt>Queue</dt>
-          <dd v-cell="renderQuantity(groupRow.queue)" />
-        </div>
-        <div>
           <dt>ETA</dt>
           <dd v-cell="renderQuantity(groupRow.eta)" />
         </div>

@@ -162,7 +162,7 @@ test.describe("toolbar", () => {
         (r: { kind: string; type: unknown }) => r.kind === "group" && r.type,
       );
       sources[0].stop_request_ids = ["r1"];
-      sources[0].queue = { value: 1204, unit: "count" };
+      sources[0].eta = { value: 180, unit: "seconds" };
       sources[1].stop_request_ids = ["r2"];
       names = [sources[0].name.label, sources[1].name.label];
       return route.fulfill({ json: body });
@@ -176,7 +176,7 @@ test.describe("toolbar", () => {
     const rows = page.locator(".sync-menu .sync-row");
     await expect(rows).toHaveCount(2);
     await expect(rows.nth(0)).toContainText(names[0]);
-    await expect(rows.nth(0)).toContainText("1,204 to go");
+    await expect(rows.nth(0)).toContainText("3 min left");
     await expect(rows.nth(1)).toContainText(names[1]);
     await rows.nth(1).getByRole("menuitem", { name: "Stop" }).click();
     await expect.poll(() => stopped).toEqual(["/api/requests/r2/stop"]);
