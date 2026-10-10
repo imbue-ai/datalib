@@ -1,0 +1,85 @@
+---
+source: datalib/backend/applets/src/unified_index/search_by_example_tests.rs
+description: "Each row's search-key columns (and the author its from and author terms come from), then every search term it answers to: derived from its columns by search_terms_of, or supplied by its render."
+---
+bridge-thread
+  columns
+    kind           Slack Thread
+    channel        #bridge
+  terms
+    id         bridge-thread                            derived
+    title      #bridge                                  derived
+    name       #bridge                                  derived
+
+picard-card
+  columns
+    kind           Contact
+    channel        Address Book
+    contact        Jean-Luc Picard
+    email          picard@enterprise.org
+  terms
+    id         picard-card                              derived
+    title      Jean-Luc Picard                          derived
+    name       Address Book                             derived
+    about      Jean-Luc Picard                          supplied
+    about      email:jean-luc@chateau-picard.example    supplied
+    about      email:picard@enterprise.org              supplied
+
+riker-email
+  columns
+    kind           Email
+    channel        Away team roster
+    account        picard@enterprise.org
+    author         William Riker
+    author_handle  email:riker@enterprise.org
+  terms
+    id         riker-email                              derived
+    container  riker-thread                             derived
+    from       email:riker@enterprise.org               derived
+    title      Away team roster                         derived
+    name       Away team roster                         derived
+    name       picard@enterprise.org                    derived
+    to         email:picard@enterprise.org              supplied
+    cc         email:troi@enterprise.org                supplied
+    label      Away Missions                            supplied
+    label      Inbox                                    supplied
+    author     William Riker                            derived
+
+riker-thread
+  columns
+    kind           Email Thread
+    channel        Away team roster
+    account        picard@enterprise.org
+  terms
+    id         riker-thread                             derived
+    title      Away team roster                         derived
+    name       Away team roster                         derived
+    name       picard@enterprise.org                    derived
+
+senior-staff-card
+  columns
+    kind           Contact group
+    channel        Address Book
+    contact        Senior Staff
+    email          senior-staff@enterprise.org
+  terms
+    id         senior-staff-card                        derived
+    title      Senior Staff                             derived
+    name       Address Book                             derived
+    about      Senior Staff                             supplied
+    about      email:senior-staff@enterprise.org        supplied
+
+worf-slack
+  columns
+    kind           Slack Message
+    channel        #bridge
+    author         Worf
+    author_handle  slack:T1701/U0000003
+  terms
+    id         worf-slack                               derived
+    container  bridge-thread                            derived
+    from       slack:T1701/U0000003                     derived
+    title      #bridge                                  derived
+    name       #bridge                                  derived
+    mention    slack:T1701/U0000002                     supplied
+    author     Worf                                     derived

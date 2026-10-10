@@ -65,6 +65,9 @@ rust_test(
         "RUST_TEST_THREADS": "1",
     },
     deps = [
+        "//datalib/backend/contact_schema:datalib_contact_schema",
+        "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
+        "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
         "//datalib/backend/unified_index:qmd_fixture",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",

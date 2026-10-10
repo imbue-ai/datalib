@@ -23,6 +23,8 @@ mod problems;
 mod qmd_search_tests;
 mod results;
 #[cfg(test)]
+mod search_by_example_tests;
+#[cfg(test)]
 mod search_finds_itself_tests;
 mod search_terms;
 #[cfg(test)]
@@ -1602,7 +1604,7 @@ mod tests {
     }
 
     /// What the `grid_index` step does after its pass.
-    async fn sync_terms(root: &std::path::Path) {
+    pub(super) async fn sync_terms(root: &std::path::Path) {
         let pool = datalib_etl_render::grid_index::open_index(
             &datalib_runtime::layout::grid_index_db(root),
         )

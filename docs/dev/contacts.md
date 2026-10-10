@@ -487,6 +487,10 @@ supplies an `about` search term for each handle the card holds and each
 name it gives, and nobody wrote the card. So `with:riker` finds his card
 beside everything he took part in.
 
+[`search_by_example_tests.rs`](../../datalib/backend/applets/src/unified_index/search_by_example_tests.rs)
+shows each of these rules on a small cast: how its rows are filed, and
+which queries do and do not find them.
+
 **`contact:<id>` is everything from Riker, whatever handle he used.**
 Links sit over the view, so the search terms know handles and never
 contacts. A `contact:<id>` value on a person key is read from the
