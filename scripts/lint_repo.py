@@ -328,6 +328,7 @@ def main() -> int:
     rc |= _check_no_hand_rolled_atomic_write(root)
     rc |= _check_cargo_manifest_crates_used(root)
     rc |= _check_bound_lists_are_chunked(root)
+    rc |= _check_try_get_ok_is_flattened(root)
     return rc
 
 
@@ -1086,6 +1087,54 @@ def _check_bound_lists_are_chunked(root: Path) -> int:
         + "\n\n  Bind the set as one JSON array, `IN (SELECT value FROM json_each(?))`,\n"
         "  or size the run from `chunk.len()` in a `.chunks(N)` loop. See\n"
         "  lint_repo.py check 16.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 17: a `try_get(...).ok()` reads `Option<T>` -------------------
+#
+# sqlx's `Row::try_get` skips its type check for a NULL, and its SQLite
+# decoders read a NULL as `""` or `0` (doltlite_facts'
+# `a_null_read_as_a_bare_type_is_its_default_not_an_error`). So
+# `let x: Option<String> = r.try_get("c").ok()` is `Some("")` for a NULL:
+# the type is inferred as a bare `String`, and the read succeeds (#13).
+# Reading `Option<T>` and flattening is the one spelling of "maybe absent"
+# that is right; a column that cannot be NULL is read with `?` instead,
+# so a missing column fails rather than reading as nothing.
+_TRY_GET_OK = re.compile(
+    r"\btry_get(?:::<[^()]*>)?\((?:[^()]|\([^()]*\))*\)\s*\.ok\(\)(?!\s*\.flatten\(\))"
+)
+
+# Files that spell the trap on purpose, with the reason.
+_TRY_GET_OK_ALLOWED: dict[str, str] = {
+    "datalib/backend/doltlite_facts/doltlite_facts.rs": (
+        "the test that shows a NULL read as a bare type is its default"
+    ),
+}
+
+
+def _check_try_get_ok_is_flattened(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        if rel in _TRY_GET_OK_ALLOWED:
+            continue
+        text = (root / rel).read_text(encoding="utf-8")
+        for m in _TRY_GET_OK.finditer(text):
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            if text[line_start : m.start()].lstrip().startswith("//"):
+                continue
+            lineno = text.count("\n", 0, m.start()) + 1
+            hits.append(f"  {rel}:{lineno}: {' '.join(m.group(0).split())}")
+    if not hits:
+        print("OK: every `try_get(...).ok()` reads an `Option` and flattens it.")
+        return 0
+    print(
+        'ERROR: a `try_get(...).ok()` that reads a NULL as `Some("")` or `Some(0)`:\n\n'
+        + "\n".join(hits)
+        + "\n\n  Read the column with `?` (or `.context(..)?`), as `Option<T>` if it\n"
+        "  can be NULL; where a missing column really is no answer, spell it\n"
+        "  `try_get::<Option<T>, _>(..).ok().flatten()`. See lint_repo.py check 17.",
         file=sys.stderr,
     )
     return 1

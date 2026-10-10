@@ -779,6 +779,12 @@ fn app_window<'a>(
     let new_app = app.clone();
     let zoom_app = app.clone();
     under_title_bar(builder)
+        // Tauri's file-drop handler claims every drag over the webview,
+        // so WebKit never fires a page's own dragover or drop: the grids'
+        // drag-a-column-to-group bar (SortableJS) did nothing. Nothing
+        // here listens for Tauri's drop events. Without it, a file
+        // dropped from Finder is WebKit's to open: see `on_navigation`.
+        .disable_drag_drop_handler()
         // A new page starts at the webview's default zoom; put it back at
         // the View menu's.
         .on_page_load(move |window, payload| {
@@ -787,6 +793,11 @@ fn app_window<'a>(
             }
         })
         .on_navigation(move |next| {
+            // A file dropped on the window: WebKit would show it in place
+            // of the app, with no way back.
+            if next.scheme() == "file" {
+                return false;
+            }
             if !leaves_the_app(next, &nav_app) {
                 return true;
             }

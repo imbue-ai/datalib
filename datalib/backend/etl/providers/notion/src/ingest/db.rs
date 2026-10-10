@@ -563,7 +563,7 @@ impl RawDb {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            let page_id: Option<String> = r.try_get("page_id").ok();
+            let page_id: Option<String> = r.try_get("page_id").context("comments page_id")?;
             if let Ok(v) = serde_json::from_str::<Value>(&payload) {
                 out.push((v, page_id));
             }

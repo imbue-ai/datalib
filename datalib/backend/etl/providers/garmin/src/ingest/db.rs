@@ -51,9 +51,13 @@ impl RawDb {
             .fetch_all(self.pool())
             .await
             .with_context(|| format!("scan {table} for pruning"))?;
-        Ok(rows
+        let ids = rows
+            .iter()
+            .map(|r| r.try_get::<String, _>("id"))
+            .collect::<Result<Vec<_>, _>>()
+            .with_context(|| format!("{table} id"))?;
+        Ok(ids
             .into_iter()
-            .filter_map(|r| r.try_get::<String, _>("id").ok())
             .filter(|id| !keep.contains(id.as_str()))
             .collect())
     }
@@ -277,7 +281,9 @@ impl RawDb {
             .fetch_optional(self.pool())
             .await
             .with_context(|| format!("select marker {scope}"))?;
-        Ok(row.and_then(|r| r.try_get::<String, _>("last_seen_at_utc").ok()))
+        row.map(|r| r.try_get::<String, _>("last_seen_at_utc"))
+            .transpose()
+            .context("sync_scope_state last_seen_at_utc")
     }
 
     pub async fn set_marker(&self, scope: &str, value: &str) -> Result<()> {

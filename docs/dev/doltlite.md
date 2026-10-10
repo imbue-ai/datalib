@@ -815,6 +815,12 @@ join back, 27 ms and 6 ms.
   reset drops `sqlite_sequence`, after which `dolt_clean()` fails with
   `no such table: main.sqlite_sequence`, so `doltlite_raw` skips the
   reset there.
+- **Through sqlx, a NULL read as a bare `String` or `i64` is `""` or
+  `0`, not an error.** sqlx's `try_get` skips its type check for a NULL
+  and its SQLite decoders return the default, so only an `Option<T>`
+  read tells NULL from empty. A nullable column is read as `Option<T>`;
+  `scripts/lint_repo.py` check 17 refuses `try_get(..).ok()` without a
+  `.flatten()` after it, the spelling that hid this.
 
 ## Versions: the storage format, and what each pin brought
 

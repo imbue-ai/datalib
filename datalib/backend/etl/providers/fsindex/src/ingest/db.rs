@@ -263,7 +263,7 @@ impl RawDb {
         .ok()?;
         let mut c = DiffCounts::default();
         for r in rows {
-            let diff_type: String = r.try_get("diff_type").ok()?;
+            let diff_type: String = r.try_get::<Option<String>, _>("diff_type").ok().flatten()?;
             let n: i64 = r.try_get("n").unwrap_or(0);
             match diff_type.as_str() {
                 "added" => c.added = n as u64,
