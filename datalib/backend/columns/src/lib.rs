@@ -56,6 +56,10 @@ pub enum ColumnType {
     /// by whoever serves the row, shown as icon + label with the id on
     /// hover.
     Identity,
+    /// A list of [`Identity`]s, each drawn as `Identity` draws one, side
+    /// by side: their labels shortened in the middle to share the cell,
+    /// and those that still do not fit folded into a count.
+    Identities,
     /// A [`Status`]: a glyph for the word, when it got there (relative,
     /// like a `Timestamp`), the reason on hover, and a bar while it
     /// moves. Sorts on when.

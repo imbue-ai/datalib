@@ -16,7 +16,7 @@ use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::blob_cas::{self, BlobBundle};
 use datalib_etl::doltlite_raw::table_exists;
 use datalib_etl::periodize::Period;
-use datalib_etl_chat_common::types::UpstreamRef;
+use datalib_etl_chat_common::types::{NamedPerson, UpstreamRef};
 use datalib_etl_chat_common::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,
@@ -139,10 +139,19 @@ async fn parse_async(
         let display = subject
             .clone()
             .unwrap_or_else(|| names.label(&chat_jid, &inputs));
+        // A chat with no subject is one person's, and named after them.
+        let named_after = match subject {
+            Some(_) => Vec::new(),
+            None => vec![NamedPerson {
+                shown: display.clone(),
+                handle: Handle::whatsapp_jid(&chat_jid),
+            }],
+        };
         chat_idx_by_rowid.insert(rowid, chats.len());
         chats.push(ChatHeader {
             chat_jid,
             display,
+            named_after,
             last_read_rowid: r.get("last_read_message_row_id"),
             items_by_period: HashMap::new(),
             person_jids: Vec::new(),
@@ -430,6 +439,7 @@ async fn parse_async(
             id: ch.chat_jid.clone(),
             chat_uuid: chat_id.uuid,
             display: ch.display,
+            named_after: ch.named_after,
             author: None,
             account: None,
             project: None,
@@ -563,6 +573,7 @@ fn build_item(
 struct ChatHeader {
     chat_jid: String,
     display: String,
+    named_after: Vec<NamedPerson>,
     last_read_rowid: Option<i64>,
     items_by_period: HashMap<String, Vec<NormalizedChatItem>>,
     /// Who wrote or reacted in the chat, in the order they first did;

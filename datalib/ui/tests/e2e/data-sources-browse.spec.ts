@@ -118,11 +118,24 @@ test("a source's row opens that source, with its type's columns", async ({ page 
   // a column with one value, so neither is on screen; the subject is,
   // and every one of them is a Slack channel or DM. The storage rows sit
   // in this source's directory but are filed under datalib, so a browse
-  // of the source is the source's data — see docs/dev/grid_rows.md.
+  // of the source is the source's data — see docs/dev/grid_rows.md. A
+  // channel reads as its name; a DM, named by its people, as their chips.
   await expect
     .poll(async () => {
-      const subjects = await columnValues(page, "subject_ref");
-      return subjects.length > 0 && subjects.every((c) => /^[#@]/.test(c.trim()));
+      const subjects = await page
+        .locator(`${SEARCH_ROWS} [col-id="subject_ref"]`)
+        .evaluateAll((cells) =>
+          cells.map((c) =>
+            c.querySelector('a.chip[data-handle^="slack:"]')
+              ? "people"
+              : (c as HTMLElement).innerText.trim().startsWith("#")
+                ? "channel"
+                : "other",
+          ),
+        );
+      return (
+        subjects.includes("channel") && subjects.includes("people") && !subjects.includes("other")
+      );
     })
     .toBe(true);
   await expect(searchHeader(page, "kind")).toHaveCount(0);

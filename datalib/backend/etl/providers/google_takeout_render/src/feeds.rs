@@ -186,6 +186,7 @@ fn chat(
 ) -> NormalizedChat {
     let feed = ids::feed(source_id, chat_id);
     NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,

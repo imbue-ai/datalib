@@ -33,6 +33,12 @@
 
 .tg-identity { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
 .tg-identity > .tg-label { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 4ch; }
+/* Several chips in one cell: the cell has cut their labels to share it
+   (chipFit.ts), so they sit in one row; overflow is a last resort. */
+.tg-identities { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; overflow: hidden; }
+.tg-identities > .tg-plain-chip,
+.tg-identities > .tg-more-chip { padding: 0 0.5em; }
+.tg-identities > .tg-more-chip { color: var(--datalib-muted); }
 /* The tree cell: indent, chevron, then the column's own drawing, which
    gives way before the chevron does. One flex row, so the cell's own
    ellipsis never swallows the lot — an overflowing inline-block is

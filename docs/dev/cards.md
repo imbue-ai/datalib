@@ -699,6 +699,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `timeseries` | `{value, unit, samples, detail, window_secs}` | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table |
 | `identity` | `{id, label, icon, detail, entity}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset. An id that is a person's handle as a URI (`mailto:…`), or an `entity` naming a group or step (`datalib:group/slack`), draws as a chip instead, see below |
 | `status` | `{key, label, at, last_success_at, detail}` | a glyph for the key (a spinner while running), when it got there, the reason on hover |
+| `identities` | `[identity, …]` | each drawn as `identity` draws one, side by side: their labels cut in the middle so each gets an even share of the cell (a short one leaves its room to the long ones), and those that would fall below a few characters folded into a "+N" whose tooltip names them (`chipFit.ts`). One plain identity alone reads as `identity` does |
 | `chips` | `[{kind, text, title}]` | a row of chips |
 | `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
 | `markdown_uuid` | a uuid or `{id, label}` | the title; click opens the document |
