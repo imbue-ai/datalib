@@ -1908,6 +1908,11 @@ source_measurements
     items
 
 == system ==
+disk_free
+    measured_at_utc
+    tz_offset
+    available_bytes
+    total_bytes
 disk_usage
     path
     measured_at_utc

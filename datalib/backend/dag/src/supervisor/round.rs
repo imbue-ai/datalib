@@ -17,6 +17,7 @@ use super::tick::{
 };
 use super::wipe;
 use crate::artifact::ArtifactPath;
+use crate::disk_space::{self, DiskFloor, LowDisk};
 use crate::events::{Event, PlannedStep, StepProgress};
 use crate::graph::Graph;
 use crate::scheduler::{
@@ -26,6 +27,10 @@ use crate::scheduler::{
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
 use crate::supervisor::record::{CurrentRun, Record};
 use crate::version::UNKNOWN;
+
+/// How often an open round looks at the disk while the config sets a
+/// floor. Nothing announces a disk filling or being freed.
+const DISK_LOOK_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// How an invocation ended, held until the step runs again (it was a
 /// pass) or everything it reads has settled (it is done for now). While a
@@ -261,6 +266,7 @@ impl Runner {
         let mut queue = QueueLedger::new(graph.steps.len());
         let mut cancelled = false;
         let mut stop_rx = self.stop.clone();
+        let mut disk = DiskWatch::default();
 
         self.refresh(
             graph,
@@ -456,6 +462,8 @@ impl Runner {
                 requests: open.iter().map(|o| o.request.clone()).collect(),
                 turned_off: turned_off.keys().chain(wiping.keys()).copied().collect(),
             };
+            let low = disk.look(&self.data_root, graph.disk_floor);
+            facts.low_disk = low.is_some();
             let t = tick(&shape, &intent, &facts);
             for scope in &t.scopes {
                 for (slot, &wanted) in slots.iter_mut().zip(scope) {
@@ -558,16 +566,25 @@ impl Runner {
                         }
                 })
                 .collect();
-            record_states(graph, &shape, &mut state, &t, &held, &turned_off, |i| {
-                if !working[i] {
-                    return Vec::new();
-                }
-                open.iter()
-                    .enumerate()
-                    .filter(|(r, _)| !closing.contains(r) && t.scopes[*r][i])
-                    .map(|(_, o)| o.id.clone())
-                    .collect()
-            });
+            record_states(
+                graph,
+                &shape,
+                &mut state,
+                &t,
+                &held,
+                &turned_off,
+                low,
+                |i| {
+                    if !working[i] {
+                        return Vec::new();
+                    }
+                    open.iter()
+                        .enumerate()
+                        .filter(|(r, _)| !closing.contains(r) && t.scopes[*r][i])
+                        .map(|(_, o)| o.id.clone())
+                        .collect()
+                },
+            );
             say_wiping(graph, &mut state, &t, &wiping);
             record_deferred(graph, &mut state, &mailbox.deferred);
 
@@ -608,6 +625,9 @@ impl Runner {
             }
             for &i in &t.stops {
                 if let Some(stop) = slots[i].live.as_mut().and_then(|l| l.stop.take()) {
+                    if let Some(low) = low.filter(|_| !turned_off.contains_key(&i)) {
+                        self.note(&graph.steps[i].id, format!("stopped: {}", low.describe()));
+                    }
                     let _ = stop.send(true);
                 }
             }
@@ -669,7 +689,10 @@ impl Runner {
                 heard = listener.next(), if listening => {
                     config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
                 }
-                joined = set.join_next() => {
+                _ = tokio::time::sleep(DISK_LOOK_EVERY),
+                    if listening && graph.disk_floor.is_some() => {}
+                // Empty while the disk holds every step back.
+                joined = set.join_next(), if !set.is_empty() => {
                     // Seals before joins: a step sends its seal before its
                     // task can finish, so every seal this join follows is
                     // queued by now.
@@ -732,6 +755,7 @@ impl Runner {
             &t,
             &vec![None; slots.len()],
             &turned_off,
+            None,
             |_| Vec::new(),
         );
         record_deferred(graph, &mut state, &mailbox.deferred);
@@ -1018,9 +1042,16 @@ impl Runner {
         let shape = shape_of(graph, &self.lock_slots);
         let t = tick(&shape, &intent, &facts_of(graph, &state));
         let held = vec![None; graph.steps.len()];
-        record_states(graph, &shape, &mut state, &t, &held, &turned_off, |_| {
-            Vec::new()
-        });
+        record_states(
+            graph,
+            &shape,
+            &mut state,
+            &t,
+            &held,
+            &turned_off,
+            None,
+            |_| Vec::new(),
+        );
         record.save(&state).await?;
         Ok(all)
     }
@@ -1325,6 +1356,7 @@ fn turned_off_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usiz
 /// passes (`held`: its invocation ended, and what it reads has not
 /// settled) waits for the producer named there. `serving` names the open requests a step
 /// has work left in, oldest first.
+#[allow(clippy::too_many_arguments)]
 fn record_states(
     graph: &Graph,
     shape: &Shape,
@@ -1332,6 +1364,7 @@ fn record_states(
     t: &Tick,
     held: &[Option<usize>],
     turned_off: &BTreeMap<usize, String>,
+    low: Option<LowDisk>,
     serving: impl Fn(usize) -> Vec<String>,
 ) {
     let id = |j: usize| graph.steps[j].id.as_str();
@@ -1342,9 +1375,10 @@ fn record_states(
         };
         let turned_off_by = turned_off.get(&i).cloned();
         let detail = match st {
-            Row::Running if t.stops.contains(&i) => Some(match &turned_off_by {
-                Some(by) => format!("stopping: turned off by {by}"),
-                None => "stopping: no open request wants it".to_string(),
+            Row::Running if t.stops.contains(&i) => Some(match (&turned_off_by, low) {
+                (Some(by), _) => format!("stopping: turned off by {by}"),
+                (None, Some(low)) => format!("stopping: {}", low.describe()),
+                (None, None) => "stopping: no open request wants it".to_string(),
             }),
             Row::Off => turned_off_by
                 .as_ref()
@@ -1358,6 +1392,10 @@ fn record_states(
                 "waiting for {}, which reads what this writes",
                 id(r)
             )),
+            Row::Waiting(Wait::DiskSpace) => Some(match low {
+                Some(low) => format!("waiting for disk space: {}", low.describe()),
+                None => "waiting for disk space".to_string(),
+            }),
             Row::Waiting(Wait::Lock(l)) => {
                 let holders: Vec<&str> = (0..t.states.len())
                     .filter(|&j| t.states[j] == Row::Running)
@@ -1377,6 +1415,58 @@ fn record_states(
         entry.state_detail = detail;
         entry.turned_off_by = turned_off_by;
         entry.requests = serving(i);
+    }
+}
+
+/// Whether the disk holds the steps back, as of the loop's last look:
+/// the floor has two lines, so the answer depends on the one before. A
+/// crossing is logged once each way rather than on every look.
+#[derive(Default)]
+struct DiskWatch {
+    low: bool,
+    unmeasured: bool,
+}
+
+impl DiskWatch {
+    /// The disk holding the steps back, if it does. A disk that cannot be
+    /// measured holds nothing back: that is logged once, at ERROR.
+    fn look(&mut self, root: &std::path::Path, floor: Option<DiskFloor>) -> Option<LowDisk> {
+        let low = match floor.map(|f| (f, disk_space::space(root))) {
+            None => None,
+            Some((floor, Ok(s))) => {
+                self.unmeasured = false;
+                floor.holds(self.low, s.available).then_some(LowDisk {
+                    available: s.available,
+                    floor,
+                })
+            }
+            Some((_, Err(e))) => {
+                if !std::mem::replace(&mut self.unmeasured, true) {
+                    tracing::error!(
+                        "supervisor: cannot measure the free space under {}, so the \
+                         [disk_space] floor holds nothing back: {e}",
+                        root.display()
+                    );
+                }
+                None
+            }
+        };
+        match (low, self.low) {
+            (Some(low), false) => tracing::warn!(
+                "supervisor: {}: no step starts, and running ones are stopped, until space \
+                 is freed",
+                low.describe()
+            ),
+            (None, true) => {
+                tracing::info!(
+                    "supervisor: the data root's disk is back over the [disk_space] resume \
+                     line; steps run"
+                )
+            }
+            _ => {}
+        }
+        self.low = low.is_some();
+        low
     }
 }
 
@@ -1458,7 +1548,10 @@ fn same_graph(a: &Graph, b: &Graph) -> bool {
             })
             .collect()
     };
-    a.fingerprints == b.fingerprints && a.locks == b.locks && when(a) == when(b)
+    a.fingerprints == b.fingerprints
+        && a.locks == b.locks
+        && a.disk_floor == b.disk_floor
+        && when(a) == when(b)
 }
 
 /// Today's graph as the tick sees it: each step writes the sink its own
@@ -1532,7 +1625,11 @@ fn facts_of(graph: &Graph, state: &Record) -> Facts {
             needs_rerun: recorded(i).is_some_and(|s| s.needs_rerun),
         })
         .collect();
-    Facts { sinks, steps }
+    Facts {
+        sinks,
+        steps,
+        low_disk: false,
+    }
 }
 
 /// The steps that answered a launch's `--migrate` with `needs_rerun` and
@@ -1936,6 +2033,50 @@ mod tests {
             Some(Some(RequestOutcome::Done))
         );
         assert_eq!(t.runs(2), 1);
+    }
+
+    /// A floor no disk can meet, set while a download runs: it is
+    /// stopped, its row says it waits for disk space, and the request
+    /// stays open. Lifting the floor runs it again and the request closes.
+    #[tokio::test]
+    async fn a_disk_under_the_floor_stops_the_running_step_until_it_is_lifted() {
+        let t = Three::new();
+        let graph = Graph::build(vec![t.step(0)]).unwrap();
+        let config = Swappable::new(&graph);
+        let other = Store::open(t.root.path()).await.unwrap();
+        let id = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let running = t.serve(graph.clone(), config.clone());
+        until("a to start", || t.runs(0) == 1).await;
+
+        let mut floored = graph.clone();
+        floored.disk_floor = Some(DiskFloor {
+            pause_below: u64::MAX,
+            resume_at: u64::MAX,
+        });
+        *config.0.lock().unwrap() = floored;
+        announce_config(t.root.path());
+        let a = until_recorded(t.root.path(), "a/raw", "waiting for disk", |st| {
+            st.state == Some(StateKind::Waiting)
+        })
+        .await;
+        assert!(
+            a.state_detail
+                .as_deref()
+                .is_some_and(|d| d.starts_with("waiting for disk space: ")),
+            "{a:?}"
+        );
+        assert!(
+            t.events.logged("a/raw", "stopped: "),
+            "the step's log says why"
+        );
+        assert_eq!(outcome(&other, &id).await, None, "the request waits");
+
+        t.go.store(true, Ordering::SeqCst);
+        *config.0.lock().unwrap() = graph;
+        announce_config(t.root.path());
+        running.await.unwrap().unwrap();
+        assert_eq!(outcome(&other, &id).await, Some(Some(RequestOutcome::Done)));
+        assert_eq!(t.runs(0), 2, "stopped once, then run to the end");
     }
 
     /// A step edited while it runs finishes on the definition it started

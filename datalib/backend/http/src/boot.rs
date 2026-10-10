@@ -109,6 +109,12 @@ pub async fn build_state(
         root_tx.clone(),
         sync.clone(),
     ));
+    tokio::spawn(crate::disk_free::run(
+        monitor.clone(),
+        app.clone(),
+        root.clone(),
+        root_tx.clone(),
+    ));
 
     // Applet discovery execs one child per configured applet, and
     // `build_state` runs on the tokio runtime — so it goes to a

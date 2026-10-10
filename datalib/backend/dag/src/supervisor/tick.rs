@@ -68,6 +68,9 @@ pub struct Facts {
     /// Each sink's published version; `None` if nothing was ever published.
     pub sinks: Vec<Option<String>>,
     pub steps: Vec<StepFacts>,
+    /// The data root's disk is under the config's `[disk_space]` floor:
+    /// nothing starts, and what runs is stopped.
+    pub low_disk: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -172,6 +175,8 @@ pub enum Wait {
     Reader(StepIx),
     /// A named lock it holds is held by others, as far as it can be.
     Lock(LockIx),
+    /// The data root's disk is under the config's free-space floor.
+    DiskSpace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,7 +231,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
 
         if f.running.is_some() {
             states[i] = StepState::Running;
-            if intent.turned_off.contains(&i) || wanting[i].is_empty() {
+            if intent.turned_off.contains(&i) || wanting[i].is_empty() || facts.low_disk {
                 stops.push(i);
             }
             continue;
@@ -268,6 +273,11 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
                 .any(|&r| step.reads.is_empty() && !started_since(f, intent.requests[r].opened));
         if !due {
             states[i] = StepState::Fresh;
+            continue;
+        }
+        if facts.low_disk {
+            pending[i] = true;
+            states[i] = StepState::Waiting(Wait::DiskSpace);
             continue;
         }
 
@@ -509,7 +519,11 @@ mod tests {
                 }
             })
             .collect();
-        Facts { sinks, steps }
+        Facts {
+            sinks,
+            steps,
+            low_disk: false,
+        }
     }
 
     fn request(roots: &[StepIx], opened: u64) -> Intent {
@@ -1090,5 +1104,53 @@ mod tests {
         let t = tick(&s, &request(&[0], 5), &facts);
         assert_eq!(started(&t), vec![0]);
         assert_eq!(t.states[3], StepState::Stale);
+    }
+
+    /// Under the free-space floor nothing starts and what runs is
+    /// stopped, but the request stays open, so the sync picks up where it
+    /// was once space is freed rather than closing as done.
+    #[test]
+    fn a_low_disk_stops_what_runs_and_holds_the_request_open_until_it_clears() {
+        let s = chain();
+        let mut facts = all_fresh(&s, 1);
+        let intent = request(&[0], 5);
+        let c0 = start_of(&tick(&s, &intent, &facts), 0);
+        run(&mut facts, 0, 6);
+
+        facts.low_disk = true;
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(t.stops, vec![0], "the running download is stopped");
+        assert!(t.starts.is_empty(), "{t:?}");
+
+        let r = facts.steps[0].running.take().unwrap();
+        facts.steps[0].last_attempt = Some(Attempt {
+            started: r.started,
+            failed: true,
+            stopped: true,
+            consumed: c0,
+        });
+        let t = tick(&s, &intent, &facts);
+        assert!(t.starts.is_empty(), "{t:?}");
+        assert_eq!(t.states[0], StepState::Waiting(Wait::DiskSpace));
+        assert!(t.closed.is_empty(), "the request waits for space");
+
+        facts.low_disk = false;
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(
+            started(&t),
+            vec![0],
+            "space is back: the download runs again"
+        );
+    }
+
+    /// A step with nothing to do is not waiting on the disk: a request
+    /// whose scope is up to date still closes while the disk is low.
+    #[test]
+    fn a_low_disk_does_not_hold_a_request_with_nothing_due() {
+        let s = chain();
+        let mut facts = all_fresh(&s, 1);
+        facts.low_disk = true;
+        let t = tick(&s, &request(&[1], 5), &facts);
+        assert_eq!(t.closed, vec![(0, Outcome::Done)]);
     }
 }

@@ -138,11 +138,14 @@ starts** in a tick, visited in topological order, iff:
    holds nobody back, so a fan-in never waits for its slowest source;
 7. **it has something to read**: a step with inputs none of whose
    producers ever published is `blocked`, or waits if one is about to run;
-8. **every lock it would take is free** (below, "What keeps steps apart").
+8. **every lock it would take is free** (below, "What keeps steps apart");
+9. **the data root's disk has room**: it is not under the config's
+   `[disk_space]` floor (below, "When the disk runs low").
 
 A step that waits says why, in its row's `state_detail`: `waiting for
 a`, `waiting for c, which reads what this writes`, `waiting for lock
-gpu, held by trainer`. Each step writes only the tree its id names, so
+gpu, held by trainer`, `waiting for disk space: 3.2 GB free on the data
+root's disk; steps pause under 10.0 GB and run again from 15.0 GB`. Each step writes only the tree its id names, so
 no two steps ever wait on each other as writers of one sink.
 
 A step that has read every seal so far is between passes: no process is
@@ -201,6 +204,47 @@ not refilled — what reads it runs instead, so its documents leave the
 grid, and its next Sync downloads everything again. The app's reset
 does not wait for a sync to end (§"Resets and purges"). The design is
 [`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
+
+## When the disk runs low
+
+Every config has a floor on the free space of the disk the data root
+lives on, with two lines: under the **pause** line the steps are held,
+and once held they stay held until the disk is back to the **resume**
+line. The gap keeps a disk hovering at one line from stopping and
+restarting the same steps over and over. The defaults are 10 GB and
+15 GB; a config moves them in a `[disk_space]` table, as bytes or with
+a unit (the grammar is `source_common`'s `byte_size`):
+
+```toml
+[disk_space]
+pause_below_bytes = "10 GB"
+resume_at_bytes = "15 GB"   # left out: 5 GB above the pause line
+```
+
+A resume line under the pause line refuses the config, and
+`pause_below_bytes = 0` turns the floor off. While the steps are held:
+
+- **nothing starts**, and every step that is due reads `waiting for disk
+  space` (rule 9);
+- **everything running is stopped**, as a stop is: SIGINT, then a
+  checkpoint and an exit. That is neither a failure nor a run (rule 4),
+  so the step runs again once there is room, and each stopped step's log
+  says why;
+- **the requests stay open**, since their steps are waiting, and the
+  sync carries on where it was once space is freed or the floor is
+  lowered. A request whose scope has nothing due still closes.
+
+The loop logs the crossing once each way (`WARN` going under the pause
+line, `INFO` reaching the resume line). Which side of the gap a disk is
+on is remembered for the length of a busy period, so a sync started
+anew with the disk between the lines runs. "Free" is what an unprivileged process may still write
+(`statvfs`'s `f_bavail`); on APFS that leaves out purgeable space, so it
+can read lower than Finder. A disk that cannot be measured holds
+nothing back, and says so once at ERROR. The floor is part of the
+graph, so an edit to it reaches a loop already running. The app's
+status bar draws the same number beside the root's size and raises a
+toast while the steps are held, and keeps the samples in the usage
+store's `disk_free` table (`http/src/disk_free.rs`).
 
 ## Upgrading a root
 
@@ -548,7 +592,10 @@ the store's `PRAGMA data_version`. If the store moved and nothing is
 announced for it by the next look, a writer bypassed `Store` (a `sqlite3`
 shell, an older build): that is logged at ERROR and counted
 (`announce::missed_announcements`), and tests assert the count is zero.
-It is the only timer, and it exists to catch that bug.
+It is the only timer that wakes an idle loop, and it exists to catch
+that bug. The other, while a round is open, is a look at the disk every
+five seconds for the `[disk_space]` floor: nothing announces a disk
+filling or being freed.
 
 A `datalib-dag` running the loop with no server up has nobody watching
 the config, so it takes an edit on at its next busy period, not mid-sync.
