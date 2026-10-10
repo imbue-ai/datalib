@@ -60,18 +60,21 @@ fn subject_identity(name: &str) -> Option<Identity> {
 }
 
 /// The Contact cell: the contact's name, a chip where its first address,
-/// else its first number, makes a handle, and plain text where neither
-/// does (a group, a number with no country code). Only a contact's own
-/// row has one.
+/// else its first number, makes a handle, else by any handle the contact
+/// has (a LinkedIn profile, a Slack user); plain text where it has none
+/// (a group, a number with no country code). Only a contact's own row
+/// has one.
 pub fn contact_identity(
     contact: Option<&str>,
     email: Option<&str>,
     phone: Option<&str>,
+    handles: &[String],
 ) -> Option<Identity> {
     let name = contact.filter(|c| !c.is_empty())?;
     let handle = email
         .and_then(Handle::email)
-        .or_else(|| phone.and_then(Handle::tel));
+        .or_else(|| phone.and_then(Handle::tel))
+        .or_else(|| handles.iter().find_map(|h| Handle::parse(h)));
     Some(Identity {
         id: handle
             .as_ref()
@@ -92,6 +95,7 @@ pub(crate) fn handle_mark(kind: HandleKind) -> &'static str {
         HandleKind::Slack => "slack",
         HandleKind::SignalAci => "signal",
         HandleKind::Facebook => "facebook",
+        HandleKind::Linkedin => "linkedin",
     }
 }
 
@@ -304,8 +308,9 @@ fn declared() -> Vec<ColumnSpec> {
         ColumnSpec::new("contact_ref", "Contact", ColumnType::Identity)
             .describe(
                 "On a contact's own row, who it is: a chip drawn from the contact's first \
-                 email address, else its first phone number, so it shows their photo and \
-                 the name your contacts give them.",
+                 email address, else its first phone number, else any other handle it has \
+                 (a LinkedIn profile, a Slack user), so it shows their photo and the name \
+                 your contacts give them.",
             )
             .hidden(),
         ColumnSpec::new("email", "Email", ColumnType::Text)
@@ -412,6 +417,7 @@ impl Sources {
             row.contact.as_deref(),
             row.email.as_deref(),
             row.phone.as_deref(),
+            &row.contact_handles,
         );
         row.subject_ref = row
             .contact_ref
@@ -463,25 +469,41 @@ impl Sources {
 mod tests {
     use super::*;
 
-    /// A contact's cell is a chip by its address, else its number, and
-    /// plain text where neither makes a handle; any other row has none.
+    /// A contact's cell is a chip by its address, else its number, else
+    /// any handle the contact has; plain text where it has none, and any
+    /// other row has none.
     #[test]
-    fn a_contacts_cell_is_its_address_else_its_number() {
-        let id = |c, e, p| contact_identity(c, e, p).map(|i| (i.id, i.label));
+    fn a_contacts_cell_is_its_address_else_its_number_else_any_handle() {
+        let id = |c, e, p, h: &[&str]| {
+            let h: Vec<String> = h.iter().map(|s| s.to_string()).collect();
+            contact_identity(c, e, p, &h).map(|i| (i.id, i.label))
+        };
         let riker = Some("Will Riker");
         assert_eq!(
-            id(riker, Some("riker@enterprise.org"), Some("+1 202 555 0101")),
+            id(
+                riker,
+                Some("riker@enterprise.org"),
+                Some("+1 202 555 0101"),
+                &["linkedin:wriker"]
+            ),
             Some(("mailto:riker@enterprise.org".into(), "Will Riker".into()))
         );
         assert_eq!(
-            id(riker, None, Some("+1 202 555 0101")),
+            id(riker, None, Some("+1 202 555 0101"), &[]),
             Some(("tel:+12025550101".into(), "Will Riker".into()))
         );
         assert_eq!(
-            id(Some("Bridge crew"), None, Some("(202) 555-0101")),
+            id(riker, None, None, &["linkedin:wriker"]),
+            Some((
+                "https://www.linkedin.com/in/wriker".into(),
+                "Will Riker".into()
+            ))
+        );
+        assert_eq!(
+            id(Some("Bridge crew"), None, Some("(202) 555-0101"), &[]),
             Some(("Bridge crew".into(), "Bridge crew".into()))
         );
-        assert_eq!(id(None, Some("riker@enterprise.org"), None), None);
+        assert_eq!(id(None, Some("riker@enterprise.org"), None, &[]), None);
     }
 
     fn values_of(keys: &[SearchKeySpec], key: &str) -> KeyValues {
@@ -617,6 +639,7 @@ mod tests {
             contact: Some("Will Riker".into()),
             email: Some("riker@enterprise.org".into()),
             phone: Some("+1 202 555 0101".into()),
+            contact_handles: Vec::new(),
             contact_ref: None,
             subject_ref: None,
             author_term: None,

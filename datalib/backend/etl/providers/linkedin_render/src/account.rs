@@ -1,4 +1,5 @@
-//! Whose export this is — the `account` column on every LinkedIn row.
+//! Whose export this is — the `account` column on every LinkedIn row,
+//! and the handle the owner's own posts and comments are written under.
 //! An export names its owner in `Email Addresses.csv` (one row flagged
 //! `Primary`) and `Profile.csv`; nothing in `Connections.csv`,
 //! `messages.csv` or `Shares.csv` does.
@@ -7,6 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl_render::inputs::{Input, RawRange};
+use datalib_handle::Handle;
 use serde_json::Value;
 
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
@@ -18,6 +20,9 @@ use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 #[derive(Debug, Clone, Default)]
 pub struct Account {
     pub label: Option<String>,
+    /// The primary address (else the first listed) as a handle: the one
+    /// identifier for the owner an export carries.
+    pub handle: Option<Handle>,
     pub inputs: Vec<Input>,
 }
 
@@ -52,8 +57,10 @@ pub fn load_account(raw_dir: &Path, range: RawRange<'_>) -> Result<Account> {
             let payloads = |rows: &[(String, Value)]| -> Vec<Value> {
                 rows.iter().map(|(_, v)| v.clone()).collect()
             };
+            let emails = payloads(&emails);
             Ok(Account {
-                label: account_label(&payloads(&emails), &payloads(&profile)),
+                label: account_label(&emails, &payloads(&profile)),
+                handle: owner_email(&emails).as_deref().and_then(Handle::email),
                 inputs,
             })
         })
@@ -63,19 +70,7 @@ pub fn load_account(raw_dir: &Path, range: RawRange<'_>) -> Result<Account> {
 /// The primary address (else the first listed), else the profile's
 /// name. `None` when the export carries neither file.
 pub fn account_label(email_addresses: &[Value], profile: &[Value]) -> Option<String> {
-    let field = |p: &Value, k: &str| -> Option<String> {
-        p.get(k)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-    };
-    let is_primary = |p: &Value| field(p, "Primary").is_some_and(|v| v.eq_ignore_ascii_case("yes"));
-    let email = email_addresses
-        .iter()
-        .find(|p| is_primary(p))
-        .or_else(|| email_addresses.first())
-        .and_then(|p| field(p, "Email Address"));
+    let email = owner_email(email_addresses);
     let name = profile.first().and_then(|p| {
         let parts: Vec<String> = ["First Name", "Last Name"]
             .iter()
@@ -84,6 +79,24 @@ pub fn account_label(email_addresses: &[Value], profile: &[Value]) -> Option<Str
         (!parts.is_empty()).then(|| parts.join(" "))
     });
     datalib_etl_chat_common::account_label("", email.as_deref(), name.as_deref())
+}
+
+/// The primary address, else the first listed.
+fn owner_email(email_addresses: &[Value]) -> Option<String> {
+    let is_primary = |p: &Value| field(p, "Primary").is_some_and(|v| v.eq_ignore_ascii_case("yes"));
+    email_addresses
+        .iter()
+        .find(|p| is_primary(p))
+        .or_else(|| email_addresses.first())
+        .and_then(|p| field(p, "Email Address"))
+}
+
+fn field(p: &Value, k: &str) -> Option<String> {
+    p.get(k)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@ use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTermKind, SuppliedSearchTerm};
 
-use datalib_contact_schema::{is_drawable_photo, Medium, NormalizedContact, Photo};
+use datalib_contact_schema::{is_drawable_photo, ContactHandle, Medium, NormalizedContact, Photo};
 use datalib_handle::Handle;
 
 use crate::types::ContactDoc;
@@ -228,7 +228,7 @@ pub fn field_rows(contact: &NormalizedContact) -> Vec<FieldRow> {
     let mut rows: Vec<FieldRow> = contact
         .handles
         .iter()
-        .filter(|h| h.medium != Medium::Other || h.handle.is_none() || h.handle != head)
+        .filter(|h| !is_the_chips_spelling(h, head.as_ref()))
         .map(|h| FieldRow {
             label: match h.medium {
                 Medium::Email => "Email",
@@ -271,6 +271,13 @@ pub fn field_rows(contact: &NormalizedContact) -> Vec<FieldRow> {
         });
     }
     rows
+}
+
+/// A handle that is neither an address nor a number, when the page's
+/// chip is drawn by it: its spelling (`name/Will Riker`) tells a reader
+/// nothing the chip does not.
+fn is_the_chips_spelling(h: &ContactHandle, head: Option<&Handle>) -> bool {
+    h.medium == Medium::Other && h.handle.is_some() && h.handle.as_ref() == head
 }
 
 /// A detail's label as providers write it, `Address (home)`, read as
@@ -338,6 +345,7 @@ pub fn chip_handle(email: Option<&str>, phone: Option<&str>) -> Option<Handle> {
 fn summary(contact: &NormalizedContact) -> String {
     let email = first_value(contact, Medium::Email);
     let phone = first_value(contact, Medium::Phone);
+    let head = head_handle(contact);
     let mut lines: Vec<String> = contact.note.iter().cloned().collect();
     lines.extend(contact.org.iter().cloned());
     lines.extend(contact.title.iter().cloned());
@@ -349,7 +357,7 @@ fn summary(contact: &NormalizedContact) -> String {
             .filter(|h| match h.medium {
                 Medium::Email => Some(h.value.as_str()) != email,
                 Medium::Phone => Some(h.value.as_str()) != phone,
-                Medium::Other => true,
+                Medium::Other => !is_the_chips_spelling(h, head.as_ref()),
             })
             .map(|h| h.value.clone()),
     );
@@ -457,9 +465,10 @@ fn head(doc: &ContactDoc, photo_rel: Option<&str>) -> String {
     out
 }
 
-/// The handle the page's heading is drawn as: the one the grid's Contact
-/// cell draws, else the card's first of any kind, since a Facebook friend
-/// is known by name alone.
+/// The handle the page's heading is drawn as, by the grid's Contact
+/// cell's rule (`columns.rs::contact_identity`): the first address, else
+/// the first number, else a handle of any kind, since a Facebook friend
+/// or a LinkedIn connection may have no other.
 fn head_handle(contact: &NormalizedContact) -> Option<Handle> {
     chip_handle(
         first_value(contact, Medium::Email),
@@ -939,6 +948,24 @@ mod tests {
             row.preview,
             "Plays the trombone Starfleet Captain | USS Enterprise will@risa.test Bridge"
         );
+    }
+
+    /// A contact known by a handle that is neither an address nor a
+    /// number — a Facebook friend, by name — is its chip; the handle's
+    /// spelling (`name/Will Riker`) is no part of its Contents.
+    #[test]
+    fn a_chip_handles_spelling_is_not_in_the_contents() {
+        let mut doc = mk_contact();
+        doc.contact.names = vec!["Will Riker".into()];
+        doc.contact.org = None;
+        doc.contact.title = None;
+        doc.contact.handles = vec![ContactHandle::of(
+            Handle::facebook_name("Will Riker").unwrap(),
+        )];
+        doc.contact.details = vec![Detail::new("Friends since", "2364-01-05")];
+        let row = build_grid_row(&mk_profile(), &doc, "facebook", "x.md", &mut Vec::new())
+            .expect("valid contact grid row");
+        assert_eq!(row.preview, "2364-01-05");
     }
 
     /// The chip is the first address, else the first number that makes a
