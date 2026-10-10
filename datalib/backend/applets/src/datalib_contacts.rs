@@ -1,8 +1,8 @@
 //! `datalib-applet datalib_contacts` — the contacts app: the one writer of
 //! `datalib_curated/datalib_contacts/`, serving what a chip needs to resolve a
 //! handle, what its popover needs to create or link a contact, the
-//! photo a person put on one, and the draft a contact is edited through
-//! on its card.
+//! photo a person put on one, the draft a contact is edited through
+//! on its card, and the table of every contact the app's Browse opens.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -18,6 +18,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use datalib_columns::{ColumnSpec, ColumnType, Identity};
+use datalib_contact_schema::{Medium, NormalizedContact};
 use datalib_contacts::drafts::ContactEdit;
 use datalib_contacts::{ContactKind, Store};
 use datalib_handle::Handle;
@@ -73,7 +75,7 @@ fn routes(store: Arc<Store>) -> Router {
     Router::new()
         .route("/resolve", post(resolve))
         .route("/search", get(search))
-        .route("/contacts", post(create))
+        .route("/contacts", get(list).post(create))
         .route("/contact/{contact_id}", get(contact))
         .route("/link", post(link))
         .route("/unlink", post(unlink))
@@ -175,6 +177,68 @@ async fn search(
         .await
         .map_err(refused)?;
     Ok(Json(json!({ "contacts": contacts })))
+}
+
+async fn list(State(store): AppState) -> Result<Json<serde_json::Value>, ApiError> {
+    let contacts = store.list().await.map_err(refused)?;
+    Ok(Json(contacts_table(&contacts)))
+}
+
+/// Every contact as a typed table (docs/dev/cards.md § "Typed tables"),
+/// in the address book's columns: the person as a chip, the first
+/// address and number, how many handles, the note, the kind and when it
+/// last changed. A contact is keyed by its id, and the chip by the
+/// handle the grid's Contact column would draw it by: its first working
+/// address, else number, else any handle; one with none is its name.
+fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
+    let columns = vec![
+        ColumnSpec::new("contact_ref", "Contact", ColumnType::Identity),
+        ColumnSpec::new("email", "Email", ColumnType::Text),
+        ColumnSpec::new("phone", "Phone", ColumnType::Text),
+        ColumnSpec::new("handles", "Handles", ColumnType::Count)
+            .describe("How many handles are linked to the contact."),
+        ColumnSpec::new("note", "Note", ColumnType::Text),
+        ColumnSpec::new("kind", "Type", ColumnType::Text),
+        ColumnSpec::new("updated_at", "Changed", ColumnType::Timestamp),
+    ];
+    let rows: Vec<serde_json::Value> = contacts
+        .iter()
+        .map(|c| {
+            let name = c.name().unwrap_or(&c.key);
+            let working = |m: Medium| {
+                c.handles
+                    .iter()
+                    .find(|h| h.medium == m && h.stopped_working_by.is_none())
+                    .or_else(|| c.handles.iter().find(|h| h.medium == m))
+            };
+            let chip = working(Medium::Email)
+                .or_else(|| working(Medium::Phone))
+                .or_else(|| c.handles.first())
+                .and_then(|h| h.handle.as_ref());
+            let contact_ref = Identity {
+                id: chip.map_or_else(|| name.to_string(), Handle::to_uri),
+                label: name.to_string(),
+                icon: chip
+                    .map(|h| crate::unified_index::columns::handle_mark(h.kind()).to_string()),
+                detail: chip.map(|h| h.describe(name)),
+                entity: None,
+            };
+            json!({
+                "key": c.key,
+                "contact_ref": contact_ref,
+                "email": working(Medium::Email).map(|h| h.value.clone()),
+                "phone": working(Medium::Phone).map(|h| h.value.clone()),
+                "handles": c.handles.len(),
+                "note": c.note,
+                "kind": match c.kind {
+                    ContactKind::Person => "Contact",
+                    ContactKind::Group => "Contact group",
+                },
+                "updated_at": c.modified_at,
+            })
+        })
+        .collect();
+    json!({ "columns": columns, "rows": rows, "row_key": "key" })
 }
 
 #[derive(Deserialize)]
@@ -460,6 +524,66 @@ mod tests {
             .await
             .unwrap();
         (status, serde_json::from_slice(&body).unwrap_or_default())
+    }
+
+    /// Browse on the contacts app: every contact as a row keyed by its id,
+    /// drawn as the chip of its first working address (a stopped one is
+    /// still listed beside it), a group as a group, and a contact with no
+    /// handle as its name alone.
+    #[tokio::test]
+    async fn every_contact_is_a_row_drawn_by_its_working_address() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&datalib_contacts::store_path(dir.path()))
+            .await
+            .unwrap();
+        let old = Handle::email("will@risa.test").unwrap();
+        let work = Handle::email("riker@enterprise.org").unwrap();
+        let tel = Handle::tel("+15550123456").unwrap();
+        let will = store
+            .create(
+                "Will Riker",
+                ContactKind::Person,
+                &[old.clone(), work.clone(), tel],
+            )
+            .await
+            .unwrap();
+        store.set_stopped_working(&old, Some("2369")).await.unwrap();
+        store.create("Q", ContactKind::Person, &[]).await.unwrap();
+        store
+            .create("Away team", ContactKind::Group, &[])
+            .await
+            .unwrap();
+        let app = routes(Arc::new(store));
+
+        let (status, body) = call(&app, "GET", "/contacts", json!(null)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["row_key"], "key");
+        let rows = body["rows"].as_array().unwrap();
+        let names: Vec<&str> = rows
+            .iter()
+            .map(|r| r["contact_ref"]["label"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Away team", "Q", "Will Riker"]);
+        let riker = &rows[2];
+        assert_eq!(riker["key"], will.as_str());
+        assert_eq!(riker["contact_ref"]["id"], "mailto:riker@enterprise.org");
+        assert_eq!(riker["contact_ref"]["icon"], "email");
+        assert_eq!(riker["email"], "riker@enterprise.org");
+        assert_eq!(riker["phone"], "+15550123456");
+        assert_eq!(riker["handles"], 3);
+        assert_eq!(rows[1]["contact_ref"]["id"], "Q", "no handle, so no chip");
+        assert_eq!(rows[0]["kind"], "Contact group");
+        let fields: Vec<&str> = body["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["field"].as_str().unwrap())
+            .collect();
+        for r in rows {
+            for f in &fields {
+                assert!(r.get(*f).is_some(), "row lacks {f}: {r}");
+            }
+        }
     }
 
     /// The card's whole round: open a draft, autosave, find the save

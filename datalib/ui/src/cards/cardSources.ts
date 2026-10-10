@@ -35,6 +35,18 @@ export function personSource(handle: string, opts: PersonViewOpts = {}): string 
   return `personView(${JSON.stringify(handle)}, ${JSON.stringify(opts)})`;
 }
 
+/// The source of the contacts app's table.
+export function contactsSource(): string {
+  return "contactsView()";
+}
+
+/// What an applet row's Browse opens: the table of an applet whose rows
+/// are its own (the server enables Browse on exactly those), else
+/// nothing.
+export function appletBrowseSource(appletId: string): string | null {
+  return appletId === "datalib_contacts" ? contactsSource() : null;
+}
+
 /// The source of a search card on `q`.
 export function searchSource(q: string): string {
   return `searchView(${JSON.stringify({ q })})`;

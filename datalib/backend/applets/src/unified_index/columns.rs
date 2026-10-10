@@ -88,7 +88,7 @@ pub fn contact_identity(
 
 /// The icon token for a handle kind; `KIND_ICON` in `ui/src/cards/contacts.ts`
 /// is the same table.
-fn handle_mark(kind: HandleKind) -> &'static str {
+pub(crate) fn handle_mark(kind: HandleKind) -> &'static str {
     match kind {
         HandleKind::Email => "email",
         HandleKind::Tel => "sms",
