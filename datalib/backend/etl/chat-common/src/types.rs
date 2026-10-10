@@ -57,6 +57,21 @@ impl NormalizedAttachment {
     }
 }
 
+/// Whom an item's author label, or a reaction's reactor label, names. A
+/// provider shows a stand-in where it has no person to show; a stand-in
+/// is drawn like a name but is not one, so it is never a participant.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub enum AuthorKind {
+    /// Whoever the label names: a person, an assistant, a tool.
+    #[default]
+    Named,
+    /// The account itself, under a stand-in such as "Me" or "User".
+    Account,
+    /// Nobody the source names: a stand-in such as "Unknown", or a
+    /// heading where a page's sections have no author.
+    Unknown,
+}
+
 /// One reaction (emoji + reactor) on an item.
 #[derive(Debug, Clone, Serialize)]
 pub struct NormalizedReaction {
@@ -71,6 +86,8 @@ pub struct NormalizedReaction {
     pub reactor_handle: Option<datalib_handle::Handle>,
     /// Human-readable label for the reactor ("Me" / "Will Riker" / …).
     pub reactor_display: String,
+    /// Whether `reactor_display` names the reactor or stands in for them.
+    pub reactor_kind: AuthorKind,
     /// The emoji or short string (`🫡`, `🔥`, …).
     pub emoji: String,
     /// Unix milliseconds when the reaction was sent, or `None` when
@@ -148,6 +165,9 @@ pub struct NormalizedChatItem {
     /// Pre-resolved author label ("Me", "Will Riker", "+12025550123"). The
     /// provider owns the outgoing/incoming rule and any name lookup.
     pub author_display: String,
+    /// Whether `author_display` names the author or stands in for the
+    /// account or for an author the source does not name.
+    pub author_kind: AuthorKind,
     /// Unix milliseconds for the item's effective timestamp, or `None`
     /// when this item has no timestamp at all.
     pub date_ms: Option<i64>,

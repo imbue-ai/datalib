@@ -16,7 +16,7 @@ use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
@@ -248,6 +248,11 @@ fn build_chat(
             "LLM Response" => filter_nonempty(model.clone()).unwrap_or_else(|| "Assistant".into()),
             _ => capitalize(sender),
         };
+        let author_kind = match (kind_label, &m.sender) {
+            ("User Input", _) => AuthorKind::Account,
+            (_, None) => AuthorKind::Unknown,
+            _ => AuthorKind::Named,
+        };
 
         let mut blocks = blocks_by_msg
             .get(m.message_uuid.as_str())
@@ -335,6 +340,7 @@ fn build_chat(
             items.push(NormalizedChatItem {
                 message_uuid: block_id.uuid.clone(),
                 author_handle: None,
+                author_kind: AuthorKind::Named,
                 author_display: block_author,
                 date_ms: block_ms,
                 text: filter_nonempty(body),
@@ -371,6 +377,7 @@ fn build_chat(
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
             author_handle: None,
+            author_kind,
             author_display: author_display.clone(),
             date_ms: msg_ms,
             text: filter_nonempty(body),
@@ -470,6 +477,10 @@ fn build_project_page(
         .and_then(iso_to_ms)
         .or_else(|| project.updated_at.as_deref().and_then(iso_to_ms));
 
+    // Upstream names no author for a project's sections, so each is
+    // headed by what it is — "Description", a file's name — in the
+    // author's place, as a heading that names nobody. The creator is the
+    // page's own `author`.
     let mut items: Vec<NormalizedChatItem> = Vec::new();
     if let Some(text) = project.description.clone().and_then(filter_nonempty) {
         items.push(project_item(
@@ -511,6 +522,7 @@ fn build_project_page(
         items.push(NormalizedChatItem {
             message_uuid: doc_id.uuid.clone(),
             author_handle: None,
+            author_kind: AuthorKind::Unknown,
             author_display: label,
             date_ms: ms,
             text: body,
@@ -600,16 +612,12 @@ fn clamp_doc_text(content: &str, max_bytes: Option<usize>) -> String {
     )
 }
 
-fn project_item(
-    id: Identity,
-    author_display: &str,
-    kind_label: &str,
-    text: String,
-) -> NormalizedChatItem {
+fn project_item(id: Identity, heading: &str, kind_label: &str, text: String) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: id.uuid,
         author_handle: None,
-        author_display: author_display.to_string(),
+        author_kind: AuthorKind::Unknown,
+        author_display: heading.to_string(),
         date_ms: id.at,
         text: Some(text),
         kind: ItemKind::Text,

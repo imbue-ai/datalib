@@ -121,32 +121,40 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         // text the account sent). All April 2369 → one month bucket each.
         assert_eq!(docs.len(), 4, "four conversations, got {}", docs.len());
 
-        // Each document names the other side by number, so `with:` that
-        // person finds it: a call log, and a thread they never wrote in.
-        let participants = |name: &str| -> Vec<String> {
-            let doc = docs
-                .iter()
+        // A call's row names the other side by number, and a thread only
+        // the account wrote in names them as its participant, so `with:`
+        // that person finds both.
+        let doc_of = |name: &str| {
+            docs.iter()
                 .find(|d| {
                     d.rows
                         .iter()
                         .any(|r| r.conversation_name.as_deref() == Some(name))
                 })
-                .unwrap_or_else(|| panic!("no document for {name}"));
-            doc.search_terms
-                .iter()
-                .filter(|t| t.uuid == doc.markdown_uuid && t.kind.as_str() == "participant")
-                .map(|t| t.value.clone())
-                .collect()
+                .unwrap_or_else(|| panic!("no document for {name}"))
         };
-        assert!(
-            participants("Deanna Troi").contains(&"tel:+12025550103".to_string()),
-            "the call log names Troi by number: {:?}",
-            participants("Deanna Troi")
+        let troi_handles: Vec<Option<&str>> = doc_of("Deanna Troi")
+            .rows
+            .iter()
+            .filter(|r| r.uuid != doc_of("Deanna Troi").markdown_uuid)
+            .map(|r| r.author_handle.as_deref())
+            .collect();
+        assert_eq!(
+            troi_handles,
+            [Some("tel:+12025550103")],
+            "the call names Troi by number"
         );
-        assert!(
-            participants("Geordi La Forge").contains(&"tel:+12025550104".to_string()),
-            "the thread only the account wrote in names Geordi by number: {:?}",
-            participants("Geordi La Forge")
+        let geordi = doc_of("Geordi La Forge");
+        let participants: Vec<&str> = geordi
+            .search_terms
+            .iter()
+            .filter(|t| t.uuid == geordi.markdown_uuid && t.kind.as_str() == "participant")
+            .map(|t| t.value.as_str())
+            .collect();
+        assert_eq!(
+            participants,
+            ["tel:+12025550104"],
+            "the thread only the account wrote in names Geordi by number"
         );
 
         let all_md: String = docs

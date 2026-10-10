@@ -3,7 +3,7 @@
 //! traffic becomes, and the text helpers both read their JSON with.
 
 use datalib_etl_chat_common::normalize::json_pretty_sorted;
-use datalib_etl_chat_common::types::{ItemKind, NormalizedChatItem, UpstreamRef};
+use datalib_etl_chat_common::types::{AuthorKind, ItemKind, NormalizedChatItem, UpstreamRef};
 use datalib_etl_render::html::{escape_text, md_code_block};
 use datalib_id::Identity;
 use serde_json::Value;
@@ -36,6 +36,7 @@ pub fn item(
     NormalizedChatItem {
         message_uuid: id.uuid,
         author_handle: None,
+        author_kind: AuthorKind::Named,
         author_display,
         date_ms,
         text: (!text.trim().is_empty()).then_some(text),

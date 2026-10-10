@@ -95,7 +95,18 @@ that, clicking a tool-call row in the grid would scroll to something
 invisible.
 
 An aside keeps its own grid row, but its document's row leaves it out:
-that row's Contents is what was said, not the plumbing.
+that row's Contents is what was said, not the plumbing, and its
+`participant` terms are who said it, so a tool named as an aside's
+author is nobody `with:` finds.
+
+## Stand-in authors
+
+Where a provider has no person to show, it shows a stand-in: "Me" for
+the account's own messages, "Unknown" for a sender the source does not
+name, a heading on a page whose sections have no author. Say so with
+the item's `author_kind` (a reaction's `reactor_kind`): `Account` or
+`Unknown` rather than `Named`. The label is still drawn, but it is not
+a participant; only a handle behind it is.
 
 Decide `is_aside` from what the item *is* upstream, not from its
 `kind_label`. ChatGPT files `system` messages under the same "Tool
