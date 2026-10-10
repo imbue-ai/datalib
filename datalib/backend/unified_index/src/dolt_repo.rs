@@ -90,7 +90,48 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
             by_uuid.insert(row.uuid.clone(), row);
         }
     }
+    add_contact_handles(at, by_uuid.values_mut()).await?;
     Ok(uuids.iter().filter_map(|u| by_uuid.remove(u)).collect())
+}
+
+/// Each contact's own row gets the handles its document's contact
+/// carries, so the Contact cell can be a chip by any of them.
+async fn add_contact_handles<'r>(
+    at: &mut At,
+    rows: impl Iterator<Item = &'r mut SearchRow>,
+) -> Result<(), RepoError> {
+    let mut contacts: std::collections::HashMap<String, Vec<&'r mut SearchRow>> =
+        std::collections::HashMap::new();
+    for row in rows.filter(|r| r.contact.is_some()) {
+        if let Some(doc) = row.markdown_uuid.clone() {
+            contacts.entry(doc).or_default().push(row);
+        }
+    }
+    if contacts.is_empty() {
+        return Ok(());
+    }
+    let docs: Vec<&String> = contacts.keys().collect();
+    let wanted = serde_json::to_string(&docs)
+        .map_err(|e| RepoError::Internal(format!("encode documents: {e}")))?;
+    let handles: Vec<(String, String)> = match sqlx::query_as(
+        "SELECT markdown_uuid, handle FROM source_contact_handles \
+          WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
+          ORDER BY markdown_uuid, handle",
+    )
+    .bind(wanted)
+    .fetch_all(&mut *at.tx)
+    .await
+    {
+        Ok(handles) => handles,
+        Err(e) if is_missing_table(&e, "source_contact_handles") => return Ok(()),
+        Err(e) => return Err(RepoError::Internal(format!("read contact handles: {e}"))),
+    };
+    for (doc, handle) in handles {
+        for row in contacts.get_mut(&doc).into_iter().flatten() {
+            row.contact_handles.push(handle.clone());
+        }
+    }
+    Ok(())
 }
 
 /// The `grid_rows` columns every [`SearchRow`] is built from. One
@@ -226,6 +267,7 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .try_get::<Option<String>, _>(G::Phone.as_str())
             .ok()
             .flatten(),
+        contact_handles: Vec::new(),
         contact_ref: None,
         author_term: None,
         channel: r.try_get(G::Channel.as_str()).unwrap_or_default(),
