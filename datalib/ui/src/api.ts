@@ -76,7 +76,7 @@ export type SearchRow = {
   contact_ref?: Identity | null;
   // The Subject cell the applet resolves: a contact's own row's Contact
   // chip, else the conversation's name.
-  subject_ref?: Identity | null;
+  subject_ref?: Identity[];
   // Where the row is filed when that is not its subject: an address
   // book, a calendar, a device. Empty on a chat.
   channel: string;
@@ -1041,6 +1041,7 @@ export type ColumnType =
   | "timeseries"
   | "quantity"
   | "identity"
+  | "identities"
   | "status"
   | "chips"
   | "actions"

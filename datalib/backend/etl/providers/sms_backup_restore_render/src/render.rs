@@ -10,7 +10,8 @@ use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    UpstreamRef,
 };
 use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -264,8 +265,15 @@ fn build_chats(
             })
             .collect();
 
+        // A text conversation has no title: it is named after whoever is
+        // on the other end, by number where its key is one.
+        let named_after = vec![NamedPerson {
+            shown: display.clone(),
+            handle: Handle::tel(&id),
+        }];
         let conversation = ids::conversation(source_id, &id);
         chats.push(NormalizedChat {
+            named_after,
             contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,

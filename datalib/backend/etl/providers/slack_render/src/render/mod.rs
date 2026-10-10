@@ -90,6 +90,26 @@ pub struct Channel {
 }
 
 impl Channel {
+    /// Who a direct message is named after: its other members, by their
+    /// Slack ids in `team_id`. Nobody for a channel, which has a name.
+    pub fn named_after(
+        &self,
+        users: datalib_etl_render::inputs::Lookup<'_, std::collections::BTreeMap<String, String>>,
+        self_user_id: Option<&str>,
+        team_id: &str,
+    ) -> Vec<datalib_etl_chat_common::types::NamedPerson> {
+        if !self.is_dm {
+            return Vec::new();
+        }
+        datalib_etl_slack::ingest::schema_raw::dm_counterparts(&self.dm_user_ids, self_user_id)
+            .into_iter()
+            .map(|u| datalib_etl_chat_common::types::NamedPerson {
+                shown: users.get(&u).cloned().unwrap_or_else(|| u.clone()),
+                handle: datalib_handle::Handle::slack(team_id, &u),
+            })
+            .collect()
+    }
+
     pub fn display(
         &self,
         users: datalib_etl_render::inputs::Lookup<'_, std::collections::BTreeMap<String, String>>,

@@ -182,6 +182,10 @@ fn build_chats(
             Some(c) => c.display(labels.users, self_user_id),
             None => format!("#{}", root.channel_id),
         };
+        let named_after = channels
+            .get(&root.channel_id)
+            .map(|c| c.named_after(labels.users, self_user_id, &root.team_id))
+            .unwrap_or_default();
         let thread = ids::thread(source_id, &root.team_id, &root.channel_id, &root.ts);
         let thread_uuid = thread.uuid.clone();
 
@@ -211,6 +215,7 @@ fn build_chats(
         let title = format!("{cname}: {}", thread_title(&root.text, labels));
 
         chats.push(NormalizedChat {
+            named_after,
             path_prefix: None,
             id: thread_uuid.clone(),
             chat_uuid: thread_uuid.clone(),

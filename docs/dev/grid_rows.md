@@ -264,7 +264,8 @@ filed in. `author` stays null: nobody wrote a contact.
 thread, page, event or card the row belongs to, carried onto every row
 in it, and on a document's own row its own title. The grid shows it as
 the Subject column (`subject_ref`, which on a contact's row is the
-card's chip), and `subject:` finds it by its whole name, `conversation:`
+card's chip and in a conversation named by its people a chip for each,
+from its `subject` terms), and `subject:` finds it by its whole name, `conversation:`
 being the same key; `convo:` names the conversation by id, and is what
 the cell's Keep only writes.
 
