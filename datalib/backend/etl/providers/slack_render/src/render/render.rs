@@ -46,9 +46,11 @@ use datalib_schema::providers::Provider;
 /// v9: the author span carries the author's handle as `data-handle`.
 /// v10: each thread carries its authors' Slack profiles (title, email).
 /// v11: a `<@U…>` mention in a body is a chip link to the user.
-/// v12: a mention in code is `@12ame`, not a link's markdown, and a `!`
+/// v12: a mention in code is `@Name`, not a link's markdown, and a `!`
 ///     typed before a mention or link no longer makes it an image.
-pub const RENDER_VERSION: u32 = 12;
+/// v13: a permalink is on the workspace's own host (`auth.test`'s `url`),
+///     so it opens in that workspace, not the browser's current one.
+pub const RENDER_VERSION: u32 = 13;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -144,6 +146,10 @@ fn build_chats(
         .as_ref()
         .and_then(|w| w.self_user_id.as_deref());
     let account = parsed.account_label();
+    let team_url = parsed
+        .workspace
+        .as_ref()
+        .and_then(|w| w.team_url.as_deref());
     // The workspace is the organization this login lives in, which is
     // what `org_name` means for Claude's Team workspaces too.
     let org_name = parsed
@@ -197,7 +203,7 @@ fn build_chats(
         let items: Vec<NormalizedChatItem> = bucket
             .messages
             .iter()
-            .map(|m| build_item(source_id, m, root, labels, unread(m)))
+            .map(|m| build_item(source_id, m, root, team_url, labels, unread(m)))
             .collect();
 
         // "#channel: <root snippet>" preserves the old scannable H1; the
@@ -220,7 +226,13 @@ fn build_chats(
             // recomputes `uuid` from it.
             external_id: Some(thread.natural_key),
             // Thread permalink → chat-level `↗` + chat grid source_url.
-            source_url: Some(slack_link(&root.team_id, &root.channel_id, &root.ts, None)),
+            source_url: Some(slack_link(
+                team_url,
+                &root.team_id,
+                &root.channel_id,
+                &root.ts,
+                None,
+            )),
             // Every row in this thread was minted under
             // `Some(team_id)`; the round-trip check
             // recomputes `uuid` from this exact string.
@@ -260,6 +272,7 @@ fn build_item(
     source_id: &str,
     m: &Message,
     root: &Message,
+    team_url: Option<&str>,
     labels: Labels<'_>,
     unread: bool,
 ) -> NormalizedChatItem {
@@ -296,7 +309,13 @@ fn build_item(
         labels: Vec::new(),
         system_note: None,
         // Per-message permalink (with thread_ts for replies).
-        source_url: Some(slack_link(&m.team_id, &m.channel_id, &m.ts, Some(&root.ts))),
+        source_url: Some(slack_link(
+            team_url,
+            &m.team_id,
+            &m.channel_id,
+            &m.ts,
+            Some(&root.ts),
+        )),
         kind_label: None,
         source_ref: Some(UpstreamRef::new(
             msg_id.entity_kind,
