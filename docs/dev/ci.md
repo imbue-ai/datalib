@@ -68,6 +68,20 @@ the prod docker image with its doc test (`datalib/docker/doc_test.sh`,
 assemble the assets are scripts under `scripts/release/`, run by
 `bazel test //...` before any tag runs them — `release_steps.md`.
 
+**Neither image build pulls from Docker Hub.** Anonymous Docker Hub
+pulls are rate-limited per IP, and a GitHub-hosted runner shares its IP
+with other people's jobs, so the quota can be spent before a run starts
+(v0.42.0's `docker-publish` failed on `toomanyrequests`). Both
+workflows take Docker Hub images through Google's pull-through mirror,
+`mirror.gcr.io`: the QEMU and BuildKit images by name, and the
+Dockerfiles' `FROM` lines through a registry mirror in
+`setup-buildx-action`'s `buildkitd-config-inline`, so the Dockerfiles
+themselves still name Docker Hub and build the same way on a laptop. A
+new workflow that pulls a Docker Hub image does the same. A tag runs
+its own tree, so a tag cut before the mirror landed (v0.42.0 and
+earlier) still pulls from Docker Hub, and re-running its jobs cannot
+change that.
+
 **BuildBuddy** (`imbue.buildbuddy.io`) is the action cache, the build
 event stream and the remote downloader for both `test.yml` bazel jobs.
 `.github/actions/prepare-bazel` writes an API key into the gitignored
