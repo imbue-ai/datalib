@@ -40,18 +40,20 @@ sh_binary(
 )
 
 # Same as :serve, but materializes a one-shot data root from the
-# checked-in TNG fixtures (`//tests/fixtures:ingested_tng`) into a
-# tmpdir and points the backend at it. Useful for eyeballing the grid
-# without needing a real on-disk datalib root. The packaged
-# `datalib_http_bin` serves both the embedded SPA and `/api/*`, so
-# we go through serve_dev.sh (no Vite dev server). The ingest genrule
-# links doltlite statically (via `//third-party/doltlite:sqlite3`), so
-# no host `dolt` install is needed.
+# checked-in TNG fixtures (`//tests/fixtures:ingested_tng`), with the
+# contacts app, into a tmpdir and points the backend at it. Useful for
+# eyeballing the grid without needing a real on-disk datalib root. The
+# packaged `datalib_http_bin` serves both the embedded SPA and `/api/*`,
+# so we go through serve_dev.sh (no Vite dev server). The ingest
+# genrule links doltlite statically (via
+# `//third-party/doltlite:sqlite3`), so no host `dolt` install is
+# needed.
 sh_binary(
     name = "dev_tng",
     srcs = ["dev_tng.sh"],
     data = [
         ":serve",
+        "//datalib/backend/applets:datalib_applet",
         "//tests/fixtures:materialize_tng_root",
     ] + DEV_RUNTIME_DATA,
     env = DEV_RUNTIME_ENV,

@@ -1,7 +1,7 @@
-//! Ctrl-C ends `datalib-http` even while a browser tab holds
-//! `/api/sync/stream` open. Graceful shutdown waits for every connection,
-//! and that SSE tail never ends on its own, so without a deadline the
-//! first Ctrl-C closed the listener and the process sat there for good.
+//! Ctrl-C ends `datalib-http` cleanly while a browser tab holds
+//! `/api/sync/stream` open: the stream ends on shutdown, so graceful
+//! shutdown finishes and stops the applets and the loop. A connection
+//! that still never ends is cut off by the deadline in `main.rs`.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -114,6 +114,31 @@ impl Server {
         sock
     }
 
+    /// Starts a request whose body never arrives, and returns once the
+    /// handler is waiting on it (hyper answers `100 Continue` when the
+    /// body is first read), so the request is in flight at the server.
+    /// It holds graceful shutdown open for as long as the socket lives.
+    fn open_stuck_request(&self) -> TcpStream {
+        let host = self.origin.trim_start_matches("http://");
+        let mut sock = TcpStream::connect(host).expect("connect");
+        sock.set_read_timeout(Some(STARTUP)).unwrap();
+        write!(
+            sock,
+            "POST /api/config/check HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: 1000\r\nExpect: 100-continue\r\n\r\n",
+            self.token
+        )
+        .unwrap();
+        let mut got = String::new();
+        let mut buf = [0u8; 256];
+        while !got.contains("\r\n\r\n") {
+            let n = sock.read(&mut buf).expect("read 100 Continue");
+            assert!(n > 0, "connection closed before 100 Continue:\n{got}");
+            got.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+        assert!(got.starts_with("HTTP/1.1 100"), "response:\n{got}");
+        sock
+    }
+
     fn sigint(&self) {
         let status = Command::new("kill")
             .args(["-INT", &self.child.id().to_string()])
@@ -161,11 +186,29 @@ fn root() -> tempfile::TempDir {
     tempfile::TempDir::with_prefix("datalib-http-shutdown-itest-").expect("tempdir")
 }
 
+/// Before the stream ended on shutdown, an open tab held graceful
+/// shutdown until the deadline cut it off, and the applets and the
+/// loop's steps were never stopped.
 #[test]
-fn sigint_exits_while_an_sse_tail_is_open() {
+fn sigint_ends_an_open_sse_tail_and_shuts_down_gracefully() {
     let dir = root();
     let mut server = start(&dir.path().join("data"));
-    let _tail = server.open_sse_tail();
+    let mut tail = server.open_sse_tail();
+
+    server.sigint();
+    let mut rest = Vec::new();
+    tail.read_to_end(&mut rest)
+        .expect("the sse stream ends on shutdown");
+    let status = server.wait_for_exit();
+    assert!(status.success(), "exit status: {status}");
+    server.stderr_line_containing("stopping applets and syncs");
+}
+
+#[test]
+fn sigint_exits_by_the_deadline_while_a_request_never_finishes() {
+    let dir = root();
+    let mut server = start(&dir.path().join("data"));
+    let _stuck = server.open_stuck_request();
 
     server.sigint();
     let status = server.wait_for_exit();
@@ -177,7 +220,7 @@ fn sigint_exits_while_an_sse_tail_is_open() {
 fn second_sigint_exits_at_once() {
     let dir = root();
     let mut server = start(&dir.path().join("data"));
-    let _tail = server.open_sse_tail();
+    let _stuck = server.open_stuck_request();
 
     server.sigint();
     // The second handler is armed only once the first signal was seen.

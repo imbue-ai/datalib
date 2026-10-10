@@ -34,6 +34,7 @@ describe("the card catalog", () => {
       "Markdown Document",
       "Perseus corpus",
       "Search",
+      "Your contacts",
     ]);
     // Case-blind: config.toml sits among the capitals.
     expect(devTools.map((e) => e.title)).toEqual([

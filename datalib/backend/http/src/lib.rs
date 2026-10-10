@@ -90,6 +90,36 @@ pub struct AppState {
     /// store is open, no loop runs, and `app_ready` is false
     /// (`datalib_store_meta::guard`).
     pub newer_root: Vec<datalib_store_meta::NewerBuild>,
+    /// Fired when the server starts shutting down; see [`ShuttingDown`].
+    pub shutting_down: ShuttingDown,
+}
+
+/// Set when the server begins shutting down. Graceful
+/// shutdown waits for every response to finish, and a response that
+/// never ends on its own — the `/api/sync/stream` tail every open tab
+/// holds — ends on this instead, so the wait is over in milliseconds
+/// and the applets and the loop's steps get stopped properly.
+#[derive(Clone)]
+pub struct ShuttingDown(Arc<tokio::sync::watch::Sender<bool>>);
+
+impl Default for ShuttingDown {
+    fn default() -> Self {
+        Self(Arc::new(tokio::sync::watch::channel(false).0))
+    }
+}
+
+impl ShuttingDown {
+    pub fn fire(&self) {
+        self.0.send_replace(true);
+    }
+
+    /// Resolves once [`Self::fire`] has been called, however long before.
+    pub fn fired(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let mut rx = self.0.subscribe();
+        async move {
+            let _ = rx.wait_for(|down| *down).await;
+        }
+    }
 }
 
 impl AppState {
@@ -776,6 +806,9 @@ fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
 
 /// The applet id that serves the grid, search and the document view.
 const UNIFIED_INDEX_APPLET: &str = "unified_index";
+/// The contacts app's applet id: its mount prefix, and the row whose
+/// Browse opens its table.
+pub(crate) const CONTACTS_APPLET: &str = "datalib_contacts";
 
 fn configured_source_count(fringe: &[String]) -> usize {
     let prefix = format!("{}/", datalib_core::layout::UNIFIED_INDEX_DIR);
@@ -1480,6 +1513,16 @@ inputs = []
 group = \"unified_index\"
 id = \"unified_index\"
 command = \"datalib-applet unified_index\"
+
+# The contacts app: the contacts a person makes and the handles they
+# link to them, which the person chips and search read. Without it the
+# chips still show what each source says about a person, with nothing
+# to link. Its store is `datalib_curated/datalib_contacts/`.
+
+[[applets]]
+group = \"unified_index\"
+id = \"datalib_contacts\"
+command = \"datalib-applet datalib_contacts\"
 "
     .to_string()
 }
@@ -1822,6 +1865,7 @@ async fn sync_stream(
             }
         }
     });
+    let stream = futures::StreamExt::take_until(stream, s.shutting_down.fired());
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
@@ -2321,12 +2365,10 @@ mod tests {
             ["unified_index/grid_index", "unified_index/qmd_aggregator"]
         );
         // And it declares the applet without which the app has no
-        // views at all — the thing `app_ready` reports on.
-        assert!(checked
-            .cfg
-            .applets
-            .iter()
-            .any(|a| a.id == UNIFIED_INDEX_APPLET));
+        // views at all — the thing `app_ready` reports on — and the
+        // contacts app, which a new root gets on by default.
+        let applets: Vec<&str> = checked.cfg.applets.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(applets, [UNIFIED_INDEX_APPLET, CONTACTS_APPLET]);
     }
 
     /// A scaffolded root has no *sources*, even though its two index

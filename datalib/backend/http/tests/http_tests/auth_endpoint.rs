@@ -34,6 +34,7 @@ async fn app() -> (axum::Router, ApiToken) {
         // is in.
         usage: Default::default(),
         newer_root: Vec::new(),
+        shutting_down: Default::default(),
         applets: Arc::new(datalib_http::applets::AppletRegistry::build(
             Vec::new(),
             (*root).clone(),

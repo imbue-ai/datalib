@@ -1075,9 +1075,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "the people the index knows by Picard's address",
         )
-        # One number written two ways — the address book's vCard 4 `tel:`
-        # URI with dashes, the SMS backup's and Google Voice's bare digits
-        # — is one handle, so a link made through either reaches both.
+        # One number written two ways — the address book's with dashes (a
+        # vCard 4 `tel:` URI, read as its number), the SMS backup's and
+        # Google Voice's bare digits — is one handle, so a link made
+        # through either reaches both.
         self.assertEqual(
             self._query(
                 self._index_db,
@@ -1092,7 +1093,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [
                 "google-takeout|Jean-Luc Picard|+12025550101",
                 "sms-backup-restore|Jean-Luc Picard|+12025550101",
-                "tng_contacts|Jean-Luc Picard|tel:+1-202-555-0101",
+                "tng_contacts|Jean-Luc Picard|+1-202-555-0101",
             ],
             "the people the index knows by Picard's number, as each wrote it",
         )
@@ -1127,13 +1128,13 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
                 "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
                 "WHERE m.source_id = 'whatsapp' AND h.handle IN "
-                "('tel:+17015550102', 'tel:+17015550103', 'tel:+17015550104') "
+                "('tel:+17015550101', 'tel:+17015550102', 'tel:+17015550103') "
                 "GROUP BY 1 ORDER BY 1;",
             ),
             [
-                'tel:+17015550102|["William Riker","Will Riker (Starfleet)","Number One"]',
-                'tel:+17015550103|["Data"]',
-                'tel:+17015550104|["Geordi La Forge"]',
+                'tel:+17015550101|["William Riker","Will Riker (Starfleet)","Number One"]',
+                'tel:+17015550102|["Data"]',
+                'tel:+17015550103|["Geordi La Forge"]',
             ],
             "WhatsApp's address book, as each chat's contacts",
         )
@@ -1151,9 +1152,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "FROM source_contact_handles h JOIN source_contacts c "
                 "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
                 "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550103';",
+                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550102';",
             ),
-            ["tel:+17015550103|Starfleet|Second Officer"],
+            ["tel:+17015550102|Starfleet|Second Officer"],
             "Data's company and title, from the address book alone",
         )
         self.assertEqual(
@@ -1165,9 +1166,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "FROM source_contact_handles h JOIN source_contacts c "
                 "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
                 "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550106';",
+                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550105';",
             ),
-            ['tel:+17015550106|["Deanna Troi"]|Starfleet|Counselor|0'],
+            ['tel:+17015550105|["Deanna Troi"]|Starfleet|Counselor|0'],
             "a WhatsApp reactor who writes nothing, under her address-book entry",
         )
         # A 1:1 chat leaves an incoming reaction's sender empty, as it does
@@ -1175,7 +1176,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # reaction names nobody.
         riker_chat = self._markdown("whatsapp", "private word about Commander Data")
         self.assertIn(
-            '🖖 [William Riker](tel:+17015550102 "William Riker (+17015550102)")',
+            '🖖 [William Riker](tel:+17015550101 "William Riker (+17015550101)")',
             riker_chat,
             "a 1:1 reaction is the chat's person, as a chip",
         )
@@ -1320,9 +1321,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         picard = self._contact_markdown(CONTACTS_DIFF_GROUP, "Jean-Luc Picard")
         self.assertIn('<div class="diff-modified">', picard)
         self.assertIn("<del>NCC-1701-D</del><ins>NCC-1701-E</ins>", picard)
-        self.assertIn(
-            "| <ins>Phone (home)</ins> | <ins>+33-555-LABARRE</ins> |", picard
-        )
+        self.assertIn("<dd><ins>+33-555-LABARRE</ins></dd>", picard)
         self.assertIn(
             '<div class="diff-removed">',
             self._contact_markdown(CONTACTS_DIFF_GROUP, "Data"),

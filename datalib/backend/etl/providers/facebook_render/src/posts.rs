@@ -256,13 +256,7 @@ fn edited_post_not_in_export(
     let item = NormalizedChatItem {
         kind_label: Some(POST_VERSION.to_string()),
         problems,
-        ..chat_item(
-            id,
-            owner.name.clone(),
-            shown.date_ms,
-            Some(text),
-            Vec::new(),
-        )
+        ..chat_item(id, owner.author(), shown.date_ms, Some(text), Vec::new())
     };
     let display = display_for(None, Some(&shown.text), "Edited Facebook post");
     let mut chat = one_item_chat(&shown.row_id, inputs, display, None, item, owner);
@@ -345,7 +339,7 @@ fn timeline_post(table: &str, row_id: &str, v: &Value, owner: &Owner) -> Normali
     let item_id = ids::post_text(&owner.source_id, row_id, date_ms);
     let mut item = chat_item(
         item_id,
-        owner.name.clone(),
+        owner.author(),
         date_ms,
         (!text.is_empty()).then_some(text),
         attachments,
@@ -438,7 +432,7 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let item_id = ids::post_text(&owner.source_id, row_id, date_ms);
     let mut item = chat_item(
         item_id,
-        owner.name.clone(),
+        owner.author(),
         date_ms,
         (!text.is_empty()).then_some(text),
         attachments,
@@ -532,6 +526,7 @@ mod tests {
         Owner {
             source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
+            handle: datalib_handle::Handle::facebook_name("Jean-Luc Picard"),
             account: Some("picard@enterprise.starfleet".to_string()),
             inputs: Vec::new(),
         }
@@ -566,6 +561,31 @@ mod tests {
         assert_eq!(item.date_ms, Some(12_600_000_000_000));
         assert_eq!(chats[0].inputs.len(), 1);
         assert_eq!(chats[0].inputs[0].table, POSTS_TABLE);
+    }
+
+    /// A post is the owner's, so its author is their chip, by the same
+    /// `facebook:name/` handle their Messenger messages carry; a store
+    /// with no profile knows its owner only as "Me", which names nobody.
+    #[test]
+    fn a_post_is_written_by_the_owners_handle() {
+        let post = json!({"timestamp": 1, "data": [{"post": "Engage."}]});
+        let rows = [("r1".to_string(), post)];
+        let rows = PostRows {
+            posts: &rows,
+            ..Default::default()
+        };
+        let chats = build_posts(&rows, &owner());
+        assert_eq!(
+            chats[0].buckets[0].items[0]
+                .author_handle
+                .as_ref()
+                .map(|h| h.as_str()),
+            Some("facebook:name/Jean-Luc Picard")
+        );
+        let nobody = Owner::from_profile("fb", &[]);
+        assert_eq!(nobody.name, "Me");
+        let chats = build_posts(&rows, &nobody);
+        assert_eq!(chats[0].buckets[0].items[0].author_handle, None);
     }
 
     /// What the person wrote and the place's name are text: escaped on

@@ -20,6 +20,7 @@ use datalib_schema::problems::Problem;
 
 use crate::ids;
 use datalib_etl_render::inputs::Inputs;
+use datalib_handle::Handle;
 use serde_json::Value;
 
 use crate::common::{
@@ -72,10 +73,10 @@ pub fn build_comments(
         let comment = data_values(v, "comment").next();
         let raw = comment.and_then(|c| str_field(c, "comment")).unwrap_or("");
         texts.push((raw.to_string(), ts_ms(v, "timestamp")));
-        let author = comment
-            .and_then(|c| str_field(c, "author"))
-            .unwrap_or(&owner.name)
-            .to_string();
+        let author = match comment.and_then(|c| str_field(c, "author")) {
+            Some(name) => (name.to_string(), Handle::facebook_name(name)),
+            None => owner.author(),
+        };
         let mut text = comment
             .and_then(|c| str_field(c, "comment"))
             .map(|c| escape_md_block(&strip_mentions(c)))
@@ -266,13 +267,7 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
             let item_id = ids::reaction(&owner.source_id, &row_ids, Some(ms));
             NormalizedChatItem {
                 source_url: r.url.clone(),
-                ..chat_item(
-                    item_id,
-                    owner.name.clone(),
-                    Some(ms),
-                    Some(text),
-                    Vec::new(),
-                )
+                ..chat_item(item_id, owner.author(), Some(ms), Some(text), Vec::new())
             }
         })
         .collect();
@@ -398,6 +393,7 @@ mod tests {
         Owner {
             source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
+            handle: datalib_handle::Handle::facebook_name("Jean-Luc Picard"),
             account: None,
             inputs: Vec::new(),
         }

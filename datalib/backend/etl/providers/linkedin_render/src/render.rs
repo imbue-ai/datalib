@@ -39,7 +39,7 @@ use datalib_schema::providers::Provider;
 /// v9: a photo no browser draws (the SVG ghost avatar) has no URL.
 /// v10: a connection is its own conversation, the connections list is
 ///     the channel alone, and its email address has a column.
-pub const RENDER_VERSION: u32 = 10;
+pub const RENDER_VERSION: u32 = 11;
 
 fn profile() -> RenderProfile {
     RenderProfile {

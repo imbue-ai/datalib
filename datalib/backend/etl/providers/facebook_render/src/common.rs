@@ -10,6 +10,7 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_facebook::ingest::schema_raw::MediaBlobRow;
 use datalib_etl_render::inputs::Inputs;
+use datalib_handle::Handle;
 use datalib_id::Identity;
 use datalib_schema::problems::{Problem, Reason, Severity};
 use datalib_schema::providers::Provider;
@@ -26,7 +27,7 @@ use serde_json::Value;
 ///     a problem row for every field render leaves unread.
 /// v7: a post's and a comment's earlier versions, from the edit files.
 /// v8: group posts in the posts feed, group comments in the comments feed.
-pub const RENDER_VERSION: u32 = 8;
+pub const RENDER_VERSION: u32 = 9;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
@@ -157,14 +158,14 @@ pub fn media_caption(media: &Value, album_name: Option<&str>) -> Option<String> 
 /// text one.
 pub fn chat_item(
     item_id: Identity,
-    author_display: String,
+    (author_display, author_handle): (String, Option<Handle>),
     date_ms: Option<i64>,
     text: Option<String>,
     attachments: Vec<NormalizedAttachment>,
 ) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: item_id.uuid,
-        author_handle: None,
+        author_handle,
         author_display,
         date_ms,
         text,

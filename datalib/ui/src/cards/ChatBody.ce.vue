@@ -55,7 +55,12 @@ import { copyToClipboard } from "@/clipboard";
 import { openExternal } from "@/externalLinks";
 import { pushToast } from "@/toasts";
 import { renderDocument } from "./renderDocument";
-import { isBrowserClick, linkFromClick, type ClickedLink } from "./chatLink";
+import {
+  isBrowserClick,
+  linkFromClick,
+  rewriteIdButtonsForCopy,
+  type ClickedLink,
+} from "./chatLink";
 import { DOC_FRAME_SRCDOC, asElement, forwardAppKeys, mirrorDensity } from "./docFrame";
 // Shared with `tools/chat_preview.mjs`, which inlines this same file so
 // the preview page behaves like the app rather than imitating it.
@@ -130,7 +135,7 @@ const emit = defineEmits<{
   /** A right-click in a framed body, with the frame's window (whose
    *  selection it is) and where the frame sits in this one. */
   (e: "frame-contextmenu", ev: MouseEvent, view: { win: Window; dx: number; dy: number }): void;
-  /** A chip asked for everything from its person: the search to open. */
+  /** A chip asked for everything with its person: the search to open. */
   (e: "open-search", q: string): void;
   /** A chip asked to open its card — a person's, a group's or a
    *  step's: the card source. */
@@ -594,7 +599,12 @@ function onFrameLoad() {
   on("dblclick", onChipDblClick);
   on("mouseover", onBodyMouseOver);
   on("mouseout", onBodyMouseOut);
-  on("copy", (ev) => copyWithHandles(ev, doc.body));
+  on("copy", (ev) => {
+    const markdownUuid = props.markdownUuid;
+    copyWithHandles(ev, doc.body, (f) =>
+      markdownUuid ? rewriteIdButtonsForCopy(f, markdownUuid) : false,
+    );
+  });
   on("contextmenu", (ev) => {
     if (onChipContextMenu(ev)) return;
     const r = frame.getBoundingClientRect();

@@ -210,7 +210,7 @@ What each source has today:
 | Google Chat and Voice, SMS backup | the address or number; a group MMS, which does not say which number sent it, has none | |
 | address books | | a card's numbers and addresses, in the source contact |
 | LinkedIn | | a connection's email address, in the source contact |
-| Facebook | a Messenger message's sender, by name; a deleted account by its conversation, where it is that conversation's only one | each Messenger reaction's; a friend's name, in the source contact |
+| Facebook | a Messenger message's sender, by name; a deleted account by its conversation, where it is that conversation's only one; the account's owner, by name, on every post, album, comment, reaction and edit (a store with no profile knows them only as "Me", and gives none) | each Messenger reaction's; a friend's name, in the source contact |
 | Beeper | none yet: a Matrix user id has no kind | |
 
 The AI chats, calendar, GitHub, GitLab and Notion write no handles.
@@ -231,9 +231,12 @@ in the mirror (`render.rs::reactor`). Slack writes a `<@U…>` mention as
 a chip link in the body (`slack_render/src/render/mrkdwn.rs`), and as
 plain `@Name` inside code, which shows what it holds; an email's
 `@` mention is a chip link too (`email_render/src/render/mentions.rs`).
-A group of contacts lists its members under its field table, each a
-chip link where the member's card has an address or a full number
-(contact-common, from `ContactDoc::member_handles`).
+A contact's own page leads with the person as a chip, so the
+right-click that links them to a contact is at the top of the page;
+a group of contacts lists its members, each a chip link where the
+member's card has an address or a full number (contact-common, from
+`ContactDoc::member_handles`; the page's layout is
+[`contact-common/README.md`](../../datalib/backend/etl/contact-common/README.md)).
 Every mention a source marks up is also a `mention` search term on its
 message's row. Every chip link
 the backend writes is shaped by one function,
@@ -370,6 +373,7 @@ is a 409 with the store's words; a handle that does not parse is a
 |---|---|
 | `POST /resolve` | `{handles}` → `{resolved: {<handle>: NormalizedContact}}`, each handle's contact; a handle nobody holds is absent |
 | `GET /search?q=` | contacts whose name contains `q`, for the popover's typeahead |
+| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle; the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
 | `POST /contacts` | create, with `name`, optional `kind`, and the `handles` to link at once |
 | `GET /contact/{id}` | one contact, working handles first |
 | `POST /link`, `POST /unlink` | one handle to or from a contact |
@@ -383,7 +387,9 @@ is a 409 with the store's words; a handle that does not parse is a
 
 The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`; the gateway passes the
-data root in the environment.
+data root in the environment. A new root's starter config
+(`scaffold_toml` in `datalib-http`) writes it, filed under
+`unified_index`; a config written before that has to add it by hand.
 
 ### Fields, and editing a contact through a draft
 
@@ -420,7 +426,7 @@ Everything is in `datalib/ui/src/cards/`:
   else the best-ranked source contact, else what the source showed),
   `chipTooltip` (the chip's title: who, the identifier, each source's
   record and the person's other handles), `chipMenu` (copy the name,
-  the identifier or both; find everything from the person; link or
+  the identifier or both; find everything with the person; link or
   edit), `copyText` and the copy rewrite. `people` is who each handle
   is, for the whole app: the resolver ([`chips.md`](chips.md)
   §"Resolving") over `/people` and the contacts app's `/resolve`; an
@@ -440,11 +446,23 @@ Everything is in `datalib/ui/src/cards/`:
   a handle as no longer working) and the right-click menu
   (`ChipMenu.ce.vue`). `chip.css` is the one look.
 - `PersonCard.ce.vue` is the card a person chip's double-click opens
-  (`personView`; its rules are `person.ts`): your contact when the
-  handle is linked to one, then each source's record of the person, a
+  (`personView`; its rules are `person.ts`). Its heading is the
+  person's chip; then your contact when the handle is linked to one;
+  then each source's record that holds one of the card's handles, a
   section per source and never merged, the source the chip was seen in
-  first. It reads only, but for *Create contact* on an unlinked handle;
-  linking stays the popover's.
+  first, each saying which handle it was found *via*. Every handle on
+  it is a chip showing the identifier (`identifierCell`), pale blue
+  when linked to a contact and grey when not, with a chip's click,
+  double-click and right-click. A source holding handles nobody has
+  linked offers *Link its other handles to <your contact>* (one link
+  per handle; one someone else holds is left alone and says whose it
+  is), and an unlinked handle offers *Create contact*.
+- `ContactsCard.ce.vue` (`contactsView()`) is the contacts app's own
+  table: every contact, read live from the app's `GET /contacts`, never
+  through the index, so it needs no sync and shows an edit made
+  anywhere as soon as the `curated` frame arrives. Browse on the app's
+  Manage row opens it. Your contacts are not in the search grid: the
+  index holds what sources render, and nothing renders this store.
 - The grid's Author column is a chip too: `grid_rows.author_handle`
   (which `from:` finds through the search terms) comes with each
   message's row and each reaction's, and
@@ -460,7 +478,7 @@ Everything is in `datalib/ui/src/cards/`:
   the number, by the rule `contact-common::chip_handle` writes the
   members' chips by), and the search list titles such a row with the
   same chip (`SearchList.ce.vue`). Browsing an address book opens on
-  Contact, Phone, Email, Contents (the note first), Touched, Type and
+  Subject (the contact's chip), Phone, Email, Contents (the note first), Touched, Type and
   then Channel (`config/browsePresets.ts`).
 
 A chip ranks what it hears: your contact first, then the source
@@ -478,7 +496,7 @@ hold each row's people by handle:
 | `to:`, `cc:`, `bcc:` | was in that header |
 | `recipient:` | was in any of them |
 | `mention:` | was mentioned, where the source marks a mention up |
-| `with:` (and `involves:`) | had any role, or is who a contact's card is about |
+| `with:` (and `involves:`) | had any role, took part in the conversation the row is (a document's own row), or is who a contact's card is about |
 
 A value that is a handle (`email:riker@enterprise.org`, or simply
 `riker@enterprise.org`, `+12025550101`) matches that handle exactly, and
@@ -488,9 +506,17 @@ handle or name holding it, so `from:riker` finds Riker under every
 spelling a source used, and anyone else whose name holds it. A name
 also reaches every handle a source ever showed under it, through the
 search terms' `names` table, filled from the rows' authors and from
-`source_contacts`. A chip's "Everything from <name>" writes
-`from:<handle>`. Typing `@` at the start of a word offers people and
+`source_contacts`. A chip's "Everything with <name>" writes
+`with:<handle>`, so it finds what they wrote, what they received and
+their own cards. Typing `@` at the start of a word offers people and
 writes the pick as `with:`.
+
+A conversation's own row answers `with:` for everyone who took part in
+it: chat-common supplies a `participant` term on each document's row
+for every author, recipient, mention and reactor of the messages it
+holds, by handle, else by the name shown. So `is:document with:riker`
+lists the conversations Riker was in, one row each, whatever his role;
+without `is:document` the same search also finds each of his messages.
 
 A contact's card answers `with:` and never `from:`: contact-common
 supplies an `about` search term for each handle the card holds and each

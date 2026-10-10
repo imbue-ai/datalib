@@ -2,18 +2,18 @@
   "root_key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
   "iv_hex": "00000000000000000000000000000000",
   "backup_dir_name": "WhatsApp",
-  "self_jid": "17015550101@s.whatsapp.net",
+  "self_jid": "12025550101@s.whatsapp.net",
   "jids": [
-    { "id": 1, "raw_string": "17015550101@s.whatsapp.net", "user": "17015550101", "server": "s.whatsapp.net" },
-    { "id": 2, "raw_string": "17015550102@s.whatsapp.net", "user": "17015550102", "server": "s.whatsapp.net" },
-    { "id": 3, "raw_string": "17015550103@s.whatsapp.net", "user": "17015550103", "server": "s.whatsapp.net" },
-    { "id": 4, "raw_string": "17015550104@s.whatsapp.net", "user": "17015550104", "server": "s.whatsapp.net" },
-    { "id": 5, "raw_string": "17015550105@s.whatsapp.net", "user": "17015550105", "server": "s.whatsapp.net" },
+    { "id": 1, "raw_string": "12025550101@s.whatsapp.net", "user": "12025550101", "server": "s.whatsapp.net" },
+    { "id": 2, "raw_string": "17015550101@s.whatsapp.net", "user": "17015550101", "server": "s.whatsapp.net" },
+    { "id": 3, "raw_string": "17015550102@s.whatsapp.net", "user": "17015550102", "server": "s.whatsapp.net" },
+    { "id": 4, "raw_string": "17015550103@s.whatsapp.net", "user": "17015550103", "server": "s.whatsapp.net" },
+    { "id": 5, "raw_string": "17015550104@s.whatsapp.net", "user": "17015550104", "server": "s.whatsapp.net" },
     { "id": 6, "raw_string": "bridge-crew@g.us",            "user": "bridge-crew",  "server": "g.us" },
     { "id": 7, "raw_string": "100000000000103@lid",         "user": "100000000000103", "server": "lid" },
     { "id": 8, "raw_string": "100000000000108@lid",         "user": "100000000000108", "server": "lid" },
     { "id": 9, "raw_string": "100000000000105@lid",         "user": "100000000000105", "server": "lid" },
-    { "id": 10, "raw_string": "17015550106@s.whatsapp.net", "user": "17015550106", "server": "s.whatsapp.net" }
+    { "id": 10, "raw_string": "17015550105@s.whatsapp.net", "user": "17015550105", "server": "s.whatsapp.net" }
   ],
   "jid_map": [
     { "lid_row_id": 7, "jid_row_id": 3 },
@@ -63,11 +63,11 @@
     { "relative_path": "WhatsApp Voice Notes/2364/tactical-briefing.opus", "size_bytes": 640 }
   ],
   "wa_contacts": [
-    { "jid": "17015550102@s.whatsapp.net", "display_name": "William Riker", "given_name": "William", "family_name": "Riker", "wa_name": "Number One" },
-    { "jid": "17015550102@s.whatsapp.net", "display_name": "Will Riker (Starfleet)" },
-    { "jid": "17015550103@s.whatsapp.net", "display_name": "Data", "company": "Starfleet", "title": "Second Officer" },
-    { "jid": "17015550104@s.whatsapp.net", "wa_name": "Geordi La Forge" },
-    { "jid": "17015550105@s.whatsapp.net", "display_name": "Worf" },
-    { "jid": "17015550106@s.whatsapp.net", "given_name": "Deanna", "family_name": "Troi", "company": "Starfleet", "title": "Counselor" }
+    { "jid": "17015550101@s.whatsapp.net", "display_name": "William Riker", "given_name": "William", "family_name": "Riker", "wa_name": "Number One" },
+    { "jid": "17015550101@s.whatsapp.net", "display_name": "Will Riker (Starfleet)" },
+    { "jid": "17015550102@s.whatsapp.net", "display_name": "Data", "company": "Starfleet", "title": "Second Officer" },
+    { "jid": "17015550103@s.whatsapp.net", "wa_name": "Geordi La Forge" },
+    { "jid": "17015550104@s.whatsapp.net", "display_name": "Worf" },
+    { "jid": "17015550105@s.whatsapp.net", "given_name": "Deanna", "family_name": "Troi", "company": "Starfleet", "title": "Counselor" }
   ]
 }

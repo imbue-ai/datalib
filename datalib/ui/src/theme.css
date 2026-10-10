@@ -28,6 +28,11 @@
   --datalib-selected: #d1d1d6;
   --datalib-accent: #1f5fd1;
   --datalib-on-accent: #ffffff;
+  /* A person chip: pale blue when linked to one of your contacts, grey
+     while not (chip.css). */
+  --datalib-chip-linked-bg: #d3e3fd;
+  --datalib-chip-linked-fg: #0b2a5e;
+  --datalib-chip-unlinked-bg: rgba(110, 110, 115, 0.16);
   --datalib-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 
   /* States: what went right, what needs a person, what broke. */
@@ -66,6 +71,9 @@
     --datalib-selected: #2e3036;
     --datalib-accent: #6ea8fe;
     --datalib-on-accent: #0d1a30;
+    --datalib-chip-linked-bg: #b8d3fe;
+    --datalib-chip-linked-fg: #0d1a30;
+    --datalib-chip-unlinked-bg: rgba(160, 162, 169, 0.2);
     --datalib-shadow: none;
 
     --datalib-ok: #7fd39a;
