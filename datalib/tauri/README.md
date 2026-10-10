@@ -181,4 +181,5 @@ Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)
   the same as the web packaging — the shell passes nothing besides
   `--no-open` and the `--url-file` handshake.
 - There is no `datalib://` deep-link handler; the shell does not link
-  `tauri-plugin-deep-link`.
+  `tauri-plugin-deep-link`. So the `datalib://chat/…` link a 🆔 button
+  becomes in a copied selection opens nothing yet.
