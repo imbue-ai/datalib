@@ -246,9 +246,17 @@ impl BlobCas {
     pub async fn open(cas_path: &Path) -> Result<Self> {
         convert_a_doltlite_cas(cas_path).await?;
         let pool = connect(cas_path, false).await?;
-        if let Err(e) = sqlx::query(CAS_OBJECTS_DDL).execute(&pool).await {
+        let ready = async {
+            sqlx::query(CAS_OBJECTS_DDL)
+                .execute(&pool)
+                .await
+                .context("create cas_objects")?;
+            run_one_time_passes(&pool).await
+        }
+        .await;
+        if let Err(e) = ready {
             pool.close().await;
-            return Err(e).context("create cas_objects");
+            return Err(e);
         }
         Ok(Self { pool })
     }
@@ -302,10 +310,16 @@ impl BlobCas {
             return Ok(HashMap::new());
         }
         let keys: Vec<String> = items.iter().map(|it| blake3_hex(it.bytes)).collect();
+        let types: Vec<Option<&str>> = items
+            .iter()
+            .zip(&keys)
+            .map(|(it, key)| stored_type(key, it.content_type, it.bytes))
+            .collect();
         let mut tx = self.pool.begin().await.context("begin cas put_many tx")?;
-        for (chunk, chunk_keys) in items
+        for ((chunk, chunk_keys), chunk_types) in items
             .chunks(crate::bulk::SQL_CHUNK)
             .zip(keys.chunks(crate::bulk::SQL_CHUNK))
+            .zip(types.chunks(crate::bulk::SQL_CHUNK))
         {
             let mut sql = String::from(
                 "INSERT OR IGNORE INTO cas_objects (blake3, byte_len, content_type, bytes) VALUES ",
@@ -315,11 +329,11 @@ impl BlobCas {
             // `&'static str` prefix plus a `(?,?,?),...` run that `push_placeholders`
             // builds from `chunk.len()`. Every value is bound.
             let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-            for (it, key) in chunk.iter().zip(chunk_keys) {
+            for ((it, key), content_type) in chunk.iter().zip(chunk_keys).zip(chunk_types) {
                 q = q
                     .bind(key)
                     .bind(it.bytes.len() as i64)
-                    .bind(it.content_type)
+                    .bind(*content_type)
                     .bind(it.bytes);
             }
             q.execute(&mut *tx)
@@ -345,6 +359,83 @@ impl BlobCas {
         .with_context(|| format!("cas get {blake3_hash}"))?;
         Ok(row.map(row_to_cas_object))
     }
+}
+
+fn stored_type<'a>(key: &str, declared: Option<&'a str>, bytes: &[u8]) -> Option<&'a str> {
+    let stored = crate::sniff::content_type_for(declared, bytes);
+    if stored != declared {
+        tracing::debug!(
+            blake3 = key,
+            declared = declared.unwrap_or("none"),
+            stored = stored.unwrap_or("none"),
+            "a blob's bytes name another type than the one declared"
+        );
+    }
+    stored
+}
+
+/// How many one-time passes over its rows a CAS has had, kept in the
+/// file's `user_version`. Pass 1 re-derived every blob's type from its
+/// bytes, for the blobs stored before `put_many` did that itself.
+const PASSES_RUN: i64 = 1;
+
+/// One write transaction, so two downloads opening one CAS cannot both
+/// run a pass.
+async fn run_one_time_passes(pool: &SqlitePool) -> Result<()> {
+    let mut tx = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .context("lock the blob cas to check its passes")?;
+    let passes: i64 = sqlx::query_scalar("PRAGMA user_version")
+        .fetch_one(&mut *tx)
+        .await
+        .context("read the blob cas's user_version")?;
+    if passes >= PASSES_RUN {
+        return tx.commit().await.context("commit the blob cas check");
+    }
+    let retyped = retype_from_bytes(&mut tx).await?;
+    // Audited: an integer constant, not input.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "PRAGMA user_version = {PASSES_RUN}"
+    )))
+    .execute(&mut *tx)
+    .await
+    .context("stamp the blob cas's user_version")?;
+    tx.commit()
+        .await
+        .context("commit the blob cas's types from bytes")?;
+    if retyped > 0 {
+        tracing::info!(
+            retyped,
+            "re-derived stored blob types from their bytes, once"
+        );
+    }
+    Ok(())
+}
+
+async fn retype_from_bytes(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<usize> {
+    let rows: Vec<(String, Option<String>, Vec<u8>)> =
+        sqlx::query_as("SELECT blake3, content_type, substr(bytes, 1, ?) FROM cas_objects")
+            .bind(crate::sniff::SIGNATURE_LEN as i64)
+            .fetch_all(&mut **tx)
+            .await
+            .context("read the stored blob types")?;
+    let fixes: Vec<(&str, &str)> = rows
+        .iter()
+        .filter_map(|(key, declared, head)| {
+            let stored = stored_type(key, declared.as_deref(), head)?;
+            (Some(stored) != declared.as_deref()).then_some((key.as_str(), stored))
+        })
+        .collect();
+    for (key, content_type) in &fixes {
+        sqlx::query("UPDATE cas_objects SET content_type = ? WHERE blake3 = ?")
+            .bind(*content_type)
+            .bind(*key)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("retype blob {key}"))?;
+    }
+    Ok(fixes.len())
 }
 
 fn row_to_cas_object(r: SqliteRow) -> CasObject {
@@ -413,15 +504,7 @@ pub fn extension_for_content_type(ct: Option<&str>) -> Option<String> {
 /// image `image/*`): a file served with no extension is not shown as
 /// an image everywhere.
 fn extension_from_magic(bytes: &[u8]) -> Option<String> {
-    let ext = match bytes {
-        [0x89, b'P', b'N', b'G', ..] => "png",
-        [0xFF, 0xD8, 0xFF, ..] => "jpg",
-        [b'G', b'I', b'F', b'8', ..] => "gif",
-        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "webp",
-        [b'%', b'P', b'D', b'F', ..] => "pdf",
-        _ => return None,
-    };
-    Some(ext.to_string())
+    extension_for_content_type(crate::sniff::content_type_from_bytes(bytes))
 }
 
 pub fn extension_from_upstream_name(name: Option<&str>) -> Option<String> {
@@ -1347,6 +1430,91 @@ mod tests {
         assert_eq!(got.bytes, b"hello");
     }
 
+    const JPEG: &[u8] = b"\xFF\xD8\xFF\xE0\0\x10JFIF\0\x01\x01";
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+
+    /// Pictures pasted into claude.ai as `*.png` came back as JPEG bytes
+    /// and were stored as `image/png`, so they rendered as `.png` files.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn put_stores_the_type_the_bytes_name() {
+        let d = tempdir().unwrap();
+        let cas = BlobCas::open(&d.path().join("blobs.sqlite")).await.unwrap();
+        let jpeg = cas.put(JPEG, Some("image/png")).await.unwrap();
+        let png = cas.put(PNG, Some("image/png")).await.unwrap();
+        let text = cas.put(b"plain words", Some("text/plain")).await.unwrap();
+        for (key, want) in [
+            (&jpeg, Some("image/jpeg")),
+            (&png, Some("image/png")),
+            (&text, Some("text/plain")),
+        ] {
+            let got = cas.get(key).await.unwrap().unwrap();
+            assert_eq!(got.content_type.as_deref(), want);
+        }
+        cas.close().await;
+    }
+
+    /// A CAS an older build filled holds the types callers declared; the
+    /// download's next open re-derives them from the bytes, once.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_older_cas_has_its_types_rederived_from_the_bytes_once() {
+        let d = tempdir().unwrap();
+        let path = d.path().join("blobs.sqlite");
+        let pool = connect(&path, false).await.unwrap();
+        sqlx::query(CAS_OBJECTS_DDL).execute(&pool).await.unwrap();
+        let rows: [(&[u8], Option<&str>); 4] = [
+            (JPEG, Some("image/png")),
+            (PNG, Some("image/png")),
+            (b"%PDF-1.4\n", None),
+            (b"plain words", Some("text/plain")),
+        ];
+        for (bytes, ct) in rows {
+            sqlx::query("INSERT INTO cas_objects VALUES (?, ?, ?, ?)")
+                .bind(blake3_hex(bytes))
+                .bind(bytes.len() as i64)
+                .bind(ct)
+                .bind(bytes)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        pool.close().await;
+
+        let cas = BlobCas::open(&path).await.unwrap();
+        let type_of = |bytes: &'static [u8]| {
+            let cas = cas.clone();
+            async move {
+                cas.get(&blake3_hex(bytes))
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .content_type
+            }
+        };
+        assert_eq!(type_of(JPEG).await.as_deref(), Some("image/jpeg"));
+        assert_eq!(type_of(PNG).await.as_deref(), Some("image/png"));
+        assert_eq!(
+            type_of(b"%PDF-1.4\n").await.as_deref(),
+            Some("application/pdf")
+        );
+        assert_eq!(type_of(b"plain words").await.as_deref(), Some("text/plain"));
+
+        // A row the pass would correct, written behind its back after it
+        // ran: a second open leaves it, so the scan is paid once.
+        let gif: &[u8] = b"GIF89a\x01\0\x01\0";
+        sqlx::query("INSERT INTO cas_objects VALUES (?, ?, 'image/png', ?)")
+            .bind(blake3_hex(gif))
+            .bind(gif.len() as i64)
+            .bind(gif)
+            .execute(cas.pool())
+            .await
+            .unwrap();
+        cas.close().await;
+        let cas = BlobCas::open(&path).await.unwrap();
+        let got = cas.get(&blake3_hex(gif)).await.unwrap().unwrap();
+        assert_eq!(got.content_type.as_deref(), Some("image/png"));
+        cas.close().await;
+    }
+
     #[test]
     fn cas_path_for_is_sibling_inside_dir() {
         let p = Path::new("/tmp/raw/slack/entities.doltlite_db");
@@ -1405,7 +1573,9 @@ mod tests {
             content_type: Some("image/*".into()),
             upstream_name: None,
         };
-        assert!(blob(b"\x89PNG\r\n").rendered_filename().ends_with(".png"));
+        assert!(blob(b"\x89PNG\r\n\x1a\n")
+            .rendered_filename()
+            .ends_with(".png"));
         assert!(blob(b"RIFF0000WEBPVP8")
             .rendered_filename()
             .ends_with(".webp"));
