@@ -4,15 +4,13 @@
 //! owns its raw store (open/commit/checkpoint); the orchestrator only drives
 //! `run`.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_notion_config::{NotionConfig, NotionSync};
-use datalib_etl_web::http::HttpResponse;
 use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
@@ -23,12 +21,10 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: present iff `api`. Consumes the
-/// playback root (BFS seeds in synth/playback mode).
+/// Ingest wave: present iff `api`.
 pub fn plan_ingest(ctx: PlanContext, config: NotionConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let playback_root = ctx.playback_root;
     let latchkey = config.latchkey_settings.clone();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.api {
@@ -36,7 +32,6 @@ pub fn plan_ingest(ctx: PlanContext, config: NotionConfig) -> Result<Vec<Box<dyn
             id: format!("notion/{name}/download"),
             raw_path,
             sync,
-            playback_root,
             latchkey,
         }));
     }
@@ -47,7 +42,6 @@ struct NotionIngest {
     id: String,
     raw_path: PathBuf,
     sync: NotionSync,
-    playback_root: Option<PathBuf>,
     /// Which latchkey identity to authenticate as, forwarded whole from
     /// the source's `latchkey_settings:` block.
     latchkey: LatchkeySettings,
@@ -70,14 +64,7 @@ impl DataProcessor for NotionIngest {
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
         ctx.run_store(pool, Some(cas_pool), |sealer| async {
             // `roots` narrows the mirror; empty means the whole workspace.
-            // In playback mode the fixture tree is the workspace, so seeds
-            // are derived from every synthesized page response.
             let mut seeds: Vec<String> = self.sync.roots.clone();
-            if let Some(pb) = self.playback_root.as_ref() {
-                let derived =
-                    derive_notion_seeds(&pb.join("notion")).context("derive notion seeds")?;
-                seeds.extend(derived);
-            }
             seeds.sort();
             seeds.dedup();
             let s = ingest::fetch(ingest::FetchOptions {
@@ -100,37 +87,4 @@ impl DataProcessor for NotionIngest {
         })
         .await
     }
-}
-
-fn derive_notion_seeds(notion_dir: &Path) -> Result<Vec<String>> {
-    let mut seeds = Vec::new();
-    if !notion_dir.is_dir() {
-        return Ok(seeds);
-    }
-    for entry in
-        fs::read_dir(notion_dir).with_context(|| format!("read_dir {}", notion_dir.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
-        }
-        let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-        let resp: HttpResponse = match serde_json::from_slice(&bytes) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let body: serde_json::Value = match serde_json::from_slice(&resp.body) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if body.get("object").and_then(|v| v.as_str()) == Some("page") {
-            if let Some(id) = body.get("id").and_then(|v| v.as_str()) {
-                seeds.push(id.to_string());
-            }
-        }
-    }
-    seeds.sort();
-    seeds.dedup();
-    Ok(seeds)
 }

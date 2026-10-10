@@ -106,10 +106,6 @@ pub fn plan(
         ($cfgty:ty, $rcfgty:ty, $dlp:ident, $rnp:ident) => {{
             let ctx = PlanContext {
                 name: name.to_string(),
-                // Playback redirection goes through the
-                // DATALIB_HTTP_PLAYBACK env (set by `download
-                // --playback-root`), not per-plan.
-                playback_root: None,
             };
             match phase {
                 Phase::Ingest => {
@@ -165,7 +161,6 @@ pub fn plan(
         ($cfgty:ty, $rcfgty:ty, $dlp:ident) => {{
             let ctx = PlanContext {
                 name: name.to_string(),
-                playback_root: None,
             };
             match phase {
                 Phase::Ingest => {
