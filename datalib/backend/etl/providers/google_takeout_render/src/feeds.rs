@@ -157,7 +157,6 @@ pub fn yearly(
     items: Vec<NormalizedChatItem>,
     inputs: Inputs,
 ) -> NormalizedChat {
-    named_after: Vec::new(),
     chat(source_id, chat_id, display, by_year(items), inputs)
 }
 
@@ -169,7 +168,6 @@ pub fn whole(
     items: Vec<NormalizedChatItem>,
     inputs: Inputs,
 ) -> NormalizedChat {
-    named_after: Vec::new(),
     chat(
         source_id,
         chat_id,
@@ -186,7 +184,6 @@ fn chat(
     periods: BTreeMap<String, Vec<NormalizedChatItem>>,
     inputs: Inputs,
 ) -> NormalizedChat {
-    named_after: Vec::new(),
     let feed = ids::feed(source_id, chat_id);
     NormalizedChat {
         named_after: Vec::new(),

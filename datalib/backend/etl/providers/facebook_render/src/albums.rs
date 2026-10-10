@@ -28,7 +28,6 @@ pub fn build_albums(albums: &[(String, Value)], owner: &Owner) -> Vec<Normalized
 }
 
 fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
-    named_after: Vec::new(),
     let name = str_field(v, "name").unwrap_or("Untitled album");
     let photos: Vec<&Value> = v
         .get("photos")

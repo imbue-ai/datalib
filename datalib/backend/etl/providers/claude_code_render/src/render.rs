@@ -180,7 +180,6 @@ fn build_chat(
     parent_title: Option<&str>,
     max_tool_result_bytes: usize,
 ) -> NormalizedChat {
-    named_after: Vec::new(),
     let session_id = str_of(meta, "session_id").unwrap_or(tid);
     let agent_id = str_of(meta, "agent_id");
     let inputs = Inputs::default();

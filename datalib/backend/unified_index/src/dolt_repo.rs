@@ -91,7 +91,69 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
         }
     }
     add_contact_handles(at, by_uuid.values_mut()).await?;
+    add_subject_people(at, by_uuid.values_mut()).await?;
     Ok(uuids.iter().filter_map(|u| by_uuid.remove(u)).collect())
+}
+
+/// Each row in a conversation named by its people gets them, read from
+/// its document's `subject` terms, with the name this conversation knows
+/// each handle by and how much they wrote, the most active first.
+async fn add_subject_people<'r>(
+    at: &mut At,
+    rows: impl Iterator<Item = &'r mut SearchRow>,
+) -> Result<(), RepoError> {
+    let mut by_doc: std::collections::HashMap<String, Vec<&'r mut SearchRow>> =
+        std::collections::HashMap::new();
+    for row in rows.filter(|r| r.contact.is_none()) {
+        if let Some(doc) = row.markdown_uuid.clone() {
+            by_doc.entry(doc).or_default().push(row);
+        }
+    }
+    if by_doc.is_empty() {
+        return Ok(());
+    }
+    let docs: Vec<&String> = by_doc.keys().collect();
+    let wanted = serde_json::to_string(&docs)
+        .map_err(|e| RepoError::Internal(format!("encode documents: {e}")))?;
+    let found: Vec<(String, String, Option<String>, Option<i64>)> = match sqlx::query_as(
+        "SELECT t.markdown_uuid, t.value, MAX(c.name), MAX(c.seen_items) \
+           FROM supplied_search_terms t \
+           LEFT JOIN source_contact_handles h \
+             ON h.markdown_uuid = t.markdown_uuid AND h.handle = t.value \
+           LEFT JOIN source_contacts c \
+             ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key \
+          WHERE t.kind = ? AND t.uuid = t.markdown_uuid \
+            AND t.markdown_uuid IN (SELECT value FROM json_each(?)) \
+          GROUP BY t.markdown_uuid, t.value",
+    )
+    .bind(datalib_schema::search_terms::SearchTermKind::Subject.as_str())
+    .bind(wanted)
+    .fetch_all(&mut *at.tx)
+    .await
+    {
+        Ok(found) => found,
+        Err(e) if is_missing_table(&e, "supplied_search_terms") => return Ok(()),
+        Err(e) => return Err(RepoError::Internal(format!("read subject people: {e}"))),
+    };
+    let mut people: std::collections::HashMap<String, Vec<crate::search::SubjectPerson>> =
+        std::collections::HashMap::new();
+    for (doc, value, name, items) in found {
+        people
+            .entry(doc)
+            .or_default()
+            .push(crate::search::SubjectPerson {
+                value,
+                name,
+                items: items.unwrap_or(0),
+            });
+    }
+    for (doc, mut named) in people {
+        named.sort_by(|a, b| b.items.cmp(&a.items).then_with(|| a.value.cmp(&b.value)));
+        for row in by_doc.get_mut(&doc).into_iter().flatten() {
+            row.subject_people = named.clone();
+        }
+    }
+    Ok(())
 }
 
 /// Each contact's own row gets the handles its document's contact
@@ -269,7 +331,8 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .flatten(),
         contact_handles: Vec::new(),
         contact_ref: None,
-        subject_ref: None,
+        subject_people: Vec::new(),
+        subject_ref: Vec::new(),
         author_term: None,
         channel: r.try_get(G::Channel.as_str()).unwrap_or_default(),
         source_url: r.try_get(G::SourceUrl.as_str()).unwrap_or_default(),

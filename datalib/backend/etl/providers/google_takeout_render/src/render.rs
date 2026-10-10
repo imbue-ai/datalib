@@ -13,7 +13,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::changed_chats;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    own_stamp_ms, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
@@ -396,24 +396,32 @@ fn build_chats(
     messages: &[(String, Value)],
     groups: &[(String, Value)],
 ) -> Vec<NormalizedChat> {
-    // space id -> (group dir, participant display), from each group
-    // dir's members.
-    let mut display_by_space: HashMap<String, (String, String)> = HashMap::new();
+    // space id -> (group dir, its members), from each group dir. A space
+    // is named after its members: Takeout gives a space no title.
+    let mut members_by_space: HashMap<String, (String, Vec<NamedPerson>)> = HashMap::new();
     for (dir, payload) in groups {
         let space = space_of_dir(dir);
-        let mut members: Vec<String> = payload
+        let mut members: Vec<NamedPerson> = payload
             .get("members")
             .and_then(Value::as_array)
             .map(|a| {
                 a.iter()
-                    .filter_map(|m| m.get("name").and_then(Value::as_str))
-                    .map(str::to_string)
+                    .filter_map(|m| {
+                        let name = m.get("name").and_then(Value::as_str)?;
+                        Some(NamedPerson {
+                            shown: name.to_string(),
+                            handle: m
+                                .get("email")
+                                .and_then(Value::as_str)
+                                .and_then(Handle::email),
+                        })
+                    })
                     .collect()
             })
             .unwrap_or_default();
         members.dedup();
         if !members.is_empty() {
-            display_by_space.insert(space, (dir.clone(), members.join(", ")));
+            members_by_space.insert(space, (dir.clone(), members));
         }
     }
 
@@ -494,17 +502,18 @@ fn build_chats(
             })
             .collect();
 
-        let display = match display_by_space.get(&space) {
-            Some((dir, display)) => {
+        let (display, named_after) = match members_by_space.get(&space) {
+            Some((dir, members)) => {
                 inputs.read("chat_groups", dir);
-                display.clone()
+                let names: Vec<&str> = members.iter().map(|m| m.shown.as_str()).collect();
+                (names.join(", "), members.clone())
             }
-            None => space.clone(),
+            None => (space.clone(), Vec::new()),
         };
 
         let chat_id = ids::space(source_id, &space);
         chats.push(NormalizedChat {
-            named_after: Vec::new(),
+            named_after,
             contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,

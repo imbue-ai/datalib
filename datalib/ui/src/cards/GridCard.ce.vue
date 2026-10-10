@@ -308,12 +308,12 @@ function refreshQmdState() {
   else void askQmdState([]);
 }
 
-// Who the Author and Contact chips are comes from `people`, the one resolver every
+// Who the Author, Contact and Subject chips are comes from `people`, the one resolver every
 // document and grid asks (docs/dev/chips.md § Resolving): a
 // cell that draws a handle asks as it draws, and when an answer changes —
 // it lands, or a link made anywhere forgets it — the cells are drawn again.
 // The Source cells are group chips, answered by `entities` the same way.
-const PERSON_COLUMNS = ["author_ref", "contact_ref"];
+const PERSON_COLUMNS = ["author_ref", "contact_ref", "subject_ref"];
 const SOURCE_COLUMN = "source_ref";
 const stopPeople = people.subscribe(() => PERSON_COLUMNS.forEach(refreshCells));
 const stopEntities = entities.subscribe(() => refreshCells(SOURCE_COLUMN));
@@ -682,11 +682,30 @@ function copyCell(column: Column<Row>, row: Row): string {
   const spec = columns.value.find((c) => c.field === column.id);
   if (spec?.type === "identity") {
     const v = row[spec.field] as Identity | null | undefined;
-    if (v?.entity) return entityCopyText(v.entity, v.label);
-    const handle = v ? handleFromUri(v.id) : null;
-    if (handle && v) return copyHandleText(handle, v.label);
+    if (v) return identityCopyText(v);
+  }
+  if (spec?.type === "identities") {
+    const list = (row[spec.field] as Identity[] | null | undefined) ?? [];
+    return list.map(identityCopyText).join(", ");
   }
   return spec ? copyText(spec.type, row[spec.field]) : "";
+}
+
+/// One identity as a copy says it: a chip as its name and identifier,
+/// anything else as its label.
+function identityCopyText(v: Identity): string {
+  if (v.entity) return entityCopyText(v.entity, v.label);
+  const handle = handleFromUri(v.id);
+  return handle ? copyHandleText(handle, v.label) : v.label;
+}
+
+/// The chip a right-click landed on. A cell can hold several, and the
+/// menu is worked out from the cell's coordinates alone, so the press
+/// itself is noted on its way down.
+let pointedChip: HTMLElement | null = null;
+function notePointedChip(e: MouseEvent) {
+  const target = e.target as Element | null;
+  pointedChip = target?.closest?.<HTMLElement>("a.chip[data-handle], a.chip[data-entity]") ?? null;
 }
 
 /// Put one id per target on the clipboard, comma-separated.
@@ -1714,7 +1733,12 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   // browser blocks it silently. Split on the URL SCHEME rather than on
   // provider, so any future local-file source inherits this.
   const linked = targets.filter((r) => linkOf(r));
-  const chipEl = el?.querySelector<HTMLElement>("a.chip[data-handle]") ?? null;
+  // The chip the press landed on, else the cell's only one; a press beside
+  // the chips in a cell of several names none.
+  const pointed = pointedChip && el?.contains(pointedChip) ? pointedChip : null;
+  const first = (selector: string) =>
+    el?.querySelectorAll(selector).length === 1 ? el.querySelector<HTMLElement>(selector) : null;
+  const chipEl = pointed ? (pointed.dataset.handle ? pointed : null) : first("a.chip[data-handle]");
   const chip = chipEl
     ? (() => {
         const handle = chipEl.dataset.handle ?? "";
@@ -1729,7 +1753,11 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
         };
       })()
     : null;
-  const entityEl = el?.querySelector<HTMLElement>("a.chip[data-entity]") ?? null;
+  const entityEl = pointed
+    ? pointed.dataset.entity
+      ? pointed
+      : null
+    : first("a.chip[data-entity]");
   const entity = entityEl
     ? (() => {
         const uri = entityEl.dataset.entity ?? "";
@@ -2423,7 +2451,7 @@ onBeforeUnmount(() => {
              class binding on that same element would wipe them on every
              change. -->
         <div class="grid" :class="{ 'grid--loading': loading, 'grid--stale': showingStale }">
-          <div ref="boxEl" class="grid-box" />
+          <div ref="boxEl" class="grid-box" @contextmenu.capture="notePointedChip" />
         </div>
         <div v-if="loading" class="grid-spinner" aria-label="searching">
           <div class="grid-spinner__ring" />

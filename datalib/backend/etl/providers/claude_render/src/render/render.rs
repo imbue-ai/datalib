@@ -201,7 +201,6 @@ fn build_chat(
     project_names: &HashMap<String, String>,
     parsed: &ParsedExport,
 ) -> NormalizedChat {
-    named_after: Vec::new(),
     let conv = &shredded.conv;
     let conv_uuid = conv.conversation_uuid.clone();
     let model = conv
@@ -451,7 +450,6 @@ fn build_project_page(
     options: &RenderOptions,
     parsed: &ParsedExport,
 ) -> NormalizedChat {
-    named_after: Vec::new(),
     let project_uuid = project.project_uuid.clone();
     let page_uuid = ids::project(source_id, &project_uuid).uuid;
     let name = project

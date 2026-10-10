@@ -176,7 +176,6 @@ fn build_chat(
     parent_title: Option<&str>,
     max_tool_result_bytes: usize,
 ) -> NormalizedChat {
-    named_after: Vec::new(),
     let inputs = Inputs::default();
     inputs.read("transcripts", tid);
 

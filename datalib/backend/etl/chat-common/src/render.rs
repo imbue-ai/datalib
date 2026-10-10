@@ -1239,8 +1239,8 @@ mod tests {
     use datalib_etl_render::section::msg_div_open;
 
     fn mk_chat() -> NormalizedChat {
-        named_after: Vec::new(),
         NormalizedChat {
+            named_after: Vec::new(),
             contacts: Vec::new(),
             inputs: Vec::new(),
             id: "100".to_string(),
@@ -1341,6 +1341,42 @@ mod tests {
                 (document, "participant", "Ship's counsel"),
                 (document, "participant", "email:worf@enterprise.org"),
                 (document, "participant", "Will Riker"),
+            ]
+        );
+    }
+
+    /// A chat named by its people names them on its document's own row,
+    /// by handle else by name, for the Subject cell to draw; a chat with
+    /// a title names nobody.
+    #[test]
+    fn a_chat_named_by_its_people_names_them_on_its_document_row() {
+        use crate::types::NamedPerson;
+        let subject_terms = |chat: &NormalizedChat| -> Vec<(String, String)> {
+            let rows = rows_of(&test_profile(), chat);
+            supplied_search_terms(chat, &chat.buckets[0], &rows)
+                .into_iter()
+                .filter(|t| t.kind == SearchTermKind::Subject)
+                .map(|t| (t.uuid, t.value))
+                .collect()
+        };
+        let mut chat = mk_chat();
+        assert!(subject_terms(&chat).is_empty());
+        chat.named_after = vec![
+            NamedPerson {
+                shown: "Will Riker".into(),
+                handle: datalib_handle::Handle::email("riker@enterprise.org"),
+            },
+            NamedPerson {
+                shown: "Q".into(),
+                handle: None,
+            },
+        ];
+        let document = "22222222-2222-2222-2222-222222222222";
+        assert_eq!(
+            subject_terms(&chat),
+            [
+                (document.into(), "email:riker@enterprise.org".into()),
+                (document.into(), "Q".into()),
             ]
         );
     }

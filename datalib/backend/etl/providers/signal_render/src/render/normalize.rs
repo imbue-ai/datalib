@@ -11,7 +11,8 @@ use std::collections::HashMap;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    UpstreamRef,
 };
 use datalib_etl_render::inputs::{Inputs, Lookup};
 
@@ -70,7 +71,7 @@ pub fn to_chats(
             .collect();
 
         chats.push(NormalizedChat {
-            named_after: Vec::new(),
+            named_after: named_after(recipients, chat),
             path_prefix: None,
             id: bundle_key.clone(),
             chat_uuid: chat_id.uuid,
@@ -213,6 +214,25 @@ fn recipient_display(
         .get(&chat.recipient_id)
         .map(|r| r.display())
         .unwrap_or_else(|| format!("recipient_{}", chat.recipient_id))
+}
+
+/// Who a one-to-one chat is named after: the person on the other end,
+/// by their number else their account id. A group, which has a title,
+/// names nobody.
+fn named_after(
+    recipients: Lookup<'_, HashMap<String, ParsedRecipient>>,
+    chat: &ParsedChat,
+) -> Vec<NamedPerson> {
+    let Some(r) = recipients.get(&chat.recipient_id) else {
+        return Vec::new();
+    };
+    match handles_of(r).into_iter().next() {
+        Some(handle) => vec![NamedPerson {
+            shown: r.display(),
+            handle: Some(handle),
+        }],
+        None => Vec::new(),
+    }
 }
 
 /// A recipient's handles: their number, where the backup has it, and

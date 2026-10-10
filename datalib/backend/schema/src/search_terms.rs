@@ -98,7 +98,7 @@ impl SearchTermKind {
             | SearchTermKind::Bcc
             | SearchTermKind::Mention
             | SearchTermKind::Container => 3,
-            SearchTermKind::Title | SearchTermKind::Label => 2,
+            SearchTermKind::Title | SearchTermKind::Subject | SearchTermKind::Label => 2,
             SearchTermKind::Author | SearchTermKind::Name | SearchTermKind::Participant => 1,
         }
     }
@@ -118,6 +118,7 @@ impl SearchTermKind {
             | SearchTermKind::Author
             | SearchTermKind::About
             | SearchTermKind::Participant
+            | SearchTermKind::Subject
             | SearchTermKind::Label => false,
         }
     }

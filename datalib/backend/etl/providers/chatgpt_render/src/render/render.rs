@@ -122,7 +122,6 @@ fn build_chat(
     parsed: &ParsedChatGPTApi,
     source_id: &str,
 ) -> NormalizedChat {
-    named_after: Vec::new(),
     let conv = &shredded.conv;
     let conv_id = conv.conversation_id.clone();
 

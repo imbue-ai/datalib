@@ -102,8 +102,8 @@ fn aside(uuid: &str, at: i64, body: &str) -> NormalizedChatItem {
 }
 
 fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedChat {
-    named_after: Vec::new(),
     NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: Vec::new(),
         id: id.to_string(),
@@ -132,7 +132,6 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
 /// The complaint this whole layout change came from: an LLM turn whose
 /// tool plumbing outweighs what was actually said.
 fn assistant_turn_with_tools() -> NormalizedChat {
-    named_after: Vec::new(),
     chat(
         "sample-tool-run",
         "Sensor sweep of the Argolis cluster",
@@ -199,7 +198,6 @@ fn assistant_turn_with_tools() -> NormalizedChat {
 /// The ordinary case: several people, a reaction, an attachment, a
 /// per-message linkout.
 fn group_chat() -> NormalizedChat {
-    named_after: Vec::new(),
     let mut picard = text(
         "s2-picard",
         "Jean-Luc Picard",
@@ -271,7 +269,6 @@ fn group_chat() -> NormalizedChat {
 /// either side. The case the clamp and the sticky jump controls exist
 /// for: without them, one message is a scroll you have to ride out.
 fn long_message() -> NormalizedChat {
-    named_after: Vec::new(),
     let mut body = String::from(
         "Full diagnostic dump from the port nacelle, as requested. \
          The interesting part is around line 60.\n",
@@ -317,7 +314,6 @@ fn long_message() -> NormalizedChat {
 /// all, an author whose name is markup, a fenced code block, a long
 /// unbroken token.
 fn edge_cases() -> NormalizedChat {
-    named_after: Vec::new(),
     let mut undated = text(
         "s3-undated",
         "Unknown sender",

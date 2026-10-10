@@ -94,7 +94,6 @@ pub fn profile_for(network: &str) -> RenderProfile {
 }
 
 fn to_chat(source_id: &str, room: &Room, doc: &DocBucket, inputs: &Inputs) -> NormalizedChat {
-    named_after: Vec::new(),
     let items: Vec<NormalizedChatItem> = doc
         .messages
         .iter()

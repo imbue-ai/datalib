@@ -17,7 +17,7 @@ use datalib_query::table::{Column, FreeText, SearchTable};
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::grid_columns::GridColumn;
-use datalib_unified_index::search::SearchRow;
+use datalib_unified_index::search::{SearchRow, SubjectPerson};
 use datalib_unified_index::terms_keys::TERMS_KEYS;
 use datalib_unified_index::view::{self, View};
 use serde::Deserialize;
@@ -46,17 +46,38 @@ pub fn author_identity(author: &str, handle: Option<&str>) -> Option<Identity> {
     })
 }
 
-/// The Subject cell away from a contact's row: the conversation's name,
-/// plain. `None` for a row with no conversation name.
-fn subject_identity(name: &str) -> Option<Identity> {
+/// The Subject cell: on a contact's own row its Contact chip; in a
+/// conversation named by its people, each of them, a chip where they
+/// have a handle; elsewhere the conversation's name, plain. Empty for a
+/// row with none of those.
+pub fn subject_identities(
+    contact: Option<&Identity>,
+    people: &[SubjectPerson],
+    name: &str,
+) -> Vec<Identity> {
+    if let Some(contact) = contact {
+        return vec![contact.clone()];
+    }
+    if !people.is_empty() {
+        return people
+            .iter()
+            .filter_map(|p| match Handle::parse(&p.value) {
+                Some(h) => author_identity(p.name.as_deref().unwrap_or_default(), Some(h.as_str())),
+                None => author_identity(&p.value, None),
+            })
+            .collect();
+    }
     let name = name.trim();
-    (!name.is_empty()).then(|| Identity {
+    if name.is_empty() {
+        return Vec::new();
+    }
+    vec![Identity {
         id: name.to_string(),
         label: name.to_string(),
         icon: None,
         detail: None,
         entity: None,
-    })
+    }]
 }
 
 /// The Contact cell: the contact's name, a chip where its first address,
@@ -266,9 +287,11 @@ fn declared() -> Vec<ColumnSpec> {
         // Second, so what a row says is on screen at any width.
         ColumnSpec::new("snippet", "Contents", ColumnType::Text),
         ColumnSpec::new("kind", "Type", ColumnType::Text),
-        ColumnSpec::new("subject_ref", "Subject", ColumnType::Identity).describe(
-            "What the row belongs to: its conversation, thread, page or event, by name, \
-             or on a contact's own row the contact, as a chip. `subject:` finds it by name.",
+        ColumnSpec::new("subject_ref", "Subject", ColumnType::Identities).describe(
+            "What the row belongs to: its conversation, thread, page or event, by name; \
+             a conversation with no title of its own, the people it is named after, as \
+             chips; a contact's own row, the contact, as a chip. `subject:` finds it by \
+             name.",
         ),
         ColumnSpec::new("conversation_name", "Conversation", ColumnType::Text).hidden(),
         ColumnSpec::new("project", "Project", ColumnType::Text)
@@ -419,10 +442,11 @@ impl Sources {
             row.phone.as_deref(),
             &row.contact_handles,
         );
-        row.subject_ref = row
-            .contact_ref
-            .clone()
-            .or_else(|| subject_identity(&row.conversation_name));
+        row.subject_ref = subject_identities(
+            row.contact_ref.as_ref(),
+            &row.subject_people,
+            &row.conversation_name,
+        );
         row.author_term = row
             .author_handle
             .clone()
@@ -504,6 +528,52 @@ mod tests {
             Some(("Bridge crew".into(), "Bridge crew".into()))
         );
         assert_eq!(id(None, Some("riker@enterprise.org"), None, &[]), None);
+    }
+
+    /// A conversation named by its people shows a chip for each, by
+    /// handle where they have one, by name where not; a titled one shows
+    /// its title; a contact's own row, the contact.
+    #[test]
+    fn a_subject_is_its_contact_else_its_people_else_its_name() {
+        let ids = |v: Vec<Identity>| v.into_iter().map(|i| (i.id, i.label)).collect::<Vec<_>>();
+        let person = |value: &str, name: Option<&str>, items| SubjectPerson {
+            value: value.into(),
+            name: name.map(str::to_string),
+            items,
+        };
+        let people = [
+            person("linkedin:jlpicard", Some("Jean-Luc Picard"), 2),
+            person("linkedin:wriker", None, 1),
+            person("Q", None, 0),
+        ];
+        assert_eq!(
+            ids(subject_identities(
+                None,
+                &people,
+                "Jean-Luc Picard, William Riker, Q"
+            )),
+            [
+                (
+                    "https://www.linkedin.com/in/jlpicard".into(),
+                    "Jean-Luc Picard".into()
+                ),
+                ("https://www.linkedin.com/in/wriker".into(), "wriker".into()),
+                ("Q".into(), "Q".into()),
+            ]
+        );
+        assert_eq!(
+            ids(subject_identities(None, &[], "#bridge")),
+            [("#bridge".into(), "#bridge".into())]
+        );
+        assert!(subject_identities(None, &[], " ").is_empty());
+        let riker = contact_identity(Some("Will Riker"), None, None, &["linkedin:wriker".into()]);
+        assert_eq!(
+            ids(subject_identities(riker.as_ref(), &people, "Will Riker")),
+            [(
+                "https://www.linkedin.com/in/wriker".into(),
+                "Will Riker".into()
+            )]
+        );
     }
 
     fn values_of(keys: &[SearchKeySpec], key: &str) -> KeyValues {
@@ -641,7 +711,8 @@ mod tests {
             phone: Some("+1 202 555 0101".into()),
             contact_handles: Vec::new(),
             contact_ref: None,
-            subject_ref: None,
+            subject_people: Vec::new(),
+            subject_ref: Vec::new(),
             author_term: None,
             channel: "#c".into(),
             source_url: "https://x".into(),
@@ -694,6 +765,10 @@ mod tests {
                     .as_str()
                     .is_some_and(|s| datalib_time::validate_iso_offset(s).is_ok()),
                 ColumnType::Identity => value.get("id").is_some() && value.get("label").is_some(),
+                ColumnType::Identities => value.as_array().is_some_and(|all| {
+                    all.iter()
+                        .all(|v| v.get("id").is_some() && v.get("label").is_some())
+                }),
                 other => panic!("column `{}`: no rule for {other:?} here yet", spec.field),
             };
             assert!(

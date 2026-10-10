@@ -71,8 +71,8 @@ fn chat(
     account: Option<&str>,
     item: NormalizedChatItem,
 ) -> NormalizedChat {
-    named_after: Vec::new(),
     NormalizedChat {
+        named_after: Vec::new(),
         id: uuid.into(),
         chat_uuid: uuid.into(),
         display: display.into(),
@@ -114,7 +114,6 @@ fn chat_profile(provider: Provider, label: &str, thread: &str, message: &str) ->
 
 /// Riker writes to Picard, copying Troi, in Picard's mailbox.
 fn riker_email() -> NormalizedChat {
-    named_after: Vec::new(),
     let mut item = message(
         "riker-email",
         "William Riker",
@@ -146,7 +145,6 @@ fn riker_email() -> NormalizedChat {
 /// Worf asks Data, by an @-mention, for a diagnostic; Q, whom the
 /// source knows by name alone, reacts.
 fn worf_slack() -> NormalizedChat {
-    named_after: Vec::new(),
     let mut item = message(
         "worf-slack",
         "Worf",
