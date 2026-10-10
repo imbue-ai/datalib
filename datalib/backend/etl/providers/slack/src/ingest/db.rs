@@ -390,6 +390,56 @@ impl RawDb {
         Ok(pruned)
     }
 
+    /// One `search.messages` page, in one transaction: the thread roots
+    /// read again because the page found a reply newer than the one they
+    /// listed, and the stretch of reply time the page settled, for each
+    /// conversation it searched.
+    pub async fn store_reply_search_page(
+        &self,
+        roots: &[MessageInput],
+        scopes: &[String],
+        covered: Option<&Span>,
+    ) -> Result<()> {
+        let page = prepare(roots)?;
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin reply search page")?;
+        write_messages(&mut tx, &page).await?;
+        if let Some(span) = covered {
+            for scope in scopes {
+                coverage::cover(&mut tx, scope, span.clone()).await?;
+            }
+        }
+        tx.commit().await.context("commit reply search page")?;
+        self.tape_messages(&page);
+        Ok(())
+    }
+
+    /// The `latest_reply` each stored thread root lists, by the root's
+    /// key. A key with no stored root is absent.
+    pub async fn root_latest_replies(
+        &self,
+        keys: &[String],
+    ) -> Result<HashMap<String, Option<String>>> {
+        let mut out = HashMap::new();
+        for key in keys {
+            let row: Option<(String, Option<String>)> = sqlx::query_as(
+                "SELECT id, json_extract(payload, '$.latest_reply') FROM messages \
+                 WHERE id = ? AND is_thread_root = 1",
+            )
+            .bind(key)
+            .fetch_optional(self.pool())
+            .await
+            .with_context(|| format!("read the root {key}"))?;
+            if let Some((id, latest_reply)) = row {
+                out.insert(id, latest_reply);
+            }
+        }
+        Ok(out)
+    }
+
     /// The threads of `channel_id` with replies, each at the version its
     /// stored root lists: the root's `latest_reply`, keyed like the root.
     /// Every stored root is listed, not only the ones this run's walk
@@ -765,6 +815,12 @@ impl RawDb {
 /// The `coverage` scope of one channel's history.
 pub fn history_scope(channel_id: &str) -> String {
     format!("history:{channel_id}")
+}
+
+/// The `coverage` scope of the reply time searched in one conversation,
+/// as `ts` keys.
+pub fn replies_scope(channel_id: &str) -> String {
+    format!("replies:{channel_id}")
 }
 
 /// A stretch of a channel one `conversations.history` page listed whole,

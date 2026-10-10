@@ -3,6 +3,7 @@
 pub mod api;
 pub mod db;
 pub mod files;
+mod reply_search;
 pub mod schema_raw;
 pub mod shapes;
 
@@ -33,9 +34,11 @@ pub use db::{
     MessageInput, OwedFile, RawDb, Thread, UserDirectoryEntry,
 };
 use files::{FileFetcher, FILE_BATCH};
+use reply_search::{ReplySearch, ReplySearchTotals, SEARCH_LAG};
 use schema_raw::{SlackAttachmentRow, THREADS};
 use shapes::{
-    M_AUTH_TEST, M_BOOKMARKS, M_CHANNELS, M_COUNTS, M_HISTORY, M_REPLIES, M_SAVED, M_USERS,
+    M_AUTH_TEST, M_BOOKMARKS, M_CHANNELS, M_COUNTS, M_HISTORY, M_REPLIES, M_SAVED, M_SEARCH,
+    M_USERS,
 };
 
 pub const DEFAULT_SINCE: &str = "2024-01-01";
@@ -1109,6 +1112,10 @@ pub struct FetchOptions {
     /// gets here.
     pub dm_conversations: Option<Vec<String>>,
     pub blob_size_limit_bytes: Option<u64>,
+    /// Search for new replies on threads history will not read again
+    /// (`reply_search`). Off in [`FetchOptions::new`], whose playback
+    /// tests run on the wall clock: the query names the run's days.
+    pub search_replies: bool,
     /// The run's one "now": the refresh window and the age of a listing
     /// sweep are measured from it.
     pub now: DateTime<Utc>,
@@ -1132,6 +1139,7 @@ impl FetchOptions {
             dms: false,
             dm_conversations: None,
             blob_size_limit_bytes: None,
+            search_replies: false,
             now: Utc::now(),
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
@@ -1185,6 +1193,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "dms": opts.dms,
         "dm_conversations": opts.dm_conversations,
         "blob_size_limit_bytes": opts.blob_size_limit_bytes,
+        "search_replies": opts.search_replies,
     });
     let run = datalib_etl::download_run::DownloadRun::start(db.pool(), &run_config).await?;
 
@@ -1304,6 +1313,26 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                     .await;
             }
             grand.account = account;
+        }
+        if opts.search_replies && !opts.control.stop.requested() {
+            let top = ts_key(&datetime_to_slack_ts(&(now - SEARCH_LAG)));
+            let search = ReplySearch {
+                db: &db,
+                team_id: &team_id,
+                latchkey: &opts.latchkey,
+                progress: &setup,
+            };
+            let mut totals = ReplySearchTotals::default();
+            // A search that fails settles nothing past where it stopped,
+            // so what it missed is searched again next run.
+            if let Err(e) = search.run(&targets, &since, &top, &mut totals).await {
+                if !interrupted(&e) {
+                    found.push(listing_problem(M_SEARCH, &e));
+                }
+            }
+            if let Some(sealer) = opts.sealer.as_ref() {
+                sealer.wrote(totals.roots_reread as u64).await;
+            }
         }
         setup.finish(&format!(
             "setup done in {}ms",
