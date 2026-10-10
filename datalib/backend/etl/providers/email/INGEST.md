@@ -194,11 +194,11 @@ with nothing listed to go on with.
   credential (401/403), a retry loop that gave up, or twenty failures in
   a row. Any of these would fail every remaining `.eml` the same way.
   The run stops asking, records one `phase:eml_download` row that says
-  why, how many it downloaded and how many are left, and still succeeds,
-  so everything it downloaded is kept. The next run downloads the rest,
-  and the row clears once a run gets through the phase. The step does
-  not fail here, because the emails themselves are already stored by
-  the time the `.eml` phase runs.
+  why, how many it downloaded and how many are left, and commits
+  everything it downloaded. The step then ends `incomplete` rather than
+  `succeeded`, and render reads what was committed. The next run
+  downloads the rest, and the row clears once a run gets through the
+  phase.
 - The `.eml` bodies wait in memory for their flush (256 of them, or
   32 MB), then go to the CAS and their edge rows are written; each
   write is a point where the run may seal. A run that is killed keeps
