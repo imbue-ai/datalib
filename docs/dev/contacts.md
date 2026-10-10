@@ -516,7 +516,11 @@ writes the pick as `with:`.
 A conversation's own row answers `with:` for everyone who took part in
 it: chat-common supplies a `participant` term on each document's row
 for every author, recipient, mention and reactor of the messages it
-holds, by handle, else by the name shown. So `is:document with:riker`
+holds, by handle, else by the name shown. Only messages count — a tool
+call or a system note is not one — and a label a provider shows where
+it has no person (the account's "Me", an "Unknown" sender; the item's
+`AuthorKind`) names nobody, so only a handle behind it takes part. So
+`is:document with:riker`
 lists the conversations Riker was in, one row each, whatever his role;
 without `is:document` the same search also finds each of his messages.
 

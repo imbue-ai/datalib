@@ -13,8 +13,8 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::changed_chats;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
-    NormalizedDoc, UpstreamRef,
+    own_stamp_ms, AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat,
+    NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -439,10 +439,7 @@ fn build_chats(
             .iter()
             .map(|m| {
                 let creator = m.get("creator");
-                let name = creator
-                    .and_then(|c| c.get("name"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("Unknown");
+                let name = creator.and_then(|c| c.get("name")).and_then(Value::as_str);
                 let handle = creator
                     .and_then(|c| c.get("email"))
                     .and_then(Value::as_str)
@@ -460,7 +457,11 @@ fn build_chats(
                 NormalizedChatItem {
                     message_uuid: msg_id.uuid.clone(),
                     author_handle: handle,
-                    author_display: name.to_string(),
+                    author_kind: match name {
+                        Some(_) => AuthorKind::Named,
+                        None => AuthorKind::Unknown,
+                    },
+                    author_display: name.unwrap_or("Unknown").to_string(),
                     date_ms,
                     text: text.filter(|s| !s.is_empty()).map(str::to_string),
                     kind: ItemKind::Text,
@@ -699,15 +700,10 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
         "text" => {
             let is_me = m.get("is_me").and_then(Value::as_bool).unwrap_or(false);
             let sender = m.get("sender");
-            let author_display = if is_me {
-                "Me".to_string()
+            let (author_display, author_kind) = if is_me {
+                ("Me".to_string(), AuthorKind::Account)
             } else {
-                sender
-                    .and_then(|s| s.get("name").and_then(Value::as_str))
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| sender.and_then(|s| s.get("tel").and_then(Value::as_str)))
-                    .unwrap_or("Unknown")
-                    .to_string()
+                shown(sender)
             };
             let author_handle = sender
                 .and_then(|s| s.get("tel").and_then(Value::as_str))
@@ -721,6 +717,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
             NormalizedChatItem {
                 message_uuid,
                 author_handle,
+                author_kind,
                 author_display,
                 date_ms,
                 text: body,
@@ -746,7 +743,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
         }
         "voicemail" | "recorded" => {
             let party = m.get("party");
-            let author_display = party_display(party);
+            let (author_display, author_kind) = shown(party);
             let transcript = m.get("transcript").and_then(Value::as_str);
             let label = if kind == "voicemail" {
                 "Voicemail"
@@ -760,6 +757,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
             NormalizedChatItem {
                 message_uuid,
                 author_handle: party_handle(party),
+                author_kind,
                 author_display,
                 date_ms,
                 text: Some(caption),
@@ -789,17 +787,20 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 "received" => "Received call",
                 _ => "Call",
             };
+            let (author_display, author_kind) = shown(party);
+            let system_note = Some(format!("{note} — {author_display}"));
             NormalizedChatItem {
                 message_uuid,
                 author_handle: party_handle(party),
-                author_display: party_display(party),
+                author_kind,
+                author_display,
                 date_ms,
                 text: None,
                 kind: ItemKind::System,
                 attachments: Vec::new(),
                 reactions: Vec::new(),
                 labels: Vec::new(),
-                system_note: Some(format!("{note} — {}", party_display(party))),
+                system_note,
                 source_url: None,
                 kind_label: None,
                 source_ref: source_ref.clone(),
@@ -814,13 +815,17 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
     }
 }
 
-fn party_display(party: Option<&Value>) -> String {
-    party
-        .and_then(|p| p.get("name").and_then(Value::as_str))
+/// A Voice sender or call party as an item shows them: their name, else
+/// their number, else an "Unknown" that names nobody.
+fn shown(who: Option<&Value>) -> (String, AuthorKind) {
+    let name = who
+        .and_then(|w| w.get("name").and_then(Value::as_str))
         .filter(|s| !s.is_empty())
-        .or_else(|| party.and_then(|p| p.get("tel").and_then(Value::as_str)))
-        .unwrap_or("Unknown")
-        .to_string()
+        .or_else(|| who.and_then(|w| w.get("tel").and_then(Value::as_str)));
+    match name {
+        Some(name) => (name.to_string(), AuthorKind::Named),
+        None => ("Unknown".to_string(), AuthorKind::Unknown),
+    }
 }
 
 fn party_handle(party: Option<&Value>) -> Option<Handle> {
@@ -1035,6 +1040,10 @@ mod tests {
         assert_eq!(chats[0].buckets[1].period_key, "2364-04");
         // is_me → "Me".
         assert_eq!(chats[0].buckets[1].items[0].author_display, "Me");
+        assert_eq!(
+            chats[0].buckets[1].items[0].author_kind,
+            AuthorKind::Account
+        );
     }
 
     /// A text and a transcript are what was said; the bold label around

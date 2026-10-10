@@ -9,7 +9,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
@@ -291,6 +291,7 @@ fn me_item(
     NormalizedChatItem {
         message_uuid: id.uuid,
         author_handle: author_handle.cloned(),
+        author_kind: AuthorKind::Account,
         author_display: ME.to_string(),
         date_ms,
         text: nonempty(&text).map(str::to_string),
@@ -325,6 +326,7 @@ fn post_placeholder(
     NormalizedChatItem {
         message_uuid: id.uuid,
         author_handle: None,
+        author_kind: AuthorKind::Named,
         author_display: "LinkedIn".to_string(),
         date_ms,
         text: None,

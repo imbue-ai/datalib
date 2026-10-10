@@ -8,8 +8,8 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc,
-    UpstreamRef,
+    own_stamp_ms, AuthorKind, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -207,6 +207,10 @@ fn build_chats(
                 NormalizedChatItem {
                     message_uuid: id.uuid,
                     author_handle: Handle::linkedin_profile_url(field(p, "SENDER PROFILE URL")),
+                    author_kind: match nonempty(from) {
+                        Some(_) => AuthorKind::Named,
+                        None => AuthorKind::Unknown,
+                    },
                     author_display: nonempty(from).unwrap_or("Unknown").to_string(),
                     date_ms,
                     text: nonempty(content).map(str::to_string),

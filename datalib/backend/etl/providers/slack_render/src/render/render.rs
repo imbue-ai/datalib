@@ -12,7 +12,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, NormalizedReaction, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
@@ -305,6 +305,7 @@ fn build_item(
             .user_id
             .as_deref()
             .and_then(|u| Handle::slack(&m.team_id, u)),
+        author_kind: AuthorKind::Named,
         author_display,
         date_ms,
         text: (!body.trim().is_empty()).then_some(body),
@@ -444,6 +445,8 @@ fn build_reactions(
             out.push(NormalizedReaction {
                 reaction_uuid: id.uuid.clone(),
                 reactor_handle: None,
+                // A count, not a person.
+                reactor_kind: AuthorKind::Unknown,
                 reactor_display: format!("{count}"),
                 emoji,
                 date_ms,
@@ -455,6 +458,7 @@ fn build_reactions(
                 out.push(NormalizedReaction {
                     reaction_uuid: id.uuid.clone(),
                     reactor_handle: Handle::slack(&m.team_id, u),
+                    reactor_kind: AuthorKind::Named,
                     reactor_display: user_labels.get(u).cloned().unwrap_or_else(|| u.to_string()),
                     emoji: emoji.clone(),
                     date_ms,

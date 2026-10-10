@@ -159,13 +159,14 @@ fn name_without_handle<'a>(shown: &'a str, handle: &datalib_handle::Handle) -> &
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ItemKind;
+    use crate::types::{AuthorKind, ItemKind};
     use datalib_handle::Handle;
 
     fn by(handle: Option<&Handle>, name: &str, ms: i64) -> NormalizedChatItem {
         NormalizedChatItem {
             message_uuid: format!("m{ms}"),
             author_handle: handle.cloned(),
+            author_kind: AuthorKind::Named,
             author_display: name.to_string(),
             date_ms: Some(ms),
             text: Some("hi".to_string()),
@@ -267,6 +268,7 @@ mod tests {
         let react = |handle: Option<&Handle>, who: &str| NormalizedReaction {
             reaction_uuid: format!("r-{who}"),
             reactor_handle: handle.cloned(),
+            reactor_kind: AuthorKind::Named,
             reactor_display: who.to_string(),
             emoji: "🫡".to_string(),
             date_ms: Some(2),
@@ -301,6 +303,7 @@ mod tests {
             reactions: vec![NormalizedReaction {
                 reaction_uuid: "r-worf".to_string(),
                 reactor_handle: Some(worf.clone()),
+                reactor_kind: AuthorKind::Named,
                 reactor_display: "Worf".to_string(),
                 emoji: "🫡".to_string(),
                 date_ms: Some(2),

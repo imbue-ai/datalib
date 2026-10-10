@@ -12,8 +12,8 @@ use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::ENTITY_KIND_CONVERSATION;
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, NormalizedReaction, Recipient,
-    RecipientRole,
+    AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, NormalizedReaction,
+    Recipient, RecipientRole,
 };
 use datalib_etl_chat_common::{RecordStampPrecision, RenderProfile, TextFormat};
 use datalib_etl_contact_common::{ContactDoc, ContactRenderProfile};
@@ -46,6 +46,7 @@ fn message(uuid: &str, author: &str, handle: Handle, at: i64, text: &str) -> Nor
         recipients: Vec::new(),
         mentions: Vec::new(),
         author_handle: Some(handle),
+        author_kind: AuthorKind::Named,
         author_display: author.into(),
         date_ms: Some(at),
         text: Some(text.into()),
@@ -156,6 +157,7 @@ fn worf_slack() -> NormalizedChat {
     item.reactions = vec![NormalizedReaction {
         reaction_uuid: "q-reaction".into(),
         reactor_handle: None,
+        reactor_kind: AuthorKind::Named,
         reactor_display: "Q".into(),
         emoji: "🫡".into(),
         date_ms: Some(T0 + 2 * HOUR),

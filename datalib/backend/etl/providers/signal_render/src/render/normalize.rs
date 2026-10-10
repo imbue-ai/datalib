@@ -11,8 +11,8 @@ use std::collections::HashMap;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl_chat_common::types::{
-    ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
-    UpstreamRef,
+    AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::inputs::{Inputs, Lookup};
 
@@ -147,6 +147,7 @@ fn to_item(
     NormalizedChatItem {
         message_uuid: id.uuid,
         author_handle: author_handle(recipients, item),
+        author_kind: author_kind(recipients, item),
         author_display: author_display(recipients, item),
         date_ms: Some(item.date_sent),
         text,
@@ -284,6 +285,19 @@ fn contacts_of(
             Some(c)
         })
         .collect()
+}
+
+fn author_kind(
+    recipients: Lookup<'_, HashMap<String, ParsedRecipient>>,
+    item: &ParsedChatItem,
+) -> AuthorKind {
+    if item.outgoing {
+        AuthorKind::Account
+    } else if recipients.get(&item.author_id).is_some() {
+        AuthorKind::Named
+    } else {
+        AuthorKind::Unknown
+    }
 }
 
 fn author_display(
