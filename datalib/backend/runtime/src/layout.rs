@@ -43,12 +43,10 @@ pub const MEDIA_DIR: &str = "media";
 /// different writer from every other store and, unlike the indexes, it
 /// cannot be regenerated.
 pub const FEEDBACK_DB: &str = "feedback.doltlite_db";
-/// The bytes-on-disk timeseries, relative to `system/`. Its own file
-/// for the reason every store here has one: doltlite's working set is
-/// per file and branch, so a sample landing between two feedback rows
-/// would be swept into whichever commit came next. Nothing commits this one at
-/// all — the rows are the history.
-pub const USAGE_DB: &str = "usage.doltlite_db";
+/// The bytes-on-disk timeseries, relative to `system/`. Plain SQLite:
+/// the rows are the history, so a doltlite commit log would add nothing
+/// but the pages every write left behind.
+pub const USAGE_DB: &str = "usage.sqlite";
 pub const REMOTE_MEDIA_DB: &str = "remote_media.doltlite_db";
 /// The download CAS: one file per fetched URL, named by its sha256.
 pub const REMOTE_MEDIA_DIR: &str = "remote_media";

@@ -22,7 +22,7 @@
                                                   on one; written only by the
                                                   `datalib_contacts` applet
 <data_root>/system/feedback.doltlite_db           filed feedback
-<data_root>/system/usage.doltlite_db              bytes-on-disk over time
+<data_root>/system/usage.sqlite                   bytes-on-disk over time (plain SQLite)
 <data_root>/system/remote_media.doltlite_db       what remote media a person let a document
                                                   load, and the URLs fetched for it
 <data_root>/system/remote_media/<sha256>          the download CAS those URLs' bytes land in
@@ -120,15 +120,28 @@ is why feedback has a file of its own with one writer. The row's `git_hash` is t
 commit as `datalib_runtime::build_id::git_hash` finds it at run time
 ([`logging.md`](logging.md) § "Every line has an author").
 
-**Usage** is the one store nothing ever commits. It is a timeseries —
-`datalib-http` walks the root every five seconds *while a run holds it*
-and appends a row per tree whose size moved — so the rows *are* the
-history. Between runs nothing writes the root, so the series
+**Usage** is a timeseries — `datalib-http` walks the root every five
+seconds *while a run holds it* and appends a row per tree whose size
+moved, one transaction per walk — so the rows *are* the history, and
+the store is plain SQLite rather than doltlite: nothing would ever
+commit it, and a doltlite file keeps every page a write replaces until
+a `dolt_gc()`, which grew it by hundreds of MB a day for rows worth a
+few MB (#1158). Between runs nothing writes the root, so the series
 deliberately has no samples there, and a change made from outside
 datalib carries the instant it was next *measured*. Reading it is
-`SELECT path, measured_at_utc, bytes FROM disk_usage`; it is compacted
-(no repeated value, nothing closer than five seconds), so carry the last
-value forward rather than assuming a fixed interval.
+`SELECT path, measured_at_utc, bytes FROM disk_usage`, with any
+`sqlite3`; it is compacted (no repeated value, nothing closer than five
+seconds), so carry the last value forward rather than assuming a fixed
+interval. A sample older than `disk_usage_days` in `[run_history]`
+(default 30, as long as a run is kept) is dropped when the server starts
+and whenever a run ends; plain SQLite reuses the freed pages, so the
+file stops growing once the window is full.
+
+An older build kept these rows in `system/usage.doltlite_db`. The first
+open by a newer one copies them into `usage.sqlite` (to a temporary
+file, renamed into place once the row counts match) and then deletes
+the old store; a crash before the rename leaves the old store whole for
+the next open to start over (`core/src/usage_store.rs`).
 
 **Remote media.** A rendered document's images on remote
 hosts are held back by the UI until a person lets them load, because

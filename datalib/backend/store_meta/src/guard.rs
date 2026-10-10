@@ -93,9 +93,9 @@ pub async fn read_at(store: &Path) -> Result<Option<Meta>> {
 
 /// Every store under a data root: each `*.doltlite_db` up to three
 /// levels down (`system/`, `<group>/ingest/`, `<group>/render_markdown/`,
-/// `unified_index/grid_index/`) and the run store. A walk rather than a
-/// list of the layout's names, so a store this crate has not heard of
-/// is inspected too.
+/// `unified_index/grid_index/`), the run store and the usage store. A
+/// walk rather than a list of the layout's names, so a store this crate
+/// has not heard of is inspected too.
 pub fn stores_under(root: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -121,9 +121,13 @@ pub fn stores_under(root: &Path) -> Vec<PathBuf> {
     }
     let mut out = Vec::new();
     walk(root, 1, &mut out);
-    let runs = datalib_runtime::layout::runs_db(root);
-    if runs.is_file() {
-        out.push(runs);
+    for plain in [
+        datalib_runtime::layout::runs_db(root),
+        datalib_runtime::layout::usage_db(root),
+    ] {
+        if plain.is_file() {
+            out.push(plain);
+        }
     }
     out.sort();
     out
@@ -176,7 +180,7 @@ mod tests {
     }
 
     /// The walk finds every doltlite store the layout places, at every
-    /// depth, and the run store, and nothing else.
+    /// depth, the run store and the usage store, and nothing else.
     #[test]
     fn the_walk_finds_every_store_the_layout_places() {
         let td = tempfile::tempdir().unwrap();
@@ -184,6 +188,8 @@ mod tests {
         let files = [
             "system/feedback.doltlite_db",
             "system/runs/runs.sqlite",
+            "system/usage.sqlite",
+            "system/supervisor.sqlite",
             "system/feedback.doltlite_db.lock",
             "system/api-token",
             "slack/ingest/entities.doltlite_db",
@@ -210,6 +216,7 @@ mod tests {
                 "slack/render_markdown/indexed_markdown.doltlite_db",
                 "system/feedback.doltlite_db",
                 "system/runs/runs.sqlite",
+                "system/usage.sqlite",
                 "unified_index/grid_index/db.doltlite_db",
             ]
         );
@@ -225,7 +232,7 @@ mod tests {
         let root = td.path();
         let newer = root.join("a/ingest/entities.doltlite_db");
         let same = root.join("b/ingest/entities.doltlite_db");
-        let bare = root.join("system/usage.doltlite_db");
+        let bare = root.join("system/usage.sqlite");
         for p in [&newer, &same, &bare] {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", p.display()))

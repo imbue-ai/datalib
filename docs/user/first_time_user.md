@@ -431,7 +431,7 @@ faster.
     ├── feedback.doltlite_db        # feedback you filed (nothing regenerates it)
     ├── remote_media.doltlite_db    # remote media you let a document load
     ├── runs/runs.sqlite            # every run's step states, logs and metrics
-    ├── usage.doltlite_db           # bytes on disk over time
+    ├── usage.sqlite                # bytes on disk over time
     └── frontend/                   # UI components: the applets', and yours in frontend/user/
 ```
 

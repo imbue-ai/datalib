@@ -46,6 +46,7 @@ pub enum StoreKind {
     /// The grid index (`unified_index/grid_index`).
     GridIndex,
     Feedback,
+    /// `system/usage.sqlite`: bytes on disk per tree, over time.
     Usage,
     /// `system/remote_media.doltlite_db`: what remote media a person
     /// let a document load, and the URLs fetched into the download CAS.

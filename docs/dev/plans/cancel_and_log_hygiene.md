@@ -1,7 +1,8 @@
 # What a cancel leaves behind, and what the log says about it
 
 **Status: PRs 1 to 4 and 8 landed (#682, #686, #692, #697, #700); 5 is
-void and 6 and 7 are open. PRs 3, 4, 5 and 8 were none of them what this
+void, 6 is open, and 7's `disk_usage` half landed with the fix for #1158
+while its event-tape half is open. PRs 3, 4, 5 and 8 were none of them what this
 doc first said they were — each says so in its own section. Last read
 against the tree 2026-09-23.** §1 is what a real data root actually contained — every
 number in it was read out of `/Users/thad/datalib/z14` at build
@@ -433,7 +434,11 @@ not meaningfully exist yet, or run the guard after the stores are made.
 
 - Default the Slack event tape to **off**. It is a debugging tool.
 - Give `disk_usage` a retention knob beside the others in
-  `[run_history]`, or downsample anything older than a day.
+  `[run_history]`, or downsample anything older than a day. **Done** as
+  the knob, `disk_usage_days` (default 30, as long as a run is kept, so
+  every run the dashboard offers keeps its disk chart), with #1158: the
+  store moved to plain SQLite, so dropping old rows frees pages the
+  file reuses.
 
 ### PR 8 — A step outlives no runner, however the runner died — **done**
 

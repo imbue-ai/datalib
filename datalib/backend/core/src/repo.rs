@@ -40,6 +40,12 @@ pub trait AppRepo: Send + Sync {
         Err(RepoError::ReadOnly)
     }
 
+    /// Drop every sample measured before `before_utc`, a UTC stamp in the
+    /// store's own format; how many went.
+    async fn forget_disk_usage_before(&self, _before_utc: &str) -> Result<u64, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
     async fn recent_disk_usage(&self, _limit: usize) -> Result<Vec<DiskUsageRow>, RepoError> {
         Err(RepoError::ReadOnly)
     }

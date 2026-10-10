@@ -2,7 +2,8 @@
 //!
 //! One background task walks the data root and keeps the newest measurement
 //! of every tree, plus a short window of samples for the sparklines. The same
-//! samples are appended to `system/usage.doltlite_db`, which nothing prunes.
+//! samples are appended to `system/usage.sqlite`, which keeps them for
+//! `[run_history] disk_usage_days`: dropped at startup and when a run ends.
 //!
 //! **It walks only while a run is in flight, and has no timer.** Nothing else
 //! writes the data root, so between runs there is nothing to find, and an
@@ -489,6 +490,35 @@ pub async fn sample_on_demand(
     sample_once(monitor, repo, root, Some(arrived), events).await;
 }
 
+/// The stamp before which a sample is dropped: `days` before `now`, in
+/// the store's UTC form, so text order is instant order.
+fn retention_cutoff(now: datalib_time::IsoOffsetTimestamp, days: u32) -> String {
+    now.bump_micros(-(days as i64) * 86_400 * 1_000_000)
+        .to_utc_and_offset()
+        .0
+}
+
+/// The config's `disk_usage_days`, read each time rather than at boot so
+/// an edit takes effect at the next run's end.
+fn disk_usage_days(root: &Path) -> u32 {
+    let path = datalib_dag::config::root_config_path(root);
+    datalib_dag::config::load_graded(&path)
+        .ok()
+        .and_then(|(checked, _)| checked.cfg.run_history)
+        .unwrap_or_default()
+        .disk_usage_days
+}
+
+async fn forget_old_samples(repo: &DynAppRepo, root: &Path) {
+    let days = disk_usage_days(root);
+    let cutoff = retention_cutoff(datalib_time::IsoOffsetTimestamp::now_local(), days);
+    match repo.forget_disk_usage_before(&cutoff).await {
+        Ok(0) => {}
+        Ok(n) => tracing::debug!("usage: dropped {n} sample(s) older than {days} days"),
+        Err(e) => tracing::warn!("usage: could not drop samples older than {days} days: {e}"),
+    }
+}
+
 fn should_walk(running: bool, was_running: bool, since_last_walk: Duration) -> bool {
     let started = running && !was_running;
     let ended = !running && was_running;
@@ -503,6 +533,7 @@ pub async fn run(
     events: crate::watch::RootTx,
     sync: crate::supervisor::SyncControl,
 ) {
+    forget_old_samples(&repo, &root).await;
     match repo.recent_disk_usage(SEED_ROWS).await {
         Ok(rows) => monitor.seed(rows).await,
         Err(e) => tracing::warn!("usage: could not read the recorded history: {e}"),
@@ -533,6 +564,9 @@ pub async fn run(
         if should_walk(running, was_running, last_walk.elapsed()) {
             sample_once(&monitor, &repo, root.clone(), None, &events).await;
             last_walk = Instant::now();
+        }
+        if was_running && !running {
+            forget_old_samples(&repo, &root).await;
         }
         was_running = running;
     }
@@ -730,6 +764,33 @@ command = "my-step"
         assert!(!snap.outputs[0].present);
         assert!(snap.outputs[0].history.is_empty());
         assert_eq!(snap.measured_at_utc, None, "no walk has happened yet");
+    }
+
+    /// The cutoff is `days` whole days before the moment given, in UTC,
+    /// whatever offset the clock is in.
+    #[test]
+    fn the_retention_cutoff_is_days_before_now_in_utc() {
+        let now = datalib_time::parse_strict("2026-09-30T10:00:00-07:00").unwrap();
+        assert_eq!(
+            retention_cutoff(now.clone(), 30),
+            "2026-08-31T17:00:00.000000+00:00"
+        );
+        assert_eq!(retention_cutoff(now, 0), "2026-09-30T17:00:00.000000+00:00");
+    }
+
+    /// No config, or one with no `[run_history]`, keeps the default; one
+    /// that names `disk_usage_days` is read.
+    #[test]
+    fn disk_usage_days_comes_from_run_history() {
+        let td = tempfile::tempdir().unwrap();
+        let default = datalib_dag::config::RunHistory::default().disk_usage_days;
+        assert_eq!(disk_usage_days(td.path()), default);
+        std::fs::write(
+            datalib_dag::config::root_config_path(td.path()),
+            "[run_history]\ndisk_usage_days = 7\n",
+        )
+        .unwrap();
+        assert_eq!(disk_usage_days(td.path()), 7);
     }
 
     /// When the loop walks, stated as a table.

@@ -72,6 +72,9 @@ max_age_days = 30
 # these are their limits.
 process_log_days = 3
 process_log_lines = 200000
+# How long to keep the bytes-on-disk samples (`system/usage.sqlite`) the
+# storage sparklines and each run's disk chart are drawn from.
+disk_usage_days = 30
 
 # ── slack ──────────────────────────────────────────────────────────
 # A group has two names. Its `id` is the identity: unique, path-safe,

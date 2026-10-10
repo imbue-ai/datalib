@@ -958,6 +958,10 @@ _SWAP_ALLOWED: dict[str, str] = {
         "the temp is a SQLite database another connection fills through "
         "ATTACH; there are no bytes to hand to atomic::write"
     ),
+    "datalib/backend/core/src/usage_store.rs": (
+        "the same move as blob_cas.rs: the temp is a SQLite database "
+        "filled through ATTACH"
+    ),
 }
 
 

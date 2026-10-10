@@ -6,7 +6,7 @@
 //! (`SourceType::item_table`).
 //!
 //! **Scope is the raw store, not the whole tree.** `<group>/render_markdown`
-//! is datalib's own output, `system/usage.doltlite_db` already tracks it
+//! is datalib's own output, `system/usage.sqlite` already tracks it
 //! per step, and measuring it from inside the thing that writes it is a
 //! ratchet: every run would find a bigger tree, write a bigger number,
 //! and commit — growing the store it just measured, forever, on a

@@ -95,7 +95,7 @@ pub async fn build_state(
 
     // Bytes on disk, over time: a walk of the root folded into a
     // snapshot the storage endpoint reads and appended to
-    // `system/usage.doltlite_db`. Driven by `root_tx` rather than a
+    // `system/usage.sqlite`. Driven by `root_tx` rather than a
     // timer of its own — a run in flight is exactly what that channel
     // is already reporting, and between runs the disk cannot have
     // moved. Spawned rather than awaited: the first walk of a large
