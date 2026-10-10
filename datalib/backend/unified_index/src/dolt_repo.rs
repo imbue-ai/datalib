@@ -644,16 +644,15 @@ impl IndexRepo for DoltRepo {
         };
         let (where_sql, params) = where_within(q, within);
         let order = order_by(sort);
-        // One statement: qmd hands over at most its ranking depth of hits,
-        // far under SQLite's bound-variable limit.
-        let placeholders = vec!["?"; uuids.len()].join(",");
+        let wanted = serde_json::to_string(uuids)
+            .map_err(|e| RepoError::Internal(format!("encode uuids: {e}")))?;
         let joiner = if where_sql.is_empty() {
             " WHERE"
         } else {
             " AND"
         };
         let sql = format!(
-            "SELECT uuid FROM {}{where_sql}{joiner} uuid IN ({placeholders}){}",
+            "SELECT uuid FROM {}{where_sql}{joiner} uuid IN (SELECT value FROM json_each(?)){}",
             at.grid_rows,
             order
                 .as_deref()
@@ -661,7 +660,7 @@ impl IndexRepo for DoltRepo {
                 .unwrap_or_default()
         );
         let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
-        for p in params.iter().chain(uuids) {
+        for p in params.iter().chain([&wanted]) {
             query = query.bind(p);
         }
         let kept = match query.fetch_all(&mut *at.tx).await {
@@ -701,22 +700,19 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Grouping::default());
         };
-        let (mut where_sql, params) = where_within(q, &[]);
+        let (mut where_sql, mut params) = where_within(q, &[]);
         if let Some(uuids) = among {
-            // qmd's ranking: at most its depth, far under SQLite's
-            // bound-variable limit.
             let joiner = if where_sql.is_empty() {
                 " WHERE"
             } else {
                 " AND"
             };
-            let placeholders = vec!["?"; uuids.len()].join(",");
-            where_sql = format!("{where_sql}{joiner} uuid IN ({placeholders})");
+            where_sql = format!("{where_sql}{joiner} uuid IN (SELECT value FROM json_each(?))");
+            params.push(
+                serde_json::to_string(uuids)
+                    .map_err(|e| RepoError::Internal(format!("encode uuids: {e}")))?,
+            );
         }
-        let params: Vec<String> = params
-            .into_iter()
-            .chain(among.unwrap_or_default().iter().cloned())
-            .collect();
         let (keys, truncated) = at.group_keys(at.grid_rows, &where_sql, &params, by).await?;
         let sample_uuids: Vec<String> = keys.iter().map(|(_, _, uuid)| uuid.clone()).collect();
         // In the same snapshot as the counts, so every group's newest row

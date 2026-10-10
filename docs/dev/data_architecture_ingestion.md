@@ -544,7 +544,7 @@ Because those statements are built at runtime, they go through `sqlx::AssertSqlS
 ### The shared pieces, all in `datalib_etl`:
 
 - **`bulk::bulk_upsert_in_tx(tx, rows, now)`** — the generic write, for any `T: BulkUpsertable` (which the table derives emit); [`etl/README.md` §"Writes: one UPSERT shape, everywhere"](/datalib/backend/etl/README.md).
-- **`bulk::SQL_CHUNK` + `bulk::push_placeholders` / `bulk::push_placeholder_list`** — chunking utilities for a provider's own multi-row `INSERT` builders.
+- **`bulk::SQL_CHUNK` + `bulk::push_placeholders` / `bulk::push_placeholder_list`** — chunking utilities for a provider's own multi-row `INSERT` builders. An `IN` list over a set binds one JSON array instead ([`etl/README.md` §"Binding a set of values"](/datalib/backend/etl/README.md)).
 - **`bulk::bulk_upsert_bookkeeping(tx, table, ids, now)`** — the `<t>_bookkeeping` UPSERT alone, for a hand-built entity write.
 - **`bulk::bulk_upsert_first_seen_in_tx` / `bulk::bulk_stamp_first_seen`** — the same, for a source that reads its whole input every run: a sidecar is stamped the first time its row is written and left alone after, so an unchanged input commits nothing ([`etl/README.md` §"Writes: one UPSERT shape, everywhere"](/datalib/backend/etl/README.md)).
 - **`bulk::EventBatch<'a>`** — the per-table `(table, &[(id, &payload)])` shape the tape primitives share.

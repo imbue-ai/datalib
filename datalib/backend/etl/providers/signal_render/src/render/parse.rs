@@ -472,9 +472,6 @@ async fn load_buckets(
     if chat_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = std::iter::repeat_n("?", chat_ids.len())
-        .collect::<Vec<_>>()
-        .join(",");
     let period_key_expr = period_key_sql(period);
     let sql = format!(
         "SELECT id,
@@ -484,16 +481,16 @@ async fn load_buckets(
                 {period_key_expr} AS period_key,
                 json(payload) AS payload
            FROM chat_items
-          WHERE chat_id IN ({placeholders})
+          WHERE chat_id IN (SELECT value FROM json_each(?))
           ORDER BY chat_id, period_key, date_sent"
     );
     // Audited: `period_key_expr` comes from `period_key_sql(period)` over the
-    // `Period` enum; `placeholders` is a `?,?,?` run and chat ids are bound.
-    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-    for c in chat_ids {
-        q = q.bind(c);
-    }
-    let irows = q.fetch_all(pool).await.context("read chat_items")?;
+    // `Period` enum; the chat ids are bound as one JSON array.
+    let irows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(serde_json::to_string(chat_ids)?)
+        .fetch_all(pool)
+        .await
+        .context("read chat_items")?;
 
     let mut bucket_idx: HashMap<(String, String), usize> = HashMap::new();
     let mut docs: Vec<DocBucket> = Vec::new();
@@ -721,6 +718,49 @@ mod tests {
                 Some("00000000-0000-0000-0000-00000000000b".to_string()),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod load_tests {
+    use super::*;
+    use datalib_etl::bulk::SQLITE_MAX_VARIABLES;
+    use datalib_etl::doltlite_raw::WirePayloadRow;
+    use datalib_etl_signal::ingest::schema_raw::ChatItemRow;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    /// More chats to render than SQLite binds in one statement (#1156):
+    /// every chat still comes back as its own bucket.
+    #[tokio::test]
+    async fn loads_more_chats_than_sqlite_binds_in_one_statement() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
+            .await
+            .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(ChatItemRow::ddl()))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let n = SQLITE_MAX_VARIABLES + 1;
+        sqlx::query(
+            "WITH RECURSIVE s(value) AS (SELECT 1 UNION ALL SELECT value + 1 FROM s WHERE value < ?1)
+             INSERT INTO chat_items (id, chat_id, author_id, date_sent, payload)
+             SELECT 'i' || value, 'c' || value, 'worf', value, '{}' FROM s",
+        )
+        .bind(n as i64)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let chats: HashSet<String> = (1..=n).map(|i| format!("c{i}")).collect();
+
+        let docs = load_buckets(&pool, Period::All, &chats).await.unwrap();
+
+        assert_eq!(docs.len(), n);
+        assert!(docs.iter().all(|d| d.items.len() == 1));
     }
 }
 

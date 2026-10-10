@@ -239,23 +239,14 @@ async fn parse_async(
         gone: narrowed.gone,
         new_head: forward.new_head,
     };
-    // `AND room_uuid IN (…)` on every per-room read below, bound from
-    // the set; empty on a cold start.
-    let room_filter = match &scan.render {
-        None => String::new(),
-        Some(set) => {
-            let placeholders = std::iter::repeat_n("?", set.len().max(1))
-                .collect::<Vec<_>>()
-                .join(",");
-            format!(" AND room_uuid IN ({placeholders})")
-        }
-    };
-    // Bound in the order the placeholders were written; a set with no
-    // room still binds one value so the SQL stays valid and matches none.
-    let room_binds: Vec<String> = match &scan.render {
-        None => Vec::new(),
-        Some(set) if set.is_empty() => vec![String::new()],
-        Some(set) => set.iter().cloned().collect(),
+    // On every per-room read below: the rooms to render, bound as one
+    // JSON array; no filter, and nothing bound, on a cold start.
+    let (room_filter, room_set) = match &scan.render {
+        None => ("", None),
+        Some(set) => (
+            " AND room_uuid IN (SELECT value FROM json_each(?))",
+            Some(serde_json::to_string(set)?),
+        ),
     };
 
     // ── per-user labels (used to populate sender_label) ────────────
@@ -379,11 +370,11 @@ async fn parse_async(
          ORDER BY room_uuid, period_key"
     );
     // Audited: the interpolations are `period_expr`, built above from the
-    // `Period` enum (`strftime_fmt()` / `key_for_all()`), and a `?,?,?`
-    // run sized from the room set, every room bound.
+    // `Period` enum (`strftime_fmt()` / `key_for_all()`), and
+    // `room_filter`, a literal whose rooms are bound.
     let mut bucket_query = sqlx::query(sqlx::AssertSqlSafe(bucket_sql));
-    for room in &room_binds {
-        bucket_query = bucket_query.bind(room);
+    if let Some(set) = &room_set {
+        bucket_query = bucket_query.bind(set);
     }
     let bucket_rows = bucket_query
         .fetch_all(&pool)
@@ -412,10 +403,10 @@ async fn parse_async(
          ORDER BY room_uuid, timestamp_ms"
     );
     // Audited: the same two interpolations as `bucket_sql` above —
-    // `period_expr` from the `Period` enum and the bound room run.
+    // `period_expr` from the `Period` enum and `room_filter`.
     let mut events_query = sqlx::query(sqlx::AssertSqlSafe(events_sql));
-    for room in &room_binds {
-        events_query = events_query.bind(room);
+    if let Some(set) = &room_set {
+        events_query = events_query.bind(set);
     }
     let event_rows = events_query
         .fetch_all(&pool)

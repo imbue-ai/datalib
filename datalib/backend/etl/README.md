@@ -574,6 +574,33 @@ crate of its own with only `sqlx` beneath it) and re-exported as
 `datalib_etl::bulk::BulkUpsertable`, because the render-schema structs
 implement it too and this crate must not reach `datalib_schema`.
 
+## Binding a set of values: one JSON array
+
+SQLite refuses a statement that binds more than 32,766 values
+(`bulk::SQLITE_MAX_VARIABLES`; doltlite keeps the default). A query that
+writes one `?` per id of a whole load set (`WHERE thread_id IN (?,?,…)`)
+passes every test, because test sets are small, and fails for the person
+with the big mailbox: email render did, on a full render (#1156).
+
+So a set to match is bound as **one JSON array**:
+
+```rust
+sqlx::query("SELECT … FROM emails WHERE thread_id IN (SELECT value FROM json_each(?))")
+    .bind(serde_json::to_string(&thread_ids)?)
+```
+
+It has no size limit, the SQL text is fixed (no `AssertSqlSafe`), and the
+planner still searches the column's index. Checked with `EXPLAIN QUERY
+PLAN` on doltlite: the plan is the same as for a literal `IN` list, with
+or without `ANALYZE`.
+
+A `?` run is still right for a multi-row `VALUES`, sized from `chunk.len()`
+in a `.chunks(SQL_CHUNK)` loop (`push_placeholders`). The older chunked
+`IN` lists work the same way. `lint_repo.py` check 16 refuses a `?` run
+sized by anything other than `chunk.len()`. A helper that takes a slice
+and trusts its callers to chunk it counts as unsized, because nothing
+checks that they do.
+
 ## Blob CAS and per-provider edge tables
 
 A source that keeps attachment bytes has two files in its raw directory:
