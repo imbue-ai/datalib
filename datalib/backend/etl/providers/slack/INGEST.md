@@ -180,7 +180,11 @@ was listed at. A walk cut off part way stores nothing of the thread.
 **Files.** See [Attachments](#attachments).
 
 A message that did not change is rewritten identically, which doltlite
-stores as no change.
+stores as no change. That needs one field set aside: Slack mints a new
+`block_id` on every read for a rich-text block the poster gave none, so
+`blocks[].block_id` is volatile (`MESSAGE_VOLATILE_PATHS`) and kept in
+`messages_bookkeeping.volatile_payload`. A message stored before that
+loses its block ids from the content row the next time it is read, once.
 
 ## Noticing a deleted message
 
@@ -296,6 +300,12 @@ and the sync goes on with the rest.
 A channel whose history fails still has its owed threads and files
 fetched on that run: they are in the store whatever the walk did.
 
+**A mirror with no messages** after a run that walked at least one
+channel cleanly is a `silent:channels` warning. Slack answers a
+channel with nothing in range by an empty page and `ok: true`, so a
+range that holds nothing looks like a successful sync without it. A run that was stopped leaves the row as it was; the first run
+that ends with a message in the store clears it.
+
 ## Attachments
 
 Each file a stored message carries that Slack serves (not a tombstone,
@@ -351,7 +361,8 @@ otherwise), leaves that table as it was, and does not stop the sync.
   account follows (the `conversations.history` copy has neither).
   Those two are volatile on `messages` too
   (`MESSAGE_VOLATILE_PATHS`), so reading a thread is not an edit to its
-  root, and the history copy does not overwrite the replies copy. A
+  root. The sidecar is merged by top-level key, so the history copy,
+  which has neither, does not take them away. A
   thread is only re-fetched when it has a new reply, so its mark is as
   fresh as its last reply, not as the last sync.
 - **`saved_items`**, from `saved.list`: in progress, completed and

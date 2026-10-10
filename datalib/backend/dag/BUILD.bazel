@@ -30,6 +30,7 @@ rust_library(
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",

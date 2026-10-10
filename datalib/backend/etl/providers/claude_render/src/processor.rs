@@ -36,7 +36,9 @@ impl SourceRender for ClaudeRender {
     }
 
     fn render_params(&self) -> serde_json::Value {
-        datalib_etl_chat_common::render::layout_params()
+        datalib_etl_chat_common::render::layout_params_with(serde_json::json!({
+            "max_project_doc_bytes": self.max_project_doc_bytes,
+        }))
     }
 
     /// A conversation is its own row; an attachment is its conversation's.

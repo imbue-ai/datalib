@@ -27,6 +27,13 @@ pub struct EventBatch<'a> {
 /// unusually wide rows should chunk smaller.
 pub const SQL_CHUNK: usize = 400;
 
+/// The most `?` one statement may bind: SQLite's compile-time default,
+/// which doltlite keeps. A `?` run sized from a whole load set passes
+/// every small test and fails on the user with the big mailbox (#1156);
+/// bind an IN list as one JSON array instead (`etl/README.md`
+/// §"Binding a set of values").
+pub const SQLITE_MAX_VARIABLES: usize = 32_766;
+
 pub fn push_placeholders(sql: &mut String, count: usize, cols: usize) {
     for i in 0..count {
         if i > 0 {
@@ -109,20 +116,17 @@ async fn clear_fetch_problems(
     table: &str,
     ids: &[&str],
 ) -> Result<()> {
-    let mut clear =
-        String::from("DELETE FROM problems WHERE scope_kind = ? AND stage = ? AND scope_key IN (");
-    clear.push_str(&vec!["?"; ids.len()].join(","));
-    clear.push(')');
-    // Audited: a `?,?,?` run sized from `ids.len()`; every value bound.
-    let mut q = sqlx::query(sqlx::AssertSqlSafe(clear))
-        .bind(datalib_problems::ScopeKind::Entity.as_str())
-        .bind(datalib_problems::Stage::Fetch.as_str());
-    for id in ids {
-        q = q.bind(format!("{table}:{id}"));
-    }
-    q.execute(&mut **tx)
-        .await
-        .with_context(|| format!("clear fetch problems for {table}"))?;
+    let keys: Vec<String> = ids.iter().map(|id| format!("{table}:{id}")).collect();
+    sqlx::query(
+        "DELETE FROM problems WHERE scope_kind = ? AND stage = ? \
+           AND scope_key IN (SELECT value FROM json_each(?))",
+    )
+    .bind(datalib_problems::ScopeKind::Entity.as_str())
+    .bind(datalib_problems::Stage::Fetch.as_str())
+    .bind(serde_json::to_string(&keys)?)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("clear fetch problems for {table}"))?;
     Ok(())
 }
 

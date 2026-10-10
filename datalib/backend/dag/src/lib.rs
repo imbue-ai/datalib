@@ -9,6 +9,7 @@ pub mod config_array;
 pub mod config_lex;
 pub mod config_order;
 pub mod diagnostics;
+pub mod disk_space;
 pub mod events;
 pub mod graph;
 pub mod lock;

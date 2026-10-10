@@ -109,6 +109,12 @@ pub enum Table {
     #[serde(rename = "storage")]
     #[strum(serialize = "storage")]
     Storage,
+    /// `GET /api/pipeline/disk`: the free space on the root's disk moved,
+    /// or crossed the config's floor (`disk_free`). Apart from `storage`,
+    /// which the Manage rows refetch on, since this one comes on a timer.
+    #[serde(rename = "disk")]
+    #[strum(serialize = "disk")]
+    Disk,
     /// What a person curated: a store under `datalib_curated/` (the
     /// contacts app's) published a new commit. A draft's autosave is no
     /// commit, so it sends none.

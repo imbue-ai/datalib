@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use app_schema::disk_free::DiskFreeRow;
 use app_schema::disk_usage::DiskUsageRow;
 use app_schema::feedback::FeedbackRow;
 use app_schema::remote_media::allow::RemoteMediaAllowRow;
@@ -53,6 +54,16 @@ pub trait AppRepo: Send + Sync {
         _since_utc: &str,
         _until_utc: &str,
     ) -> Result<Vec<DiskUsageRow>, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// Append one free-space sample. The caller has compacted the series.
+    async fn record_disk_free(&self, _row: &DiskFreeRow) -> Result<(), RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// The newest `limit` free-space samples, newest first.
+    async fn recent_disk_free(&self, _limit: usize) -> Result<Vec<DiskFreeRow>, RepoError> {
         Err(RepoError::ReadOnly)
     }
 

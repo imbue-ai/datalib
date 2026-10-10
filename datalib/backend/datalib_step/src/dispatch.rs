@@ -417,6 +417,7 @@ pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::path::Path;
+    use strum::VariantArray;
 
     /// The tree a step of this phase has for its raw store: its own
     /// `<name>/ingest` when ingesting, the same tree as its input when
@@ -592,6 +593,88 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rn.processors.len(), 1);
+    }
+
+    /// The keys a source type's render config takes, `common` aside,
+    /// read off serde's refusal of one it does not: that list is the
+    /// struct's fields, so a knob added later is found without anyone
+    /// naming it here.
+    fn render_knobs(source_type: &str) -> Vec<String> {
+        let td = tempfile::tempdir().unwrap();
+        let err = plan(
+            source_type,
+            Phase::Render,
+            "src",
+            raw_dir(td.path(), "src", Phase::Render),
+            serde_json::json!({"no_such_knob": true}),
+        )
+        .unwrap_err();
+        let err = format!("{err:#}");
+        let (_, expected) = err
+            .rsplit_once("expected")
+            .unwrap_or_else(|| panic!("{source_type}: no field list in {err}"));
+        expected
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .filter(|k| *k != "common")
+            .map(String::from)
+            .collect()
+    }
+
+    fn declared_params(source_type: &str, params: serde_json::Value) -> serde_json::Value {
+        let td = tempfile::tempdir().unwrap();
+        let planned = plan(
+            source_type,
+            Phase::Render,
+            "src",
+            raw_dir(td.path(), "src", Phase::Render),
+            params,
+        )
+        .unwrap();
+        let Wave::Render(processors) = planned.processors else {
+            panic!("{source_type}: a render plan holds render processors");
+        };
+        crate::render::declared_render_params(&processors)
+    }
+
+    /// Every knob of every render config is a render param, so changing
+    /// it renders every document again. Beeper's `period` and claude's
+    /// `max_project_doc_bytes` were not, and changing one re-rendered only
+    /// the documents whose raw rows moved (#1087). A knob added to a
+    /// render config fails here until it has a row.
+    #[test]
+    fn every_render_knob_is_a_render_param() {
+        use serde_json::json;
+        let changed = [
+            ("beeper", json!({"period": "day"})),
+            ("claude", json!({"max_project_doc_bytes": 1000})),
+            ("claude_code", json!({"max_tool_result_bytes": 1})),
+            ("codex", json!({"max_tool_result_bytes": 1})),
+            ("email", json!({"outlink_format": "gmail"})),
+            ("email", json!({"only_render_labels": ["Inbox"]})),
+            ("perseus", json!({"alignment_pairs": [["grc2", "eng2"]]})),
+            ("signal", json!({"period": "day"})),
+        ];
+        let mut knobs_seen = 0;
+        for source_type in SourceType::VARIANTS.iter().map(|t| t.as_str()) {
+            let default = declared_params(source_type, json!({}));
+            for knob in render_knobs(source_type) {
+                knobs_seen += 1;
+                let (_, params) = changed
+                    .iter()
+                    .find(|(t, p)| *t == source_type && p.get(&knob).is_some())
+                    .unwrap_or_else(|| {
+                        panic!("{source_type}'s render knob `{knob}` needs a row in `changed`")
+                    });
+                assert_ne!(
+                    declared_params(source_type, params.clone()),
+                    default,
+                    "changing {source_type}'s `{knob}` leaves its render params as they were"
+                );
+            }
+        }
+        assert_eq!(knobs_seen, changed.len(), "a row names no knob");
     }
 
     /// An `ingest` step whose params hold none of its provider's methods

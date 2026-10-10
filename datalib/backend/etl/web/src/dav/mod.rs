@@ -160,6 +160,27 @@ pub async fn propfind<P: DavProps>(
     request(service, HttpMethod::Propfind, url, depth, body, latchkey).await
 }
 
+pub async fn list_members<P: DavProps>(
+    service: HttpService,
+    url: &str,
+    body: &str,
+    latchkey: &LatchkeySettings,
+) -> Result<Multistatus<P>, DavError> {
+    let ms = propfind(service, url, "1", body, latchkey).await?;
+    // A `Depth: 1` PROPFIND answers for the collection itself too (RFC 4918
+    // §9.1), so a reply naming nothing is not an empty collection: a 200
+    // with an empty body parses to that, and its caller would delete
+    // every member it holds.
+    if ms.responses.is_empty() {
+        return Err(DavError::Malformed {
+            service,
+            url: url.to_string(),
+            message: "the listing named nothing, not even the collection itself".into(),
+        });
+    }
+    Ok(ms)
+}
+
 pub async fn report<P: DavProps>(
     service: HttpService,
     url: &str,
