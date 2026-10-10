@@ -400,13 +400,13 @@ async fn search_handler(
             Page::default()
         }
         Err(SearchFailure::Qmd(e)) => {
-            tracing::error!(query = %q, error = %e, "a free-text search failed in qmd");
+            tracing::error!(error = %e, "a free-text search failed in qmd");
             qmd_error = Some(e);
             Page::default()
         }
         Err(SearchFailure::Index(e)) => {
             let msg = format!("structured search: {e}");
-            tracing::error!(query = %q, error = %e, "a structured search failed");
+            tracing::error!(error = %e, "a structured search failed");
             errors.push(msg);
             Page::default()
         }
