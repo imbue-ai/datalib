@@ -324,7 +324,8 @@ fn first_str(v: Option<&Value>) -> Option<String> {
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "email_mailboxes",
-    index = "email_mailboxes_by_mailbox:mailbox_id"
+    index = "email_mailboxes_by_mailbox:mailbox_id",
+    index = "email_mailboxes_by_email:email_id"
 )]
 pub struct EmailMailboxRow {
     pub id: String,
@@ -347,7 +348,11 @@ impl EmailMailboxRow {
 /// headers (`R` → seen, `F` → flagged) and from `X-Keywords:` when
 /// present. Synthesized `id` PK like [`EmailMailboxRow`].
 #[derive(Debug, Clone, RawTable)]
-#[raw_table(table = "email_keywords", index = "email_keywords_by_keyword:keyword")]
+#[raw_table(
+    table = "email_keywords",
+    index = "email_keywords_by_keyword:keyword",
+    index = "email_keywords_by_email:email_id"
+)]
 pub struct EmailKeywordRow {
     pub id: String,
     pub email_id: String,
@@ -440,4 +445,60 @@ pub fn full_ddl() -> Vec<String> {
         out.push(dr::bookkeeping_ddl_for(table));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datalib_etl::blob_cas::CasEdgeRow;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::Row;
+    use std::str::FromStr;
+
+    /// Every write of an email deletes its mailbox and keyword rows by
+    /// `email_id`, and render loads them the same way. Without an index
+    /// each of those scans the whole table, which makes a full sync
+    /// quadratic in the mailbox's size.
+    #[tokio::test]
+    async fn the_email_id_lookups_are_searched_by_index() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
+            .await
+            .unwrap();
+        let ddl = [
+            EmailMailboxRow::all_ddl(),
+            EmailKeywordRow::all_ddl(),
+            <EmlBlobRow as CasEdgeRow>::all_ddl(),
+        ];
+        for sql in ddl.concat() {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for sql in [
+            "DELETE FROM email_mailboxes WHERE email_id = ?",
+            "DELETE FROM email_keywords WHERE email_id = ?",
+            "DELETE FROM email_blobs WHERE email_id = ?",
+            "SELECT id FROM email_mailboxes WHERE email_id IN (SELECT value FROM json_each(?))",
+            "SELECT id FROM email_keywords WHERE email_id IN (SELECT value FROM json_each(?))",
+        ] {
+            let plan: Vec<String> =
+                sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+                    .bind("[]")
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|r| r.get::<String, _>("detail"))
+                    .collect();
+            assert!(
+                plan.iter().all(|d| !d.starts_with("SCAN email")),
+                "{sql} scans its table: {plan:?}"
+            );
+        }
+    }
 }

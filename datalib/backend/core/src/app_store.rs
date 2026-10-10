@@ -5,11 +5,13 @@
 use crate::app_store_migrate::{DISK_USAGE_LADDER, FEEDBACK_LADDER, REMOTE_MEDIA_LADDER};
 use crate::repo::{AppRepo, RepoError};
 use crate::store::open_pool;
-use app_schema::disk_usage::{DiskUsageRow, DDL as DISK_USAGE_DDL};
+use app_schema::disk_free::DiskFreeRow;
+use app_schema::disk_usage::DiskUsageRow;
 use app_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
 use app_schema::remote_media::allow::RemoteMediaAllowRow;
 use app_schema::remote_media::media::RemoteMediaRow;
 use app_schema::remote_media::{AllowScope, DDL as REMOTE_MEDIA_DDL};
+use app_schema::USAGE_DDL;
 use async_trait::async_trait;
 use datalib_store_meta::StoreKind;
 use sqlx::sqlite::SqlitePool;
@@ -111,7 +113,7 @@ impl AppStore {
             has_dolt,
         };
         store.init_feedback_table().await?;
-        store.init_disk_usage_table().await?;
+        store.init_usage_tables().await?;
         store.init_remote_media_tables().await?;
         // Which build wrote each store, beside its tables. Feedback and
         // remote media are committed per row with `-Am`, so a changed
@@ -127,7 +129,7 @@ impl AppStore {
             (
                 &store.usage_pool,
                 StoreKind::Usage,
-                DISK_USAGE_DDL,
+                USAGE_DDL,
                 DISK_USAGE_LADDER,
             ),
             (
@@ -185,8 +187,8 @@ impl AppStore {
         }
         Ok(())
     }
-    async fn init_disk_usage_table(&self) -> Result<(), sqlx::Error> {
-        for (_table, ddl) in DISK_USAGE_DDL {
+    async fn init_usage_tables(&self) -> Result<(), sqlx::Error> {
+        for (_table, ddl) in USAGE_DDL {
             sqlx::query(*ddl).execute(&self.usage_pool).await?;
         }
         Ok(())
@@ -313,6 +315,36 @@ impl AppRepo for AppStore {
             .iter()
             .chain(&during)
             .map(usage_row)
+            .collect::<Result<_, _>>()
+            .map_err(decode_error)
+    }
+
+    async fn record_disk_free(&self, row: &DiskFreeRow) -> Result<(), RepoError> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO disk_free \
+             (measured_at_utc, tz_offset, available_bytes, total_bytes) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&row.measured_at_utc)
+        .bind(&row.tz_offset)
+        .bind(row.available_bytes)
+        .bind(row.total_bytes)
+        .execute(&self.usage_pool)
+        .await
+        .map_err(|e| RepoError::Internal(format!("insert disk_free: {e}")))?;
+        Ok(())
+    }
+
+    async fn recent_disk_free(&self, limit: usize) -> Result<Vec<DiskFreeRow>, RepoError> {
+        let rows = sqlx::query(
+            "SELECT measured_at_utc, tz_offset, available_bytes, total_bytes FROM disk_free \
+             ORDER BY measured_at_utc DESC LIMIT ?",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.usage_pool)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        rows.iter()
+            .map(disk_free_row)
             .collect::<Result<_, _>>()
             .map_err(decode_error)
     }
@@ -466,6 +498,15 @@ fn usage_row(r: &sqlx::sqlite::SqliteRow) -> Result<DiskUsageRow, sqlx::Error> {
     })
 }
 
+fn disk_free_row(r: &sqlx::sqlite::SqliteRow) -> Result<DiskFreeRow, sqlx::Error> {
+    Ok(DiskFreeRow {
+        measured_at_utc: r.try_get("measured_at_utc")?,
+        tz_offset: r.try_get("tz_offset")?,
+        available_bytes: r.try_get("available_bytes")?,
+        total_bytes: r.try_get("total_bytes")?,
+    })
+}
+
 fn allow_row(r: &sqlx::sqlite::SqliteRow) -> Result<RemoteMediaAllowRow, sqlx::Error> {
     Ok(RemoteMediaAllowRow {
         allow_uuid: r.try_get("allow_uuid")?,
@@ -566,6 +607,33 @@ mod tests {
             .unwrap();
         assert_eq!(got.sha256, "bbb");
         assert_eq!(store.list_remote_media().await.unwrap().len(), 1);
+    }
+
+    /// The free-space series sits in the usage store beside disk usage,
+    /// keeps every sample, and reads back newest first — what the status
+    /// bar's sparkline is seeded from after a restart.
+    #[tokio::test]
+    async fn disk_free_keeps_every_sample_newest_first() {
+        let td = tempfile::tempdir().unwrap();
+        let store = AppStore::open(td.path()).await.unwrap();
+        for (at, available) in [
+            ("2026-10-10T17:00:00.000000Z", 50),
+            ("2026-10-10T17:00:10.000000Z", 40),
+        ] {
+            store
+                .record_disk_free(&DiskFreeRow {
+                    measured_at_utc: at.into(),
+                    tz_offset: Some("-07:00".into()),
+                    available_bytes: available,
+                    total_bytes: 100,
+                })
+                .await
+                .unwrap();
+        }
+        let back = store.recent_disk_free(10).await.unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].available_bytes, 40);
+        assert_eq!(back[1].measured_at_utc, "2026-10-10T17:00:00.000000Z");
     }
 
     /// The disk-usage timeseries round-trips, and — the part worth

@@ -62,6 +62,17 @@ data_root = "~/tmp/dr-dag"
 # `RUST_LOG` in a process's environment wins over this.
 log_level = "trace"
 
+
+# The free space the data root's disk must keep. Under `pause_below`
+# no step starts and running ones are stopped; they carry on once the
+# disk is back to `resume_at`, and the status bar turns red meanwhile.
+# Bytes, or a size with a unit: "5000 MB", "10 GB", "8 GiB". Omit the
+# table for the defaults, which are these; `pause_below_bytes = 0`
+# turns the floor off.
+[disk_space]
+pause_below_bytes = "10 GB"
+resume_at_bytes = "15 GB"
+
 # How much of the run store (`system/runs/runs.sqlite`: every run's step
 # states, log lines and metrics) to keep. Both limits apply; omit the
 # table for the defaults, which are these.

@@ -33,6 +33,7 @@ rust_library(
         "src/boot.rs",
         "src/config_upgrade.rs",
         "src/connect.rs",
+        "src/disk_free.rs",
         "src/frontend.rs",
         "src/embed.rs",
         "src/history.rs",

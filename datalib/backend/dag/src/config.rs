@@ -23,6 +23,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::{Diagnostic, EntryKind, EntryRef, Severity};
+use crate::disk_space::DiskFloor;
 use crate::graph::Graph;
 use crate::step::{StepRun, StepSpec};
 
@@ -68,6 +69,12 @@ pub struct DagConfig {
     /// environment wins over both.
     #[serde(default)]
     pub log_level: Option<datalib_runs::LogLevel>,
+    /// The free space the data root's disk must keep (`[disk_space]`):
+    /// under its pause line no step starts and running ones are stopped,
+    /// until its resume line. Omitted means the defaults in
+    /// [`DiskFloor`].
+    #[serde(default)]
+    pub disk_space: Option<DiskFloor>,
 }
 
 /// The retention rule for `system/runs/runs.sqlite`, as a person writes it in
@@ -788,6 +795,8 @@ struct RawConfig {
     run_history: Option<RunHistory>,
     #[serde(default)]
     log_level: Option<datalib_runs::LogLevel>,
+    #[serde(default)]
+    disk_space: Option<DiskFloor>,
 }
 
 /// One entry on its way in: where it sits in the file, and what it
@@ -1935,6 +1944,7 @@ fn entries_of(text: &str) -> Entries {
             checkpoint_cadence: raw.checkpoint_cadence,
             run_history: raw.run_history,
             log_level: raw.log_level,
+            disk_space: raw.disk_space,
         },
         specs,
         lock_specs: accepted.lock_specs,
@@ -2018,6 +2028,7 @@ pub fn check_text(text: &str) -> ConfigCheck {
     let (mut graph, mut graph_diags) =
         Graph::build_graded(std::mem::take(&mut entries.specs), &entries.dropped);
     graph.locks = std::mem::take(&mut entries.lock_specs);
+    graph.disk_floor = Some(entries.cfg.disk_space.unwrap_or_default());
 
     // Graph assembly drops more than the entry pass could see — a step whose
     // input names nothing, a ring — so narrow the surviving config to what the
@@ -2069,6 +2080,7 @@ impl DagConfig {
             checkpoint_cadence: None,
             run_history: None,
             log_level: None,
+            disk_space: None,
         }
     }
 }
@@ -2097,6 +2109,35 @@ mod cadence_tests {
                 "{bad:?} must not parse"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod disk_floor_tests {
+    use super::check_text;
+    use crate::disk_space::DiskFloor;
+
+    /// The floor is written the way a person says a size, reaches the
+    /// graph the loop reads (so an edit mid-sync is taken on), and is on
+    /// at its defaults in a config that says nothing of it.
+    #[test]
+    fn the_free_space_floor_reads_human_units_and_reaches_the_graph() {
+        let check = check_text(
+            "[disk_space]\npause_below_bytes = \"5000 MB\"\nresume_at_bytes = \"8 GB\"\n",
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        let floor = DiskFloor {
+            pause_below: 5_000_000_000,
+            resume_at: 8_000_000_000,
+        };
+        assert_eq!(check.cfg.disk_space, Some(floor));
+        assert_eq!(check.graph.disk_floor, Some(floor));
+        assert_eq!(check_text("").graph.disk_floor, Some(DiskFloor::default()));
+        assert!(check_text("[disk_space]\npause_below_bytes = \"10 XB\"\n").is_fatal());
+        assert!(check_text(
+            "[disk_space]\npause_below_bytes = \"20 GB\"\nresume_at_bytes = \"1 GB\"\n"
+        )
+        .is_fatal());
     }
 }
 

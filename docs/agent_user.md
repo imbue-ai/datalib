@@ -422,6 +422,11 @@ document.
   `PUT /api/config` (or the Manage tab) returns the same list in
   `diagnostics` and writes nothing. A data root holding a pre-TOML
   `config.yaml` reads as unconfigured — set it up again from the app.
+- **Every step reads `waiting for disk space`**: the data root's disk
+  went under the config's `[disk_space]` pause line (10 GB unless the
+  config moves it), so the loop stopped what ran and starts nothing
+  until the disk is back to the resume line (15 GB). Free space, or
+  lower the lines; the open syncs carry on by themselves.
 - **A step that silently stopped running**: check `diagnostics` on
   `GET /api/config`, or `--check`. A config with one unusable entry
   still loads — that entry is dropped and everything else runs — so a

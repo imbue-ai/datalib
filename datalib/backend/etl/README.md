@@ -118,7 +118,16 @@ re-download, which defeats incremental render.
 
 Declare them per-provider as `VolatilePath`s next to the table definition;
 `split_volatile` moves them into the sidecar's `volatile_payload`, and
-`overlay` reconstructs the wire object exactly.
+`overlay` reconstructs the wire object exactly. A path is object keys,
+plus `*` (`EVERY_ELEMENT`) to reach into each element of an array:
+`["blocks", "*", "block_id"]` takes the id Slack mints on every read out
+of each block, and the sidecar keeps them in order
+(`{"blocks": [{"block_id": …}, {}, …]}`, `{}` for a block without one).
+
+Writing the sidecar replaces it. When two endpoints return one record
+with different volatile fields, as Slack's history and replies copies of
+a thread root do, `merge_volatile_payloads_in_tx` replaces only the
+top-level keys the new copy carries, so the other copy's fields survive.
 
 This is different from sorting an unordered array (see AGENTS.md): volatile
 means *the value carries no information*. If losing the value would lose
@@ -565,6 +574,33 @@ crate of its own with only `sqlx` beneath it) and re-exported as
 `datalib_etl::bulk::BulkUpsertable`, because the render-schema structs
 implement it too and this crate must not reach `datalib_schema`.
 
+## Binding a set of values: one JSON array
+
+SQLite refuses a statement that binds more than 32,766 values
+(`bulk::SQLITE_MAX_VARIABLES`; doltlite keeps the default). A query that
+writes one `?` per id of a whole load set (`WHERE thread_id IN (?,?,…)`)
+passes every test, because test sets are small, and fails for the person
+with the big mailbox: email render did, on a full render (#1156).
+
+So a set to match is bound as **one JSON array**:
+
+```rust
+sqlx::query("SELECT … FROM emails WHERE thread_id IN (SELECT value FROM json_each(?))")
+    .bind(serde_json::to_string(&thread_ids)?)
+```
+
+It has no size limit, the SQL text is fixed (no `AssertSqlSafe`), and the
+planner still searches the column's index. Checked with `EXPLAIN QUERY
+PLAN` on doltlite: the plan is the same as for a literal `IN` list, with
+or without `ANALYZE`.
+
+A `?` run is still right for a multi-row `VALUES`, sized from `chunk.len()`
+in a `.chunks(SQL_CHUNK)` loop (`push_placeholders`). The older chunked
+`IN` lists work the same way. `lint_repo.py` check 16 refuses a `?` run
+sized by anything other than `chunk.len()`. A helper that takes a slice
+and trusts its callers to chunk it counts as unsized, because nothing
+checks that they do.
+
 ## Blob CAS and per-provider edge tables
 
 A source that keeps attachment bytes has two files in its raw directory:
@@ -580,6 +616,21 @@ with the key its bytes went in under; an edge takes its hash from that
 answer. No caller hands the CAS a key, so no key can name other bytes. A
 hash a caller already had (a scan's, a stored edge's) only decides what
 to skip reading, never what read bytes are called.
+
+**The bytes name their own type, too, where they can.** A caller passes
+the type it was told — a response header, an upstream field, a guess
+from the file name — and those can be wrong: pictures pasted into
+claude.ai as `*.png` have come back as JPEG bytes. `put_many` stores
+the type the bytes' leading signature names instead (`sniff.rs`: JPEG,
+PNG, GIF, WebP, PDF, HEIC, AVIF), and logs the disagreement at debug.
+Bytes it does not recognize keep the declared type; TIFF, ZIP and RIFF
+are left out on purpose, because a camera raw file, a `.docx` and a WAV
+are built on them. A CAS filled before this is corrected once, by the
+next download's open: the file's `user_version` counts the one-time
+passes it has had, and pass 1 re-derives every stored type from its
+blob's first bytes. A page already rendered keeps its old file name
+until it is rendered again, and at render a type the provider's edge
+projection names still comes before the CAS's (`BlobBundle::load_many`).
 
 The bundle is the common vocabulary at both ends. Download adds bytes as they
 arrive and drains the bundle at end of bucket; parse loads every document's

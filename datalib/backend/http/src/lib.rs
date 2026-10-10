@@ -34,6 +34,7 @@ pub mod binaries;
 pub mod boot;
 pub mod config_upgrade;
 pub mod connect;
+pub mod disk_free;
 mod embed;
 pub mod frontend;
 pub mod history;
@@ -201,6 +202,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/pipeline/storage", get(pipeline_storage))
+        .route("/api/pipeline/disk", get(pipeline_disk))
         .route("/api/pipeline/history", get(history::tree_history))
         .route("/api/requests", get(requests_list).post(request_open))
         .route("/api/requests/{id}/stop", post(request_stop))
@@ -1527,6 +1529,14 @@ async fn pipeline_storage(
     }
     let steps = usage::declared_trees(&s.config_path());
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
+}
+
+async fn pipeline_disk(State(s): State<AppState>) -> Json<disk_free::DiskFree> {
+    let config_path = s.config_path();
+    let floor = tokio::task::spawn_blocking(move || disk_free::floor_of(&config_path))
+        .await
+        .unwrap_or_default();
+    Json(s.usage.free.snapshot(floor).await)
 }
 
 // --- Intent: requests, switches, resets (`docs/dev/plans/supervisor.md` §2.9) --

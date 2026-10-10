@@ -13,6 +13,14 @@ pub mod disk_usage {
     include!("disk_usage.rs");
 }
 
+pub mod disk_free {
+    include!("disk_free.rs");
+}
+
+/// Every table of the usage store (`system/usage.doltlite_db`), for its
+/// DDL and its schema hash.
+pub const USAGE_DDL: &[(&str, &str)] = &[disk_usage::DDL[0], disk_free::DDL[0]];
+
 pub mod remote_media;
 
 pub mod runs;

@@ -102,7 +102,10 @@ inputs = ["slack/keyword_index", "slack/embed"]
 ```
 
 Any top-level keys (`data_root`, `binary_dir`) must be written *above*
-the first `[[…]]` header.
+the first `[[…]]` header. A `[disk_space]` table moves the free-space
+floor: under `pause_below_bytes` (default `"10 GB"`) no step runs and
+running ones are stopped, until the disk is back to `resume_at_bytes`
+(default `"15 GB"`).
 
 ## What you do
 

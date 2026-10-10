@@ -39,6 +39,10 @@ pub struct Graph {
     /// The named locks its steps may hold: the defaults, and whatever the
     /// config declares (`supervisor::locks`).
     pub locks: Vec<crate::supervisor::locks::LockSpec>,
+    /// The config's `[disk_space]`, here so a loop that re-reads its graph
+    /// mid-sync takes an edit to it on. `None` only for a graph built
+    /// without a config, as tests build them: no floor at all.
+    pub disk_floor: Option<crate::disk_space::DiskFloor>,
 }
 
 impl Graph {
@@ -272,6 +276,7 @@ impl Graph {
                 fingerprints,
                 steps,
                 locks: crate::supervisor::locks::defaults(),
+                disk_floor: None,
             },
             Vec::new(),
         )

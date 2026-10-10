@@ -90,33 +90,41 @@ pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String 
 // per-fetch fields that churn without meaning anything, and leaving them in
 // the content payload makes every re-download look like a change.
 
-/// Object keys from the payload root down to a field to split out.
-/// `&["updated"]` is top-level; `&["topic", "last_set"]` is nested.
+/// Steps from the payload root down to a field to split out. A step is an
+/// object key, or [`EVERY_ELEMENT`] for each element of an array.
+/// `&["updated"]` is top-level; `&["topic", "last_set"]` is nested;
+/// `&["blocks", "*", "block_id"]` is the `block_id` of every block. The
+/// last step must be a key.
 pub type VolatilePath<'a> = &'a [&'a str];
+
+/// The [`VolatilePath`] step that descends into every element of an array.
+pub const EVERY_ELEMENT: &str = "*";
 
 /// Partition `payload` into `(base, volatile)`. `volatile` is `None` when
 /// nothing matched. Exact inverse of [`overlay`]. A path that is absent — or
-/// that would descend through a non-object — is skipped, so declaring a
-/// volatile field some objects lack is harmless.
+/// that would descend through the wrong kind of value — is skipped, so
+/// declaring a volatile field some objects lack is harmless. Under an array
+/// the volatile half is positional: one object per element, `{}` for an
+/// element that gave up nothing.
 pub fn split_volatile(payload: &Value, paths: &[VolatilePath]) -> (Value, Option<Value>) {
     let mut base = payload.clone();
-    let mut volatile = serde_json::Map::new();
-    let mut any = false;
+    let mut volatile: Option<Value> = None;
     for path in paths {
-        if path.is_empty() {
-            continue;
-        }
-        if let Some(taken) = remove_path(&mut base, path) {
-            insert_path(&mut volatile, path, taken);
-            any = true;
+        if let Some(taken) = take_path(&mut base, path) {
+            volatile = Some(match volatile {
+                Some(so_far) => overlay(&so_far, &taken),
+                None => taken,
+            });
         }
     }
-    (base, any.then_some(Value::Object(volatile)))
+    (base, volatile)
 }
 
 /// Deep-merge `volatile` onto `base`; the inverse of [`split_volatile`].
 /// NOT RFC 7386 merge-patch: a `null` in `volatile` sets the key to `null`
-/// rather than deleting it, because Slack payloads carry real nulls.
+/// rather than deleting it, because Slack payloads carry real nulls. Two
+/// arrays merge element by element, and an empty object there leaves the
+/// base element as it is.
 pub fn overlay(base: &Value, volatile: &Value) -> Value {
     match (base, volatile) {
         (Value::Object(b), Value::Object(v)) => {
@@ -130,42 +138,71 @@ pub fn overlay(base: &Value, volatile: &Value) -> Value {
             }
             Value::Object(out)
         }
+        (Value::Array(b), Value::Array(v)) => {
+            let mut out = b.clone();
+            for (i, vv) in v.iter().enumerate() {
+                let gave_nothing = vv.as_object().is_some_and(|m| m.is_empty());
+                match out.get_mut(i) {
+                    Some(_) if gave_nothing => {}
+                    Some(existing) => *existing = overlay(existing, vv),
+                    None => out.push(vv.clone()),
+                }
+            }
+            Value::Array(out)
+        }
         _ => volatile.clone(),
     }
 }
 
-fn remove_path(root: &mut Value, path: &[&str]) -> Option<Value> {
-    let (last, parents) = path.split_last()?;
-    let mut cur = root;
-    for key in parents {
-        cur = match cur {
-            Value::Object(m) => m.get_mut(*key)?,
-            _ => return None,
-        };
-    }
-    match cur {
-        Value::Object(m) => m.remove(*last),
-        _ => None,
+/// The sidecar for a record two endpoints return with different volatile
+/// fields: each top-level key `fresh` carries replaces the stored one, and
+/// a key it lacks keeps its stored value.
+pub fn merge_volatile(stored: Option<&Value>, fresh: &Value) -> Value {
+    match (stored, fresh) {
+        (Some(Value::Object(s)), Value::Object(f)) => {
+            let mut out = s.clone();
+            out.extend(f.iter().map(|(k, v)| (k.clone(), v.clone())));
+            Value::Object(out)
+        }
+        _ => fresh.clone(),
     }
 }
 
-fn insert_path(obj: &mut serde_json::Map<String, Value>, path: &[&str], value: Value) {
-    let Some((last, parents)) = path.split_last() else {
-        return;
-    };
-    let mut cur = obj;
-    for key in parents {
-        let entry = cur
-            .entry((*key).to_string())
-            .or_insert_with(|| Value::Object(serde_json::Map::new()));
-        match entry {
-            Value::Object(m) => cur = m,
-            // Declared parent path collided with a non-object leaf; bail
-            // rather than clobber.
-            _ => return,
+/// Remove what `path` names from `value`, returning it wrapped in the same
+/// keys and arrays it was found under.
+fn take_path(value: &mut Value, path: &[&str]) -> Option<Value> {
+    let (step, rest) = path.split_first()?;
+    if *step == EVERY_ELEMENT {
+        if rest.is_empty() {
+            return None;
         }
+        let Value::Array(items) = value else {
+            return None;
+        };
+        let taken: Vec<Option<Value>> = items.iter_mut().map(|i| take_path(i, rest)).collect();
+        if taken.iter().all(Option::is_none) {
+            return None;
+        }
+        let placeholder = || Value::Object(serde_json::Map::new());
+        return Some(Value::Array(
+            taken
+                .into_iter()
+                .map(|t| t.unwrap_or_else(placeholder))
+                .collect(),
+        ));
     }
-    cur.insert((*last).to_string(), value);
+    let Value::Object(m) = value else {
+        return None;
+    };
+    let taken = if rest.is_empty() {
+        m.remove(*step)?
+    } else {
+        take_path(m.get_mut(*step)?, rest)?
+    };
+    Some(Value::Object(serde_json::Map::from_iter([(
+        (*step).to_string(),
+        taken,
+    )])))
 }
 
 // ── Shared DDL ──────────────────────────────────────────────────────
@@ -2355,6 +2392,39 @@ pub async fn set_volatile_payloads_in_tx(
     Ok(())
 }
 
+/// [`set_volatile_payloads_in_tx`], but each value is [`merge_volatile`]d
+/// onto the one stored rather than replacing it.
+pub async fn merge_volatile_payloads_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    volatile: &[(&str, &serde_json::Value)],
+) -> Result<()> {
+    if volatile.is_empty() {
+        return Ok(());
+    }
+    let bk = format!("{table}_bookkeeping");
+    let select: std::sync::Arc<str> =
+        format!("SELECT json(volatile_payload) FROM {bk} WHERE id = ?").into();
+    let mut merged = Vec::with_capacity(volatile.len());
+    for (id, fresh) in volatile {
+        // Audited: only `bk` is interpolated; the id is bound.
+        let stored: Option<String> =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(std::sync::Arc::clone(&select)))
+                .bind(*id)
+                .fetch_optional(&mut **tx)
+                .await
+                .with_context(|| format!("read volatile_payload {bk}={id}"))?
+                .flatten();
+        let stored: Option<Value> = stored
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .with_context(|| format!("parse volatile_payload {bk}={id}"))?;
+        merged.push((*id, merge_volatile(stored.as_ref(), fresh)));
+    }
+    let merged: Vec<(&str, &Value)> = merged.iter().map(|(id, v)| (*id, v)).collect();
+    set_volatile_payloads_in_tx(tx, table, &merged).await
+}
+
 // ── dolt_diff incremental-render scan ───────────────────────────────
 
 /// Result of a [`scan_buckets`] scan.
@@ -3071,6 +3141,103 @@ mod tests {
         let (base, volatile) = split_volatile(&payload, &[&["nope"]]);
         assert!(volatile.is_none());
         assert_eq!(base, payload);
+    }
+
+    fn message_with_blocks(first_id: &str, second_id: &str) -> Value {
+        json!({
+            "ts": "1735689600.000100",
+            "text": "status report",
+            "blocks": [
+                { "type": "rich_text", "block_id": first_id,
+                  "elements": [{ "type": "rich_text_section",
+                                 "elements": [{ "type": "text", "text": "status report" }] }] },
+                { "type": "divider" },
+                "not an object",
+                { "type": "rich_text", "block_id": second_id, "elements": [] },
+            ],
+        })
+    }
+
+    /// A `*` step reaches the field in every element of an array, keeps
+    /// the elements that lack it (or are not objects) where they were,
+    /// and overlay puts each value back in its own element.
+    #[test]
+    fn split_overlay_roundtrip_through_array_elements() {
+        let payload = message_with_blocks("a1", "b2");
+        let paths: &[VolatilePath] = &[&["blocks", "*", "block_id"]];
+
+        let (base, volatile) = split_volatile(&payload, paths);
+
+        let blocks = base["blocks"].as_array().unwrap();
+        assert_eq!(blocks.len(), 4);
+        assert!(blocks.iter().all(|b| b.get("block_id").is_none()));
+        assert_eq!(blocks[0]["elements"], payload["blocks"][0]["elements"]);
+        assert_eq!(blocks[2], json!("not an object"));
+        let volatile = volatile.expect("block ids present");
+        assert_eq!(
+            volatile,
+            json!({ "blocks": [{ "block_id": "a1" }, {}, {}, { "block_id": "b2" }] })
+        );
+        assert_eq!(overlay(&base, &volatile), payload);
+    }
+
+    /// The point of an array path: two reads that differ only in an id
+    /// the server mints per read store the same content.
+    #[test]
+    fn reads_differing_only_in_an_array_field_split_to_one_base() {
+        let paths: &[VolatilePath] = &[&["blocks", "*", "block_id"]];
+        let (first, _) = split_volatile(&message_with_blocks("a1", "b2"), paths);
+        let (second, _) = split_volatile(&message_with_blocks("x9", "y8"), paths);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn an_array_path_that_matches_nothing_splits_nothing() {
+        let payload = json!({ "blocks": [{ "type": "divider" }], "files": [] });
+        let paths: &[VolatilePath] = &[&["blocks", "*", "block_id"], &["files", "*", "id"]];
+        let (base, volatile) = split_volatile(&payload, paths);
+        assert_eq!(base, payload);
+        assert!(volatile.is_none());
+    }
+
+    /// A copy of a record that carries fewer volatile fields replaces the
+    /// ones it carries, null included, and leaves the rest.
+    #[test]
+    fn merge_volatile_replaces_by_top_level_key() {
+        let stored = json!({ "last_read": "1.0", "subscribed": true,
+                             "blocks": [{ "block_id": "a1" }, { "block_id": "b2" }] });
+        let fresh = json!({ "blocks": [{ "block_id": "z9" }], "subscribed": null });
+        assert_eq!(
+            merge_volatile(Some(&stored), &fresh),
+            json!({ "last_read": "1.0", "subscribed": null, "blocks": [{ "block_id": "z9" }] })
+        );
+        assert_eq!(merge_volatile(None, &fresh), fresh);
+    }
+
+    /// Two paths into one array merge into one positional volatile half,
+    /// and a path through two arrays reaches the inner elements.
+    #[test]
+    fn array_paths_combine_and_nest() {
+        let payload = json!({ "rows": [
+            { "a": 1, "b": 2, "cells": [{ "id": "c1", "v": 0 }, { "v": 1 }] },
+            { "b": 3, "cells": [] },
+        ]});
+        let paths: &[VolatilePath] = &[
+            &["rows", "*", "a"],
+            &["rows", "*", "b"],
+            &["rows", "*", "cells", "*", "id"],
+        ];
+        let (base, volatile) = split_volatile(&payload, paths);
+        assert_eq!(
+            base,
+            json!({ "rows": [{ "cells": [{ "v": 0 }, { "v": 1 }] }, { "cells": [] }] })
+        );
+        let volatile = volatile.unwrap();
+        assert_eq!(
+            volatile,
+            json!({ "rows": [{ "a": 1, "b": 2, "cells": [{ "id": "c1" }, {}] }, { "b": 3 }] })
+        );
+        assert_eq!(overlay(&base, &volatile), payload);
     }
 
     #[tokio::test]

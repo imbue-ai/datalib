@@ -445,23 +445,17 @@ async fn load_buckets(
         });
     }
 
-    let placeholders = std::iter::repeat_n("?", wanted_thread_ids.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!(
-        "SELECT id, account_id, thread_id, blob_id, message_id, in_reply_to, \"references\",
+    let erows = sqlx::query(
+        "SELECT id, account_id, thread_id, blob_id, message_id, in_reply_to, references_header,
                 received_at, sent_at, size, subject, from_json, to_json, cc_json, has_attachment
            FROM emails
-          WHERE thread_id IN ({placeholders})
-          ORDER BY thread_id, received_at, id"
-    );
-    // Audited: static template; the only interpolation is a `?,?,?` run sized
-    // from the chunk length. Every value is bound.
-    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-    for t in &wanted_thread_ids {
-        q = q.bind(t);
-    }
-    let erows = q.fetch_all(pool).await.context("phase 2 emails select")?;
+          WHERE thread_id IN (SELECT value FROM json_each(?))
+          ORDER BY thread_id, received_at, id",
+    )
+    .bind(serde_json::to_string(&wanted_thread_ids)?)
+    .fetch_all(pool)
+    .await
+    .context("phase 2 emails select")?;
     let mut email_ids_in_buckets: HashSet<String> = HashSet::with_capacity(erows.len());
     for r in &erows {
         let id: String = r.try_get("id").unwrap_or_default();
@@ -485,7 +479,9 @@ async fn load_buckets(
             in_reply_to: r
                 .try_get::<Option<String>, _>("in_reply_to")
                 .unwrap_or(None),
-            references: r.try_get::<Option<String>, _>("references").unwrap_or(None),
+            references: r
+                .try_get::<Option<String>, _>("references_header")
+                .unwrap_or(None),
             received_at: r
                 .try_get::<Option<String>, _>("received_at")
                 .unwrap_or(None),
@@ -514,23 +510,17 @@ async fn load_buckets(
         }
     }
 
-    let placeholders = std::iter::repeat_n("?", email_ids_in_buckets.len())
-        .collect::<Vec<_>>()
-        .join(",");
+    let email_ids = serde_json::to_string(&email_ids_in_buckets)?;
 
-    // mailboxes
-    let sql = format!(
-        "SELECT id, email_id, mailbox_id FROM email_mailboxes WHERE email_id IN ({placeholders})"
-    );
-    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-    for e in &email_ids_in_buckets {
-        q = q.bind(e);
-    }
-    for r in q
-        .fetch_all(pool)
-        .await
-        .context("phase 2 email_mailboxes select")?
-    {
+    let mailbox_rows = sqlx::query(
+        "SELECT id, email_id, mailbox_id FROM email_mailboxes
+          WHERE email_id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(&email_ids)
+    .fetch_all(pool)
+    .await
+    .context("phase 2 email_mailboxes select")?;
+    for r in mailbox_rows {
         let e: String = r.try_get("email_id").unwrap_or_default();
         let m: String = r.try_get("mailbox_id").unwrap_or_default();
         let Some(&idx) = email_to_bucket.get(&e) else {
@@ -543,19 +533,15 @@ async fn load_buckets(
         docs[idx].joins.mailboxes.entry(e).or_default().push(m);
     }
 
-    // keywords
-    let sql = format!(
-        "SELECT id, email_id, keyword FROM email_keywords WHERE email_id IN ({placeholders})"
-    );
-    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-    for e in &email_ids_in_buckets {
-        q = q.bind(e);
-    }
-    for r in q
-        .fetch_all(pool)
-        .await
-        .context("phase 2 email_keywords select")?
-    {
+    let keyword_rows = sqlx::query(
+        "SELECT id, email_id, keyword FROM email_keywords
+          WHERE email_id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(&email_ids)
+    .fetch_all(pool)
+    .await
+    .context("phase 2 email_keywords select")?;
+    for r in keyword_rows {
         let e: String = r.try_get("email_id").unwrap_or_default();
         let k: String = r.try_get("keyword").unwrap_or_default();
         let Some(&idx) = email_to_bucket.get(&e) else {
@@ -574,4 +560,74 @@ async fn load_buckets(
     // port.
 
     Ok(docs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datalib_etl::bulk::SQLITE_MAX_VARIABLES;
+    use datalib_etl_email::ingest::schema_raw::{EmailKeywordRow, EmailMailboxRow, EmailRow};
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    /// A full render of a mailbox with more threads than SQLite binds in
+    /// one statement (#1156): each thread, its email and the email's
+    /// mailbox and keyword all come back.
+    #[tokio::test]
+    async fn loads_more_threads_than_sqlite_binds_in_one_statement() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
+            .await
+            .unwrap();
+        let ddl = [
+            EmailRow::all_ddl(),
+            EmailMailboxRow::all_ddl(),
+            EmailKeywordRow::all_ddl(),
+        ];
+        for sql in ddl.concat() {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let n = SQLITE_MAX_VARIABLES + 1;
+        // `?1` rows numbered from 1, for each table.
+        let numbered = "WITH RECURSIVE s(value) AS (SELECT 1 UNION ALL SELECT value + 1 FROM s WHERE value < ?1)";
+        for insert in [
+            "INSERT INTO emails (id, account_id, thread_id, blob_id, references_header)
+             SELECT 'e' || value, 'acct', 't' || value, 'b' || value, '<r' || value || '>' FROM s",
+            "INSERT INTO email_mailboxes (id, email_id, mailbox_id)
+             SELECT 'e' || value || '#inbox', 'e' || value, 'inbox' FROM s",
+            "INSERT INTO email_keywords (id, email_id, keyword)
+             SELECT 'e' || value || '#$seen', 'e' || value, '$seen' FROM s",
+        ] {
+            sqlx::query(sqlx::AssertSqlSafe(format!("{numbered} {insert}")))
+                .bind(n as i64)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let to_load: HashSet<(String, String)> = (1..=n)
+            .map(|i| ("acct".to_string(), format!("t{i}")))
+            .collect();
+
+        let docs = load_buckets(&pool, &to_load).await.unwrap();
+
+        assert_eq!(docs.len(), n);
+        let last = docs
+            .iter()
+            .find(|d| d.thread_id == format!("t{n}"))
+            .unwrap();
+        let email = &last.emails[..];
+        assert_eq!(email.len(), 1);
+        assert_eq!(
+            email[0].references.as_deref(),
+            Some(format!("<r{n}>").as_str())
+        );
+        assert_eq!(last.joins.mailboxes[&email[0].id], vec!["inbox"]);
+        assert_eq!(last.joins.keywords[&email[0].id], vec!["$seen"]);
+    }
 }

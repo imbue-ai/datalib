@@ -190,6 +190,9 @@ struct MonitorState {
 /// The live view of what the root weighs.
 pub struct UsageMonitor {
     state: RwLock<MonitorState>,
+    /// Free space on the root's disk, sampled on its own clock
+    /// (`disk_free`).
+    pub free: crate::disk_free::DiskFreeMonitor,
     /// Held for the length of a walk, so two never overlap. Walks are
     /// I/O-bound over the same tree; running them concurrently would
     /// double the reads to produce one answer.
@@ -206,6 +209,7 @@ impl UsageMonitor {
     pub fn new() -> Self {
         Self {
             state: RwLock::new(MonitorState::default()),
+            free: crate::disk_free::DiskFreeMonitor::default(),
             walking: tokio::sync::Mutex::default(),
         }
     }
@@ -281,36 +285,17 @@ impl UsageMonitor {
     }
 
     pub async fn seed(&self, rows: Vec<DiskUsageRow>) {
-        let mut by_series: BTreeMap<String, Vec<(i64, UsageSample)>> = BTreeMap::new();
+        let mut by_series: BTreeMap<String, Vec<UsageSample>> = BTreeMap::new();
         for r in rows {
-            let Ok(at) = datalib_time::parse_strict(&r.measured_at_utc) else {
-                continue;
-            };
-            by_series.entry(r.path).or_default().push((
-                at.inner().timestamp_millis(),
-                UsageSample {
-                    at: r.measured_at_utc,
-                    bytes: r.bytes.max(0) as u64,
-                },
-            ));
+            by_series.entry(r.path).or_default().push(UsageSample {
+                at: r.measured_at_utc,
+                bytes: r.bytes.max(0) as u64,
+            });
         }
-        let cutoff = chrono::Utc::now().timestamp_millis() - HISTORY_WINDOW.as_millis() as i64;
         let mut st = self.state.write().await;
-        for (path, mut samples) in by_series {
-            samples.sort_by_key(|(ms, _)| *ms);
-            // Everything inside the window, preceded by the newest
-            // sample from before it — the value the window opens at.
-            let first_inside = samples.iter().position(|(ms, _)| *ms >= cutoff);
-            let start = match first_inside {
-                Some(0) => 0,
-                Some(i) => i - 1,
-                // Nothing inside the window: keep only the last known
-                // value, which draws as a flat line until a new sample
-                // lands.
-                None => samples.len().saturating_sub(1),
-            };
+        for (path, samples) in by_series {
             let s = st.series.entry(path).or_default();
-            s.history = samples.into_iter().skip(start).map(|(_, x)| x).collect();
+            s.history = seeded_window(samples);
             // The newest seeded sample is also the value to show until
             // the first fresh walk lands — otherwise a restart reads as
             // an empty disk for a few seconds.
@@ -383,7 +368,26 @@ fn parse_ms(at: &str) -> Option<i64> {
         .map(|t| t.inner().timestamp_millis())
 }
 
-fn prune(history: &mut VecDeque<UsageSample>) {
+/// Samples read back from a store, in any order, as a series' history:
+/// everything inside the window, led by the newest sample from before it
+/// — the value the window opens at. With nothing inside, only the last
+/// known value, which draws as a flat line until a new sample lands.
+pub(crate) fn seeded_window(samples: Vec<UsageSample>) -> VecDeque<UsageSample> {
+    let cutoff = chrono::Utc::now().timestamp_millis() - HISTORY_WINDOW.as_millis() as i64;
+    let mut timed: Vec<(i64, UsageSample)> = samples
+        .into_iter()
+        .filter_map(|s| Some((parse_ms(&s.at)?, s)))
+        .collect();
+    timed.sort_by_key(|(ms, _)| *ms);
+    let start = match timed.iter().position(|(ms, _)| *ms >= cutoff) {
+        Some(0) => 0,
+        Some(i) => i - 1,
+        None => timed.len().saturating_sub(1),
+    };
+    timed.into_iter().skip(start).map(|(_, s)| s).collect()
+}
+
+pub(crate) fn prune(history: &mut VecDeque<UsageSample>) {
     let Some(newest) = history.back().and_then(|s| parse_ms(&s.at)) else {
         return;
     };

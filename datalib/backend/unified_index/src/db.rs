@@ -186,16 +186,16 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
             )
         }
         // A contact is its handles, read from the contacts store before the
-        // query runs; none read is no row (`IN ()`), and the applet refuses
+        // query runs; none read is no row (an empty array), and the applet refuses
         // a contact it could not read before it gets here.
         TermsValue::Contact(_) => {
-            let handles = term.handles.clone().unwrap_or_default();
+            let handles = term.handles.as_deref().unwrap_or_default();
             (
                 format!(
-                    " AND t.val_id IN (SELECT val_id FROM {s}.vals WHERE value IN ({}))",
-                    vec!["?"; handles.len()].join(", ")
+                    " AND t.val_id IN (SELECT val_id FROM {s}.vals \
+                     WHERE value IN (SELECT value FROM json_each(?)))"
                 ),
-                handles,
+                vec![serde_json::Value::from(handles.to_vec()).to_string()],
             )
         }
     };
@@ -346,8 +346,11 @@ mod tests {
         let mut q = parse_query("with:contact:c-1");
         q.terms[0].handles = Some(vec!["email:a@b.c".into(), "tel:+1555".into()]);
         let (sql, params) = build_where(&q);
-        assert!(sql.ends_with("WHERE value IN (?, ?)))"), "{sql}");
-        assert_eq!(params, ["email:a@b.c", "tel:+1555"]);
+        assert!(
+            sql.ends_with("WHERE value IN (SELECT value FROM json_each(?))))"),
+            "{sql}"
+        );
+        assert_eq!(params, [r#"["email:a@b.c","tel:+1555"]"#]);
 
         let (sql, params) = build_where(&parse_query("-author:riker"));
         assert!(sql.starts_with(" WHERE uuid NOT IN ("), "{sql}");
