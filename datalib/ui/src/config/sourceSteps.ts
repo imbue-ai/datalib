@@ -124,6 +124,7 @@ const DEFAULT_NAMES: Record<string, string> = {
   "unified_index/qmd_aggregator": "Unified Index (QMD)",
   "unified_index/embedding_map": "Unified Index (map)",
   unified_index: "Unified Index (Applet)",
+  datalib_contacts: "Contacts (Applet)",
 };
 
 /// The label to show for an entry that declares no `name`. Falls back

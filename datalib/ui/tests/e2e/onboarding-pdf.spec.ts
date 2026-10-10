@@ -129,7 +129,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     await expect(cardOf(page, "sourcesView(")).toHaveCount(1);
     // The scaffold's one group, and the System group every root has,
-    // are the table's whole content; the scaffold's three entries are
+    // are the table's whole content; the scaffold's four entries are
     // under it.
     await expect(nameCell(page, "group:unified_index")).toContainText("Unified Index");
     await expect(page.locator(TABLE_ROWS)).toHaveCount(2);
@@ -139,6 +139,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       "unified_index/grid_index",
       "unified_index/qmd_aggregator",
       "unified_index",
+      "datalib_contacts",
     ]) {
       await expect(row(page, id)).toHaveCount(1);
     }
