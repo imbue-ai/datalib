@@ -686,8 +686,8 @@ async fn load_me_payload(pool: &SqlitePool) -> Result<(Option<String>, Option<Va
     let Some(row) = row else {
         return Ok((None, None));
     };
-    let id: Option<String> = row.try_get("id").ok();
-    let s: Option<String> = row.try_get("payload").ok();
+    let id: Option<String> = row.try_get("id").context("me id")?;
+    let s: Option<String> = row.try_get("payload").context("me payload")?;
     Ok((id, s.and_then(|t| serde_json::from_str::<Value>(&t).ok())))
 }
 
@@ -719,7 +719,9 @@ async fn load_conversations(
             unparsed.push(Unparsed::new("conversations", &id, &payload_str));
             continue;
         };
-        let fetched_at_utc: Option<String> = r.try_get("fetched_at_utc").ok();
+        let fetched_at_utc: Option<String> = r
+            .try_get("fetched_at_utc")
+            .context("conversations fetched_at_utc")?;
         out.push(LoadedConversation {
             id,
             payload,

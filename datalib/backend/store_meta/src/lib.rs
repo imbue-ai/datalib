@@ -46,7 +46,9 @@ pub enum StoreKind {
     /// The grid index (`unified_index/grid_index`).
     GridIndex,
     Feedback,
-    Usage,
+    /// `system/disk_stats.sqlite`: bytes under each tree of the root, and
+    /// the free space on its disk, over time. Plain SQLite.
+    DiskStats,
     /// `system/remote_media.doltlite_db`: what remote media a person
     /// let a document load, and the URLs fetched into the download CAS.
     RemoteMedia,
@@ -380,7 +382,7 @@ mod tests {
     async fn a_newer_builds_spelling_is_none_not_a_guess() {
         let td = tempfile::tempdir().unwrap();
         let p = pool(&td.path().join("s.db")).await;
-        write(&p, StoreKind::Usage, "h", Versions::default())
+        write(&p, StoreKind::DiskStats, "h", Versions::default())
             .await
             .unwrap();
         sqlx::query("UPDATE _datalib_meta SET value = 'holodeck' WHERE key = 'store_kind'")

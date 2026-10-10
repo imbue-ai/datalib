@@ -38,22 +38,17 @@ pub trait DataProcessor: Send + Sync {
     }
 }
 
-/// The genuinely-runtime inputs a provider's `plan()` needs that are NOT part
-/// of its (already-normalized) config: the source's orchestrator-owned identity
-/// and, in synth/playback mode, the fixture root. Everything else a `plan()`
-/// once received separately — the resolved paths, blob cap, event-tape flag,
-/// download give-up bound — the provider now reads straight from `config.common`
-/// (a resolved [`datalib_source_common::SourceCommon`]), since the
-/// orchestrator's `normalize()` resolved it at load. Built once per source.
+/// What a provider's `plan()` needs that is not part of its config: the
+/// source's orchestrator-owned identity. Everything else — the resolved paths,
+/// blob cap, event-tape flag, download give-up bound — it reads from
+/// `config.common` (a resolved [`datalib_source_common::SourceCommon`]).
+/// Built once per source.
 #[derive(Debug, Clone)]
 pub struct PlanContext {
     /// `sources[].name` — the source's identity in the orchestrator's list
     /// (used for processor IDs and labels). Orchestrator-owned; deliberately
     /// NOT part of any provider's config schema.
     pub name: String,
-    /// Playback-fixture root, when the orchestrator is in synth/playback mode.
-    /// Only notion consumes it (to derive BFS seeds); `None` on the live path.
-    pub playback_root: Option<std::path::PathBuf>,
 }
 
 /// Orchestrator-owned context handed to every [`DataProcessor::run`]. Carries

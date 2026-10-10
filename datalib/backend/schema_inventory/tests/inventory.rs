@@ -201,7 +201,7 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
         ),
         (
             "system",
-            portable(&[app_schema::feedback::DDL, app_schema::USAGE_DDL]),
+            portable(&[app_schema::feedback::DDL, app_schema::DISK_STATS_DDL]),
         ),
         // The one store under `datalib_curated/`: what a person wrote.
         (

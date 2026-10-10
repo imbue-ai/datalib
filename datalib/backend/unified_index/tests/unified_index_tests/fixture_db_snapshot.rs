@@ -122,10 +122,10 @@ async fn snapshot_grid_rows_and_documents() {
             let content_hash: String = r.try_get("content_hash").unwrap_or_default();
             let entire_chat: String = r.try_get("entire_chat").unwrap_or_default();
             json!({
-                "uuid": r.try_get::<String, _>("uuid").ok(),
-                "provider": r.try_get::<String, _>("provider").ok(),
-                "kind": r.try_get::<String, _>("kind").ok(),
-                "source_label": r.try_get::<String, _>("source_label").ok(),
+                "uuid": r.try_get::<String, _>("uuid").expect("uuid"),
+                "provider": r.try_get::<String, _>("provider").expect("provider"),
+                "kind": r.try_get::<String, _>("kind").expect("kind"),
+                "source_label": r.try_get::<String, _>("source_label").expect("source_label"),
                 // `Option<String>`, not `String`: `created_at` is nullable, and
                 // reading it as a bare `String` rendered SQL NULL as `""` —
                 // so this golden could not tell "upstream gave us no
@@ -140,7 +140,7 @@ async fn snapshot_grid_rows_and_documents() {
                 "org_name": r.try_get::<Option<String>, _>("org_name").ok().flatten(),
                 "channel": r.try_get::<Option<String>, _>("channel").ok().flatten(),
                 "conversation_name": r.try_get::<Option<String>, _>("conversation_name").ok().flatten(),
-                "conversation_uuid": r.try_get::<String, _>("conversation_uuid").ok(),
+                "conversation_uuid": r.try_get::<String, _>("conversation_uuid").expect("conversation_uuid"),
                 "message_index": r.try_get::<Option<i64>, _>("message_index").ok().flatten(),
                 "preview_len": preview.chars().count(),
                 "content_hash": content_hash.get(..16).unwrap_or_default(),
@@ -177,10 +177,10 @@ async fn snapshot_grid_rows_and_documents() {
         .iter()
         .map(|r| {
             json!({
-                "markdown_uuid": r.try_get::<String, _>("markdown_uuid").ok(),
-                "source_id": r.try_get::<String, _>("source_id").ok(),
-                "provider": r.try_get::<String, _>("provider").ok(),
-                "kind": r.try_get::<String, _>("kind").ok(),
+                "markdown_uuid": r.try_get::<String, _>("markdown_uuid").expect("markdown_uuid"),
+                "source_id": r.try_get::<String, _>("source_id").expect("source_id"),
+                "provider": r.try_get::<String, _>("provider").expect("provider"),
+                "kind": r.try_get::<String, _>("kind").expect("kind"),
                 "title": r.try_get::<Option<String>, _>("title").ok().flatten(),
                 "created_at": r.try_get::<Option<String>, _>("created_at").ok().flatten(),
                 "modified_at": r.try_get::<Option<String>, _>("modified_at").ok().flatten(),
@@ -213,9 +213,7 @@ async fn snapshot_grid_rows_and_documents() {
     let mut totals: std::collections::BTreeMap<String, i64> = Default::default();
     let mut passes = 0usize;
     for r in &log_rows {
-        let Some(msg) = r.try_get::<String, _>("message").ok() else {
-            continue;
-        };
+        let msg: String = r.try_get("message").expect("dolt_log message");
         let Some(fields) = msg.strip_prefix("datalib-step grid_index: ") else {
             // Without the ` run=<id>` stamp every step commit carries: the
             // id is minted per build.

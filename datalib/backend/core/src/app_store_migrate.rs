@@ -8,8 +8,15 @@
 //! UTC, so the rows are rewritten as well as the columns. The rung
 //! probes for the old column, so a store made after the rename is at
 //! version 0 and passes through it unchanged.
+//!
+//! One move, too: the disk timeseries left the doltlite `usage` store for
+//! the plain-SQLite `disk_stats` one. [`carry_legacy_usage`] copies an old
+//! root's rows across on open.
+
+use std::path::Path;
 
 use datalib_store_meta::Migration;
+use sqlx::sqlite::SqlitePool;
 use sqlx::{Row, SqliteConnection};
 
 /// One table's stamp columns, old name to new, and the key that names
@@ -175,6 +182,117 @@ macro_rules! stamps_rung {
 }
 
 pub(crate) const FEEDBACK_LADDER: &[Migration] = &[stamps_rung!(FEEDBACK)];
-pub(crate) const DISK_USAGE_LADDER: &[Migration] = &[stamps_rung!(DISK_USAGE)];
+/// Born as plain SQLite after the stamp rename; an old root's rows reach
+/// it through [`carry_legacy_usage`], which climbs that rung on the way.
+pub(crate) const DISK_STATS_LADDER: &[Migration] = &[];
 /// Born after the stamp rename; nothing to climb yet.
 pub(crate) const REMOTE_MEDIA_LADDER: &[Migration] = &[];
+
+/// How many rows one page of the copy reads.
+const COPY_PAGE: i64 = 5_000;
+
+/// Copy the rows of the doltlite `usage` store a build before
+/// `disk_stats` left into `to`, then remove the old file. Its columns are
+/// first brought to today's names, since it may still owe the stamp rung.
+/// A copy that fails leaves the old file for the next open to try again;
+/// every row is keyed, so a second copy adds nothing twice. The number of
+/// rows copied, 0 when there was no old file.
+pub(crate) async fn carry_legacy_usage(root: &Path, to: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let legacy = crate::layout::legacy_usage_db(root);
+    if !legacy.is_file() {
+        return Ok(0);
+    }
+    let from = crate::store::open_pool(&legacy).await?;
+    let copied = copy_usage_rows(&from, to).await;
+    from.close().await;
+    let copied = copied?;
+    remove_with_sidecars(&legacy).map_err(sqlx::Error::Io)?;
+    Ok(copied)
+}
+
+async fn copy_usage_rows(from: &SqlitePool, to: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let mut src = from.acquire().await?;
+    migrate_stamps(&mut src, &DISK_USAGE).await?;
+    let tables: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .fetch_all(&mut *src)
+            .await?;
+    let has = |t: &str| tables.iter().any(|n| n == t);
+    let mut copied = 0u64;
+    let mut tx = to.begin().await?;
+    if has("disk_usage") {
+        let mut after: (String, String) = (String::new(), String::new());
+        loop {
+            let rows = sqlx::query(
+                "SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage \
+                 WHERE path > ? OR (path = ? AND measured_at_utc > ?) \
+                 ORDER BY path, measured_at_utc LIMIT ?",
+            )
+            .bind(&after.0)
+            .bind(&after.0)
+            .bind(&after.1)
+            .bind(COPY_PAGE)
+            .fetch_all(&mut *src)
+            .await?;
+            let Some(last) = rows.last() else { break };
+            after = (last.get("path"), last.get("measured_at_utc"));
+            for r in &rows {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO disk_usage (path, measured_at_utc, tz_offset, bytes) \
+                     VALUES (?, ?, ?, ?)",
+                )
+                .bind(r.get::<String, _>("path"))
+                .bind(r.get::<String, _>("measured_at_utc"))
+                .bind(r.get::<Option<String>, _>("tz_offset"))
+                .bind(r.get::<i64, _>("bytes"))
+                .execute(&mut *tx)
+                .await?;
+            }
+            copied += rows.len() as u64;
+        }
+    }
+    if has("disk_free") {
+        let mut after = String::new();
+        loop {
+            let rows = sqlx::query(
+                "SELECT measured_at_utc, tz_offset, available_bytes, total_bytes FROM disk_free \
+                 WHERE measured_at_utc > ? ORDER BY measured_at_utc LIMIT ?",
+            )
+            .bind(&after)
+            .bind(COPY_PAGE)
+            .fetch_all(&mut *src)
+            .await?;
+            let Some(last) = rows.last() else { break };
+            after = last.get("measured_at_utc");
+            for r in &rows {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO disk_free \
+                     (measured_at_utc, tz_offset, available_bytes, total_bytes) VALUES (?, ?, ?, ?)",
+                )
+                .bind(r.get::<String, _>("measured_at_utc"))
+                .bind(r.get::<Option<String>, _>("tz_offset"))
+                .bind(r.get::<i64, _>("available_bytes"))
+                .bind(r.get::<i64, _>("total_bytes"))
+                .execute(&mut *tx)
+                .await?;
+            }
+            copied += rows.len() as u64;
+        }
+    }
+    tx.commit().await?;
+    Ok(copied)
+}
+
+/// The store and whatever the engine kept beside it under its name.
+fn remove_with_sidecars(store: &Path) -> std::io::Result<()> {
+    let (Some(dir), Some(name)) = (store.parent(), store.file_name()) else {
+        return Ok(());
+    };
+    let name = name.to_string_lossy().into_owned();
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(&name) {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}

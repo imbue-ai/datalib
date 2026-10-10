@@ -820,16 +820,16 @@ pub async fn load_self_identity(pool: &SqlitePool) -> Result<Option<Value>> {
     .await
     .context("select self_identity")?;
     let Some(row) = row else { return Ok(None) };
-    let payload: Option<String> = row.try_get("payload").ok();
+    let payload: Option<String> = row.try_get("payload").context("self_identity payload")?;
     Ok(payload.and_then(|s| serde_json::from_str(&s).ok()))
 }
 
 /// A loaded row's `payload` column, parsed; `None` for a row the load
 /// steps over.
-pub fn row_payload(row: &sqlx::sqlite::SqliteRow) -> Option<Value> {
+pub fn row_payload(row: &sqlx::sqlite::SqliteRow) -> Result<Option<Value>> {
     use sqlx::Row as _;
-    let payload: String = row.try_get("payload").ok()?;
-    serde_json::from_str(&payload).ok()
+    let payload: Option<String> = row.try_get("payload").context("payload column")?;
+    Ok(payload.and_then(|s| serde_json::from_str(&s).ok()))
 }
 
 /// A payload's string field, owned. For the promoted columns of a raw row.

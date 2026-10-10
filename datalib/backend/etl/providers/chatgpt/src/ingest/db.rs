@@ -55,7 +55,7 @@ impl RawDb {
             .await
             .context("select me")?;
         let Some(row) = row else { return Ok(None) };
-        let payload: Option<String> = row.try_get("payload").ok();
+        let payload: Option<String> = row.try_get("payload").context("me payload")?;
         Ok(payload.and_then(|s: String| serde_json::from_str(&s).ok()))
     }
 
@@ -249,7 +249,9 @@ impl RawDb {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            let fetched_at_utc: Option<String> = r.try_get("fetched_at_utc").ok();
+            let fetched_at_utc: Option<String> = r
+                .try_get("fetched_at_utc")
+                .context("conversations fetched_at_utc")?;
             let Ok(payload_v) = serde_json::from_str::<Value>(&payload) else {
                 continue;
             };

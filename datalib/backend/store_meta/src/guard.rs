@@ -93,9 +93,10 @@ pub async fn read_at(store: &Path) -> Result<Option<Meta>> {
 
 /// Every store under a data root: each `*.doltlite_db` up to three
 /// levels down (`system/`, `<group>/ingest/`, `<group>/render_markdown/`,
-/// `unified_index/grid_index/`) and the run store. A walk rather than a
-/// list of the layout's names, so a store this crate has not heard of
-/// is inspected too.
+/// `unified_index/grid_index/`), and the two plain-SQLite stores that
+/// carry a meta row: the run store and disk stats. A walk rather than a
+/// list of the layout's names, so a store this crate has not heard of is
+/// inspected too.
 pub fn stores_under(root: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -121,9 +122,13 @@ pub fn stores_under(root: &Path) -> Vec<PathBuf> {
     }
     let mut out = Vec::new();
     walk(root, 1, &mut out);
-    let runs = datalib_runtime::layout::runs_db(root);
-    if runs.is_file() {
-        out.push(runs);
+    for plain in [
+        datalib_runtime::layout::runs_db(root),
+        datalib_runtime::layout::disk_stats_db(root),
+    ] {
+        if plain.is_file() {
+            out.push(plain);
+        }
     }
     out.sort();
     out
@@ -184,6 +189,8 @@ mod tests {
         let files = [
             "system/feedback.doltlite_db",
             "system/runs/runs.sqlite",
+            "system/disk_stats.sqlite",
+            "system/disk_stats.sqlite-journal",
             "system/feedback.doltlite_db.lock",
             "system/api-token",
             "slack/ingest/entities.doltlite_db",
@@ -208,6 +215,7 @@ mod tests {
             vec![
                 "slack/ingest/entities.doltlite_db",
                 "slack/render_markdown/indexed_markdown.doltlite_db",
+                "system/disk_stats.sqlite",
                 "system/feedback.doltlite_db",
                 "system/runs/runs.sqlite",
                 "unified_index/grid_index/db.doltlite_db",
@@ -225,7 +233,7 @@ mod tests {
         let root = td.path();
         let newer = root.join("a/ingest/entities.doltlite_db");
         let same = root.join("b/ingest/entities.doltlite_db");
-        let bare = root.join("system/usage.doltlite_db");
+        let bare = root.join("system/remote_media.doltlite_db");
         for p in [&newer, &same, &bare] {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", p.display()))
