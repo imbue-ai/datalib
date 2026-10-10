@@ -19,7 +19,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::changed_chats;
 use datalib_etl_chat_common::render::{RenderProfile, ENTITY_KIND_CONVERSATION};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
@@ -453,13 +453,25 @@ impl ChatBuild {
                 }
             })
             .collect();
-        let display = self
-            .display_name
-            .filter(|s| !s.trim().is_empty())
+        let title = self.display_name.filter(|s| !s.trim().is_empty());
+        // A chat with no name of its own is called by its people.
+        let named_after = match title {
+            Some(_) => Vec::new(),
+            None => self
+                .participants
+                .iter()
+                .map(|id| NamedPerson {
+                    shown: id.clone(),
+                    handle: Handle::tel(id).or_else(|| Handle::email(id)),
+                })
+                .collect(),
+        };
+        let display = title
             .or_else(|| (!self.participants.is_empty()).then(|| self.participants.join(", ")))
             .or(self.identifier)
             .unwrap_or_else(|| self.guid.clone());
         NormalizedChat {
+            named_after,
             contacts: Vec::new(),
             inputs: self.inputs.declared(),
             path_prefix: None,

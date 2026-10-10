@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use datalib_etl_chat_common::period::by_year;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, NormalizedReaction, UpstreamRef,
+    ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc, NormalizedReaction,
+    UpstreamRef,
 };
 use datalib_etl_facebook::ingest::schema_raw::{MESSENGER_MESSAGES_TABLE, MESSENGER_THREADS_TABLE};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_link_dest};
@@ -190,6 +191,7 @@ fn conversation(
 
     let chat = ids::conversation(&owner.source_id, row_id);
     NormalizedChat {
+        named_after: named_after(thread, &participants, owner, &people),
         contacts: Vec::new(),
         inputs: inputs.declared(),
         path_prefix: None,
@@ -288,6 +290,39 @@ fn display(row_id: &str, thread: &Value, participants: &[&str], owner: &Owner) -
     } else {
         others.join(", ")
     }
+}
+
+/// Who a conversation is named after when its name is its people: one
+/// with no title, or whose title is only the other people's names, as
+/// the export titles a one-to-one conversation. A deleted account is
+/// one of them under the handle `People` gives it.
+fn named_after(
+    thread: &Value,
+    participants: &[&str],
+    owner: &Owner,
+    people: &People,
+) -> Vec<NamedPerson> {
+    let others: Vec<&str> = participants
+        .iter()
+        .map(|n| n.trim())
+        .filter(|n| *n != owner.name)
+        .collect();
+    let named: Vec<&str> = others
+        .iter()
+        .copied()
+        .filter(|n| !is_deleted_account(n))
+        .collect();
+    let title = str_field(thread, "title").unwrap_or("").trim();
+    if !is_deleted_account(title) && title != named.join(", ") {
+        return Vec::new();
+    }
+    others
+        .into_iter()
+        .map(|n| {
+            let (shown, handle) = people.who(n);
+            NamedPerson { shown, handle }
+        })
+        .collect()
 }
 
 fn folder_label(folder: &str) -> String {

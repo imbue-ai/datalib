@@ -278,6 +278,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         ),
     ];
     let chat = NormalizedChat {
+        named_after: Vec::new(),
         contacts: Vec::new(),
         inputs: Vec::new(),
         id: "hostile-chat".into(),

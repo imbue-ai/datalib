@@ -3,6 +3,16 @@
 
 use serde::Serialize;
 
+/// Someone a conversation is named after: their handle, else the name
+/// shown; the name this conversation knows a handle by; and how many of
+/// its messages they wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubjectPerson {
+    pub value: String,
+    pub name: Option<String>,
+    pub items: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct SearchRow {
     /// Stable per-row identifier; equals the `uuid` column of `grid_rows`.
@@ -93,11 +103,17 @@ pub struct SearchRow {
     /// URI for its id. Resolved by the applet; never read from the index.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact_ref: Option<datalib_columns::Identity>,
-    /// The Subject cell: on a contact's own row, its Contact chip;
-    /// elsewhere the conversation's name. Resolved by the applet; never
-    /// read from the index.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subject_ref: Option<datalib_columns::Identity>,
+    /// Who the row's conversation is named after, when it has no title
+    /// of its own (`subject` terms on its document's row), the most
+    /// active first. Read beside the row; empty on any other row.
+    #[serde(skip)]
+    pub subject_people: Vec<SubjectPerson>,
+    /// The Subject cell: on a contact's own row, its Contact chip; in a
+    /// conversation named by its people, a chip for each; elsewhere the
+    /// conversation's name. Resolved by the applet; never read from the
+    /// index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subject_ref: Vec<datalib_columns::Identity>,
     /// What a `from:` term names this row's author by: the handle where
     /// there is one, else the name shown. What the Author cell's Keep
     /// only writes. Resolved by the applet; never read from the index.

@@ -36,7 +36,7 @@ use tracing::{info, info_span, instrument, Instrument};
 pub use api::{ChatGPTClient, ChatGPTError};
 pub use db::{db_path_for, Conversation, FileRef, LoadedConversation, LoadedRaw, RawDb};
 use fetchers::{Attachments, Conversations};
-use schema_raw::{MeRow, ATTACHMENTS, CONVERSATIONS};
+use schema_raw::{MeRow, ATTACHMENTS, CONVERSATIONS, CONVERSATION_VOLATILE_PATHS};
 
 /// Between listing pages. ChatGPT doesn't appear to throttle us at any
 /// polite rate; 100ms keeps us from looking like a tight loop.
@@ -527,7 +527,10 @@ async fn upsert_me(ctx: &Ctx<'_>, payload: &Value) -> Result<()> {
 
 /// One conversation as the detail endpoint answered it, ready to store.
 pub(crate) fn parse_conversation(id: &str, full: &Value) -> Result<Conversation> {
-    let full = canonicalize_conversation_payload(full);
+    let (full, volatile) = dr::split_volatile(
+        &canonicalize_conversation_payload(full),
+        CONVERSATION_VOLATILE_PATHS,
+    );
     Ok(Conversation {
         id: id.to_string(),
         title: full.get("title").and_then(Value::as_str).map(String::from),
@@ -538,6 +541,7 @@ pub(crate) fn parse_conversation(id: &str, full: &Value) -> Result<Conversation>
             .map(|v| serde_json::to_string(v).unwrap_or_default()),
         files: attachment_targets(&full),
         payload: serde_json::to_string(&full).context("serialize conversation")?,
+        volatile,
     })
 }
 

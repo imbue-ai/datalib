@@ -8,7 +8,8 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    own_stamp_ms, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -229,12 +230,18 @@ fn build_chats(
         items.sort_by_key(|i| i.date_ms);
 
         let payloads: Vec<&Value> = rows.iter().map(|(_, p)| *p).collect();
-        let display = nonempty(field(payloads[0], "CONVERSATION TITLE"))
+        let title = nonempty(field(payloads[0], "CONVERSATION TITLE"));
+        let display = title
             .map(str::to_string)
             .unwrap_or_else(|| participants(&payloads));
+        let named_after = match title {
+            Some(_) => Vec::new(),
+            None => named_after(&payloads),
+        };
 
         let conversation = ids::conversation(source_id, table, &conv);
         chats.push(NormalizedChat {
+            named_after,
             contacts: Vec::new(),
             inputs: inputs.declared(),
             path_prefix: None,
@@ -281,6 +288,39 @@ fn participants(rows: &[&Value]) -> String {
     } else {
         seen.join(", ")
     }
+}
+
+/// The people an untitled conversation is named after: each sender and
+/// addressee, in first-seen order, by their profile where the row gives
+/// it. `TO` and `RECIPIENT PROFILE URLS` are read as pairs only when they
+/// list as many entries.
+fn named_after(rows: &[&Value]) -> Vec<NamedPerson> {
+    let mut out: Vec<NamedPerson> = Vec::new();
+    for p in rows {
+        let from = [(field(p, "FROM"), field(p, "SENDER PROFILE URL"))];
+        let to_names: Vec<&str> = field(p, "TO").split(',').collect();
+        let to_urls: Vec<&str> = field(p, "RECIPIENT PROFILE URLS").split(',').collect();
+        let paired = to_names.len() == to_urls.len();
+        let to = to_names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (*n, if paired { to_urls[i] } else { "" }));
+        for (name, url) in from.into_iter().chain(to) {
+            let Some(name) = nonempty(name) else { continue };
+            let person = NamedPerson {
+                shown: name.to_string(),
+                handle: Handle::linkedin_profile_url(url),
+            };
+            let seen = out.iter().any(|o| match (&o.handle, &person.handle) {
+                (Some(a), Some(b)) => a == b,
+                _ => o.shown == person.shown,
+            });
+            if !seen {
+                out.push(person);
+            }
+        }
+    }
+    out
 }
 
 pub(crate) fn field<'a>(p: &'a Value, key: &str) -> &'a str {
@@ -335,6 +375,12 @@ mod tests {
         assert_eq!(c1.buckets[0].items.len(), 2);
         assert_eq!(c1.buckets[0].items[0].text.as_deref(), Some("first"));
         assert_eq!(c1.display, "A, B");
+        let named: Vec<&str> = c1.named_after.iter().map(|p| p.shown.as_str()).collect();
+        assert_eq!(
+            named,
+            ["A", "B"],
+            "an untitled conversation is named after its people"
+        );
     }
 
     /// A message's sender is a chip by their profile, the same handle
@@ -360,6 +406,38 @@ mod tests {
             .map(|i| i.author_handle.clone())
             .collect();
         assert_eq!(handles, [Handle::linkedin("jlpicard"), None]);
+    }
+
+    /// An untitled conversation names its people by their profiles, so
+    /// the Subject cell draws them as the same chips their connections
+    /// are; a titled one names nobody.
+    #[test]
+    fn an_untitled_conversation_is_named_after_its_people_by_profile() {
+        let mut m = msg(
+            "c1",
+            "Jean-Luc Picard",
+            "William Riker",
+            "2026-01-01 00:00:00 UTC",
+            "Engage.",
+        );
+        m["SENDER PROFILE URL"] = json!("https://www.linkedin.com/in/jlpicard");
+        m["RECIPIENT PROFILE URLS"] = json!("https://www.linkedin.com/in/wriker");
+        let chats = build_chats("li", "messages", &with_ids(&[m.clone()]), None, &[]);
+        let named: Vec<_> = chats[0]
+            .named_after
+            .iter()
+            .map(|p| (p.shown.as_str(), p.handle.clone()))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("Jean-Luc Picard", Handle::linkedin("jlpicard")),
+                ("William Riker", Handle::linkedin("wriker")),
+            ]
+        );
+        m["CONVERSATION TITLE"] = json!("Bridge");
+        let chats = build_chats("li", "messages", &with_ids(&[m]), None, &[]);
+        assert!(chats[0].named_after.is_empty());
     }
 
     #[test]

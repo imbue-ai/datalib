@@ -526,6 +526,14 @@ holds, by handle, else by the name shown. So `is:document with:riker`
 lists the conversations Riker was in, one row each, whatever his role;
 without `is:document` the same search also finds each of his messages.
 
+A conversation with no title of its own is named after its people, and
+says so: the provider fills `NormalizedChat::named_after` (a DM's other
+party, an untitled group's members, by handle where it has one) and
+chat-common writes each as a `subject` term on the document's row. The
+grid's Subject cell draws them as chips. LinkedIn, Slack DMs, Messenger,
+Signal and WhatsApp one-to-one chats, Messages, Google Chat and SMS
+backups fill it; a titled chat names nobody.
+
 A contact's card answers `with:` and never `from:`: contact-common
 supplies an `about` search term for each handle the card holds and each
 name it gives, and nobody wrote the card. So `with:riker` finds his card
