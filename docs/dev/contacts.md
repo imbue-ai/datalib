@@ -386,7 +386,9 @@ is a 409 with the store's words; a handle that does not parse is a
 
 The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`; the gateway passes the
-data root in the environment.
+data root in the environment. A new root's starter config
+(`scaffold_toml` in `datalib-http`) writes it, filed under
+`unified_index`; a config written before that has to add it by hand.
 
 ### Fields, and editing a contact through a draft
 
@@ -487,7 +489,7 @@ hold each row's people by handle:
 | `to:`, `cc:`, `bcc:` | was in that header |
 | `recipient:` | was in any of them |
 | `mention:` | was mentioned, where the source marks a mention up |
-| `with:` (and `involves:`) | had any role, or is who a contact's card is about |
+| `with:` (and `involves:`) | had any role, took part in the conversation the row is (a document's own row), or is who a contact's card is about |
 
 A value that is a handle (`email:riker@enterprise.org`, or simply
 `riker@enterprise.org`, `+12025550101`) matches that handle exactly, and
@@ -501,6 +503,13 @@ search terms' `names` table, filled from the rows' authors and from
 `with:<handle>`, so it finds what they wrote, what they received and
 their own cards. Typing `@` at the start of a word offers people and
 writes the pick as `with:`.
+
+A conversation's own row answers `with:` for everyone who took part in
+it: chat-common supplies a `participant` term on each document's row
+for every author, recipient, mention and reactor of the messages it
+holds, by handle, else by the name shown. So `is:document with:riker`
+lists the conversations Riker was in, one row each, whatever his role;
+without `is:document` the same search also finds each of his messages.
 
 A contact's card answers `with:` and never `from:`: contact-common
 supplies an `about` search term for each handle the card holds and each

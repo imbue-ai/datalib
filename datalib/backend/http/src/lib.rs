@@ -1480,6 +1480,16 @@ inputs = []
 group = \"unified_index\"
 id = \"unified_index\"
 command = \"datalib-applet unified_index\"
+
+# The contacts app: the contacts a person makes and the handles they
+# link to them, which the person chips and search read. Without it the
+# chips still show what each source says about a person, with nothing
+# to link. Its store is `datalib_curated/datalib_contacts/`.
+
+[[applets]]
+group = \"unified_index\"
+id = \"datalib_contacts\"
+command = \"datalib-applet datalib_contacts\"
 "
     .to_string()
 }
@@ -2321,12 +2331,10 @@ mod tests {
             ["unified_index/grid_index", "unified_index/qmd_aggregator"]
         );
         // And it declares the applet without which the app has no
-        // views at all — the thing `app_ready` reports on.
-        assert!(checked
-            .cfg
-            .applets
-            .iter()
-            .any(|a| a.id == UNIFIED_INDEX_APPLET));
+        // views at all — the thing `app_ready` reports on — and the
+        // contacts app, which a new root gets on by default.
+        let applets: Vec<&str> = checked.cfg.applets.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(applets, [UNIFIED_INDEX_APPLET, "datalib_contacts"]);
     }
 
     /// A scaffolded root has no *sources*, even though its two index
