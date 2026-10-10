@@ -31,6 +31,11 @@
   --datalib-selected: #d1d1d6;
   --datalib-accent: #1f5fd1;
   --datalib-on-accent: #ffffff;
+  /* A person chip: pale blue when linked to one of your contacts, grey
+     while not (chip.css). */
+  --datalib-chip-linked-bg: #d3e3fd;
+  --datalib-chip-linked-fg: #0b2a5e;
+  --datalib-chip-unlinked-bg: rgba(110, 110, 115, 0.16);
   --datalib-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 
   /* States: what went right, what needs a person, what broke. */
@@ -120,6 +125,9 @@ a {
     --datalib-selected: #2e3036;
     --datalib-accent: #6ea8fe;
     --datalib-on-accent: #0d1a30;
+    --datalib-chip-linked-bg: #b8d3fe;
+    --datalib-chip-linked-fg: #0d1a30;
+    --datalib-chip-unlinked-bg: rgba(160, 162, 169, 0.2);
     --datalib-shadow: none;
 
     --datalib-ok: #7fd39a;
@@ -789,6 +797,99 @@ code.hljs {
   filter: none;
 }
 
+/* A contact's page (contact-common): the person as a card — photo,
+   their chip as the heading, role and groups — then what the source
+   says about them as a two-column list. */
+.chat-body .contact-head {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 0.25rem 0 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: calc(var(--datalib-radius) + 4px);
+  background: var(--datalib-card-bg, #fafafa);
+}
+.chat-body .contact-photo p {
+  margin: 0;
+}
+.chat-body .contact-photo img {
+  display: block;
+  width: 5.5rem;
+  height: 5.5rem;
+  max-height: none;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.chat-body .contact-who {
+  min-width: 0;
+}
+.chat-body .contact-who h1 {
+  font-size: 1.4rem;
+  line-height: 1.3;
+  margin: 0;
+  border: none;
+  padding: 0;
+}
+.chat-body .contact-role {
+  margin: 0.2rem 0 0;
+  color: var(--datalib-muted, #94a3b8);
+}
+.chat-body .contact-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.45rem 0 0;
+}
+.chat-body .contact-group {
+  font-size: 0.75rem;
+  padding: 0.05rem 0.5rem;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+  color: var(--datalib-muted, #94a3b8);
+}
+.chat-body .contact-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.35rem 1.25rem;
+  margin: 0 0 1rem;
+  padding: 0 1rem;
+}
+.chat-body .contact-fields dt {
+  color: var(--datalib-muted, #94a3b8);
+  text-align: right;
+}
+.chat-body .contact-fields dd {
+  margin: 0;
+}
+/* A handle's value is a chip in a paragraph of its own (markdown makes
+   the chip link); the paragraph keeps no margin, so its row is as tall
+   as a plain one. */
+.chat-body .contact-fields dd > p {
+  margin: 0;
+}
+.chat-body .contact-qualifier {
+  font-size: 0.8em;
+  font-style: italic;
+}
+.chat-body .contact-members h2 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--datalib-muted, #94a3b8);
+  margin: 0 0 0.4rem;
+  padding: 0 1rem;
+  border: none;
+}
+.chat-body .contact-members ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  list-style: none;
+  margin: 0;
+  padding: 0 1rem;
+}
 /* A chip: a link the app resolves, drawn as the person it names
    (docs/dev/chips.md). Shared by the document frame and the
    grid's cells, so both draw the same chip; each includes this file
@@ -809,9 +910,22 @@ code.hljs {
 .handle-linkable {
   cursor: pointer;
 }
+/* A person chip says at a glance whether it is linked to one of your
+   contacts: pale blue when it is, grey while it is not (theme.css's
+   `--datalib-chip-*`). A chip link not yet drawn (the render preview, or
+   before the answer lands) is the grey; `:where` keeps that rule from
+   outranking the blue. */
+:where(a.chip[data-handle]),
+.handle-unresolved,
 .handle-resolved {
-  padding: 0 0.5rem 0 0.15rem;
-  background: var(--datalib-hover, #f0f0f0);
+  border-radius: 999px;
+  padding: 0 0.5em 0 0.2em;
+  background: var(--datalib-chip-unlinked-bg, rgba(110, 110, 115, 0.16));
+}
+a.chip.handle-resolved,
+.handle-resolved {
+  background: var(--datalib-chip-linked-bg, #d3e3fd);
+  color: var(--datalib-chip-linked-fg, #0b2a5e);
 }
 .handle-stale {
   opacity: 0.7;
@@ -1216,10 +1330,11 @@ a.chip {
 <div class="preview-bar">
   <strong>Render preview</strong>
   <button id="theme" type="button">Dark theme</button>
+  <button id="linked" type="button" aria-pressed="false">Draw chips as linked</button>
   <button id="expand" type="button">Expand / collapse all</button>
   <span>Click a message to select it.</span>
 </div>
-<nav class="preview-jump"><a href="#src-beeper">beeper</a><a href="#src-chatgpt-api">chatgpt-api</a><a href="#src-claude-api">claude-api</a><a href="#src-claude-code">claude-code</a><a href="#src-codex">codex</a><a href="#src-facebook">facebook</a><a href="#src-garmin">garmin</a><a href="#src-github">github</a><a href="#src-gitlab">gitlab</a><a href="#src-google-takeout">google-takeout</a><a href="#src-linkedin">linkedin</a><a href="#src-notion">notion</a><a href="#src-ship-air">ship-air</a><a href="#src-signal">signal</a><a href="#src-slack-diff">slack-diff</a><a href="#src-slack">slack</a><a href="#src-sms-backup-restore">sms-backup-restore</a><a href="#src-tng-calendar">tng_calendar</a><a href="#src-tng-contacts-diff">tng_contacts-diff</a><a href="#src-tng-contacts">tng_contacts</a><a href="#src-tng-email">tng_email</a><a href="#src-tng-pdfs">tng_pdfs</a><a href="#src-whatsapp">whatsapp</a><a href="#src-yolink">yolink</a><a href="#src-zz-synthetic">zz-synthetic</a></nav>
+<nav class="preview-jump"><a href="#src-beeper">beeper</a><a href="#src-chatgpt-api">chatgpt-api</a><a href="#src-claude-api">claude-api</a><a href="#src-claude-code">claude-code</a><a href="#src-codex">codex</a><a href="#src-facebook">facebook</a><a href="#src-garmin">garmin</a><a href="#src-github">github</a><a href="#src-gitlab">gitlab</a><a href="#src-google-takeout">google-takeout</a><a href="#src-linkedin">linkedin</a><a href="#src-notion">notion</a><a href="#src-ship-air">ship-air</a><a href="#src-signal">signal</a><a href="#src-slack-diff">slack-diff</a><a href="#src-slack">slack</a><a href="#src-sms-backup-restore">sms-backup-restore</a><a href="#src-tng-calendar">tng_calendar</a><a href="#src-tng-contacts-diff">tng_contacts-diff</a><a href="#src-tng-contacts">tng_contacts</a><a href="#src-tng-email">tng_email</a><a href="#src-tng-pdfs">tng_pdfs</a><a href="#src-whatsapp">whatsapp</a><a href="#src-yolink">yolink</a><a href="#src-zz-synthetic-contacts">zz-synthetic-contacts</a><a href="#src-zz-synthetic">zz-synthetic</a></nav>
 <section class="chat-preview">
 <section class="preview-source" id="src-beeper">
 <h2 class="preview-source-name">beeper <span class="preview-count">5 documents</span></h2>
@@ -1359,7 +1474,7 @@ a.chip {
 </div>
 <div id="m-018e4160-1640-8e42-9ba2-3d0926e6ec1a" data-section-uuid="018e4160-1640-8e42-9ba2-3d0926e6ec1a" class="msg msg--beeper">
 <h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2024-03-15T09:10:00+00:00" title="2024-03-15 09:10:00 UTC">Fri Mar 15th, 2024 at 09:10</time></h2>
-<p><img src="blobs/54bd094b1cc83367.png" alt="iconian-schematic.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="iconian-schematic.png"></p>
 <ul>
 <li><span id="m-018e4164-aa20-8e01-b6fe-7b416d774266" data-section-uuid="018e4164-aa20-8e01-b6fe-7b416d774266">❤️ Mr. Data</span></li>
 <li><span id="m-018ea11c-c100-89e8-953f-22306f533a8b" data-section-uuid="018ea11c-c100-89e8-953f-22306f533a8b">🤔 Mr. Data</span></li>
@@ -1525,8 +1640,8 @@ plt.savefig('surveys.png')
 <div id="m-0b81030a-b4c0-8a1c-89fa-a5cbfbed339b" data-section-uuid="0b81030a-b4c0-8a1c-89fa-a5cbfbed339b" class="msg msg--chatgpt">
 <h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2370-10-28T08:02:00+00:00" title="2370-10-28 08:02:00 UTC">Wed Oct 28th, 2370 at 08:02</time></h2>
 <p>Summarize the away team report and describe the photos.</p>
-<p><img src="blobs/e827a91f36122dae.jpg" alt="viewscreen.jpg"></p>
-<p><img src="blobs/3b5513fa91f4c23f.jpg" alt="beach.jpg"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="viewscreen.jpg"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="beach.jpg"></p>
 <p>📎 <a href="blobs/4473037304ea1f98.pdf">Away Team Report.pdf</a> — 400 B</p>
 </div>
 <details class="tool-group">
@@ -1549,7 +1664,7 @@ plt.savefig('surveys.png')
 </div>
 <div id="m-0b81030b-c630-85bd-947f-8c9ccfe6c432" data-section-uuid="0b81030b-c630-85bd-947f-8c9ccfe6c432" class="msg msg--chatgpt">
 <h2><span class="msg-author">Tool</span> <time class="msg-ts" datetime="2370-10-28T08:03:10+00:00" title="2370-10-28 08:03:10 UTC">Wed Oct 28th, 2370 at 08:03</time></h2>
-<p><img src="blobs/f612a31ba7cf5ab9.png" alt="f612a31ba7cf5ab9.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="f612a31ba7cf5ab9.png"></p>
 </div>
 <details class="branch">
 <summary>✎ Another version · 1 message</summary>
@@ -2094,8 +2209,8 @@ plt.savefig(<span class="hljs-string">&#x27;holodeck_chart.png&#x27;</span>)
 <div id="m-0b7611f7-d0e0-85e0-869e-c55cb9e6bc24" data-section-uuid="0b7611f7-d0e0-85e0-869e-c55cb9e6bc24" class="msg msg--claude">
 <h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-05-02T10:05:00+00:00" title="2369-05-02 10:05:00 UTC">Fri May 2nd, 2369 at 10:05</time></h2>
 <p>Here is the away team report and two photos from the holodeck. What do they show?</p>
-<p><img src="blobs/0ae22de3748a8df9.png" alt="arch.png"></p>
-<p><img src="blobs/650b03afa397278c.png" alt="sherwood.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="arch.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="sherwood.png"></p>
 <p>📎 <a href="blobs/4473037304ea1f98.pdf">Away Team Report.pdf</a> — 400 B</p>
 </div>
 <details class="branch">
@@ -2930,12 +3045,12 @@ Output:
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-80d5-a95b-fe11f630248a/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-80d5-a95b-fe11f630248a">Facebook · Two views of the bridge before alpha shift.</h1>
 <div id="m-0b751fcc-e1c0-8cfc-af76-63e50c166b7e" data-section-uuid="0b751fcc-e1c0-8cfc-af76-63e50c166b7e" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-16T09:30:00+00:00" title="2369-03-16 09:30:00 UTC">Sun Mar 16th, 2369 at 09:30</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-16T09:30:00+00:00" title="2369-03-16 09:30:00 UTC">Sun Mar 16th, 2369 at 09:30</time></h2>
 <p>Two views of the bridge before alpha shift.</p>
 <p>The bridge at dawn.</p>
 <p>— with Data</p>
-<p><img src="blobs/0303506702c3ec28.png" alt="200000000000003.png"></p>
-<p><img src="blobs/156f6002713189bc.png" alt="200000000000004.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="200000000000003.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="200000000000004.png"></p>
 </div>
 </div>
 </div>
@@ -2943,7 +3058,7 @@ Output:
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-82fd-b937-8667bd212330/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-82fd-b937-8667bd212330">Facebook · Jean-Luc Picard added a life event from January 5, 2364: Took command of the En…</h1>
 <div id="m-0b7534ef-a600-815d-afff-30d4689cfd5c" data-section-uuid="0b7534ef-a600-815d-afff-30d4689cfd5c" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-20T12:00:00+00:00" title="2369-03-20 12:00:00 UTC">Thu Mar 20th, 2369 at 12:00</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-20T12:00:00+00:00" title="2369-03-20 12:00:00 UTC">Thu Mar 20th, 2369 at 12:00</time></h2>
 <p><strong>Took command of the Enterprise</strong></p>
 <p>Stardate 41153.7 — a new ship, a new crew. ✨</p>
 <p>📍 Farpoint Station — Deneb IV</p>
@@ -2954,7 +3069,7 @@ Output:
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-83eb-9997-79540a4520c8/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-83eb-9997-79540a4520c8">Facebook · Guinan's new menu — try the Saurian brandy.</h1>
 <div id="m-0b754532-3f00-8241-8f48-e40ad1f7d630" data-section-uuid="0b754532-3f00-8241-8f48-e40ad1f7d630" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-23T15:46:40+00:00" title="2369-03-23 15:46:40 UTC">Sun Mar 23rd, 2369 at 15:46</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-23T15:46:40+00:00" title="2369-03-23 15:46:40 UTC">Sun Mar 23rd, 2369 at 15:46</time></h2>
 <p>Guinan's new menu — try the Saurian brandy.</p>
 <p><a href="https://tenforward.example/menu">https://tenforward.example/menu</a></p>
 </div>
@@ -2999,7 +3114,7 @@ Output:
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8709-9b9f-6daf23a20dfe/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8709-9b9f-6daf23a20dfe">Facebook · Away team to Risa. Bring the horga'hn, Number One.</h1>
 <div id="m-0b758cb8-cb00-8cdb-9093-e1e57b64491b" data-section-uuid="0b758cb8-cb00-8cdb-9093-e1e57b64491b" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-06T13:06:40+00:00" title="2369-04-06 13:06:40 UTC">Sun Apr 6th, 2369 at 13:06</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-04-06T13:06:40+00:00" title="2369-04-06 13:06:40 UTC">Sun Apr 6th, 2369 at 13:06</time></h2>
 <p>Away team to Risa. Bring the horga'hn, Number One.</p>
 <p><em>The last saved version of a post the export no longer has.</em></p>
 </div>
@@ -3007,110 +3122,77 @@ Output:
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8768-85df-b763ceaebe85/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8768-85df-b763ceaebe85">Beverly Crusher</h1>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>facebook</td>
-<td>name/Beverly Crusher</td>
-</tr>
-<tr>
-<td>Friends since</td>
-<td>2364-02-14T18:30:00+00:00</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8768-85df-b763ceaebe85">
+<div class="contact-who">
+<h1><a href="datalib:handle/facebook/name/Beverly%20Crusher" title="Beverly Crusher (facebook:name/Beverly Crusher)" class="chip" data-handle="facebook:name/Beverly Crusher">Beverly Crusher</a></h1>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Friends since</dt><dd>2364-02-14T18:30:00+00:00</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-88f7-a8ca-8020c717b96b/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-88f7-a8ca-8020c717b96b">Facebook · Class of 2327: reunion at Boothby's garden. Bring your own trowel.</h1>
 <div id="m-0b753f3c-5e00-8e06-b236-c6aac8793f4d" data-section-uuid="0b753f3c-5e00-8e06-b236-c6aac8793f4d" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-22T12:00:00+00:00" title="2369-03-22 12:00:00 UTC">Sat Mar 22nd, 2369 at 12:00</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-22T12:00:00+00:00" title="2369-03-22 12:00:00 UTC">Sat Mar 22nd, 2369 at 12:00</time></h2>
 <p>Class of 2327: reunion at Boothby's garden. Bring your own trowel.</p>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8a3c-a66b-d2616975dbfc/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8a3c-a66b-d2616975dbfc">William Riker</h1>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>facebook</td>
-<td>name/William Riker</td>
-</tr>
-<tr>
-<td>Friends since</td>
-<td>2364-01-06T10:00:00+00:00</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8a3c-a66b-d2616975dbfc">
+<div class="contact-who">
+<h1><a href="datalib:handle/facebook/name/William%20Riker" title="William Riker (facebook:name/William Riker)" class="chip" data-handle="facebook:name/William Riker">William Riker</a></h1>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Friends since</dt><dd>2364-01-06T10:00:00+00:00</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8a95-8e69-5d9ef0dcdf0c/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8a95-8e69-5d9ef0dcdf0c">Data</h1>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>facebook</td>
-<td>name/Data</td>
-</tr>
-<tr>
-<td>Friends since</td>
-<td>2364-01-06T10:05:00+00:00</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8a95-8e69-5d9ef0dcdf0c">
+<div class="contact-who">
+<h1><a href="datalib:handle/facebook/name/Data" title="Data (facebook:name/Data)" class="chip" data-handle="facebook:name/Data">Data</a></h1>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Friends since</dt><dd>2364-01-06T10:05:00+00:00</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8b03-b202-0ecc96ba797c/2369.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8e1c-a468-12421c1778c4">Facebook · Comments (2369)</h1>
 <div id="m-0b751fe8-5900-8112-b919-93e76f91f97d" data-section-uuid="0b751fe8-5900-8112-b919-93e76f91f97d" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-16T10:00:00+00:00" title="2369-03-16 10:00:00 UTC">Sun Mar 16th, 2369 at 10:00</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-16T10:00:00+00:00" title="2369-03-16 10:00:00 UTC">Sun Mar 16th, 2369 at 10:00</time></h2>
 <p>And the same view an hour later.</p>
 <p><em>Jean-Luc Picard commented on his own photo.</em></p>
-<p><img src="blobs/156f6002713189bc.png" alt="200000000000004.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="200000000000004.png"></p>
 </div>
 <details class="branch">
 <summary>✎ Another version · 1 message</summary>
 <div id="m-0b752b47-b980-89c3-8b3d-65ba6f7c2be4" data-section-uuid="0b752b47-b980-89c3-8b3d-65ba6f7c2be4" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-18T15:00:00+00:00" title="2369-03-18 15:00:00 UTC">Tue Mar 18th, 2369 at 15:00</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-18T15:00:00+00:00" title="2369-03-18 15:00:00 UTC">Tue Mar 18th, 2369 at 15:00</time></h2>
 <p>Enjoy the chair, Number One.</p>
 </div>
 </details>
 <div id="m-0b752b47-b980-8eb3-812f-5dde417cd6e2" data-section-uuid="0b752b47-b980-8eb3-812f-5dde417cd6e2" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-18T15:00:00+00:00" title="2369-03-18 15:00:00 UTC">Tue Mar 18th, 2369 at 15:00</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-18T15:00:00+00:00" title="2369-03-18 15:00:00 UTC">Tue Mar 18th, 2369 at 15:00</time></h2>
 <p>Enjoy the chair, Will.</p>
 <p><em>Jean-Luc Picard commented on William Riker's post.</em></p>
 </div>
 <div id="m-0b754237-4e80-8957-a001-e0281126f4a1" data-section-uuid="0b754237-4e80-8957-a001-e0281126f4a1" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-23T01:53:20+00:00" title="2369-03-23 01:53:20 UTC">Sun Mar 23rd, 2369 at 01:53</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-23T01:53:20+00:00" title="2369-03-23 01:53:20 UTC">Sun Mar 23rd, 2369 at 01:53</time></h2>
 <p>Proud of you, Ensign.</p>
 <p><em>Jean-Luc Picard commented on Wesley Crusher's post in Starfleet Academy Alumni.</em></p>
 </div>
 <div id="m-0b757706-9800-8486-823f-6cdc07d0b538" data-section-uuid="0b757706-9800-8486-823f-6cdc07d0b538" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-02T08:00:00+00:00" title="2369-04-02 08:00:00 UTC">Wed Apr 2nd, 2369 at 08:00</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-04-02T08:00:00+00:00" title="2369-04-02 08:00:00 UTC">Wed Apr 2nd, 2369 at 08:00</time></h2>
 <p>Guinan's synthehol never disappoints. 🍸</p>
 <p><em>Jean-Luc Picard commented on his own album.</em></p>
 </div>
@@ -3120,7 +3202,7 @@ Output:
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8ba6-97c6-f48500bf8e47/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8ba6-97c6-f48500bf8e47">Facebook · Happy birthday, Number One. The bridge is yours for the day.</h1>
 <div id="m-0b752b10-cb00-884d-9f04-a02d1c74c917" data-section-uuid="0b752b10-cb00-884d-9f04-a02d1c74c917" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-18T14:00:00+00:00" title="2369-03-18 14:00:00 UTC">Tue Mar 18th, 2369 at 14:00</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-18T14:00:00+00:00" title="2369-03-18 14:00:00 UTC">Tue Mar 18th, 2369 at 14:00</time></h2>
 <p>Happy birthday, Number One. The bridge is yours for the day.</p>
 <p>— feeling grateful</p>
 <p><em>Edited 2369-03-18</em></p>
@@ -3155,7 +3237,7 @@ And take Data with you.</p>
 </div>
 <div id="m-0b75aa88-04c0-89b5-a659-bd6a070a5dd7" data-section-uuid="0b75aa88-04c0-89b5-a659-bd6a070a5dd7" class="msg msg--facebook">
 <h2><a href="datalib:handle/facebook/name/William%20Riker" title="William Riker (facebook:name/William Riker)" class="chip" data-handle="facebook:name/William Riker">William Riker</a> <time class="msg-ts" datetime="2369-04-12T08:02:00+00:00" title="2369-04-12 08:02:00 UTC">Sat Apr 12th, 2369 at 08:02</time></h2>
-<p><img src="blobs/0303506702c3ec28.png" alt="300000000000001.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="300000000000001.png"></p>
 </div>
 <div id="m-0b75aa88-ef20-8375-82ce-d8d6bbdfda8c" data-section-uuid="0b75aa88-ef20-8375-82ce-d8d6bbdfda8c" class="msg msg--facebook">
 <h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-04-12T08:03:00+00:00" title="2369-04-12 08:03:00 UTC">Sat Apr 12th, 2369 at 08:03</time></h2>
@@ -3164,7 +3246,7 @@ And take Data with you.</p>
 </div>
 <div id="m-0b75aa89-d980-8c93-a669-41b1034c43ae" data-section-uuid="0b75aa89-d980-8c93-a669-41b1034c43ae" class="msg msg--facebook">
 <h2><a href="datalib:handle/facebook/name/William%20Riker" title="William Riker (facebook:name/William Riker)" class="chip" data-handle="facebook:name/William Riker">William Riker</a> <time class="msg-ts" datetime="2369-04-12T08:04:00+00:00" title="2369-04-12 08:04:00 UTC">Sat Apr 12th, 2369 at 08:04</time></h2>
-<p><img src="blobs/0303506702c3ec28.png" alt="400000000000001.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="400000000000001.png"></p>
 </div>
 <div id="m-0b75aa8a-c3e0-868b-b7fa-fc8375e4ae82" data-section-uuid="0b75aa8a-c3e0-868b-b7fa-fc8375e4ae82" class="msg msg--facebook">
 <h2><a href="datalib:handle/facebook/name/William%20Riker" title="William Riker (facebook:name/William Riker)" class="chip" data-handle="facebook:name/William Riker">William Riker</a> <time class="msg-ts" datetime="2369-04-12T08:05:00+00:00" title="2369-04-12 08:05:00 UTC">Sat Apr 12th, 2369 at 08:05</time></h2>
@@ -3195,11 +3277,11 @@ And take Data with you.</p>
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8cc5-baf1-845294bad07e/2369.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8400-98e6-f708fd304ed3">Facebook · Reactions (2369)</h1>
 <div id="m-0b752b2c-4240-8fed-b7ba-2a2e745b3546" data-section-uuid="0b752b2c-4240-8fed-b7ba-2a2e745b3546" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-18T14:30:00+00:00" title="2369-03-18 14:30:00 UTC">Tue Mar 18th, 2369 at 14:30</time> <a class="source-link" href="https://www.facebook.com/will.riker/posts/pfbid0RIKER" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-18T14:30:00+00:00" title="2369-03-18 14:30:00 UTC">Tue Mar 18th, 2369 at 14:30</time> <a class="source-link" href="https://www.facebook.com/will.riker/posts/pfbid0RIKER" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>👍 Jean-Luc Picard liked William Riker's post.</p>
 </div>
 <div id="m-0b75770b-2be0-8c1b-84b2-0eacd016df5e" data-section-uuid="0b75770b-2be0-8c1b-84b2-0eacd016df5e" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-02T08:05:00+00:00" title="2369-04-02 08:05:00 UTC">Wed Apr 2nd, 2369 at 08:05</time> <a class="source-link" href="https://www.facebook.com/photo.php?fbid=200000000000002&amp;set=a.100000000000001" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-04-02T08:05:00+00:00" title="2369-04-02 08:05:00 UTC">Wed Apr 2nd, 2369 at 08:05</time> <a class="source-link" href="https://www.facebook.com/photo.php?fbid=200000000000002&amp;set=a.100000000000001" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>❤️ Jean-Luc Picard reacted to Guinan's photo.</p>
 </div>
 </div>
@@ -3208,17 +3290,17 @@ And take Data with you.</p>
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8d5b-9ccc-4069d9d92992/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8d5b-9ccc-4069d9d92992">Facebook · Ten Forward Nights</h1>
 <div id="m-0b7574a1-30c0-81cf-8ff9-c592d6aff132" data-section-uuid="0b7574a1-30c0-81cf-8ff9-c592d6aff132" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T20:50:00+00:00" title="2369-04-01 20:50:00 UTC">Tue Apr 1st, 2369 at 20:50</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-04-01T20:50:00+00:00" title="2369-04-01 20:50:00 UTC">Tue Apr 1st, 2369 at 20:50</time></h2>
 <p>Off-duty evenings on Deck 10.</p>
 </div>
 <div id="m-0b7574a1-30c0-83d2-959f-e96abe351f0f" data-section-uuid="0b7574a1-30c0-83d2-959f-e96abe351f0f" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T20:50:00+00:00" title="2369-04-01 20:50:00 UTC">Tue Apr 1st, 2369 at 20:50</time></h2>
-<p><img src="blobs/303f964a39bf6024.png" alt="200000000000001.png"></p>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-04-01T20:50:00+00:00" title="2369-04-01 20:50:00 UTC">Tue Apr 1st, 2369 at 20:50</time></h2>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="200000000000001.png"></p>
 </div>
 <div id="m-0b7574a3-0580-8e3d-8a8e-02920d2e9d3c" data-section-uuid="0b7574a3-0580-8e3d-8a8e-02920d2e9d3c" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T20:52:00+00:00" title="2369-04-01 20:52:00 UTC">Tue Apr 1st, 2369 at 20:52</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-04-01T20:52:00+00:00" title="2369-04-01 20:52:00 UTC">Tue Apr 1st, 2369 at 20:52</time></h2>
 <p>Guinan behind the bar.</p>
-<p><img src="blobs/8b80ba76f8bd4174.png" alt="200000000000002.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="200000000000002.png"></p>
 </div>
 </div>
 </div>
@@ -3228,12 +3310,12 @@ And take Data with you.</p>
 <details class="branch">
 <summary>✎ Another version · 1 message</summary>
 <div id="m-0b751ce7-4e00-813b-a3e3-ef94b9216c94" data-section-uuid="0b751ce7-4e00-813b-a3e3-ef94b9216c94" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-15T20:00:00+00:00" title="2369-03-15 20:00:00 UTC">Sat Mar 15th, 2369 at 20:00</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-15T20:00:00+00:00" title="2369-03-15 20:00:00 UTC">Sat Mar 15th, 2369 at 20:00</time></h2>
 <p>Tea, Earl Grey, hot. Evening in Ten Forward with the senior staff</p>
 </div>
 </details>
 <div id="m-0b751ce7-4e00-8aa3-96fc-fc3bb74c0111" data-section-uuid="0b751ce7-4e00-8aa3-96fc-fc3bb74c0111" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-15T20:00:00+00:00" title="2369-03-15 20:00:00 UTC">Sat Mar 15th, 2369 at 20:00</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-15T20:00:00+00:00" title="2369-03-15 20:00:00 UTC">Sat Mar 15th, 2369 at 20:00</time></h2>
 <p>Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.</p>
 <p>📍 <a href="https://www.facebook.com/pages/Ten-Forward/300000000000001">Ten Forward</a> — Deck 10, USS Enterprise</p>
 </div>
@@ -3243,10 +3325,10 @@ And take Data with you.</p>
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8e1c-8c2e-c30f42ab6c8b/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8e1c-8c2e-c30f42ab6c8b">Facebook · Ten Forward Nights</h1>
 <div id="m-0b7574aa-5880-8869-a53f-321f7cade7cd" data-section-uuid="0b7574aa-5880-8869-a53f-321f7cade7cd" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T21:00:00+00:00" title="2369-04-01 21:00:00 UTC">Tue Apr 1st, 2369 at 21:00</time></h2>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-04-01T21:00:00+00:00" title="2369-04-01 21:00:00 UTC">Tue Apr 1st, 2369 at 21:00</time></h2>
 <p>Ten Forward Nights</p>
-<p><img src="blobs/303f964a39bf6024.png" alt="200000000000001.png"></p>
-<p><img src="blobs/8b80ba76f8bd4174.png" alt="200000000000002.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="200000000000001.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="200000000000002.png"></p>
 </div>
 </div>
 </div>
@@ -3301,8 +3383,8 @@ And take Data with you.</p>
 <h3 class="preview-name">facebook/render_markdown/00000000-0000-8f4d-b0a7-cfeb302ede83/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8f4d-b0a7-cfeb302ede83">Facebook · Jean-Luc Picard posted in Away Team Photographers.</h1>
 <div id="m-0b754b28-2000-83b2-9916-69a95bb3c612" data-section-uuid="0b754b28-2000-83b2-9916-69a95bb3c612" class="msg msg--facebook">
-<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-24T19:33:20+00:00" title="2369-03-24 19:33:20 UTC">Mon Mar 24th, 2369 at 19:33</time></h2>
-<p><img src="blobs/0303506702c3ec28.png" alt="200000000000003.png"></p>
+<h2><a href="datalib:handle/facebook/name/Jean-Luc%20Picard" title="Jean-Luc Picard (facebook:name/Jean-Luc Picard)" class="chip" data-handle="facebook:name/Jean-Luc Picard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-03-24T19:33:20+00:00" title="2369-03-24 19:33:20 UTC">Mon Mar 24th, 2369 at 19:33</time></h2>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="200000000000003.png"></p>
 </div>
 </div>
 </div>
@@ -4140,7 +4222,7 @@ Riker out.</p>
 <div id="m-0b501890-01a0-8621-aed0-ae4ef59b0e09" data-section-uuid="0b501890-01a0-8621-aed0-ae4ef59b0e09" class="msg msg--google_takeout">
 <h2><a href="tel:+12025550101" title="Jean-Luc Picard (+12025550101)" class="chip" data-handle="tel:+12025550101">Jean-Luc Picard</a> <time class="msg-ts" datetime="2364-03-01T17:03:00+00:00" title="2364-03-01 17:03:00 UTC">Sun Mar 1st, 2364 at 17:03</time></h2>
 <p>Here is the sensor reading.</p>
-<p><img src="blobs/846b6adacbeb3968.jpg" alt="Jean-Luc Picard - Text - 2364-03-01T09_00_00Z-1-1.jpg"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="Jean-Luc Picard - Text - 2364-03-01T09_00_00Z-1-1.jpg"></p>
 </div>
 <div id="m-0b501dea-8d00-8ed9-8a44-2b8899d19c0e" data-section-uuid="0b501dea-8d00-8ed9-8a44-2b8899d19c0e" class="msg msg--google_takeout">
 <h2><a href="tel:+12025550101" title="Jean-Luc Picard (+12025550101)" class="chip" data-handle="tel:+12025550101">Jean-Luc Picard</a> <time class="msg-ts" datetime="2364-03-02T18:00:00+00:00" title="2364-03-02 18:00:00 UTC">Mon Mar 2nd, 2364 at 18:00</time></h2>
@@ -4209,7 +4291,7 @@ Riker out.</p>
 <div id="m-019e941d-2ac0-8086-8756-df018957d9d2" data-section-uuid="019e941d-2ac0-8086-8756-df018957d9d2" class="msg msg--google_takeout">
 <h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2026-06-04T19:30:00+00:00" title="2026-06-04 19:30:00 UTC">Thu Jun 4th, 2026 at 19:30</time></h2>
 <p>View from Picard's usual table</p>
-<p><img src="blobs/423dbde669b16f68.jpg" alt="Ten Forward bar"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="Ten Forward bar"></p>
 </div>
 </div>
 </div>
@@ -4250,12 +4332,12 @@ Riker out.</p>
 <div id="m-019cb47b-37a0-8569-a994-f8d76ad88c90" data-section-uuid="019cb47b-37a0-8569-a994-f8d76ad88c90" class="msg msg--google_takeout">
 <h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2026-03-03T16:15:00+00:00" title="2026-03-03 16:15:00 UTC">Tue Mar 3rd, 2026 at 16:15</time></h2>
 <p>Make this saucer sketch look like the Enterprise-D at warp.</p>
-<p><img src="blobs/a1cd752a5bf7cfcd.jpg" alt="saucer-sketch.jpg"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="saucer-sketch.jpg"></p>
 </div>
 <div id="m-019cb47b-37a0-8062-8af5-e9ae30432d33" data-section-uuid="019cb47b-37a0-8062-8af5-e9ae30432d33" class="msg msg--google_takeout">
 <h2><span class="msg-author">Gemini</span> <time class="msg-ts" datetime="2026-03-03T16:15:00+00:00" title="2026-03-03 16:15:00 UTC">Tue Mar 3rd, 2026 at 16:15</time></h2>
 <p>Here is the Enterprise-D at warp.</p>
-<p><img src="blobs/d1d75f43668043c3.jpg" alt="2364030112000000001-ncc1701d0e5f6a7b.jpeg"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="2364030112000000001-ncc1701d0e5f6a7b.jpeg"></p>
 </div>
 <div id="m-019d5ea4-0220-8071-872a-454306cb7e22" data-section-uuid="019d5ea4-0220-8071-872a-454306cb7e22" class="msg msg--google_takeout">
 <h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2026-04-05T17:15:00+00:00" title="2026-04-05 17:15:00 UTC">Sun Apr 5th, 2026 at 17:15</time></h2>
@@ -4532,87 +4614,44 @@ Riker out.</p>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">linkedin/render_markdown/00000000-0000-8bbb-8c8b-8ae1dedef5e2/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8bbb-8c8b-8ae1dedef5e2">Jean-Luc Picard <a class="source-link" href="https://www.linkedin.com/in/jlpicard" target="_blank" rel="noopener noreferrer">↗</a></h1>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Org</td>
-<td>Starfleet</td>
-</tr>
-<tr>
-<td>Title</td>
-<td>Captain</td>
-</tr>
-<tr>
-<td>Email</td>
-<td><a href="mailto:jlpicard@starfleet.gov">jlpicard@starfleet.gov</a></td>
-</tr>
-<tr>
-<td>Connected On</td>
-<td>10 Apr 2369</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8bbb-8c8b-8ae1dedef5e2">
+<div class="contact-who">
+<h1><a href="mailto:jlpicard@starfleet.gov" title="Jean-Luc Picard &lt;jlpicard@starfleet.gov&gt;" class="chip" data-handle="email:jlpicard@starfleet.gov">Jean-Luc Picard</a> <a class="source-link" href="https://www.linkedin.com/in/jlpicard" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<p class="contact-role">Captain · Starfleet</p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email</dt><dd class="chip-identifiers">
+<p><a href="mailto:jlpicard@starfleet.gov" title="jlpicard@starfleet.gov" class="chip" data-handle="email:jlpicard@starfleet.gov">jlpicard@starfleet.gov</a></p>
+</dd>
+<dt>Connected On</dt><dd>10 Apr 2369</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">linkedin/render_markdown/00000000-0000-8d5b-95c0-1e95e75b6e77/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8d5b-95c0-1e95e75b6e77">William Riker <a class="source-link" href="https://www.linkedin.com/in/wriker" target="_blank" rel="noopener noreferrer">↗</a></h1>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Org</td>
-<td>Starfleet</td>
-</tr>
-<tr>
-<td>Title</td>
-<td>Commander</td>
-</tr>
-<tr>
-<td>Connected On</td>
-<td>09 Apr 2369</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8d5b-95c0-1e95e75b6e77">
+<div class="contact-who">
+<h1>William Riker <a class="source-link" href="https://www.linkedin.com/in/wriker" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<p class="contact-role">Commander · Starfleet</p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Connected On</dt><dd>09 Apr 2369</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">linkedin/render_markdown/00000000-0000-8f36-a408-50d26aa9b0db/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8f36-a408-50d26aa9b0db">Data Soong <a class="source-link" href="https://www.linkedin.com/in/datasoong" target="_blank" rel="noopener noreferrer">↗</a></h1>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Org</td>
-<td>Starfleet</td>
-</tr>
-<tr>
-<td>Title</td>
-<td>Lt. Commander, Operations</td>
-</tr>
-<tr>
-<td>Connected On</td>
-<td>08 Apr 2369</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8f36-a408-50d26aa9b0db">
+<div class="contact-who">
+<h1>Data Soong <a class="source-link" href="https://www.linkedin.com/in/datasoong" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<p class="contact-role">Lt. Commander, Operations · Starfleet</p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Connected On</dt><dd>08 Apr 2369</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
@@ -5939,7 +5978,7 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <div id="m-0b75ba68-0b60-887e-b930-8855bf9650de" data-section-uuid="0b75ba68-0b60-887e-b930-8855bf9650de" class="msg msg--sms_backup_restore">
 <h2><a href="tel:+12025550102" title="Worf (+12025550102)" class="chip" data-handle="tel:+12025550102">Worf</a> <time class="msg-ts" datetime="2369-04-15T10:01:00+00:00" title="2369-04-15 10:01:00 UTC">Tue Apr 15th, 2369 at 10:01</time></h2>
 <p>Bat'leth practice at 0700.</p>
-<p><img src="blobs/937a72665cf9fcb9.gif" alt="batleth.gif"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="batleth.gif"></p>
 </div>
 </div>
 </div>
@@ -5960,7 +5999,7 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <div id="m-0b75ba32-0740-8993-adf7-73c1d3d06442" data-section-uuid="0b75ba32-0740-8993-adf7-73c1d3d06442" class="msg msg--sms_backup_restore">
 <h2><a href="tel:+12025550101" title="Jean-Luc Picard (+12025550101)" class="chip" data-handle="tel:+12025550101">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-04-15T09:02:00+00:00" title="2369-04-15 09:02:00 UTC">Tue Apr 15th, 2369 at 09:02</time></h2>
 <p>The Enterprise approaches.</p>
-<p><img src="blobs/3af2399847fcb127.png" alt="viewscreen.png"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="viewscreen.png"></p>
 </div>
 <div id="m-0b75ba32-f1a0-824c-915f-32273472fad4" data-section-uuid="0b75ba32-f1a0-824c-915f-32273472fad4" class="msg msg--sms_backup_restore">
 <h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2369-04-15T09:03:00+00:00" title="2369-04-15 09:03:00 UTC">Tue Apr 15th, 2369 at 09:03</time></h2>
@@ -6672,185 +6711,112 @@ Worf has asked that no one serve gagh.</p>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts-diff/render_markdown/00000000-0000-8195-8ee2-d14cb601f004/index.md</h3>
 <div class="chat-body markdown-body"><div class="diff-added">
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8195-8ee2-d14cb601f004">Worf</h1>
-<p><img src="blobs/00000000-0000-8195-8ee2-d14cb601f004.jpg" alt="Worf"></p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Org</td>
-<td>Starfleet — USS Enterprise NCC-1701-D — Security</td>
-</tr>
-<tr>
-<td>Title</td>
-<td>Chief of Security</td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:worf@enterprise.starfleet">worf@enterprise.starfleet</a></td>
-</tr>
-<tr>
-<td>Phone (cell)</td>
-<td>+1-202-555-0102</td>
-</tr>
-<tr>
-<td>Note</td>
-<td>Son of Mogh. Prefers prune juice.</td>
-</tr>
-</tbody>
-</table>
+<div class="contact-head" data-page-title-uuid="00000000-0000-8195-8ee2-d14cb601f004">
+<div class="contact-photo">
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="Worf"></p>
+</div>
+<div class="contact-who">
+<h1><a href="mailto:worf@enterprise.starfleet" title="Worf &lt;worf@enterprise.starfleet&gt;" class="chip" data-handle="email:worf@enterprise.starfleet">Worf</a></h1>
+<p class="contact-role">Chief of Security · Starfleet — USS Enterprise NCC-1701-D — Security</p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:worf@enterprise.starfleet" title="worf@enterprise.starfleet" class="chip" data-handle="email:worf@enterprise.starfleet">worf@enterprise.starfleet</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">cell</span></dt><dd class="chip-identifiers">
+<p><a href="tel:+12025550102" title="+1-202-555-0102 (+12025550102)" class="chip" data-handle="tel:+12025550102">+1-202-555-0102</a></p>
+</dd>
+<dt>Note</dt><dd>Son of Mogh. Prefers prune juice.</dd>
+</dl>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts-diff/render_markdown/00000000-0000-819d-aad9-cb628fc3bec0/index.md</h3>
 <div class="chat-body markdown-body"><div class="diff-removed">
-<h1 class="page-title" data-page-title-uuid="00000000-0000-819d-aad9-cb628fc3bec0">Kalita</h1>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Title</td>
-<td>Maquis pilot</td>
-</tr>
-<tr>
-<td>Phone (work)</td>
-<td>+1-555-BADLANDS</td>
-</tr>
-</tbody>
-</table>
+<div class="contact-head" data-page-title-uuid="00000000-0000-819d-aad9-cb628fc3bec0">
+<div class="contact-who">
+<h1>Kalita</h1>
+<p class="contact-role">Maquis pilot</p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Phone <span class="contact-qualifier">work</span></dt><dd>+1-555-BADLANDS</dd>
+</dl>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts-diff/render_markdown/00000000-0000-825c-a3c4-1fb84e9bfce6/index.md</h3>
 <div class="chat-body markdown-body"><div class="diff-modified">
-<h1 class="page-title" data-page-title-uuid="00000000-0000-825c-a3c4-1fb84e9bfce6">Jean-Luc Picard</h1>
-<p><img src="blobs/00000000-0000-825c-a3c4-1fb84e9bfce6.jpg" alt="Jean-Luc Picard"></p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Group</td>
-<td>Senior Staff</td>
-</tr>
-<tr>
-<td>Org</td>
-<td>Starfleet — USS Enterprise <del>NCC-1701-D</del><ins>NCC-1701-E</ins></td>
-</tr>
-<tr>
-<td>Title</td>
-<td>Captain</td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:jlpicard@enterprise.starfleet">jlpicard@enterprise.starfleet</a></td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:picard@enterprise.starfleet">picard@enterprise.starfleet</a></td>
-</tr>
-<tr>
-<td>Phone (work)</td>
-<td>+1-555-NCC-1701</td>
-</tr>
-<tr>
-<td>Phone (cell)</td>
-<td>tel:+1-202-555-0101</td>
-</tr>
-<tr>
-<td><ins>Phone (home)</ins></td>
-<td><ins>+33-555-LABARRE</ins></td>
-</tr>
-<tr>
-<td>Address (work)</td>
-<td>, , Ready Room, Deck 1, Saucer Section, ,</td>
-</tr>
-<tr>
-<td>Note</td>
-<td>Make it so.</td>
-</tr>
-</tbody>
-</table>
+<div class="contact-head" data-page-title-uuid="00000000-0000-825c-a3c4-1fb84e9bfce6">
+<div class="contact-photo">
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="Jean-Luc Picard"></p>
+</div>
+<div class="contact-who">
+<h1><a href="mailto:jlpicard@enterprise.starfleet" title="Jean-Luc Picard &lt;jlpicard@enterprise.starfleet&gt;" class="chip" data-handle="email:jlpicard@enterprise.starfleet">Jean-Luc Picard</a></h1>
+<p class="contact-role">Captain · Starfleet — USS Enterprise <del>NCC-1701-D</del><ins>NCC-1701-E</ins></p>
+<p class="contact-groups"><span class="contact-group">Senior Staff</span></p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:jlpicard@enterprise.starfleet" title="jlpicard@enterprise.starfleet" class="chip" data-handle="email:jlpicard@enterprise.starfleet">jlpicard@enterprise.starfleet</a></p>
+</dd>
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:picard@enterprise.starfleet" title="picard@enterprise.starfleet" class="chip" data-handle="email:picard@enterprise.starfleet">picard@enterprise.starfleet</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">work</span></dt><dd>+1-555-NCC-1701</dd>
+<dt>Phone <span class="contact-qualifier">cell</span></dt><dd class="chip-identifiers">
+<p><a href="tel:+12025550101" title="+1-202-555-0101 (+12025550101)" class="chip" data-handle="tel:+12025550101">+1-202-555-0101</a></p>
+</dd>
+<dt><ins>Phone</ins> <span class="contact-qualifier"><ins>home</ins></span></dt><dd><ins>+33-555-LABARRE</ins></dd>
+<dt>Address <span class="contact-qualifier">work</span></dt><dd>Ready Room, Deck 1, Saucer Section</dd>
+<dt>Note</dt><dd>Make it so.</dd>
+</dl>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts-diff/render_markdown/00000000-0000-8429-b938-7d1e51384182/index.md</h3>
 <div class="chat-body markdown-body"><div class="diff-removed">
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8429-b938-7d1e51384182">Ro Laren</h1>
-<p><img src="blobs/00000000-0000-8429-b938-7d1e51384182.jpg" alt="Ro Laren"></p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Title</td>
-<td>Maquis cell leader</td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:ro.laren@maquis.badlands">ro.laren@maquis.badlands</a></td>
-</tr>
-<tr>
-<td>Note</td>
-<td>Resigned her commission. Last seen in the Badlands.</td>
-</tr>
-</tbody>
-</table>
+<div class="contact-head" data-page-title-uuid="00000000-0000-8429-b938-7d1e51384182">
+<div class="contact-photo">
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="Ro Laren"></p>
+</div>
+<div class="contact-who">
+<h1><a href="mailto:ro.laren@maquis.badlands" title="Ro Laren &lt;ro.laren@maquis.badlands&gt;" class="chip" data-handle="email:ro.laren@maquis.badlands">Ro Laren</a></h1>
+<p class="contact-role">Maquis cell leader</p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:ro.laren@maquis.badlands" title="ro.laren@maquis.badlands" class="chip" data-handle="email:ro.laren@maquis.badlands">ro.laren@maquis.badlands</a></p>
+</dd>
+<dt>Note</dt><dd>Resigned her commission. Last seen in the Badlands.</dd>
+</dl>
 </div>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts-diff/render_markdown/00000000-0000-86be-a0a0-341fa48bbc80/index.md</h3>
 <div class="chat-body markdown-body"><div class="diff-removed">
-<h1 class="page-title" data-page-title-uuid="00000000-0000-86be-a0a0-341fa48bbc80">Data</h1>
-<p><img src="blobs/00000000-0000-86be-a0a0-341fa48bbc80.jpg" alt="Data"></p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Org</td>
-<td>Starfleet — USS Enterprise NCC-1701-D — Operations</td>
-</tr>
-<tr>
-<td>Title</td>
-<td>Operations Officer</td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:data@enterprise.starfleet">data@enterprise.starfleet</a></td>
-</tr>
-<tr>
-<td>Note</td>
-<td>Soong-type android. Positronic. Probability of friendship: 1.0.</td>
-</tr>
-</tbody>
-</table>
+<div class="contact-head" data-page-title-uuid="00000000-0000-86be-a0a0-341fa48bbc80">
+<div class="contact-photo">
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="Data"></p>
+</div>
+<div class="contact-who">
+<h1><a href="mailto:data@enterprise.starfleet" title="Data &lt;data@enterprise.starfleet&gt;" class="chip" data-handle="email:data@enterprise.starfleet">Data</a></h1>
+<p class="contact-role">Operations Officer · Starfleet — USS Enterprise NCC-1701-D — Operations</p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:data@enterprise.starfleet" title="data@enterprise.starfleet" class="chip" data-handle="email:data@enterprise.starfleet">data@enterprise.starfleet</a></p>
+</dd>
+<dt>Note</dt><dd>Soong-type android. Positronic. Probability of friendship: 1.0.</dd>
+</dl>
 </div>
 </div>
 </div>
@@ -6859,284 +6825,181 @@ Worf has asked that no one serve gagh.</p>
 <h2 class="preview-source-name">tng_contacts <span class="preview-count">10 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts/render_markdown/00000000-0000-8140-88d9-42badf1b195b/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8140-88d9-42badf1b195b">drone.4.of.12@unimatrix01.borg</h1>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Email</td>
-<td><a href="mailto:drone.4.of.12@unimatrix01.borg">drone.4.of.12@unimatrix01.borg</a></td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8140-88d9-42badf1b195b">
+<div class="contact-who">
+<h1><a href="mailto:drone.4.of.12@unimatrix01.borg" title="drone.4.of.12@unimatrix01.borg" class="chip" data-handle="email:drone.4.of.12@unimatrix01.borg">drone.4.of.12@unimatrix01.borg</a></h1>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email</dt><dd class="chip-identifiers">
+<p><a href="mailto:drone.4.of.12@unimatrix01.borg" title="drone.4.of.12@unimatrix01.borg" class="chip" data-handle="email:drone.4.of.12@unimatrix01.borg">drone.4.of.12@unimatrix01.borg</a></p>
+</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts/render_markdown/00000000-0000-81e2-8596-1ee8f9640d13/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-81e2-8596-1ee8f9640d13">Jean-Luc Picard</h1>
-<p><img src="blobs/00000000-0000-81e2-8596-1ee8f9640d13.jpg" alt="Jean-Luc Picard"></p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Group</td>
-<td>Senior Staff</td>
-</tr>
-<tr>
-<td>Org</td>
-<td>Starfleet — USS Enterprise NCC-1701-E</td>
-</tr>
-<tr>
-<td>Title</td>
-<td>Captain</td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:jlpicard@enterprise.starfleet">jlpicard@enterprise.starfleet</a></td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:picard@enterprise.starfleet">picard@enterprise.starfleet</a></td>
-</tr>
-<tr>
-<td>Phone (work)</td>
-<td>+1-555-NCC-1701</td>
-</tr>
-<tr>
-<td>Phone (cell)</td>
-<td>tel:+1-202-555-0101</td>
-</tr>
-<tr>
-<td>Phone (home)</td>
-<td>+33-555-LABARRE</td>
-</tr>
-<tr>
-<td>Address (work)</td>
-<td>, , Ready Room, Deck 1, Saucer Section, ,</td>
-</tr>
-<tr>
-<td>Note</td>
-<td>Make it so.</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-81e2-8596-1ee8f9640d13">
+<div class="contact-photo">
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="Jean-Luc Picard"></p>
+</div>
+<div class="contact-who">
+<h1><a href="mailto:jlpicard@enterprise.starfleet" title="Jean-Luc Picard &lt;jlpicard@enterprise.starfleet&gt;" class="chip" data-handle="email:jlpicard@enterprise.starfleet">Jean-Luc Picard</a></h1>
+<p class="contact-role">Captain · Starfleet — USS Enterprise NCC-1701-E</p>
+<p class="contact-groups"><span class="contact-group">Senior Staff</span></p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:jlpicard@enterprise.starfleet" title="jlpicard@enterprise.starfleet" class="chip" data-handle="email:jlpicard@enterprise.starfleet">jlpicard@enterprise.starfleet</a></p>
+</dd>
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:picard@enterprise.starfleet" title="picard@enterprise.starfleet" class="chip" data-handle="email:picard@enterprise.starfleet">picard@enterprise.starfleet</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">work</span></dt><dd>+1-555-NCC-1701</dd>
+<dt>Phone <span class="contact-qualifier">cell</span></dt><dd class="chip-identifiers">
+<p><a href="tel:+12025550101" title="+1-202-555-0101 (+12025550101)" class="chip" data-handle="tel:+12025550101">+1-202-555-0101</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">home</span></dt><dd>+33-555-LABARRE</dd>
+<dt>Address <span class="contact-qualifier">work</span></dt><dd>Ready Room, Deck 1, Saucer Section</dd>
+<dt>Note</dt><dd>Make it so.</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts/render_markdown/00000000-0000-829a-bb9d-4c1b203d3251/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-829a-bb9d-4c1b203d3251">Senior Staff</h1>
-<p><strong>Members</strong></p>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-829a-bb9d-4c1b203d3251">
+<div class="contact-who">
+<h1>Senior Staff</h1>
+</div>
+</div>
+<div class="contact-members">
+<h2>Members</h2>
 <ul>
 <li><a href="mailto:jlpicard@enterprise.starfleet" title="Jean-Luc Picard &lt;jlpicard@enterprise.starfleet&gt;" class="chip" data-handle="email:jlpicard@enterprise.starfleet">Jean-Luc Picard</a></li>
 <li><a href="mailto:wriker@enterprise.starfleet" title="William T. Riker &lt;wriker@enterprise.starfleet&gt;" class="chip" data-handle="email:wriker@enterprise.starfleet">William T. Riker</a></li>
 </ul>
 </div>
 </div>
+</div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts/render_markdown/00000000-0000-85d8-ac4b-9c4472cee5ea/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-85d8-ac4b-9c4472cee5ea">Worf</h1>
-<p><img src="blobs/00000000-0000-85d8-ac4b-9c4472cee5ea.jpg" alt="Worf"></p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Org</td>
-<td>Starfleet — USS Enterprise NCC-1701-D — Security</td>
-</tr>
-<tr>
-<td>Title</td>
-<td>Chief of Security</td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:worf@enterprise.starfleet">worf@enterprise.starfleet</a></td>
-</tr>
-<tr>
-<td>Phone (cell)</td>
-<td>+1-202-555-0102</td>
-</tr>
-<tr>
-<td>Note</td>
-<td>Son of Mogh. Prefers prune juice.</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-85d8-ac4b-9c4472cee5ea">
+<div class="contact-photo">
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="Worf"></p>
+</div>
+<div class="contact-who">
+<h1><a href="mailto:worf@enterprise.starfleet" title="Worf &lt;worf@enterprise.starfleet&gt;" class="chip" data-handle="email:worf@enterprise.starfleet">Worf</a></h1>
+<p class="contact-role">Chief of Security · Starfleet — USS Enterprise NCC-1701-D — Security</p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:worf@enterprise.starfleet" title="worf@enterprise.starfleet" class="chip" data-handle="email:worf@enterprise.starfleet">worf@enterprise.starfleet</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">cell</span></dt><dd class="chip-identifiers">
+<p><a href="tel:+12025550102" title="+1-202-555-0102 (+12025550102)" class="chip" data-handle="tel:+12025550102">+1-202-555-0102</a></p>
+</dd>
+<dt>Note</dt><dd>Son of Mogh. Prefers prune juice.</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts/render_markdown/00000000-0000-8acb-9e72-ef58e1a96813/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8acb-9e72-ef58e1a96813">Seven of Nine</h1>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:seven.of.nine@unimatrix01.borg">seven.of.nine@unimatrix01.borg</a></td>
-</tr>
-<tr>
-<td>Email</td>
-<td><a href="mailto:annika.hansen@raven.fed">annika.hansen@raven.fed</a></td>
-</tr>
-<tr>
-<td>Phone (home)</td>
-<td>+1-555-TERTIARY</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8acb-9e72-ef58e1a96813">
+<div class="contact-who">
+<h1><a href="mailto:seven.of.nine@unimatrix01.borg" title="Seven of Nine &lt;seven.of.nine@unimatrix01.borg&gt;" class="chip" data-handle="email:seven.of.nine@unimatrix01.borg">Seven of Nine</a></h1>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:seven.of.nine@unimatrix01.borg" title="seven.of.nine@unimatrix01.borg" class="chip" data-handle="email:seven.of.nine@unimatrix01.borg">seven.of.nine@unimatrix01.borg</a></p>
+</dd>
+<dt>Email</dt><dd class="chip-identifiers">
+<p><a href="mailto:annika.hansen@raven.fed" title="annika.hansen@raven.fed" class="chip" data-handle="email:annika.hansen@raven.fed">annika.hansen@raven.fed</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">home</span></dt><dd>+1-555-TERTIARY</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts/render_markdown/00000000-0000-8b00-b38c-a2a290dad572/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8b00-b38c-a2a290dad572">William T. Riker</h1>
-<p><img src="blobs/00000000-0000-8b00-b38c-a2a290dad572.jpg" alt="William T. Riker"></p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Group</td>
-<td>Senior Staff</td>
-</tr>
-<tr>
-<td>Org</td>
-<td>Starfleet — USS Enterprise NCC-1701-D</td>
-</tr>
-<tr>
-<td>Title</td>
-<td>Commander</td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:wriker@enterprise.starfleet">wriker@enterprise.starfleet</a></td>
-</tr>
-<tr>
-<td>Email (home)</td>
-<td><a href="mailto:will.riker@alaska.earth">will.riker@alaska.earth</a></td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:riker@enterprise.starfleet">riker@enterprise.starfleet</a></td>
-</tr>
-<tr>
-<td>Phone (cell)</td>
-<td>+1-555-NUMBER-1</td>
-</tr>
-<tr>
-<td>Note</td>
-<td>Plays the trombone. Owns a beard.</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8b00-b38c-a2a290dad572">
+<div class="contact-photo">
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="William T. Riker"></p>
+</div>
+<div class="contact-who">
+<h1><a href="mailto:wriker@enterprise.starfleet" title="William T. Riker &lt;wriker@enterprise.starfleet&gt;" class="chip" data-handle="email:wriker@enterprise.starfleet">William T. Riker</a></h1>
+<p class="contact-role">Commander · Starfleet — USS Enterprise NCC-1701-D</p>
+<p class="contact-groups"><span class="contact-group">Senior Staff</span></p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:wriker@enterprise.starfleet" title="wriker@enterprise.starfleet" class="chip" data-handle="email:wriker@enterprise.starfleet">wriker@enterprise.starfleet</a></p>
+</dd>
+<dt>Email <span class="contact-qualifier">home</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:will.riker@alaska.earth" title="will.riker@alaska.earth" class="chip" data-handle="email:will.riker@alaska.earth">will.riker@alaska.earth</a></p>
+</dd>
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:riker@enterprise.starfleet" title="riker@enterprise.starfleet" class="chip" data-handle="email:riker@enterprise.starfleet">riker@enterprise.starfleet</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">cell</span></dt><dd>+1-555-NUMBER-1</dd>
+<dt>Note</dt><dd>Plays the trombone. Owns a beard.</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts/render_markdown/00000000-0000-8c51-a4b4-dde335468f6c/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8c51-a4b4-dde335468f6c">Hugh</h1>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:third.of.five@unimatrix01.borg">third.of.five@unimatrix01.borg</a></td>
-</tr>
-<tr>
-<td>Phone (work)</td>
-<td>+1-555-THIRD-OF-5</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8c51-a4b4-dde335468f6c">
+<div class="contact-who">
+<h1><a href="mailto:third.of.five@unimatrix01.borg" title="Hugh &lt;third.of.five@unimatrix01.borg&gt;" class="chip" data-handle="email:third.of.five@unimatrix01.borg">Hugh</a></h1>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:third.of.five@unimatrix01.borg" title="third.of.five@unimatrix01.borg" class="chip" data-handle="email:third.of.five@unimatrix01.borg">third.of.five@unimatrix01.borg</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">work</span></dt><dd>+1-555-THIRD-OF-5</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts/render_markdown/00000000-0000-8d78-9232-e6b0deeebfb7/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8d78-9232-e6b0deeebfb7">Geordi La Forge</h1>
-<p><img src="blobs/00000000-0000-8d78-9232-e6b0deeebfb7.jpg" alt="Geordi La Forge"></p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Org</td>
-<td>Starfleet — USS Enterprise NCC-1701-D — Engineering</td>
-</tr>
-<tr>
-<td>Title</td>
-<td>Chief Engineer</td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:glaforge@enterprise.starfleet">glaforge@enterprise.starfleet</a></td>
-</tr>
-<tr>
-<td>Email (work)</td>
-<td><a href="mailto:laforge@enterprise.starfleet">laforge@enterprise.starfleet</a></td>
-</tr>
-<tr>
-<td>Phone (work)</td>
-<td>+1-555-WARP-FAC</td>
-</tr>
-<tr>
-<td>Note</td>
-<td>If we modulate the deflector array we should be able to render this contact correctly.</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8d78-9232-e6b0deeebfb7">
+<div class="contact-photo">
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="Geordi La Forge"></p>
+</div>
+<div class="contact-who">
+<h1><a href="mailto:glaforge@enterprise.starfleet" title="Geordi La Forge &lt;glaforge@enterprise.starfleet&gt;" class="chip" data-handle="email:glaforge@enterprise.starfleet">Geordi La Forge</a></h1>
+<p class="contact-role">Chief Engineer · Starfleet — USS Enterprise NCC-1701-D — Engineering</p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:glaforge@enterprise.starfleet" title="glaforge@enterprise.starfleet" class="chip" data-handle="email:glaforge@enterprise.starfleet">glaforge@enterprise.starfleet</a></p>
+</dd>
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:laforge@enterprise.starfleet" title="laforge@enterprise.starfleet" class="chip" data-handle="email:laforge@enterprise.starfleet">laforge@enterprise.starfleet</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">work</span></dt><dd>+1-555-WARP-FAC</dd>
+<dt>Note</dt><dd>If we modulate the deflector array we should be able to render this contact correctly.</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts/render_markdown/00000000-0000-8f5b-ab9b-f6b9fbf217b5/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8f5b-ab9b-f6b9fbf217b5">Locutus of Borg</h1>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Email</td>
-<td><a href="mailto:locutus@unicomplex.borg">locutus@unicomplex.borg</a></td>
-</tr>
-<tr>
-<td>Phone (Subspace relay)</td>
-<td>+1-555-FUTILE</td>
-</tr>
-</tbody>
-</table>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8f5b-ab9b-f6b9fbf217b5">
+<div class="contact-who">
+<h1><a href="mailto:locutus@unicomplex.borg" title="Locutus of Borg &lt;locutus@unicomplex.borg&gt;" class="chip" data-handle="email:locutus@unicomplex.borg">Locutus of Borg</a></h1>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email</dt><dd class="chip-identifiers">
+<p><a href="mailto:locutus@unicomplex.borg" title="locutus@unicomplex.borg" class="chip" data-handle="email:locutus@unicomplex.borg">locutus@unicomplex.borg</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">Subspace relay</span></dt><dd>+1-555-FUTILE</dd>
+</dl>
 </div>
 </div>
 <div class="preview-doc">
@@ -7266,7 +7129,7 @@ Worf has asked that no one serve gagh.</p>
 <p><span class="msg-recipients"><span class="msg-recipients-role">To</span> <a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a></span></p>
 <p>🏷 Inbox</p>
 <p>Bridge status display below:</p>
-<p><img src="blobs/491fbd09cfa629f6.png" alt="LCARS"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="LCARS"></p>
 <p>Ping <a href="mailto:laforge@enterprise.starfleet" title="@Geordi La Forge &lt;laforge@enterprise.starfleet&gt;" class="chip" data-handle="email:laforge@enterprise.starfleet">@Geordi La Forge</a> if the glyph fails.</p>
 <p>End of report.</p>
 </div>
@@ -7602,7 +7465,7 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 </div>
 <div id="m-0b50e810-bbe0-817e-84fc-3b5903d9a10d" data-section-uuid="0b50e810-bbe0-817e-84fc-3b5903d9a10d" class="msg msg--whatsapp">
 <h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2364-04-11T00:05:00+00:00" title="2364-04-11 00:05:00 UTC">Sat Apr 11th, 2364 at 00:05</time></h2>
-<p><img src="blobs/ade2b43c28300670.jpg" alt="bridge-viewscreen.jpg"></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="bridge-viewscreen.jpg"></p>
 </div>
 <div id="m-0b50e811-a640-8b94-a752-fe955e6453e0" data-section-uuid="0b50e811-a640-8b94-a752-fe955e6453e0" class="msg msg--whatsapp">
 <h2><a href="tel:+17015550103" title="Data (+17015550103)" class="chip" data-handle="tel:+17015550103">Data</a> <time class="msg-ts" datetime="2364-04-11T00:06:00+00:00" title="2364-04-11 00:06:00 UTC">Sat Apr 11th, 2364 at 00:06</time></h2>
@@ -8090,6 +7953,116 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 </div>
 </div>
 </section>
+<section class="preview-source" id="src-zz-synthetic-contacts">
+<h2 class="preview-source-name">zz-synthetic-contacts <span class="preview-count">6 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">zz-synthetic-contacts/samples/render_markdown/00000000-0000-4000-8000-000000000001/index.md</h3>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-4000-8000-000000000001">
+<div class="contact-photo">
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA5NiA5NiI+PHJlY3Qgd2lkdGg9Ijk2IiBoZWlnaHQ9Ijk2IiBmaWxsPSJoc2woMjE1IDQ1JSA0NSUpIi8+PHRleHQgeD0iNDgiIHk9IjYwIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIzNiIgZmlsbD0iI2ZmZiIgdGV4dC1hbmNob3I9Im1pZGRsZSI+SlA8L3RleHQ+PC9zdmc+" alt="Jean-Luc Picard"></p>
+</div>
+<div class="contact-who">
+<h1><a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a></h1>
+<p class="contact-role">Captain · Starfleet — USS Enterprise NCC-1701-D</p>
+<p class="contact-groups"><span class="contact-group">Senior Staff</span> <span class="contact-group">Away Team</span></p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:picard@enterprise.starfleet" title="picard@enterprise.starfleet" class="chip" data-handle="email:picard@enterprise.starfleet">picard@enterprise.starfleet</a></p>
+</dd>
+<dt>Email <span class="contact-qualifier">home</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:jl@labarre.earth" title="jl@labarre.earth" class="chip" data-handle="email:jl@labarre.earth">jl@labarre.earth</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">cell</span></dt><dd class="chip-identifiers">
+<p><a href="tel:+12025550101" title="+1 202 555 0101 (+12025550101)" class="chip" data-handle="tel:+12025550101">+1 202 555 0101</a></p>
+</dd>
+<dt>Phone <span class="contact-qualifier">home</span></dt><dd>(555) 010-1701</dd>
+<dt>Address <span class="contact-qualifier">home</span></dt><dd>Château Picard, La Barre, France</dd>
+<dt>Birthday</dt><dd>2305-07-13</dd>
+<dt>Note</dt><dd>Make it so.<br>Prefers Earl Grey, hot.</dd>
+</dl>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">zz-synthetic-contacts/samples/render_markdown/00000000-0000-4000-8000-000000000002/index.md</h3>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-4000-8000-000000000002">
+<div class="contact-who">
+<h1><a href="mailto:riker@enterprise.starfleet" title="William T. Riker &lt;riker@enterprise.starfleet&gt;" class="chip" data-handle="email:riker@enterprise.starfleet">William T. Riker</a></h1>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email</dt><dd class="chip-identifiers">
+<p><a href="mailto:riker@enterprise.starfleet" title="riker@enterprise.starfleet" class="chip" data-handle="email:riker@enterprise.starfleet">riker@enterprise.starfleet</a></p>
+</dd>
+</dl>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">zz-synthetic-contacts/samples/render_markdown/00000000-0000-4000-8000-000000000003/index.md</h3>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-4000-8000-000000000003">
+<div class="contact-who">
+<h1>Q</h1>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Phone</dt><dd>555-0199</dd>
+<dt>Note</dt><dd>Omnipotent. Do not answer.</dd>
+</dl>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">zz-synthetic-contacts/samples/render_markdown/00000000-0000-4000-8000-000000000004/index.md</h3>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-4000-8000-000000000004">
+<div class="contact-who">
+<h1>Senior Staff</h1>
+</div>
+</div>
+<div class="contact-members">
+<h2>Members</h2>
+<ul>
+<li><a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a></li>
+<li><a href="mailto:riker@enterprise.starfleet" title="William T. Riker &lt;riker@enterprise.starfleet&gt;" class="chip" data-handle="email:riker@enterprise.starfleet">William T. Riker</a></li>
+<li>Data</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">zz-synthetic-contacts/samples/render_markdown/00000000-0000-4000-8000-000000000005/index.md</h3>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-4000-8000-000000000005">
+<div class="contact-who">
+<h1><a href="mailto:laforge@enterprise.starfleet" title="Geordi La Forge &lt;laforge@enterprise.starfleet&gt;" class="chip" data-handle="email:laforge@enterprise.starfleet">Geordi La Forge</a> <a class="source-link" href="https://www.linkedin.com/in/geordi" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<p class="contact-role">Chief Engineer · Starfleet</p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email</dt><dd class="chip-identifiers">
+<p><a href="mailto:laforge@enterprise.starfleet" title="laforge@enterprise.starfleet" class="chip" data-handle="email:laforge@enterprise.starfleet">laforge@enterprise.starfleet</a></p>
+</dd>
+<dt>Photo</dt><dd><a href="https://media.example.invalid/geordi.jpg">https://media.example.invalid/geordi.jpg</a></dd>
+</dl>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">zz-synthetic-contacts/samples/render_markdown/00000000-0000-4000-8000-000000000006/index.md</h3>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-4000-8000-000000000006">
+<div class="contact-who">
+<h1><a href="mailto:lore@omicron.theta" title="&lt;b&gt;Lore&lt;/b&gt; &amp; [brother](javascript:x) &lt;lore@omicron.theta&gt;" class="chip" data-handle="email:lore@omicron.theta">&lt;b&gt;Lore&lt;/b&gt; &amp; [brother](javascript:x)</a></h1>
+<p class="contact-role">&lt;b&gt;Lore&lt;/b&gt; &amp; [brother](javascript:x)</p>
+<p class="contact-groups"><span class="contact-group">&lt;b&gt;Lore&lt;/b&gt; &amp; [brother](javascript:x)</span></p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">&lt;b&gt;Lore&lt;/b&gt; &amp; [brother](javascript:x)</span></dt><dd class="chip-identifiers">
+<p><a href="mailto:lore@omicron.theta" title="lore@omicron.theta" class="chip" data-handle="email:lore@omicron.theta">lore@omicron.theta</a></p>
+</dd>
+<dt>&lt;b&gt;Lore&lt;/b&gt; &amp; [brother](javascript:x)</dt><dd>&lt;b&gt;Lore&lt;/b&gt; &amp; [brother](javascript:x)</dd>
+<dt>Note</dt><dd># not a heading<br><br>| not a cell |</dd>
+</dl>
+</div>
+</div>
+</section>
 <section class="preview-source" id="src-zz-synthetic">
 <h2 class="preview-source-name">zz-synthetic <span class="preview-count">4 documents</span></h2>
 <div class="preview-doc">
@@ -8501,10 +8474,13 @@ export function injectCopyUuidButtons(root) {
   }
 
   for (const el of root.querySelectorAll("[data-page-title-uuid]")) {
-    if (el.querySelector(":scope > button.copy-uuid")) continue;
+    // The id sits on the heading itself, or on a block whose heading is
+    // a markdown `#` (a contact page's head, whose heading is a chip).
+    const host = el.matches("h1") ? el : (el.querySelector("h1") ?? el);
+    if (host.querySelector(":scope > button.copy-uuid")) continue;
     const uuid = el.getAttribute("data-page-title-uuid") ?? "";
     if (!uuid) continue;
-    addHeaderControl(el, " ", button(uuid, "Copy page ID"));
+    addHeaderControl(host, " ", button(uuid, "Copy page ID"));
   }
 }
 
@@ -8622,6 +8598,16 @@ export function decorateLongMessages(root, opts = {}) {
 }
 
 
+// Nothing resolves a chip here, so every person chip draws grey, as one
+// not linked to a contact; the switch draws them all as linked, blue.
+document.getElementById("linked").addEventListener("click", (ev) => {
+  const on = ev.target.getAttribute("aria-pressed") !== "true";
+  ev.target.setAttribute("aria-pressed", String(on));
+  for (const a of document.querySelectorAll("a.chip[data-handle]")) {
+    a.classList.toggle("handle-chip", on);
+    a.classList.toggle("handle-resolved", on);
+  }
+});
 for (const body of document.querySelectorAll(".chat-body")) {
   injectCopyUuidButtons(body);
   decorateLongMessages(body);

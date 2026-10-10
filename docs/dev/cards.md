@@ -606,7 +606,7 @@ programs against:
   section per source, never merged. The source named by `seenIn` —
   where the chip that opened it was — leads, marked "seen here". A
   person chip's double-click opens it (`personSource` in
-  `cards/cardSources.ts`); it offers the search for everything from
+  `cards/cardSources.ts`); it offers the search for everything with
   them, and *Create contact* for an unlinked handle where a contacts
   app is configured.
 - `configView()` — `config.toml` itself, edited directly, saved through

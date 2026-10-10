@@ -4,7 +4,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { NormalizedContact, Who } from "./contacts";
-import { personHandles, personModel, sectionLines } from "./person";
+import {
+  linkableHandles,
+  linkState,
+  personHandles,
+  personModel,
+  sectionHandles,
+  sectionLines,
+} from "./person";
 
 function contact(
   source_id: string,
@@ -138,5 +145,47 @@ describe("sectionLines", () => {
 
   it("says nothing it does not have", () => {
     expect(sectionLines(contact("sms_backup", "1", ["Number One"]))).toEqual([]);
+  });
+});
+
+/** The case that read as a puzzle: only the address is linked, and the
+ *  Slack profile is on the card because it lists the same address. The
+ *  card says so, and offers to link the Slack id too. */
+describe("why a source is on the card, and what is linked", () => {
+  const linkedByEmail = contact("datalib_contacts", "c-1", ["William Riker"], [EMAIL]);
+  const other = contact("datalib_contacts", "c-2", ["Thomas Riker"], ["slack:T1/U9"]);
+  const whoOf = answers({
+    [EMAIL]: { mine: linkedByEmail, sourceContacts: [slack] },
+    "slack:T1/U2": { mine: null, sourceContacts: [slack] },
+    "slack:T1/U9": { mine: other, sourceContacts: [] },
+  });
+
+  it("names the card's handle each section was found by", () => {
+    const m = personModel(EMAIL, null, whoOf);
+    expect(m.sections.map((s) => [s.sourceId, s.via])).toEqual([["slack", [EMAIL]]]);
+  });
+
+  it("tells linked to this contact from linked to another and from nobody's", () => {
+    expect(linkState(EMAIL, linkedByEmail, whoOf)).toBe("this");
+    expect(linkState("slack:T1/U9", linkedByEmail, whoOf)).toBe("other");
+    expect(linkState("slack:T1/U2", linkedByEmail, whoOf)).toBe("none");
+    expect(linkState(EMAIL, null, whoOf)).toBe("other");
+  });
+
+  it("offers to link only what nobody holds, and only to a contact", () => {
+    const m = personModel(EMAIL, null, whoOf);
+    expect(linkableHandles(m.sections[0], m.mine, whoOf)).toEqual(["slack:T1/U2"]);
+    expect(linkableHandles(m.sections[0], null, whoOf)).toEqual([]);
+    const withTaken = {
+      ...m.sections[0],
+      contact: contact("slack", "T1/U9", ["Tom"], ["slack:T1/U9", EMAIL]),
+    };
+    expect(linkableHandles(withTaken, m.mine, whoOf)).toEqual([]);
+  });
+
+  it("asks about every handle any section holds", () => {
+    expect(sectionHandles(personModel(EMAIL, null, whoOf)).sort()).toEqual(
+      [EMAIL, "slack:T1/U2"].sort(),
+    );
   });
 });

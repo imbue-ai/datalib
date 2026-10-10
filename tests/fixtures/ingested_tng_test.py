@@ -1075,9 +1075,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "the people the index knows by Picard's address",
         )
-        # One number written two ways — the address book's vCard 4 `tel:`
-        # URI with dashes, the SMS backup's and Google Voice's bare digits
-        # — is one handle, so a link made through either reaches both.
+        # One number written two ways — the address book's with dashes (a
+        # vCard 4 `tel:` URI, read as its number), the SMS backup's and
+        # Google Voice's bare digits — is one handle, so a link made
+        # through either reaches both.
         self.assertEqual(
             self._query(
                 self._index_db,
@@ -1092,7 +1093,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [
                 "google-takeout|Jean-Luc Picard|+12025550101",
                 "sms-backup-restore|Jean-Luc Picard|+12025550101",
-                "tng_contacts|Jean-Luc Picard|tel:+1-202-555-0101",
+                "tng_contacts|Jean-Luc Picard|+1-202-555-0101",
             ],
             "the people the index knows by Picard's number, as each wrote it",
         )
@@ -1320,9 +1321,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         picard = self._contact_markdown(CONTACTS_DIFF_GROUP, "Jean-Luc Picard")
         self.assertIn('<div class="diff-modified">', picard)
         self.assertIn("<del>NCC-1701-D</del><ins>NCC-1701-E</ins>", picard)
-        self.assertIn(
-            "| <ins>Phone (home)</ins> | <ins>+33-555-LABARRE</ins> |", picard
-        )
+        self.assertIn("<dd><ins>+33-555-LABARRE</ins></dd>", picard)
         self.assertIn(
             '<div class="diff-removed">',
             self._contact_markdown(CONTACTS_DIFF_GROUP, "Data"),

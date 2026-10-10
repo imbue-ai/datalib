@@ -100,7 +100,10 @@ Runs:
 `:dev_tng` is the best command to run first: it needs nothing but the repo.
 It materializes a one-shot data root from the checked-in TNG fixtures
 (`//tests/fixtures:ingested_tng`) into a tmpdir and points the backend at it,
-so you can eyeball the grid without a real on-disk root or any credentials:
+so you can eyeball the grid without a real on-disk root or any credentials.
+The root has the contacts app too, starting empty, so a chip can be linked
+to a contact. Every source in it is render-only: browsing and search work,
+and syncing a source fails on its missing raw store.
 
 ```sh
 bazelisk run //datalib:dev_tng
