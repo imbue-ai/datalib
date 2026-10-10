@@ -266,14 +266,11 @@ pub async fn bulk_upsert_entity_in_tx<T: BulkUpsertable>(
     }
     let started = Instant::now();
     upsert_entity_rows(tx, rows).await?;
-    let elapsed_ms = started.elapsed().as_millis() as u64;
-    let table = T::TABLE;
-    let count = rows.len();
     tracing::debug!(
-        table,
-        rows = count,
-        elapsed_ms,
-        "upserted a batch of {count} rows into {table} in {elapsed_ms}ms"
+        table = T::TABLE,
+        rows = rows.len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "upserted a batch of rows"
     );
     Ok(())
 }

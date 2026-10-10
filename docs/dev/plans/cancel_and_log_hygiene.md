@@ -1,10 +1,9 @@
 # What a cancel leaves behind, and what the log says about it
 
-**Status: PRs 1 to 4 and 8 landed (#682, #686, #692, #697, #700), and
-the `disk_usage` half of 7 (#1177); 5 is void, and 6 and 7's event-tape
-half are open. PRs 3, 4, 5 and 8 were none of them what this doc first
-said they were — each says so in its own section. PR 7 last read against
-the tree 2026-10-10, the rest 2026-09-23.** §1 is what a real data root actually contained — every
+**Status: PRs 1 to 4 and 6 to 8 landed (#682, #686, #692, #697, #700,
+#1171, #1177); 5 is void. PRs 3 to 6 and 8 were none of them what this
+doc first said they were — each says so in its own section. PRs 6 and 7
+last read against the tree 2026-10-10, the rest 2026-09-23.** §1 is what a real data root actually contained — every
 number in it was read out of `/Users/thad/datalib/z14` at build
 `787c1a4c`, not inferred. §2 is the work, one section per change.
 Where this doc and the tree disagree, the tree wins.
@@ -419,20 +418,26 @@ a root being created".
 What is left is small and cosmetic: do not warn about a store that does
 not meaningfully exist yet, or run the guard after the stores are made.
 
-### PR 6 — Stop the log eating itself
+### PR 6 — Stop the log eating itself — **done**
 
-- Fix the `/api/processes` storm: either split a step-progress table out
-  of `Runs` in [`watch.rs`](../../../datalib/backend/http/src/watch.rs),
-  or have `RunLogPanel` refetch only when the attempt set has changed.
-  The comment already states the intended rule.
-- Make `upserted a batch …` one message with `rows`, `table` and `ms` as
-  fields. Grouping by target in the log card becomes useful again.
-- Optional, and a judgment call: a floor of about a second on
-  `/api/manage/rows` while a run is in flight.
+- The `/api/processes` storm: neither of the two fixes first proposed.
+  The run store counts a new part, `processes`, which moves when a
+  process row appears or ends and not on a step's progress message;
+  `watch.rs` turns it into a `processes` frame, and `RunLogPanel`
+  refetches its picker on that instead of on `runs`. The rule the
+  comment stated is now the code.
+- `upserted a batch of rows` is one message, with `table`, `rows` and
+  `elapsed_ms` as fields (`elapsed_ms`, not `ms`, because every other
+  ingest timing line in the tree uses that name).
+- The floor on `/api/manage/rows` landed separately in #781, as the
+  watch's `manage_rows_every` (one second).
 
-### PR 7 — Bound the two growing stores — **half done**
+### PR 7 — Bound the two growing stores — **done**
 
-- Default the Slack event tape to **off**. It is a debugging tool.
+- **Done (#1171):** the Slack event tape defaults to **off**. A config
+  that sets `common.event_tape` keeps what it says; one that leaves it
+  unset stops writing the tape. An `events/` directory already on disk
+  stays until someone deletes it; nothing reads it.
 - **Done (#1177), as the knob:** `[run_history] disk_usage_days`, default
   30 (as long as a run is kept, so every run the dashboard lists keeps
   its disk chart). It bounds both tables of `system/disk_stats.sqlite`,

@@ -11,7 +11,8 @@
 /// A dataset the server serves, named by what serves it. Mirrors
 /// `watch::Table` by hand. A consumer names the ones it reads and
 /// refetches on those; a change to anything else never reaches it.
-export type LiveTable = "dag" | "manage.rows" | "runs" | "log" | "storage" | "disk" | "curated";
+export type LiveTable =
+  "dag" | "manage.rows" | "runs" | "processes" | "log" | "storage" | "disk" | "curated";
 
 /// One `root` frame. Mirrors `watch::RootFrame`; see that module for
 /// what each kind covers and why the frame carries no payload (every

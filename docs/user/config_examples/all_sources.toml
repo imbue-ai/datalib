@@ -298,6 +298,11 @@ blob_size_limit_bytes = "1 MB"  # skip file/media uploads larger than this
 # built-in default (30 minutes without progress, 50 failures).
 [steps.params.common.download_params]
 maximum_sequential_failed_requests = 100
+# A plain-text JSONL copy of every row the download writes, under
+# `ingest/events/`, for debugging. Nothing reads it and it grows with
+# every run, so it is off unless you ask for it:
+# [steps.params.common.event_tape]
+# enabled = true
 
 [steps.params.api]
 since = "2025-01-01"     # oldest message to mirror (YYYY-MM-DD or RFC 3339;

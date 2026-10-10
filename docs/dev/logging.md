@@ -21,7 +21,7 @@ for the life of the server. The tables:
 | `step_runs` | a step in a run: state, attempt, error, message. While a run is live every step of the config is here, `pending` until reached; when it ends, the ones no request reached go, so a closed run holds the steps it ran. A run whose runner died keeps them, as `stopped`: nothing settled them, so any might have been about to run |
 | `log` | a line |
 | `metrics`, `metric_samples` | a step's numbers — the newest value, and a sparse timeseries |
-| `store_changes` | a part of the store a reader can depend on (`runs`, `step_runs`, `metrics`, a run's lines, the server's lines), with a counter each write bumps |
+| `store_changes` | a part of the store a reader can depend on (`runs`, `step_runs`, `metrics`, `processes`, a run's lines, the server's lines), with a counter each write bumps. A step's progress message is a `step_runs` write; `processes` moves only when a process starts or ends |
 
 Every stamp is UTC in a `*_utc` column with the offset the clock was
 in beside it (`tz_offset`); text order is instant order. A line keeps
