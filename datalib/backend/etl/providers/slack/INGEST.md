@@ -47,6 +47,7 @@ a file download is retried, rate-limited and replayed like an API call.
 | `users.list`                | Enumerate workspace users                |
 | `conversations.history`     | Each channel's uncovered stretches + refresh window |
 | `conversations.replies`     | The replies of each thread the store owes |
+| `search.messages`           | Replies posted since the last search, to roots history will not read again |
 | `client.counts`             | How far the account has read, per conversation |
 | `saved.list`                | The account's "Saved for later" items    |
 | `bookmarks.list`            | A conversation's header bookmarks        |
@@ -145,6 +146,7 @@ nothing to remember in between.
 |---|---|---|---|
 | a channel's history | everything from `since` on | the `coverage` spans of scope `history:<channel>` | the gaps |
 | a thread's replies | each stored root's `latest_reply` | `held_version` in the thread's sidecar | a root with replies whose thread is not held at that version |
+| reply time, searched | everything from `since` to half an hour ago | the `coverage` spans of scope `replies:<channel>` | the gaps |
 | a file's bytes | an edge in `slack_attachments`, written with its message | the edge's `blake3`, and the fetch that landed it | an edge with no `blake3`, when `media` is on |
 
 **History.** `conversations.history` returns a stretch newest first.
@@ -176,6 +178,34 @@ for one at a time, `conversations.replies` is walked to its end, and one
 transaction stores the thread's row and messages, deletes the stored
 replies the walk did not return, and holds the thread at the version it
 was listed at. A walk cut off part way stores nothing of the thread.
+
+A root's `latest_reply` only moves when history lists the root again,
+and outside the refresh window it never does. So before the channels are
+walked, the run searches for the replies posted since its last search
+(`ingest/reply_search.rs`). Each conversation's reply time is a range
+whose searched stretches are `coverage` spans, so a run that has not
+happened for months searches the months, and one cut off part way leaves
+a smaller gap. The searched range stops half an hour short of the run's
+now, because a reply is searchable a little after it is posted.
+`search.messages` returns a page of a stretch newest first, and each
+page settles its stretch the way a history page does. A reply newer
+than its stored root's `latest_reply` sends that root to be read again
+(`conversations.history` at exactly the root's `ts`), in the transaction
+that settles the page, and the thread is then owed like any other.
+
+- A match carries no `thread_ts`. Its `permalink` does, which is how a
+  reply is told from a root.
+- `after:` and `before:` take whole days, excluded, in the account's own
+  time zone, so a query reaches two days past each end of its stretch.
+- One query names up to 20 conversations as `in:<#id>` filters, which
+  Slack ORs.
+- A conversation whose history nothing has covered yet is not searched:
+  the walk ahead reads every root it has fresh. Its reply time up to now
+  is settled at the start of the run.
+- A store from before the search has walked history and searched
+  nothing, so its first run searches back to `since`, once.
+- Only a token that may search can call `search.messages`. A browser
+  session's can; a refusal is a `problems` row and costs only the search.
 
 **Files.** See [Attachments](#attachments).
 
@@ -213,9 +243,9 @@ ever ask for that thread again. A reply that was also sent to the
 channel (`thread_broadcast`) does appear in history, but it is stored as
 a reply and treated as one here.
 
-It defaults to 30 days. Without it we would notice nothing: no deleted
-message, no edit, and no new reply on a thread whose root is older than
-the newest message we hold. Set it to how far back you want those
+It defaults to 30 days. Without it we would notice no deleted message
+and no edit. (A new reply on a thread is found by the reply search
+instead; see "Threads" above.) Set it to how far back you want those
 caught, or to `0` to turn the pass off:
 
 ```toml

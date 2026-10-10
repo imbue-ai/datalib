@@ -102,6 +102,7 @@ impl DataProcessor for SlackIngest {
                 dms: self.sync.dms,
                 dm_conversations: self.sync.dm_conversations.clone(),
                 blob_size_limit_bytes: self.blob_size_limit_bytes,
+                search_replies: true,
                 latchkey: self.latchkey.clone(),
                 now,
                 progress: ctx.progress.clone(),
