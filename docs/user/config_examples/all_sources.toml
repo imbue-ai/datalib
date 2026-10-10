@@ -1150,9 +1150,10 @@ inputs = ["whatsapp/keyword_index"]
 
 # File-backed: point `export.path` at an unzipped "Download your
 # information" export in its JSON format (the HTML one is not read).
-# Ingest mirrors every JSON file to its own table and every photo or
-# video a record references into the blob store; render emits your
-# posts, albums, comments and reactions, and your friends as contacts.
+# Ingest mirrors every JSON file to its own table (Messenger's
+# conversations into two) and every photo or video a record references
+# into the blob store; render emits your posts, albums, comments,
+# reactions and Messenger conversations, and your friends as contacts.
 # Each export is a complete snapshot, and the ingest prunes what a newer
 # one no longer holds.
 [[groups]]
