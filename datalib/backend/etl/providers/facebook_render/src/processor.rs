@@ -14,9 +14,9 @@ use datalib_etl_chat_common::render::render_all as chat_render_all;
 use datalib_etl_chat_common::types::NormalizedChat;
 use datalib_etl_contact_common::{render_all as contact_render_all, ContactDoc};
 use datalib_etl_facebook::ingest::schema_raw::{
-    ALBUMS_TABLE, COMMENTS_TABLE, COMMENT_EDITS_TABLE, FRIENDS_TABLE, MESSENGER_MESSAGES_TABLE,
-    MESSENGER_THREADS_TABLE, OTHER_POSTS_TABLE, POSTS_TABLE, POST_EDITS_TABLE, PROFILE_TABLE,
-    REACTIONS_TABLE,
+    ALBUMS_TABLE, COMMENTS_TABLE, COMMENT_EDITS_TABLE, FRIENDS_TABLE, GROUPS_JOINED_TABLE,
+    GROUP_COMMENTS_TABLE, GROUP_POSTS_TABLE, MESSENGER_MESSAGES_TABLE, MESSENGER_THREADS_TABLE,
+    OTHER_POSTS_TABLE, POSTS_TABLE, POST_EDITS_TABLE, PROFILE_TABLE, REACTIONS_TABLE,
 };
 use datalib_etl_facebook::ingest::{db_path_for, RawDb};
 use datalib_etl_facebook_config::FacebookRenderConfig;
@@ -30,7 +30,7 @@ use crate::albums::{albums_profile, build_albums};
 use crate::common::{str_field, RENDER_VERSION};
 use crate::friends::{build_friends, friends_profile};
 use crate::messenger::{build_conversations, messenger_profile};
-use crate::posts::{build_posts, posts_profile};
+use crate::posts::{build_posts, posts_profile, PostRows};
 
 pub fn plan_render(
     ctx: PlanContext,
@@ -119,6 +119,9 @@ const ALL_TABLES: &[&str] = &[
     MESSENGER_MESSAGES_TABLE,
     POST_EDITS_TABLE,
     COMMENT_EDITS_TABLE,
+    GROUP_POSTS_TABLE,
+    GROUP_COMMENTS_TABLE,
+    GROUPS_JOINED_TABLE,
 ];
 
 /// Everything one pass reads off the store, built while it is open.
@@ -170,14 +173,22 @@ pub fn render_source(
 
             let owner = Owner::from_profile(source.name, rows(PROFILE_TABLE));
             let mut posts = build_posts(
-                rows(POSTS_TABLE),
-                rows(OTHER_POSTS_TABLE),
-                rows(POST_EDITS_TABLE),
+                &PostRows {
+                    posts: rows(POSTS_TABLE),
+                    other_posts: rows(OTHER_POSTS_TABLE),
+                    group_posts: rows(GROUP_POSTS_TABLE),
+                    edits: rows(POST_EDITS_TABLE),
+                    groups_joined: rows(GROUPS_JOINED_TABLE),
+                },
                 &owner,
             );
             let mut albums = build_albums(rows(ALBUMS_TABLE), &owner);
-            let mut comments =
-                build_comments(rows(COMMENTS_TABLE), rows(COMMENT_EDITS_TABLE), &owner);
+            let mut comments = build_comments(
+                rows(COMMENTS_TABLE),
+                rows(GROUP_COMMENTS_TABLE),
+                rows(COMMENT_EDITS_TABLE),
+                &owner,
+            );
             let mut reactions = build_reactions(rows(REACTIONS_TABLE), &owner);
             let mut conversations = build_conversations(
                 rows(MESSENGER_THREADS_TABLE),
@@ -196,7 +207,12 @@ pub fn render_source(
                     .as_ref()
                     .is_some_and(|c| c.contains_key(POST_EDITS_TABLE));
             let as_one: &[&str] = if edited {
-                &[POSTS_TABLE, OTHER_POSTS_TABLE, POST_EDITS_TABLE]
+                &[
+                    POSTS_TABLE,
+                    OTHER_POSTS_TABLE,
+                    GROUP_POSTS_TABLE,
+                    POST_EDITS_TABLE,
+                ]
             } else {
                 &[]
             };
