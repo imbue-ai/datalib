@@ -49,6 +49,13 @@ export function toDeeplink(route: Route): string {
   return `datalib://${toHash(route)}`;
 }
 
+/** The link a copied 🆔 button becomes: the document, and the section within
+ *  it when the uuid is one of its sections rather than the page. */
+export function chatDeeplink(markdownUuid: string, uuid: string): string {
+  const params: Record<string, string> = uuid === markdownUuid ? {} : { msg: uuid };
+  return toDeeplink({ kind: "chat", markdownUuid, params });
+}
+
 function parseQuery(q: string): Record<string, string> {
   const out: Record<string, string> = {};
   if (!q) return out;

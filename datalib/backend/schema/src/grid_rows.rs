@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
     index = "grid_rows_by_kind:kind,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_channel:channel,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_conversation:conversation_uuid,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_subject:conversation_name,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_account:account,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
