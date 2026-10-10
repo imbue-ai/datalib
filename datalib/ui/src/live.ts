@@ -276,3 +276,21 @@ export function oneAtATime(run: () => Promise<void>): () => void {
     else void loop();
   };
 }
+
+/// A refetch whose answer replaces what the page holds, run
+/// `oneAtATime`. Only the newest answer is kept: one in flight when
+/// another ask arrives is dropped for the run that ask is owed, so an
+/// older answer never lands over a newer one, or over a guess the page
+/// made before asking.
+export function newestAnswer<T>(fetch: () => Promise<T>, keep: (answer: T) => void): () => void {
+  let asked = 0;
+  const rerun = oneAtATime(async () => {
+    const mine = asked;
+    const answer = await fetch();
+    if (mine === asked) keep(answer);
+  });
+  return () => {
+    asked += 1;
+    rerun();
+  };
+}
