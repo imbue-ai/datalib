@@ -213,4 +213,7 @@ export type ViewLibs = {
   // source's record of them, the one the chip was seen in first.
   // Opened by double-clicking a person chip. See cards/PersonCard.ce.vue.
   personView: (handle: string, opts?: { seenIn?: string | null }) => CardRender;
+  // Every contact in the contacts app, read straight from it; Browse on
+  // the app's row opens it. See cards/ContactsCard.ce.vue.
+  contactsView: () => CardRender;
 };

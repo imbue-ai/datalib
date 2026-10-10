@@ -15,7 +15,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-mod columns;
+pub(crate) mod columns;
 mod grouping;
 mod map;
 mod problems;

@@ -191,7 +191,9 @@ A grid draws a chip from an `identity` typed cell
 when given its `chips` option, and `GridCard` redraws the Author and
 Source columns when `people` or `entities` says an answer changed. The
 run log draws its Group and Step columns as chips the same way
-(`RunLogPanel.ce.vue`).
+(`RunLogPanel.ce.vue`), and `TableGrid` takes the option too, as the
+contacts app's table does (`ContactsCard.ce.vue`). `tableGrid.css` keeps
+the grid theme's link colour off a chip in a cell.
 
 The Manage table's Name cell is not a chip, on purpose: the row *is*
 the group or step, its double-click renames it, and its own menu
