@@ -35,8 +35,11 @@ impl SourceRender for BeeperRender {
         crate::render::render::RENDER_VERSION
     }
 
+    // `period` decides how messages bucket into documents.
     fn render_params(&self) -> serde_json::Value {
-        datalib_etl_chat_common::render::layout_params()
+        datalib_etl_chat_common::render::layout_params_with(serde_json::json!({
+            "period": self.period.as_config_str(),
+        }))
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {

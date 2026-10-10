@@ -42,7 +42,10 @@ pub trait RenderProcessor: Send + Sync {
     /// filter. The driver stores them beside the cursor and, when they
     /// differ from the stored ones, renders every bucket again rather
     /// than only the changed ones. A processor with no knobs returns the
-    /// empty object, which never differs from itself.
+    /// empty object, which never differs from itself. Every key of a
+    /// render config but `common` is such a knob, and
+    /// `every_render_knob_is_a_render_param` in `datalib_step` fails on
+    /// one left out.
     fn render_params(&self) -> serde_json::Value {
         serde_json::json!({})
     }
