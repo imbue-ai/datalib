@@ -733,10 +733,13 @@ reaches nobody.
 sqlx 0.9 only accepts `&'static str` as a query string. Anything built at
 runtime is wrapped in `sqlx::AssertSqlSafe(...)` — an assertion *you*
 make — with a comment saying why it is safe. Two patterns cover almost
-everything: placeholders built from a count with every value bound, and
+everything: a `?` run sized from `chunk.len()` with every value bound, and
 table/column names that are `&'static str` at every callsite. Anything
 from upstream data is quoted (`lightroom`'s `plan::quote_ident`) or
-bound.
+bound. **A set of values to match is one bound JSON array**,
+`IN (SELECT value FROM json_each(?))`, never a `?` per value: SQLite
+binds at most 32,766 values per statement, and only a real user's data
+gets there (`datalib/backend/etl/README.md` §"Binding a set of values").
 
 ## Timestamp convention
 
