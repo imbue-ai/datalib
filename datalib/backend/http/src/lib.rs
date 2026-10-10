@@ -776,6 +776,9 @@ fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
 
 /// The applet id that serves the grid, search and the document view.
 const UNIFIED_INDEX_APPLET: &str = "unified_index";
+/// The contacts app's applet id: its mount prefix, and the row whose
+/// Browse opens its table.
+pub(crate) const CONTACTS_APPLET: &str = "datalib_contacts";
 
 fn configured_source_count(fringe: &[String]) -> usize {
     let prefix = format!("{}/", datalib_core::layout::UNIFIED_INDEX_DIR);
@@ -2334,7 +2337,7 @@ mod tests {
         // views at all — the thing `app_ready` reports on — and the
         // contacts app, which a new root gets on by default.
         let applets: Vec<&str> = checked.cfg.applets.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(applets, [UNIFIED_INDEX_APPLET, "datalib_contacts"]);
+        assert_eq!(applets, [UNIFIED_INDEX_APPLET, CONTACTS_APPLET]);
     }
 
     /// A scaffolded root has no *sources*, even though its two index
