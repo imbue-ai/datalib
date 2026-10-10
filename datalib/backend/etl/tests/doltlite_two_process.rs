@@ -1054,6 +1054,8 @@ fn a_second_writer_in_another_process_is_refused_and_told_who_holds_the_store() 
         "200",
         "--interval-ms",
         "50",
+        "--commits-out",
+        &t.path("holder-commits"),
         "--out",
         &t.path("holder.json"),
     ]);
@@ -1080,8 +1082,13 @@ fn a_second_writer_in_another_process_is_refused_and_told_who_holds_the_store() 
         "the refusal names the holder ({holder_pid}): {refusal}"
     );
 
-    // Long enough for the holder to commit past the refusal.
-    std::thread::sleep(Duration::from_millis(300));
+    let at_refusal = std::fs::read_to_string(t.path("holder-commits"))
+        .ok()
+        .and_then(|n| n.parse::<usize>().ok())
+        .unwrap_or(0);
+    t.await_content("holder-commits", &mut holder, |n| {
+        n.parse::<usize>().is_ok_and(|n| n > at_refusal)
+    });
     t.release(&mut holder);
     let holder = t.report("holder.json");
     if holder["dolt"] == Value::Bool(false) {
@@ -1089,7 +1096,7 @@ fn a_second_writer_in_another_process_is_refused_and_told_who_holds_the_store() 
     }
     assert_eq!(errors(&holder), Vec::<String>::new(), "holder errors");
     assert!(
-        holder["commits"].as_array().map_or(0, Vec::len) >= 2,
+        holder["commits"].as_array().map_or(0, Vec::len) > at_refusal,
         "the holder kept committing through the refused open: {holder:?}"
     );
     // And the store is free once the holder is gone.
