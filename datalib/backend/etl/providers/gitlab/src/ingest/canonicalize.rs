@@ -89,8 +89,8 @@ mod tests {
         assert_ne!(canonicalize_payload(&a), canonicalize_payload(&b));
     }
 
-    /// 37 of the 43 real occurrences are array-nested, which is exactly
-    /// what `split_volatile`'s object-key paths cannot reach.
+    /// 37 of the 43 real occurrences are array-nested, under parents no
+    /// fixed list of `split_volatile` paths would name.
     #[test]
     fn reaches_avatars_nested_inside_arrays() {
         let p = json!({

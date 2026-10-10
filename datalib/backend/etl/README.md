@@ -118,7 +118,16 @@ re-download, which defeats incremental render.
 
 Declare them per-provider as `VolatilePath`s next to the table definition;
 `split_volatile` moves them into the sidecar's `volatile_payload`, and
-`overlay` reconstructs the wire object exactly.
+`overlay` reconstructs the wire object exactly. A path is object keys,
+plus `*` (`EVERY_ELEMENT`) to reach into each element of an array:
+`["blocks", "*", "block_id"]` takes the id Slack mints on every read out
+of each block, and the sidecar keeps them in order
+(`{"blocks": [{"block_id": …}, {}, …]}`, `{}` for a block without one).
+
+Writing the sidecar replaces it. When two endpoints return one record
+with different volatile fields, as Slack's history and replies copies of
+a thread root do, `merge_volatile_payloads_in_tx` replaces only the
+top-level keys the new copy carries, so the other copy's fields survive.
 
 This is different from sorting an unordered array (see AGENTS.md): volatile
 means *the value carries no information*. If losing the value would lose

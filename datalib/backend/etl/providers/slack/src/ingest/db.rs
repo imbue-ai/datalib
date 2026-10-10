@@ -843,7 +843,7 @@ async fn write_messages(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>])
         .collect();
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     bulk_upsert_in_tx(tx, &rows, &now).await?;
-    dr::set_volatile_payloads_in_tx(tx, MessageRow::TABLE, &volatile).await?;
+    dr::merge_volatile_payloads_in_tx(tx, MessageRow::TABLE, &volatile).await?;
     for p in page {
         let message_uuid = &p.row.id_and_payload.id;
         let files = p.payload.get("files").and_then(Value::as_array);
@@ -1352,6 +1352,78 @@ mod tests {
         read_thread(&db, "1.0", "3.0").await;
         assert!(problems().await.is_empty());
         assert!(owed_threads(&db).await.is_empty());
+    }
+
+    fn with_block_id(mut message: MessageInput, block_id: &str) -> MessageInput {
+        message.payload["blocks"] = json!([{
+            "type": "rich_text", "block_id": block_id,
+            "elements": [{"type": "rich_text_section",
+                          "elements": [{"type": "text", "text": "status report"}]}],
+        }]);
+        message
+    }
+
+    async fn message_payload_and_volatile(db: &RawDb, ts: &str) -> (String, Option<Value>) {
+        let key = slack_message_key("T1", "C1", ts);
+        let payload: String = sqlx::query_scalar("SELECT json(payload) FROM messages WHERE id = ?")
+            .bind(&key)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let volatile: Option<String> = sqlx::query_scalar(
+            "SELECT json(volatile_payload) FROM messages_bookkeeping WHERE id = ?",
+        )
+        .bind(&key)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        (payload, volatile.map(|v| serde_json::from_str(&v).unwrap()))
+    }
+
+    /// Slack mints a fresh `block_id` for a rich-text block on every
+    /// read, so a message read twice must store the same content row.
+    #[tokio::test]
+    async fn a_re_minted_block_id_is_not_a_change_to_the_message() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
+        db.upsert_messages(&[with_block_id(root("1.0", 0, None), "Ab1")])
+            .await
+            .unwrap();
+        let (first, _) = message_payload_and_volatile(&db, "1.0").await;
+
+        db.upsert_messages(&[with_block_id(root("1.0", 0, None), "Zz9")])
+            .await
+            .unwrap();
+        let (second, volatile) = message_payload_and_volatile(&db, "1.0").await;
+
+        assert_eq!(first, second);
+        assert!(!second.contains("block_id"), "{second}");
+        assert_eq!(volatile.unwrap()["blocks"][0]["block_id"], "Zz9");
+    }
+
+    /// The history copy of a followed root has block ids to split but no
+    /// read mark; storing it after the replies copy (a refresh does) must
+    /// not take the mark away from the thread.
+    #[tokio::test]
+    async fn the_history_copy_of_a_followed_root_keeps_its_read_mark() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
+        let mut replies_copy = with_block_id(root("1.0", 1, Some("2.0")), "Ab1");
+        replies_copy.payload["last_read"] = json!("1.0");
+        replies_copy.payload["subscribed"] = json!(true);
+        db.upsert_messages(&[replies_copy]).await.unwrap();
+        let (first, _) = message_payload_and_volatile(&db, "1.0").await;
+
+        let history_copy = with_block_id(root("1.0", 1, Some("2.0")), "Zz9");
+        db.upsert_messages(&[history_copy]).await.unwrap();
+        let (second, volatile) = message_payload_and_volatile(&db, "1.0").await;
+
+        assert_eq!(first, second);
+        assert_eq!(
+            volatile.unwrap(),
+            json!({"last_read": "1.0", "subscribed": true,
+                   "blocks": [{"block_id": "Zz9"}]})
+        );
     }
 
     fn with_file(ts: &str, file: Value) -> MessageInput {
