@@ -330,11 +330,13 @@ mod tests {
                 role: RecipientRole::To,
                 display: "Deanna Troi".into(),
                 handle: Some(troi.clone()),
+                drawn: true,
             },
             Recipient {
                 role: RecipientRole::Cc,
                 display: "picard@enterprise.org".into(),
                 handle: Some(picard.clone()),
+                drawn: true,
             },
         ];
         let got = baseline_contacts("mail", &[item], &[]);

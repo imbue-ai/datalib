@@ -54,7 +54,10 @@ An item with `recipients` (an email's To, Cc and Bcc) gets one more line
 straight under the header, a paragraph rather than an HTML block
 because markdown is not parsed inside a block:
 `<span class="msg-recipients">To [Will Riker](mailto:… "…"), <span
-class="msg-recipient">Deanna Troi</span>; Cc …</span>`.
+class="msg-recipient">Deanna Troi</span>; Cc …</span>`. A recipient
+the conversation already names (`Recipient::drawn` false: the number a
+text went to) is left off the line, so every message does not repeat
+it, and is searched and counted all the same.
 
 Each document also carries a `NormalizedContact` per handle in it
 (`src/people.rs`): authors with what they wrote, recipients and

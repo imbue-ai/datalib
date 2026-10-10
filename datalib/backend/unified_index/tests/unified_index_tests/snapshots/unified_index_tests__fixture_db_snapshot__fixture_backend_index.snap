@@ -137,6 +137,18 @@ expression: snapshot
       "title": "drone.4.of.12@unimatrix01.borg"
     },
     {
+      "bucket_key": "00000000-0000-85d9-b5a3-420c27c71680",
+      "created_at": "2369-04-15T11:00:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "00000000-0000-8155-8d40-a50571af703b",
+      "md_path": "sms-backup-restore/render_markdown/00000000-0000-85d9-b5a3-420c27c71680/2369-04.md",
+      "modified_at": "2369-04-15T11:00:00+00:00",
+      "provider": "sms_backup_restore",
+      "renderer_version": "rust-v1.7",
+      "source_id": "sms-backup-restore",
+      "title": "Geordi La Forge"
+    },
+    {
       "bucket_key": "00000000-0000-8184-b70f-0aace9f02d6c",
       "created_at": "2369-04-14T10:00:00+00:00",
       "kind": "chat",
@@ -276,7 +288,7 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/00000000-0000-8a32-861f-a85bca667a83/2369-04.md",
       "modified_at": "2369-04-15T10:01:00+00:00",
       "provider": "sms_backup_restore",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "sms-backup-restore",
       "title": "Worf"
     },
@@ -516,7 +528,7 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/00000000-0000-8709-8732-c5f02579e8d6/2369-04.md",
       "modified_at": "2369-04-14T20:30:00+00:00",
       "provider": "sms_backup_restore",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "sms-backup-restore",
       "title": "Deanna Troi"
     },
@@ -1320,7 +1332,7 @@ expression: snapshot
       "md_path": "sms-backup-restore/render_markdown/00000000-0000-8c57-9571-2bd28212d376/2369-04.md",
       "modified_at": "2369-04-15T09:03:00+00:00",
       "provider": "sms_backup_restore",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "sms-backup-restore",
       "title": "Jean-Luc Picard"
     },
@@ -1813,7 +1825,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=158 markdowns_read=158 markdowns_removed=3 rows_inserted=755"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=159 markdowns_read=159 markdowns_removed=3 rows_inserted=757"
     }
   ],
   "grid_rows": [
@@ -2086,6 +2098,36 @@ expression: snapshot
       "upstream_entity_kind": "contact",
       "upstream_id": "Borg#Borg:Borg:3",
       "uuid": "00000000-0000-8140-88d9-42badf1b195b"
+    },
+    {
+      "account": null,
+      "author": null,
+      "byte_size": 43,
+      "channel": null,
+      "content_hash": "76ce67b3a79d2166",
+      "conversation_name": "Geordi La Forge",
+      "conversation_uuid": "00000000-0000-85d9-b5a3-420c27c71680",
+      "created_at": "2369-04-15T11:00:00+00:00",
+      "entire_chat": "/chat/00000000-0000-8155-8d40-a50571af703b",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "SMS Conversation",
+      "markdown_uuid": "00000000-0000-8155-8d40-a50571af703b",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 43,
+      "project": "SMS Backup",
+      "provider": "sms_backup_restore",
+      "qmd_path": "sms-backup-restore/render_markdown/00000000-0000-85d9-b5a3-420c27c71680/2369-04.md",
+      "source_label": "SMS",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "conversation_month",
+      "upstream_id": "sms:+12025550104#2369-04",
+      "uuid": "00000000-0000-8155-8d40-a50571af703b"
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -13009,6 +13051,36 @@ expression: snapshot
     },
     {
       "account": null,
+      "author": "Me",
+      "byte_size": 43,
+      "channel": null,
+      "content_hash": "76ce67b3a79d2166",
+      "conversation_name": "Geordi La Forge",
+      "conversation_uuid": "00000000-0000-85d9-b5a3-420c27c71680",
+      "created_at": "2369-04-15T11:00:00+00:00",
+      "entire_chat": "/chat/00000000-0000-8155-8d40-a50571af703b",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "SMS Message",
+      "markdown_uuid": "00000000-0000-8155-8d40-a50571af703b",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 43,
+      "project": "SMS Backup",
+      "provider": "sms_backup_restore",
+      "qmd_path": "sms-backup-restore/render_markdown/00000000-0000-85d9-b5a3-420c27c71680/2369-04.md",
+      "source_label": "SMS",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "message",
+      "upstream_id": "159a850f-302c-55ec-a8cc-9b3dacc42e20",
+      "uuid": "0b75ba9e-0f80-8ad5-8bd8-d3e3fd659bed"
+    },
+    {
+      "account": null,
       "author": "jlpicard",
       "byte_size": null,
       "channel": null,
@@ -16563,15 +16635,15 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:40cbe5eb2a764532e8500a7e3feea5896bbc46543034c0caf928a7d7c424953e",
+      "members_sha": "sha256:212f9897ec9c084bd03eece909a29f4543658d06428987c869de576bcfa979c0",
       "rows": 170,
       "source": ""
     }
   ],
   "summary": {
-    "documents_count": 150,
+    "documents_count": 151,
     "dolt_log_count": 3,
-    "grid_rows_count": 491,
+    "grid_rows_count": 493,
     "storage_rows_count": 227
   }
 }

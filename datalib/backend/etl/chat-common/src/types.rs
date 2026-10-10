@@ -115,6 +115,10 @@ pub struct Recipient {
     /// As the source showed them: a display name, else the address.
     pub display: String,
     pub handle: Option<datalib_handle::Handle>,
+    /// Whether the message's recipients line names them. False where the
+    /// conversation already says who (an SMS thread's other side), so
+    /// every message would repeat it; searched and counted either way.
+    pub drawn: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -145,7 +149,8 @@ pub struct NormalizedChatItem {
     /// anchor (`id="m-{uuid}"`) and the message-level grid_row PK.
     pub message_uuid: String,
     /// Who it was addressed to, where the source says: an email's To, Cc
-    /// and Bcc. Empty for a chat, whose members are the conversation's.
+    /// and Bcc, the number a text was sent to. Empty for a chat, whose
+    /// members are the conversation's.
     pub recipients: Vec<Recipient>,
     /// Who the text names where the source marks a name up as a person
     /// (Slack's `<@U…>`, a Signal mention), never a name or address
