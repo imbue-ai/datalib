@@ -188,6 +188,20 @@ fn timeline_post_unread(v: &Value) -> Vec<datalib_schema::problems::Problem> {
     out
 }
 
+/// The labels of a post on someone else's page that render reads, or
+/// leaves out on purpose: which app wrote it, the language Facebook
+/// guessed, whether to translate it.
+const OTHER_PAGE_LABELS: &[&str] = &[
+    "Message",
+    "Media",
+    "Feeling/activity",
+    "Last modified",
+    "Detected dialect",
+    "App used at creation time",
+    "Third-party app used at creation time",
+    "Translation should be skipped",
+];
+
 /// A post on someone else's page or profile: the `label_values` shape,
 /// keyed by Facebook's own `fbid`.
 fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
@@ -217,9 +231,19 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     {
         body.markup(format!("— {}", escape_md_inline(feeling)));
     }
+    let date_ms = ts_ms(v, "timestamp");
+    if let Some(edited) = label_value(v, "Last modified")
+        .and_then(|lv| lv.get("timestamp_value"))
+        .and_then(Value::as_i64)
+        .filter(|s| *s > 0 && Some(*s * 1000) != date_ms)
+        .and_then(|s| datalib_time::IsoOffsetTimestamp::from_unix_millis(s * 1000))
+    {
+        let stamp = edited.to_rfc3339_secs();
+        let day = stamp.split('T').next().unwrap_or(&stamp);
+        body.markup(format!("*Edited {day}*"));
+    }
     let text = body.markdown();
     let display = display_for(None, body.opening_words(), "Facebook post on another page");
-    let date_ms = ts_ms(v, "timestamp");
     let item_id = ids::post_text(&owner.source_id, row_id, date_ms);
     let mut item = chat_item(
         item_id,
@@ -229,8 +253,7 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         attachments,
     );
     item.problems = unread_keys(v, &["fbid", "label_values", "media", "timestamp"], "");
-    item.problems
-        .extend(unread_labels(v, &["Message", "Media", "Feeling/activity"]));
+    item.problems.extend(unread_labels(v, OTHER_PAGE_LABELS));
     one_item_chat(row_id, inputs, display, None, item, owner)
 }
 

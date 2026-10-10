@@ -160,18 +160,6 @@ FACEBOOK_UNREAD_LABELS = [
     f"{problem_uuid}|warning|parse|markdown|{FACEBOOK_OTHER_PAGE_POST}"
     f"|{FACEBOOK_OTHER_PAGE_POST_ITEM}|label_values:{label}|uncovered_type|{shape}"
     for problem_uuid, label, shape in [
-        (
-            "5db7500e-c6c4-54cc-a31c-ce89169ae96c",
-            "Detected dialect",
-            "object{label,value}",
-        ),
-        (
-            "5fb2d302-6f5c-5d25-b427-20ac87180332",
-            "Last modified",
-            "object{label,timestamp_value}",
-        ),
-        ("b4ddb4bd-ec84-50e6-ac58-d9a61e4c0f3e", "Target", "object{label}"),
-        ("c74628d6-11fb-5351-859e-5a9512ce0345", "Attachments", "object{dict,title}"),
         ("dd6c6c4b-5913-505a-b250-ed5b355c8bdd", "", "object{timestamp_value}"),
     ]
 ]

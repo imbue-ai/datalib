@@ -361,13 +361,15 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
                  list (left the conversation?)",
                 "warning call_duration /message/call_duration = int",
                 "warning label_values: /label_values/7 = object{timestamp_value}",
-                "warning label_values:Attachments /label_values/5 = object{dict,title}",
-                "warning label_values:Detected dialect /label_values/4 = object{label,value}",
-                "warning label_values:Last modified /label_values/1 = \
-                 object{label,timestamp_value}",
-                "warning label_values:Target /label_values/3 = object{label}",
             ]
         );
+        // A post on another page edited after it was posted says so.
+        let other_page = docs
+            .iter()
+            .find(|d| fs::read_to_string(&d.md_path).is_ok_and(|md| md.contains("Edited 2369-")))
+            .map(|d| d.md_path.clone());
+        assert!(other_page.is_some(), "the edited post carries its note");
+
         // Every document declares the rows it read, so a change to any of
         // them renders it again; every one includes the profile row.
         for d in &docs {

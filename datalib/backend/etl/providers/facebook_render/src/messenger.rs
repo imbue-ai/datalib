@@ -384,6 +384,9 @@ fn message(
     }
 
     let unsent = m.get("is_unsent").and_then(Value::as_bool) == Some(true);
+    if unsent && !(parts.is_empty() && attachments.is_empty()) {
+        parts.push("*Unsent*".to_string());
+    }
     let text = (!parts.is_empty()).then(|| parts.join("\n\n"));
     let empty = text.is_none() && attachments.is_empty();
     if empty && !unsent {
@@ -395,11 +398,16 @@ fn message(
     let id = ids::message(&owner.source_id, row_id, date_ms);
     let mut item = chat_item(id, author, date_ms, text, attachments);
     item.author_handle = handle;
-    if unsent {
-        item.system_note = Some("Unsent".to_string());
-        if empty {
-            item.kind = ItemKind::System;
-        }
+    // A message the export carries nothing of still happened: say so
+    // rather than draw a bare header.
+    if empty {
+        item.kind = ItemKind::System;
+        let note = if unsent {
+            "Unsent"
+        } else {
+            "No content in the export"
+        };
+        item.system_note = Some(note.to_string());
     }
     let reactions = m.get("reactions").and_then(Value::as_array);
     for (i, r) in reactions.into_iter().flatten().enumerate() {

@@ -274,7 +274,9 @@ pub fn unread_attachment_keys(record: &Value) -> Vec<Problem> {
 
 /// The `label_values` entries whose `label` (or a section's `title`)
 /// render does not read, each reported under `label_values:<label>` by
-/// the shape of its entry.
+/// the shape of its entry. An entry with nothing in it — no value, an
+/// empty list — loses nothing, and is not one; a real export is full of
+/// them.
 pub fn unread_labels(record: &Value, read: &[&str]) -> Vec<Problem> {
     let entries = record.get("label_values").and_then(Value::as_array);
     entries
@@ -289,7 +291,7 @@ pub fn unread_labels(record: &Value, read: &[&str]) -> Vec<Problem> {
                 .or_else(|| lv.get("title"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            (!read.contains(&label)).then(|| {
+            (!read.contains(&label) && !is_empty_entry(lv)).then(|| {
                 Problem::field(
                     format!("label_values:{label}"),
                     Reason::UncoveredType,
@@ -300,6 +302,22 @@ pub fn unread_labels(record: &Value, read: &[&str]) -> Vec<Problem> {
             })
         })
         .collect()
+}
+
+/// A `label_values` entry with no value: every key but its `label` or
+/// `title` empty, or absent.
+fn is_empty_entry(lv: &Value) -> bool {
+    lv.as_object().is_some_and(|m| {
+        m.iter()
+            .filter(|(k, _)| *k != "label" && *k != "title")
+            .all(|(_, v)| match v {
+                Value::Null => true,
+                Value::String(s) => s.trim().is_empty(),
+                Value::Array(a) => a.is_empty(),
+                Value::Object(o) => o.is_empty(),
+                _ => false,
+            })
+    })
 }
 
 /// What a value is, without what it says: `string(12 chars)`,
@@ -411,6 +429,22 @@ mod tests {
             ]
         );
         assert_eq!(shape_of(&json!("private words")), "string(13 chars)");
+    }
+
+    #[test]
+    fn an_empty_label_values_entry_is_not_a_problem() {
+        let r = json!({"label_values": [
+            {"label": "Target"},
+            {"label": "Files", "media": []},
+            {"title": "Shares", "dict": []},
+            {"label": "Feeling", "value": " "},
+            {"label": "Mood", "value": "curious"},
+        ]});
+        let fields: Vec<String> = unread_labels(&r, &[])
+            .into_iter()
+            .filter_map(|p| p.field)
+            .collect();
+        assert_eq!(fields, ["label_values:Mood"]);
     }
 
     #[test]
