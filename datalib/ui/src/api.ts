@@ -74,6 +74,11 @@ export type SearchRow = {
   email: string | null;
   phone: string | null;
   contact_ref?: Identity | null;
+  // The Subject cell the applet resolves: a contact's own row's Contact
+  // chip, else the conversation's name.
+  subject_ref?: Identity | null;
+  // Where the row is filed when that is not its subject: an address
+  // book, a calendar, a device. Empty on a chat.
   channel: string;
   // Public URL for the row's source artifact (Slack permalink, LinkedIn
   // post, …); empty when none.

@@ -835,3 +835,29 @@ async fn item_counts_and_their_history_reach_the_rows_from_the_run_store() {
         );
     }
 }
+
+/// The contacts app's rows are its own, so its row's Browse is on (the UI
+/// opens its table); any other applet serves endpoints and has none.
+#[tokio::test]
+async fn the_contacts_app_can_be_browsed_and_another_applet_cannot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = format!(
+        "{CONFIG}\n[[applets]]\nid = \"datalib_contacts\"\ngroup = \"unified_index\"\n\
+         command = \"datalib-applet datalib_contacts\"\n"
+    );
+    write_root(tmp.path(), &config, None).await;
+    let rows = by_key(&get_rows(tmp.path()).await);
+    let browse = |key: &str| {
+        rows[key]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == "browse")
+            .cloned()
+            .unwrap()
+    };
+    let contacts = browse("datalib_contacts");
+    assert_eq!(contacts["enabled"], true, "{contacts}");
+    assert_eq!(contacts["label"], "Browse your contacts");
+    assert_eq!(browse("unified_index")["enabled"], false);
+}

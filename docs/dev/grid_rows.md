@@ -253,10 +253,27 @@ group, and `email` and `phone` are the card's first address and number
 as the source wrote them, a number with or without its country code.
 The grid's Contact column is drawn from the three, and from the
 contact's handles in `source_contact_handles` where neither the address
-nor the number makes one ([`chips.md`](chips.md) §"In a grid"). Such a row is its own
-conversation, so `conversation_name` is the contact's name too, and
-`channel` holds the address book or list it is filed in and is the
-only column that does. `author` stays null: nobody wrote a contact.
+nor the number makes one ([`chips.md`](chips.md) §"In a grid"), and so
+is the Subject cell on such a row. A card is its own subject, so `conversation_name` is the
+contact's name too, and `channel` holds the address book or list it is
+filed in. `author` stays null: nobody wrote a contact.
+
+### `conversation_name` and `channel`: the subject, and where it is filed
+
+`conversation_name` is the row's **subject**: the conversation,
+thread, page, event or card the row belongs to, carried onto every row
+in it, and on a document's own row its own title. The grid shows it as
+the Subject column (`subject_ref`, which on a contact's row is the
+card's chip), and `subject:` finds it by its whole name, `conversation:`
+being the same key; `convo:` names the conversation by id, and is what
+the cell's Keep only writes.
+
+`channel` is where a row is filed when that is *not* its subject: a
+card's address book, an event's calendar, a sensor's device, LinkedIn's
+connections list. A chat leaves it null — chat-common writes the
+conversation's name once, as its subject — so the two never repeat
+each other. A hierarchy of places (a Slack workspace and its channel, a
+Linear org and its team) is not modelled yet.
 
 ### `conversation_uuid`, `preview`, `content_hash`
 

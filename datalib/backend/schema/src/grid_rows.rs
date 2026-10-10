@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
     index = "grid_rows_by_kind:kind,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_channel:channel,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_conversation:conversation_uuid,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_subject:conversation_name,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_account:account,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
@@ -160,14 +161,16 @@ pub struct GridRow {
     /// Display name for `org_uuid`, shown in the Org column.
     #[col(sql = "VARCHAR(255)", search)]
     pub org_name: Option<String>,
-    /// Slack channel, or a chat's display name (group subject, 1:1
-    /// counterpart). Null for providers with no channel concept.
+    /// Where the row is filed, when that is not its subject: a contact's
+    /// address book, an event's calendar, a sensor's device. Null for a
+    /// chat, whose conversation is its subject.
     #[col(sql = "VARCHAR(255)", search)]
     pub channel: Option<String>,
-    /// Title of the parent conversation, carried onto every child row so a
-    /// grid row stands alone without a join. For thread-level rows this
-    /// duplicates the row's own title.
-    #[col(sql = "TEXT")]
+    /// The row's subject: the conversation, thread, page, event or card it
+    /// belongs to, carried onto every child row so a grid row stands alone
+    /// without a join. For a document's own row this is its own title.
+    /// Searched by name as `subject:`; `convo:` names it by id.
+    #[col(sql = "TEXT", search = "subject", alias = "conversation")]
     pub conversation_name: Option<String>,
     /// The parent thread, so the preview pane knows what to open. Equals
     /// `uuid` for thread-level rows.

@@ -17,6 +17,7 @@ import { copyToClipboard } from "@/clipboard";
 import { confirmAction, openRawStore, revealInFileManager } from "@/desktop";
 import { pushToast } from "@/toasts";
 import type { Api } from "./cardApi";
+import { appletBrowseSource } from "./cardSources";
 import { historySource } from "./libs/historyView";
 import { logSource } from "./libs/logView";
 import { syncDashboardSource } from "./libs/syncDashboardView";
@@ -66,7 +67,8 @@ function groupBrowse(g: ManageRow): string | null {
 }
 
 /// A row's Browse: `system/` browses the run log, a group its view, a
-/// step its group's — or, for a download step in the app, its raw store.
+/// step its group's, the contacts app its table — or, for a download
+/// step in the app, its raw store.
 export function withBrowse<R extends ManageRow>(
   r: R,
   groups: Map<string, ManageRow>,
@@ -76,6 +78,10 @@ export function withBrowse<R extends ManageRow>(
     return { ...r, browseSource: browseAction(r)?.enabled ? "logView()" : null, rawStore: null };
   }
   if (r.kind === "group") return { ...r, browseSource: groupBrowse(r), rawStore: null };
+  if (r.kind === "applet") {
+    const browseSource = browseAction(r)?.enabled ? appletBrowseSource(r.id) : null;
+    return { ...r, browseSource, rawStore: null };
+  }
   const group = r.group ? groups.get(r.group) : undefined;
   const rawStore = canReveal ? r.raw_store_path : null;
   return {

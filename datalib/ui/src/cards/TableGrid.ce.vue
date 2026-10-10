@@ -32,7 +32,7 @@ import { keepActiveOnRecord } from "@/grid/activeCell";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
 import { hoverWholeRow } from "@/grid/rowHover";
-import { treeColumnField, typedColumns } from "./typedColumns";
+import { treeColumnField, typedColumns, type SlickColumnOptions } from "./typedColumns";
 import type { TableGridApi } from "./tableGridApi";
 import { fieldsOfType } from "./cellRenderers";
 
@@ -63,6 +63,9 @@ const props = withDefaults(
     columnOverrides?: Record<string, Partial<Column<T>>>;
     /// How many leading columns stay put while the rest scroll sideways.
     pinnedColumns?: number;
+    /// An identity naming a person is drawn as a chip (docs/dev/chips.md
+    /// § "In a grid"); the host redraws its column when an answer moves.
+    chips?: SlickColumnOptions<T>["chips"];
     /// Pixels per row. Read once, when the grid is built.
     rowHeight?: number;
     /// Which rows carry a grip to drag them by. A row moves among its
@@ -236,6 +239,7 @@ function buildColumns(): Column<T>[] {
     actions: props.actions,
     onOpenDocument: (uuid) => emit("openDocument", uuid),
     overrides: props.columnOverrides,
+    chips: props.chips,
   }).map((c, i) =>
     // A pinned column hidden would unpin the one after it.
     i < props.pinnedColumns ? { ...c, excludeFromColumnPicker: true, reorderable: false } : c,

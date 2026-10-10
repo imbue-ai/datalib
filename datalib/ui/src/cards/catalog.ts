@@ -140,6 +140,12 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     description: "Your contact and what each source says about one person.",
     icon: "person",
   },
+  contactsView: {
+    title: "Your contacts",
+    description: "Every contact you have made, live from the contacts app: filter, open, link.",
+    icon: "contacts",
+    gallery: "contactsView()",
+  },
   syncDashboardView: {
     title: "Sync dashboard",
     description: "One source's sync: its steps, charts over the run, and its log.",

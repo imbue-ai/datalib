@@ -609,6 +609,16 @@ programs against:
   `cards/cardSources.ts`); it offers the search for everything with
   them, and *Create contact* for an unlinked handle where a contacts
   app is configured.
+- `contactsView()` — every contact in the contacts app
+  (`cards/ContactsCard.ce.vue`), read straight from it
+  (`GET /applet/datalib_contacts/contacts`, a typed table) and read
+  again on the root's `curated` frame, so an edit made anywhere shows
+  at once. The person is a chip (a click links a handle), a filter
+  narrows by name, address, number or note, a box makes a new contact,
+  a double-click opens the person card and a right-click offers
+  everything with them. The contacts app's row on the Manage screen
+  opens it with Browse (`appletBrowseSource`), and the card gallery
+  lists it.
 - `configView()` — `config.toml` itself, edited directly, saved through
   the backend's loader. Reloads on the root's `config_changed` frame
   and, a beat sooner, on the `config.written` bus topic a card publishes

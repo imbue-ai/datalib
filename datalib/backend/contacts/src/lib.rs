@@ -279,6 +279,29 @@ pub struct ContactSummary {
     pub kind: String,
 }
 
+/// A contact as the store answers it, from its `contacts` row, its links
+/// (working first) and whether it has a photo.
+fn assemble(
+    r: &sqlx::sqlite::SqliteRow,
+    links: Vec<ContactHandle>,
+    has_photo: bool,
+) -> NormalizedContact {
+    let contact_id: String = r.get("contact_id");
+    let kind: String = r.get("kind");
+    let mut contact = NormalizedContact::new(
+        SOURCE_ID,
+        &contact_id,
+        ContactKind::parse(&kind).unwrap_or(ContactKind::Person),
+    );
+    contact.names = vec![r.get("name")];
+    contact.note = r.get("note");
+    contact.created_at = r.get("created_at_utc");
+    contact.modified_at = r.get("updated_at_utc");
+    contact.photo_url = has_photo.then(|| photo_url(&contact_id));
+    contact.handles = links;
+    contact
+}
+
 /// [`Store::search`], over any open of the store, the writer's or a
 /// reader's ([`read::ContactsReader`]).
 pub(crate) async fn search_in(
@@ -408,24 +431,13 @@ impl Store {
         else {
             return Ok(None);
         };
-        let kind: String = r.get("kind");
-        let mut contact = NormalizedContact::new(
-            SOURCE_ID,
-            contact_id,
-            ContactKind::parse(&kind).unwrap_or(ContactKind::Person),
-        );
-        contact.names = vec![r.get("name")];
-        contact.note = r.get("note");
-        contact.created_at = r.get("created_at_utc");
-        contact.modified_at = r.get("updated_at_utc");
         let has_photo: Option<i64> =
             sqlx::query_scalar("SELECT 1 FROM photos WHERE contact_id = ?")
                 .bind(contact_id)
                 .fetch_optional(&self.pool)
                 .await
                 .context("read whether a contact has a photo")?;
-        contact.photo_url = has_photo.map(|_| photo_url(contact_id));
-        contact.handles = sqlx::query(
+        let links = sqlx::query(
             "SELECT handle, stopped_working_by FROM handles WHERE contact_id = ? \
               ORDER BY stopped_working_by IS NOT NULL, handle",
         )
@@ -436,7 +448,49 @@ impl Store {
         .iter()
         .map(|h| stored_link(h.get("handle"), h.get("stopped_working_by")))
         .collect();
-        Ok(Some(contact))
+        Ok(Some(assemble(&r, links, has_photo.is_some())))
+    }
+
+    /// Every contact, by name, as [`Store::contact`] answers each: what the
+    /// contacts app's own table lists. Merged-away contacts are left out.
+    /// Three reads, whatever the count.
+    pub async fn list(&self) -> Result<Vec<NormalizedContact>> {
+        let rows = sqlx::query(
+            "SELECT contact_id, name, kind, note, created_at_utc, updated_at_utc \
+               FROM contacts WHERE merged_into IS NULL ORDER BY name COLLATE NOCASE, contact_id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list contacts")?;
+        let mut links: HashMap<String, Vec<ContactHandle>> = HashMap::new();
+        for h in sqlx::query(
+            "SELECT contact_id, handle, stopped_working_by FROM handles \
+              ORDER BY contact_id, stopped_working_by IS NOT NULL, handle",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list the linked handles")?
+        {
+            links
+                .entry(h.get("contact_id"))
+                .or_default()
+                .push(stored_link(h.get("handle"), h.get("stopped_working_by")));
+        }
+        let with_photo: std::collections::HashSet<String> =
+            sqlx::query_scalar("SELECT contact_id FROM photos")
+                .fetch_all(&self.pool)
+                .await
+                .context("list the contacts with a photo")?
+                .into_iter()
+                .collect();
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let id: String = r.get("contact_id");
+                let has_photo = with_photo.contains(&id);
+                assemble(r, links.remove(&id).unwrap_or_default(), has_photo)
+            })
+            .collect())
     }
 
     /// A new contact holding `handles`. Refused, with nothing written, if
@@ -959,6 +1013,66 @@ mod tests {
         for k in LinkedHow::VARIANTS {
             assert_eq!(serde_json::to_value(k).unwrap(), k.as_str());
         }
+    }
+
+    /// The contacts app's own table: every contact by name whatever its
+    /// case, each with its links (working first) and its photo, as one
+    /// contact reads alone.
+    #[tokio::test]
+    async fn list_answers_every_contact_as_contact_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&store_path(dir.path())).await.unwrap();
+        let riker = email("riker@enterprise.org");
+        let tel = Handle::tel("+15550123456").unwrap();
+        let will = store
+            .create(
+                "Will Riker",
+                ContactKind::Person,
+                std::slice::from_ref(&riker),
+            )
+            .await
+            .unwrap();
+        store.link(&tel, &will).await.unwrap();
+        store
+            .set_stopped_working(&riker, Some("2369"))
+            .await
+            .unwrap();
+        let data = store
+            .create("data", ContactKind::Person, &[])
+            .await
+            .unwrap();
+        store
+            .set_photo(&data, "image/png", b"\x89PNG\r\n\x1a\n")
+            .await
+            .unwrap();
+        let crew = store
+            .create("Bridge crew", ContactKind::Group, &[])
+            .await
+            .unwrap();
+
+        let listed = store.list().await.unwrap();
+        let names: Vec<&str> = listed.iter().filter_map(|c| c.name()).collect();
+        assert_eq!(names, ["Bridge crew", "data", "Will Riker"]);
+        assert_eq!(listed[0].key, crew);
+        assert_eq!(listed[0].kind, ContactKind::Group);
+        assert_eq!(
+            listed[1].photo_url.as_deref(),
+            Some(photo_url(&data).as_str())
+        );
+        let handles: Vec<Option<&str>> = listed[2]
+            .handles
+            .iter()
+            .map(|h| h.handle.as_ref().map(Handle::as_str))
+            .collect();
+        assert_eq!(
+            handles,
+            [Some(tel.as_str()), Some(riker.as_str())],
+            "working first"
+        );
+        for c in &listed {
+            assert_eq!(Some(c), store.contact(&c.key).await.unwrap().as_ref());
+        }
+        store.close().await;
     }
 
     /// The whole loop a chip drives: unresolved, created, resolved, and
