@@ -296,6 +296,12 @@ and the sync goes on with the rest.
 A channel whose history fails still has its owed threads and files
 fetched on that run: they are in the store whatever the walk did.
 
+**A mirror with no messages** after a run that walked at least one
+channel cleanly is a `silent:channels` warning. Slack answers a
+channel with nothing in range by an empty page and `ok: true`, so a
+range that holds nothing looks like a successful sync without it. A run that was stopped leaves the row as it was; the first run
+that ends with a message in the store clears it.
+
 ## Attachments
 
 Each file a stored message carries that Slack serves (not a tombstone,
