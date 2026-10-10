@@ -108,3 +108,7 @@ before the version bump.
   and the network. The release runner and the tauri bundle both make
   this same call.
 - Signing, notarization, and the asset uploads.
+- `docker-publish`'s pulls. Its Docker Hub images come through
+  `mirror.gcr.io` (`ci.md` §"What runs where"), and only a tag runs
+  that job, so a change to how it pulls is first tried by the next
+  release.
