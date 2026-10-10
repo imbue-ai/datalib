@@ -129,6 +129,15 @@ export function uriFromEntity(kind, id) {
   return `datalib:${kind}/${id}`;
 }
 
+/** The contact a `datalib:contact/<id>` URI names, or null. Mirrors
+ *  `datalib_contacts::contact_uri`.
+ *  @param {string} href
+ *  @returns {string | null} */
+export function contactFromUri(href) {
+  const m = /^datalib:contact\/(.+)$/.exec(href.trim());
+  return m ? m[1] : null;
+}
+
 /** The markdown-it plugin: an explicit link whose href names a handle
  *  gets `class="chip"` and `data-handle`; one naming a group or a step,
  *  `class="chip"` and `data-entity` (its URI). A link linkify made from a bare

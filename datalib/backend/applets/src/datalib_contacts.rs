@@ -76,7 +76,8 @@ fn routes(store: Arc<Store>) -> Router {
         .route("/resolve", post(resolve))
         .route("/search", get(search))
         .route("/contacts", get(list).post(create))
-        .route("/contact/{contact_id}", get(contact))
+        .route("/contact/{contact_id}", get(contact).delete(delete))
+        .route("/merge", post(merge))
         .route("/link", post(link))
         .route("/unlink", post(unlink))
         .route("/stopped_working", post(stopped_working))
@@ -126,6 +127,9 @@ fn refused(e: anyhow::Error) -> ApiError {
         "has no draft",
         "a field needs an id",
         "two fields share",
+        "merged into itself",
+        "already merged",
+        "can be merged",
     ]
     .iter()
     .any(|m| msg.contains(m));
@@ -189,7 +193,8 @@ async fn list(State(store): AppState) -> Result<Json<serde_json::Value>, ApiErro
 /// address and number, how many handles, the note, the kind and when it
 /// last changed. A contact is keyed by its id, and the chip by the
 /// handle the grid's Contact column would draw it by: its first working
-/// address, else number, else any handle; one with none is its name.
+/// address, else number, else any handle; one with none is a chip for
+/// the contact itself.
 fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
     let columns = vec![
         ColumnSpec::new("contact_ref", "Contact", ColumnType::Identity),
@@ -216,7 +221,7 @@ fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
                 .or_else(|| c.handles.first())
                 .and_then(|h| h.handle.as_ref());
             let contact_ref = Identity {
-                id: chip.map_or_else(|| name.to_string(), Handle::to_uri),
+                id: chip.map_or_else(|| datalib_contacts::contact_uri(&c.key), Handle::to_uri),
                 label: name.to_string(),
                 icon: chip
                     .map(|h| crate::unified_index::columns::handle_mark(h.kind()).to_string()),
@@ -286,6 +291,36 @@ async fn contact(
             format!("no contact {contact_id}"),
         )),
     }
+}
+
+/// Everything of the contact goes; its handles are nobody's afterwards.
+async fn delete(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    store.delete(&contact_id).await.map_err(|e| {
+        if format!("{e:#}").contains("no contact") {
+            ApiError(StatusCode::NOT_FOUND, format!("no contact {contact_id}"))
+        } else {
+            refused(e)
+        }
+    })?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct MergeBody {
+    from: String,
+    into: String,
+}
+
+/// `from` is merged into `into`, which survives.
+async fn merge(
+    State(store): AppState,
+    Json(body): Json<MergeBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    store.merge(&body.from, &body.into).await.map_err(refused)?;
+    Ok(Json(json!({ "contact_id": body.into })))
 }
 
 #[derive(Deserialize)]
@@ -571,7 +606,12 @@ mod tests {
         assert_eq!(riker["email"], "riker@enterprise.org");
         assert_eq!(riker["phone"], "+15550123456");
         assert_eq!(riker["handles"], 3);
-        assert_eq!(rows[1]["contact_ref"]["id"], "Q", "no handle, so no chip");
+        let q = rows[1]["key"].as_str().unwrap();
+        assert_eq!(
+            rows[1]["contact_ref"]["id"],
+            datalib_contacts::contact_uri(q),
+            "no handle, so a chip for the contact itself"
+        );
         assert_eq!(rows[0]["kind"], "Contact group");
         let fields: Vec<&str> = body["columns"]
             .as_array()
@@ -584,6 +624,48 @@ mod tests {
                 assert!(r.get(*f).is_some(), "row lacks {f}: {r}");
             }
         }
+    }
+
+    /// The table's right-click: two rows for one person merged into the
+    /// one kept, then a contact deleted; a refusal is the person's to fix.
+    #[tokio::test]
+    async fn a_duplicate_is_merged_and_a_contact_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&datalib_contacts::store_path(dir.path()))
+            .await
+            .unwrap();
+        let tel = Handle::tel("+15550123456").unwrap();
+        let keep = store
+            .create("Data", ContactKind::Person, std::slice::from_ref(&tel))
+            .await
+            .unwrap();
+        let dup = store
+            .create("Data", ContactKind::Person, &[])
+            .await
+            .unwrap();
+        let store = Arc::new(store);
+        let app = routes(store.clone());
+
+        let (status, body) = call(&app, "POST", "/merge", json!({"from": dup, "into": keep})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, table) = call(&app, "GET", "/contacts", json!(null)).await;
+        assert_eq!(table["rows"].as_array().unwrap().len(), 1);
+        let (status, body) = call(&app, "POST", "/merge", json!({"from": dup, "into": keep})).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+        let (status, body) = call(&app, "DELETE", &format!("/contact/{keep}"), json!(null)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, _) = call(&app, "DELETE", &format!("/contact/{keep}"), json!(null)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (_, body) = call(&app, "POST", "/resolve", json!({"handles": [tel.as_str()]})).await;
+        assert_eq!(body["resolved"], json!({}));
+
+        drop(app);
+        Arc::try_unwrap(store)
+            .ok()
+            .expect("the router is gone")
+            .close()
+            .await;
     }
 
     /// The card's whole round: open a draft, autosave, find the save

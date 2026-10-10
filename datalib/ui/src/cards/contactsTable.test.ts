@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { filterContacts, rowHandle, type ContactRow } from "./contactsTable";
+import { filterContacts, mergeInto, rowHandle, type ContactRow } from "./contactsTable";
 
 function row(key: string, label: string, id: string, extra: Partial<ContactRow> = {}): ContactRow {
   return {
@@ -23,7 +23,7 @@ const riker = row("c1", "Will Riker", "mailto:riker@enterprise.org", {
   email: "riker@enterprise.org",
   note: "Plays the trombone",
 });
-const q = row("c2", "Q", "Q");
+const q = row("c2", "Q", "datalib:contact/c2");
 const troi = row("c3", "Deanna Troi", "tel:+15550100", { phone: "+15550100" });
 
 describe("filterContacts", () => {
@@ -43,5 +43,12 @@ describe("rowHandle", () => {
     expect(rowHandle(riker)).toBe("email:riker@enterprise.org");
     expect(rowHandle(troi)).toBe("tel:+15550100");
     expect(rowHandle(q)).toBeNull();
+  });
+});
+
+describe("mergeInto", () => {
+  it("merges every other row aimed at into the one clicked, and nothing for one row", () => {
+    expect(mergeInto(riker, [q, riker, troi]).map((r) => r.key)).toEqual(["c2", "c3"]);
+    expect(mergeInto(riker, [riker])).toEqual([]);
   });
 });

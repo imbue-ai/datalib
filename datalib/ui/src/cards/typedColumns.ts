@@ -7,9 +7,9 @@
 // hosts; a card with a grid of its own (`GridCard`) calls this and
 // keeps driving its grid itself.
 import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
-import { entityFromUri, handleFromUri } from "./chipLinks";
+import { contactFromUri, entityFromUri, handleFromUri } from "./chipLinks";
 import { entityCell, type EntityView } from "./entities";
-import { chipCell, type Who } from "./contacts";
+import { chipCell, contactCell, type NormalizedContact, type Who } from "./contacts";
 import { Editors } from "@slickgrid-universal/common";
 import type {
   Action,
@@ -58,6 +58,8 @@ export type SlickColumnOptions<T> = {
     canLink: () => boolean;
     /// A group or step identity (`Identity.entity`): what is known of it.
     entity?: (uri: string) => EntityView | undefined;
+    /// One of your contacts, whose id is a `datalib:contact/` URI.
+    contact?: (contactId: string) => NormalizedContact | undefined;
   };
 };
 
@@ -304,6 +306,10 @@ export function typedColumns<T extends Record<string, unknown>>(
             const v = row?.[f] as Identity | null;
             if (opts.chips?.entity && v?.entity && entityFromUri(v.entity)) {
               return entityCell(v.entity, v.label, opts.chips.entity(v.entity), v.icon ?? null);
+            }
+            const contactId = opts.chips?.contact && v ? contactFromUri(v.id) : null;
+            if (contactId && opts.chips?.contact) {
+              return contactCell(contactId, v!.label, opts.chips.contact(contactId));
             }
             const handle = opts.chips && v ? handleFromUri(v.id) : null;
             if (handle && opts.chips) {
