@@ -130,7 +130,9 @@ impl RawDb {
         .fetch_optional(self.pool())
         .await
         .context("select cached team_id")?;
-        Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
+        row.map(|r| r.try_get::<String, _>("id"))
+            .transpose()
+            .context("workspaces id")
     }
 
     pub async fn load_workspace(&self) -> Result<Option<Value>> {
@@ -140,7 +142,7 @@ impl RawDb {
                 .await
                 .context("select workspace")?;
         let Some(row) = row else { return Ok(None) };
-        let payload: Option<String> = row.try_get("payload").ok();
+        let payload: Option<String> = row.try_get("payload").context("workspace payload")?;
         Ok(payload.and_then(|s| serde_json::from_str(&s).ok()))
     }
 
@@ -306,23 +308,19 @@ impl RawDb {
             .fetch_all(self.pool())
             .await
             .context("select channels_for_fetch")?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| {
-                let id: String = r.try_get("id").ok()?;
-                Some(FetchTarget {
-                    id,
-                    name: r.try_get("name").ok().flatten(),
-                    is_dm: r.try_get::<Option<i64>, _>("is_dm").ok().flatten() == Some(1),
+        rows.iter()
+            .map(|r| {
+                Ok(FetchTarget {
+                    id: r.try_get("id")?,
+                    name: r.try_get("name")?,
+                    is_dm: r.try_get::<Option<i64>, _>("is_dm")? == Some(1),
                     dm_user_ids: parse_dm_user_ids(
-                        r.try_get::<Option<String>, _>("dm_user_ids")
-                            .ok()
-                            .flatten()
-                            .as_deref(),
+                        r.try_get::<Option<String>, _>("dm_user_ids")?.as_deref(),
                     ),
                 })
             })
-            .collect())
+            .collect::<Result<_, sqlx::Error>>()
+            .context("decode channels_for_fetch")
     }
 
     /// Every mirrored user's ids and names, for labelling DMs and their
@@ -333,21 +331,19 @@ impl RawDb {
             .fetch_all(self.pool())
             .await
             .context("select user_directory")?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| {
-                let id: String = r.try_get("id").ok()?;
-                if id.is_empty() {
-                    return None;
-                }
-                Some(UserDirectoryEntry {
-                    id,
-                    name: r.try_get("name").ok().flatten(),
-                    real_name: r.try_get("real_name").ok().flatten(),
-                    display_name: r.try_get("display_name").ok().flatten(),
+        let entries = rows
+            .iter()
+            .map(|r| {
+                Ok(UserDirectoryEntry {
+                    id: r.try_get("id")?,
+                    name: r.try_get("name")?,
+                    real_name: r.try_get("real_name")?,
+                    display_name: r.try_get("display_name")?,
                 })
             })
-            .collect())
+            .collect::<Result<Vec<_>, sqlx::Error>>()
+            .context("decode user_directory")?;
+        Ok(entries.into_iter().filter(|e| !e.id.is_empty()).collect())
     }
 
     // ── messages ────────────────────────────────────────────────────

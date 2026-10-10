@@ -94,7 +94,7 @@ impl RawDb {
         .context("select merge_requests")?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            let Some(payload) = row_payload(&r) else {
+            let Some(payload) = row_payload(&r)? else {
                 continue;
             };
             out.push(LoadedMergeRequest {
@@ -117,7 +117,7 @@ impl RawDb {
         .context("select discussions")?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            let Some(payload) = row_payload(&r) else {
+            let Some(payload) = row_payload(&r)? else {
                 continue;
             };
             out.push(LoadedDiscussion {

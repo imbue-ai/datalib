@@ -44,7 +44,9 @@ impl RawDb {
             .fetch_optional(self.pool())
             .await
             .context("select state token")?;
-        Ok(row.and_then(|r| r.try_get::<String, _>("last_seen_at_utc").ok()))
+        row.map(|r| r.try_get::<String, _>("last_seen_at_utc"))
+            .transpose()
+            .context("sync_scope_state last_seen_at_utc")
     }
 
     pub async fn save_scope(&self, scope: &str, token: &str) -> Result<()> {

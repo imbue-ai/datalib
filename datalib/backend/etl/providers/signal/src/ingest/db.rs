@@ -62,10 +62,9 @@ impl RawDb {
         .fetch_optional(self.pool())
         .await
         .context("last_ingested_snapshot")?;
-        Ok(row.and_then(|r| {
-            let d: Option<String> = r.try_get("snapshot_dir").ok();
-            let b: String = r.try_get("blake3").ok()?;
-            Some((d.unwrap_or_default(), b))
-        }))
+        let Some(r) = row else { return Ok(None) };
+        let d: Option<String> = r.try_get("snapshot_dir").context("snapshot_dir")?;
+        let b: String = r.try_get("blake3").context("blake3")?;
+        Ok(Some((d.unwrap_or_default(), b)))
     }
 }

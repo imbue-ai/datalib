@@ -1937,4 +1937,36 @@ mod compat {
         ok(&mut w, "SELECT dolt_reset('--hard')").await;
         err_contains(exec(&mut w, "SELECT dolt_clean()").await, "sqlite_sequence");
     }
+
+    /// sqlx's `try_get` skips its type check for a NULL, and its SQLite
+    /// decoders read a NULL as `""` or `0`: a bare `String` or `i64` read of
+    /// a NULL succeeds, so `.ok()` on it is `Some("")`. Only an `Option<T>`
+    /// read tells NULL from empty. Lint check 16 leans on this.
+    #[tokio::test]
+    async fn a_null_read_as_a_bare_type_is_its_default_not_an_error() {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        ok(
+            &mut w,
+            "CREATE TABLE t (k INTEGER PRIMARY KEY, s TEXT, n INT)",
+        )
+        .await;
+        ok(&mut w, "INSERT INTO t VALUES (1, NULL, NULL), (2, '', 0)").await;
+        let rows = sqlx::query("SELECT s, n FROM t ORDER BY k")
+            .fetch_all(&mut w)
+            .await
+            .unwrap();
+        let (null, empty) = (&rows[0], &rows[1]);
+
+        assert_eq!(null.try_get::<String, _>("s").ok(), Some(String::new()));
+        assert_eq!(null.try_get::<i64, _>("n").ok(), Some(0));
+        assert_eq!(empty.try_get::<String, _>("s").ok(), Some(String::new()));
+
+        assert_eq!(null.try_get::<Option<String>, _>("s").unwrap(), None);
+        assert_eq!(null.try_get::<Option<i64>, _>("n").unwrap(), None);
+        assert_eq!(
+            empty.try_get::<Option<String>, _>("s").unwrap(),
+            Some(String::new())
+        );
+    }
 }

@@ -1012,10 +1012,10 @@ impl IndexRepo for DoltRepo {
             Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Default::default()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| r.try_get("markdown_uuid").ok())
-            .collect())
+        rows.iter()
+            .map(|r| r.try_get::<String, _>("markdown_uuid"))
+            .collect::<Result<_, _>>()
+            .map_err(|e| RepoError::Internal(format!("decode markdown_uuid: {e}")))
     }
 
     async fn matching_qmd_paths(
@@ -1044,11 +1044,13 @@ impl IndexRepo for DoltRepo {
             Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Default::default()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| r.try_get::<String, _>("qmd_path").ok())
-            .map(|p| crate::qmd::mapping::norm_path(&p))
-            .collect())
+        rows.iter()
+            .map(|r| {
+                r.try_get::<String, _>("qmd_path")
+                    .map(|p| crate::qmd::mapping::norm_path(&p))
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|e| RepoError::Internal(format!("decode qmd_path: {e}")))
     }
 
     async fn grid_row_refs_for_hits(
@@ -1160,13 +1162,9 @@ impl IndexRepo for DoltRepo {
         };
         let mut out: Vec<EdgeRowOut> = Vec::with_capacity(rows.len());
         for r in rows {
-            // Annotate the nullable columns with explicit `Option<String>`
-            // so a SQL NULL maps to `None`. `try_get(...).ok()` against a
-            // bare `String` collapses both NULL and lookup errors into
-            // `None`; but it also turns a literal empty-string value into
-            // `Some("")`, which the UI's `src_anchor_uuid === null`
-            // filter then fails to match. Pinning the inferred type lifts
-            // that ambiguity.
+            // The nullable columns are read as `Option<String>`: a NULL read
+            // as a bare `String` comes back `""`, which the UI's
+            // `src_anchor_uuid === null` filter then fails to match.
             let edge = EdgeRow {
                 edge_uuid: r.try_get("edge_uuid").unwrap_or_default(),
                 src_markdown_uuid: r.try_get("src_markdown_uuid").unwrap_or_default(),
@@ -1254,7 +1252,9 @@ impl IndexRepo for DoltRepo {
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         let Some(r) = row else { return Ok(None) };
-        let rel: Option<String> = r.try_get("md_path").ok();
-        Ok(rel.map(|p| self.root.as_ref().join(p)))
+        let rel: String = r
+            .try_get("md_path")
+            .map_err(|e| RepoError::Internal(format!("decode md_path: {e}")))?;
+        Ok(Some(self.root.as_ref().join(rel)))
     }
 }

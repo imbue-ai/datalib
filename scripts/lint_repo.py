@@ -36,6 +36,9 @@ instead from `bazel run //:precommit` and as a plain step in
      by hand: `datalib_runtime::atomic` is the one write-then-rename.
  15. Every crate datalib/backend/Cargo.toml lists is named by some
      BUILD.bazel, so the list cannot keep a crate nothing links.
+ 16. No `try_get(...).ok()` without `.flatten()` after it: sqlx reads a
+     NULL as a bare `String` or `i64` as `""` or `0`, so that `.ok()` is
+     `Some("")` where the column holds nothing.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -327,6 +330,7 @@ def main() -> int:
     rc |= _check_icons(root)
     rc |= _check_no_hand_rolled_atomic_write(root)
     rc |= _check_cargo_manifest_crates_used(root)
+    rc |= _check_try_get_ok_is_flattened(root)
     return rc
 
 
@@ -1014,6 +1018,54 @@ def _check_cargo_manifest_crates_used(root: Path) -> int:
         + "\n".join(f"  {name}" for name in unused)
         + "\n\n  Delete them from the manifest and run tools/repin_cargo.sh.\n"
         "  See lint_repo.py check 15.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 16: a `try_get(...).ok()` reads `Option<T>` -------------------
+#
+# sqlx's `Row::try_get` skips its type check for a NULL, and its SQLite
+# decoders read a NULL as `""` or `0` (doltlite_facts'
+# `a_null_read_as_a_bare_type_is_its_default_not_an_error`). So
+# `let x: Option<String> = r.try_get("c").ok()` is `Some("")` for a NULL:
+# the type is inferred as a bare `String`, and the read succeeds (#13).
+# Reading `Option<T>` and flattening is the one spelling of "maybe absent"
+# that is right; a column that cannot be NULL is read with `?` instead,
+# so a missing column fails rather than reading as nothing.
+_TRY_GET_OK = re.compile(
+    r"\btry_get(?:::<[^()]*>)?\((?:[^()]|\([^()]*\))*\)\s*\.ok\(\)(?!\s*\.flatten\(\))"
+)
+
+# Files that spell the trap on purpose, with the reason.
+_TRY_GET_OK_ALLOWED: dict[str, str] = {
+    "datalib/backend/doltlite_facts/doltlite_facts.rs": (
+        "the test that shows a NULL read as a bare type is its default"
+    ),
+}
+
+
+def _check_try_get_ok_is_flattened(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        if rel in _TRY_GET_OK_ALLOWED:
+            continue
+        text = (root / rel).read_text(encoding="utf-8")
+        for m in _TRY_GET_OK.finditer(text):
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            if text[line_start : m.start()].lstrip().startswith("//"):
+                continue
+            lineno = text.count("\n", 0, m.start()) + 1
+            hits.append(f"  {rel}:{lineno}: {' '.join(m.group(0).split())}")
+    if not hits:
+        print("OK: every `try_get(...).ok()` reads an `Option` and flattens it.")
+        return 0
+    print(
+        'ERROR: a `try_get(...).ok()` that reads a NULL as `Some("")` or `Some(0)`:\n\n'
+        + "\n".join(hits)
+        + "\n\n  Read the column with `?` (or `.context(..)?`), as `Option<T>` if it\n"
+        "  can be NULL; where a missing column really is no answer, spell it\n"
+        "  `try_get::<Option<T>, _>(..).ok().flatten()`. See lint_repo.py check 16.",
         file=sys.stderr,
     )
     return 1

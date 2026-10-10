@@ -375,14 +375,21 @@ pub fn chunk_snippet(body: &str, pos: i64) -> String {
 async fn check_version(pool: &SqlitePool) -> Result<()> {
     let info: HashMap<String, String> = sqlx::query(
         "SELECT key, CAST(value AS TEXT) AS value FROM vectors_vec_info \
-          WHERE key IN ('CREATE_VERSION_MAJOR', 'CREATE_VERSION_MINOR', 'CREATE_VERSION')",
+          WHERE value IS NOT NULL \
+            AND key IN ('CREATE_VERSION_MAJOR', 'CREATE_VERSION_MINOR', 'CREATE_VERSION')",
     )
     .fetch_all(pool)
     .await
     .context("read `vectors_vec_info`")?
-    .into_iter()
-    .filter_map(|r| Some((r.try_get("key").ok()?, r.try_get("value").ok()?)))
-    .collect();
+    .iter()
+    .map(|r| {
+        Ok((
+            r.try_get::<String, _>("key")?,
+            r.try_get::<String, _>("value")?,
+        ))
+    })
+    .collect::<Result<_, sqlx::Error>>()
+    .context("decode `vectors_vec_info`")?;
     let major = info.get("CREATE_VERSION_MAJOR").map(String::as_str);
     let minor = info.get("CREATE_VERSION_MINOR").map(String::as_str);
     if (major, minor) != (Some("0"), Some("1")) {

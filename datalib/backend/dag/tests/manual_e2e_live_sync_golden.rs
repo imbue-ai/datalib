@@ -1386,8 +1386,8 @@ async fn latest_sync_run(path: &Path) -> Value {
         return Value::String("<no sync_runs rows — file-backed source>".into());
     };
 
-    let status: Option<String> = row.try_get("status").ok();
-    let summary: Option<String> = row.try_get("summary").ok();
+    let status: Option<String> = row.try_get("status").expect("sync_runs status");
+    let summary: Option<String> = row.try_get("summary").expect("sync_runs summary");
     let summary = summary
         .map(|s| serde_json::from_str::<Value>(&s).unwrap_or(Value::String(s)))
         .unwrap_or(Value::Null);
@@ -2028,7 +2028,7 @@ async fn dump_store_async(path: &Path) -> Value {
             .iter()
             .filter_map(|r| {
                 let pos = r.try_get::<i64, _>("pk").unwrap_or(0);
-                let name = r.try_get::<String, _>("name").ok()?;
+                let name = r.try_get::<String, _>("name").expect("table_info name");
                 (pos > 0 && name != "volatile_payload").then_some((pos, name))
             })
             .collect();
@@ -2119,32 +2119,21 @@ fn cell_value(row: &sqlx::sqlite::SqliteRow, name: &str, parse_json: bool) -> Va
     }
     let type_info = raw.type_info().into_owned();
     match type_info.name() {
-        "TEXT" => row
-            .try_get::<String, _>(name)
-            .ok()
-            .map(|s| {
-                if parse_json {
-                    serde_json::from_str::<Value>(&s).unwrap_or(Value::String(s))
-                } else {
-                    Value::String(s)
-                }
-            })
-            .unwrap_or(Value::Null),
-        "INTEGER" => row
-            .try_get::<i64, _>(name)
-            .ok()
-            .map(Value::from)
-            .unwrap_or(Value::Null),
-        "REAL" => row
-            .try_get::<f64, _>(name)
-            .ok()
-            .and_then(|n| serde_json::Number::from_f64(n).map(Value::Number))
-            .unwrap_or(Value::Null),
-        "BLOB" => row
-            .try_get::<Vec<u8>, _>(name)
-            .ok()
-            .map(|b| Value::String(format!("<bytes {}>", b.len())))
-            .unwrap_or(Value::Null),
+        "TEXT" => {
+            let s: String = row.try_get(name).expect("TEXT decodes as String");
+            if parse_json {
+                serde_json::from_str::<Value>(&s).unwrap_or(Value::String(s))
+            } else {
+                Value::String(s)
+            }
+        }
+        "INTEGER" => Value::from(row.try_get::<i64, _>(name).expect("INTEGER decodes as i64")),
+        "REAL" => serde_json::Number::from_f64(row.try_get(name).expect("REAL decodes as f64"))
+            .map_or(Value::Null, Value::Number),
+        "BLOB" => {
+            let b: Vec<u8> = row.try_get(name).expect("BLOB decodes as bytes");
+            Value::String(format!("<bytes {}>", b.len()))
+        }
         _ => Value::Null,
     }
 }

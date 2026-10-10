@@ -544,15 +544,13 @@ pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConv
     .context("load_conversations")?;
     let mut out = Vec::with_capacity(rows.len());
     for r in &rows {
-        let Some(payload) = row_payload(r) else {
+        let Some(payload) = row_payload(r)? else {
             continue;
         };
         out.push(LoadedConversation {
             id: r.try_get("id").unwrap_or_default(),
-            org_uuid: r
-                .try_get::<Option<String>, _>("org_uuid")
-                .unwrap_or_default(),
-            org_name: r.try_get("org_name").ok(),
+            org_uuid: r.try_get("org_uuid")?,
+            org_name: r.try_get("org_name")?,
             payload,
         });
     }
@@ -564,7 +562,9 @@ pub async fn first_user_uuid_from(pool: &SqlitePool) -> Result<Option<String>> {
         .fetch_optional(pool)
         .await
         .context("first_user_uuid")?;
-    Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
+    row.map(|r| r.try_get::<String, _>("id"))
+        .transpose()
+        .context("users id")
 }
 
 pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>> {
@@ -577,13 +577,13 @@ pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>>
     .context("load_projects")?;
     let mut out = Vec::with_capacity(rows.len());
     for r in &rows {
-        let Some(payload) = row_payload(r) else {
+        let Some(payload) = row_payload(r)? else {
             continue;
         };
         out.push(LoadedProject {
             id: r.try_get("id").unwrap_or_default(),
-            org_uuid: r.try_get("org_uuid").ok(),
-            org_name: r.try_get("org_name").ok(),
+            org_uuid: r.try_get("org_uuid")?,
+            org_name: r.try_get("org_name")?,
             payload,
         });
     }
@@ -600,7 +600,7 @@ pub async fn load_project_docs_from(pool: &SqlitePool) -> Result<Vec<LoadedProje
     .context("load_project_docs")?;
     let mut out = Vec::with_capacity(rows.len());
     for r in &rows {
-        let Some(payload) = row_payload(r) else {
+        let Some(payload) = row_payload(r)? else {
             continue;
         };
         let Ok(project_uuid) = r.try_get::<String, _>("project_uuid") else {
@@ -615,9 +615,9 @@ pub async fn load_project_docs_from(pool: &SqlitePool) -> Result<Vec<LoadedProje
     Ok(out)
 }
 
-fn row_payload(r: &sqlx::sqlite::SqliteRow) -> Option<Value> {
-    let s: String = r.try_get("payload").ok()?;
-    serde_json::from_str(&s).ok()
+fn row_payload(r: &sqlx::sqlite::SqliteRow) -> Result<Option<Value>> {
+    let s: Option<String> = r.try_get("payload").context("payload column")?;
+    Ok(s.and_then(|s| serde_json::from_str(&s).ok()))
 }
 
 #[derive(Debug, Clone)]

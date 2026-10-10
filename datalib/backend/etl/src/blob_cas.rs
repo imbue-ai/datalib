@@ -343,17 +343,19 @@ impl BlobCas {
         .fetch_optional(&self.pool)
         .await
         .with_context(|| format!("cas get {blake3_hash}"))?;
-        Ok(row.map(row_to_cas_object))
+        row.map(row_to_cas_object)
+            .transpose()
+            .with_context(|| format!("decode cas object {blake3_hash}"))
     }
 }
 
-fn row_to_cas_object(r: SqliteRow) -> CasObject {
-    CasObject {
-        blake3: r.try_get("blake3").unwrap_or_default(),
-        byte_len: r.try_get("byte_len").unwrap_or_default(),
-        content_type: r.try_get("content_type").ok(),
-        bytes: r.try_get("bytes").unwrap_or_default(),
-    }
+fn row_to_cas_object(r: SqliteRow) -> Result<CasObject, sqlx::Error> {
+    Ok(CasObject {
+        blake3: r.try_get("blake3")?,
+        byte_len: r.try_get("byte_len")?,
+        content_type: r.try_get("content_type")?,
+        bytes: r.try_get("bytes")?,
+    })
 }
 
 pub fn blake3_hex(bytes: &[u8]) -> String {

@@ -2635,10 +2635,10 @@ pub async fn failed_ids(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
         .fetch_all(pool)
         .await
         .with_context(|| format!("select failed_ids({table})"))?;
-    Ok(rows
-        .iter()
-        .filter_map(|r| r.try_get::<String, _>("id").ok())
-        .collect())
+    rows.iter()
+        .map(|r| r.try_get::<String, _>("id"))
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("decode failed_ids({table})"))
 }
 
 pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
