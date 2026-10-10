@@ -34,7 +34,9 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// a conversation left fold in as `<details class="branch">`.
 /// v14: an email's Bcc shows on its recipients line, and it and each
 /// message's mentions are `supplied_search_terms` rows.
-pub const LAYOUT_VERSION: u32 = 14;
+/// v15: a document's own row names everyone who took part in it
+/// (`participant` terms), so `is:document with:…` finds conversations.
+pub const LAYOUT_VERSION: u32 = 15;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -1045,6 +1047,58 @@ fn supplied_search_terms(doc: &NormalizedDoc, rows: &[GridRow]) -> Vec<SuppliedS
             }
         }
     }
+    if kept.contains(doc.markdown_uuid.as_str()) {
+        for value in participants(doc, &kept) {
+            let term = SuppliedSearchTerm {
+                uuid: doc.markdown_uuid.clone(),
+                kind: SearchTermKind::Participant,
+                value,
+            };
+            if !out.contains(&term) {
+                out.push(term);
+            }
+        }
+    }
+    out
+}
+
+/// Everyone who took part in a document's kept messages — who wrote
+/// each, who it was addressed to, who it mentions, who reacted — by
+/// handle, else by the name shown: the document row's `participant`
+/// terms. In first-seen order, each once.
+fn participants(doc: &NormalizedDoc, kept: &std::collections::HashSet<&str>) -> Vec<String> {
+    let person = |handle: Option<&datalib_handle::Handle>, shown: &str| {
+        handle
+            .map(|h| h.as_str().to_string())
+            .or_else(|| Some(shown.trim().to_string()).filter(|s| !s.is_empty()))
+    };
+    let mut out: Vec<String> = Vec::new();
+    for item in doc
+        .items
+        .iter()
+        .filter(|i| kept.contains(i.message_uuid.as_str()))
+    {
+        let author = person(item.author_handle.as_ref(), &item.author_display);
+        let recipients = item
+            .recipients
+            .iter()
+            .filter_map(|r| person(r.handle.as_ref(), &r.display));
+        let mentions = item.mentions.iter().map(|h| h.as_str().to_string());
+        let reactors = item
+            .reactions
+            .iter()
+            .filter_map(|r| person(r.reactor_handle.as_ref(), &r.reactor_display));
+        for value in author
+            .into_iter()
+            .chain(recipients)
+            .chain(mentions)
+            .chain(reactors)
+        {
+            if !out.contains(&value) {
+                out.push(value);
+            }
+        }
+    }
     out
 }
 
@@ -1225,7 +1279,7 @@ mod tests {
     /// An email's To and Cc reach the search by handle, and its labels as
     /// written; a recipient with no handle has nothing to match exactly.
     #[test]
-    fn a_messages_recipients_and_labels_are_its_search_terms() {
+    fn a_messages_recipients_and_labels_are_its_search_terms_and_its_documents_participants() {
         use crate::types::{Recipient, RecipientRole};
         let mut chat = mk_chat();
         let item = &mut chat.buckets[0].items[0];
@@ -1254,6 +1308,7 @@ mod tests {
             .map(|t| (t.uuid.as_str(), t.kind.as_str(), t.value.as_str()))
             .collect();
         let message = "33333333-3333-3333-3333-333333333333";
+        let document = "22222222-2222-2222-2222-222222222222";
         assert_eq!(
             terms,
             [
@@ -1261,6 +1316,14 @@ mod tests {
                 (message, "cc", "email:worf@enterprise.org"),
                 (message, "label", "Inbox"),
                 (message, "label", "Away team"),
+                // Everyone in the document, on its own row: the author
+                // and a recipient without a handle by the name shown,
+                // the rest by handle, the reactor too.
+                (document, "participant", "Picard"),
+                (document, "participant", "email:troi@enterprise.org"),
+                (document, "participant", "Ship's counsel"),
+                (document, "participant", "email:worf@enterprise.org"),
+                (document, "participant", "Will Riker"),
             ]
         );
     }

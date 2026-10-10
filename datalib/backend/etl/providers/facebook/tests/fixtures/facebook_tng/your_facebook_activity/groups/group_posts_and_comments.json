@@ -1,0 +1,59 @@
+{
+  "group_posts_v2": [
+    {
+      "timestamp": 12598200000,
+      "title": "Jean-Luc Picard posted in Starfleet Academy Alumni.",
+      "data": [
+        {
+          "post": "Class of 2327: reunion at Boothby's garden. Bring your own trowel."
+        }
+      ]
+    },
+    {
+      "timestamp": 12598300000,
+      "title": "Jean-Luc Picard shared a link in Ten Forward Regulars.",
+      "data": [
+        {
+          "post": "Guinan's new menu \u00e2\u0080\u0094 try the Saurian brandy."
+        }
+      ],
+      "attachments": [
+        {
+          "data": [
+            {
+              "external_context": {
+                "url": "https://tenforward.example/menu"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "timestamp": 12598400000,
+      "title": "Jean-Luc Picard posted in Away Team Photographers.",
+      "attachments": [
+        {
+          "data": [
+            {
+              "media": {
+                "uri": "your_facebook_activity/posts/media/your_posts/200000000000003.png",
+                "creation_timestamp": 12598399000,
+                "media_metadata": {
+                  "photo_metadata": {
+                    "exif_data": [
+                      {
+                        "upload_ip": "10.0.0.1"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "data": []
+    }
+  ]
+}

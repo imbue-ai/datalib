@@ -57,10 +57,10 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         .context("fetch")?;
         datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: facebook fetch").await?;
 
-        // 20 JSON files, seven of them Messenger conversations, two of
-        // them edits;
+        // 23 JSON files, seven of them Messenger conversations, two of
+        // them edits, three of them groups;
         // `no-data.txt` and the HTML are not files to us.
-        assert_eq!(summary.files, 20, "json files ingested");
+        assert_eq!(summary.files, 23, "json files ingested");
         assert_eq!(summary.parse_errors, 0);
         // Six PNGs (four posted, a Messenger photo and a sticker), each
         // stored once however many records point at it; the video the
@@ -142,8 +142,9 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
 
         // 5 posts (4 timeline + 1 on another page) + 1 album + a year of
         // comments + a year of reactions + 3 friends + a year each of 7
-        // Messenger conversations + the edit of a post deleted since.
-        assert_eq!(docs.len(), 5 + 1 + 1 + 1 + 3 + 7 + 1, "documents rendered");
+        // Messenger conversations + the edit of a post deleted since + 3
+        // group posts.
+        assert_eq!(docs.len(), 5 + 1 + 1 + 1 + 3 + 7 + 1 + 3, "documents rendered");
         let all_rows: Vec<_> = docs.iter().flat_map(|d| d.rows.iter()).collect();
         assert!(
             all_rows
@@ -365,6 +366,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
                  their messages cannot be told apart",
                 "info sender_name - = a sender the conversation's participants do not \
                  list (left the conversation?)",
+                "info title - = a group post whose group the membership file does not name",
                 "warning call_duration /message/call_duration = int",
                 "warning label_values: /label_values/7 = object{timestamp_value}",
             ]
@@ -404,6 +406,26 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             "a comment's first version above it: {md}"
         );
         assert_eq!(md.matches("Enjoy the chair, Will.").count(), 1, "{md}");
+
+        // Groups: a group post is a post, its group the project; a group
+        // left since is not named, and says so. A group comment is a
+        // comment.
+        let project_of = |needle: &str| {
+            docs.iter()
+                .flat_map(|d| &d.rows)
+                .find(|r| r.kind == "Facebook Post" && r.preview.contains(needle))
+                .and_then(|r| r.project.clone())
+        };
+        assert_eq!(
+            project_of("reunion at Boothby").as_deref(),
+            Some("Starfleet Academy Alumni")
+        );
+        assert_eq!(
+            project_of("Saurian brandy").as_deref(),
+            Some("Ten Forward Regulars")
+        );
+        let comments_md = fs::read_to_string(&year.md_path)?;
+        assert!(comments_md.contains("Proud of you, Ensign."), "{comments_md}");
 
         // Every document declares the rows it read, so a change to any of
         // them renders it again; every one includes the profile row.

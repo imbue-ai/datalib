@@ -193,6 +193,13 @@ FACEBOOK_EDIT_OF_A_DELETED_POST = (
     "|Text|noted|an edit of a post the export no longer has; rendered as a post "
     "of its own"
 )
+FACEBOOK_GROUP_LEFT_SINCE = (
+    "1c2b2222-725a-568a-9107-f24220ba8f4e"
+    "|info|parse|markdown"
+    "|00000000-0000-8f4d-b0a7-cfeb302ede83"  # the post in Away Team Photographers
+    "|0b754b28-2000-83b2-9916-69a95bb3c612"
+    "|title|noted|a group post whose group the membership file does not name"
+)
 PDF_THAT_WILL_NOT_IDENTIFY = (
     "7b765789-41e7-536c-9392-2facf510901a"
     "|error|fetch|entity"
@@ -227,6 +234,7 @@ EXPECTED_PROBLEMS = {
             FACEBOOK_SENDER_WHO_LEFT,
             FACEBOOK_DELETED_ACCOUNTS_TOGETHER,
             FACEBOOK_EDIT_OF_A_DELETED_POST,
+            FACEBOOK_GROUP_LEFT_SINCE,
             *FACEBOOK_UNREAD_LABELS,
         ]
     ),

@@ -25,7 +25,8 @@ use serde_json::Value;
 /// v6: Messenger conversations, one document per year; a comment's link;
 ///     a problem row for every field render leaves unread.
 /// v7: a post's and a comment's earlier versions, from the edit files.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: group posts in the posts feed, group comments in the comments feed.
+pub const RENDER_VERSION: u32 = 8;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
