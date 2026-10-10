@@ -4,7 +4,10 @@
 
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{NormalizedChat, NormalizedChatItem, NormalizedDoc};
-use datalib_etl_facebook::ingest::schema_raw::{OTHER_POSTS_TABLE, POSTS_TABLE};
+use datalib_etl_facebook::ingest::schema_raw::{OTHER_POSTS_TABLE, POSTS_TABLE, POST_EDITS_TABLE};
+use datalib_etl_render::inputs::Input;
+
+use crate::edits::{histories, version_items, Target, Version};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_link_dest};
 
 use crate::ids;
@@ -13,7 +16,8 @@ use serde_json::Value;
 
 use crate::common::{
     attachment_entries, chat_item, data_values, first_line, label_value, media_attachment,
-    media_caption, profile, str_field, strip_mentions, truncate, ts_ms,
+    media_caption, noted, profile, str_field, strip_mentions, truncate, ts_ms,
+    unread_attachment_keys, unread_keys, unread_labels,
 };
 use crate::processor::Owner;
 
@@ -62,10 +66,13 @@ impl Body {
     }
 }
 
-/// Rows as `(row id, record)` from the two post tables.
+/// Rows as `(row id, record)` from the two post tables and the edits
+/// file. Each post's earlier versions fold in above its text; an edit of
+/// a post the export no longer has is a post of its own.
 pub fn build_posts(
     posts: &[(String, Value)],
     other_posts: &[(String, Value)],
+    edits: &[(String, Value)],
     owner: &Owner,
 ) -> Vec<NormalizedChat> {
     let mut chats: Vec<NormalizedChat> = posts
@@ -77,7 +84,124 @@ pub fn build_posts(
             .iter()
             .map(|(id, v)| other_page_post(id, v, owner)),
     );
+
+    let texts: Vec<(String, Option<i64>)> = posts
+        .iter()
+        .map(|(_, v)| (timeline_text(v), ts_ms(v, "timestamp")))
+        .chain(other_posts.iter().map(|(_, v)| {
+            let text = label_value(v, "Message").and_then(|lv| str_field(lv, "value"));
+            (text.unwrap_or("").to_string(), ts_ms(v, "timestamp"))
+        }))
+        .collect();
+    let targets: Vec<Target<'_>> = texts
+        .iter()
+        .map(|(text, date_ms)| Target {
+            text,
+            date_ms: *date_ms,
+        })
+        .collect();
+    let versions = edits
+        .iter()
+        .filter_map(|(id, v)| Version::from_record(id, v))
+        .collect();
+    // Which post an edit is of is decided over every edit and every post:
+    // a new edit may be any post's, and a post deleted or changed moves
+    // its versions to another post or to a document of their own. So
+    // where there are edits, every post, and every edit of a post gone,
+    // reads all of them, and the processor renders every post again when
+    // any of them changes (`narrow_chats`).
+    let edit_inputs: Vec<Input> = if edits.is_empty() {
+        Vec::new()
+    } else {
+        let all = |table: &'static str, rows: &[(String, Value)]| {
+            rows.iter()
+                .map(|(id, _)| Input::new(table, id))
+                .collect::<Vec<_>>()
+        };
+        [
+            all(POST_EDITS_TABLE, edits),
+            all(POSTS_TABLE, posts),
+            all(OTHER_POSTS_TABLE, other_posts),
+        ]
+        .concat()
+    };
+    for chat in &mut chats {
+        chat.inputs.extend(edit_inputs.iter().cloned());
+    }
+    for history in histories(versions, &targets) {
+        match history.target {
+            Some(i) => {
+                let earlier: Vec<&Version> = history.earlier(&texts[i].0).collect();
+                let items = version_items(&earlier, ids::KIND_POST_VERSION, POST_VERSION, owner);
+                let post = &mut chats[i].buckets[0].items;
+                if let Some(item) = post.last_mut() {
+                    item.problems.extend(history.unshown_problems(&texts[i].0));
+                }
+                post.splice(0..0, items);
+            }
+            None => chats.push(edited_post_not_in_export(
+                &history.versions,
+                &edit_inputs,
+                owner,
+            )),
+        }
+    }
     chats
+}
+
+const POST_VERSION: &str = "Facebook Post Version";
+
+fn timeline_text(v: &Value) -> String {
+    data_values(v, "post")
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The versions of a post the export does not have: its last version
+/// shown, the earlier ones folded in above it.
+fn edited_post_not_in_export(
+    versions: &[Version],
+    edit_inputs: &[Input],
+    owner: &Owner,
+) -> NormalizedChat {
+    let (shown, earlier) = versions.split_last().expect("a history has a version");
+    let inputs = Inputs::default();
+    for input in edit_inputs {
+        inputs.read(&input.table, &input.id);
+    }
+    let text = format!(
+        "{}\n\n*The last saved version of a post the export no longer has.*",
+        escape_md_block(&strip_mentions(&shown.text))
+    );
+    let id = ids::version(
+        &owner.source_id,
+        ids::KIND_POST_VERSION,
+        &shown.row_id,
+        shown.date_ms,
+    );
+    let mut problems = shown.problems.clone();
+    problems.push(noted(
+        "Text",
+        "an edit of a post the export no longer has; rendered as a post of its own",
+    ));
+    let item = NormalizedChatItem {
+        kind_label: Some(POST_VERSION.to_string()),
+        problems,
+        ..chat_item(
+            id,
+            owner.name.clone(),
+            shown.date_ms,
+            Some(text),
+            Vec::new(),
+        )
+    };
+    let display = display_for(None, Some(&shown.text), "Edited Facebook post");
+    let mut chat = one_item_chat(&shown.row_id, inputs, display, None, item, owner);
+    let earlier: Vec<&Version> = earlier.iter().collect();
+    let items = version_items(&earlier, ids::KIND_POST_VERSION, POST_VERSION, owner);
+    chat.buckets[0].items.splice(0..0, items);
+    chat
 }
 
 fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
@@ -151,21 +275,55 @@ fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let date_ms = ts_ms(v, "timestamp");
     let display = display_for(title.as_deref(), body.opening_words(), "Facebook post");
     let item_id = ids::post_text(&owner.source_id, row_id, date_ms);
-    one_item_chat(
-        row_id,
-        inputs,
-        display,
-        None,
-        chat_item(
-            item_id,
-            owner.name.clone(),
-            date_ms,
-            (!text.is_empty()).then_some(text),
-            attachments,
-        ),
-        owner,
-    )
+    let mut item = chat_item(
+        item_id,
+        owner.name.clone(),
+        date_ms,
+        (!text.is_empty()).then_some(text),
+        attachments,
+    );
+    item.problems = timeline_post_unread(v);
+    one_item_chat(row_id, inputs, display, None, item, owner)
 }
+
+/// What render does not read of a timeline post. `update_timestamp` is
+/// read and left out: on a real export it is the post's own time on all
+/// but one post in sixty-three, so it says nothing about an edit.
+fn timeline_post_unread(v: &Value) -> Vec<datalib_schema::problems::Problem> {
+    let mut out = unread_keys(
+        v,
+        &["timestamp", "attachments", "data", "title", "tags"],
+        "",
+    );
+    let data = v.get("data").and_then(Value::as_array);
+    for (i, d) in data.into_iter().flatten().enumerate() {
+        out.extend(unread_keys(
+            d,
+            &["post", "update_timestamp", "backdated_timestamp"],
+            &format!("/data/{i}"),
+        ));
+    }
+    let tags = v.get("tags").and_then(Value::as_array);
+    for (i, t) in tags.into_iter().flatten().enumerate() {
+        out.extend(unread_keys(t, &["name"], &format!("/tags/{i}")));
+    }
+    out.extend(unread_attachment_keys(v));
+    out
+}
+
+/// The labels of a post on someone else's page that render reads, or
+/// leaves out on purpose: which app wrote it, the language Facebook
+/// guessed, whether to translate it.
+const OTHER_PAGE_LABELS: &[&str] = &[
+    "Message",
+    "Media",
+    "Feeling/activity",
+    "Last modified",
+    "Detected dialect",
+    "App used at creation time",
+    "Third-party app used at creation time",
+    "Translation should be skipped",
+];
 
 /// A post on someone else's page or profile: the `label_values` shape,
 /// keyed by Facebook's own `fbid`.
@@ -196,24 +354,30 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     {
         body.markup(format!("— {}", escape_md_inline(feeling)));
     }
+    let date_ms = ts_ms(v, "timestamp");
+    if let Some(edited) = label_value(v, "Last modified")
+        .and_then(|lv| lv.get("timestamp_value"))
+        .and_then(Value::as_i64)
+        .filter(|s| *s > 0 && Some(*s * 1000) != date_ms)
+        .and_then(|s| datalib_time::IsoOffsetTimestamp::from_unix_millis(s * 1000))
+    {
+        let stamp = edited.to_rfc3339_secs();
+        let day = stamp.split('T').next().unwrap_or(&stamp);
+        body.markup(format!("*Edited {day}*"));
+    }
     let text = body.markdown();
     let display = display_for(None, body.opening_words(), "Facebook post on another page");
-    let date_ms = ts_ms(v, "timestamp");
     let item_id = ids::post_text(&owner.source_id, row_id, date_ms);
-    one_item_chat(
-        row_id,
-        inputs,
-        display,
-        None,
-        chat_item(
-            item_id,
-            owner.name.clone(),
-            date_ms,
-            (!text.is_empty()).then_some(text),
-            attachments,
-        ),
-        owner,
-    )
+    let mut item = chat_item(
+        item_id,
+        owner.name.clone(),
+        date_ms,
+        (!text.is_empty()).then_some(text),
+        attachments,
+    );
+    item.problems = unread_keys(v, &["fbid", "label_values", "media", "timestamp"], "");
+    item.problems.extend(unread_labels(v, OTHER_PAGE_LABELS));
+    one_item_chat(row_id, inputs, display, None, item, owner)
 }
 
 /// `📍 Name — address`, once per place: a check-in carries the same place
@@ -316,7 +480,7 @@ mod tests {
             "data": [{"post": "Tea, Earl Grey, hot."}, {}],
             "title": "Jean-Luc Picard was at Ten Forward.",
         });
-        let chats = build_posts(&[("r1".to_string(), post)], &[], &owner());
+        let chats = build_posts(&[("r1".to_string(), post)], &[], &[], &owner());
         assert_eq!(chats.len(), 1);
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::Text);
@@ -342,7 +506,7 @@ mod tests {
             }}]}],
             "data": [{"post": "<script>x</script> & co"}],
         });
-        let chats = build_posts(&[("r1".to_string(), post)], &[], &owner());
+        let chats = build_posts(&[("r1".to_string(), post)], &[], &[], &owner());
         assert_eq!(
             chats[0].buckets[0].items[0].text.as_deref(),
             Some(
@@ -364,7 +528,7 @@ mod tests {
             "data": [{}],
             "title": "Jean-Luc Picard added 2 new photos.",
         });
-        let chats = build_posts(&[("r1".to_string(), post)], &[], &owner());
+        let chats = build_posts(&[("r1".to_string(), post)], &[], &[], &owner());
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(item.attachments.len(), 2);
@@ -391,7 +555,7 @@ mod tests {
             "data": [{"backdated_timestamp": 5}, {}],
             "title": "Jean-Luc Picard added a life event: Took command",
         });
-        let chats = build_posts(&[("r1".to_string(), post)], &[], &owner());
+        let chats = build_posts(&[("r1".to_string(), post)], &[], &[], &owner());
         let text = chats[0].buckets[0].items[0].text.as_deref().unwrap();
         assert_eq!(
             text,
@@ -416,7 +580,7 @@ mod tests {
             ],
             "fbid": "400000000000001",
         });
-        let chats = build_posts(&[], &[("400000000000001".to_string(), post)], &owner());
+        let chats = build_posts(&[], &[("400000000000001".to_string(), post)], &[], &owner());
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(

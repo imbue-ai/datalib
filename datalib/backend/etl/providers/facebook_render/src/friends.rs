@@ -1,10 +1,12 @@
 //! Friends as contacts through the shared contact renderer. The export
 //! gives a friend a name and the day the friendship was made, nothing
-//! more — no profile URL, no id.
+//! more — no profile URL, no id — so the name is the handle, the one
+//! Messenger writes for them too.
 
-use datalib_contact_schema::{ContactKind, Detail, NormalizedContact};
+use datalib_contact_schema::{ContactHandle, ContactKind, Detail, NormalizedContact};
 use datalib_etl_contact_common::{ContactDoc, ContactRenderProfile};
 use datalib_etl_facebook::ingest::schema_raw::FRIENDS_TABLE;
+use datalib_handle::Handle;
 
 use crate::ids;
 use datalib_etl_render::inputs::Inputs;
@@ -46,6 +48,12 @@ pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<ContactD
                 .map(str::to_string)
                 .into_iter()
                 .collect();
+            person.handles = person
+                .names
+                .iter()
+                .filter_map(|n| Handle::facebook_name(n))
+                .map(ContactHandle::of)
+                .collect();
             person.created_at = since.clone();
             person.details = since
                 .map(|s| vec![Detail::new("Friends since", s)])
@@ -83,6 +91,13 @@ mod tests {
         assert_eq!(contacts.len(), 1);
         assert_eq!(contacts[0].contact.name(), Some("William Riker"));
         assert_eq!(contacts[0].group_label, "Friends");
+        assert_eq!(
+            contacts[0].contact.handles[0]
+                .handle
+                .as_ref()
+                .map(|h| h.as_str()),
+            Some("facebook:name/William Riker")
+        );
         assert_eq!(contacts[0].contact.details[0].label, "Friends since");
         assert!(contacts[0]
             .contact

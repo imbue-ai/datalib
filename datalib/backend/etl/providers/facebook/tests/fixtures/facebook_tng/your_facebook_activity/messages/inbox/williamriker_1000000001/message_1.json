@@ -1,0 +1,110 @@
+{
+  "participants": [
+    {
+      "name": "William Riker"
+    },
+    {
+      "name": "Jean-Luc Picard"
+    }
+  ],
+  "messages": [
+    {
+      "sender_name": "Jean-Luc Picard",
+      "timestamp_ms": 12600000480000,
+      "content": "Jean-Luc Picard started a video chat.",
+      "call_duration": 125,
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "William Riker",
+      "timestamp_ms": 12600000420000,
+      "is_unsent": true,
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "Jean-Luc Picard",
+      "timestamp_ms": 12600000360000,
+      "content": "Now.",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "Jean-Luc Picard",
+      "timestamp_ms": 12600000360000,
+      "content": "Engage.",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "William Riker",
+      "timestamp_ms": 12600000300000,
+      "content": "Tea, Earl Grey, hot? \u00e2\u0098\u0095",
+      "reactions": [
+        {
+          "reaction": "\u00e2\u009d\u00a4",
+          "actor": "Jean-Luc Picard",
+          "timestamp": 12600000310
+        },
+        {
+          "reaction": "\u00f0\u009f\u0098\u0086",
+          "actor": "William Riker"
+        }
+      ],
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "William Riker",
+      "timestamp_ms": 12600000240000,
+      "sticker": {
+        "uri": "your_facebook_activity/messages/stickers_used/400000000000001.png",
+        "ai_stickers": []
+      },
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "Jean-Luc Picard",
+      "timestamp_ms": 12600000180000,
+      "content": "Remember this one?",
+      "share": {
+        "link": "https://memory-alpha.example/wiki/Picard_Maneuver",
+        "share_text": "The Picard Maneuver \u00e2\u0080\u0094 a warp-speed feint"
+      },
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "William Riker",
+      "timestamp_ms": 12600000120000,
+      "photos": [
+        {
+          "uri": "your_facebook_activity/messages/inbox/williamriker_1000000001/photos/300000000000001.png",
+          "creation_timestamp": 12600000119
+        }
+      ],
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "Jean-Luc Picard",
+      "timestamp_ms": 12600000061000,
+      "content": "Make it so, Number One.\nAnd take Data with you.",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    },
+    {
+      "sender_name": "William Riker",
+      "timestamp_ms": 12600000001000,
+      "content": "Captain, the away team is ready.",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    }
+  ],
+  "title": "William Riker",
+  "is_still_participant": true,
+  "thread_path": "inbox/williamriker_1000000001",
+  "magic_words": []
+}

@@ -3,7 +3,8 @@
 //! carries one, else a hash of the record — and those are unique across
 //! the export, so the scope is provider-global. The feeds datalib
 //! composes (the comments and reactions timelines, the friends list)
-//! are keyed on their names.
+//! are keyed on their names. A Messenger message is stamped at the
+//! millisecond its file gives; everything else at the second.
 
 use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
@@ -19,10 +20,19 @@ pub const KIND_PHOTO: &str = "photo";
 pub const KIND_FEED: &str = "feed";
 pub const KIND_FEED_YEAR: &str = "feed_year";
 pub const KIND_COMMENT: &str = "comment";
+pub const KIND_POST_VERSION: &str = "post_version";
+pub const KIND_COMMENT_VERSION: &str = "comment_version";
 pub const KIND_REACTION: &str = "reaction";
 pub const KIND_FRIEND: &str = "friend";
+pub const KIND_CONVERSATION: &str = "conversation";
+pub const KIND_CONVERSATION_YEAR: &str = "conversation_year";
+pub const KIND_MESSAGE: &str = "message";
+pub const KIND_MESSAGE_REACTION: &str = "message_reaction";
+
+pub const MESSENGER_STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Millis;
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
+const MESSENGER_IDS: Minter = Minter::new(ID_NAMESPACE, MESSENGER_STAMP_PRECISION);
 
 pub fn post(source_id: &str, row_id: &str) -> Identity {
     IDS.mint(source_id, KIND_POST, row_id.to_string(), None)
@@ -73,6 +83,16 @@ pub fn comment(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity 
     IDS.mint(source_id, KIND_COMMENT, row_id.to_string(), date_ms)
 }
 
+/// A saved version of a post or a comment, by its edit record's row.
+pub fn version(
+    source_id: &str,
+    kind: &'static str,
+    row_id: &str,
+    date_ms: Option<i64>,
+) -> Identity {
+    IDS.mint(source_id, kind, row_id.to_string(), date_ms)
+}
+
 /// One reaction may arrive as two export rows; the item is keyed on
 /// every row it folds together.
 pub fn reaction(source_id: &str, row_ids: &[&str], date_ms: Option<i64>) -> Identity {
@@ -84,6 +104,42 @@ pub fn reaction(source_id: &str, row_ids: &[&str], date_ms: Option<i64>) -> Iden
 /// out so a friend row does not move when the export re-states it.
 pub fn friend(source_id: &str, row_id: &str) -> Identity {
     IDS.mint(source_id, KIND_FRIEND, row_id.to_string(), None)
+}
+
+/// A Messenger conversation, by the id its directory ends in.
+pub fn conversation(source_id: &str, thread_id: &str) -> Identity {
+    MESSENGER_IDS.mint(source_id, KIND_CONVERSATION, thread_id.to_string(), None)
+}
+
+pub fn conversation_year(source_id: &str, thread_id: &str, period_key: &str) -> Identity {
+    MESSENGER_IDS.mint(
+        source_id,
+        KIND_CONVERSATION_YEAR,
+        composite_key(&[thread_id, period_key]),
+        None,
+    )
+}
+
+/// A message, by the row id the ingest keyed it on.
+pub fn message(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
+    MESSENGER_IDS.mint(source_id, KIND_MESSAGE, row_id.to_string(), date_ms)
+}
+
+/// A reaction has no id of its own; one person reacts to one message
+/// once with each emoji.
+pub fn message_reaction(
+    source_id: &str,
+    message_row_id: &str,
+    actor: &str,
+    emoji: &str,
+    date_ms: Option<i64>,
+) -> Identity {
+    MESSENGER_IDS.mint(
+        source_id,
+        KIND_MESSAGE_REACTION,
+        composite_key(&[message_row_id, actor, emoji]),
+        date_ms,
+    )
 }
 
 #[cfg(test)]
@@ -106,6 +162,12 @@ mod tests {
             comment("src", "r3", MS),
             reaction("src", &["r4", "r5"], MS),
             friend("src", "r6"),
+            version("src", KIND_POST_VERSION, "e1", MS),
+            version("src", KIND_COMMENT_VERSION, "e2", MS),
+            conversation("src", "1000000001"),
+            conversation_year("src", "1000000001", "2369"),
+            message("src", "1000000001:12600000360000:0", MS),
+            message_reaction("src", "1000000001:12600000360000:0", "Worf", "👍", MS),
         ] {
             assert_eq!(
                 got.uuid,

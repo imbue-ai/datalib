@@ -229,7 +229,7 @@
   },
   "facebook": {
     "schema_hash": "b157be8f630c11b6710f51a960d3554d4beec7ff7001638f3505d2b221ef5fcd",
-    "schema_version": 0,
+    "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",

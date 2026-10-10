@@ -151,6 +151,48 @@ FACEBOOK_VIDEO_NOT_IN_EXPORT = (
     "#your_facebook_activity/posts/media/videos/600000000000001.mp4"
     "|||not_found|media file not in the export: No such file or directory (os error 2)"
 )
+# Facebook's render reports every field it leaves unread, by its shape
+# alone, on the document and at the item's section, so a run over a real
+# export says what it left out (INGEST.md §"What render reports").
+FACEBOOK_OTHER_PAGE_POST = "00000000-0000-8ba6-97c6-f48500bf8e47"  # its document
+FACEBOOK_OTHER_PAGE_POST_ITEM = "0b752b10-cb00-884d-9f04-a02d1c74c917"
+FACEBOOK_UNREAD_LABELS = [
+    f"{problem_uuid}|warning|parse|markdown|{FACEBOOK_OTHER_PAGE_POST}"
+    f"|{FACEBOOK_OTHER_PAGE_POST_ITEM}|label_values:{label}|uncovered_type|{shape}"
+    for problem_uuid, label, shape in [
+        ("dd6c6c4b-5913-505a-b250-ed5b355c8bdd", "", "object{timestamp_value}"),
+    ]
+]
+FACEBOOK_CALL_DURATION_UNREAD = (
+    "01212325-894c-5374-87de-1d1815eeceb2"
+    "|warning|parse|markdown"
+    "|00000000-0000-83cd-81f6-03463a36a7ff"  # Riker's conversation, 2369
+    "|0b75aa8d-8300-8a42-b652-9507008d5441"  # the video-chat message
+    "|call_duration|uncovered_type|int"
+)
+FACEBOOK_TEN_FORWARD = "00000000-0000-8c0a-a597-b3f178ded27c"  # its 2369 document
+FACEBOOK_SENDER_WHO_LEFT = (
+    "bc107a95-a158-587e-85e2-16d746246397"
+    f"|info|parse|markdown|{FACEBOOK_TEN_FORWARD}"
+    "|0b75aab9-7500-8649-a7c9-bcf2a91acd15"  # Wesley's message
+    "|sender_name|noted|a sender the conversation's participants do not list "
+    "(left the conversation?)"
+)
+FACEBOOK_DELETED_ACCOUNTS_TOGETHER = (
+    "cf96cab7-5e94-5468-8b3f-5b53932267da"
+    f"|info|parse|markdown|{FACEBOOK_TEN_FORWARD}"
+    "|0b75aab3-f6c0-82ed-9976-ca875cebaeb6"  # the conversation's first message
+    "|participants|noted|3 deleted accounts among 7 participants; "
+    "their messages cannot be told apart"
+)
+FACEBOOK_EDIT_OF_A_DELETED_POST = (
+    "290e595a-6488-5991-a8fc-8039410b070e"
+    "|info|parse|markdown"
+    "|00000000-0000-8709-9b9f-6daf23a20dfe"  # the post of its own it renders as
+    "|0b758cb8-cb00-8cdb-9093-e1e57b64491b"  # its one item, the last version
+    "|Text|noted|an edit of a post the export no longer has; rendered as a post "
+    "of its own"
+)
 PDF_THAT_WILL_NOT_IDENTIFY = (
     "7b765789-41e7-536c-9392-2facf510901a"
     "|error|fetch|entity"
@@ -178,7 +220,16 @@ TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
 )
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
-    "facebook": [FACEBOOK_VIDEO_NOT_IN_EXPORT],
+    "facebook": sorted(
+        [
+            FACEBOOK_VIDEO_NOT_IN_EXPORT,
+            FACEBOOK_CALL_DURATION_UNREAD,
+            FACEBOOK_SENDER_WHO_LEFT,
+            FACEBOOK_DELETED_ACCOUNTS_TOGETHER,
+            FACEBOOK_EDIT_OF_A_DELETED_POST,
+            *FACEBOOK_UNREAD_LABELS,
+        ]
+    ),
     "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
     "google-takeout": [
         TAKEOUT_POST_NOT_A_VIDEO,
@@ -1184,6 +1235,29 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "Signal's account of a person: number and ACI together",
         )
+        # Facebook names people and never numbers them: a Messenger
+        # author is a `facebook:name/` handle, and a deleted account is
+        # told apart only in a conversation where it is the one deleted
+        # account, by that conversation (docs/dev/contacts.md). Ten
+        # Forward has three, and none of them gets a handle.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT DISTINCT h.handle || '|' || c.name "
+                "FROM source_contact_handles h JOIN source_contacts c "
+                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "WHERE m.source_id = 'facebook' AND (h.handle LIKE 'facebook:deleted/%' "
+                "OR h.handle = 'facebook:name/William Riker') ORDER BY 1;",
+            ),
+            [
+                "facebook:deleted/1000000002|Facebook user",
+                "facebook:deleted/1000000003|Facebook user",
+                "facebook:deleted/1000000005|Facebook user",
+                "facebook:name/William Riker|William Riker",
+            ],
+            "a Facebook person by name, a deleted one by its conversation",
+        )
         # A Slack mention is a chip link: the viewer resolves the href to
         # the person, and any other markdown viewer shows a link whose
         # title says who it names (docs/dev/plans/chips.md).
@@ -1960,7 +2034,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         return rendered
 
     def _assert_problems_reach_the_log(self, expected: dict[str, list[str]]) -> None:
-        """Every problem a step stores reaches its log at the row's level.
+        """Every problem a step stores reaches its log at the row's level
+        (an `info` finding at debug).
 
         Once, most writers stored a row and logged nothing, and the rest
         logged every row as a `warn!`. Each step now logs one
@@ -1991,7 +2066,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         stored: dict[tuple[str, str], int] = {}
         for source, rows in expected.items():
             for row in rows:
-                level = {"error": "error", "warning": "warn"}[row.split("|")[1]]
+                # An `info` row is a finding, logged at debug.
+                level = {"error": "error", "warning": "warn", "info": "debug"}[
+                    row.split("|")[1]
+                ]
                 stored[(source, level)] = stored.get((source, level), 0) + 1
         self.assertEqual(
             logged,

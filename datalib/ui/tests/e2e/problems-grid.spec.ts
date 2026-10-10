@@ -95,11 +95,15 @@ test("a source's problems open in the grid, its filter in the search bar", async
 /// a row in the middle of it, and must still be reachable end to end.
 test("a severity cell's right-click keeps only its severity", async ({ page, request }) => {
   const [source, theirs] = await busiest(request);
-  await page.setViewportSize({ width: 1280, height: 480 });
   await withCounts(page, source);
   await page.goto("/data_sources");
-  await counts(page, source).dblclick();
+  // Opened at full height: in the short window the Manage grid scrolls
+  // to reach a row low in it, and a double-click lands on whichever row
+  // it redrew there.
+  await counts(page, source).locator(".tg-chip-warning").dblclick();
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
+  await gridSettled(page);
+  await page.setViewportSize({ width: 1280, height: 480 });
   await gridSettled(page);
 
   const target = theirs[0];

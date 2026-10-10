@@ -1,0 +1,24 @@
+{
+  "participants": [
+    {
+      "name": "Lwaxana Troi"
+    },
+    {
+      "name": "Jean-Luc Picard"
+    }
+  ],
+  "messages": [
+    {
+      "sender_name": "Lwaxana Troi",
+      "timestamp_ms": 12600005000000,
+      "content": "Jean-Luc! I shall be aboard on Tuesday.",
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    }
+  ],
+  "title": "Lwaxana Troi",
+  "is_still_participant": true,
+  "thread_path": "message_requests/lwaxanatroi_1000000006",
+  "magic_words": [],
+  "is_pending": true
+}

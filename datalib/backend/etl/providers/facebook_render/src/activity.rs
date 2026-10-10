@@ -4,21 +4,26 @@
 
 use std::collections::BTreeMap;
 
-use datalib_etl_chat_common::period::by_year;
+use datalib_etl_chat_common::period::year_of;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
-use datalib_etl_facebook::ingest::schema_raw::{COMMENTS_TABLE, REACTIONS_TABLE};
-use datalib_etl_render::html::{escape_md_block, escape_md_inline};
+use datalib_etl_facebook::ingest::schema_raw::{
+    COMMENTS_TABLE, COMMENT_EDITS_TABLE, REACTIONS_TABLE,
+};
+
+use crate::edits::{histories, version_items, Target, Version};
+use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_link_dest};
+use datalib_schema::problems::Problem;
 
 use crate::ids;
 use datalib_etl_render::inputs::Inputs;
 use serde_json::Value;
 
 use crate::common::{
-    attachment_entries, chat_item, data_values, label_value, media_attachment, profile, str_field,
-    strip_mentions, ts_ms,
+    attachment_entries, chat_item, data_values, label_value, media_attachment, noted, profile,
+    str_field, strip_mentions, ts_ms, unread_attachment_keys, unread_keys,
 };
 use crate::processor::Owner;
 
@@ -43,15 +48,24 @@ pub fn reactions_profile() -> RenderProfile {
 pub const COMMENTS_CHAT: &str = "comments";
 pub const REACTIONS_CHAT: &str = "reactions";
 
-pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<NormalizedChat> {
-    if comments.is_empty() {
+/// Each comment's earlier versions fold in above it; an edit of a
+/// comment the export no longer has stands at its own time.
+pub fn build_comments(
+    comments: &[(String, Value)],
+    edits: &[(String, Value)],
+    owner: &Owner,
+) -> Vec<NormalizedChat> {
+    if comments.is_empty() && edits.is_empty() {
         return Vec::new();
     }
     let inputs = Inputs::default();
-    let mut items = Vec::with_capacity(comments.len());
+    let mut groups: Vec<Group> = Vec::with_capacity(comments.len());
+    let mut texts: Vec<(String, Option<i64>)> = Vec::with_capacity(comments.len());
     for (row_id, v) in comments {
         inputs.read(COMMENTS_TABLE, row_id);
         let comment = data_values(v, "comment").next();
+        let raw = comment.and_then(|c| str_field(c, "comment")).unwrap_or("");
+        texts.push((raw.to_string(), ts_ms(v, "timestamp")));
         let author = comment
             .and_then(|c| str_field(c, "author"))
             .unwrap_or(&owner.name)
@@ -70,17 +84,118 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             .filter_map(|e| e.get("media"))
             .filter_map(|m| media_attachment(m, row_id, &inputs))
             .collect();
+        for url in attachment_entries(v)
+            .filter_map(|e| e.get("external_context"))
+            .filter_map(|c| str_field(c, "url"))
+        {
+            if !text.is_empty() {
+                text.push_str("\n\n");
+            }
+            text.push_str(&format!("🔗 <{}>", md_link_dest(url)));
+        }
         let date_ms = ts_ms(v, "timestamp");
         let item_id = ids::comment(&owner.source_id, row_id, date_ms);
-        items.push(chat_item(
+        let mut item = chat_item(
             item_id,
             author,
             date_ms,
             (!text.is_empty()).then_some(text),
             attachments,
-        ));
+        );
+        item.problems = comment_unread(v);
+        groups.push(Group {
+            at: date_ms,
+            items: vec![item],
+        });
     }
-    vec![yearly_chat(COMMENTS_CHAT, "Comments", items, inputs, owner)]
+
+    for (row_id, _) in edits {
+        inputs.read(COMMENT_EDITS_TABLE, row_id);
+    }
+    let targets: Vec<Target<'_>> = texts
+        .iter()
+        .map(|(text, date_ms)| Target {
+            text,
+            date_ms: *date_ms,
+        })
+        .collect();
+    let versions = edits
+        .iter()
+        .filter_map(|(id, v)| Version::from_record(id, v))
+        .collect();
+    for history in histories(versions, &targets) {
+        match history.target {
+            Some(i) => {
+                let earlier: Vec<&Version> = history.earlier(&texts[i].0).collect();
+                let items =
+                    version_items(&earlier, ids::KIND_COMMENT_VERSION, COMMENT_VERSION, owner);
+                if let Some(item) = groups[i].items.last_mut() {
+                    item.problems.extend(history.unshown_problems(&texts[i].0));
+                }
+                groups[i].items.splice(0..0, items);
+            }
+            None => {
+                let all: Vec<&Version> = history.versions.iter().collect();
+                let (shown, earlier) = all.split_last().expect("a history has a version");
+                let mut items =
+                    version_items(earlier, ids::KIND_COMMENT_VERSION, COMMENT_VERSION, owner);
+                let mut last =
+                    version_items(&[*shown], ids::KIND_COMMENT_VERSION, COMMENT_VERSION, owner);
+                for item in &mut last {
+                    item.branch.clear();
+                    item.problems.push(noted(
+                        "Text",
+                        "an edit of a comment the export no longer has; rendered at its own time",
+                    ));
+                    if let Some(text) = &mut item.text {
+                        text.push_str(
+                            "\n\n*The last saved version of a comment the export no longer has.*",
+                        );
+                    }
+                }
+                items.extend(last);
+                groups.push(Group {
+                    at: shown.date_ms,
+                    items,
+                });
+            }
+        }
+    }
+    vec![yearly_chat(
+        COMMENTS_CHAT,
+        "Comments",
+        groups,
+        inputs,
+        owner,
+    )]
+}
+
+const COMMENT_VERSION: &str = "Facebook Comment Version";
+
+/// Items that read together, filed by one time: a comment and the
+/// versions folded in above it go into the year the comment was made.
+struct Group {
+    at: Option<i64>,
+    items: Vec<NormalizedChatItem>,
+}
+
+/// What render does not read of a comment record.
+fn comment_unread(v: &Value) -> Vec<Problem> {
+    let mut out = unread_keys(v, &["timestamp", "data", "title", "attachments"], "");
+    let data = v.get("data").and_then(Value::as_array);
+    for (i, d) in data.into_iter().flatten().enumerate() {
+        let path = format!("/data/{i}");
+        out.extend(unread_keys(d, &["comment"], &path));
+        if let Some(c) = d.get("comment") {
+            out.extend(unread_keys(
+                c,
+                &["author", "comment", "timestamp"],
+                &format!("{path}/comment"),
+            ));
+        }
+    }
+    out.extend(unread_attachment_keys(v));
+    out
 }
 
 /// The export ships reactions in two shapes, sometimes both for one
@@ -129,7 +244,7 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
         }
     }
 
-    let items = by_key
+    let items: Vec<NormalizedChatItem> = by_key
         .into_iter()
         .map(|((ms, _), r)| {
             let emoji = emoji_for(&r.kind);
@@ -155,10 +270,17 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
             }
         })
         .collect();
+    let groups = items
+        .into_iter()
+        .map(|item| Group {
+            at: item.date_ms,
+            items: vec![item],
+        })
+        .collect();
     vec![yearly_chat(
         REACTIONS_CHAT,
         "Reactions",
-        items,
+        groups,
         inputs,
         owner,
     )]
@@ -215,10 +337,15 @@ fn capitalize(s: &str) -> String {
 fn yearly_chat(
     id: &str,
     display: &str,
-    items: Vec<NormalizedChatItem>,
+    mut groups: Vec<Group>,
     inputs: Inputs,
     owner: &Owner,
 ) -> NormalizedChat {
+    groups.sort_by_key(|g| g.at);
+    let mut years: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
+    for g in groups {
+        years.entry(year_of(g.at)).or_default().extend(g.items);
+    }
     for input in &owner.inputs {
         inputs.read(&input.table, &input.id);
     }
@@ -239,7 +366,7 @@ fn yearly_chat(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: by_year(items)
+        buckets: years
             .into_iter()
             .map(|(period_key, items)| {
                 let year = ids::feed_year(&owner.source_id, id, &period_key);
@@ -296,7 +423,7 @@ mod tests {
                 }),
             ),
         ];
-        let chats = build_comments(&rows, &owner());
+        let chats = build_comments(&rows, &[], &owner());
         assert_eq!(chats.len(), 1);
         let years: Vec<&str> = chats[0]
             .buckets

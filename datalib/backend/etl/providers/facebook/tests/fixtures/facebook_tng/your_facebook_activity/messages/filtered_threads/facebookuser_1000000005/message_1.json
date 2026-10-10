@@ -1,0 +1,26 @@
+{
+  "participants": [
+    {
+      "name": "Facebook user"
+    },
+    {
+      "name": "Jean-Luc Picard"
+    }
+  ],
+  "messages": [
+    {
+      "sender_name": "Facebook user",
+      "timestamp_ms": 12600004000000,
+      "content": "You have won a shuttlecraft! Claim it here.",
+      "share": {
+        "link": "https://shuttles.example/claim"
+      },
+      "is_geoblocked_for_viewer": false,
+      "is_unsent_image_by_messenger_kid_parent": false
+    }
+  ],
+  "title": "Facebook user",
+  "is_still_participant": true,
+  "thread_path": "filtered_threads/facebookuser_1000000005",
+  "magic_words": []
+}
