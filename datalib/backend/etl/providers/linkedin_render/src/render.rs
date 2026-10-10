@@ -14,6 +14,7 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, keys_reading, Bucket, Input, Inputs, RawRange};
+use datalib_handle::Handle;
 use serde_json::Value;
 
 use crate::ids;
@@ -40,7 +41,11 @@ use datalib_schema::providers::Provider;
 /// v9: a photo no browser draws (the SVG ghost avatar) has no URL.
 /// v10: a connection is its own conversation, the connections list is
 ///     the channel alone, and its email address has a column.
-pub const RENDER_VERSION: u32 = 11;
+/// v11: a connection's page leads with its chip, and lists every handle
+///     as one.
+/// v12: a connection and a message's sender carry a `linkedin:` handle,
+///     and the owner's posts and comments their primary address.
+pub const RENDER_VERSION: u32 = 12;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -70,6 +75,7 @@ pub fn render(
         out_dir,
         name: source_id,
         account,
+        owner: _,
         account_inputs,
         range,
     } = *source;
@@ -200,7 +206,7 @@ fn build_chats(
                 let id = ids::message(source_id, table, row_id, date_ms);
                 NormalizedChatItem {
                     message_uuid: id.uuid,
-                    author_handle: None,
+                    author_handle: Handle::linkedin_profile_url(field(p, "SENDER PROFILE URL")),
                     author_kind: match nonempty(from) {
                         Some(_) => AuthorKind::Named,
                         None => AuthorKind::Unknown,
@@ -334,6 +340,31 @@ mod tests {
         assert_eq!(c1.buckets[0].items.len(), 2);
         assert_eq!(c1.buckets[0].items[0].text.as_deref(), Some("first"));
         assert_eq!(c1.display, "A, B");
+    }
+
+    /// A message's sender is a chip by their profile, the same handle
+    /// their connection carries; a sender with no profile URL has none.
+    #[test]
+    fn a_senders_profile_url_is_their_handle() {
+        let mut picard = msg(
+            "c1",
+            "Jean-Luc Picard",
+            "B",
+            "2026-01-01 00:00:00 UTC",
+            "Engage.",
+        );
+        picard["SENDER PROFILE URL"] = json!("https://www.linkedin.com/in/jlpicard");
+        let payloads = vec![
+            picard,
+            msg("c1", "Q", "A", "2026-01-01 00:01:00 UTC", "Hm."),
+        ];
+        let chats = build_chats("li", "messages", &with_ids(&payloads), None, &[]);
+        let handles: Vec<_> = chats[0].buckets[0]
+            .items
+            .iter()
+            .map(|i| i.author_handle.clone())
+            .collect();
+        assert_eq!(handles, [Handle::linkedin("jlpicard"), None]);
     }
 
     #[test]

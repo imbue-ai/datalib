@@ -16,6 +16,7 @@ use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, md_link_dest};
 use datalib_etl_render::inputs::{changed_rows, Input, Inputs};
+use datalib_handle::Handle;
 use serde_json::Value;
 
 use crate::ids;
@@ -54,6 +55,7 @@ pub fn render_posts(
         out_dir,
         name: source_id,
         account,
+        owner,
         account_inputs,
         range,
     } = *source;
@@ -89,7 +91,16 @@ pub fn render_posts(
         return Ok(FeedOutcome::default());
     };
 
-    let mut chats = build_post_chats(source_id, &shares, &comments, account, account_inputs);
+    let mut chats = build_post_chats(
+        source_id,
+        &shares,
+        &comments,
+        Owner {
+            account,
+            handle: owner,
+        },
+        account_inputs,
+    );
 
     let mut outcome = narrow_docs(&mut chats, chat_key, changed, range, new_head);
 
@@ -105,6 +116,14 @@ pub fn render_posts(
     )?;
     outcome.buckets.extend(s.buckets);
     Ok(outcome)
+}
+
+/// Whose export this is: the `account` label, and the handle every share
+/// and comment is written under.
+#[derive(Clone, Copy, Default)]
+struct Owner<'a> {
+    account: Option<&'a str>,
+    handle: Option<&'a Handle>,
 }
 
 /// One share + its comments, sharing a post key.
@@ -124,7 +143,7 @@ fn build_post_chats(
     source_id: &str,
     shares: &[(String, Value)],
     comments: &[(String, Value)],
-    account: Option<&str>,
+    owner: Owner<'_>,
     account_inputs: &[Input],
 ) -> Vec<NormalizedChat> {
     // BTreeMap keeps thread order stable across runs.
@@ -186,6 +205,7 @@ fn build_post_chats(
             }
             items.push(me_item(
                 |at| ids::share(source_id, row_id, at),
+                owner.handle,
                 date,
                 body,
                 &thread.url,
@@ -210,6 +230,7 @@ fn build_post_chats(
             let body = nonempty(field(c, "Message")).unwrap_or("").to_string();
             items.push(me_item(
                 |at| ids::comment(source_id, row_id, at),
+                owner.handle,
                 date,
                 body,
                 &thread.url,
@@ -227,7 +248,7 @@ fn build_post_chats(
             display: thread_title(thread.share.map(|(_, s)| s), &comment_payloads),
             title: None,
             author: None,
-            account: account.map(str::to_string),
+            account: owner.account.map(str::to_string),
             project: None,
             external_id: Some(post.natural_key),
             // Whole-post linkout on the thread header / chat-level row.
@@ -251,6 +272,7 @@ fn build_post_chats(
 /// what the row stores.
 fn me_item(
     mint: impl FnOnce(Option<i64>) -> datalib_id::Identity,
+    author_handle: Option<&Handle>,
     date: &str,
     body: String,
     url: &str,
@@ -267,7 +289,7 @@ fn me_item(
     let id = mint(date_ms);
     NormalizedChatItem {
         message_uuid: id.uuid,
-        author_handle: None,
+        author_handle: author_handle.cloned(),
         author_kind: AuthorKind::Account,
         author_display: ME.to_string(),
         date_ms,
@@ -482,7 +504,13 @@ mod tests {
         let shares = vec![share(ugc, "2026-05-07 16:41:18", "My post body")];
         let comments = vec![comment(ugc, "2026-05-08 09:00:00", "Following up")];
 
-        let chats = build_post_chats("li", &with_ids(&shares), &with_ids(&comments), None, &[]);
+        let chats = build_post_chats(
+            "li",
+            &with_ids(&shares),
+            &with_ids(&comments),
+            Owner::default(),
+            &[],
+        );
         assert_eq!(chats.len(), 1, "share + comment on same URN merge");
         let items = &chats[0].buckets[0].items;
         assert_eq!(items.len(), 2, "post + one comment");
@@ -513,7 +541,13 @@ mod tests {
         let ugc = "https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A1";
         let shares = vec![share(ugc, "2026-05-07 16:41:18", "<script>x</script> & co")];
         let comments = vec![comment(ugc, "2026-05-08 09:00:00", "# <b>co</b>")];
-        let chats = build_post_chats("li", &with_ids(&shares), &with_ids(&comments), None, &[]);
+        let chats = build_post_chats(
+            "li",
+            &with_ids(&shares),
+            &with_ids(&comments),
+            Owner::default(),
+            &[],
+        );
         let items = &chats[0].buckets[0].items;
         assert_eq!(
             items[0].text.as_deref(),
@@ -529,6 +563,29 @@ mod tests {
         assert_eq!(chats[0].display, "Post: <script>x</script> & co");
     }
 
+    /// The owner's posts and comments are written under the export's
+    /// address, so they are a chip like anyone else's message.
+    #[test]
+    fn the_owners_items_carry_the_owners_handle() {
+        let ugc = "https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A1";
+        let picard = Handle::email("jlpicard@starfleet.gov").unwrap();
+        let owner = Owner {
+            account: Some("jlpicard@starfleet.gov"),
+            handle: Some(&picard),
+        };
+        let chats = build_post_chats(
+            "li",
+            &with_ids(&[share(ugc, "2026-05-07 16:41:18", "Engage.")]),
+            &with_ids(&[comment(ugc, "2026-05-08 09:00:00", "Make it so.")]),
+            owner,
+            &[],
+        );
+        for item in &chats[0].buckets[0].items {
+            assert_eq!(item.author_handle.as_ref(), Some(&picard));
+            assert_eq!(item.author_display, "Me");
+        }
+    }
+
     #[test]
     fn comment_only_thread_notes_missing_original() {
         let act = "https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567681";
@@ -536,7 +593,7 @@ mod tests {
             "li",
             &[],
             &with_ids(&[comment(act, "2026-04-30 15:32:07", "Great point!")]),
-            None,
+            Owner::default(),
             &[],
         );
         assert_eq!(chats.len(), 1);
@@ -565,7 +622,7 @@ mod tests {
                 share(b, "2026-01-02 00:00:00", "B"),
             ]),
             &[],
-            None,
+            Owner::default(),
             &[],
         );
         assert_eq!(chats.len(), 2, "two distinct posts → two threads");

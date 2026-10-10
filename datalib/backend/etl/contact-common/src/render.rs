@@ -457,9 +457,10 @@ fn head(doc: &ContactDoc, photo_rel: Option<&str>) -> String {
     out
 }
 
-/// The handle the page's heading is drawn as: the one the grid's Contact
-/// cell draws, else the card's first of any kind, since a Facebook friend
-/// is known by name alone.
+/// The handle the page's heading is drawn as, by the grid's Contact
+/// cell's rule (`columns.rs::contact_identity`): the first address, else
+/// the first number, else a handle of any kind, since a Facebook friend
+/// or a LinkedIn connection may have no other.
 fn head_handle(contact: &NormalizedContact) -> Option<Handle> {
     chip_handle(
         first_value(contact, Medium::Email),
