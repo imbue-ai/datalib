@@ -29,6 +29,9 @@ pub struct Source<'a> {
     pub out_dir: &'a Path,
     pub name: &'a str,
     pub account: Option<&'a str>,
+    /// The export owner's handle, which their own posts and comments are
+    /// written under.
+    pub owner: Option<&'a datalib_handle::Handle>,
     /// The rows the account label came from, declared by every document.
     pub account_inputs: &'a [Input],
     /// The raw store as this run reads it — the driver's cursor, pin and
@@ -71,6 +74,7 @@ impl SourceRender for LinkedinRender {
             out_dir: ctx.root,
             name: ctx.name,
             account: account.label.as_deref(),
+            owner: account.handle.as_ref(),
             account_inputs: &account.inputs,
             range: ctx.raw_range(),
         };
