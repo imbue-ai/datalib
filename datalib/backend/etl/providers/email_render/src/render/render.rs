@@ -688,6 +688,7 @@ impl ParsedEml {
                         role,
                         display: display.to_string(),
                         handle: Handle::email(address),
+                        drawn: true,
                     })
                 })
         })

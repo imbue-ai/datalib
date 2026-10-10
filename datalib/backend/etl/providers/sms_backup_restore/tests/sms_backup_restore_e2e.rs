@@ -50,15 +50,15 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: sms fetch").await?;
 
         assert_eq!(summary.files, 2, "2 xml files (sms + calls)");
-        assert_eq!(summary.sms, 3, "3 plain SMS");
+        assert_eq!(summary.sms, 4, "4 plain SMS");
         assert_eq!(summary.mms, 3, "3 MMS");
         assert_eq!(summary.calls, 3, "3 calls");
         assert_eq!(summary.attachments, 3, "png + m4a + gif");
         assert_eq!(summary.blobs_stored, 3, "3 distinct blobs in CAS");
         assert_eq!(summary.parse_errors, 0);
 
-        // 3 sms + 3 mms all land in one entity table.
-        assert_eq!(db.load_payloads("sms_messages").await?.len(), 6);
+        // 4 sms + 3 mms all land in one entity table.
+        assert_eq!(db.load_payloads("sms_messages").await?.len(), 7);
         assert_eq!(db.load_payloads("sms_calls").await?.len(), 3);
 
         // CAS edge rows carry a blake3, and the bytes are in cas_objects.
@@ -89,7 +89,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         assert_eq!(again.files, 0, "unchanged files are skipped on re-run");
         assert_eq!(
             db.load_payloads("sms_messages").await?.len(),
-            6,
+            7,
             "no duplicate messages after re-ingest"
         );
 
@@ -116,10 +116,38 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
             .context("render")?;
         }
 
-        // Three conversations: Picard (texts + mms + call merged), Worf
-        // (text + mms), Deanna Troi (call only). All April 2369 → one
-        // month bucket each.
-        assert_eq!(docs.len(), 3, "three conversations, got {}", docs.len());
+        // Four conversations: Picard (texts + mms + call merged), Worf
+        // (text + mms), Deanna Troi (call only), Geordi La Forge (one
+        // text the account sent). All April 2369 → one month bucket each.
+        assert_eq!(docs.len(), 4, "four conversations, got {}", docs.len());
+
+        // Each document names the other side by number, so `with:` that
+        // person finds it: a call log, and a thread they never wrote in.
+        let participants = |name: &str| -> Vec<String> {
+            let doc = docs
+                .iter()
+                .find(|d| {
+                    d.rows
+                        .iter()
+                        .any(|r| r.conversation_name.as_deref() == Some(name))
+                })
+                .unwrap_or_else(|| panic!("no document for {name}"));
+            doc.search_terms
+                .iter()
+                .filter(|t| t.uuid == doc.markdown_uuid && t.kind.as_str() == "participant")
+                .map(|t| t.value.clone())
+                .collect()
+        };
+        assert!(
+            participants("Deanna Troi").contains(&"tel:+12025550103".to_string()),
+            "the call log names Troi by number: {:?}",
+            participants("Deanna Troi")
+        );
+        assert!(
+            participants("Geordi La Forge").contains(&"tel:+12025550104".to_string()),
+            "the thread only the account wrote in names Geordi by number: {:?}",
+            participants("Geordi La Forge")
+        );
 
         let all_md: String = docs
             .iter()
@@ -216,7 +244,7 @@ fn a_deleted_backup_takes_only_what_no_other_file_holds() -> Result<()> {
             }
         };
         fetch(&db).await?;
-        assert_eq!(count(&db, "sms_messages").await?, 6);
+        assert_eq!(count(&db, "sms_messages").await?, 7);
         assert_eq!(count(&db, "sms_calls").await?, 3);
 
         fs::remove_file(input.join("sms-2369040112000.xml"))?;
@@ -226,14 +254,14 @@ fn a_deleted_backup_takes_only_what_no_other_file_holds() -> Result<()> {
             older_gone.removed, 0,
             "the newer backup holds every message"
         );
-        assert_eq!(count(&db, "sms_messages").await?, 6);
+        assert_eq!(count(&db, "sms_messages").await?, 7);
         assert_eq!(count(&db, "sms_attachments").await?, 3);
 
         fs::remove_file(input.join("calls-2369041512000.xml"))?;
         let calls_gone = fetch(&db).await?;
         assert_eq!(calls_gone.removed, 3);
         assert_eq!(count(&db, "sms_calls").await?, 0);
-        assert_eq!(count(&db, "sms_messages").await?, 6);
+        assert_eq!(count(&db, "sms_messages").await?, 7);
 
         // A backup rewritten in place is the whole of that snapshot: a
         // message the new one no longer carries was deleted.
@@ -244,7 +272,7 @@ fn a_deleted_backup_takes_only_what_no_other_file_holds() -> Result<()> {
         fs::write(&path, format!("{}{}", &xml[..first_sms], &xml[end..]))?;
         let rewritten = fetch(&db).await?;
         assert_eq!(rewritten.removed, 1);
-        assert_eq!(count(&db, "sms_messages").await?, 5);
+        assert_eq!(count(&db, "sms_messages").await?, 6);
 
         // Nothing is gone any more, so a quiet run reads nothing.
         let quiet = fetch(&db).await?;
@@ -450,7 +478,7 @@ fn deletions_held_back_are_made_once_every_file_reads() -> Result<()> {
     rt.block_on(async {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         fetch_dir(&db, &input, &cache).await?;
-        assert_eq!(messages(&db).await?, 6);
+        assert_eq!(messages(&db).await?, 7);
 
         // One message leaves the backup, and a new file will not parse.
         let xml = fs::read_to_string(&sms)?;
@@ -469,7 +497,7 @@ fn deletions_held_back_are_made_once_every_file_reads() -> Result<()> {
         fs::write(&broken, r#"<smses count="0"></smses>"#)?;
         let caught_up = fetch_dir(&db, &input, &cache).await?;
         assert_eq!(caught_up.removed, 1);
-        assert_eq!(messages(&db).await?, 5);
+        assert_eq!(messages(&db).await?, 6);
         assert!(problems(&db).await?.is_empty());
         db.close().await;
         Ok::<_, anyhow::Error>(())
@@ -508,7 +536,7 @@ fn a_backup_that_is_recognizably_nothing_deletes_nothing() -> Result<()> {
             }
         };
         fetch_dir(&db, &input, &cache).await?;
-        assert_eq!(messages(&db).await?, 6);
+        assert_eq!(messages(&db).await?, 7);
 
         for (what, bytes) in [
             ("an empty file", String::new()),
@@ -521,7 +549,7 @@ fn a_backup_that_is_recognizably_nothing_deletes_nothing() -> Result<()> {
             fs::write(&sms, &bytes)?;
             let s = fetch_dir(&db, &input, &cache).await?;
             assert_eq!(s.removed, 0, "{what} deleted messages");
-            assert_eq!(messages(&db).await?, 6, "{what} deleted messages");
+            assert_eq!(messages(&db).await?, 7, "{what} deleted messages");
             assert!(
                 problems(&db)
                     .await?
@@ -534,7 +562,7 @@ fn a_backup_that_is_recognizably_nothing_deletes_nothing() -> Result<()> {
         // An empty backup that says so is a backup of nothing.
         fs::write(&sms, r#"<?xml version='1.0' ?><smses count="0"></smses>"#)?;
         let emptied = fetch_dir(&db, &input, &cache).await?;
-        assert_eq!(emptied.removed, 6);
+        assert_eq!(emptied.removed, 7);
         assert_eq!(messages(&db).await?, 0);
         assert!(problems(&db).await?.is_empty());
         db.close().await;
@@ -586,7 +614,7 @@ fn a_run_that_fails_before_its_prune_prunes_on_the_next() -> Result<()> {
         let messages: i64 = sqlx::query_scalar("SELECT count(*) FROM sms_messages")
             .fetch_one(db.pool())
             .await?;
-        assert_eq!(messages, 5, "the message the backup dropped is deleted");
+        assert_eq!(messages, 6, "the message the backup dropped is deleted");
         db.close().await;
         Ok::<_, anyhow::Error>(())
     })

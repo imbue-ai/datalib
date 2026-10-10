@@ -207,7 +207,8 @@ What each source has today:
 | WhatsApp | the sender's number, a linked id (`…@lid`) through `jid_map` | each reaction's sender |
 | Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | a mention (a `mentionAci` body range), by number else ACI, written `@Name` in place of its `U+FFFC`; number and ACI together, in the source contact; one known by ACI alone reads as the dashed ACI. The ACI is read by its one path in the stored frame, and one that will not read is a problem on the recipient (`aci`, `CoercionFailed`), not a silent loss |
 | Messages | the number or Apple ID address | each tapback's |
-| Google Chat and Voice, SMS backup | the address or number; a group MMS, which does not say which number sent it, has none | |
+| Google Chat and Voice | the address or number | |
+| SMS backup | the number; a group MMS, which does not say which number sent it, has none; a call by the other side's number | the number or numbers a text the account sent went to, as recipients |
 | address books | | a card's numbers and addresses, in the source contact |
 | LinkedIn | | a connection's email address, in the source contact |
 | Facebook | a Messenger message's sender, by name; a deleted account by its conversation, where it is that conversation's only one; the account's owner, by name, on every post, album, comment, reaction and edit (a store with no profile knows them only as "Me", and gives none) | each Messenger reaction's; a friend's name, in the source contact |
@@ -222,7 +223,9 @@ address or user id like anyone else's.
 ## In a document
 
 chat-common writes an author with a handle as a chip link in the
-message header, and recipients as a line straight under it; the shape,
+message header, and recipients as a line straight under it, leaving
+off those the conversation already names (an SMS thread's other
+side); the shape,
 and why the href is load-bearing, is
 [`chat-common/README.md`](../../datalib/backend/etl/chat-common/README.md)
 §"The message header". A reactor with a handle is a chip link too, in a

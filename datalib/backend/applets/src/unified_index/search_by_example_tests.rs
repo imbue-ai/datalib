@@ -125,11 +125,13 @@ fn riker_email() -> NormalizedChat {
             role: RecipientRole::To,
             display: "Jean-Luc Picard".into(),
             handle: Some(email("picard@enterprise.org")),
+            drawn: true,
         },
         Recipient {
             role: RecipientRole::Cc,
             display: "Deanna Troi".into(),
             handle: Some(email("troi@enterprise.org")),
+            drawn: true,
         },
     ];
     item.labels = vec!["Inbox".into(), "Away Missions".into()];

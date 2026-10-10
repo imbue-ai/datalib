@@ -258,6 +258,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         role: RecipientRole::To,
         display: f.hostile("recipient"),
         handle: None,
+        drawn: true,
     }];
     said.reactions = vec![reaction(
         "r1",

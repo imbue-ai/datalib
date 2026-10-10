@@ -710,7 +710,7 @@ fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
     for role in [RecipientRole::To, RecipientRole::Cc, RecipientRole::Bcc] {
         let names: Vec<String> = recipients
             .iter()
-            .filter(|r| r.role == role)
+            .filter(|r| r.role == role && r.drawn)
             .map(|r| match &r.handle {
                 Some(h) => chip_link(&r.display, h),
                 None => format!(
@@ -1287,16 +1287,19 @@ mod tests {
                 role: RecipientRole::To,
                 display: "Deanna Troi".into(),
                 handle: datalib_handle::Handle::email("Troi@Enterprise.org"),
+                drawn: true,
             },
             Recipient {
                 role: RecipientRole::Cc,
                 display: "Ship's counsel".into(),
                 handle: None,
+                drawn: true,
             },
             Recipient {
                 role: RecipientRole::Cc,
                 display: "Worf".into(),
                 handle: datalib_handle::Handle::email("worf@enterprise.org"),
+                drawn: true,
             },
         ];
         item.labels = vec!["Inbox".into(), " ".into(), "Away team".into()];
@@ -2343,6 +2346,7 @@ mod tests {
             role,
             display: display.to_string(),
             handle: datalib_handle::Handle::email(addr),
+            drawn: true,
         };
         let line = recipients_line(&[
             r(RecipientRole::Cc, "<Q>", "q@continuum.org"),
@@ -2361,6 +2365,38 @@ mod tests {
         assert_eq!(recipients_line(&[]), None);
     }
 
+    /// A text's recipient is the thread's other side: it reaches the
+    /// search and the document's participants without a To line on
+    /// every message saying what the conversation already does.
+    #[test]
+    fn a_recipient_not_drawn_is_searched_but_not_shown() {
+        use crate::types::{Recipient, RecipientRole};
+        let troi = Recipient {
+            role: RecipientRole::To,
+            display: "Deanna Troi".into(),
+            handle: datalib_handle::Handle::tel("+12025550103"),
+            drawn: false,
+        };
+        assert_eq!(recipients_line(std::slice::from_ref(&troi)), None);
+
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].recipients = vec![troi];
+        let md = join(&render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test",
+        ));
+        assert!(!md.contains("msg-recipients"), "{md}");
+        let rows = rows_of(&test_profile(), &chat);
+        let terms: Vec<(String, String)> = supplied_search_terms(&chat.buckets[0], &rows)
+            .into_iter()
+            .map(|t| (t.kind.as_str().to_string(), t.value))
+            .collect();
+        assert!(terms.contains(&("to".into(), "tel:+12025550103".into())));
+        assert!(terms.contains(&("participant".into(), "tel:+12025550103".into())));
+    }
+
     /// A blank line in a name once ended the recipients line and
     /// markdown read the rest of the name (#992); the line is a
     /// paragraph now, which a blank line would end just the same.
@@ -2371,6 +2407,7 @@ mod tests {
             role: RecipientRole::To,
             display: "Worf\n\n[x](https://e.test)".to_string(),
             handle: None,
+            drawn: true,
         }])
         .unwrap();
         assert!(!line.contains('\n'), "{line}");
