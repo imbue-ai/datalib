@@ -20,6 +20,10 @@ pub const REACTIONS_TABLE: &str =
     "your_facebook_activity_comments_and_reactions_likes_and_reactions";
 pub const FRIENDS_TABLE: &str = "connections_friends_your_friends";
 pub const PROFILE_TABLE: &str = "personal_information_profile_information_profile_information";
+pub const GROUP_POSTS_TABLE: &str = "your_facebook_activity_groups_group_posts_and_comments";
+pub const GROUP_COMMENTS_TABLE: &str = "your_facebook_activity_groups_your_comments_in_groups";
+pub const GROUPS_JOINED_TABLE: &str =
+    "your_facebook_activity_groups_your_group_membership_activity";
 pub const POST_EDITS_TABLE: &str = "your_facebook_activity_posts_edits_you_made_to_posts";
 pub const COMMENT_EDITS_TABLE: &str =
     "your_facebook_activity_comments_and_reactions_your_comment_edits";
@@ -123,6 +127,18 @@ mod tests {
         assert_eq!(
             canonical_table("connections/friends/your_friends.json"),
             FRIENDS_TABLE
+        );
+        assert_eq!(
+            canonical_table("your_facebook_activity/groups/group_posts_and_comments.json"),
+            GROUP_POSTS_TABLE
+        );
+        assert_eq!(
+            canonical_table("your_facebook_activity/groups/your_comments_in_groups.json"),
+            GROUP_COMMENTS_TABLE
+        );
+        assert_eq!(
+            canonical_table("your_facebook_activity/groups/your_group_membership_activity.json"),
+            GROUPS_JOINED_TABLE
         );
         assert_eq!(
             canonical_table("your_facebook_activity/posts/edits_you_made_to_posts.json"),

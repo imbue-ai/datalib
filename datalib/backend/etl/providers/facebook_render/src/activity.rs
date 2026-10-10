@@ -9,6 +9,7 @@ use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_facebook::ingest::schema_raw::GROUP_COMMENTS_TABLE;
 use datalib_etl_facebook::ingest::schema_raw::{
     COMMENTS_TABLE, COMMENT_EDITS_TABLE, REACTIONS_TABLE,
 };
@@ -52,17 +53,22 @@ pub const REACTIONS_CHAT: &str = "reactions";
 /// comment the export no longer has stands at its own time.
 pub fn build_comments(
     comments: &[(String, Value)],
+    group_comments: &[(String, Value)],
     edits: &[(String, Value)],
     owner: &Owner,
 ) -> Vec<NormalizedChat> {
-    if comments.is_empty() && edits.is_empty() {
+    if comments.is_empty() && group_comments.is_empty() && edits.is_empty() {
         return Vec::new();
     }
     let inputs = Inputs::default();
     let mut groups: Vec<Group> = Vec::with_capacity(comments.len());
     let mut texts: Vec<(String, Option<i64>)> = Vec::with_capacity(comments.len());
-    for (row_id, v) in comments {
-        inputs.read(COMMENTS_TABLE, row_id);
+    let rows = comments
+        .iter()
+        .map(|r| (COMMENTS_TABLE, r))
+        .chain(group_comments.iter().map(|r| (GROUP_COMMENTS_TABLE, r)));
+    for (table, (row_id, v)) in rows {
+        inputs.read(table, row_id);
         let comment = data_values(v, "comment").next();
         let raw = comment.and_then(|c| str_field(c, "comment")).unwrap_or("");
         texts.push((raw.to_string(), ts_ms(v, "timestamp")));
@@ -189,7 +195,7 @@ fn comment_unread(v: &Value) -> Vec<Problem> {
         if let Some(c) = d.get("comment") {
             out.extend(unread_keys(
                 c,
-                &["author", "comment", "timestamp"],
+                &["author", "comment", "timestamp", "group"],
                 &format!("{path}/comment"),
             ));
         }
@@ -423,7 +429,7 @@ mod tests {
                 }),
             ),
         ];
-        let chats = build_comments(&rows, &[], &owner());
+        let chats = build_comments(&rows, &[], &[], &owner());
         assert_eq!(chats.len(), 1);
         let years: Vec<&str> = chats[0]
             .buckets
