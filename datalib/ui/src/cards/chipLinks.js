@@ -8,7 +8,7 @@
 // exactly; the Rust tests and `chip_links.test.ts` run the same cases.
 
 /** The handle kinds this build knows; `datalib_handle::HandleKind`. */
-const KINDS = new Set(["email", "tel", "slack", "signal_aci", "facebook"]);
+const KINDS = new Set(["email", "tel", "slack", "signal_aci", "facebook", "linkedin"]);
 
 /** The handle (`email:…`, `tel:…`, `slack:T/U`) a URI names, or null
  *  when it names none this build knows.
@@ -42,6 +42,7 @@ export function handleFromUri(href) {
       return null;
     }
     if (kind === "facebook") return facebookHandle(value);
+    if (kind === "linkedin") return linkedinHandle(value);
     if (kind === "signal_aci") {
       // A Signal account id: a UUID, spelled lowercase with dashes
       // (`Handle::signal_aci`).
@@ -53,6 +54,8 @@ export function handleFromUri(href) {
     // A kind with a scheme of its own reads back through that scheme.
     return KINDS.has(kind) ? handleFromUri(uriFromHandle(`${kind}:${value}`) ?? "") : null;
   }
+  const linkedin = linkedinFromProfileUrl(uri);
+  if (linkedin) return linkedin;
   if (uri.toLowerCase().startsWith("slack://user?")) {
     const params = new URLSearchParams(uri.slice("slack://user?".length));
     const team = params.get("team") ?? "";
@@ -78,7 +81,35 @@ export function uriFromHandle(handle) {
   }
   if (kind === "signal_aci") return `datalib:handle/signal_aci/${value}`;
   if (kind === "facebook") return `datalib:handle/facebook/${percentEncode(value)}`;
+  if (kind === "linkedin") return `https://www.linkedin.com/in/${percentEncode(value)}`;
   return null;
+}
+
+/** The member a LinkedIn profile URL names, by its slug decoded and
+ *  lowercased (`Handle::linkedin_profile_url`).
+ *  @param {string} uri
+ *  @returns {string | null} */
+function linkedinFromProfileUrl(uri) {
+  const m = /^https?:\/\/([^/]+)\/in\/([^?#]*)/i.exec(uri);
+  if (!m) return null;
+  const host = m[1].toLowerCase();
+  if (host !== "linkedin.com" && !host.endsWith(".linkedin.com")) return null;
+  let slug;
+  try {
+    slug = decodeURIComponent(m[2].replace(/\/$/, ""));
+  } catch {
+    return null;
+  }
+  return linkedinHandle(slug);
+}
+
+/** `Handle::linkedin`: a decoded slug, lowercased.
+ *  @param {string} slug
+ *  @returns {string | null} */
+function linkedinHandle(slug) {
+  const s = slug.trim().toLowerCase();
+  // eslint-disable-next-line no-control-regex
+  return s && !/[\s\u0000-\u001f\u007f-\u009f/?#%]/.test(s) ? `linkedin:${s}` : null;
 }
 
 /** A Facebook person, `name/<name>` with its whitespace collapsed or

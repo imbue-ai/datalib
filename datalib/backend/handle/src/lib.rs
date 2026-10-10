@@ -42,6 +42,10 @@ pub enum HandleKind {
     /// an account deleted since, which only its one-to-one conversation
     /// tells apart from the others.
     Facebook,
+    /// A LinkedIn member by the slug of their profile URL
+    /// (`linkedin.com/in/<slug>`), which every connection and message
+    /// sender in an export carries.
+    Linkedin,
 }
 
 impl HandleKind {
@@ -192,6 +196,36 @@ impl Handle {
             .then(|| Self::of(HandleKind::Facebook, &format!("deleted/{id}")))
     }
 
+    /// A LinkedIn member by their profile slug, already percent-decoded:
+    /// lowercased, as LinkedIn matches it. A slug holding a `/`, `?`,
+    /// `#`, `%` or whitespace is a URL not yet taken apart, and refused.
+    pub fn linkedin(slug: &str) -> Option<Self> {
+        let slug = slug.trim().to_lowercase();
+        let well_formed = !slug.is_empty()
+            && !slug
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '/' | '?' | '#' | '%'));
+        well_formed.then(|| Self::of(HandleKind::Linkedin, &slug))
+    }
+
+    /// The member a LinkedIn profile URL names: `http(s)://` on
+    /// `linkedin.com` or any subdomain of it, then `/in/<slug>`, its
+    /// slug percent-decoded; a trailing `/`, query or fragment is dropped.
+    pub fn linkedin_profile_url(url: &str) -> Option<Self> {
+        let url = url.trim();
+        let rest = strip_prefix_ignore_case(url, "https://")
+            .or_else(|| strip_prefix_ignore_case(url, "http://"))?;
+        let (host, path) = rest.split_once('/')?;
+        let host = host.to_ascii_lowercase();
+        if host != "linkedin.com" && !host.ends_with(".linkedin.com") {
+            return None;
+        }
+        let path = path.split(['?', '#']).next().unwrap_or_default();
+        let slug = path.strip_prefix("in/")?;
+        let slug = slug.strip_suffix('/').unwrap_or(slug);
+        Self::linkedin(&percent_decode(slug)?)
+    }
+
     /// A handle as written by [`Handle::as_str`]. `None` for an unknown
     /// kind or a value its kind would not have produced.
     pub fn parse(s: &str) -> Option<Self> {
@@ -217,6 +251,7 @@ impl Handle {
                 ("deleted", id) => Self::facebook_deleted(id),
                 _ => None,
             },
+            HandleKind::Linkedin => Self::linkedin(value),
         }
     }
 
@@ -235,7 +270,8 @@ impl Handle {
 
     /// The handle as a URI another app can follow: `mailto:` and `tel:`
     /// as the standards spell them, a Slack user as Slack's own deep
-    /// link, and a kind with no scheme of its own (a Signal account id, a
+    /// link, a LinkedIn member as their profile's web address, and a kind
+    /// with no scheme of its own (a Signal account id, a
     /// Facebook person) as `datalib:handle/<kind>/<value>`, the value
     /// percent-encoded but for its `/`s. This is the href of a chip
     /// link; [`Handle::from_uri`] reads it back, and
@@ -247,6 +283,12 @@ impl Handle {
             HandleKind::Slack => {
                 let (team, user) = self.value().split_once('/').unwrap_or((self.value(), ""));
                 format!("slack://user?team={team}&id={user}")
+            }
+            HandleKind::Linkedin => {
+                format!(
+                    "https://www.linkedin.com/in/{}",
+                    percent_encode(self.value())
+                )
             }
             // No app follows a link to a Signal account id, so it takes
             // the spelling for a kind with no scheme of its own.
@@ -262,8 +304,8 @@ impl Handle {
 
     /// The handle a URI names, or `None` for one that names no handle
     /// this build knows: `mailto:` (its query dropped), `tel:`,
-    /// `slack://user?team=…&id=…` with the parameters in either order,
-    /// and `datalib:handle/<kind>/<value>`, the spelling for a kind that
+    /// `slack://user?team=…&id=…` with the parameters in either order, a
+    /// LinkedIn profile's web address, and `datalib:handle/<kind>/<value>`, the spelling for a kind that
     /// has no standard scheme of its own.
     pub fn from_uri(uri: &str) -> Option<Self> {
         let uri = uri.trim();
@@ -276,6 +318,9 @@ impl Handle {
         if let Some(rest) = strip_prefix_ignore_case(uri, "datalib:handle/") {
             let (kind, value) = rest.split_once('/')?;
             return Self::rebuild(&format!("{kind}:{}", percent_decode(value)?));
+        }
+        if let Some(member) = Self::linkedin_profile_url(uri) {
+            return Some(member);
         }
         let query = strip_prefix_ignore_case(uri, "slack://user?")?;
         let (mut team, mut user) = (None, None);
@@ -302,7 +347,10 @@ impl Handle {
         match self.kind() {
             HandleKind::Email => format!("{shown} <{}>", self.value()),
             HandleKind::Tel => format!("{shown} ({})", self.value()),
-            HandleKind::Slack | HandleKind::SignalAci | HandleKind::Facebook => {
+            HandleKind::Slack
+            | HandleKind::SignalAci
+            | HandleKind::Facebook
+            | HandleKind::Linkedin => {
                 format!("{shown} ({})", self.as_str())
             }
         }
@@ -651,6 +699,14 @@ mod tests {
                 Handle::facebook_deleted("1000000002").unwrap(),
                 "datalib:handle/facebook/deleted/1000000002",
             ),
+            (
+                Handle::linkedin("jlpicard").unwrap(),
+                "https://www.linkedin.com/in/jlpicard",
+            ),
+            (
+                Handle::linkedin("jürgen-müller-1a2b").unwrap(),
+                "https://www.linkedin.com/in/j%C3%BCrgen-m%C3%BCller-1a2b",
+            ),
         ] {
             assert_eq!(h.to_uri(), uri);
             assert_eq!(Handle::from_uri(uri), Some(h));
@@ -669,6 +725,11 @@ mod tests {
             Handle::slack("T01", "U02")
         );
         assert_eq!(Handle::from_uri("https://enterprise.org/riker"), None);
+        assert_eq!(
+            Handle::from_uri("https://www.linkedin.com/feed/update/urn:li:share:1"),
+            None,
+            "a post is not a person"
+        );
         assert_eq!(Handle::from_uri("slack://channel?team=T01&id=C03"), None);
         assert_eq!(Handle::from_uri("datalib:group/slack"), None);
         // The spelling for a kind with no scheme of its own; every kind
@@ -726,6 +787,52 @@ mod tests {
         assert_eq!(Handle::facebook_deleted(""), None);
         assert_eq!(Handle::parse("facebook:Q"), None);
         assert_eq!(Handle::parse("facebook:other/Q"), None);
+    }
+
+    /// Every way an export or a browser writes one profile's address is
+    /// one handle: the connection, the message sender and the recipient
+    /// have to meet on it.
+    #[test]
+    fn every_spelling_of_one_linkedin_profile_is_one_handle() {
+        let picard = Handle::linkedin("jlpicard").unwrap();
+        assert_eq!(picard.as_str(), "linkedin:jlpicard");
+        for url in [
+            "https://www.linkedin.com/in/jlpicard",
+            " https://www.linkedin.com/in/jlpicard/ ",
+            "http://linkedin.com/in/JLPicard",
+            "https://fr.linkedin.com/in/jlpicard?trk=profile",
+            "HTTPS://WWW.LINKEDIN.COM/in/jlpicard#about",
+        ] {
+            assert_eq!(
+                Handle::linkedin_profile_url(url),
+                Some(picard.clone()),
+                "{url:?}"
+            );
+        }
+        assert_eq!(
+            Handle::linkedin_profile_url(
+                "https://www.linkedin.com/in/j%c3%bcrgen-m%c3%bcller-1a2b"
+            ),
+            Handle::linkedin("Jürgen-Müller-1a2b"),
+            "an export writes a slug's accents escaped, in lowercase hex"
+        );
+        for bad in [
+            "",
+            "jlpicard",
+            "https://www.linkedin.com/in/",
+            "https://www.linkedin.com/company/starfleet",
+            "https://notlinkedin.com/in/jlpicard",
+            "https://www.linkedin.com.evil.test/in/jlpicard",
+            "https://www.linkedin.com/in/jl/picard",
+            "https://www.linkedin.com/in/jl%2",
+        ] {
+            assert_eq!(Handle::linkedin_profile_url(bad), None, "{bad:?}");
+        }
+        for bad in ["", " ", "jl picard", "jl/picard", "jl%20picard", "a?b"] {
+            assert_eq!(Handle::linkedin(bad), None, "{bad:?}");
+        }
+        assert_eq!(Handle::parse("linkedin:JLPicard"), None);
+        assert_eq!(Handle::rebuild("linkedin:JLPicard"), Some(picard));
     }
 
     #[test]

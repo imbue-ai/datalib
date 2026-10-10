@@ -27,6 +27,8 @@ describe("handleFromUri / uriFromHandle", () => {
         "datalib:handle/facebook/name/Beverly%20Crusher-Howard%20%E2%98%95",
       ],
       ["facebook:deleted/1000000002", "datalib:handle/facebook/deleted/1000000002"],
+      ["linkedin:jlpicard", "https://www.linkedin.com/in/jlpicard"],
+      ["linkedin:jürgen-müller-1a2b", "https://www.linkedin.com/in/j%C3%BCrgen-m%C3%BCller-1a2b"],
     ]) {
       expect(uriFromHandle(handle)).toBe(uri);
       expect(handleFromUri(uri)).toBe(handle);
@@ -48,6 +50,14 @@ describe("handleFromUri / uriFromHandle", () => {
     expect(handleFromUri("datalib:handle/facebook/name/%20%20")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/deleted/12a")).toBeNull();
     expect(handleFromUri("datalib:handle/facebook/other/Q")).toBeNull();
+    expect(handleFromUri("http://fr.linkedin.com/in/JLPicard/?trk=x")).toBe("linkedin:jlpicard");
+    expect(handleFromUri("https://www.linkedin.com/in/j%c3%bcrgen-m%c3%bcller-1a2b")).toBe(
+      "linkedin:jürgen-müller-1a2b",
+    );
+    expect(handleFromUri("https://www.linkedin.com/feed/update/urn:li:share:1")).toBeNull();
+    expect(handleFromUri("https://www.linkedin.com.evil.test/in/jlpicard")).toBeNull();
+    expect(handleFromUri("https://www.linkedin.com/in/jl/picard")).toBeNull();
+    expect(handleFromUri("https://www.linkedin.com/in/")).toBeNull();
     expect(handleFromUri("mailto:not an address")).toBeNull();
     expect(uriFromHandle("fax:+15550123456")).toBeNull();
   });

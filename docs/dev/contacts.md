@@ -119,6 +119,7 @@ number. What that costs:
 | `slack` | `<team_id>/<user_id>` | `Handle::slack` | `slack://user?team=<team>&id=<user>` |
 | `signal_aci` | a Signal account id, a lowercase dashed UUID | `Handle::signal_aci` | `datalib:handle/signal_aci/<uuid>` |
 | `facebook` | `name/<the name shown>`, its whitespace collapsed; or `deleted/<conversation id>` | `Handle::facebook_name`, `Handle::facebook_deleted` | `datalib:handle/facebook/<value>`, percent-encoded but for its `/`s |
+| `linkedin` | the slug of a profile URL (`linkedin.com/in/<slug>`), percent-decoded and lowercased | `Handle::linkedin`, `Handle::linkedin_profile_url` (any `linkedin.com` host; a trailing `/`, query or fragment is dropped) | `https://www.linkedin.com/in/<slug>`, the profile itself |
 
 A Facebook export names people and never numbers them, so a
 `facebook:name/` handle is a name: two people of one name are one
@@ -209,7 +210,7 @@ What each source has today:
 | Messages | the number or Apple ID address | each tapback's |
 | Google Chat and Voice, SMS backup | the address or number; a group MMS, which does not say which number sent it, has none | |
 | address books | | a card's numbers and addresses, in the source contact |
-| LinkedIn | | a connection's email address, in the source contact |
+| LinkedIn | a message's sender, by `SENDER PROFILE URL`; the account's owner, by their primary address, on every post and comment | a connection's profile and email address, in the source contact |
 | Facebook | a Messenger message's sender, by name; a deleted account by its conversation, where it is that conversation's only one; the account's owner, by name, on every post, album, comment, reaction and edit (a store with no profile knows them only as "Me", and gives none) | each Messenger reaction's; a friend's name, in the source contact |
 | Beeper | none yet: a Matrix user id has no kind | |
 
@@ -482,7 +483,8 @@ Everything is in `datalib/ui/src/cards/`:
   Facebook's list) in `channel` alone. The grid's Contact column is a
   chip from those (`columns.rs::contact_identity`: the address, else
   the number, by the rule `contact-common::chip_handle` writes the
-  members' chips by), and the search list titles such a row with the
+  members' chips by, else any handle the index holds for the contact in
+  `source_contact_handles`, read beside the row), and the search list titles such a row with the
   same chip (`SearchList.ce.vue`). Browsing an address book opens on
   Subject (the contact's chip), Phone, Email, Contents (the note first), Touched, Type and
   then Channel (`config/browsePresets.ts`).
