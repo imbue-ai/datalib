@@ -1128,13 +1128,13 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
                 "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
                 "WHERE m.source_id = 'whatsapp' AND h.handle IN "
-                "('tel:+17015550102', 'tel:+17015550103', 'tel:+17015550104') "
+                "('tel:+17015550101', 'tel:+17015550102', 'tel:+17015550103') "
                 "GROUP BY 1 ORDER BY 1;",
             ),
             [
-                'tel:+17015550102|["William Riker","Will Riker (Starfleet)","Number One"]',
-                'tel:+17015550103|["Data"]',
-                'tel:+17015550104|["Geordi La Forge"]',
+                'tel:+17015550101|["William Riker","Will Riker (Starfleet)","Number One"]',
+                'tel:+17015550102|["Data"]',
+                'tel:+17015550103|["Geordi La Forge"]',
             ],
             "WhatsApp's address book, as each chat's contacts",
         )
@@ -1152,9 +1152,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "FROM source_contact_handles h JOIN source_contacts c "
                 "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
                 "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550103';",
+                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550102';",
             ),
-            ["tel:+17015550103|Starfleet|Second Officer"],
+            ["tel:+17015550102|Starfleet|Second Officer"],
             "Data's company and title, from the address book alone",
         )
         self.assertEqual(
@@ -1166,9 +1166,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "FROM source_contact_handles h JOIN source_contacts c "
                 "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
                 "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550106';",
+                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550105';",
             ),
-            ['tel:+17015550106|["Deanna Troi"]|Starfleet|Counselor|0'],
+            ['tel:+17015550105|["Deanna Troi"]|Starfleet|Counselor|0'],
             "a WhatsApp reactor who writes nothing, under her address-book entry",
         )
         # A 1:1 chat leaves an incoming reaction's sender empty, as it does
@@ -1176,7 +1176,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # reaction names nobody.
         riker_chat = self._markdown("whatsapp", "private word about Commander Data")
         self.assertIn(
-            '🖖 [William Riker](tel:+17015550102 "William Riker (+17015550102)")',
+            '🖖 [William Riker](tel:+17015550101 "William Riker (+17015550101)")',
             riker_chat,
             "a 1:1 reaction is the chat's person, as a chip",
         )
