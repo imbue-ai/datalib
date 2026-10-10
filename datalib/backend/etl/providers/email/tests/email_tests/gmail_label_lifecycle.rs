@@ -25,21 +25,12 @@ const UNDER_TRAVEL: &str = "18c9f2a1b2c3d702";
 const TAKEOUT_DECIMAL: &str = "1853466712473707184";
 const TAKEOUT_EMAIL: &str = "19b8d627a801a2b0";
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_gmail_label_row_follows_the_label() {
-    // One test, scenarios in sequence: `PLAYBACK_ENV` is process-global.
-    a_renamed_label_keeps_its_row_and_a_deleted_one_comes_off_its_mail().await;
-    a_takeout_import_moves_onto_the_real_label_ids().await;
-    a_takeout_import_after_the_api_files_under_the_real_ids().await;
-    a_takeout_label_no_message_carries_goes().await;
-    a_label_listing_that_names_nothing_takes_no_label_off_any_mail().await;
-}
-
 /// `labels.list` answering with no `labels` key read as an account with
 /// no labels, and every Gmail mailbox the store held was emptied: every
 /// email lost every label. Every account has the system labels, so a
 /// reply without the list is malformed and fails the run, and a list
 /// that names nothing plans no deletions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_label_listing_that_names_nothing_takes_no_label_off_any_mail() {
     let m = Mirror::new();
     put_labels(
@@ -93,6 +84,7 @@ async fn a_label_listing_that_names_nothing_takes_no_label_off_any_mail() {
     assert_eq!(after.filed(UNDER_TRAVEL), before.filed(UNDER_TRAVEL));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_takeout_label_no_message_carries_goes() {
     let m = Mirror::new();
     let dir = tempfile::tempdir().unwrap();
@@ -107,6 +99,7 @@ async fn a_takeout_label_no_message_carries_goes() {
     assert!(!state.mailboxes.contains_key(&named("Old")));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_renamed_label_keeps_its_row_and_a_deleted_one_comes_off_its_mail() {
     let m = Mirror::new();
     put_labels(
@@ -155,6 +148,7 @@ async fn a_renamed_label_keeps_its_row_and_a_deleted_one_comes_off_its_mail() {
     assert_eq!(state.filed(UNDER_TRAVEL), vec![real("INBOX")]);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_takeout_import_moves_onto_the_real_label_ids() {
     let m = Mirror::new();
     let dir = tempfile::tempdir().unwrap();
@@ -190,6 +184,7 @@ async fn a_takeout_import_moves_onto_the_real_label_ids() {
     assert_eq!(after.mailboxes[&named("Long Gone")], "Long Gone");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_takeout_import_after_the_api_files_under_the_real_ids() {
     let m = Mirror::new();
     put_labels(

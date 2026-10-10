@@ -9,7 +9,7 @@ use datalib_etl_claude::ingest::{
     db::block_on_load_all, db::db_path_for, fetch, FetchOptions, RawDb,
 };
 use datalib_etl_claude::synthesize::ClaudeSynth;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -62,12 +62,10 @@ async fn claude_synth_playback_extract_roundtrip() {
     // unconditionally).
     assert_eq!(report.fixtures_written, 8);
 
-    std::env::set_var(PLAYBACK_ENV, &playback);
-
     // Open here and close before the store is read back: the file
     // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
-    let summary = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         // Point export_dir at our input snapshot so users.json gets
         // ingested before the listing pass needs account_uuid.
         export_dir: Some(api.clone()),
@@ -75,8 +73,8 @@ async fn claude_synth_playback_extract_roundtrip() {
         sleep_between: Duration::ZERO,
         conv_uuids: Vec::new(),
         ..FetchOptions::new(db.clone())
-    })
-    .await;
+    });
+    let summary = playback::scope(&playback, download).await;
     db.commit_all("test").await.unwrap();
     db.close().await;
     let summary = summary.unwrap();
@@ -106,12 +104,12 @@ async fn claude_synth_playback_extract_roundtrip() {
     // Open here and close before the store is read back: the file
     // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&since_db)).await.unwrap();
-    let summary = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         export_dir: Some(api.clone()),
         since: Some("2025-01-02".to_string()),
         ..FetchOptions::new(db.clone())
-    })
-    .await;
+    });
+    let summary = playback::scope(&playback, download).await;
     db.commit_all("test").await.unwrap();
     db.close().await;
     let summary = summary.unwrap();
@@ -127,12 +125,12 @@ async fn claude_synth_playback_extract_roundtrip() {
     // Open here and close before the store is read back: the file
     // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&since_db)).await.unwrap();
-    let summary = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         export_dir: Some(api.clone()),
         since: Some("2024-12-01".to_string()),
         ..FetchOptions::new(db.clone())
-    })
-    .await;
+    });
+    let summary = playback::scope(&playback, download).await;
     db.commit_all("test").await.unwrap();
     db.close().await;
     let summary = summary.unwrap();

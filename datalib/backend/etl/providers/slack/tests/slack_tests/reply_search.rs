@@ -49,8 +49,8 @@ fn search_match(ts: &str, thread_ts: &str) -> Value {
            "permalink": format!("https://ncc-1701.slack.com/archives/C1/p{p}?thread_ts={thread_ts}&cid=C1")})
 }
 
-async fn run(out: &Path, now: &str) {
-    fetch_into(out, |o| FetchOptions {
+async fn run(playback: &Path, out: &Path, now: &str) {
+    fetch_into(playback, out, |o| FetchOptions {
         search_replies: true,
         now: now.parse().unwrap(),
         ..o
@@ -91,7 +91,7 @@ async fn a_late_reply_to_an_old_thread_is_found_by_search() {
         json!([root(1, FIRST_REPLY), reply(FIRST_REPLY, "all decks report")]),
     );
     first.serve();
-    run(&first.out, FIRST_RUN).await;
+    run(&first.playback, &first.out, FIRST_RUN).await;
     assert_eq!(stored_ts(&first.out), [ROOT, FIRST_REPLY, NEWEST]);
     assert_eq!(search_problems(&first.out).await, [] as [&str; 0]);
 
@@ -133,7 +133,7 @@ async fn a_late_reply_to_an_old_thread_is_found_by_search() {
         ]),
     );
     second.serve();
-    run(&first.out, SECOND_RUN).await;
+    run(&second.playback, &first.out, SECOND_RUN).await;
     assert_eq!(
         stored_ts(&first.out),
         [ROOT, FIRST_REPLY, NEWEST, LATE_REPLY],
@@ -143,6 +143,6 @@ async fn a_late_reply_to_an_old_thread_is_found_by_search() {
 
     // The same now again: the reply time up to it is searched, so the run
     // asks nothing the tape lacks.
-    run(&first.out, SECOND_RUN).await;
+    run(&second.playback, &first.out, SECOND_RUN).await;
     assert_eq!(search_problems(&first.out).await, [] as [&str; 0]);
 }

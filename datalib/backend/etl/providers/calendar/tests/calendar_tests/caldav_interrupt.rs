@@ -14,8 +14,9 @@ use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_calendar::ingest::caldav::{self, dav};
 use datalib_etl_calendar::ingest::{db_path_for, RawDb};
-use datalib_etl_web::http::{HttpMethod, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::http::{HttpMethod, LatchkeySettings};
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::playback;
 
 use crate::caldav_playback::{
     account_fixtures, fixture, multistatus, resource, xml, BRIDGE, HOST, RECEPTION, STAFF,
@@ -166,8 +167,7 @@ impl Rig for Caldav {
     }
 
     async fn download(&self, db: &RawDb, stop: StopFlag) -> Result<()> {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
-        caldav::fetch(caldav::FetchOptions {
+        let download = caldav::fetch(caldav::FetchOptions {
             db: db.clone(),
             server_url: format!("{HOST}/"),
             calendars: Vec::new(),
@@ -179,9 +179,8 @@ impl Rig for Caldav {
                 ..Default::default()
             },
             sealer: None,
-        })
-        .await
-        .map(|_| ())
+        });
+        playback::scope(&self.playback, download).await.map(|_| ())
     }
 
     async fn seal(&self, db: RawDb) -> Result<()> {

@@ -97,7 +97,6 @@ rust_test(
     env = {
         "INSTA_WORKSPACE_ROOT": ".",
         "JMAP_FIXTURE_DIR": "datalib/backend/etl/providers/email/tests/fixtures",
-        "RUST_TEST_THREADS": "1",
     },
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [

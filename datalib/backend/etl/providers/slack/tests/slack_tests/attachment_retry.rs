@@ -145,8 +145,8 @@ fn landed() -> Attachment {
     }
 }
 
-async fn run(out: &Path, limit: Option<u64>) -> usize {
-    let summary = fetch_into(out, |o| FetchOptions {
+async fn run(playback: &Path, out: &Path, limit: Option<u64>) -> usize {
+    let summary = fetch_into(playback, out, |o| FetchOptions {
         media: true,
         blob_size_limit_bytes: limit,
         ..o
@@ -161,7 +161,7 @@ async fn run(out: &Path, limit: Option<u64>) -> usize {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_download_is_retried_without_relisting_its_message() {
     let t = first_world(500);
-    run(&t.out, None).await;
+    run(&t.playback, &t.out, None).await;
     let first = attachment(&t.out).await;
     assert_eq!(first.blake3, None);
     assert_eq!(
@@ -170,9 +170,9 @@ async fn a_failed_download_is_retried_without_relisting_its_message() {
         "a file that never landed is dropped, not stale"
     );
 
-    let _second = second_world();
+    let second = second_world();
     assert_eq!(
-        run(&t.out, None).await,
+        run(&second.playback, &t.out, None).await,
         0,
         "the message is not listed again"
     );
@@ -184,7 +184,7 @@ async fn a_failed_download_is_retried_without_relisting_its_message() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_raised_size_limit_fetches_a_skipped_file_without_a_rewalk() {
     let t = first_world(200);
-    run(&t.out, Some(4)).await;
+    run(&t.playback, &t.out, Some(4)).await;
     let first = attachment(&t.out).await;
     assert_eq!(first.blake3, None);
     assert_eq!(
@@ -192,9 +192,9 @@ async fn a_raised_size_limit_fetches_a_skipped_file_without_a_rewalk() {
         Some(("warning".to_string(), "over_size_limit".to_string()))
     );
 
-    let _second = second_world();
+    let second = second_world();
     assert_eq!(
-        run(&t.out, None).await,
+        run(&second.playback, &t.out, None).await,
         0,
         "the message is not listed again"
     );
@@ -207,10 +207,10 @@ async fn a_raised_size_limit_fetches_a_skipped_file_without_a_rewalk() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_file_over_todays_limit_is_reclassified_as_a_skip() {
     let t = first_world(500);
-    run(&t.out, None).await;
+    run(&t.playback, &t.out, None).await;
 
-    let _second = second_world();
-    run(&t.out, Some(4)).await;
+    let second = second_world();
+    run(&second.playback, &t.out, Some(4)).await;
     let after = attachment(&t.out).await;
     assert_eq!(after.blake3, None);
     assert_eq!(
@@ -226,7 +226,7 @@ async fn a_failed_file_over_todays_limit_is_reclassified_as_a_skip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_file_stamped_fetched_without_bytes_is_still_owed() {
     let t = first_world(500);
-    run(&t.out, None).await;
+    run(&t.playback, &t.out, None).await;
     let db = RawDb::open(&db_path_for(&t.out)).await.unwrap();
     sqlx::query("UPDATE slack_attachments_bookkeeping SET fetched_at_utc = last_attempt_at_utc")
         .execute(db.pool())
@@ -237,8 +237,8 @@ async fn a_file_stamped_fetched_without_bytes_is_still_owed() {
         .unwrap();
     db.close().await;
 
-    let _second = second_world();
-    run(&t.out, Some(4)).await;
+    let second = second_world();
+    run(&second.playback, &t.out, Some(4)).await;
     assert_eq!(
         attachment(&t.out).await.problem,
         Some(("warning".to_string(), "over_size_limit".to_string()))
@@ -251,15 +251,15 @@ async fn a_file_stamped_fetched_without_bytes_is_still_owed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_channel_that_fails_partway_still_records_its_attachments() {
     let t = first_world_failing_after_the_first_page(500);
-    run(&t.out, None).await;
+    run(&t.playback, &t.out, None).await;
     let first = attachment(&t.out).await;
     assert_eq!(
         first.problem,
         Some(("error".to_string(), "fetch_failed".to_string()))
     );
 
-    let _second = second_world();
-    run(&t.out, None).await;
+    let second = second_world();
+    run(&second.playback, &t.out, None).await;
     assert_eq!(attachment(&t.out).await, landed());
 }
 
@@ -283,7 +283,7 @@ async fn history_problems(out: &Path) -> i64 {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turning_media_on_fetches_the_files_of_stored_messages_without_a_rewalk() {
     let t = first_world(200);
-    fetch_into(&t.out, |o| o).await.unwrap();
+    fetch_into(&t.playback, &t.out, |o| o).await.unwrap();
     assert_eq!(
         attachment(&t.out).await,
         Attachment {
@@ -294,8 +294,8 @@ async fn turning_media_on_fetches_the_files_of_stored_messages_without_a_rewalk(
         "with media off the file is listed, not fetched, and that is no problem"
     );
 
-    let _second = second_world();
-    assert_eq!(run(&t.out, None).await, 0);
+    let second = second_world();
+    assert_eq!(run(&second.playback, &t.out, None).await, 0);
     assert_eq!(attachment(&t.out).await, landed());
     assert_eq!(history_problems(&t.out).await, 0);
 }
@@ -338,7 +338,7 @@ async fn one_file_on_two_messages_in_a_batch_is_fetched_once_for_both() {
     t.serve();
     serve_file(&t.playback, 200, BYTES);
 
-    let summary = fetch_into(&t.out, |o| FetchOptions { media: true, ..o })
+    let summary = fetch_into(&t.playback, &t.out, |o| FetchOptions { media: true, ..o })
         .await
         .unwrap();
     assert_eq!(
@@ -360,7 +360,7 @@ async fn one_file_on_two_messages_in_a_batch_is_fetched_once_for_both() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_file_already_held_is_not_fetched_for_a_new_message() {
     let t = first_world(200);
-    run(&t.out, None).await;
+    run(&t.playback, &t.out, None).await;
     assert_eq!(attachment(&t.out).await, landed());
 
     let later = Tree::new();
@@ -373,9 +373,12 @@ async fn a_file_already_held_is_not_fetched_for_a_new_message() {
     .unwrap();
     later.serve();
 
-    let summary = fetch_into(&t.out, |o| FetchOptions { media: true, ..o })
-        .await
-        .unwrap();
+    let summary = fetch_into(&later.playback, &t.out, |o| FetchOptions {
+        media: true,
+        ..o
+    })
+    .await
+    .unwrap();
     // Counts of zero are left out: nothing downloaded, one edge held.
     assert_eq!(
         summary.media,

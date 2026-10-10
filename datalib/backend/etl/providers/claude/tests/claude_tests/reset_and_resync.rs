@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use datalib_etl_claude::ingest::{db::db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_claude::synthesize::ClaudeSynth;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::json;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -144,20 +144,19 @@ async fn a_reset_and_resync_preserves_data_tables() {
     .unwrap();
 
     ClaudeSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
 
     // ── Run 1: fresh download ─────────────────────────────────────
     // Open here and close before the store is read back: the file
     // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
-    let s1 = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         export_dir: Some(api.clone()),
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuids: Vec::new(),
         ..FetchOptions::new(db.clone())
-    })
-    .await;
+    });
+    let s1 = playback::scope(&playback, download).await;
     // Seal before closing, as the session does in production. The
     // read below opens its own pool, which lands on `main`; a download
     // that never sealed left its rows on the writer's branch, where no
@@ -203,14 +202,14 @@ async fn a_reset_and_resync_preserves_data_tables() {
     // Open here and close before the store is read back: the file
     // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
-    let s2 = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         export_dir: Some(api.clone()),
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuids: Vec::new(),
         ..FetchOptions::new(db.clone())
-    })
-    .await;
+    });
+    let s2 = playback::scope(&playback, download).await;
     // Sealed for the same reason as run 1's: the read below is its own
     // pool on `main`.
     datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "reset-test: second")

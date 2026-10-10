@@ -10,7 +10,8 @@ use datalib_etl_calendar::ingest::google::{
     self, calendar_list_url, events_url, windowed_events_url,
 };
 use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb, Window};
-use datalib_etl_web::http::{HttpRequest, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, LatchkeySettings};
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
 
@@ -67,9 +68,8 @@ async fn try_run_in(
     store: &Path,
     window: Option<Window>,
 ) -> anyhow::Result<FetchSummary> {
-    std::env::set_var(PLAYBACK_ENV, playback);
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
-    let summary = google::fetch(google::FetchOptions {
+    let download = google::fetch(google::FetchOptions {
         db: db.clone(),
         calendars: Vec::new(),
         window,
@@ -77,13 +77,12 @@ async fn try_run_in(
         progress: Default::default(),
         control: Default::default(),
         sealer: None,
-    })
-    .await;
+    });
+    let summary = playback::scope(playback, download).await;
     if summary.is_ok() {
         db.commit_all("test").await.expect("commit");
     }
     db.close().await;
-    std::env::remove_var(PLAYBACK_ENV);
     summary
 }
 
@@ -182,12 +181,10 @@ async fn pages_then_syncs_and_survives_an_expired_token() {
     fixture(&two, &events_url(AWAY, Some("a1"), None), gone);
     fixture(&two, &events_url(AWAY, None, None), away_all);
 
-    std::env::set_var(PLAYBACK_ENV, &one);
     let config: datalib_etl_calendar_config::CalendarConfig =
         serde_json::from_value(json!({"google": {}})).unwrap();
-    let report =
-        datalib_etl_calendar::probe::probe(&config, ProbeAsk::List(ProbeList::Calendars)).await;
-    std::env::remove_var(PLAYBACK_ENV);
+    let probe = datalib_etl_calendar::probe::probe(&config, ProbeAsk::List(ProbeList::Calendars));
+    let report = playback::scope(&one, probe).await;
     let report = report.expect("probe under playback");
     assert_eq!(report.account.address.as_deref(), Some(PRIMARY));
     let items: Vec<(&str, Option<&str>)> = report
@@ -363,11 +360,10 @@ async fn a_stopped_run_leaves_the_last_listing_rows() {
     let failed = vec!["listing:calendar Away team".to_string()];
     assert_eq!(problem_keys(&store).await, failed);
 
-    std::env::set_var(PLAYBACK_ENV, &playback);
     let db = RawDb::open(&db_path_for(&store)).await.expect("open store");
     let control = datalib_etl::control::DownloadControl::default();
     control.stop.request();
-    google::fetch(google::FetchOptions {
+    let download = google::fetch(google::FetchOptions {
         db: db.clone(),
         calendars: Vec::new(),
         window: None,
@@ -375,12 +371,12 @@ async fn a_stopped_run_leaves_the_last_listing_rows() {
         progress: Default::default(),
         control,
         sealer: None,
-    })
-    .await
-    .expect("a stopped run");
+    });
+    playback::scope(&playback, download)
+        .await
+        .expect("a stopped run");
     db.commit_all("test").await.expect("commit");
     db.close().await;
-    std::env::remove_var(PLAYBACK_ENV);
     assert_eq!(problem_keys(&store).await, failed);
 }
 

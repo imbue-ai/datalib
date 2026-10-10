@@ -18,8 +18,8 @@ fn first_capture() -> PathBuf {
     }
 }
 
-async fn sync(out: &Path) {
-    fetch_into(out, |o| FetchOptions {
+async fn sync(playback: &Path, out: &Path) {
+    fetch_into(playback, out, |o| FetchOptions {
         members_only: true,
         media: false,
         dms: true,
@@ -53,26 +53,26 @@ async fn both_captures_answer_every_request_the_pipelines_syncs_make() {
     let (playback, playback_v2) = (d.path().join("playback"), d.path().join("playback_v2"));
 
     serve(&first, &playback);
-    sync(&out).await;
+    sync(&playback, &out).await;
     assert_eq!(problems(&out).await, [] as [&str; 0], "the first sync");
     let cold = stored_ts(&out);
-    sync(&out).await;
+    sync(&playback, &out).await;
     assert_eq!(problems(&out).await, [] as [&str; 0], "the first again");
     assert_eq!(stored_ts(&out), cold);
 
     serve(&second, &playback_v2);
-    sync(&out).await;
+    sync(&playback_v2, &out).await;
     assert_eq!(problems(&out).await, [] as [&str; 0], "the second capture");
     let grown = stored_ts(&out);
     assert_eq!(grown.len(), cold.len() + 2);
     for added in [WORFS_FOURTH_REPLY, RED_ALERT] {
         assert!(grown.iter().any(|ts| ts == added), "{added} in {grown:?}");
     }
-    sync(&out).await;
+    sync(&playback_v2, &out).await;
     assert_eq!(problems(&out).await, [] as [&str; 0], "the second again");
 
     serve(&first, &playback);
-    sync(&out).await;
+    sync(&playback, &out).await;
     assert_eq!(problems(&out).await, [] as [&str; 0], "back to the first");
     assert_eq!(stored_ts(&out), grown);
 

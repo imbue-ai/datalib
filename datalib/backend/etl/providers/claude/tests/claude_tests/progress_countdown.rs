@@ -22,7 +22,7 @@ use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_claude::ingest::{db::db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_claude::synthesize::ClaudeSynth;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::json;
 use tempfile::tempdir;
@@ -117,22 +117,20 @@ async fn each_conversation_ticks_once_and_the_count_reaches_zero_only_at_the_end
     .unwrap();
 
     ClaudeSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
 
     let recorder = Recorder::default();
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
-    let summary = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         export_dir: Some(api.clone()),
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuids: Vec::new(),
         progress: Progress::new(Arc::new(recorder.clone())),
         ..FetchOptions::new(db.clone())
-    })
-    .await;
+    });
+    let summary = playback::scope(&playback, download).await;
     db.commit_all("test").await.unwrap();
     db.close().await;
-    std::env::remove_var(PLAYBACK_ENV);
 
     let summary = summary.expect("claude fetch under playback");
     assert_eq!(summary.fetched, CONVERSATIONS);

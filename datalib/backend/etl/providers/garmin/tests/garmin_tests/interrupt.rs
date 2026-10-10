@@ -15,12 +15,12 @@ use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, RawDb, ACTIVITY_PAGE};
 use datalib_etl_garmin_config::GarminApi;
-use datalib_etl_web::http::PLAYBACK_ENV;
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use serde_json::json;
 
-use crate::prune_gate::{Account, PLAYBACK, TODAY};
+use crate::prune_gate::{Account, TODAY};
 
 /// Every table the download fills. The `_bookkeeping` sidecars and
 /// `problems` are left out: a run that was cut off has more attempts
@@ -93,7 +93,6 @@ impl Rig for Garmin {
     }
 
     async fn download(&self, db: &RawDb, stop: StopFlag) -> Result<()> {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
         let fast = std::time::Duration::from_millis(1);
         let guard = RetryGuard::new(
             std::time::Duration::from_secs(3600),
@@ -102,7 +101,7 @@ impl Rig for Garmin {
             fast,
             stop.clone(),
         );
-        retry::scope(
+        let download = retry::scope(
             guard,
             fetch(FetchOptions {
                 db: db.clone(),
@@ -116,9 +115,8 @@ impl Rig for Garmin {
                 },
                 sealer: None,
             }),
-        )
-        .await
-        .map(|_| ())
+        );
+        playback::scope(&self.playback, download).await.map(|_| ())
     }
 
     async fn seal(&self, db: RawDb) -> Result<()> {
@@ -182,7 +180,6 @@ fn every(n: u64) -> Vec<u64> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_first_download_cut_off_at_any_request_resumes_to_the_same_store() {
-    let _serial = PLAYBACK.lock().await;
     let a = busy_account();
     let rig = Garmin {
         playback: a.playback.clone(),
@@ -204,7 +201,6 @@ async fn a_first_download_cut_off_at_any_request_resumes_to_the_same_store() {
 /// test above and fails this one at the changed activity's detail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_later_download_cut_off_at_any_request_resumes_to_the_same_store() {
-    let _serial = PLAYBACK.lock().await;
     let before = busy_account();
     let first = Garmin {
         playback: before.playback.clone(),

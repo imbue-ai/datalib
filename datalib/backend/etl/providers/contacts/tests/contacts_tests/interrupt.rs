@@ -13,8 +13,9 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_contacts::ingest::{self, api, db_path_for, RawDb};
-use datalib_etl_web::http::{HttpMethod, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::http::{HttpMethod, LatchkeySettings};
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::playback;
 
 use crate::carddav_playback::{
     account_fixtures, card, cards, fixture, multistatus, resource, xml, BOOK, BRIDGE_V1, BRIDGE_V2,
@@ -163,8 +164,7 @@ impl Rig for Carddav {
     }
 
     async fn download(&self, db: &RawDb, stop: StopFlag) -> Result<()> {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
-        ingest::fetch(ingest::FetchOptions {
+        let download = ingest::fetch(ingest::FetchOptions {
             latchkey: LatchkeySettings::default(),
             db: db.clone(),
             server_url: format!("{HOST}/"),
@@ -175,9 +175,8 @@ impl Rig for Carddav {
                 ..Default::default()
             },
             sealer: None,
-        })
-        .await
-        .map(|_| ())
+        });
+        playback::scope(&self.playback, download).await.map(|_| ())
     }
 
     async fn seal(&self, db: RawDb) -> Result<()> {

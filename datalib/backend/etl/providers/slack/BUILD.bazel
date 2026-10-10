@@ -87,7 +87,6 @@ rust_test(
     edition = "2021",
     env = {
         "INSTA_WORKSPACE_ROOT": ".",
-        "RUST_TEST_THREADS": "1",
         "SLACK_FIXTURE_DIR": "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
     },
     proc_macro_deps = ["@datalib_crates//:async-trait"],

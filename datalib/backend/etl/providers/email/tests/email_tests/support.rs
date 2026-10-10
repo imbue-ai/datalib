@@ -15,7 +15,8 @@ use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::{db_path_for, RawDb};
-use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{json_response, write_fixture};
 use datalib_obs::diagnostics::Diagnostics;
 use serde_json::{json, Value};
@@ -47,16 +48,14 @@ impl Mirror {
     where
         F: Future<Output = anyhow::Result<T>>,
     {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
         let db = RawDb::open(&db_path_for(&self.root))
             .await
             .expect("open raw db");
-        let out = download(db.clone()).await;
+        let out = playback::scope(&self.playback, download(db.clone())).await;
         if out.is_ok() {
             db.commit_all("test").await.unwrap();
         }
         db.close().await;
-        std::env::remove_var(PLAYBACK_ENV);
         out
     }
 
@@ -71,7 +70,6 @@ impl Mirror {
     where
         F: Future<Output = anyhow::Result<T>>,
     {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
         let db = RawDb::open(&db_path_for(&self.root))
             .await
             .expect("open raw db");
@@ -92,12 +90,10 @@ impl Mirror {
             Diagnostics::new(),
         );
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
-        let out = ctx
-            .run_store(pool, Some(cas_pool), |sealer| async move {
-                download(db, sealer).await.map(|_| String::new())
-            })
-            .await;
-        std::env::remove_var(PLAYBACK_ENV);
+        let run = ctx.run_store(pool, Some(cas_pool), |sealer| async move {
+            download(db, sealer).await.map(|_| String::new())
+        });
+        let out = playback::scope(&self.playback, run).await;
         out.map(|_| ())
     }
 

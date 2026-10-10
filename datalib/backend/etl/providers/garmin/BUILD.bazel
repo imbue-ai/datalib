@@ -55,9 +55,6 @@ rust_test(
         ":tng_fixture",
     ],
     edition = "2021",
-    env = {
-        "RUST_TEST_THREADS": "1",
-    },
     proc_macro_deps = [
         "@datalib_crates//:async-trait",
     ],

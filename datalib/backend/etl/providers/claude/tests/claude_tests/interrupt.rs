@@ -21,8 +21,9 @@ use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_claude::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_claude::synthesize::ClaudeSynth;
-use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
 use serde_json::{json, Value};
 
@@ -255,8 +256,7 @@ impl Rig for Claude {
     }
 
     async fn download(&self, db: &RawDb, stop: StopFlag) -> Result<()> {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
-        fetch(FetchOptions {
+        let download = fetch(FetchOptions {
             export_dir: Some(self.api.clone()),
             now: Some(NOW.to_string()),
             control: DownloadControl {
@@ -264,9 +264,8 @@ impl Rig for Claude {
                 ..Default::default()
             },
             ..FetchOptions::new(db.clone())
-        })
-        .await
-        .map(|_| ())
+        });
+        playback::scope(&self.playback, download).await.map(|_| ())
     }
 
     async fn seal(&self, db: RawDb) -> Result<()> {

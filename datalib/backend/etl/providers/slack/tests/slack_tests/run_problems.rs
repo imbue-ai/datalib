@@ -97,8 +97,9 @@ async fn a_channel_that_fails_is_a_problem_until_it_walks() {
         refused_by_slack(),
     )
     .unwrap();
-    serve(&api1, &d.path().join("playback1"));
-    fetch_into(&out, |o| o)
+    let playback1 = d.path().join("playback1");
+    serve(&api1, &playback1);
+    fetch_into(&playback1, &out, |o| o)
         .await
         .expect("one channel failing is not the run failing");
     assert_eq!(stored_ts(&out), [A]);
@@ -113,8 +114,9 @@ async fn a_channel_that_fails_is_a_problem_until_it_walks() {
     History::cold("C2")
         .record(&api2, json!([msg(B, "warp core")]))
         .unwrap();
-    serve(&api2, &d.path().join("playback2"));
-    fetch_into(&out, |o| o).await.unwrap();
+    let playback2 = d.path().join("playback2");
+    serve(&api2, &playback2);
+    fetch_into(&playback2, &out, |o| o).await.unwrap();
     assert_eq!(stored_ts(&out), [A, B]);
     assert_eq!(problems(&out).await, [], "the channel walked this time");
 }
@@ -149,8 +151,9 @@ async fn a_thread_that_fails_is_a_problem_on_the_thread_until_it_fetches() {
         refused_by_slack(),
     )
     .unwrap();
-    serve(&api1, &d.path().join("playback1"));
-    fetch_into(&out, |o| o)
+    let playback1 = d.path().join("playback1");
+    serve(&api1, &playback1);
+    fetch_into(&playback1, &out, |o| o)
         .await
         .expect("one thread failing is not the run failing");
     assert_eq!(stored_ts(&out), [A, B]);
@@ -176,8 +179,9 @@ async fn a_thread_that_fails_is_a_problem_on_the_thread_until_it_fetches() {
         ]}),
     )
     .unwrap();
-    serve(&api2, &d.path().join("playback2"));
-    fetch_into(&out, |o| o).await.unwrap();
+    let playback2 = d.path().join("playback2");
+    serve(&api2, &playback2);
+    fetch_into(&playback2, &out, |o| o).await.unwrap();
     assert_eq!(stored_ts(&out), [A, REPLY, B]);
     assert_eq!(problems(&out).await, [], "the thread fetched this time");
 }
@@ -204,16 +208,18 @@ async fn a_user_listing_that_fails_is_a_problem_and_the_run_goes_on() {
     History::cold("C1")
         .record(&api1, json!([msg(A, "status report")]))
         .unwrap();
-    serve(&api1, &d.path().join("playback1"));
-    fetch_into(&out, |o| o).await.unwrap();
+    let playback1 = d.path().join("playback1");
+    serve(&api1, &playback1);
+    fetch_into(&playback1, &out, |o| o).await.unwrap();
     assert_eq!(stored_ts(&out), [A]);
     assert_eq!(problems(&out).await, [row("listing:users.list", "error")]);
 
     let api2 = d.path().join("api2");
     record_listings(&api2, channels);
     resumed("C1", A).record(&api2, json!([])).unwrap();
-    serve(&api2, &d.path().join("playback2"));
-    fetch_into(&out, |o| o).await.unwrap();
+    let playback2 = d.path().join("playback2");
+    serve(&api2, &playback2);
+    fetch_into(&playback2, &out, |o| o).await.unwrap();
     assert_eq!(problems(&out).await, []);
 }
 
@@ -242,8 +248,9 @@ async fn a_channel_listing_cut_short_walks_what_it_stored() {
     History::cold("C1")
         .record(&api, json!([msg(A, "status report")]))
         .unwrap();
-    serve(&api, &d.path().join("playback"));
-    fetch_into(&out, |o| o).await.unwrap();
+    let playback = d.path().join("playback");
+    serve(&api, &playback);
+    fetch_into(&playback, &out, |o| o).await.unwrap();
     assert_eq!(stored_ts(&out), [A]);
     assert_eq!(
         problems(&out).await,
@@ -267,8 +274,9 @@ async fn a_channel_listing_that_fails_with_nothing_stored_fails_the_run() {
         refused_by_slack(),
     )
     .unwrap();
-    serve(&api, &d.path().join("playback"));
-    let Err(err) = fetch_into(&out, |o| o).await else {
+    let playback = d.path().join("playback");
+    serve(&api, &playback);
+    let Err(err) = fetch_into(&playback, &out, |o| o).await else {
         panic!("the run walked nothing and still succeeded");
     };
     assert!(
@@ -290,8 +298,9 @@ async fn an_empty_mirror_after_a_clean_walk_is_a_warning_until_a_message_arrives
     record_listings(&api1, channels.clone());
     History::cold("C1").record(&api1, json!([])).unwrap();
     History::cold("C2").record(&api1, json!([])).unwrap();
-    serve(&api1, &d.path().join("playback1"));
-    fetch_into(&out, |o| o).await.unwrap();
+    let playback1 = d.path().join("playback1");
+    serve(&api1, &playback1);
+    fetch_into(&playback1, &out, |o| o).await.unwrap();
     assert_eq!(stored_ts(&out), Vec::<String>::new());
     assert_eq!(problems(&out).await, [row("silent:channels", "warning")]);
 
@@ -301,8 +310,9 @@ async fn an_empty_mirror_after_a_clean_walk_is_a_warning_until_a_message_arrives
         .record(&api2, json!([msg(A, "status report")]))
         .unwrap();
     History::cold("C2").record(&api2, json!([])).unwrap();
-    serve(&api2, &d.path().join("playback2"));
-    fetch_into(&out, |o| o).await.unwrap();
+    let playback2 = d.path().join("playback2");
+    serve(&api2, &playback2);
+    fetch_into(&playback2, &out, |o| o).await.unwrap();
     assert_eq!(stored_ts(&out), [A]);
     assert_eq!(problems(&out).await, [], "the mirror holds a message now");
 }

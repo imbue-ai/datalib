@@ -12,7 +12,7 @@ use datalib_etl_gitlab::ingest::{
 use datalib_etl_gitlab::synthesize::GitlabSynth;
 use datalib_etl_gitlab_render::render::parse_api_dir;
 use datalib_etl_render::inputs::RawRange;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
@@ -64,18 +64,16 @@ async fn gitlab_synth_playback_extract_roundtrip() {
     // 1 user + 3 scopes + 3 resumed ones + 1 MR detail + 1 discussions
     assert_eq!(report.fixtures_written, 9);
 
-    std::env::set_var(PLAYBACK_ENV, &playback);
-
     // The test owns the store: one connection for the download and the
     // assertions both, because the file takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
-    let summary = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
         ..FetchOptions::new(db.clone(), crate::tng_now())
-    })
-    .await;
+    });
+    let summary = playback::scope(&playback, download).await;
     // Seal on the same handle, the way the download step's
     // `RawStoreSession::finish` does. The render read below is taken at a
     // commit, so without this it has nothing to read.

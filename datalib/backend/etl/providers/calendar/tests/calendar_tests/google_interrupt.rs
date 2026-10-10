@@ -14,8 +14,9 @@ use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_calendar::ingest::google::{self, events_url};
 use datalib_etl_calendar::ingest::{db_path_for, RawDb};
-use datalib_etl_web::http::{LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::playback;
 use serde_json::json;
 
 use crate::caldav_interrupt::{copy_store, every};
@@ -142,8 +143,7 @@ impl Rig for Google {
     }
 
     async fn download(&self, db: &RawDb, stop: StopFlag) -> Result<()> {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
-        google::fetch(google::FetchOptions {
+        let download = google::fetch(google::FetchOptions {
             db: db.clone(),
             calendars: Vec::new(),
             window: None,
@@ -154,9 +154,8 @@ impl Rig for Google {
                 ..Default::default()
             },
             sealer: None,
-        })
-        .await
-        .map(|_| ())
+        });
+        playback::scope(&self.playback, download).await.map(|_| ())
     }
 
     async fn seal(&self, db: RawDb) -> Result<()> {

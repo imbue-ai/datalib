@@ -8,7 +8,7 @@ use datalib_etl_claude::ingest::{db_path_for, fetch, FetchOptions, FetchSummary,
 use datalib_etl_claude::synthesize::ClaudeSynth;
 use datalib_etl_claude_render::render::parse::parse;
 use datalib_etl_render::inputs::RawRange;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -104,6 +104,7 @@ fn seed(api: &std::path::Path, playback: &std::path::Path, project_updated_at: &
 /// returning. Every caller reads the store afterwards, and the file
 /// takes one writer at a time.
 async fn run(
+    playback: &std::path::Path,
     raw: &std::path::Path,
     api: &std::path::Path,
     tweak: impl FnOnce(&mut FetchOptions),
@@ -118,7 +119,7 @@ async fn run(
         ..FetchOptions::new(db.clone())
     };
     tweak(&mut o);
-    let s = fetch(o).await;
+    let s = playback::scope(playback, fetch(o)).await;
     // Committed the way the processor's `RawStoreSession::finish` does:
     // render pins HEAD, so an uncommitted row is invisible to it.
     db.commit_all("test").await.unwrap();
@@ -126,18 +127,11 @@ async fn run(
     s.unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn projects_mirror_end_to_end() {
-    round_trip_and_only_refetch_when_upstream_moves().await;
-    project_uuids_bounds_the_walk().await;
-    projects_can_be_disabled().await;
-    conv_uuids_scopes_conversations_not_projects().await;
-}
-
 /// `conv_uuids` scopes *conversations*. It used to short-circuit the
 /// whole run before the project walk, so a targeted refetch mirrored no
 /// projects at all — and `sync.projects` (default on) and an explicit
 /// `sync.project_uuids` were both silently ignored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conv_uuids_scopes_conversations_not_projects() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");
@@ -145,9 +139,11 @@ async fn conv_uuids_scopes_conversations_not_projects() {
     let raw = d.path().join("raw");
     fs::create_dir_all(&raw).unwrap();
     seed(&api, &playback, "2025-01-03T00:00:00Z");
-    std::env::set_var(PLAYBACK_ENV, &playback);
 
-    let s = run(&raw, &api, |o| o.conv_uuids = vec!["c1".to_string()]).await;
+    let s = run(&playback, &raw, &api, |o| {
+        o.conv_uuids = vec!["c1".to_string()]
+    })
+    .await;
     assert_eq!(
         s.projects_fetched, 2,
         "a targeted chat refetch still mirrors projects"
@@ -165,7 +161,7 @@ async fn conv_uuids_scopes_conversations_not_projects() {
     // walk whether or not conversations are scoped.
     let raw2 = d.path().join("raw2");
     fs::create_dir_all(&raw2).unwrap();
-    let s2 = run(&raw2, &api, |o| {
+    let s2 = run(&playback, &raw2, &api, |o| {
         o.conv_uuids = vec!["c1".to_string()];
         o.project_uuids = vec![PROJECT.to_string()];
     })
@@ -178,7 +174,7 @@ async fn conv_uuids_scopes_conversations_not_projects() {
     // And `projects = false` still switches it off in this mode.
     let raw3 = d.path().join("raw3");
     fs::create_dir_all(&raw3).unwrap();
-    let s3 = run(&raw3, &api, |o| {
+    let s3 = run(&playback, &raw3, &api, |o| {
         o.conv_uuids = vec!["c1".to_string()];
         o.projects = false;
     })
@@ -186,6 +182,7 @@ async fn conv_uuids_scopes_conversations_not_projects() {
     assert_eq!(s3.projects_fetched, 0, "the off switch still works");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn round_trip_and_only_refetch_when_upstream_moves() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");
@@ -193,10 +190,9 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
     let raw = d.path().join("raw");
     fs::create_dir_all(&raw).unwrap();
     seed(&api, &playback, "2025-01-03T00:00:00Z");
-    std::env::set_var(PLAYBACK_ENV, &playback);
 
     // ── Run 1: cold ───────────────────────────────────────────────
-    let s1 = run(&raw, &api, |_| {}).await;
+    let s1 = run(&playback, &raw, &api, |_| {}).await;
     assert_eq!(s1.projects_fetched, 2, "cold run must store both projects");
     assert_eq!(
         s1.project_docs_fetched, 3,
@@ -256,7 +252,7 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
     );
 
     // ── Run 2: nothing moved upstream ─────────────────────────────
-    let s2 = run(&raw, &api, |_| {}).await;
+    let s2 = run(&playback, &raw, &api, |_| {}).await;
     assert_eq!(
         s2.projects_fetched, 0,
         "unchanged project metadata must not be rewritten"
@@ -270,7 +266,7 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
 
     // ── Run 3: upstream bumped `updated_at` ───────────────────────
     seed(&api, &playback, "2025-06-01T00:00:00Z");
-    let s3 = run(&raw, &api, |_| {}).await;
+    let s3 = run(&playback, &raw, &api, |_| {}).await;
     assert_eq!(
         s3.projects_fetched, 1,
         "only the project whose updated_at moved should be re-stored"
@@ -286,6 +282,7 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn project_uuids_bounds_the_walk() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");
@@ -293,9 +290,8 @@ async fn project_uuids_bounds_the_walk() {
     let raw = d.path().join("raw");
     fs::create_dir_all(&raw).unwrap();
     seed(&api, &playback, "2025-01-03T00:00:00Z");
-    std::env::set_var(PLAYBACK_ENV, &playback);
 
-    let s = run(&raw, &api, |o| {
+    let s = run(&playback, &raw, &api, |o| {
         // Given as a paste-able URL to pin that the same
         // `normalize_id_token` treatment `conv_uuids` gets applies here.
         o.project_uuids = vec![format!("https://claude.ai/project/{PROJECT}")];
@@ -319,6 +315,7 @@ async fn project_uuids_bounds_the_walk() {
 
 /// `sync.projects = false` is a real off switch, not a no-op: no
 /// project row is written and no project request is made.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn projects_can_be_disabled() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");
@@ -326,9 +323,8 @@ async fn projects_can_be_disabled() {
     let raw = d.path().join("raw");
     fs::create_dir_all(&raw).unwrap();
     seed(&api, &playback, "2025-01-03T00:00:00Z");
-    std::env::set_var(PLAYBACK_ENV, &playback);
 
-    let s = run(&raw, &api, |o| o.projects = false).await;
+    let s = run(&playback, &raw, &api, |o| o.projects = false).await;
     assert_eq!(s.projects_fetched, 0);
     assert_eq!(s.project_docs_fetched, 0);
     assert_eq!(s.errors, 0);

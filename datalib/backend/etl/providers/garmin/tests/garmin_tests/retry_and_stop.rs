@@ -11,7 +11,7 @@ use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_garmin::ingest::daily_path;
 
-use crate::prune_gate::{status, Account, PLAYBACK, TODAY};
+use crate::prune_gate::{status, Account, TODAY};
 
 const DISPLAY_NAME: &str = "jean-luc.picard";
 
@@ -19,7 +19,6 @@ const DISPLAY_NAME: &str = "jean-luc.picard";
 /// it is owed, and the settled days around it are not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_day_behind_the_resume_point_is_fetched_again_and_only_it() {
-    let _serial = PLAYBACK.lock().await;
     let a = Account::tng();
     a.answer(
         &daily_path("sleep", DISPLAY_NAME, "2369-04-03"),
@@ -58,7 +57,6 @@ async fn a_failed_day_behind_the_resume_point_is_fetched_again_and_only_it() {
 /// asked for again, its `problems` row there for good.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_default_window_stays_where_the_first_run_put_it() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     // The clock reads a year after the fixture's first day, so the
     // default window opens on it; `until` keeps the walk inside the
@@ -100,7 +98,6 @@ async fn the_default_window_stays_where_the_first_run_put_it() {
 /// standing for good.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_day_the_window_moved_past_is_no_longer_a_problem() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     a.api.metrics = Some(vec!["sleep".into()]);
     a.answer(
@@ -132,7 +129,6 @@ async fn a_failed_day_the_window_moved_past_is_no_longer_a_problem() {
 /// the detail was never asked for again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_activity_detail_is_fetched_again_though_the_listing_did_not_change() {
-    let _serial = PLAYBACK.lock().await;
     let a = Account::tng();
     let detail = "/activity-service/activity/17010413001";
     a.answer(detail, status(500, "upstream fell over"));
@@ -177,7 +173,6 @@ impl ProgressSink for StopAt {
 /// remaining metric.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stop_is_no_problem_and_the_days_after_it_are_fetched_next_run() {
-    let _serial = PLAYBACK.lock().await;
     let a = Account::tng();
     let stop = StopFlag::new();
     let control = DownloadControl {
@@ -234,7 +229,6 @@ async fn a_stop_is_no_problem_and_the_days_after_it_are_fetched_next_run() {
 /// asked for the detail again: it stayed as it was before the rename.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_changed_activity_whose_detail_refetch_fails_is_fetched_again() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     a.run().await;
 
@@ -273,7 +267,6 @@ async fn a_changed_activity_whose_detail_refetch_fails_is_fetched_again() {
 /// widened and walked all of history again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_widened_since_is_walked_once_though_one_day_keeps_failing() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     a.api.metrics = Some(vec!["sleep".into()]);
     a.spec["activities"][0]["listing"]["startTimeGMT"] = "2369-04-03 06:30:00".into();

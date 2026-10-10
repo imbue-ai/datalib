@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use datalib_etl_claude::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_claude::synthesize::{ClaudeSynth, BASE, DETAIL_QUERY};
-use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::json;
 use tempfile::tempdir;
@@ -103,20 +104,10 @@ async fn run(raw: &std::path::Path, api: &std::path::Path) -> FetchSummary {
     s.unwrap()
 }
 
-/// One test, two scenarios, run in sequence.
-///
-/// `PLAYBACK_ENV` is process-global and each scenario points it at its
-/// own fixture dir, so as separate `#[tokio::test]`s they race and one
-/// clears the other's playback root mid-request.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_refusal_and_an_absence_are_reported_differently() {
-    a_persistent_403_is_reported_as_forbidden_not_missing().await;
-    a_404_everywhere_is_still_reported_as_not_found().await;
-}
-
 /// A 403 that outlives the retries is a *refusal*, not an absence.
 /// Reporting it as `not_found` sends the reader hunting for a deleted
 /// chat when the fix is a credential.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_persistent_403_is_reported_as_forbidden_not_missing() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");
@@ -126,9 +117,7 @@ async fn a_persistent_403_is_reported_as_forbidden_not_missing() {
     seed(&api, &playback);
     detail_answers(&playback, 403);
 
-    std::env::set_var(PLAYBACK_ENV, &playback);
-    let s = run(&raw, &api).await;
-    std::env::remove_var(PLAYBACK_ENV);
+    let s = playback::scope(&playback, run(&raw, &api)).await;
 
     assert_eq!(s.fetched, 0, "the conversation was refused: {s:?}");
     assert_eq!(s.problems.len(), 1, "{:?}", s.problems);
@@ -161,6 +150,7 @@ async fn a_persistent_403_is_reported_as_forbidden_not_missing() {
 
 /// The other half, and the reason the distinction is not free: a 404
 /// really does mean the id names nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_404_everywhere_is_still_reported_as_not_found() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");
@@ -170,9 +160,7 @@ async fn a_404_everywhere_is_still_reported_as_not_found() {
     seed(&api, &playback);
     detail_answers(&playback, 404);
 
-    std::env::set_var(PLAYBACK_ENV, &playback);
-    let s = run(&raw, &api).await;
-    std::env::remove_var(PLAYBACK_ENV);
+    let s = playback::scope(&playback, run(&raw, &api)).await;
 
     assert_eq!(s.fetched, 0);
     assert_eq!(s.problems.len(), 1, "{:?}", s.problems);

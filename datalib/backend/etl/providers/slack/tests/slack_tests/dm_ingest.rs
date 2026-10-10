@@ -71,8 +71,8 @@ fn write_all_histories(api: &Path) {
     }
 }
 
-async fn run_fetch(out: &Path, dms: bool, dm_conversations: Option<Vec<&str>>) {
-    fetch_into(out, |o| FetchOptions {
+async fn run_fetch(playback: &Path, out: &Path, dms: bool, dm_conversations: Option<Vec<&str>>) {
+    fetch_into(playback, out, |o| FetchOptions {
         dms,
         dm_conversations: dm_conversations.map(|v| v.into_iter().map(String::from).collect()),
         ..o
@@ -96,7 +96,7 @@ async fn dms_off_never_asks_for_direct_messages() {
 
     t.serve();
 
-    run_fetch(&t.out, false, None).await;
+    run_fetch(&t.playback, &t.out, false, None).await;
 
     assert_eq!(channels_with_messages(&t.out), set(&["C1"]));
 }
@@ -111,7 +111,7 @@ async fn dms_on_mirrors_direct_and_group_messages() {
 
     t.serve();
 
-    run_fetch(&t.out, true, None).await;
+    run_fetch(&t.playback, &t.out, true, None).await;
 
     assert_eq!(
         channels_with_messages(&t.out),
@@ -134,6 +134,7 @@ async fn dm_conversations_narrows_to_the_named_conversations() {
 
     // One as a bare id, one as the link `Copy link` hands out.
     run_fetch(
+        &t.playback,
         &t.out,
         true,
         Some(vec!["D1", "https://enterprise.slack.com/archives/G1"]),
@@ -161,7 +162,7 @@ async fn dm_conversations_naming_nothing_walks_no_dms() {
     t.serve();
 
     // A person, not a conversation — the shape the old `dm_users` took.
-    run_fetch(&t.out, true, Some(vec!["U2", "@riker"])).await;
+    run_fetch(&t.playback, &t.out, true, Some(vec!["U2", "@riker"])).await;
 
     assert_eq!(channels_with_messages(&t.out), set(&["C1"]));
 }
@@ -180,11 +181,11 @@ async fn turning_dms_on_relists_despite_the_sweep_ttl() {
 
     t.serve();
 
-    run_fetch(&t.out, false, None).await;
+    run_fetch(&t.playback, &t.out, false, None).await;
     assert_eq!(channels_with_messages(&t.out), set(&["C1"]));
 
     // Run 2, seconds later — well inside MANIFEST_TTL.
-    run_fetch(&t.out, true, None).await;
+    run_fetch(&t.playback, &t.out, true, None).await;
     assert_eq!(
         channels_with_messages(&t.out),
         set(&["C1", "D1", "D2", "G1"]),
@@ -213,7 +214,7 @@ async fn turning_dms_off_stops_walking_them_without_deleting() {
 
     t.serve();
 
-    run_fetch(&t.out, true, None).await;
+    run_fetch(&t.playback, &t.out, true, None).await;
     assert_eq!(
         channels_with_messages(&t.out),
         set(&["C1", "D1", "D2", "G1"])
@@ -222,7 +223,7 @@ async fn turning_dms_off_stops_walking_them_without_deleting() {
     // The DM history fixtures are still served, so a run that kept
     // walking them would succeed — the assertion is that it doesn't
     // need to, and that nothing is dropped either.
-    run_fetch(&t.out, false, None).await;
+    run_fetch(&t.playback, &t.out, false, None).await;
     assert_eq!(
         channels_with_messages(&t.out),
         set(&["C1", "D1", "D2", "G1"]),

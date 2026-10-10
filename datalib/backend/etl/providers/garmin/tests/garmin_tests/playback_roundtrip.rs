@@ -11,7 +11,7 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::{GarminApi, DAILY_METRICS};
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use sqlx::Row;
 
@@ -23,13 +23,18 @@ fn spec_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/garmin_tng/tng.json")
 }
 
-async fn run(raw: &Path, api: &GarminApi) -> FetchSummary {
-    run_with(raw, api, Progress::noop()).await
+async fn run(playback: &Path, raw: &Path, api: &GarminApi) -> FetchSummary {
+    run_with(playback, raw, api, Progress::noop()).await
 }
 
-async fn run_with(raw: &Path, api: &GarminApi, progress: Progress) -> FetchSummary {
+async fn run_with(
+    playback: &Path,
+    raw: &Path,
+    api: &GarminApi,
+    progress: Progress,
+) -> FetchSummary {
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
-    let summary = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         db: db.clone(),
         latchkey: Default::default(),
         api: api.clone(),
@@ -37,8 +42,8 @@ async fn run_with(raw: &Path, api: &GarminApi, progress: Progress) -> FetchSumma
         progress,
         control: DownloadControl::default(),
         sealer: None,
-    })
-    .await;
+    });
+    let summary = playback::scope(playback, download).await;
     db.commit_all("test").await.unwrap();
     db.close().await;
     summary.unwrap()
@@ -77,13 +82,12 @@ async fn garmin_synth_playback_ingest_roundtrip() {
         report.fixtures_written,
         3 + DAILY_METRICS.len() * 15 + 1 + 2 + 4 + 5
     );
-    std::env::set_var(PLAYBACK_ENV, &playback);
 
     let api = GarminApi {
         since: Some("2369-04-01".into()),
         ..Default::default()
     };
-    let s = run(&raw, &api).await;
+    let s = run(&playback, &raw, &api).await;
     assert_eq!(s.errors, 0, "{}", s.line());
     assert_eq!(s.metrics, DAILY_METRICS.len());
     assert_eq!(s.days, DAILY_METRICS.len() * 15);
@@ -212,7 +216,7 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     // Second run: everything re-fetched inside the refresh window, and
     // nothing new to fetch beyond it.
     let lengths = Arc::new(Lengths::default());
-    let s2 = run_with(&raw, &api, Progress::new(lengths.clone())).await;
+    let s2 = run_with(&playback, &raw, &api, Progress::new(lengths.clone())).await;
     assert_eq!(s2.errors, 0, "{}", s2.line());
     assert_eq!(
         s2.activities_fetched, 0,
@@ -241,7 +245,7 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     let edited = d.path().join("edited.json");
     std::fs::write(&edited, serde_json::to_vec(&spec).unwrap()).unwrap();
     GarminSynth::new(&edited).synthesize(&playback).unwrap();
-    let s3 = run(&raw, &api).await;
+    let s3 = run(&playback, &raw, &api).await;
     assert_eq!(s3.weigh_ins_pruned, 1, "{}", s3.line());
     assert_eq!(
         count(&raw, "SELECT COUNT(*) FROM garmin_weigh_ins").await,

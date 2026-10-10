@@ -12,8 +12,9 @@ use chrono::{TimeZone, Utc};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl::stop::StopFlag;
-use datalib_etl_web::http::{HttpResponse, PLAYBACK_ENV};
+use datalib_etl_web::http::HttpResponse;
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use datalib_etl_web::synthesize::write_fixture;
 use datalib_etl_yolink::ingest::{
@@ -132,7 +133,6 @@ impl Rig for Yolink {
     }
 
     async fn download(&self, db: &RawDb, stop: StopFlag) -> Result<()> {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
         let fast = std::time::Duration::from_millis(1);
         let guard = RetryGuard::new(
             std::time::Duration::from_secs(3600),
@@ -141,7 +141,7 @@ impl Rig for Yolink {
             fast,
             stop.clone(),
         );
-        retry::scope(
+        let download = retry::scope(
             guard,
             fetch(FetchOptions {
                 db: db.clone(),
@@ -154,9 +154,8 @@ impl Rig for Yolink {
                 },
                 sealer: None,
             }),
-        )
-        .await
-        .map(|_| ())
+        );
+        playback::scope(&self.playback, download).await.map(|_| ())
     }
 
     async fn seal(&self, db: RawDb) -> Result<()> {

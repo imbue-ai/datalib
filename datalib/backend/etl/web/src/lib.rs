@@ -9,5 +9,6 @@ pub mod http;
 pub mod interrupt;
 pub mod latchkey;
 pub mod owed;
+pub mod playback;
 pub mod retry;
 pub mod synthesize;

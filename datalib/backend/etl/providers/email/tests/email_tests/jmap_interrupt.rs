@@ -15,8 +15,8 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::{db_path_for, fetch, FetchOptions, RawDb};
-use datalib_etl_web::http::PLAYBACK_ENV;
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::playback;
 
 use crate::jmap_tape::{Account, Email, Tape, HOST};
 
@@ -86,7 +86,6 @@ impl Rig for Jmap {
     }
 
     async fn download(&self, db: &RawDb, stop: StopFlag) -> Result<()> {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
         let mut opts = FetchOptions::new(db.clone());
         opts.hostname = HOST.to_string();
         // One at a time, so the order of the `.eml` requests is the same
@@ -97,7 +96,9 @@ impl Rig for Jmap {
             stop,
             ..Default::default()
         };
-        fetch(opts).await.map(|_| ())
+        playback::scope(&self.playback, fetch(opts))
+            .await
+            .map(|_| ())
     }
 
     async fn seal(&self, db: RawDb) -> Result<()> {
@@ -222,7 +223,6 @@ async fn a_first_download_cut_off_at_any_request_resumes_to_the_same_store() {
             .await
             .unwrap_or_else(|e| panic!("{how:?}: {e:#}"));
     }
-    std::env::remove_var(PLAYBACK_ENV);
 }
 
 /// From an empty store nothing is ever changed, moved or destroyed, so
@@ -253,5 +253,4 @@ async fn a_later_download_cut_off_at_any_request_resumes_to_the_same_store() {
             .await
             .unwrap_or_else(|e| panic!("{how:?}: {e:#}"));
     }
-    std::env::remove_var(PLAYBACK_ENV);
 }

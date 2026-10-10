@@ -17,7 +17,6 @@ use std::sync::{Arc, Mutex};
 use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl_slack::ingest::FetchOptions;
 use datalib_etl_slack::recorded::record_workspace;
-use datalib_etl_web::http::PLAYBACK_ENV;
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, Tree};
@@ -78,12 +77,11 @@ async fn the_count_reaches_zero_once_at_the_end_not_after_the_first_channel() {
     t.serve();
 
     let recorder = Recorder::default();
-    let result = fetch_into(&t.out, |o| FetchOptions {
+    let result = fetch_into(&t.playback, &t.out, |o| FetchOptions {
         progress: Progress::new(Arc::new(recorder.clone())),
         ..o
     })
     .await;
-    std::env::remove_var(PLAYBACK_ENV);
 
     let summary = result.expect("slack fetch under playback");
     assert_eq!(

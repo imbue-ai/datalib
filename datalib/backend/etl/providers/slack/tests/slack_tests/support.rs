@@ -10,7 +10,7 @@ use datalib_etl_slack::ingest::{
 };
 use datalib_etl_slack::recorded::{record_auth, record_conversations, record_users, CHANNEL_TYPES};
 use datalib_etl_slack::synthesize::SlackSynth;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -35,8 +35,8 @@ impl Tree {
         }
     }
 
-    /// Synthesizes what was recorded and points the transport at it.
-    /// Returns how many fixtures that made.
+    /// Synthesizes what was recorded into the tape. Returns how many
+    /// fixtures that made.
     pub fn serve(&self) -> usize {
         serve(&self.api, &self.playback)
     }
@@ -44,26 +44,27 @@ impl Tree {
 
 pub fn serve(api: &Path, playback: &Path) -> usize {
     let report = SlackSynth::new(api).synthesize(playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, playback);
     report.fixtures_written
 }
 
-/// One download into `out`, every channel from the default `since`, no
-/// refresh window and no media, with `adjust` applied on top. The store
+/// One download into `out` against the tape at `playback`, every channel
+/// from the default `since`, no refresh window and no media, with
+/// `adjust` applied on top. The store
 /// is opened here and closed before anything reads it back: the file takes
 /// one writer at a time.
 pub async fn fetch_into(
+    playback: &Path,
     out: &Path,
     adjust: impl FnOnce(FetchOptions) -> FetchOptions,
 ) -> anyhow::Result<FetchSummary> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let summary = fetch(adjust(FetchOptions {
+    let download = fetch(adjust(FetchOptions {
         refresh_window_days: 0,
         members_only: false,
         media: false,
         ..FetchOptions::new(db.clone())
-    }))
-    .await;
+    }));
+    let summary = playback::scope(playback, download).await;
     db.commit_all("test").await.unwrap();
     db.close().await;
     summary

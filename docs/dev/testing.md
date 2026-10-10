@@ -90,12 +90,16 @@ measurement).
 
 Two things follow from sharing a process:
 
-* **Anything process-global is now shared.** The playback transport is
-  chosen by an environment variable each test points at its own fixture
-  tree, so the provider binaries set `RUST_TEST_THREADS = "1"` and say
-  so in `main.rs`. A tracing subscriber is the same story from the
-  other side: four of `datalib/backend/http`'s modules each install the
-  process's only one, so each runs as a slice (below).
+* **Anything process-global is now shared.** An environment variable
+  one test sets is every test's. A binary whose tests need one runs
+  them one at a time (`RUST_TEST_THREADS = "1"`, with the variable named
+  beside it: `DATALIB_RUNTIME_DIR` in `unified_index_tests` and
+  `applet_unittests`). Playback is not one: a test points the future it
+  runs at its own tape with `datalib_etl_web::playback::scope`, which is
+  task-local, and `DATALIB_HTTP_PLAYBACK` is for a step run as a
+  process. A tracing subscriber is the same story from the other side:
+  four of `datalib/backend/http`'s modules each install the process's
+  only one, so each runs as a slice (below).
 * **insta names a snapshot after the module path.** The goldens live in
   `tests/<name>/snapshots/` and are called
   `<name>__<module>__<snapshot>.snap`. Keep the target name equal to
@@ -402,7 +406,7 @@ bazelisk run //datalib/ui:e2e -- --project chromium-data-sources-streaming
 Three pieces make that possible, and each is small:
 
 * `DATALIB_HTTP_PLAYBACK_DELAY_MS` beside `DATALIB_HTTP_PLAYBACK`
-  ([`http.rs`](/datalib/backend/etl/web/src/http.rs)): a replayed request
+  ([`playback.rs`](/datalib/backend/etl/web/src/playback.rs)): a replayed request
   waits that long before it answers. Playback only; a fixture that
   answers instantly hides everything that depends on a download taking
   time. Its sibling `DATALIB_HTTP_PLAYBACK_HOLD` names a file: while it
@@ -413,7 +417,9 @@ Three pieces make that possible, and each is small:
   a delay is a window that a slow runner can miss.
   `DATALIB_HTTP_PLAYBACK_HOLD_SEALED` is the same, except a request waits
   only once its process has sealed a checkpoint, so a download publishes
-  something before it parks; the streaming spec uses it.
+  something before it parks; the streaming spec uses it. A Rust test
+  sets the same three on its scope (`Playback::delay`, `hold`,
+  `hold_sealed`).
 * The tapes come from `datalib-step synthesize`, run by `run_e2e.sh` at
   startup over the checked-in `chatgpt_api` / `claude_export` fixtures —
   the same call `tests/fixtures/run_sync_pipeline.py` makes.

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use datalib_etl::event_store::{diff_and_save, make_record};
 use datalib_etl_notion::ingest::{fetch, FetchOptions, RawDb};
 use datalib_etl_notion::synthesize::NotionSynth;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
@@ -101,17 +101,14 @@ async fn notion_synth_playback_extract_roundtrip() {
     // 1 page + 1 markdown + 1 comments + 1 user + 1 anchor block = 5
     assert_eq!(report.fixtures_written, 5);
 
-    std::env::set_var(PLAYBACK_ENV, &playback);
-
     // The test owns the store: one connection for the download and the
     // assertions both, because the file takes one writer at a time.
     let out = RawDb::open(&out_db).await.unwrap();
-    let summary = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         subtree_pages: vec![pid.to_string()],
         ..FetchOptions::new(out.clone())
-    })
-    .await
-    .unwrap();
+    });
+    let summary = playback::scope(&playback, download).await.unwrap();
     assert_eq!(summary.new_pages, 1);
 
     let pages = out.load_pages().await.unwrap();

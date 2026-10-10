@@ -10,7 +10,8 @@ use std::path::Path;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_contacts::ingest::{self, api, db_path_for, RawDb};
 use datalib_etl_web::dav;
-use datalib_etl_web::http::{HttpMethod, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::http::{HttpMethod, HttpResponse, LatchkeySettings};
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::write_fixture;
 
 pub(crate) const HOST: &str = "https://carddav.enterprise.test";
@@ -174,9 +175,8 @@ async fn run_named(
     control: datalib_etl::control::DownloadControl,
     addressbooks: &[&str],
 ) -> anyhow::Result<ingest::FetchSummary> {
-    std::env::set_var(PLAYBACK_ENV, playback);
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
-    let summary = ingest::fetch(ingest::FetchOptions {
+    let download = ingest::fetch(ingest::FetchOptions {
         latchkey: LatchkeySettings::default(),
         db: db.clone(),
         server_url: format!("{HOST}/"),
@@ -184,13 +184,12 @@ async fn run_named(
         progress: Default::default(),
         control,
         sealer: None,
-    })
-    .await;
+    });
+    let summary = playback::scope(playback, download).await;
     if summary.is_ok() {
         db.commit_all("test").await.expect("commit");
     }
     db.close().await;
-    std::env::remove_var(PLAYBACK_ENV);
     summary
 }
 

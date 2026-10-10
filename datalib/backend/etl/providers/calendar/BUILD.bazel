@@ -59,7 +59,6 @@ rust_test(
     srcs = glob(["tests/calendar_tests/*.rs"]),
     crate_root = "tests/calendar_tests/main.rs",
     edition = "2021",
-    env = {"RUST_TEST_THREADS": "1"},
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         ":datalib_etl_calendar",

@@ -13,7 +13,7 @@ use datalib_etl_garmin_render::render::parse::parse;
 use datalib_etl_garmin_render::render::render::{document_uuid, render_all};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 
 const SOURCE: &str = "garmin";
@@ -28,9 +28,8 @@ fn spec_path() -> PathBuf {
 
 async fn ingest(raw: &Path, playback: &Path) {
     GarminSynth::new(spec_path()).synthesize(playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, playback);
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
-    let s = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         db: db.clone(),
         latchkey: Default::default(),
         api: GarminApi {
@@ -41,9 +40,8 @@ async fn ingest(raw: &Path, playback: &Path) {
         progress: Progress::noop(),
         control: DownloadControl::default(),
         sealer: None,
-    })
-    .await
-    .unwrap();
+    });
+    let s = playback::scope(playback, download).await.unwrap();
     assert_eq!(s.errors, 0, "{}", s.line());
     // The ingest step commits at the end of its run; do the same here so
     // the render's pin has a HEAD to read at.

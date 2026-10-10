@@ -110,8 +110,8 @@ fn write_window(api: &Path, messages: Value, has_more: bool) {
     .unwrap();
 }
 
-async fn run_fetch(out: &Path, refresh_window_days: i64) -> usize {
-    fetch_into(out, |o| FetchOptions {
+async fn run_fetch(playback: &Path, out: &Path, refresh_window_days: i64) -> usize {
+    fetch_into(playback, out, |o| FetchOptions {
         since: SINCE.into(),
         refresh_window_days,
         ..o
@@ -137,14 +137,14 @@ async fn a_message_missing_from_a_rewalked_window_is_deleted() {
 
     t.serve();
 
-    run_fetch(&t.out, 0).await;
+    run_fetch(&t.playback, &t.out, 0).await;
     assert_eq!(
         stored_ts(&t.out),
         vec![TS_A.to_string(), TS_B.to_string(), TS_C.to_string()],
         "run 1 mirrors all three",
     );
 
-    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
+    let pruned = run_fetch(&t.playback, &t.out, WHOLE_CHANNEL_DAYS).await;
     assert_eq!(pruned, 1, "the run must report the deletion it acted on");
     assert_eq!(
         stored_ts(&t.out),
@@ -173,8 +173,8 @@ async fn no_refresh_window_means_no_prune() {
 
     t.serve();
 
-    run_fetch(&t.out, 0).await;
-    let pruned = run_fetch(&t.out, 0).await;
+    run_fetch(&t.playback, &t.out, 0).await;
+    let pruned = run_fetch(&t.playback, &t.out, 0).await;
 
     assert_eq!(pruned, 0, "nothing was re-enumerated, so nothing may go");
     assert_eq!(
@@ -204,8 +204,8 @@ async fn a_truncated_walk_prunes_nothing() {
 
     t.serve();
 
-    run_fetch(&t.out, 0).await;
-    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
+    run_fetch(&t.playback, &t.out, 0).await;
+    let pruned = run_fetch(&t.playback, &t.out, WHOLE_CHANNEL_DAYS).await;
 
     assert_eq!(pruned, 0, "a walk that stopped short licenses no deletion");
     assert_eq!(
@@ -244,10 +244,10 @@ async fn a_rewalked_window_keeps_the_replies_of_a_thread_it_lists() {
         TS_REPLY_2.to_string(),
         TS_C.to_string(),
     ];
-    run_fetch(&t.out, 0).await;
+    run_fetch(&t.playback, &t.out, 0).await;
     assert_eq!(stored_ts(&t.out), everything, "run 1 mirrors the thread");
 
-    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
+    let pruned = run_fetch(&t.playback, &t.out, WHOLE_CHANNEL_DAYS).await;
     assert_eq!(pruned, 0, "nothing was deleted upstream");
     assert_eq!(
         stored_ts(&t.out),
@@ -276,8 +276,8 @@ async fn a_thread_root_missing_from_a_rewalked_window_takes_its_replies() {
 
     t.serve();
 
-    run_fetch(&t.out, 0).await;
-    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
+    run_fetch(&t.playback, &t.out, 0).await;
+    let pruned = run_fetch(&t.playback, &t.out, WHOLE_CHANNEL_DAYS).await;
 
     assert_eq!(pruned, 3, "the root and its two replies");
     assert_eq!(
@@ -322,8 +322,8 @@ async fn a_window_of_two_pages_deletes_page_by_page() {
 
     t.serve();
 
-    run_fetch(&t.out, 0).await;
-    let pruned = run_fetch(&t.out, WHOLE_CHANNEL_DAYS).await;
+    run_fetch(&t.playback, &t.out, 0).await;
+    let pruned = run_fetch(&t.playback, &t.out, WHOLE_CHANNEL_DAYS).await;
     assert_eq!(pruned, 1, "B, which the second page's stretch lacks");
     assert_eq!(stored_ts(&t.out), vec![TS_A.to_string(), TS_C.to_string()],);
 }

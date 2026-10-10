@@ -96,17 +96,13 @@ rust_test(
 )
 
 # Every hermetic test of the download that needs a playback tape, one
-# binary: the tape is chosen by a process-global environment variable,
-# so the tests take turns.
+# binary.
 rust_test(
     name = "yolink_tests",
     size = "medium",
     srcs = glob(["tests/yolink_tests/*.rs"]),
     crate_root = "tests/yolink_tests/main.rs",
     edition = "2021",
-    env = {
-        "RUST_TEST_THREADS": "1",
-    },
     proc_macro_deps = [
         "@datalib_crates//:async-trait",
     ],

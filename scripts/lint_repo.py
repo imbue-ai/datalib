@@ -329,6 +329,7 @@ def main() -> int:
     rc |= _check_cargo_manifest_crates_used(root)
     rc |= _check_bound_lists_are_chunked(root)
     rc |= _check_try_get_ok_is_flattened(root)
+    rc |= _check_no_playback_set_var(root)
     return rc
 
 
@@ -1135,6 +1136,43 @@ def _check_try_get_ok_is_flattened(root: Path) -> int:
         + "\n\n  Read the column with `?` (or `.context(..)?`), as `Option<T>` if it\n"
         "  can be NULL; where a missing column really is no answer, spell it\n"
         "  `try_get::<Option<T>, _>(..).ok().flatten()`. See lint_repo.py check 17.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 18: playback is scoped, not set in the environment -----------
+#
+# `DATALIB_HTTP_PLAYBACK` and its siblings select the tape for a whole
+# process: a step launched by a test, the fixture pipeline, an e2e
+# backend. Set in a test with `set_var`, it is every test's in that
+# binary, and they run in parallel. A test scopes its future to its tape
+# instead (`datalib_etl_web::playback::scope`). The step's own
+# `--playback-root` is the one in-process setter.
+_PLAYBACK_SET_VAR = re.compile(
+    r"\bset_var\(\s*(?:[\w:]*PLAYBACK\w*_ENV\b|\"DATALIB_HTTP_PLAYBACK)"
+)
+_PLAYBACK_SET_VAR_ALLOWED = {"datalib/backend/datalib_step/src/main.rs"}
+
+
+def _check_no_playback_set_var(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        if rel in _PLAYBACK_SET_VAR_ALLOWED:
+            continue
+        text = (root / rel).read_text(encoding="utf-8")
+        for m in _PLAYBACK_SET_VAR.finditer(text):
+            lineno = text.count("\n", 0, m.start()) + 1
+            hits.append(f"  {rel}:{lineno}: {m.group(0)}")
+    if not hits:
+        print("OK: no test sets the playback environment variables.")
+        return 0
+    print(
+        "ERROR: playback pointed at a tape through the environment:\n\n"
+        + "\n".join(hits)
+        + "\n\n  Run the future under `datalib_etl_web::playback::scope(<tape>, …)`;\n"
+        "  `Playback::delay`, `hold` and `hold_sealed` set the rest.\n"
+        "  See lint_repo.py check 18.",
         file=sys.stderr,
     )
     return 1

@@ -16,8 +16,8 @@ use datalib_etl_forge_ingest_common::Bounds;
 use datalib_etl_gitlab::ingest::{
     db_path_for, fetch, search_url, FetchOptions, RawDb, DEFAULT_SCOPES,
 };
-use datalib_etl_web::http::PLAYBACK_ENV;
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use serde_json::{json, Value};
 
@@ -141,7 +141,6 @@ impl Rig for Gitlab {
     }
 
     async fn download(&self, db: &RawDb, stop: StopFlag) -> Result<()> {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
         let fast = std::time::Duration::from_millis(1);
         let guard = RetryGuard::new(
             std::time::Duration::from_secs(3600),
@@ -150,7 +149,7 @@ impl Rig for Gitlab {
             fast,
             stop.clone(),
         );
-        retry::scope(
+        let download = retry::scope(
             guard,
             fetch(FetchOptions {
                 refresh_window_days: 0,
@@ -160,9 +159,8 @@ impl Rig for Gitlab {
                 },
                 ..FetchOptions::new(db.clone(), crate::tng_now())
             }),
-        )
-        .await
-        .map(|_| ())
+        );
+        playback::scope(&self.playback, download).await.map(|_| ())
     }
 
     async fn seal(&self, db: RawDb) -> Result<()> {

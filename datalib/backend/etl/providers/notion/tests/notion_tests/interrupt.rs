@@ -17,8 +17,9 @@ use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_notion::ingest::official::BASE;
 use datalib_etl_notion::ingest::{db_path_for, fetch, FetchOptions, RawDb};
-use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use datalib_etl_web::synthesize::write_fixture;
 use serde_json::json;
@@ -236,7 +237,6 @@ impl Rig for Notion {
     }
 
     async fn download(&self, db: &RawDb, stop: StopFlag) -> Result<()> {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
         let fast = std::time::Duration::from_millis(1);
         let guard = RetryGuard::new(
             std::time::Duration::from_secs(3600),
@@ -245,7 +245,7 @@ impl Rig for Notion {
             fast,
             stop.clone(),
         );
-        retry::scope(
+        let download = retry::scope(
             guard,
             fetch(FetchOptions {
                 subtree_pages: self.roots.clone(),
@@ -255,9 +255,8 @@ impl Rig for Notion {
                 },
                 ..FetchOptions::new(db.clone())
             }),
-        )
-        .await
-        .map(|_| ())
+        );
+        playback::scope(&self.playback, download).await.map(|_| ())
     }
 
     async fn seal(&self, db: RawDb) -> Result<()> {

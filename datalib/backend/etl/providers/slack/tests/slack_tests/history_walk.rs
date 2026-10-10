@@ -39,7 +39,7 @@ async fn a_walk_that_fails_after_its_first_page_is_finished_from_under_it() {
     )
     .unwrap();
     first.serve();
-    fetch_into(&first.out, |o| o)
+    fetch_into(&first.playback, &first.out, |o| o)
         .await
         .expect("a channel that fails is a problem row, not a failed run");
     assert_eq!(stored_ts(&first.out), [B, C]);
@@ -61,7 +61,9 @@ async fn a_walk_that_fails_after_its_first_page_is_finished_from_under_it() {
     .record(&second.api, json!([msg(B, "b"), msg(A, "a")]))
     .unwrap();
     second.serve();
-    fetch_into(&first.out, |o| o).await.unwrap();
+    fetch_into(&second.playback, &first.out, |o| o)
+        .await
+        .unwrap();
     assert_eq!(stored_ts(&first.out), [A, B, C]);
 
     let db = RawDb::open(&db_path_for(&first.out)).await.unwrap();
