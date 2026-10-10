@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { chatUuidFromHref, linkFromClick, rewriteIdButtonsForCopy } from "../src/cards/chatLink";
+import { copyWithHandles } from "../src/cards/contacts";
 
 // Forge a MouseEvent-shaped object whose `target` is an `<a>` carrying
 // the given href (or an arbitrary descendant of it). jsdom's
@@ -108,5 +109,30 @@ describe("rewriteIdButtonsForCopy", () => {
       ["datalib://chat/doc-1?msg=sec-2", "🆔"],
     ]);
     expect(rewriteIdButtonsForCopy(root, "doc-1")).toBe(false);
+  });
+
+  /** The copy hook carries the rewrite to the clipboard's HTML, for a
+   *  selection with no contact chip in it as much as one with. */
+  it("puts the 🆔 link in a copied selection's html", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<p data-section-uuid="sec-2">hello <button type="button" class="copy-uuid" data-uuid="sec-2">🆔</button> there</p>`;
+    document.body.append(root);
+    const range = document.createRange();
+    range.selectNodeContents(root);
+    document.getSelection()!.removeAllRanges();
+    document.getSelection()!.addRange(range);
+
+    const data: Record<string, string> = {};
+    let prevented = false;
+    const ev = {
+      clipboardData: { setData: (type: string, value: string) => (data[type] = value) },
+      preventDefault: () => (prevented = true),
+    } as unknown as ClipboardEvent;
+    copyWithHandles(ev, root, (f) => rewriteIdButtonsForCopy(f, "doc-1"));
+    root.remove();
+
+    expect(prevented).toBe(true);
+    expect(data["text/html"]).toContain('<a href="datalib://chat/doc-1?msg=sec-2">🆔</a>');
+    expect(data["text/html"]).not.toContain("<button");
   });
 });
