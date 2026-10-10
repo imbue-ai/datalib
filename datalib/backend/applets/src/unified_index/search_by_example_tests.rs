@@ -23,7 +23,9 @@ use datalib_schema::search_terms::SearchTermKind;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
 
-use super::tests::{index_over, search, sync_terms, uuids};
+use super::tabs::SearchTab;
+use super::tests::{index_over, search, search_tab, sync_terms, uuids};
+use super::Index;
 
 /// 2369-04-15 08:30:00 UTC.
 const T0: i64 = 12602794200000;
@@ -346,6 +348,15 @@ async fn how_it_is_filed(
     out
 }
 
+/// The rows a query finds, by readable id, sorted.
+async fn found(s: &Index, q: &str, tab: Option<SearchTab>) -> Vec<String> {
+    let r = search_tab(s, q, tab, None, 50, None).await;
+    assert!(r.refused.is_empty() && r.errors.is_empty(), "{q}: {r:?}");
+    let mut rows: Vec<String> = uuids(&r).into_iter().map(String::from).collect();
+    rows.sort();
+    rows
+}
+
 /// How rows are filed, and which queries find them: the rules of
 /// `terms_keys.rs` and the grid's column keys, each shown on one row of
 /// a small cast.
@@ -362,39 +373,44 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
     }, {
         insta::assert_snapshot!(filed);
     });
-
     let s = index_over(tmp.path()).await;
+
+    // What each key finds.
     for (q, want) in [
         // from: reads the author's handle and the name they were shown
         // under. An address is a handle whether or not it says `email:`.
         ("from:riker", vec!["riker-email"]),
         ("from:riker@enterprise.org", vec!["riker-email"]),
         ("from:email:riker@enterprise.org", vec!["riker-email"]),
-        // Unquoted, any part of a name or handle.
+        // Unquoted, any part of a name or handle; quoted, the whole name,
+        // case-blind.
         ("from:will", vec!["riker-email"]),
-        // Quoted, the whole name, case-blind, and never a part of it.
         (r#"from:"william riker""#, vec!["riker-email"]),
-        (r#"from:"Riker""#, vec![]),
-        // Nobody wrote a contact's card.
-        ("from:picard", vec![]),
         ("to:picard@enterprise.org", vec!["riker-email"]),
-        // Troi was copied, not addressed; recipient: is To, Cc and Bcc.
-        ("to:troi", vec![]),
+        // A name also reaches every handle a source showed under it, so a
+        // role whose terms hold only handles finds a person by name.
+        (r#"to:"Jean-Luc Picard""#, vec!["riker-email"]),
+        ("to:jean", vec!["riker-email"]),
+        // recipient: is To, Cc and Bcc.
         ("cc:troi", vec!["riker-email"]),
         ("recipient:troi", vec!["riker-email"]),
         ("mention:slack:T1701/U0000002", vec!["worf-slack"]),
-        // A mention holds Data's handle and not his name, and the "Data"
-        // written in Riker's email is text, which no key reads.
-        ("mention:data", vec![]),
         // with: is any role on a message, or who a card is about.
         ("with:picard", vec!["picard-card", "riker-email"]),
         (
             "with:picard@enterprise.org",
             vec!["picard-card", "riker-email"],
         ),
+        (
+            r#"with:"Jean-Luc Picard""#,
+            vec!["picard-card", "riker-email"],
+        ),
         ("with:troi", vec!["riker-email"]),
+        // Troi has no card: the email itself showed her address under
+        // that name.
+        (r#"with:"Deanna Troi""#, vec!["riker-email"]),
         // The card's second address is in its `about` terms and nowhere
-        // else; the email column holds only the first (below).
+        // else; the email column holds only the first.
         ("with:jean-luc@chateau-picard.example", vec!["picard-card"]),
         // A group's card is about the group: its members are not its
         // terms, so with:troi above does not find it.
@@ -428,7 +444,6 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // A column key is the whole value as stored, case and all: unlike
         // the terms keys, never in part and never case-blind.
         ("kind:Email", vec!["riker-email"]),
-        ("kind:email", vec![]),
         (r#"kind:"Email Thread""#, vec!["riker-thread"]),
         ("channel:#bridge", vec!["bridge-thread", "worf-slack"]),
         (
@@ -440,17 +455,83 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
             vec!["riker-email", "riker-thread"],
         ),
         (r#"contact:"Jean-Luc Picard""#, vec!["picard-card"]),
-        ("contact:Picard", vec![]),
         ("contact:*", vec!["picard-card", "senior-staff-card"]),
         ("email:picard@enterprise.org", vec!["picard-card"]),
-        ("email:jean-luc@chateau-picard.example", vec![]),
-        // Keys combine with AND: Troi's one role on the email is Cc.
-        ("with:troi kind:Email -cc:troi", vec![]),
+        // A document, and every row in it.
+        ("convo:riker-thread", vec!["riker-email", "riker-thread"]),
+        // Keys combine with AND.
+        ("with:picard kind:Email", vec!["riker-email"]),
     ] {
+        assert_eq!(found(&s, q, None).await, want, "{q}");
+    }
+
+    // What finds nothing, and why.
+    for q in [
+        // Quoted is the whole name, never a part of it.
+        r#"from:"Riker""#,
+        // Nobody wrote a contact's card, and Picard wrote nothing here:
+        // his name reaches his handles, but no row is from them.
+        "from:picard",
+        r#"from:"Jean-Luc Picard""#,
+        // Troi was copied, not addressed.
+        "to:troi",
+        // A mention holds Data's handle and not his name, and the "Data"
+        // written in Riker's email is text, which no key reads.
+        "mention:data",
+        // A quoted label is the whole label.
+        r#"label:"Away""#,
+        // Column keys: the whole value, case and all.
+        "kind:email",
+        "contact:Picard",
+        "convo:riker",
+        // The email column holds a card's first address only.
+        "email:jean-luc@chateau-picard.example",
+        // `email:` is that column, not a person's address: Riker has no
+        // card. His address is found with from: or with:.
+        "email:riker@enterprise.org",
+        // Troi's one role on the email is Cc.
+        "with:troi kind:Email -cc:troi",
+    ] {
+        assert_eq!(found(&s, q, None).await, Vec::<String>::new(), "{q}");
+    }
+
+    // The Fields tab matches free text against every term a row answers
+    // to: a bare word as the start of one, a quoted word whole.
+    let fields = Some(SearchTab::Fields);
+    for (q, want) in [
+        // The two ids that start with it, and riker-email's author too.
+        ("rik", vec!["riker-email", "riker-thread"]),
+        ("riker", vec!["riker-email", "riker-thread"]),
+        // Riker's name, not the ids it begins.
+        (r#""riker""#, vec!["riker-email"]),
+        (r#""rik""#, vec![]),
+        ("riker-email", vec!["riker-email"]),
+        // A row's own terms only: the person keys' name-to-handle reach
+        // is not here, so the email to Picard's address is not found.
+        ("jean", vec!["picard-card"]),
+        (r#""Jean-Luc Picard""#, vec!["picard-card"]),
+        // riker-email and riker-thread hold Picard's mailbox as a name.
+        ("picard", vec!["picard-card", "riker-email", "riker-thread"]),
+        ("senior", vec!["senior-staff-card"]),
+        // The word in the thread's title, where label:"Away" wanted a
+        // whole label.
+        (r#""Away""#, vec!["riker-email", "riker-thread"]),
+        // A handle is one word, so a word inside it starts nothing.
+        ("chateau", vec![]),
+        // Keys narrow it as anywhere else.
+        ("riker -from:riker", vec!["riker-thread"]),
+    ] {
+        assert_eq!(found(&s, q, fields).await, want, "Fields tab: {q}");
+    }
+
+    // There is no `id:` key; a row's id is found on the Fields tab.
+    for q in ["id:riker", r#"id:"riker""#] {
         let r = search(&s, q, None, 50, None).await;
-        assert!(r.refused.is_empty() && r.errors.is_empty(), "{q}: {r:?}");
-        let mut got = uuids(&r);
-        got.sort();
-        assert_eq!(got, want, "{q}");
+        assert!(r.rows.is_empty(), "{q}: {:?}", uuids(&r));
+        assert!(
+            r.refused.iter().any(|why| why.contains("`id:`")),
+            "{q}: {:?}",
+            r.refused
+        );
     }
 }
