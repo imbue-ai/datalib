@@ -2,16 +2,19 @@
 # Render every provider's markdown into one interactive HTML page — the
 # checked-in golden `datalib/ui/tests/goldens/render_preview.html`, which
 # is there so a rendering change can be reviewed by opening a file in a
-# browser instead of building a data root.
+# browser instead of building a data root. Every contact page, from the
+# fixture's address book, LinkedIn and Facebook and from contact-common's
+# own corpus, goes on a second page of its own, `contact_preview.html`.
 #
 #   bazelisk test //datalib/ui:render_preview_test   # regenerate and diff
 #   bazelisk run  //datalib/ui:render_preview        # rewrite the golden
 #
 # Two markdown sources, and both are needed. The TNG fixture is what
 # every provider's renderer *actually* emits, end to end, which is the
-# only honest way to compare them; chat-common's synthetic corpus adds
-# the shapes no fixture has (a hundred-line message, an author whose
-# name is markup, an item with no timestamp at all).
+# only honest way to compare them; chat-common's and contact-common's
+# synthetic corpora add the shapes no fixture has (a hundred-line
+# message, an author whose name is markup, an item with no timestamp at
+# all, a card with every field).
 #
 # The two modes differ only in where the CSS comes from and what happens
 # to the result: `run` reads the .vue files from your working tree (so an
@@ -40,9 +43,11 @@ need_runfile() {
 }
 
 samples_bin="$(need_runfile "$DATALIB_TEST_SAMPLES_BIN_RLOC")"
+contact_samples_bin="$(need_runfile "$DATALIB_TEST_CONTACT_SAMPLES_BIN_RLOC")"
 node_bin="$(need_runfile "$DATALIB_TEST_NODE_BIN_RLOC")"
 preview_js="$(need_runfile "$DATALIB_TEST_PREVIEW_JS_RLOC")"
 golden="$(need_runfile "$DATALIB_TEST_GOLDEN_RLOC")"
+contact_golden="$(need_runfile "$DATALIB_TEST_CONTACT_GOLDEN_RLOC")"
 fixture_tar="$(need_runfile "$DATALIB_TEST_FIXTURE_MD_RLOC")"
 
 work="$(mktemp -d)"
@@ -57,6 +62,7 @@ tar -xf "$fixture_tar" -C "$md" --strip-components=1
 # chat-common's synthetic corpus, under a name that sorts last so the
 # real output leads.
 "$samples_bin" "$md/zz-synthetic" >/dev/null
+"$contact_samples_bin" "$md/zz-synthetic-contacts" >/dev/null
 
 # `--ui` names the tree the card CSS is read from; the script always
 # resolves its own npm packages from beside itself in the runfiles.
@@ -67,18 +73,31 @@ else
 fi
 
 "$node_bin" "$preview_js" --md "$md" --out "$work/render_preview.html" --ui "$ui_root"
+# Every page contact-common wrote opens with this block.
+"$node_bin" "$preview_js" --md "$md" --out "$work/contact_preview.html" --ui "$ui_root" \
+  --only '<div class="contact-head"' --title "Contact preview"
 
 if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
-  dest="$BUILD_WORKSPACE_DIRECTORY/datalib/ui/tests/goldens/render_preview.html"
-  cp "$work/render_preview.html" "$dest"
-  echo "wrote $dest"
+  for page in render_preview contact_preview; do
+    dest="$BUILD_WORKSPACE_DIRECTORY/datalib/ui/tests/goldens/$page.html"
+    cp "$work/$page.html" "$dest"
+    echo "wrote $dest"
+  done
   exit 0
 fi
 
-if ! diff -u "$golden" "$work/render_preview.html" > "$work/diff.txt"; then
-  echo "The render preview golden is stale." >&2
-  echo "Regenerate it with:  bazelisk run //datalib/ui:render_preview" >&2
-  echo >&2
-  head -c 8000 "$work/diff.txt" >&2
+stale=0
+for pair in "render_preview:$golden" "contact_preview:$contact_golden"; do
+  page="${pair%%:*}"
+  want="${pair#*:}"
+  if ! diff -u "$want" "$work/$page.html" > "$work/$page.diff"; then
+    echo "The $page golden is stale." >&2
+    head -c 8000 "$work/$page.diff" >&2
+    echo >&2
+    stale=1
+  fi
+done
+if [[ "$stale" == 1 ]]; then
+  echo "Regenerate with:  bazelisk run //datalib/ui:render_preview" >&2
   exit 1
 fi

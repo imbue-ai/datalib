@@ -527,9 +527,12 @@ vitest_bin.vitest_test(
 # `:render_preview_test` regenerates it so the checked-in copy cannot go
 # stale.
 #
+# Every contact page also goes on a page of its own,
+# `tests/goldens/contact_preview.html`.
+#
 # The markdown comes from the TNG fixture — what every provider's
-# renderer actually emits, end to end — plus chat-common's synthetic
-# corpus for the shapes no fixture has.
+# renderer actually emits, end to end — plus chat-common's and
+# contact-common's synthetic corpora for the shapes no fixture has.
 
 # Staged into bazel-out so node resolves `markdown-it` / `highlight.js`
 # by walking up from the script to the rules_js-linked `:node_modules`
@@ -560,13 +563,17 @@ _RENDER_PREVIEW_DATA = [
     ":node_modules",
     ":render_preview_script",
     ":render_preview_sources",
+    "tests/goldens/contact_preview.html",
     "tests/goldens/render_preview.html",
     "//datalib/backend/etl/chat-common:render_chat_samples",
+    "//datalib/backend/etl/contact-common:render_contact_samples",
     "//tests/fixtures:ingested/qmd_md.tar",
     "@nodejs_host//:node_bin",
 ]
 
 _RENDER_PREVIEW_ENV = {
+    "DATALIB_TEST_CONTACT_GOLDEN_RLOC": "$(rlocationpath tests/goldens/contact_preview.html)",
+    "DATALIB_TEST_CONTACT_SAMPLES_BIN_RLOC": "$(rlocationpath //datalib/backend/etl/contact-common:render_contact_samples)",
     "DATALIB_TEST_FIXTURE_MD_RLOC": "$(rlocationpath //tests/fixtures:ingested/qmd_md.tar)",
     "DATALIB_TEST_GOLDEN_RLOC": "$(rlocationpath tests/goldens/render_preview.html)",
     "DATALIB_TEST_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",

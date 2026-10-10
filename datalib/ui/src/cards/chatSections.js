@@ -136,10 +136,13 @@ export function injectCopyUuidButtons(root) {
   }
 
   for (const el of root.querySelectorAll("[data-page-title-uuid]")) {
-    if (el.querySelector(":scope > button.copy-uuid")) continue;
+    // The id sits on the heading itself, or on a block whose heading is
+    // a markdown `#` (a contact page's head, whose heading is a chip).
+    const host = el.matches("h1") ? el : (el.querySelector("h1") ?? el);
+    if (host.querySelector(":scope > button.copy-uuid")) continue;
     const uuid = el.getAttribute("data-page-title-uuid") ?? "";
     if (!uuid) continue;
-    addHeaderControl(el, " ", button(uuid, "Copy page ID"));
+    addHeaderControl(host, " ", button(uuid, "Copy page ID"));
   }
 }
 

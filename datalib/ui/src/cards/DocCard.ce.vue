@@ -75,7 +75,7 @@ function onFrameLink(link: ClickedLink) {
   else void openExternal(url);
 }
 
-/// A chip asked for everything from its person: a search card on that
+/// A chip asked for everything with its person: a search card on that
 /// query, beside this one.
 function onOpenSearch(q: string) {
   props.ctx.host.openCards(`searchView(${JSON.stringify({ q })})`);

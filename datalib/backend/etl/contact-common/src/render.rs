@@ -10,17 +10,16 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::escape_md_inline;
+use datalib_etl_render::html::{escape_attr, escape_md_inline, escape_text};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::chip_link;
 use datalib_etl_render::section::{join, Section};
-use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTermKind, SuppliedSearchTerm};
 
-use datalib_contact_schema::{is_drawable_photo, ContactHandle, Medium, NormalizedContact, Photo};
+use datalib_contact_schema::{is_drawable_photo, Medium, NormalizedContact, Photo};
 use datalib_handle::Handle;
 
 use crate::types::ContactDoc;
@@ -206,39 +205,83 @@ fn display_or_id(doc: &ContactDoc) -> &str {
         .unwrap_or(&doc.doc_uuid)
 }
 
-/// The page's field table, in one order for every source: where the
-/// person is filed, who they are, how to reach them, then whatever else
-/// the source says. A group's members are listed under the table.
-pub fn table_rows(contact: &NormalizedContact) -> Vec<(String, String)> {
-    let mut rows: Vec<(String, String)> = Vec::new();
-    rows.extend(
-        contact
-            .groups
-            .iter()
-            .map(|g| ("Group".to_string(), g.clone())),
-    );
-    if let Some(org) = &contact.org {
-        rows.push(("Org".to_string(), org.clone()));
+/// One line of a contact's field list: what it is (`Email`), the
+/// source's own word for which one (`work`), the value as written, and
+/// either the handle it is, drawn as a chip, or a plain link (a photo's
+/// URL).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldRow {
+    pub label: String,
+    pub qualifier: Option<String>,
+    pub value: String,
+    pub handle: Option<Handle>,
+    pub href: Option<String>,
+}
+
+/// The page's fields, in one order for every source: how to reach the
+/// person, then whatever else the source says, then the note. Name,
+/// role and groups are the page's head, not fields, and so is a handle
+/// that is neither an address nor a number when the heading's chip is
+/// drawn by it: its spelling (`name/Will Riker`) tells a reader nothing.
+pub fn field_rows(contact: &NormalizedContact) -> Vec<FieldRow> {
+    let head = head_handle(contact);
+    let mut rows: Vec<FieldRow> = contact
+        .handles
+        .iter()
+        .filter(|h| h.medium != Medium::Other || h.handle.is_none() || h.handle != head)
+        .map(|h| FieldRow {
+            label: match h.medium {
+                Medium::Email => "Email",
+                Medium::Phone => "Phone",
+                Medium::Other => h.handle.as_ref().map_or("Handle", |h| h.kind().as_str()),
+            }
+            .to_string(),
+            qualifier: h.label.clone().filter(|l| !l.trim().is_empty()),
+            value: h.value.clone(),
+            handle: h.handle.clone(),
+            href: None,
+        })
+        .collect();
+    rows.extend(contact.details.iter().map(|d| {
+        let (label, qualifier) = split_qualifier(&d.label);
+        FieldRow {
+            label,
+            qualifier,
+            value: d.value.clone(),
+            handle: None,
+            href: None,
+        }
+    }));
+    if let Some(Photo::Url(url)) = &contact.photo {
+        rows.push(FieldRow {
+            label: "Photo".to_string(),
+            qualifier: None,
+            value: url.clone(),
+            handle: None,
+            href: Some(url.clone()),
+        });
     }
-    if let Some(title) = &contact.title {
-        rows.push(("Title".to_string(), title.clone()));
-    }
-    rows.extend(
-        contact
-            .handles
-            .iter()
-            .map(|h| (handle_label(h), h.value.clone())),
-    );
-    rows.extend(
-        contact
-            .details
-            .iter()
-            .map(|d| (d.label.clone(), d.value.clone())),
-    );
     if let Some(note) = &contact.note {
-        rows.push(("Note".to_string(), note.clone()));
+        rows.push(FieldRow {
+            label: "Note".to_string(),
+            qualifier: None,
+            value: note.clone(),
+            handle: None,
+            href: None,
+        });
     }
     rows
+}
+
+/// A detail's label as providers write it, `Address (home)`, read as
+/// the label and the source's word for which one.
+fn split_qualifier(label: &str) -> (String, Option<String>) {
+    match label.strip_suffix(')').and_then(|l| l.split_once(" (")) {
+        Some((base, q)) if !base.trim().is_empty() && !q.trim().is_empty() => {
+            (base.to_string(), Some(q.to_string()))
+        }
+        _ => (label.to_string(), None),
+    }
 }
 
 /// Who the card is about, as `with:` finds it: each handle it holds and
@@ -315,18 +358,6 @@ fn summary(contact: &NormalizedContact) -> String {
     lines.join("\n")
 }
 
-fn handle_label(h: &ContactHandle) -> String {
-    let base = match h.medium {
-        Medium::Email => "Email",
-        Medium::Phone => "Phone",
-        Medium::Other => h.handle.as_ref().map_or("Handle", |h| h.kind().as_str()),
-    };
-    match h.label.as_deref() {
-        Some(l) if !l.is_empty() => format!("{base} ({l})"),
-        _ => base.to_string(),
-    }
-}
-
 fn render_markdown(
     profile: &ContactRenderProfile,
     doc: &ContactDoc,
@@ -359,58 +390,151 @@ fn render_markdown(
     out.push_str("---\n\n");
     let frontmatter = Section::unkeyed(out);
 
-    // The page body — title, photo, field table — is the one section
-    // the contact's grid row names.
+    // The page body — the head, the fields, a group's members — is the
+    // one section the contact's grid row names.
     let mut out = String::with_capacity(1024);
-    let title = display_or_id(doc).to_string();
-    // Shared `Title` helper so contact pages carry the same
-    // `data-page-title-uuid` hook the Vue side uses for the
-    // copy-page-id button. `source_url` is the contact's canonical web
-    // page (a LinkedIn profile, say) when the provider has one.
-    out.push_str(
-        &Title {
-            suffix: None,
-            text: &title,
-            markdown_uuid: Some(m_uuid),
-            source_url: contact.source_url.as_deref(),
-        }
-        .render(),
-    );
-
-    if let Some(rel) = photo_rel {
-        out.push_str(&format!("![{}]({rel})\n\n", escape_md_inline(&title)));
-    }
-
-    let mut table_rows: Vec<(String, String)> = table_rows(contact)
-        .into_iter()
-        .map(|(label, value)| (escape_md_inline(&label), table_cell(&value)))
-        .collect();
-    if let Some(Photo::Url(url)) = &contact.photo {
-        table_rows.push(("Photo URL".to_string(), autolink_cell(url)));
-    }
-
-    if !table_rows.is_empty() {
-        out.push_str("| Field | Value |\n");
-        out.push_str("| --- | --- |\n");
-        for (k, v) in table_rows {
-            out.push_str(&format!("| {k} | {v} |\n"));
-        }
-        out.push('\n');
-    }
-
-    if !contact.members.is_empty() {
-        out.push_str("**Members**\n\n");
-        for (i, name) in contact.members.iter().enumerate() {
-            let line = match doc.member_handles.get(i).and_then(Option::as_ref) {
-                Some(handle) => chip_link(name, handle),
-                None => escape_md_inline(name),
-            };
-            out.push_str(&format!("- {line}\n"));
-        }
-        out.push('\n');
-    }
-
+    out.push_str(&head(doc, photo_rel));
+    out.push_str(&fields(contact));
+    out.push_str(&members(doc));
     vec![frontmatter, Section::keyed(m_uuid, out)]
+}
+
+/// The top of the page: the photo, the person as a chip (the right-click
+/// that links them to a contact), their role and the groups they are
+/// filed in. The heading is a markdown `#` so the chip link inside it is
+/// marked; the copy-page-id button finds it through the wrapper's
+/// `data-page-title-uuid`.
+fn head(doc: &ContactDoc, photo_rel: Option<&str>) -> String {
+    let contact = &doc.contact;
+    let name = display_or_id(doc);
+    let mut out = format!(
+        "<div class=\"contact-head\" data-page-title-uuid=\"{}\">\n\n",
+        escape_attr(&doc.doc_uuid)
+    );
+    if let Some(rel) = photo_rel {
+        out.push_str(&format!(
+            "<div class=\"contact-photo\">\n\n![{}]({rel})\n\n</div>\n\n",
+            escape_md_inline(name)
+        ));
+    }
+    out.push_str("<div class=\"contact-who\">\n\n");
+    let heading = match head_handle(contact) {
+        Some(handle) => chip_link(name, &handle),
+        None => escape_md_inline(name),
+    };
+    out.push_str(&format!("# {heading}"));
+    if let Some(url) = &contact.source_url {
+        out.push_str(&format!(
+            " <a class=\"source-link\" href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">↗</a>",
+            escape_attr(url)
+        ));
+    }
+    out.push_str("\n\n");
+    let role: Vec<&str> = [contact.title.as_deref(), contact.org.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !role.is_empty() {
+        out.push_str(&format!(
+            "<p class=\"contact-role\">{}</p>\n\n",
+            lines_html(&role.join(" · "))
+        ));
+    }
+    if !contact.groups.is_empty() {
+        let pills: Vec<String> = contact
+            .groups
+            .iter()
+            .map(|g| format!("<span class=\"contact-group\">{}</span>", escape_text(g)))
+            .collect();
+        out.push_str(&format!(
+            "<p class=\"contact-groups\">{}</p>\n\n",
+            pills.join(" ")
+        ));
+    }
+    out.push_str("</div>\n</div>\n\n");
+    out
+}
+
+/// The handle the page's heading is drawn as, by the grid's Contact
+/// cell's rule (`columns.rs::contact_identity`): the first address, else
+/// the first number, else a handle of any kind, since a Facebook friend
+/// or a LinkedIn connection may have no other.
+fn head_handle(contact: &NormalizedContact) -> Option<Handle> {
+    chip_handle(
+        first_value(contact, Medium::Email),
+        first_value(contact, Medium::Phone),
+    )
+    .or_else(|| contact.handles.iter().find_map(|h| h.handle.clone()))
+}
+
+/// The field list. A plain value is text between tags, with no line break
+/// that could end the HTML block whatever it holds. A handle is a chip
+/// link, which only markdown makes, so its `<dd>` closes the block around
+/// one paragraph holding the link; the `chip-identifiers` class has the
+/// viewer draw it as the address rather than the person, and a plain
+/// click on it is the chip's, never the mail app's.
+fn fields(contact: &NormalizedContact) -> String {
+    let rows = field_rows(contact);
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("<dl class=\"contact-fields\">\n");
+    for row in rows {
+        let qualifier = row
+            .qualifier
+            .as_deref()
+            .map(|q| {
+                format!(
+                    " <span class=\"contact-qualifier\">{}</span>",
+                    escape_text(q)
+                )
+            })
+            .unwrap_or_default();
+        let dt = format!("<dt>{}{qualifier}</dt>", escape_text(&row.label));
+        let line = match (&row.handle, &row.href) {
+            (Some(handle), _) => format!(
+                "{dt}<dd class=\"chip-identifiers\">\n\n{}\n\n</dd>\n",
+                chip_link(&row.value, handle)
+            ),
+            (None, Some(href)) => format!(
+                "{dt}<dd><a href=\"{}\">{}</a></dd>\n",
+                escape_attr(href),
+                lines_html(&row.value)
+            ),
+            (None, None) => format!("{dt}<dd>{}</dd>\n", lines_html(&row.value)),
+        };
+        out.push_str(&line);
+    }
+    out.push_str("</dl>\n\n");
+    out
+}
+
+/// A group's members, each a chip where the member has a handle.
+fn members(doc: &ContactDoc) -> String {
+    if doc.contact.members.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("<div class=\"contact-members\">\n\n## Members\n\n");
+    for (i, name) in doc.contact.members.iter().enumerate() {
+        let line = match doc.member_handles.get(i).and_then(Option::as_ref) {
+            Some(handle) => chip_link(name, handle),
+            None => escape_md_inline(name),
+        };
+        out.push_str(&format!("- {line}\n"));
+    }
+    out.push_str("\n</div>\n\n");
+    out
+}
+
+/// Plain text between tags, its line breaks kept as `<br>`.
+fn lines_html(value: &str) -> String {
+    value
+        .lines()
+        .map(escape_text)
+        .collect::<Vec<_>>()
+        .join("<br>")
 }
 
 /// `None`, with the reason recorded on `problems`, when the row will
@@ -483,35 +607,10 @@ fn ext_for(content_type: &str) -> &'static str {
     }
 }
 
-/// A plain value as one table cell: each line escaped, and a line break,
-/// which would end the row, drawn as `<br>`.
-fn table_cell(value: &str) -> String {
-    value
-        .lines()
-        .map(escape_md_inline)
-        .collect::<Vec<_>>()
-        .join("<br>")
-}
-
-/// A URL as a link in a table cell, with anything that would end the
-/// link or the cell percent-encoded.
-fn autolink_cell(url: &str) -> String {
-    let mut out = String::from("<");
-    for c in url.chars() {
-        match c {
-            '<' | '>' | '|' => out.push_str(&format!("%{:02X}", c as u32)),
-            c if c.is_whitespace() => out.push_str(&format!("%{:02X}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('>');
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_contact_schema::{ContactKind, Detail};
+    use datalib_contact_schema::{ContactHandle, ContactKind, Detail};
 
     fn mk_contact() -> ContactDoc {
         let mut contact = NormalizedContact::new(
@@ -539,7 +638,7 @@ mod tests {
     /// Every source's page lists the same things in the same order, and a
     /// number with no country code is still on it.
     #[test]
-    fn the_table_is_one_order_for_every_source() {
+    fn the_fields_are_one_order_for_every_source() {
         let mut c = NormalizedContact::new("s", "k", ContactKind::Person);
         c.note = Some("two\nlines".into());
         c.details = vec![Detail::new("Address (home)", "1 Main St")];
@@ -550,21 +649,30 @@ mod tests {
         c.title = Some("Commander".into());
         c.org = Some("Starfleet".into());
         c.groups = vec!["Bridge".into()];
-        let labels: Vec<String> = table_rows(&c).into_iter().map(|(l, _)| l).collect();
+        let rows = field_rows(&c);
+        let labels: Vec<(&str, Option<&str>)> = rows
+            .iter()
+            .map(|r| (r.label.as_str(), r.qualifier.as_deref()))
+            .collect();
         assert_eq!(
             labels,
             [
-                "Group",
-                "Org",
-                "Title",
-                "Email (work)",
-                "Phone (cell)",
-                "Address (home)",
-                "Note"
+                ("Email", Some("work")),
+                ("Phone", Some("cell")),
+                ("Address", Some("home")),
+                ("Note", None)
             ]
         );
-        assert_eq!(table_rows(&c)[4].1, "(555) 010-1234");
-        assert_eq!(table_rows(&c)[6].1, "two\nlines");
+        assert_eq!(
+            rows[0].handle.as_ref().map(Handle::as_str),
+            Some("email:riker@enterprise.org")
+        );
+        assert_eq!(rows[1].value, "(555) 010-1234");
+        assert_eq!(
+            rows[1].handle, None,
+            "a number with no country code is no handle"
+        );
+        assert_eq!(rows[3].value, "two\nlines");
     }
 
     fn mk_profile() -> ContactRenderProfile {
@@ -579,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn markdown_has_title_url_and_field_table() {
+    fn markdown_has_a_head_and_a_field_list() {
         let sections = render_markdown(&mk_profile(), &mk_contact(), "linkedin", None);
         assert_eq!(sections[0].uuid, None, "frontmatter belongs to no row");
         assert_eq!(
@@ -588,27 +696,73 @@ mod tests {
             "the body is the contact's section"
         );
         let md = join(&sections);
-        assert!(md.contains("Jean-Luc Picard"));
-        assert!(md.contains("https://www.linkedin.com/in/jlp"));
-        assert!(md.contains("| Org | Starfleet |"));
-        // Pipe inside a value is escaped so it doesn't break the table.
-        assert!(md.contains("Captain \\| USS Enterprise"));
+        assert!(
+            md.contains(
+                "<div class=\"contact-head\" data-page-title-uuid=\"11111111-1111-1111-1111-111111111111\">"
+            ),
+            "{md}"
+        );
+        assert!(md.contains("# Jean-Luc Picard <a class=\"source-link\" href=\"https://www.linkedin.com/in/jlp\""), "{md}");
+        assert!(
+            md.contains("<p class=\"contact-role\">Captain | USS Enterprise · Starfleet</p>"),
+            "{md}"
+        );
         assert!(md.contains("provider: linkedin"));
     }
 
+    /// The person leads the page as their chip, by the handle the grid's
+    /// Contact cell draws: the first address, else the first number, else
+    /// the first handle of any kind.
+    #[test]
+    fn the_head_is_the_persons_chip() {
+        let mut doc = mk_contact();
+        doc.contact.handles = vec![
+            ContactHandle::phone(Some("cell".into()), "+1 202 555 0101"),
+            ContactHandle::email(Some("work".into()), "jlp@enterprise.test"),
+        ];
+        let md = join(&render_markdown(&mk_profile(), &doc, "linkedin", None));
+        assert!(
+            md.contains(
+                "# [Jean-Luc Picard](mailto:jlp@enterprise.test \"Jean-Luc Picard <jlp@enterprise.test>\")"
+            ),
+            "{md}"
+        );
+        assert!(
+            md.contains(
+                "<dt>Email <span class=\"contact-qualifier\">work</span></dt>\
+                 <dd class=\"chip-identifiers\">\n\n\
+                 [jlp@enterprise.test](mailto:jlp@enterprise.test \"jlp@enterprise.test\")\n\n</dd>"
+            ),
+            "{md}"
+        );
+        doc.contact.handles = vec![ContactHandle::of(
+            Handle::facebook_name("Jean-Luc Picard").unwrap(),
+        )];
+        let md = join(&render_markdown(&mk_profile(), &doc, "linkedin", None));
+        assert!(
+            md.contains("# [Jean-Luc Picard](datalib:handle/facebook/name/Jean-Luc%20Picard "),
+            "{md}"
+        );
+        assert!(
+            !md.contains("<dt>facebook"),
+            "the chip is the handle; its spelling is no field: {md}"
+        );
+    }
+
     /// A name, a field's label and its value are what the address book
-    /// says: none of it opens a tag or breaks out of the table, and a
+    /// says: none of it opens a tag or ends the field list, and a
     /// multi-line note keeps its lines.
     #[test]
     fn a_contact_in_markup_renders_escaped() {
         const MARKUP: &str = "<script>x</script> & co";
         let mut contact = mk_contact();
         contact.contact.names = vec![format!("{MARKUP}]")];
-        contact.contact.org = None;
+        contact.contact.org = Some(MARKUP.to_string());
         contact.contact.title = None;
+        contact.contact.groups = vec![MARKUP.to_string()];
         contact.contact.details = vec![Detail::new(MARKUP, MARKUP)];
-        contact.contact.note = Some("# not a heading\n| not a cell".to_string());
-        contact.contact.photo = Some(Photo::Url("https://e.invalid/a b|c>.png".to_string()));
+        contact.contact.note = Some("# not a heading\n\n| not a cell".to_string());
+        contact.contact.photo = Some(Photo::Url("https://e.invalid/a\"b.png".to_string()));
         let md = join(&render_markdown(
             &mk_profile(),
             &contact,
@@ -624,17 +778,41 @@ mod tests {
             "{md}"
         );
         assert!(
-            md.contains("| &lt;script&gt;x&lt;/script&gt; &amp; co | &lt;script&gt;x&lt;/script&gt; &amp; co |"),
+            md.contains("# &lt;script&gt;x&lt;/script&gt; &amp; co\\]"),
             "{md}"
         );
         assert!(
-            md.contains("| Note | \\# not a heading<br>\\| not a cell |"),
+            md.contains(
+                "<span class=\"contact-group\">&lt;script&gt;x&lt;/script&gt; &amp; co</span>"
+            ),
             "{md}"
         );
         assert!(
-            md.contains("| Photo URL | <https://e.invalid/a%20b%7Cc%3E.png> |"),
+            md.contains("<dt>&lt;script&gt;x&lt;/script&gt; &amp; co</dt><dd>&lt;script&gt;x&lt;/script&gt; &amp; co</dd>"),
             "{md}"
         );
+        assert!(
+            md.contains("<dt>Note</dt><dd># not a heading<br><br>| not a cell</dd>"),
+            "{md}"
+        );
+        assert!(
+            md.contains("<dd><a href=\"https://e.invalid/a&quot;b.png\">https://e.invalid/a\"b.png</a></dd>"),
+            "{md}"
+        );
+        let fields = body
+            .split_once("<dl class=\"contact-fields\">")
+            .and_then(|(_, rest)| rest.split_once("</dl>"))
+            .map(|(dl, _)| dl)
+            .expect("a field list");
+        for line in fields
+            .lines()
+            .filter(|l| l.starts_with("<dt>") && !l.contains("chip-identifiers"))
+        {
+            assert!(
+                line.ends_with("</dd>"),
+                "a plain value keeps to its line, so nothing ends the HTML block: {line}"
+            );
+        }
     }
 
     #[test]
@@ -816,7 +994,7 @@ mod tests {
         let md = join(&render_markdown(&mk_profile(), &doc, "linkedin", None));
         assert!(
             md.contains(
-                "**Members**\n\n\
+                "## Members\n\n\
                  - [Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\")\n\
                  - Q\n"
             ),

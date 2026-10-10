@@ -40,9 +40,11 @@ use datalib_schema::providers::Provider;
 /// v9: a photo no browser draws (the SVG ghost avatar) has no URL.
 /// v10: a connection is its own conversation, the connections list is
 ///     the channel alone, and its email address has a column.
-/// v11: a connection and a message's sender carry a `linkedin:` handle,
+/// v11: a connection's page leads with its chip, and lists every handle
+///     as one.
+/// v12: a connection and a message's sender carry a `linkedin:` handle,
 ///     and the owner's posts and comments their primary address.
-pub const RENDER_VERSION: u32 = 11;
+pub const RENDER_VERSION: u32 = 12;
 
 fn profile() -> RenderProfile {
     RenderProfile {

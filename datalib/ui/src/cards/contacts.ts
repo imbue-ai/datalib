@@ -178,7 +178,7 @@ export type ChipMenuEntry = { id: ChipMenuId; label: string; separator?: boolean
 
 /** The menu for one chip: open the person's card, the double-click's
  *  card; write to an email address; copy the identifier, the name, or
- *  both; find everything from this person; and, with a contacts app,
+ *  both; find everything with this person; and, with a contacts app,
  *  link or edit the link. `canLink` is whether a contacts app is there
  *  to link with. */
 export function chipMenu(
@@ -197,7 +197,7 @@ export function chipMenu(
   out.push({ id: "copy-id", label: `Copy ${value}`, separator: out.length === 1 });
   if (named) out.push({ id: "copy-name", label: `Copy “${name}”` });
   if (named) out.push({ id: "copy-both", label: `Copy “${copyText(handle, name)}”` });
-  out.push({ id: "search", label: `Everything from ${name}`, separator: true });
+  out.push({ id: "search", label: `Everything with ${name}`, separator: true });
   if (canLink) {
     out.push({
       id: "edit",
@@ -214,10 +214,11 @@ export function composeUri(handle: string): string | null {
   return handleKind(handle) === "email" ? uriFromHandle(handle) : null;
 }
 
-/** The search that finds everything from this person: their handle, in
- *  the search terms' `from:`, which the search bar draws as their chip. */
+/** The search that finds everything this person took part in: their
+ *  handle, in the search terms' `with:` (any role, and the cards about
+ *  them), which the search bar draws as their chip. */
 export function searchQueryFor(handle: string): string {
-  return filterToken("from", handle, false);
+  return filterToken("with", handle, false);
 }
 
 const MAX_SOURCE_CONTACTS = 4;
@@ -521,7 +522,9 @@ export function canLinkHandles(): boolean {
 // ── The DOM ───────────────────────────────────────────────────────────
 
 /** Ask who every chip link under `root` is and draw it as a chip, from
- *  `people`. Safe to call again — after an edit, or when `people` says an
+ *  `people`. A chip inside a `.chip-identifiers` block (a contact page's
+ *  field list) shows its identifier rather than the person, as on the
+ *  person card. Safe to call again — after an edit, or when `people` says an
  *  answer changed: each link keeps what the source showed in
  *  `data-shown-as`. A handle whose question failed is drawn unresolved. */
 export async function decorateHandles(root: HTMLElement): Promise<void> {
@@ -535,7 +538,8 @@ export async function decorateHandles(root: HTMLElement): Promise<void> {
   for (const s of spans) {
     if (!s.isConnected) continue;
     const handle = s.dataset.handle ?? "";
-    drawChip(s, chipLook(handle, s.dataset.shownAs ?? "", people.get(handle) ?? NOBODY, canLink));
+    const look = s.closest(".chip-identifiers") ? identifierLook : chipLook;
+    drawChip(s, look(handle, s.dataset.shownAs ?? "", people.get(handle) ?? NOBODY, canLink));
   }
 }
 
@@ -616,6 +620,43 @@ export function chipCell(
   a.dataset.handle = handle;
   a.dataset.shownAs = shownAs;
   drawChip(a, chipLook(handle, shownAs, who ?? { mine: null, sourceContacts: [] }, canLink));
+  return a;
+}
+
+/** A chip that shows the identifier rather than the person, for a list of
+ *  one person's handles, where the name would repeat on every line. Its
+ *  colour, tooltip and menu are the person chip's; its lead is always the
+ *  kind's mark. `shown` is the identifier as the source wrote it. */
+export function identifierLook(
+  handle: string,
+  shown: string,
+  who: Who,
+  canLink: boolean,
+): ChipLook {
+  const text = shown.trim() || handleValue(handle);
+  return {
+    ...chipLook(handle, text, who, canLink),
+    text,
+    initial: null,
+    photo: null,
+    icon: handleIcon(handle),
+  };
+}
+
+/** `identifierLook` drawn as a chip link, as `chipCell` draws a person. */
+export function identifierCell(
+  handle: string,
+  shown: string,
+  who: Who | undefined,
+  canLink: boolean,
+): HTMLAnchorElement {
+  const a = document.createElement("a");
+  a.className = "chip";
+  const uri = uriFromHandle(handle);
+  if (uri) a.href = uri;
+  a.dataset.handle = handle;
+  a.dataset.shownAs = shown;
+  drawChip(a, identifierLook(handle, shown, who ?? NOBODY, canLink));
   return a;
 }
 

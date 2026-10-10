@@ -136,7 +136,7 @@ pub fn version_items(
                 kind_label: Some(kind_label.to_string()),
                 branch: vec![branch.clone()],
                 problems: v.problems.clone(),
-                ..chat_item(id, owner.name.clone(), v.date_ms, Some(text), Vec::new())
+                ..chat_item(id, owner.author(), v.date_ms, Some(text), Vec::new())
             }
         })
         .collect()

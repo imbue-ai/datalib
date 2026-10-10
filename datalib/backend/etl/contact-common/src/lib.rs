@@ -3,7 +3,10 @@
 //! people (vCards, LinkedIn connections, Facebook friends).
 
 pub mod render;
+pub mod samples;
 pub mod types;
 
-pub use render::{chip_handle, render_all, table_rows, ContactRenderProfile, RenderSummary};
+pub use render::{
+    chip_handle, field_rows, render_all, ContactRenderProfile, FieldRow, RenderSummary,
+};
 pub use types::ContactDoc;
