@@ -417,7 +417,7 @@ impl RawDb {
         .context("select contacts for render")?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            let vcard: Option<String> = r.try_get("vcard").ok();
+            let vcard: Option<String> = r.try_get("vcard").context("contacts vcard")?;
             let Some(vcard) = vcard else { continue };
             out.push(LoadedRawContact {
                 id: r.try_get("id").unwrap_or_default(),

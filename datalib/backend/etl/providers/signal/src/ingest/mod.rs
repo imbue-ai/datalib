@@ -201,12 +201,14 @@ async fn read_snapshot(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
         .await
         .context("preload already-decrypted attachments")?;
         rows.iter()
-            .filter_map(|r| {
-                let ref_id: String = r.try_get("ref_id").ok()?;
-                let blake3: String = r.try_get("blake3").ok()?;
-                Some((ref_id, blake3))
+            .map(|r| {
+                Ok((
+                    r.try_get::<String, _>("ref_id")?,
+                    r.try_get::<String, _>("blake3")?,
+                ))
             })
-            .collect()
+            .collect::<Result<_, sqlx::Error>>()
+            .context("decode already-decrypted attachments")?
     };
 
     // Frames that would not decode: their records are missing from this

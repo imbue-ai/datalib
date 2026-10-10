@@ -123,7 +123,7 @@ impl RawDb {
             .with_context(|| format!("select {table}"))?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            let Some(payload) = row_payload(&r) else {
+            let Some(payload) = row_payload(&r)? else {
                 continue;
             };
             out.push(LoadedChild {

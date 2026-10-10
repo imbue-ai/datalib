@@ -292,15 +292,10 @@ impl AppRepo for AppStore {
         .fetch_all(&self.disk_stats_pool)
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;
-        Ok(rows
-            .iter()
-            .map(|r| DiskUsageRow {
-                path: r.try_get("path").unwrap_or_default(),
-                measured_at_utc: r.try_get("measured_at_utc").unwrap_or_default(),
-                tz_offset: r.try_get("tz_offset").ok(),
-                bytes: r.try_get("bytes").unwrap_or_default(),
-            })
-            .collect())
+        rows.iter()
+            .map(usage_row)
+            .collect::<Result<_, _>>()
+            .map_err(decode_error)
     }
 
     async fn disk_usage_between(
@@ -329,16 +324,12 @@ impl AppRepo for AppStore {
         .fetch_all(&self.disk_stats_pool)
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;
-        Ok(before
+        before
             .iter()
             .chain(&during)
-            .map(|r| DiskUsageRow {
-                path: r.try_get("path").unwrap_or_default(),
-                measured_at_utc: r.try_get("measured_at_utc").unwrap_or_default(),
-                tz_offset: r.try_get("tz_offset").ok(),
-                bytes: r.try_get("bytes").unwrap_or_default(),
-            })
-            .collect())
+            .map(usage_row)
+            .collect::<Result<_, _>>()
+            .map_err(decode_error)
     }
 
     async fn record_disk_free(&self, row: &DiskFreeRow) -> Result<(), RepoError> {
@@ -365,15 +356,10 @@ impl AppRepo for AppStore {
         .fetch_all(&self.disk_stats_pool)
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;
-        Ok(rows
-            .iter()
-            .map(|r| DiskFreeRow {
-                measured_at_utc: r.try_get("measured_at_utc").unwrap_or_default(),
-                tz_offset: r.try_get("tz_offset").ok(),
-                available_bytes: r.try_get("available_bytes").unwrap_or_default(),
-                total_bytes: r.try_get("total_bytes").unwrap_or_default(),
-            })
-            .collect())
+        rows.iter()
+            .map(disk_free_row)
+            .collect::<Result<_, _>>()
+            .map_err(decode_error)
     }
 
     async fn list_remote_allows(&self) -> Result<Vec<RemoteMediaAllowRow>, RepoError> {
@@ -384,7 +370,10 @@ impl AppRepo for AppStore {
         .fetch_all(&self.remote_media_pool)
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;
-        Ok(rows.iter().map(allow_row).collect())
+        rows.iter()
+            .map(allow_row)
+            .collect::<Result<_, _>>()
+            .map_err(decode_error)
     }
 
     async fn allow_remote(
@@ -407,7 +396,7 @@ impl AppRepo for AppStore {
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;
         if let Some(r) = existing {
-            return Ok(allow_row(&r));
+            return allow_row(&r).map_err(decode_error);
         }
         let (created_at_utc, tz_offset) =
             datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
@@ -463,7 +452,10 @@ impl AppRepo for AppStore {
         .fetch_optional(&self.remote_media_pool)
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;
-        Ok(row.as_ref().map(media_row))
+        row.as_ref()
+            .map(media_row)
+            .transpose()
+            .map_err(decode_error)
     }
 
     async fn list_remote_media(&self) -> Result<Vec<RemoteMediaRow>, RepoError> {
@@ -474,7 +466,10 @@ impl AppRepo for AppStore {
         .fetch_all(&self.remote_media_pool)
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;
-        Ok(rows.iter().map(media_row).collect())
+        rows.iter()
+            .map(media_row)
+            .collect::<Result<_, _>>()
+            .map_err(decode_error)
     }
 
     async fn record_remote_media(&self, row: RemoteMediaRow) -> Result<(), RepoError> {
@@ -503,25 +498,47 @@ impl AppRepo for AppStore {
     }
 }
 
-fn allow_row(r: &sqlx::sqlite::SqliteRow) -> RemoteMediaAllowRow {
-    RemoteMediaAllowRow {
-        allow_uuid: r.try_get("allow_uuid").unwrap_or_default(),
-        scope: r.try_get("scope").unwrap_or_default(),
-        key: r.try_get("key").unwrap_or_default(),
-        created_at_utc: r.try_get("created_at_utc").unwrap_or_default(),
-        tz_offset: r.try_get("tz_offset").ok(),
-    }
+fn decode_error(e: sqlx::Error) -> RepoError {
+    RepoError::Internal(format!("decode row: {e}"))
 }
 
-fn media_row(r: &sqlx::sqlite::SqliteRow) -> RemoteMediaRow {
-    RemoteMediaRow {
-        url: r.try_get("url").unwrap_or_default(),
-        sha256: r.try_get("sha256").unwrap_or_default(),
-        content_type: r.try_get("content_type").unwrap_or_default(),
-        byte_size: r.try_get("byte_size").unwrap_or_default(),
-        fetched_at_utc: r.try_get("fetched_at_utc").unwrap_or_default(),
-        tz_offset: r.try_get("tz_offset").ok(),
-    }
+fn usage_row(r: &sqlx::sqlite::SqliteRow) -> Result<DiskUsageRow, sqlx::Error> {
+    Ok(DiskUsageRow {
+        path: r.try_get("path")?,
+        measured_at_utc: r.try_get("measured_at_utc")?,
+        tz_offset: r.try_get("tz_offset")?,
+        bytes: r.try_get("bytes")?,
+    })
+}
+
+fn disk_free_row(r: &sqlx::sqlite::SqliteRow) -> Result<DiskFreeRow, sqlx::Error> {
+    Ok(DiskFreeRow {
+        measured_at_utc: r.try_get("measured_at_utc")?,
+        tz_offset: r.try_get("tz_offset")?,
+        available_bytes: r.try_get("available_bytes")?,
+        total_bytes: r.try_get("total_bytes")?,
+    })
+}
+
+fn allow_row(r: &sqlx::sqlite::SqliteRow) -> Result<RemoteMediaAllowRow, sqlx::Error> {
+    Ok(RemoteMediaAllowRow {
+        allow_uuid: r.try_get("allow_uuid")?,
+        scope: r.try_get("scope")?,
+        key: r.try_get("key")?,
+        created_at_utc: r.try_get("created_at_utc")?,
+        tz_offset: r.try_get("tz_offset")?,
+    })
+}
+
+fn media_row(r: &sqlx::sqlite::SqliteRow) -> Result<RemoteMediaRow, sqlx::Error> {
+    Ok(RemoteMediaRow {
+        url: r.try_get("url")?,
+        sha256: r.try_get("sha256")?,
+        content_type: r.try_get("content_type")?,
+        byte_size: r.try_get("byte_size")?,
+        fetched_at_utc: r.try_get("fetched_at_utc")?,
+        tz_offset: r.try_get("tz_offset")?,
+    })
 }
 
 /// Ask the linked libsqlite3 whether `dolt_commit` is a registered
@@ -659,6 +676,34 @@ mod tests {
             .map(|r| r.bytes)
             .collect();
         assert_eq!(root, vec![180, 100]);
+    }
+
+    /// A row stored without an offset reads back as `None`, not `Some("")`:
+    /// a bare `String` read of a NULL succeeds with `""` in sqlx.
+    #[tokio::test]
+    async fn a_null_tz_offset_reads_back_as_none() {
+        let td = tempfile::tempdir().unwrap();
+        let store = AppStore::open(td.path()).await.unwrap();
+        let mut stamped = sample(ROOT_PATH, "2026-09-02T10:00:05-07:00", 180);
+        stamped.tz_offset = Some("-07:00".into());
+        store
+            .record_disk_usage(&[sample(ROOT_PATH, "2026-09-02T10:00:00-07:00", 100), stamped])
+            .await
+            .unwrap();
+        let offsets: Vec<Option<String>> = store
+            .recent_disk_usage(10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.tz_offset)
+            .collect();
+        assert_eq!(offsets, vec![Some("-07:00".into()), None]);
+
+        let between = store
+            .disk_usage_between(ROOT_PATH, "2026-09-02T00:00:00", "2026-09-03T00:00:00")
+            .await
+            .unwrap();
+        assert_eq!(between[0].tz_offset, None);
     }
 
     /// A data root from before the stamps moved to `<x>_at_utc` +
