@@ -1,0 +1,35 @@
+[
+  {
+    "fbid": "170100000000201",
+    "timestamp": 12597624000,
+    "label_values": [
+      {
+        "label": "Text",
+        "value": "Tea, Earl Grey, hot. Evening in Ten Forward with the senior staff"
+      }
+    ],
+    "media": []
+  },
+  {
+    "fbid": "170100000000201",
+    "timestamp": 12597624013,
+    "label_values": [
+      {
+        "label": "Text",
+        "value": "Tea, Earl Grey, hot. \u00e2\u0098\u0095 Evening in Ten Forward with the senior staff."
+      }
+    ],
+    "media": []
+  },
+  {
+    "fbid": "170100000000202",
+    "timestamp": 12599500000,
+    "label_values": [
+      {
+        "label": "Text",
+        "value": "Away team to Risa. Bring the horga'hn, Number One."
+      }
+    ],
+    "media": []
+  }
+]

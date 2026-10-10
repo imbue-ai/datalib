@@ -26,6 +26,7 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:similar",
         "@datalib_crates//:tokio",
     ],
 )

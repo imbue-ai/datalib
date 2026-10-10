@@ -163,7 +163,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
-    let mut by_table: Tables = BTreeMap::new();
+    let mut read: BTreeMap<String, Vec<(String, Value)>> = BTreeMap::new();
     let export = ExportFiles::walk(&opts.input_path)?;
     let mut problems = export.walk_problems();
     // Chunks of one table share it (`album/0.json`, `album/1.json`), so a
@@ -185,7 +185,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
                     chunks.entry(table).or_default().push(file.clone());
                 }
                 for r in records {
-                    by_table.entry(r.table).or_default().insert(r.id, r.payload);
+                    read.entry(r.table).or_default().push((r.id, r.payload));
                 }
                 opts.progress
                     .set_message(&format!("{rel}: read ({} files)", summary.files));
@@ -200,6 +200,14 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
             }
         }
     }
+
+    let by_table: Tables = read
+        .into_iter()
+        .map(|(table, rows)| {
+            let rows = key_rows(&table, rows);
+            (table, rows)
+        })
+        .collect();
 
     // A table is split into chunks (`album/0.json`, `album/1.json`), and an
     // export unpacked only in part can hold some of them: absence from this
@@ -590,6 +598,41 @@ fn row_id(table: &str, record: &Value) -> String {
     {
         return fbid.to_string();
     }
+    content_id(table, record)
+}
+
+/// One table's rows by id. Facebook's `fbid` is the key where a record
+/// has one, but an `fbid` is not always one record's alone: where it
+/// names two that differ, each is keyed by its content instead, so
+/// neither overwrites the other. The same record read twice is one row.
+fn key_rows(table: &str, rows: Vec<(String, Value)>) -> BTreeMap<String, Value> {
+    let mut by_fbid: HashMap<String, HashSet<String>> = HashMap::new();
+    for (id, record) in &rows {
+        if is_fbid_key(id, record) {
+            by_fbid
+                .entry(id.clone())
+                .or_default()
+                .insert(record.to_string());
+        }
+    }
+    rows.into_iter()
+        .map(|(id, record)| {
+            let shared = is_fbid_key(&id, &record) && by_fbid.get(&id).is_some_and(|v| v.len() > 1);
+            let id = if shared {
+                content_id(table, &record)
+            } else {
+                id
+            };
+            (id, record)
+        })
+        .collect()
+}
+
+fn is_fbid_key(id: &str, record: &Value) -> bool {
+    record.get("fbid").and_then(Value::as_str) == Some(id)
+}
+
+fn content_id(table: &str, record: &Value) -> String {
     let recipe = format!("{table}\u{0}{record}");
     Uuid::new_v5(&facebook_ns(), recipe.as_bytes())
         .as_hyphenated()
@@ -652,6 +695,28 @@ mod tests {
         assert_eq!(a.len(), 36);
         assert_eq!(a, row_id("t", &json!({"timestamp": 1, "title": "a"})));
         assert_ne!(a, row_id("u", &json!({"timestamp": 1, "title": "a"})));
+    }
+
+    /// Two edit records of one post carried one `fbid`, and the second
+    /// overwrote the first: a version of the post was lost at ingest.
+    #[test]
+    fn an_fbid_that_names_two_records_keeps_both() {
+        let a = json!({"fbid": "9", "timestamp": 1, "text": "first"});
+        let b = json!({"fbid": "9", "timestamp": 2, "text": "second"});
+        let c = json!({"fbid": "8", "timestamp": 3});
+        let rows = key_rows(
+            "t",
+            vec![
+                ("9".into(), a.clone()),
+                ("9".into(), b.clone()),
+                ("8".into(), c.clone()),
+                ("8".into(), c.clone()),
+            ],
+        );
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert_eq!(rows.get("8"), Some(&c), "a lone fbid is still the key");
+        assert!(rows.values().any(|v| v == &a) && rows.values().any(|v| v == &b));
+        assert!(!rows.contains_key("9"));
     }
 
     #[test]

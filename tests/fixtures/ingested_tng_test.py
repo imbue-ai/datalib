@@ -185,6 +185,14 @@ FACEBOOK_DELETED_ACCOUNTS_TOGETHER = (
     "|participants|noted|3 deleted accounts among 7 participants; "
     "their messages cannot be told apart"
 )
+FACEBOOK_EDIT_OF_A_DELETED_POST = (
+    "290e595a-6488-5991-a8fc-8039410b070e"
+    "|info|parse|markdown"
+    "|00000000-0000-8709-9b9f-6daf23a20dfe"  # the post of its own it renders as
+    "|0b758cb8-cb00-8cdb-9093-e1e57b64491b"  # its one item, the last version
+    "|Text|noted|an edit of a post the export no longer has; rendered as a post "
+    "of its own"
+)
 PDF_THAT_WILL_NOT_IDENTIFY = (
     "7b765789-41e7-536c-9392-2facf510901a"
     "|error|fetch|entity"
@@ -218,6 +226,7 @@ EXPECTED_PROBLEMS = {
             FACEBOOK_CALL_DURATION_UNREAD,
             FACEBOOK_SENDER_WHO_LEFT,
             FACEBOOK_DELETED_ACCOUNTS_TOGETHER,
+            FACEBOOK_EDIT_OF_A_DELETED_POST,
             *FACEBOOK_UNREAD_LABELS,
         ]
     ),

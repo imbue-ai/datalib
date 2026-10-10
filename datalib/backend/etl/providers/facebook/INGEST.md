@@ -104,7 +104,10 @@ chunk belongs in the one table
 (`your_facebook_activity_posts_your_posts_check_ins_photos_and_videos`,
 `your_facebook_activity_posts_album`). Each record is one row: `id` is
 the record's `fbid` when it has one, else a uuidv5 over the table and
-the record's canonical JSON; `payload` is the record. `schema_raw.rs`
+the record's canonical JSON; `payload` is the record. An `fbid` is not
+always one record's alone — two saved versions of one post can share
+it — so where an `fbid` names records that differ, each is keyed by
+its content instead, and neither overwrites the other. `schema_raw.rs`
 names the tables render reads and pins each to the path it comes from.
 
 Messenger is the exception (`ingest/messenger.rs`): every conversation
@@ -191,7 +194,7 @@ them against the render cursor, then six feeds:
 |---|---|---|
 | posts | `…posts_your_posts_check_ins_photos_and_videos` + `…posts_on_other_pages_and_profiles` | post: the text, its media as attachments, a `📍 Place — address` line per check-in (the export lists a place twice, with and without its page URL; the one with the URL wins), a life event as a bold title and description, and `— with A, B` for tags |
 | albums | `…posts_album` | album: the description first, then every photo in creation order, captioned where the photo has one of its own |
-| comments | `…comments_and_reactions_comments` | year: the comment, with Facebook's sentence about it in italics beneath, and any photo attached |
+| comments | `…comments_and_reactions_comments` | year: the comment, with Facebook's sentence about it in italics beneath, any photo attached and any link |
 | reactions | `…comments_and_reactions_likes_and_reactions` | year: `👍 X liked Y's post.`, the URL as the header's `↗` |
 | friends | `connections_friends_your_friends` | friend, as a contact in one "Friends" group with a "Friends since" field, and their name as their handle |
 | Messenger | `messenger_threads` + `messenger_messages` | year of a conversation: each message with its photos, sticker, shared link (`🔗`) and reactions; an unsent one as a note. The project says which folder (`Messenger`, `Messenger · requests`, …) |
@@ -225,6 +228,30 @@ from one says `Facebook user (one of N deleted accounts here)` and has
 no handle: nothing in the export tells them apart.
 `docs/dev/contacts.md` has the handle's rules.
 
+### Edits
+
+`posts/edits_you_made_to_posts.json` and
+`comments_and_reactions/your_comment_edits.json` hold the versions a
+post or a comment was saved in — on a real export, the first at the
+moment it was posted and the last the text it has now — in the
+`label_values` shape, with the text under `Text` (a comment's also has
+`Caption` and `Content state`, empty on the account we have). Neither
+names the post or comment it is a version of. `edits.rs` ties each
+version to the most alike post or comment made no later than it
+(`similar`'s ratio at least 0.6), keeping versions that share an `fbid`
+together. On the page, the earlier versions fold into one
+"✎ Another version" just above the text they became; the version that
+is the text now is not shown twice. An edit no post or comment matches
+is of one the export no longer has: a post of its own, or a comment at
+its own time, with its last version shown and a note saying so. Every
+post (and the comments feed) reads every edit row, since a new edit
+may be any one's.
+
+A post's `update_timestamp` is not an edit: on a real export it is the
+post's own time on all but one post in sixty-three. A post on another
+page carries a `Last modified`, shown as `Edited <day>` when it is not
+the day it was posted.
+
 ### What render reports
 
 Facebook adds fields without notice, and a field render does not read
@@ -245,6 +272,7 @@ those:
 | `message`, `Noted` | info | a message with nothing to show; the sample lists its keys |
 | `participants`, `Noted` | info | several deleted accounts in one conversation |
 | `sender_name`, `Noted` | info | a sender the participants do not list, once per sender |
+| `Text`, `Noted` | info | an edit of a post or comment the export no longer has |
 
 Counting them over a real export says what to build next:
 

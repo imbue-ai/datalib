@@ -14,8 +14,9 @@ use datalib_etl_chat_common::render::render_all as chat_render_all;
 use datalib_etl_chat_common::types::NormalizedChat;
 use datalib_etl_contact_common::{render_all as contact_render_all, ContactDoc};
 use datalib_etl_facebook::ingest::schema_raw::{
-    ALBUMS_TABLE, COMMENTS_TABLE, FRIENDS_TABLE, MESSENGER_MESSAGES_TABLE, MESSENGER_THREADS_TABLE,
-    OTHER_POSTS_TABLE, POSTS_TABLE, PROFILE_TABLE, REACTIONS_TABLE,
+    ALBUMS_TABLE, COMMENTS_TABLE, COMMENT_EDITS_TABLE, FRIENDS_TABLE, MESSENGER_MESSAGES_TABLE,
+    MESSENGER_THREADS_TABLE, OTHER_POSTS_TABLE, POSTS_TABLE, POST_EDITS_TABLE, PROFILE_TABLE,
+    REACTIONS_TABLE,
 };
 use datalib_etl_facebook::ingest::{db_path_for, RawDb};
 use datalib_etl_facebook_config::FacebookRenderConfig;
@@ -116,6 +117,8 @@ const ALL_TABLES: &[&str] = &[
     PROFILE_TABLE,
     MESSENGER_THREADS_TABLE,
     MESSENGER_MESSAGES_TABLE,
+    POST_EDITS_TABLE,
+    COMMENT_EDITS_TABLE,
 ];
 
 /// Everything one pass reads off the store, built while it is open.
@@ -166,9 +169,15 @@ pub fn render_source(
             let rows = |t: &str| tables.get(t).map(Vec::as_slice).unwrap_or(&[]);
 
             let owner = Owner::from_profile(source.name, rows(PROFILE_TABLE));
-            let mut posts = build_posts(rows(POSTS_TABLE), rows(OTHER_POSTS_TABLE), &owner);
+            let mut posts = build_posts(
+                rows(POSTS_TABLE),
+                rows(OTHER_POSTS_TABLE),
+                rows(POST_EDITS_TABLE),
+                &owner,
+            );
             let mut albums = build_albums(rows(ALBUMS_TABLE), &owner);
-            let mut comments = build_comments(rows(COMMENTS_TABLE), &owner);
+            let mut comments =
+                build_comments(rows(COMMENTS_TABLE), rows(COMMENT_EDITS_TABLE), &owner);
             let mut reactions = build_reactions(rows(REACTIONS_TABLE), &owner);
             let mut conversations = build_conversations(
                 rows(MESSENGER_THREADS_TABLE),
@@ -178,14 +187,27 @@ pub fn render_source(
             let mut friends = build_friends(rows(FRIENDS_TABLE), &owner);
 
             let mut buckets = Buckets::new();
+            // Which post an edit is of is decided over every post and every
+            // edit, so where there are edits, a change to any of them can
+            // move a version — to another post, or to a document of its
+            // own no row of which changed — and every post renders again.
+            let edited = !rows(POST_EDITS_TABLE).is_empty()
+                || changed
+                    .as_ref()
+                    .is_some_and(|c| c.contains_key(POST_EDITS_TABLE));
+            let as_one: &[&str] = if edited {
+                &[POSTS_TABLE, OTHER_POSTS_TABLE, POST_EDITS_TABLE]
+            } else {
+                &[]
+            };
+            buckets.extend(narrow_chats(&mut posts, changed.as_ref(), range, as_one));
             for chats in [
-                &mut posts,
                 &mut albums,
                 &mut comments,
                 &mut reactions,
                 &mut conversations,
             ] {
-                buckets.extend(narrow_chats(chats, changed.as_ref(), range));
+                buckets.extend(narrow_chats(chats, changed.as_ref(), range, &[]));
             }
             buckets.extend(narrow_contacts(&mut friends, changed.as_ref(), range));
 
@@ -262,15 +284,21 @@ pub fn render_source(
 /// every chat a changed row maps to — and name each of those keys with
 /// nothing first, so a stale chat whose rows are gone loses its
 /// documents. `None` from either side renders everything.
+/// A change to a row of any `as_one` table renders every chat again:
+/// those tables decide something across all of them.
 fn narrow_chats(
     chats: &mut Vec<NormalizedChat>,
     changed: Option<&HashMap<String, HashSet<String>>>,
     range: RawRange<'_>,
+    as_one: &[&str],
 ) -> Buckets {
     let forward = changed.map(|changed| {
+        let all = as_one
+            .iter()
+            .any(|t| changed.get(*t).is_some_and(|ids| !ids.is_empty()));
         chats
             .iter()
-            .filter(|c| touched(&c.inputs, changed))
+            .filter(|c| all || touched(&c.inputs, changed))
             .map(|c| c.chat_uuid.clone())
             .collect::<HashSet<String>>()
     });

@@ -20,6 +20,8 @@ pub const KIND_PHOTO: &str = "photo";
 pub const KIND_FEED: &str = "feed";
 pub const KIND_FEED_YEAR: &str = "feed_year";
 pub const KIND_COMMENT: &str = "comment";
+pub const KIND_POST_VERSION: &str = "post_version";
+pub const KIND_COMMENT_VERSION: &str = "comment_version";
 pub const KIND_REACTION: &str = "reaction";
 pub const KIND_FRIEND: &str = "friend";
 pub const KIND_CONVERSATION: &str = "conversation";
@@ -79,6 +81,16 @@ pub fn feed_year(source_id: &str, name: &str, period_key: &str) -> Identity {
 
 pub fn comment(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
     IDS.mint(source_id, KIND_COMMENT, row_id.to_string(), date_ms)
+}
+
+/// A saved version of a post or a comment, by its edit record's row.
+pub fn version(
+    source_id: &str,
+    kind: &'static str,
+    row_id: &str,
+    date_ms: Option<i64>,
+) -> Identity {
+    IDS.mint(source_id, kind, row_id.to_string(), date_ms)
 }
 
 /// One reaction may arrive as two export rows; the item is keyed on
@@ -150,6 +162,8 @@ mod tests {
             comment("src", "r3", MS),
             reaction("src", &["r4", "r5"], MS),
             friend("src", "r6"),
+            version("src", KIND_POST_VERSION, "e1", MS),
+            version("src", KIND_COMMENT_VERSION, "e2", MS),
             conversation("src", "1000000001"),
             conversation_year("src", "1000000001", "2369"),
             message("src", "1000000001:12600000360000:0", MS),

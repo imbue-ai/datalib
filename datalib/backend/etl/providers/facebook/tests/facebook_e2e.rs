@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_facebook::ingest::schema_raw::{
-    ALBUMS_TABLE, COMMENTS_TABLE, FRIENDS_TABLE, MESSENGER_MESSAGES_TABLE, MESSENGER_THREADS_TABLE,
-    POSTS_TABLE, PROFILE_TABLE, REACTIONS_TABLE,
+    ALBUMS_TABLE, COMMENTS_TABLE, COMMENT_EDITS_TABLE, FRIENDS_TABLE, MESSENGER_MESSAGES_TABLE,
+    MESSENGER_THREADS_TABLE, POSTS_TABLE, POST_EDITS_TABLE, PROFILE_TABLE, REACTIONS_TABLE,
 };
 use datalib_etl_facebook::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_facebook_render::processor::{render_source, Source};
@@ -57,9 +57,10 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         .context("fetch")?;
         datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: facebook fetch").await?;
 
-        // 18 JSON files, seven of them Messenger conversations;
+        // 20 JSON files, seven of them Messenger conversations, two of
+        // them edits;
         // `no-data.txt` and the HTML are not files to us.
-        assert_eq!(summary.files, 18, "json files ingested");
+        assert_eq!(summary.files, 20, "json files ingested");
         assert_eq!(summary.parse_errors, 0);
         // Six PNGs (four posted, a Messenger photo and a sticker), each
         // stored once however many records point at it; the video the
@@ -74,6 +75,9 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert_eq!(rows(&db, REACTIONS_TABLE).await.len(), 4);
         assert_eq!(rows(&db, FRIENDS_TABLE).await.len(), 3);
         assert_eq!(rows(&db, PROFILE_TABLE).await.len(), 1);
+        // Two versions of one post share an fbid; both are kept.
+        assert_eq!(rows(&db, POST_EDITS_TABLE).await.len(), 3);
+        assert_eq!(rows(&db, COMMENT_EDITS_TABLE).await.len(), 2);
         // A file nothing renders is ingested all the same, under its
         // path's slug with the chunk-index rule leaving `7_days` alone.
         assert_eq!(
@@ -138,8 +142,8 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
 
         // 5 posts (4 timeline + 1 on another page) + 1 album + a year of
         // comments + a year of reactions + 3 friends + a year each of 7
-        // Messenger conversations.
-        assert_eq!(docs.len(), 5 + 1 + 1 + 1 + 3 + 7, "documents rendered");
+        // Messenger conversations + the edit of a post deleted since.
+        assert_eq!(docs.len(), 5 + 1 + 1 + 1 + 3 + 7 + 1, "documents rendered");
         let all_rows: Vec<_> = docs.iter().flat_map(|d| d.rows.iter()).collect();
         assert!(
             all_rows
@@ -355,6 +359,8 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert_eq!(
             found,
             [
+                "info Text - = an edit of a post the export no longer has; rendered as a \
+                 post of its own",
                 "info participants - = 3 deleted accounts among 7 participants; \
                  their messages cannot be told apart",
                 "info sender_name - = a sender the conversation's participants do not \
@@ -369,6 +375,35 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .find(|d| fs::read_to_string(&d.md_path).is_ok_and(|md| md.contains("Edited 2369-")))
             .map(|d| d.md_path.clone());
         assert!(other_page.is_some(), "the edited post carries its note");
+
+        // Edits: an earlier version folds in above the text it became;
+        // the version that is the text now is not shown twice.
+        let page = fs::read_to_string(&check_in.md_path)?;
+        // Past the front matter and the heading, which repeat the title.
+        let md = page.split_once("</h1>").map_or(page.as_str(), |(_, body)| body);
+        let original = "Evening in Ten Forward with the senior staff\n";
+        assert!(md.contains("Another version"), "{md}");
+        assert!(md.contains(original), "the first version: {md}");
+        assert!(md.find(original) < md.find("senior staff."), "above it: {md}");
+        assert_eq!(md.matches("senior staff.").count(), 1, "{md}");
+        assert!(check_in
+            .rows
+            .iter()
+            .any(|r| r.kind == "Facebook Post Version"));
+        let gone = docs
+            .iter()
+            .find(|d| {
+                fs::read_to_string(&d.md_path).is_ok_and(|md| md.contains("Away team to Risa"))
+            })
+            .expect("the edit of a deleted post is a post of its own");
+        let md = fs::read_to_string(&gone.md_path)?;
+        assert!(md.contains("a post the export no longer has"), "{md}");
+        let md = fs::read_to_string(&year.md_path)?;
+        assert!(
+            md.find("Enjoy the chair, Number One.") < md.find("Enjoy the chair, Will."),
+            "a comment's first version above it: {md}"
+        );
+        assert_eq!(md.matches("Enjoy the chair, Will.").count(), 1, "{md}");
 
         // Every document declares the rows it read, so a change to any of
         // them renders it again; every one includes the profile row.

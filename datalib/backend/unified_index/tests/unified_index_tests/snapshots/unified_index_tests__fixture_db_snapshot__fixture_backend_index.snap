@@ -72,7 +72,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-80d5-a95b-fe11f630248a/all.md",
       "modified_at": "2369-03-16T09:30:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Two views of the bridge before alpha shift."
     },
@@ -240,7 +240,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-84d8-9001-d3718b01d5e1/2369.md",
       "modified_at": "2369-04-12T08:34:20.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Facebook user · 1000000003"
     },
@@ -360,7 +360,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-82fd-b937-8667bd212330/all.md",
       "modified_at": "2369-03-20T12:00:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Jean-Luc Picard added a life event from January 5, 2364: Took command of the En…"
     },
@@ -408,7 +408,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8c82-8a32-5b80abc87553/2369.md",
       "modified_at": "2369-04-12T08:08:00.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "William Riker"
     },
@@ -432,7 +432,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8cc5-baf1-845294bad07e/2369.md",
       "modified_at": "2369-04-02T08:05:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Reactions"
     },
@@ -665,6 +665,18 @@ expression: snapshot
       "title": "Mission Briefing — Sector 001"
     },
     {
+      "bucket_key": "00000000-0000-8709-9b9f-6daf23a20dfe",
+      "created_at": "2369-04-06T13:06:40+00:00",
+      "kind": "chat",
+      "markdown_uuid": "00000000-0000-8709-9b9f-6daf23a20dfe",
+      "md_path": "facebook/render_markdown/00000000-0000-8709-9b9f-6daf23a20dfe/all.md",
+      "modified_at": "2369-04-06T13:06:40+00:00",
+      "provider": "facebook",
+      "renderer_version": "rust-v1.7",
+      "source_id": "facebook",
+      "title": "Away team to Risa. Bring the horga'hn, Number One."
+    },
+    {
       "bucket_key": "00000000-0000-872d-a4f4-3355175938a9",
       "created_at": "2026-01-15T20:00:00-08:00",
       "kind": "chat",
@@ -684,7 +696,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8768-85df-b763ceaebe85/index.md",
       "modified_at": null,
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Beverly Crusher"
     },
@@ -816,7 +828,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-840e-933b-7e3c0a96ee52/2369.md",
       "modified_at": "2369-04-12T09:23:20.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Lwaxana Troi"
     },
@@ -1032,7 +1044,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8a3c-a66b-d2616975dbfc/index.md",
       "modified_at": null,
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "William Riker"
     },
@@ -1068,7 +1080,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8a95-8e69-5d9ef0dcdf0c/index.md",
       "modified_at": null,
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Data"
     },
@@ -1164,7 +1176,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8ba6-97c6-f48500bf8e47/all.md",
       "modified_at": "2369-03-18T14:00:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Happy birthday, Number One. The bridge is yours for the day."
     },
@@ -1176,7 +1188,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8c30-82a5-bc6ccada3dd3/2369.md",
       "modified_at": "2369-04-12T09:41:00.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Deanna Troi"
     },
@@ -1284,7 +1296,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8ef0-a5ad-33a9d1bb3c0b/2369.md",
       "modified_at": "2369-04-12T08:56:00.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Ten Forward"
     },
@@ -1452,7 +1464,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8d5b-9ccc-4069d9d92992/all.md",
       "modified_at": "2369-04-01T20:52:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Ten Forward Nights"
     },
@@ -1524,7 +1536,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8dca-8614-69a1a3d92c28/all.md",
       "modified_at": "2369-03-15T20:00:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff."
     },
@@ -1536,7 +1548,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8e1c-8c2e-c30f42ab6c8b/all.md",
       "modified_at": "2369-04-01T21:00:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Ten Forward Nights"
     },
@@ -1548,7 +1560,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8b03-b202-0ecc96ba797c/2369.md",
       "modified_at": "2369-04-02T08:00:00+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Comments"
     },
@@ -1560,7 +1572,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-84e6-9994-8925c3e28d23/2369.md",
       "modified_at": "2369-04-12T08:17:40.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Facebook user · 1000000002"
     },
@@ -1596,7 +1608,7 @@ expression: snapshot
       "md_path": "facebook/render_markdown/00000000-0000-8f0b-a18a-78e2d79f491a/2369.md",
       "modified_at": "2369-04-12T09:06:40.000+00:00",
       "provider": "facebook",
-      "renderer_version": "rust-v1.6",
+      "renderer_version": "rust-v1.7",
       "source_id": "facebook",
       "title": "Facebook user · 1000000005"
     },
@@ -1765,7 +1777,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=154 markdowns_read=154 markdowns_removed=3 rows_inserted=739"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=155 markdowns_read=155 markdowns_removed=3 rows_inserted=745"
     }
   ],
   "grid_rows": [
@@ -3298,6 +3310,36 @@ expression: snapshot
       "upstream_entity_kind": "thread",
       "upstream_id": "1853466712473707184",
       "uuid": "00000000-0000-8708-9f53-15db76337ff7"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": "Jean-Luc Picard",
+      "byte_size": 112,
+      "channel": "Away team to Risa. Bring the horga'hn, Number One.",
+      "content_hash": "345611e850e1afc0",
+      "conversation_name": "Away team to Risa. Bring the horga'hn, Number One.",
+      "conversation_uuid": "00000000-0000-8709-9b9f-6daf23a20dfe",
+      "created_at": "2369-04-06T13:06:40+00:00",
+      "entire_chat": "/chat/00000000-0000-8709-9b9f-6daf23a20dfe",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Facebook Post",
+      "markdown_uuid": "00000000-0000-8709-9b9f-6daf23a20dfe",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 109,
+      "project": null,
+      "provider": "facebook",
+      "qmd_path": "facebook/render_markdown/00000000-0000-8709-9b9f-6daf23a20dfe/all.md",
+      "source_label": "Facebook",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "post",
+      "upstream_id": "170100000000202",
+      "uuid": "00000000-0000-8709-9b9f-6daf23a20dfe"
     },
     {
       "account": null,
@@ -5372,7 +5414,7 @@ expression: snapshot
     {
       "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
-      "byte_size": 178,
+      "byte_size": 243,
       "channel": "Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.",
       "content_hash": "6030e9b4c33a2354",
       "conversation_name": "Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.",
@@ -5380,7 +5422,7 @@ expression: snapshot
       "created_at": "2369-03-15T20:00:00+00:00",
       "entire_chat": "/chat/00000000-0000-8dca-8614-69a1a3d92c28",
       "git_sha": null,
-      "item_count": 1,
+      "item_count": 2,
       "kind": "Facebook Post",
       "markdown_uuid": "00000000-0000-8dca-8614-69a1a3d92c28",
       "message_index": null,
@@ -5432,7 +5474,7 @@ expression: snapshot
     {
       "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
-      "byte_size": 244,
+      "byte_size": 272,
       "channel": "Comments",
       "content_hash": "bbfe0b86e4f92ac5",
       "conversation_name": "Comments",
@@ -5440,7 +5482,7 @@ expression: snapshot
       "created_at": "2369-03-16T10:00:00+00:00",
       "entire_chat": "/chat/00000000-0000-8e1c-a468-12421c1778c4",
       "git_sha": null,
-      "item_count": 3,
+      "item_count": 4,
       "kind": "Facebook Comments",
       "markdown_uuid": "00000000-0000-8e1c-a468-12421c1778c4",
       "message_index": null,
@@ -10202,6 +10244,36 @@ expression: snapshot
     {
       "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
+      "byte_size": 65,
+      "channel": "Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.",
+      "content_hash": "d5a42b2a5fe103fe",
+      "conversation_name": "Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.",
+      "conversation_uuid": "00000000-0000-8dca-8614-69a1a3d92c28",
+      "created_at": "2369-03-15T20:00:00+00:00",
+      "entire_chat": "/chat/00000000-0000-8dca-8614-69a1a3d92c28",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Facebook Post Version",
+      "markdown_uuid": "00000000-0000-8dca-8614-69a1a3d92c28",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 65,
+      "project": null,
+      "provider": "facebook",
+      "qmd_path": "facebook/render_markdown/00000000-0000-8dca-8614-69a1a3d92c28/all.md",
+      "source_label": "Facebook",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "post_version",
+      "upstream_id": "749a45d3-4f01-522a-9b8a-5f17ff8b8be8",
+      "uuid": "0b751ce7-4e00-813b-a3e3-ef94b9216c94"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": "Jean-Luc Picard",
       "byte_size": 178,
       "channel": "Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.",
       "content_hash": "6030e9b4c33a2354",
@@ -10213,7 +10285,7 @@ expression: snapshot
       "item_count": 1,
       "kind": "Facebook Post Message",
       "markdown_uuid": "00000000-0000-8dca-8614-69a1a3d92c28",
-      "message_index": 0,
+      "message_index": 1,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
       "org_name": null,
@@ -10352,6 +10424,36 @@ expression: snapshot
     {
       "account": "picard@enterprise.starfleet",
       "author": "Jean-Luc Picard",
+      "byte_size": 28,
+      "channel": "Comments",
+      "content_hash": "de2852e1e38f4555",
+      "conversation_name": "Comments",
+      "conversation_uuid": "00000000-0000-8b03-b202-0ecc96ba797c",
+      "created_at": "2369-03-18T15:00:00+00:00",
+      "entire_chat": "/chat/00000000-0000-8e1c-a468-12421c1778c4",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Facebook Comment Version",
+      "markdown_uuid": "00000000-0000-8e1c-a468-12421c1778c4",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 28,
+      "project": null,
+      "provider": "facebook",
+      "qmd_path": "facebook/render_markdown/00000000-0000-8b03-b202-0ecc96ba797c/2369.md",
+      "source_label": "Facebook",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "comment_version",
+      "upstream_id": "170100000000301",
+      "uuid": "0b752b47-b980-89c3-8b3d-65ba6f7c2be4"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": "Jean-Luc Picard",
       "byte_size": 76,
       "channel": "Comments",
       "content_hash": "4596df3258ff7358",
@@ -10363,7 +10465,7 @@ expression: snapshot
       "item_count": 1,
       "kind": "Facebook Comment",
       "markdown_uuid": "00000000-0000-8e1c-a468-12421c1778c4",
-      "message_index": 1,
+      "message_index": 2,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
       "org_name": null,
@@ -10543,7 +10645,7 @@ expression: snapshot
       "item_count": 1,
       "kind": "Facebook Comment",
       "markdown_uuid": "00000000-0000-8e1c-a468-12421c1778c4",
-      "message_index": 2,
+      "message_index": 3,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
       "org_name": null,
@@ -10588,6 +10690,36 @@ expression: snapshot
       "upstream_entity_kind": "reaction",
       "upstream_id": "1670f76d-00d9-56d4-9eaf-1623117839a9#500000000000002",
       "uuid": "0b75770b-2be0-8c1b-84b2-0eacd016df5e"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": "Jean-Luc Picard",
+      "byte_size": 112,
+      "channel": "Away team to Risa. Bring the horga'hn, Number One.",
+      "content_hash": "345611e850e1afc0",
+      "conversation_name": "Away team to Risa. Bring the horga'hn, Number One.",
+      "conversation_uuid": "00000000-0000-8709-9b9f-6daf23a20dfe",
+      "created_at": "2369-04-06T13:06:40+00:00",
+      "entire_chat": "/chat/00000000-0000-8709-9b9f-6daf23a20dfe",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "Facebook Post Version",
+      "markdown_uuid": "00000000-0000-8709-9b9f-6daf23a20dfe",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 109,
+      "project": null,
+      "provider": "facebook",
+      "qmd_path": "facebook/render_markdown/00000000-0000-8709-9b9f-6daf23a20dfe/all.md",
+      "source_label": "Facebook",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "post_version",
+      "upstream_id": "170100000000202",
+      "uuid": "0b758cb8-cb00-8cdb-9093-e1e57b64491b"
     },
     {
       "account": "data@enterprise.starfleet.test",
@@ -16185,15 +16317,15 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:bf3b35f952fb6ff3b8b1852e62122e98bed70b322966670a3c53f43b0f2a082f",
-      "rows": 165,
+      "members_sha": "sha256:be622c464bf3ae00c8f282db5932972d8947e205007e97f2865bb4e73261f4f3",
+      "rows": 167,
       "source": ""
     }
   ],
   "summary": {
-    "documents_count": 146,
+    "documents_count": 147,
     "dolt_log_count": 3,
-    "grid_rows_count": 480,
-    "storage_rows_count": 222
+    "grid_rows_count": 484,
+    "storage_rows_count": 224
   }
 }

@@ -20,6 +20,9 @@ pub const REACTIONS_TABLE: &str =
     "your_facebook_activity_comments_and_reactions_likes_and_reactions";
 pub const FRIENDS_TABLE: &str = "connections_friends_your_friends";
 pub const PROFILE_TABLE: &str = "personal_information_profile_information_profile_information";
+pub const POST_EDITS_TABLE: &str = "your_facebook_activity_posts_edits_you_made_to_posts";
+pub const COMMENT_EDITS_TABLE: &str =
+    "your_facebook_activity_comments_and_reactions_your_comment_edits";
 
 /// One row per Messenger conversation, keyed by its id; and one per
 /// message, keyed `<thread id>:<timestamp_ms>:<n>`. No export path names
@@ -120,6 +123,16 @@ mod tests {
         assert_eq!(
             canonical_table("connections/friends/your_friends.json"),
             FRIENDS_TABLE
+        );
+        assert_eq!(
+            canonical_table("your_facebook_activity/posts/edits_you_made_to_posts.json"),
+            POST_EDITS_TABLE
+        );
+        assert_eq!(
+            canonical_table(
+                "your_facebook_activity/comments_and_reactions/your_comment_edits.json"
+            ),
+            COMMENT_EDITS_TABLE
         );
         assert_eq!(
             canonical_table("personal_information/profile_information/profile_information.json"),
