@@ -182,6 +182,16 @@ A grid draws a chip from an `identity` typed cell
   `phone`, else any handle `source_contact_handles` holds for the
   contact). An identity cell whose `id` is no handle is drawn as plain
   text: a group of contacts, a contact with no handle at all.
+- **Several people**: an `identities` cell holds a list, each drawn as
+  above. The search grid's Subject column is one (`subject_ref`, built
+  by `columns.rs::subject_identities`): a contact's own row is its
+  Contact chip, a conversation named by its people is a chip for each
+  of them, and anything else is its conversation's name. Who a
+  conversation is named after is the provider's to say
+  (`NormalizedChat::named_after`: a DM's other party, an untitled
+  group's members); chat-common writes them as `subject` terms on the
+  document's row, and the applet reads them beside the row with the name
+  this conversation knows each by, most active first.
 - **A group or a step**: the cell's `entity` is the URI, *beside* a
   bare `id`. The id stays bare because other code keys on it: the
   document view stores a source's "always load images" setting under
@@ -190,8 +200,10 @@ A grid draws a chip from an `identity` typed cell
   config declares).
 
 `typedColumns.ts` draws such a cell through `chipCell` or `entityCell`
-when given its `chips` option, and `GridCard` redraws the Author and
-Source columns when `people` or `entities` says an answer changed. The
+when given its `chips` option, and `GridCard` redraws the Author,
+Contact, Subject and Source columns when `people` or `entities` says an
+answer changed. A right-click acts on the chip it landed on, so each
+chip in a cell of several has its own menu. The
 run log draws its Group and Step columns as chips the same way
 (`RunLogPanel.ce.vue`), and `TableGrid` takes the option too, as the
 contacts app's table does (`ContactsCard.ce.vue`). `tableGrid.css` keeps
