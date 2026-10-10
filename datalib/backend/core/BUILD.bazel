@@ -17,6 +17,7 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:thiserror",
+        "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
     ],
 )

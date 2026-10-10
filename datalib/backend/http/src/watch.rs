@@ -1135,7 +1135,8 @@ mod tests {
         let root = Path::new("/data");
         for quiet in [
             "system/feedback.doltlite_db",
-            "system/usage.doltlite_db",
+            "system/disk_stats.sqlite",
+            "system/disk_stats.sqlite-journal",
             "system/api-token",
             "system/supervisor.sqlite",
             "system/supervisor.sqlite-wal",
@@ -1510,10 +1511,10 @@ mod tests {
     /// The control for the filter, and the reason `classify` is not
     /// simply "anything under `system/`".
     #[tokio::test]
-    async fn writes_to_the_usage_store_are_not_reported() {
+    async fn writes_to_the_disk_stats_store_are_not_reported() {
         let td = tempfile::tempdir().unwrap();
         let (mut rx, feed) = watching(td.path()).await;
-        let usage = td.path().join("system/usage.doltlite_db");
+        let usage = td.path().join("system/disk_stats.sqlite");
         for n in 0..20 {
             std::fs::write(&usage, format!("row {n}")).unwrap();
             feed.moved(&usage);

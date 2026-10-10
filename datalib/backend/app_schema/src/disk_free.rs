@@ -1,6 +1,5 @@
 // Free-space timeseries: how much the data root's disk had left, sampled
-// over time. Lives in the usage store beside `disk_usage`, and like it is
-// never committed: the rows are the history.
+// over time. Lives in the disk-stats store beside `disk_usage`.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

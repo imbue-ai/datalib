@@ -2,7 +2,7 @@
 //!
 //! One background task walks the data root and keeps the newest measurement
 //! of every tree, plus a short window of samples for the sparklines. The same
-//! samples are appended to `system/usage.doltlite_db`, which nothing prunes.
+//! samples are appended to `system/disk_stats.sqlite`, which nothing prunes.
 //!
 //! **It walks only while a run is in flight, and has no timer.** Nothing else
 //! writes the data root, so between runs there is nothing to find, and an

@@ -15,6 +15,8 @@ pub const M_COUNTS: &str = "client.counts";
 pub const M_BOOKMARKS: &str = "bookmarks.list";
 /// Also the web client's own: "Saved for later".
 pub const M_SAVED: &str = "saved.list";
+/// Answers only a token that may search, which a browser session's is.
+pub const M_SEARCH: &str = "search.messages";
 
 pub fn items_in_response(
     method: &str,

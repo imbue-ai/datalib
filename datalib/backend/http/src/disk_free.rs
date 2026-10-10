@@ -4,8 +4,8 @@
 //! Unlike the root's size (`usage.rs`), this is sampled on a timer whether
 //! or not a run is going: every process on the volume moves it, nothing
 //! announces that, and a look is one `statvfs`, not a walk. Each recorded
-//! sample is appended to the usage store's `disk_free` table, which seeds
-//! the line again after a restart.
+//! sample is appended to the `disk_free` table of
+//! `system/disk_stats.sqlite`, which seeds the line again after a restart.
 //!
 //! The loop holds every step while the disk is under the config's
 //! `[disk_space]` floor (`datalib_dag::disk_space`); this module only
