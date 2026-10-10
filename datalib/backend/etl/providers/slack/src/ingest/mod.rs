@@ -20,7 +20,7 @@ use tracing::{info, info_span, instrument, warn, Instrument};
 use api::{call_slack, SlackCall, SlackError};
 use async_trait::async_trait;
 use datalib_etl::bulk::BulkUpsertable;
-use datalib_etl::download_problems::{DownloadProblem, RunProblem};
+use datalib_etl::download_problems::{DownloadProblem, RunProblem, SilentEntry};
 use datalib_etl::events;
 use datalib_etl::progress::RunBar;
 use datalib_etl::raw_store::Sealer;
@@ -1356,6 +1356,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             sealer: opts.sealer.as_ref(),
             blake3_by_file: &blake3_by_file,
         };
+        let mut walked = 0usize;
         for (cid, name) in &targets {
             // Asked to stop: end here rather than start a channel whose
             // first request the transport would refuse.
@@ -1378,8 +1379,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             bar.did(1);
             // A channel that failed costs only itself: what it did not
             // cover or fetch is still owed, by the store's own account.
-            if let Err(e) = result {
-                found.push(listing_problem(&format!("{M_HISTORY} {name}"), &e));
+            match result {
+                Ok(()) => walked += 1,
+                Err(e) => found.push(listing_problem(&format!("{M_HISTORY} {name}"), &e)),
             }
             let written = (totals.messages + totals.replies + totals.pruned) as u64;
             grand.messages += totals.messages;
@@ -1393,6 +1395,19 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             }
         }
         bar.finish();
+        // Every channel answering with nothing is a success to Slack, so
+        // nothing else would say the mirror is empty.
+        if walked > 0 && !opts.control.stop.requested() {
+            let held = db.count_messages().await?;
+            found.silent((held == 0).then(|| SilentEntry {
+                name: "channels".to_string(),
+                detail: format!(
+                    "{walked} channel(s) walked and none holds a message since {}. \
+                     If this workspace has messages, check `since` and `channels`.",
+                    opts.since
+                ),
+            }));
+        }
         Ok::<(), anyhow::Error>(())
     };
 
