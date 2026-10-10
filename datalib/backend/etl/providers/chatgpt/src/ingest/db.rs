@@ -13,7 +13,7 @@ use sqlx::{Row, Sqlite, Transaction};
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
-use datalib_etl::doltlite_raw::WirePayload;
+use datalib_etl::doltlite_raw::{self as dr, WirePayload};
 use datalib_etl_web::owed::Listed;
 
 use super::schema_raw::{
@@ -32,7 +32,10 @@ pub struct Conversation {
     pub title: Option<String>,
     /// The detail's `update_time`, JSON-encoded as the row keeps it.
     pub update_time: Option<String>,
+    /// Without the fields `CONVERSATION_VOLATILE_PATHS` names.
     pub payload: String,
+    /// Those fields, for the sidecar.
+    pub volatile: Option<Value>,
     pub files: Vec<FileRef>,
 }
 
@@ -158,6 +161,24 @@ impl RawDb {
             update_time: c.update_time.clone(),
         };
         bulk_upsert_entity_in_tx(tx, &[row]).await?;
+        // The sidecar row may not exist yet: the loop records the fetch
+        // after this. A copy with nothing volatile clears the last one's.
+        let volatile = c
+            .volatile
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .context("serialize a conversation's volatile fields")?;
+        sqlx::query(
+            "INSERT INTO conversations_bookkeeping (id, attempt_count, volatile_payload) \
+             VALUES (?, 0, jsonb(?)) \
+             ON CONFLICT(id) DO UPDATE SET volatile_payload = excluded.volatile_payload",
+        )
+        .bind(&c.id)
+        .bind(volatile)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("store the volatile fields of {}", c.id))?;
         let mut keep: HashSet<String> = HashSet::new();
         for f in &c.files {
             let id = ConversationAttachmentRow::pk_recipe(&c.id, &f.id);
@@ -233,7 +254,8 @@ impl RawDb {
 
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
         let rows = sqlx::query(
-            "SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc
+            "SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc,
+                    json(b.volatile_payload) AS volatile
              FROM conversations c
              LEFT JOIN conversations_bookkeeping b ON b.id = c.id
              WHERE c.payload IS NOT NULL
@@ -255,9 +277,18 @@ impl RawDb {
             let Ok(payload_v) = serde_json::from_str::<Value>(&payload) else {
                 continue;
             };
+            let volatile: Option<Value> = r
+                .try_get::<Option<String>, _>("volatile")
+                .context("conversations volatile_payload")?
+                .map(|v| serde_json::from_str(&v))
+                .transpose()
+                .context("parse conversations volatile_payload")?;
             out.push(LoadedConversation {
                 id,
-                payload: payload_v,
+                payload: match &volatile {
+                    Some(v) => dr::overlay(&payload_v, v),
+                    None => payload_v,
+                },
                 fetched_at_utc,
             });
         }
@@ -344,6 +375,7 @@ mod tests {
             title: Some(id.into()),
             update_time: Some("1.0".into()),
             payload: json!({"id": id, "mapping": {}}).to_string(),
+            volatile: None,
             files: files
                 .iter()
                 .map(|f| FileRef {
