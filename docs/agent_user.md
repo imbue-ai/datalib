@@ -50,7 +50,7 @@ write the one index file under `unified_index/qmd_aggregator/`):
     ├── api-token                   # this process's bearer token
     ├── feedback.doltlite_db        # filed feedback (nothing regenerates it)
     ├── remote_media.doltlite_db    # remote media a person let a document load
-    └── usage.doltlite_db           # bytes-on-disk timeseries
+    └── disk_stats.sqlite           # bytes on disk and free space, over time (plain SQLite)
 ```
 
 The split is by writer: `unified_index/` is produced by the pipeline

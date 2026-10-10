@@ -43,12 +43,14 @@ pub const MEDIA_DIR: &str = "media";
 /// different writer from every other store and, unlike the indexes, it
 /// cannot be regenerated.
 pub const FEEDBACK_DB: &str = "feedback.doltlite_db";
-/// The bytes-on-disk timeseries, relative to `system/`. Its own file
-/// for the reason every store here has one: doltlite's working set is
-/// per file and branch, so a sample landing between two feedback rows
-/// would be swept into whichever commit came next. Nothing commits this one at
-/// all — the rows are the history.
-pub const USAGE_DB: &str = "usage.doltlite_db";
+/// The disk timeseries — bytes under each tree of the root, and the free
+/// space on its disk — relative to `system/`. Plain SQLite: nothing ever
+/// committed it, so doltlite's history bought it nothing, and a stock
+/// `sqlite3` reads it.
+pub const DISK_STATS_DB: &str = "disk_stats.sqlite";
+/// Where [`DISK_STATS_DB`]'s rows lived before it, as doltlite. The next
+/// open copies them over and removes it (`datalib_core::app_store`).
+pub const LEGACY_USAGE_DB: &str = "usage.doltlite_db";
 pub const REMOTE_MEDIA_DB: &str = "remote_media.doltlite_db";
 /// The download CAS: one file per fetched URL, named by its sha256.
 pub const REMOTE_MEDIA_DIR: &str = "remote_media";
@@ -126,8 +128,12 @@ pub fn feedback_db(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(FEEDBACK_DB)
 }
 
-pub fn usage_db(data_root: &Path) -> PathBuf {
-    system_dir(data_root).join(USAGE_DB)
+pub fn disk_stats_db(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(DISK_STATS_DB)
+}
+
+pub fn legacy_usage_db(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(LEGACY_USAGE_DB)
 }
 
 pub fn remote_media_db(data_root: &Path) -> PathBuf {
