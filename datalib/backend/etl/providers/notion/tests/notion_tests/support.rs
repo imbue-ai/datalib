@@ -6,7 +6,8 @@ use std::path::Path;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_notion::ingest::official::{BASE, PAGE_SIZE};
 use datalib_etl_notion::ingest::{fetch, FetchOptions, FetchSummary, RawDb};
-use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
 
@@ -135,9 +136,8 @@ pub async fn run_with(
     store: &Path,
     adjust: impl FnOnce(FetchOptions) -> FetchOptions,
 ) -> anyhow::Result<FetchSummary> {
-    std::env::set_var(PLAYBACK_ENV, tape);
     let db = RawDb::open(store).await.unwrap();
-    let summary = fetch(adjust(FetchOptions::new(db.clone()))).await;
+    let summary = playback::scope(tape, fetch(adjust(FetchOptions::new(db.clone())))).await;
     if summary.is_ok() {
         db.commit_all("test").await.unwrap();
     }

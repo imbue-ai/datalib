@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_claude::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_claude::synthesize::{ClaudeSynth, BASE, DETAIL_QUERY};
-use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
+use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
 use serde_json::{json, Value};
@@ -143,7 +144,6 @@ impl Account {
     }
 
     async fn run(&self, tweak: impl FnOnce(&mut FetchOptions)) -> anyhow::Result<FetchSummary> {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
         let control = datalib_etl::control::DownloadControl::default();
         // One failure is the give-up: a 429 ends as a rate limit at once.
@@ -161,10 +161,9 @@ impl Account {
             ..FetchOptions::new(db.clone())
         };
         tweak(&mut o);
-        let s = retry::scope(guard, fetch(o)).await;
+        let s = playback::scope(&self.playback, retry::scope(guard, fetch(o))).await;
         db.commit_all("test").await.unwrap();
         db.close().await;
-        std::env::remove_var(PLAYBACK_ENV);
         s
     }
 
@@ -208,26 +207,9 @@ fn no_keys() -> Vec<String> {
     Vec::new()
 }
 
-/// One test, several scenarios, run in sequence: `PLAYBACK_ENV` is
-/// process-global, so as separate tests they would race.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn part_of_a_sync_that_fails_is_a_problem_row() {
-    an_org_whose_listing_fails_costs_only_that_org().await;
-    project_listings_that_fail_are_rows_until_they_list().await;
-    a_named_conversation_that_fails_costs_only_itself().await;
-    an_account_that_will_not_load_is_a_phase_row().await;
-    a_failed_attachment_says_why_and_lands_on_a_later_run().await;
-    a_stub_no_listing_names_goes_with_its_problem().await;
-    a_listed_conversation_whose_detail_is_missing_keeps_what_is_held().await;
-    a_refused_org_holds_back_the_stub_prune_and_all_refused_fails().await;
-    a_project_whose_docs_failed_is_asked_again().await;
-    a_file_claude_no_longer_has_is_not_asked_for_again().await;
-    a_rate_limit_ends_the_walk_with_one_row().await;
-    an_org_without_chat_is_not_walked_and_keeps_what_it_held().await;
-}
-
 /// A conversation listing that failed other than 403 used to fail the
 /// whole step; a refused org's row is reported beside it, once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_org_whose_listing_fails_costs_only_that_org() {
     let acct = Account::new(true);
     let convs = [
@@ -266,6 +248,7 @@ async fn an_org_whose_listing_fails_costs_only_that_org() {
 
 /// Every project listing that failed was a `warn!`, and a configured
 /// project uuid nothing had was another.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn project_listings_that_fail_are_rows_until_they_list() {
     let acct = Account::new(true);
     let convs = [conv("c-a1", ENTERPRISE), conv("c-b1", DEFIANT)];
@@ -323,6 +306,7 @@ async fn project_listings_that_fail_are_rows_until_they_list() {
 
 /// One named conversation that failed used to fail the step, and its
 /// `config:` rows outlived a move off `conv_uuids`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_named_conversation_that_fails_costs_only_itself() {
     let acct = Account::new(true);
     let convs = [conv("c-a1", ENTERPRISE), conv("c-a2", ENTERPRISE)];
@@ -345,6 +329,7 @@ async fn a_named_conversation_that_fails_costs_only_itself() {
 }
 
 /// `/account` failing was a `warn!` and an empty users table.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_account_that_will_not_load_is_a_phase_row() {
     let acct = Account::new(false);
     acct.holds(&[conv("c-a1", ENTERPRISE)], &[]);
@@ -359,6 +344,7 @@ async fn an_account_that_will_not_load_is_a_phase_row() {
 
 /// An attachment's row said "no bytes" whatever went wrong, and was tried
 /// again only when its conversation changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_attachment_says_why_and_lands_on_a_later_run() {
     let acct = Account::new(true);
     let mut with_file = conv("c-a1", ENTERPRISE);
@@ -402,6 +388,7 @@ async fn a_failed_attachment_says_why_and_lands_on_a_later_run() {
 /// A conversation whose every fetch failed is a stub with no org, which
 /// the per-org prune never reached: deleted upstream, it and its row
 /// stood for good.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stub_no_listing_names_goes_with_its_problem() {
     let acct = Account::new(true);
     acct.holds(&[conv("c-a1", ENTERPRISE), conv("c-x", ENTERPRISE)], &[]);
@@ -418,6 +405,7 @@ async fn a_stub_no_listing_names_goes_with_its_problem() {
 /// A conversation the listing still names, whose detail answers 404, was
 /// deleted from the mirror on every run while the listing kept naming it.
 /// Only a listing that leaves it out says it is gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_listed_conversation_whose_detail_is_missing_keeps_what_is_held() {
     let acct = Account::new(true);
     acct.holds(&[conv("c-a1", ENTERPRISE)], &[]);
@@ -445,6 +433,7 @@ async fn a_listed_conversation_whose_detail_is_missing_keeps_what_is_held() {
 /// listing holds the stub prune back; and a run every org refuses (a
 /// session expired inside the org cache) fails rather than reading as
 /// "everything deleted".
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_refused_org_holds_back_the_stub_prune_and_all_refused_fails() {
     let acct = Account::new(true);
     acct.holds(
@@ -477,6 +466,7 @@ async fn a_refused_org_holds_back_the_stub_prune_and_all_refused_fails() {
 /// A changed project's metadata was stored and its docs listing failed;
 /// the next run saw the metadata current and the docs swept under a day
 /// ago, so it asked for nothing and the row cleared on a stale project.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_project_whose_docs_failed_is_asked_again() {
     let acct = Account::new(true);
     let convs = [conv("c-a1", ENTERPRISE)];
@@ -523,6 +513,7 @@ fn contents() -> HttpRequest {
 }
 
 /// A 404 on a file was retried every run, for good.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_file_claude_no_longer_has_is_not_asked_for_again() {
     let acct = Account::new(true);
     acct.holds(&[conv_with_file()], &[]);
@@ -549,6 +540,7 @@ async fn a_file_claude_no_longer_has_is_not_asked_for_again() {
 
 /// After the give-up guard tripped, every later request was refused at
 /// once, and the walk wrote one failure row per conversation and file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_rate_limit_ends_the_walk_with_one_row() {
     let acct = Account::new(true);
     acct.holds(&[conv("c-a1", ENTERPRISE), conv("c-a2", ENTERPRISE)], &[]);
@@ -577,6 +569,7 @@ async fn a_rate_limit_ends_the_walk_with_one_row() {
 /// beside it. An org whose capabilities leave out `chat` is not asked for
 /// anything, so it is not pruned either: an empty answer from it would
 /// have deleted what the store holds for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_org_without_chat_is_not_walked_and_keeps_what_it_held() {
     let acct = Account::new(true);
     acct.holds(&[conv("c-a1", ENTERPRISE), conv("c-d1", CONSOLE)], &[]);

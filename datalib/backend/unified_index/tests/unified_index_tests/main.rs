@@ -1,9 +1,9 @@
 //! Every hermetic unified-index test, one binary: each module is one
 //! behaviour.
 //!
-//! `RUST_TEST_THREADS=1` because the playback transport is chosen
-//! by a process-global environment variable that each test points
-//! at its own fixture tree; one process means one such variable.
+//! `RUST_TEST_THREADS=1` because `qmd_daemon_scope` sets
+//! `DATALIB_RUNTIME_DIR` for the whole process, which is sound only
+//! while no other test's thread is reading the environment.
 
 mod dolt_backend_integration;
 mod fixture_db_snapshot;

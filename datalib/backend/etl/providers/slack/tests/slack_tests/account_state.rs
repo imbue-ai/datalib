@@ -112,8 +112,8 @@ fn write_saved(api: &Path, saved_page: Vec<Value>) {
     page("archived", None, vec![], "");
 }
 
-async fn run_fetch(out: &Path) -> FetchSummary {
-    fetch_into(out, |o| o).await.unwrap()
+async fn run_fetch(playback: &Path, out: &Path) -> FetchSummary {
+    fetch_into(playback, out, |o| o).await.unwrap()
 }
 
 async fn stored(out: &Path) -> (Vec<Value>, Vec<Value>, Vec<Value>, Vec<Value>) {
@@ -157,7 +157,7 @@ async fn read_states_saved_items_and_bookmarks_are_stored() {
     );
     let playback1 = d.path().join("playback1");
     serve(&api1, &playback1);
-    let summary = run_fetch(&out).await;
+    let summary = run_fetch(&playback1, &out).await;
     assert_eq!(summary.account.read_states, 2);
     assert_eq!(summary.account.saved_items, 3);
     assert_eq!(summary.account.bookmarks, 2);
@@ -198,7 +198,7 @@ async fn read_states_saved_items_and_bookmarks_are_stored() {
     write_saved(&api2, vec![]);
     let playback2 = d.path().join("playback2");
     serve(&api2, &playback2);
-    run_fetch(&out).await;
+    run_fetch(&playback2, &out).await;
 
     let (content2, read_states2, saved_items2, _) = stored(&out).await;
     assert_eq!(content2, content, "reading moved the content payload");
@@ -275,7 +275,7 @@ fn write_channel_with_marks(api: &Path, channel_mark: &str) {
 
 async fn sync_to_commit(out: &Path, api: &Path, playback: &Path) -> String {
     serve(api, playback);
-    run_fetch(out).await;
+    run_fetch(playback, out).await;
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
     let head = dr::head_commit(db.pool()).await.unwrap().expect("a commit");
     db.close().await;

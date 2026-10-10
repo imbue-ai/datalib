@@ -2,14 +2,13 @@
 //!
 //! One entry point, [`latchkey_curl`], in two modes that produce the same
 //! `HttpResponse` so callers cannot tell them apart: **live**, which shells
-//! out to `latchkey curl`, and **playback** (`DATALIB_HTTP_PLAYBACK=<dir>`),
-//! which reads a fixture and never touches the network. We never record live
+//! out to `latchkey curl`, and **playback** ([`crate::playback`]), which
+//! reads a fixture and never touches the network. We never record live
 //! traffic into the repo.
 //!
 //! It is also the single place rate-limit handling lives.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -33,7 +32,7 @@ pub enum HttpMethod {
 }
 
 impl HttpMethod {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             HttpMethod::Get => "GET",
             HttpMethod::Post => "POST",
@@ -282,91 +281,6 @@ pub enum HttpError {
     Interrupted { service: HttpService, url: String },
 }
 
-/// Environment variable a caller (genrule, hermetic test, dev loop) can
-/// set to switch every provider into fixture playback. Value is a
-/// directory; per-request fixtures live at `<dir>/<provider>/<key>.json`.
-pub const PLAYBACK_ENV: &str = "DATALIB_HTTP_PLAYBACK";
-
-/// Milliseconds to wait before answering each replayed request. Playback
-/// only: a fixture answers instantly, which hides everything that depends
-/// on a download taking time — checkpoints sealing mid-run, a consumer
-/// starting on a partial store, the Manage screen showing a step in
-/// flight. The streaming e2e suite sets it to make a replayed download
-/// last long enough to watch.
-pub const PLAYBACK_DELAY_ENV: &str = "DATALIB_HTTP_PLAYBACK_DELAY_MS";
-
-/// A file whose presence holds every replayed request: while it exists
-/// the request waits, and the moment it is gone the request is answered.
-/// Playback only. A test that has to act on a download in flight — add a
-/// source beside it, stop it — holds the tape, acts, and releases it,
-/// instead of picking a delay and hoping the window is wide enough on a
-/// slow runner. A stop ends the wait as `Interrupted`, like a backoff.
-pub const PLAYBACK_HOLD_ENV: &str = "DATALIB_HTTP_PLAYBACK_HOLD";
-
-/// Like [`PLAYBACK_HOLD_ENV`], but a request waits only once its process
-/// has sealed a checkpoint. A download runs freely to its first seal and
-/// then parks, so a test sees it in flight with something already
-/// published downstream, for as long as the file exists.
-pub const PLAYBACK_HOLD_SEALED_ENV: &str = "DATALIB_HTTP_PLAYBACK_HOLD_SEALED";
-
-const HOLD_POLL: Duration = Duration::from_millis(50);
-
-enum Mode {
-    Live,
-    Playback {
-        root: PathBuf,
-        delay: Duration,
-        hold: Option<PathBuf>,
-        hold_sealed: Option<PathBuf>,
-    },
-}
-
-impl Mode {
-    fn current() -> Self {
-        let path_in = |name: &str| {
-            std::env::var_os(name)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        };
-        match std::env::var_os(PLAYBACK_ENV) {
-            Some(v) if !v.is_empty() => Mode::Playback {
-                root: PathBuf::from(v),
-                delay: playback_delay(),
-                hold: path_in(PLAYBACK_HOLD_ENV),
-                hold_sealed: path_in(PLAYBACK_HOLD_SEALED_ENV),
-            },
-            _ => Mode::Live,
-        }
-    }
-}
-
-/// Waits while `hold` exists; `true` when a stop ended the wait instead.
-async fn held(stop: &datalib_etl::stop::StopFlag, hold: &Path) -> bool {
-    while hold.exists() {
-        if stop.requested() {
-            return true;
-        }
-        tokio::time::sleep(HOLD_POLL).await;
-    }
-    false
-}
-
-fn playback_delay() -> Duration {
-    let Some(raw) = std::env::var_os(PLAYBACK_DELAY_ENV) else {
-        return Duration::ZERO;
-    };
-    match raw.to_str().and_then(|s| s.trim().parse::<u64>().ok()) {
-        Some(ms) => Duration::from_millis(ms),
-        None => {
-            tracing::warn!(
-                value = %raw.to_string_lossy(),
-                "{PLAYBACK_DELAY_ENV} is not a whole number of milliseconds; replaying with no delay"
-            );
-            Duration::ZERO
-        }
-    }
-}
-
 /// A single `Retry-After` wait is capped here so one pathological header
 /// (or a far-future `x-ratelimit-reset`) can't park a source for hours. The
 /// give-up policy ([`crate::retry::RetryGuard`]) still bounds total effort;
@@ -495,37 +409,9 @@ where
         // zero provider-side code. File-based ingestion never reaches this
         // path, so it correctly reports zero requests.
         datalib_etl::download_metrics::record_api_request();
-        let outcome = match Mode::current() {
-            Mode::Live => live::send(req).await,
-            Mode::Playback {
-                root,
-                delay,
-                hold,
-                hold_sealed,
-            } => {
-                if !delay.is_zero() {
-                    tokio::time::sleep(delay).await;
-                }
-                let hold = hold
-                    .or(hold_sealed.filter(|_| datalib_etl::raw_store::has_sealed_a_checkpoint()));
-                if let Some(hold) = hold {
-                    if held(guard.stop(), &hold).await {
-                        return Err(HttpError::Interrupted {
-                            service: req.service,
-                            url: req.url.clone(),
-                        });
-                    }
-                }
-                match crate::interrupt::before_request().await {
-                    Some(crate::interrupt::Strike::Interrupted) => {
-                        return Err(HttpError::Interrupted {
-                            service: req.service,
-                            url: req.url.clone(),
-                        });
-                    }
-                    None => playback::lookup(req, &root).await,
-                }
-            }
+        let outcome = match crate::playback::current() {
+            None => live::send(req).await,
+            Some(playback) => playback.answer(req, guard.stop()).await,
         };
 
         // Decide whether this attempt is retryable. `None` = accept (success
@@ -795,29 +681,6 @@ mod live {
     }
 }
 
-// Playback mode: read pre-recorded fixtures from disk.
-
-mod playback {
-    use super::*;
-
-    pub(super) async fn lookup(req: &HttpRequest, root: &Path) -> Result<HttpResponse, HttpError> {
-        let key = fixture_key(req);
-        let path = root.join(req.service.as_str()).join(&key);
-        let bytes = tokio::fs::read(&path).await.map_err(|_| {
-            HttpError::PlaybackMiss(format!(
-                "{}: no fixture for {} {} (key={})",
-                path.display(),
-                req.method.as_str(),
-                req.url,
-                key
-            ))
-        })?;
-        let resp: HttpResponse = serde_json::from_slice(&bytes)
-            .map_err(|e| HttpError::PlaybackInvalid(format!("{}: {e}", path.display())))?;
-        Ok(resp)
-    }
-}
-
 /// Stable filename a request maps to in the playback root. Used both by
 /// `latchkey_curl` (to look up fixtures) and by per-provider synthesizers
 /// (to write them). Format: `<METHOD>-<sha256-prefix>.json`. The sha256
@@ -887,27 +750,9 @@ fn canonical_url(url: &str) -> String {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-
-    /// Serializes the tests that point `PLAYBACK_ENV` at a fixture dir.
-    /// Rust runs unit tests on parallel threads within one process and
-    /// `PLAYBACK_ENV` is process-global, so without this one test's
-    /// `remove_var` can clear the playback root mid-request in another and
-    /// flip it into live mode — the cause of the intermittent
-    /// `retries_429_then_gives_up_per_guard` failures in CI.
-    #[allow(clippy::await_holding_lock)]
-    pub(crate) async fn with_playback<T>(
-        root: &std::path::Path,
-        body: impl std::future::Future<Output = T>,
-    ) -> T {
-        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _lock = GUARD.lock().unwrap_or_else(|poison| poison.into_inner());
-        std::env::set_var(PLAYBACK_ENV, root);
-        let out = body.await;
-        std::env::remove_var(PLAYBACK_ENV);
-        out
-    }
+    use crate::playback::{self, Playback};
 
     fn with_via_desktop_prefix<T>(prefix: Option<&str>, body: impl FnOnce() -> T) -> T {
         static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1028,7 +873,7 @@ pub(crate) mod tests {
     async fn playback_miss_returns_named_error() {
         let dir = tempfile::tempdir().unwrap();
         let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
-        let err = with_playback(dir.path(), latchkey_curl(&req))
+        let err = playback::scope(dir.path(), latchkey_curl(&req))
             .await
             .unwrap_err();
         match err {
@@ -1059,7 +904,7 @@ pub(crate) mod tests {
             serde_json::to_vec(&response).unwrap(),
         )
         .unwrap();
-        let got = with_playback(dir.path(), latchkey_curl(&req))
+        let got = playback::scope(dir.path(), latchkey_curl(&req))
             .await
             .unwrap();
         assert_eq!(got.status, 200);
@@ -1138,7 +983,7 @@ pub(crate) mod tests {
             fast,
             datalib_etl::stop::StopFlag::default(),
         );
-        let err = with_playback(
+        let err = playback::scope(
             dir.path(),
             crate::retry::scope(guard, async { latchkey_curl(&req).await }),
         )
@@ -1189,7 +1034,7 @@ pub(crate) mod tests {
             stopper.request();
         });
         let started = std::time::Instant::now();
-        let err = with_playback(
+        let err = playback::scope(
             dir.path(),
             crate::retry::scope(guard, async { latchkey_curl(&req).await }),
         )
@@ -1244,12 +1089,10 @@ pub(crate) mod tests {
             *stamp.lock().unwrap() = Some(std::time::Instant::now());
             std::fs::remove_file(&releaser).unwrap();
         });
-        let resp = with_playback(dir.path(), async {
-            std::env::set_var(PLAYBACK_HOLD_ENV, &hold);
-            let out = crate::retry::scope(guard, async { latchkey_curl(&req).await }).await;
-            std::env::remove_var(PLAYBACK_HOLD_ENV);
-            out
-        })
+        let resp = playback::scope(
+            Playback::at(dir.path()).hold(&hold),
+            crate::retry::scope(guard, async { latchkey_curl(&req).await }),
+        )
         .await
         .unwrap();
         assert_eq!(resp.status, 200);
@@ -1279,12 +1122,10 @@ pub(crate) mod tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
             stopper.request();
         });
-        let err = with_playback(dir.path(), async {
-            std::env::set_var(PLAYBACK_HOLD_ENV, &hold);
-            let out = crate::retry::scope(guard, async { latchkey_curl(&req).await }).await;
-            std::env::remove_var(PLAYBACK_HOLD_ENV);
-            out
-        })
+        let err = playback::scope(
+            Playback::at(dir.path()).hold(&hold),
+            crate::retry::scope(guard, async { latchkey_curl(&req).await }),
+        )
         .await
         .unwrap_err();
         assert!(matches!(err, HttpError::Interrupted { .. }), "got {err:?}");
@@ -1322,12 +1163,10 @@ pub(crate) mod tests {
             *stamp.lock().unwrap() = Some(std::time::Instant::now());
             std::fs::remove_file(&releaser).unwrap();
         });
-        let resp = with_playback(dir.path(), async {
-            std::env::set_var(PLAYBACK_HOLD_SEALED_ENV, &hold);
-            let out = crate::retry::scope(guard, async { latchkey_curl(&req).await }).await;
-            std::env::remove_var(PLAYBACK_HOLD_SEALED_ENV);
-            out
-        })
+        let resp = playback::scope(
+            Playback::at(dir.path()).hold_sealed(&hold),
+            crate::retry::scope(guard, async { latchkey_curl(&req).await }),
+        )
         .await
         .unwrap();
         assert_eq!(resp.status, 200);
@@ -1349,7 +1188,7 @@ pub(crate) mod tests {
         stop.request();
         let fast = Duration::from_millis(1);
         let guard = crate::retry::RetryGuard::new(Duration::from_secs(3600), 3, fast, fast, stop);
-        let err = with_playback(
+        let err = playback::scope(
             dir.path(),
             crate::retry::scope(guard, async { latchkey_curl(&req).await }),
         )

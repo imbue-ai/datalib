@@ -18,6 +18,7 @@ use datalib_etl_slack::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_slack::recorded::{record_auth, record_call, DEFAULT_SINCE_TS};
 use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::write_fixture;
 use serde_json::{json, Value};
 
@@ -290,7 +291,7 @@ fn serve_file(playback: &Path, id: &str, name: &str) {
     .unwrap();
 }
 
-/// The tape, served. Kept alive by the returned tree.
+/// The tape, synthesized. Kept alive by the returned tree.
 pub fn workspace() -> Tree {
     let t = Tree::new();
     record_workspace(&t.api);
@@ -376,11 +377,10 @@ impl Rig for Slack {
 }
 
 async fn every_cut(how: How) {
-    let _tape = workspace();
+    let tape = workspace();
     let scratch = tempfile::tempdir().unwrap();
-    every_cut_resumes(&Slack, how, scratch.path(), |n| (1..=n).collect())
-        .await
-        .unwrap();
+    let cuts = every_cut_resumes(&Slack, how, scratch.path(), |n| (1..=n).collect());
+    playback::scope(&tape.playback, cuts).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

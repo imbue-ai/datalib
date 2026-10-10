@@ -12,13 +12,10 @@ use datalib_etl_github::synthesize::GithubSynth;
 use datalib_etl_github_render::render::{parse_api_dir, render_github};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
-use tokio::sync::Mutex;
-
-static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
 const REPO: &str = "octocat/hello";
 
@@ -59,17 +56,16 @@ fn build_events(api: &Path, prs: &[(u64, &str)]) {
 
 async fn download(api: &Path, playback: &Path, out_db: &Path) {
     GithubSynth::new(api).synthesize(playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, playback);
     // The test owns the store: one connection for the download and the
     // assertions both, because the file takes one writer at a time.
     let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
-    let out = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: std::time::Duration::ZERO,
         ..FetchOptions::new(db.clone(), crate::tng_now())
-    })
-    .await;
+    });
+    let out = playback::scope(playback, download).await;
     out.unwrap();
 
     // Commit, the way the orchestrator's `RawStoreSession::finish` does
@@ -133,7 +129,6 @@ fn render_once(
 ///
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_second_render_over_an_unchanged_store_renders_nothing() {
-    let _guard = ENV_LOCK.lock().await;
     let d = tempdir().unwrap();
     let out_db = d.path().join("raw");
     let out = d.path().join("out");
@@ -170,7 +165,6 @@ async fn a_second_render_over_an_unchanged_store_renders_nothing() {
 /// so it is declared empty and the driver drops its document.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pr_that_left_the_store_is_a_bucket_with_no_rows() {
-    let _guard = ENV_LOCK.lock().await;
     let d = tempdir().unwrap();
     let out_db = d.path().join("raw");
     let out = d.path().join("out");

@@ -15,7 +15,8 @@ use datalib_etl_garmin::ingest::api::{base_url, req_get, req_get_bytes};
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::GarminApi;
-use datalib_etl_web::http::{HttpResponse, PLAYBACK_ENV};
+use datalib_etl_web::http::HttpResponse;
+use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
 use serde_json::{json, Value};
@@ -25,9 +26,6 @@ pub(crate) const TODAY: chrono::NaiveDate = match chrono::NaiveDate::from_ymd_op
     Some(d) => d,
     None => panic!("a real date"),
 };
-
-/// `PLAYBACK_ENV` is process-global; the tests in this binary take turns.
-pub(crate) static PLAYBACK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn spec_path() -> PathBuf {
     let rel = "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json";
@@ -116,7 +114,6 @@ impl Account {
         control: DownloadControl,
         progress: Progress,
     ) -> FetchSummary {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
         let fast = std::time::Duration::from_millis(1);
         let guard = RetryGuard::new(
@@ -126,7 +123,7 @@ impl Account {
             fast,
             control.stop.clone(),
         );
-        let summary = retry::scope(
+        let download = retry::scope(
             guard,
             fetch(FetchOptions {
                 db: db.clone(),
@@ -137,8 +134,8 @@ impl Account {
                 control,
                 sealer: None,
             }),
-        )
-        .await;
+        );
+        let summary = playback::scope(&self.playback, download).await;
         db.commit_all("test").await.unwrap();
         db.close().await;
         summary.unwrap()
@@ -219,7 +216,6 @@ const DEVICES: &str = "/device-service/deviceregistration/devices";
 /// stays, and the run says why.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_wrapped_listing_with_no_array_does_not_prune() {
-    let _serial = PLAYBACK.lock().await;
     let a = Account::tng();
     let s1 = a.run().await;
     assert_eq!(s1.errors, 0, "{}", s1.line());
@@ -267,7 +263,6 @@ async fn a_wrapped_listing_with_no_array_does_not_prune() {
 /// the device registration alike.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_listing_answering_nothing_does_not_prune() {
-    let _serial = PLAYBACK.lock().await;
     let a = Account::tng();
     a.run().await;
     assert_eq!(a.count("SELECT COUNT(*) FROM garmin_devices").await, 1);
@@ -317,7 +312,6 @@ async fn a_listing_answering_nothing_does_not_prune() {
 /// run still returns `Ok` so the other phases' work is committed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_phase_that_fails_wholesale_is_a_problems_row_and_the_run_stays_green() {
-    let _serial = PLAYBACK.lock().await;
     let a = Account::tng();
     a.run().await;
     assert_eq!(a.count("SELECT COUNT(*) FROM garmin_weigh_ins").await, 4);
@@ -359,7 +353,6 @@ async fn a_phase_that_fails_wholesale_is_a_problems_row_and_the_run_stays_green(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_second_page_that_fails_does_not_prune_and_a_complete_walk_does() {
     use datalib_etl_garmin::ingest::{item_listing_path, ITEM_PAGE};
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     let workouts: Vec<Value> = (0..=ITEM_PAGE)
         .map(|i| json!({"workoutId": 4000 + i, "workoutName": format!("Drill {i}")}))
@@ -448,7 +441,6 @@ async fn a_second_page_that_fails_does_not_prune_and_a_complete_walk_does() {
 /// only, which stays as the last run stored it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_user_settings_failure_is_a_listing_row_and_the_stored_row_stays() {
-    let _serial = PLAYBACK.lock().await;
     let a = Account::tng();
     a.run().await;
     a.answer(
@@ -478,7 +470,6 @@ async fn a_user_settings_failure_is_a_listing_row_and_the_stored_row_stays() {
 /// cannot list it, and says so rather than only logging it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gear_that_cannot_be_listed_is_a_listing_row() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     let profile = a.spec["social_profile"].as_object_mut().unwrap();
     profile.remove("profileId");

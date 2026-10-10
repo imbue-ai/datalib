@@ -15,8 +15,9 @@ use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::gmail_api::{fetch, FetchOptions};
 use datalib_etl_email::ingest::{db_path_for, RawDb};
-use datalib_etl_web::http::{HttpResponse, PLAYBACK_ENV};
+use datalib_etl_web::http::HttpResponse;
 use datalib_etl_web::interrupt::{every_cut_resumes, How, Rig};
+use datalib_etl_web::playback;
 use serde_json::{json, Value};
 
 use crate::jmap_interrupt::{contents, copy_store};
@@ -46,7 +47,6 @@ impl Rig for Gmail {
     }
 
     async fn download(&self, db: &RawDb, stop: StopFlag) -> Result<()> {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
         let mut opts = FetchOptions::new(db.clone());
         // Two messages to a write, so a cut lands between writes.
         opts.flush_batch = Some(2);
@@ -54,7 +54,9 @@ impl Rig for Gmail {
             stop,
             ..Default::default()
         };
-        fetch(opts).await.map(|_| ())
+        playback::scope(&self.playback, fetch(opts))
+            .await
+            .map(|_| ())
     }
 
     async fn seal(&self, db: RawDb) -> Result<()> {
@@ -201,7 +203,6 @@ async fn a_first_download_cut_off_at_any_request_resumes_to_the_same_store() {
             .await
             .unwrap_or_else(|e| panic!("{how:?}: {e:#}"));
     }
-    std::env::remove_var(PLAYBACK_ENV);
 }
 
 /// From an empty store nothing is ever relabeled or deleted, so a
@@ -232,5 +233,4 @@ async fn a_later_download_cut_off_at_any_request_resumes_to_the_same_store() {
             .await
             .unwrap_or_else(|e| panic!("{how:?}: {e:#}"));
     }
-    std::env::remove_var(PLAYBACK_ENV);
 }

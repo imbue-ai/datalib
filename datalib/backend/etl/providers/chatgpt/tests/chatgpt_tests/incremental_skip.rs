@@ -7,7 +7,7 @@ use chrono::DateTime;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_chatgpt::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_chatgpt::synthesize::ChatgptSynth;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -25,26 +25,30 @@ fn iso_for_epoch(epoch: f64) -> String {
         .to_string()
 }
 
-async fn run_fetch(out_db: &std::path::Path) -> datalib_etl_chatgpt::ingest::FetchSummary {
-    run_fetch_since(out_db, None).await
+async fn run_fetch(
+    playback: &std::path::Path,
+    out_db: &std::path::Path,
+) -> datalib_etl_chatgpt::ingest::FetchSummary {
+    run_fetch_since(playback, out_db, None).await
 }
 
 async fn run_fetch_since(
+    playback: &std::path::Path,
     out_db: &std::path::Path,
     since: Option<&str>,
 ) -> datalib_etl_chatgpt::ingest::FetchSummary {
     // Open here and close before the store is read back: the file
     // takes one writer at a time.
     let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
-    let s = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         max_pages: None,
         limit: None,
         sleep_between: Duration::ZERO,
         since: since.map(String::from),
         conv_uuids: Vec::new(),
         ..FetchOptions::new(db.clone())
-    })
-    .await;
+    });
+    let s = playback::scope(playback, download).await;
     db.commit_all("test").await.unwrap();
     db.close().await;
     s.unwrap()
@@ -81,10 +85,9 @@ async fn second_sync_skips_already_downloaded_conversations() {
     );
 
     ChatgptSynth::new(&api).synthesize(&playback).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback);
 
     // First sync: both conversations are new and get fetched.
-    let first = run_fetch(&out_db).await;
+    let first = run_fetch(&playback, &out_db).await;
     assert_eq!(first.fetched, 2, "first sync should fetch both convs");
     assert_eq!(first.skipped, 0);
     assert_eq!(first.errors, 0);
@@ -92,7 +95,7 @@ async fn second_sync_skips_already_downloaded_conversations() {
     // Second sync against the same DB: nothing changed upstream, so the
     // ISO listing values must reconcile with the stored float values and
     // both conversations are recognized as up-to-date — zero re-fetches.
-    let second = run_fetch(&out_db).await;
+    let second = run_fetch(&playback, &out_db).await;
     assert_eq!(
         second.fetched, 0,
         "second sync re-fetched already-downloaded convs (skip-check format mismatch)"
@@ -107,7 +110,7 @@ async fn second_sync_skips_already_downloaded_conversations() {
     // conversations' update_times (a: 2024-03-20, b: 2024-03-21), only
     // the newer c-b is fetched; c-a is out of scope.
     let since_db = d.path().join("out_since.doltlite_db");
-    let scoped = run_fetch_since(&since_db, Some("2024-03-21")).await;
+    let scoped = run_fetch_since(&playback, &since_db, Some("2024-03-21")).await;
     assert_eq!(scoped.fetched, 1, "only c-b is at/after the cutoff");
     assert_eq!(scoped.out_of_scope, 1, "c-a predates the cutoff");
     assert_eq!(scoped.skipped, 0);
@@ -115,7 +118,7 @@ async fn second_sync_skips_already_downloaded_conversations() {
 
     // Moving `since` further back backfills the newly-in-scope c-a as
     // missing while the already-fetched c-b classifies up to date.
-    let backfill = run_fetch_since(&since_db, Some("2024-03-01")).await;
+    let backfill = run_fetch_since(&playback, &since_db, Some("2024-03-01")).await;
     assert_eq!(backfill.fetched, 1, "c-a backfills once in scope");
     assert_eq!(backfill.skipped, 1, "c-b is already up to date");
     assert_eq!(backfill.out_of_scope, 0);
@@ -125,9 +128,7 @@ async fn second_sync_skips_already_downloaded_conversations() {
     // than the cutoff. The listing is newest-first, so page 1 is the
     // recent conv + 99 old ones and page 2 holds the last old one. The
     // page-1 tail is already past the cutoff, so the walk must stop
-    // without ever requesting page 2. (Same test function as above —
-    // not a separate #[tokio::test] — so the process-wide PLAYBACK_ENV
-    // re-point below can't race a concurrently running test.)
+    // without ever requesting page 2.
     let api2 = d.path().join("input_snapshot_paged");
     let playback2 = d.path().join("playback_paged");
     let paged_db = d.path().join("out_paged.doltlite_db");
@@ -158,9 +159,8 @@ async fn second_sync_skips_already_downloaded_conversations() {
         &json!({"id": "c-new", "update_time": epoch_new, "mapping": {}, "title": "New"}),
     );
     ChatgptSynth::new(&api2).synthesize(&playback2).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &playback2);
 
-    let paged = run_fetch_since(&paged_db, Some("2024-03-01")).await;
+    let paged = run_fetch_since(&playback2, &paged_db, Some("2024-03-01")).await;
     // Only page 1 (100 items) was listed; page 2's single old item was
     // never requested. Without the cutoff stop the listing would be 101.
     assert_eq!(paged.listing, 100, "walk should stop after page 1");

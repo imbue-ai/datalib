@@ -76,7 +76,6 @@ rust_test(
     env = {
         "CLAUDE_FIXTURE_DIR": "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
         "INSTA_WORKSPACE_ROOT": ".",
-        "RUST_TEST_THREADS": "1",
     },
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [

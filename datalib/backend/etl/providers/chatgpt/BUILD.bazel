@@ -75,7 +75,6 @@ rust_test(
     env = {
         "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
         "INSTA_WORKSPACE_ROOT": ".",
-        "RUST_TEST_THREADS": "1",
     },
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [

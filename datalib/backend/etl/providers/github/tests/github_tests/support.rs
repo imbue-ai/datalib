@@ -14,7 +14,8 @@ use datalib_etl_github::ingest::{
     ENTITY_SELF,
 };
 use datalib_etl_github::synthesize::GithubSynth;
-use datalib_etl_web::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::http::{fixture_key, HttpRequest, HttpService};
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map};
 
@@ -73,13 +74,14 @@ pub async fn run(
     pb: &Path,
     tweak: impl FnOnce(FetchOptions) -> FetchOptions,
 ) -> Result<FetchSummary, String> {
-    std::env::set_var(PLAYBACK_ENV, pb);
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
     let opts = FetchOptions {
         refresh_window_days: 0,
         ..FetchOptions::new(db.clone(), crate::tng_now())
     };
-    let summary = fetch(tweak(opts)).await.map_err(|e| format!("{e:#}"));
+    let summary = playback::scope(pb, fetch(tweak(opts)))
+        .await
+        .map_err(|e| format!("{e:#}"));
     // As the processor does: a run that fails commits nothing, and the
     // next open of the store drops what it wrote.
     if summary.is_ok() {

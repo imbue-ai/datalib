@@ -45,18 +45,13 @@ struct Cut {
     killed: tokio::sync::Notify,
 }
 
-/// The cut in force. One for the process, not one per task: a download
-/// that spawns its requests onto other tasks must still be counted and
-/// cut. So, like the playback root, only one [`run`] may be under way at
-/// a time.
-static CUT: std::sync::Mutex<Option<Arc<Cut>>> = std::sync::Mutex::new(None);
-
-fn cut_in_force() -> Option<Arc<Cut>> {
-    CUT.lock().unwrap_or_else(|p| p.into_inner()).clone()
-}
-
-fn set_cut(cut: Option<Arc<Cut>>) {
-    *CUT.lock().unwrap_or_else(|p| p.into_inner()) = cut;
+tokio::task_local! {
+    /// The cut in force for the download [`run`] drives. Task-local, like
+    /// the playback tape, so interruption tests share a binary with every
+    /// other playback test. A request spawned onto another task is neither
+    /// counted nor cut, but it has no tape either, so it fails rather than
+    /// passing quietly.
+    static CUT: Arc<Cut>;
 }
 
 /// What a replayed request should do in place of answering.
@@ -67,7 +62,7 @@ pub(crate) enum Strike {
 /// Called where a replayed request is about to be served. Counts it, and
 /// at the chosen request cuts the run off. A no-op outside [`run`].
 pub(crate) async fn before_request() -> Option<Strike> {
-    let cut = cut_in_force()?;
+    let cut = CUT.try_with(Arc::clone).ok()?;
     let n = cut.served.fetch_add(1, Ordering::SeqCst) + 1;
     if cut.at != Some(n) {
         return None;
@@ -94,7 +89,7 @@ pub struct Ran<T> {
 
 /// Run `download`, counting its replayed requests, and cut it off at the
 /// `at`-th. `stop` must be the flag the download itself reads. A killed
-/// download is dropped, which aborts the tasks it spawned and holds.
+/// download is dropped.
 pub async fn run<T>(
     at: Option<u64>,
     how: How,
@@ -108,13 +103,11 @@ pub async fn run<T>(
         served: AtomicU64::new(0),
         killed: tokio::sync::Notify::new(),
     });
-    set_cut(Some(cut.clone()));
     let finished = tokio::select! {
         biased;
         _ = cut.killed.notified() => None,
-        out = download => Some(out),
+        out = CUT.scope(cut.clone(), download) => Some(out),
     };
-    set_cut(None);
     Ran {
         finished,
         requests: cut.served.load(Ordering::SeqCst),
@@ -393,7 +386,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let tape = tape(d.path());
         let every = |n: u64| (1..=n).collect::<Vec<_>>();
-        crate::http::tests::with_playback(&tape, async {
+        crate::playback::scope(&tape, async {
             for how in [How::Kill, How::Stop] {
                 let broken = RowDoublesAsDone {
                     detail_with_the_row: false,
@@ -414,5 +407,41 @@ mod tests {
             }
         })
         .await;
+    }
+
+    /// Two runs in flight at once each count and cut only their own
+    /// requests: the cut one is not finished by the other's tape, and the
+    /// whole one is not cut by the other's count.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cut_reaches_only_the_run_it_was_made_for() {
+        use crate::http::{latchkey_curl, HttpError, HttpRequest, HttpService};
+        use crate::playback::{self, Playback};
+        let d = tempfile::tempdir().unwrap();
+        let tape = tape(d.path());
+        let three = || async {
+            for path in ["items", "items/picard", "items/riker"] {
+                let url = format!("https://api.example.test/{path}");
+                latchkey_curl(&HttpRequest::get(HttpService::Github, url)).await?;
+            }
+            Ok::<_, HttpError>(())
+        };
+        // The delay only keeps both runs in flight together.
+        let paced = || Playback::at(&tape).delay(std::time::Duration::from_millis(20));
+        let (cut, whole) = tokio::join!(
+            playback::scope(paced(), run(Some(1), How::Stop, StopFlag::new(), three())),
+            playback::scope(paced(), run(None, How::Stop, StopFlag::new(), three())),
+        );
+        assert!(
+            matches!(cut.finished, Some(Err(HttpError::Interrupted { .. }))),
+            "{:?}",
+            cut.finished
+        );
+        assert_eq!(cut.requests, 1);
+        assert!(
+            matches!(whole.finished, Some(Ok(()))),
+            "{:?}",
+            whole.finished
+        );
+        assert_eq!(whole.requests, 3);
     }
 }

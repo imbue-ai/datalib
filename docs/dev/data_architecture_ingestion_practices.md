@@ -332,7 +332,7 @@ low-cost mitigation.
 is always JSON/JSONL — diffable, language-agnostic, no doltlite
 version skew. The doltlite db is always a *produced* artifact, never
 a checked-in input. The flow is: synth reads JSONL → emits HTTP
-playback responses (`DATALIB_HTTP_PLAYBACK`) → download reads playback
+playback responses (`datalib_etl_web::playback`) → download reads playback
 → writes the runtime `.doltlite_db`. This is the invariant's only
 statement.
 

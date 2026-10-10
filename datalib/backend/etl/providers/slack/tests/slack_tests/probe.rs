@@ -8,7 +8,7 @@ use datalib_etl_slack::probe::probe;
 use datalib_etl_slack::recorded::record_call;
 use datalib_etl_slack::synthesize::SlackSynth;
 use datalib_etl_slack_config::SlackConfig;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use datalib_probe::{ProbeAsk, ProbeList, ProbeProgress, ProbeReport};
 use serde_json::{json, Value};
@@ -88,13 +88,14 @@ async fn each_ask_reads_only_what_it_needs() {
     write_workspace(&api);
     let synth = SlackSynth::new(&api).synthesize(&playback).unwrap();
     assert_eq!(synth.fixtures_written, 4);
-    std::env::set_var(PLAYBACK_ENV, &playback);
     let config: SlackConfig = serde_json::from_value(json!({"api": {}})).unwrap();
 
     let seen = Mutex::new(Vec::new());
     let record = |p: ProbeProgress| seen.lock().unwrap().push(p.done);
 
-    let account = probe(&config, ProbeAsk::Account, &record).await.unwrap();
+    let account = playback::scope(&playback, probe(&config, ProbeAsk::Account, &record))
+        .await
+        .unwrap();
     assert_eq!(account.mode, "api");
     assert_eq!(account.account.id, "U1");
     assert_eq!(
@@ -104,9 +105,12 @@ async fn each_ask_reads_only_what_it_needs() {
     assert!(account.items.is_empty());
     assert!(seen.lock().unwrap().is_empty(), "a check lists nothing");
 
-    let channels = probe(&config, ProbeAsk::List(ProbeList::Channels), &record)
-        .await
-        .unwrap();
+    let channels = playback::scope(
+        &playback,
+        probe(&config, ProbeAsk::List(ProbeList::Channels), &record),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         rows(&channels),
         vec![
@@ -120,9 +124,12 @@ async fn each_ask_reads_only_what_it_needs() {
 
     // A DM's path is the id `dm_conversations` takes, and its title is
     // what the sync will call it.
-    let dms = probe(&config, ProbeAsk::List(ProbeList::Conversations), &record)
-        .await
-        .unwrap();
+    let dms = playback::scope(
+        &playback,
+        probe(&config, ProbeAsk::List(ProbeList::Conversations), &record),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         rows(&dms),
         vec![
@@ -133,8 +140,11 @@ async fn each_ask_reads_only_what_it_needs() {
     // The directory and the DMs count as one list.
     assert_eq!(*seen.lock().unwrap(), vec![3, 5]);
 
-    let err = probe(&config, ProbeAsk::List(ProbeList::Labels), &record)
-        .await
-        .expect_err("Slack has no labels");
+    let err = playback::scope(
+        &playback,
+        probe(&config, ProbeAsk::List(ProbeList::Labels), &record),
+    )
+    .await
+    .expect_err("Slack has no labels");
     assert!(err.to_string().contains("no `labels` list"), "{err}");
 }

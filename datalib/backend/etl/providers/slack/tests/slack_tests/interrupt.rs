@@ -38,7 +38,7 @@ async fn a_stop_ends_the_walk_at_the_next_channel_boundary() {
     t.serve();
 
     let stop = StopFlag::new();
-    let summary = fetch_into(&t.out, |o| FetchOptions {
+    let summary = fetch_into(&t.playback, &t.out, |o| FetchOptions {
         progress: Progress::new(Arc::new(StopOnFirstChannel(stop.clone()))),
         control: DownloadControl {
             stop: stop.clone(),
@@ -69,6 +69,6 @@ async fn a_stop_ends_the_walk_at_the_next_channel_boundary() {
     reader.close().await;
     assert_eq!(covered.len(), 1, "{covered:?}");
 
-    fetch_into(&t.out, |o| o).await.unwrap();
+    fetch_into(&t.playback, &t.out, |o| o).await.unwrap();
     assert_eq!(channels_with_messages(&t.out).len(), 3);
 }

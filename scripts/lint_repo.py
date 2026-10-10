@@ -36,6 +36,9 @@ instead from `bazel run //:precommit` and as a plain step in
      by hand: `datalib_runtime::atomic` is the one write-then-rename.
  15. Every crate datalib/backend/Cargo.toml lists is named by some
      BUILD.bazel, so the list cannot keep a crate nothing links.
+ 16. No Rust test points playback at a tape through the environment:
+     a test binary runs its tests in parallel, and the variable is
+     every test's at once.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -327,6 +330,7 @@ def main() -> int:
     rc |= _check_icons(root)
     rc |= _check_no_hand_rolled_atomic_write(root)
     rc |= _check_cargo_manifest_crates_used(root)
+    rc |= _check_no_playback_set_var(root)
     return rc
 
 
@@ -1014,6 +1018,43 @@ def _check_cargo_manifest_crates_used(root: Path) -> int:
         + "\n".join(f"  {name}" for name in unused)
         + "\n\n  Delete them from the manifest and run tools/repin_cargo.sh.\n"
         "  See lint_repo.py check 15.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 16: playback is scoped, not set in the environment -----------
+#
+# `DATALIB_HTTP_PLAYBACK` and its siblings select the tape for a whole
+# process: a step launched by a test, the fixture pipeline, an e2e
+# backend. Set in a test with `set_var`, it is every test's in that
+# binary, and they run in parallel. A test scopes its future to its tape
+# instead (`datalib_etl_web::playback::scope`). The step's own
+# `--playback-root` is the one in-process setter.
+_PLAYBACK_SET_VAR = re.compile(
+    r"\bset_var\(\s*(?:[\w:]*PLAYBACK\w*_ENV\b|\"DATALIB_HTTP_PLAYBACK)"
+)
+_PLAYBACK_SET_VAR_ALLOWED = {"datalib/backend/datalib_step/src/main.rs"}
+
+
+def _check_no_playback_set_var(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        if rel in _PLAYBACK_SET_VAR_ALLOWED:
+            continue
+        text = (root / rel).read_text(encoding="utf-8")
+        for m in _PLAYBACK_SET_VAR.finditer(text):
+            lineno = text.count("\n", 0, m.start()) + 1
+            hits.append(f"  {rel}:{lineno}: {m.group(0)}")
+    if not hits:
+        print("OK: no test sets the playback environment variables.")
+        return 0
+    print(
+        "ERROR: playback pointed at a tape through the environment:\n\n"
+        + "\n".join(hits)
+        + "\n\n  Run the future under `datalib_etl_web::playback::scope(<tape>, …)`;\n"
+        "  `Playback::delay`, `hold` and `hold_sealed` set the rest.\n"
+        "  See lint_repo.py check 16.",
         file=sys.stderr,
     )
     return 1

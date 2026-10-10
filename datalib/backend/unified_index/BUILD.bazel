@@ -79,6 +79,7 @@ rust_test(
     edition = "2021",
     env = QMD_FIXTURE_ENV | {
         "INSTA_WORKSPACE_ROOT": ".",
+        # qmd_daemon_scope.rs sets `DATALIB_RUNTIME_DIR` for the process.
         "RUST_TEST_THREADS": "1",
     },
     deps = [

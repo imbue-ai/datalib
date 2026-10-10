@@ -10,7 +10,8 @@ use std::path::Path;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_calendar::ingest::caldav::{self, dav};
 use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb};
-use datalib_etl_web::http::{HttpMethod, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
+use datalib_etl_web::http::{HttpMethod, HttpResponse, LatchkeySettings};
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::write_fixture;
 
 pub(crate) const HOST: &str = "https://caldav.enterprise.test";
@@ -144,9 +145,8 @@ async fn run_with(
     window: Option<datalib_etl_calendar::ingest::Window>,
     control: datalib_etl::control::DownloadControl,
 ) -> FetchSummary {
-    std::env::set_var(PLAYBACK_ENV, playback);
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
-    let summary = caldav::fetch(caldav::FetchOptions {
+    let download = caldav::fetch(caldav::FetchOptions {
         db: db.clone(),
         server_url: format!("{HOST}/"),
         calendars: Vec::new(),
@@ -155,13 +155,12 @@ async fn run_with(
         progress: Default::default(),
         control,
         sealer: None,
-    })
-    .await;
+    });
+    let summary = playback::scope(playback, download).await;
     if summary.is_ok() {
         db.commit_all("test").await.expect("commit");
     }
     db.close().await;
-    std::env::remove_var(PLAYBACK_ENV);
     summary.expect("caldav fetch under playback")
 }
 
@@ -218,13 +217,11 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
 
     // "Test connection" reaches the same account the way the download
     // does, and offers its one calendar — not the scheduling boxes.
-    std::env::set_var(PLAYBACK_ENV, &one);
     let config: datalib_etl_calendar_config::CalendarConfig =
         serde_json::from_value(serde_json::json!({"caldav": {"server_url": format!("{HOST}/")}}))
             .unwrap();
-    let report =
-        datalib_etl_calendar::probe::probe(&config, ProbeAsk::List(ProbeList::Calendars)).await;
-    std::env::remove_var(PLAYBACK_ENV);
+    let probe = datalib_etl_calendar::probe::probe(&config, ProbeAsk::List(ProbeList::Calendars));
+    let report = playback::scope(&one, probe).await;
     let report = report.expect("probe under playback");
     assert_eq!(
         report.account.address.as_deref(),

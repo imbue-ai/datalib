@@ -372,7 +372,7 @@ latchkey, and a non-HTTP provider needs a different plan.
 Unit tests cover the pure parts (label vocabulary, envelope synthesis,
 history parsing, base64url, the quota throttle). Hermetic tests in
 `tests/email_tests/` replay synthesized Gmail conversations through
-`DATALIB_HTTP_PLAYBACK`: `gmail_label_union`,
+HTTP playback: `gmail_label_union`,
 `gmail_widened_labels_backfill`, `gmail_failed_fetch_is_owed`,
 `gmail_history_replay` and `gmail_interrupt` (a download cut off at each
 request in turn and run again must leave the store an uninterrupted run

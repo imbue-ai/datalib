@@ -77,7 +77,6 @@ rust_test(
     edition = "2021",
     env = {
         "INSTA_WORKSPACE_ROOT": ".",
-        "RUST_TEST_THREADS": "1",
     },
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [

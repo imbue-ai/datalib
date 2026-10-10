@@ -9,7 +9,7 @@ use datalib_etl_chatgpt::ingest::{
     db::block_on_load_all, db::db_path_for, fetch, FetchOptions, RawDb,
 };
 use datalib_etl_chatgpt::synthesize::ChatgptSynth;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -48,19 +48,17 @@ async fn chatgpt_synth_playback_extract_roundtrip() {
     // me + 1 listing page + 1 terminator + 2 conv = 5
     assert_eq!(report.fixtures_written, 5);
 
-    std::env::set_var(PLAYBACK_ENV, &playback);
-
     // Open here and close before the store is read back: the file
     // takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
-    let summary = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         max_pages: None,
         limit: None,
         sleep_between: Duration::ZERO,
         conv_uuids: Vec::new(),
         ..FetchOptions::new(db.clone())
-    })
-    .await;
+    });
+    let summary = playback::scope(&playback, download).await;
     db.commit_all("test").await.unwrap();
     db.close().await;
     let summary = summary.unwrap();

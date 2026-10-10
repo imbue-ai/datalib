@@ -47,8 +47,8 @@ async fn history_problems(out: &Path) -> i64 {
     n
 }
 
-async fn run_fetch(out: &Path, since: &str) {
-    fetch_into(out, |o| FetchOptions {
+async fn run_fetch(playback: &Path, out: &Path, since: &str) {
+    fetch_into(playback, out, |o| FetchOptions {
         since: since.into(),
         ..o
     })
@@ -80,14 +80,14 @@ async fn widened_since_walks_the_stretch_below_what_was_covered() {
 
     t.serve();
 
-    run_fetch(&t.out, "2024-01-01").await;
+    run_fetch(&t.playback, &t.out, "2024-01-01").await;
     assert_eq!(
         stored_ts(&t.out),
         vec![TS_NEW.to_string()],
         "run 1 should mirror only the in-scope message",
     );
 
-    run_fetch(&t.out, "2023-01-01").await;
+    run_fetch(&t.playback, &t.out, "2023-01-01").await;
     assert_eq!(
         stored_ts(&t.out),
         vec![TS_OLD.to_string(), TS_NEW.to_string()],
@@ -109,8 +109,8 @@ async fn unchanged_since_issues_no_backfill() {
 
     t.serve();
 
-    run_fetch(&t.out, "2024-01-01").await;
-    run_fetch(&t.out, "2024-01-01").await;
+    run_fetch(&t.playback, &t.out, "2024-01-01").await;
+    run_fetch(&t.playback, &t.out, "2024-01-01").await;
 
     assert_eq!(stored_ts(&t.out), vec![TS_NEW.to_string()]);
     assert_eq!(history_problems(&t.out).await, 0);
@@ -133,8 +133,8 @@ async fn narrowed_since_keeps_existing_messages_and_issues_no_backfill() {
 
     t.serve();
 
-    run_fetch(&t.out, "2023-01-01").await;
-    run_fetch(&t.out, "2024-01-01").await;
+    run_fetch(&t.playback, &t.out, "2023-01-01").await;
+    run_fetch(&t.playback, &t.out, "2024-01-01").await;
 
     assert_eq!(
         stored_ts(&t.out),

@@ -16,14 +16,11 @@ use datalib_etl_github::ingest::{
     ENTITY_SELF,
 };
 use datalib_etl_github::synthesize::GithubSynth;
-use datalib_etl_web::http::{fixture_key, HttpRequest, HttpService, PLAYBACK_ENV};
+use datalib_etl_web::http::{fixture_key, HttpRequest, HttpService};
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
-use tokio::sync::Mutex;
-
-/// `PLAYBACK_ENV` is process-global; these tests must not overlap.
-static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
 const REPO: &str = "octocat/hello";
 const NUM: u64 = 7;
@@ -73,17 +70,17 @@ fn build_events(api: &Path, comment_ids: &[i64]) {
     }
 }
 
-async fn run(out_db: &Path) -> usize {
+async fn run(playback: &Path, out_db: &Path) -> usize {
     // The test owns the store: one connection for the download and the
     // assertions both, because the file takes one writer at a time.
     let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
-    let out = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
         ..FetchOptions::new(db.clone(), crate::tng_now())
-    })
-    .await;
+    });
+    let out = playback::scope(playback, download).await;
     // As the processor does: only a run that succeeds commits.
     if out.is_ok() {
         db.commit_all("test").await.unwrap();
@@ -106,7 +103,6 @@ fn stored_comment_ids(out_db: &Path) -> Vec<i64> {
 /// A comment GitHub stops listing is a comment its author deleted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_comment_dropped_from_the_listing_is_deleted() {
-    let _guard = ENV_LOCK.lock().await;
     let d = tempdir().unwrap();
     let out_db = d.path().join("out.doltlite_db");
 
@@ -114,8 +110,7 @@ async fn a_comment_dropped_from_the_listing_is_deleted() {
     let pb1 = d.path().join("pb1");
     build_events(&api1, &[101, 102]);
     GithubSynth::new(&api1).synthesize(&pb1).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &pb1);
-    run(&out_db).await;
+    run(&pb1, &out_db).await;
     assert_eq!(stored_comment_ids(&out_db), vec![101, 102], "both mirrored");
 
     // Second tape: comment 102 is gone from the PR's listing.
@@ -123,8 +118,7 @@ async fn a_comment_dropped_from_the_listing_is_deleted() {
     let pb2 = d.path().join("pb2");
     build_events(&api2, &[101]);
     GithubSynth::new(&api2).synthesize(&pb2).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &pb2);
-    let pruned = run(&out_db).await;
+    let pruned = run(&pb2, &out_db).await;
 
     assert_eq!(pruned, 1, "the run must report the deletion it acted on");
     assert_eq!(
@@ -152,7 +146,6 @@ async fn a_comment_dropped_from_the_listing_is_deleted() {
 /// that lists its comments fetches it whole and clears the row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_listing_prunes_nothing() {
-    let _guard = ENV_LOCK.lock().await;
     let d = tempdir().unwrap();
     let out_db = d.path().join("out.doltlite_db");
 
@@ -160,8 +153,7 @@ async fn a_failed_listing_prunes_nothing() {
     let pb = d.path().join("pb");
     build_events(&api, &[101, 102]);
     GithubSynth::new(&api).synthesize(&pb).unwrap();
-    std::env::set_var(PLAYBACK_ENV, &pb);
-    run(&out_db).await;
+    run(&pb, &out_db).await;
     assert_eq!(stored_comment_ids(&out_db), vec![101, 102]);
 
     // Same tape, minus the comments listing.
@@ -177,7 +169,7 @@ async fn a_failed_listing_prunes_nothing() {
     );
     fs::remove_file(&fixture).unwrap();
 
-    let pruned = run(&out_db).await;
+    let pruned = run(&pb, &out_db).await;
 
     assert_eq!(pruned, 0, "a request that failed licenses no deletion");
     assert_eq!(
@@ -197,7 +189,7 @@ async fn a_failed_listing_prunes_nothing() {
 
     // The listing answers again: the PR is fetched whole and the row goes.
     GithubSynth::new(&api).synthesize(&pb).unwrap();
-    run(&out_db).await;
+    run(&pb, &out_db).await;
     assert_eq!(problems(&out_db).await, []);
 }
 

@@ -15,7 +15,7 @@ async fn slack_synth_playback_extract_roundtrip() {
         .unwrap();
     assert_eq!(t.serve(), 4);
 
-    let summary = fetch_into(&t.out, |o| o).await.unwrap();
+    let summary = fetch_into(&t.playback, &t.out, |o| o).await.unwrap();
     assert_eq!(summary.messages, 1);
 
     // One workspace, one channel, one user, one message — sourced from the

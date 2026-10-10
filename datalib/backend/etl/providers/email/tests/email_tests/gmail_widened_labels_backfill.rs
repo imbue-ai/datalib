@@ -29,14 +29,6 @@ const UNDER_TRAVEL: &str = "18c9f2a1b2c3d602";
 const INBOX_ONLY: &str = "18c9f2a1b2c3d603";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_widened_filter_backfills_what_is_newly_in_scope() {
-    // One test, three scenarios in sequence: `PLAYBACK_ENV` is
-    // process-global, so as separate `#[tokio::test]`s they would race.
-    an_unchanged_filter_replays_history_only().await;
-    an_added_label_walks_just_that_label().await;
-    a_removed_filter_walks_the_whole_account().await;
-}
-
 async fn an_unchanged_filter_replays_history_only() {
     let h = Harness::new();
     let first = h.run(&["datalib"]).await;
@@ -51,6 +43,7 @@ async fn an_unchanged_filter_replays_history_only() {
     assert_eq!(h.mirrored().await, ids(&[UNDER_LIB]));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_added_label_walks_just_that_label() {
     let h = Harness::new();
     h.run(&["datalib"]).await;
@@ -69,6 +62,7 @@ async fn an_added_label_walks_just_that_label() {
     assert_eq!(again.emails_upserted, 0, "{again:?}");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_removed_filter_walks_the_whole_account() {
     let h = Harness::new();
     h.run(&["datalib"]).await;

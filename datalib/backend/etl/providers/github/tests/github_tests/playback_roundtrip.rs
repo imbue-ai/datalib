@@ -11,7 +11,7 @@ use datalib_etl_github::ingest::{
     ENTITY_PR_REVIEW, ENTITY_PR_REVIEW_COMMENT, ENTITY_SELF,
 };
 use datalib_etl_github::synthesize::GithubSynth;
-use datalib_etl_web::http::PLAYBACK_ENV;
+use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
@@ -79,18 +79,16 @@ async fn github_synth_playback_extract_roundtrip() {
     // endpoints = 11
     assert_eq!(report.fixtures_written, 11);
 
-    std::env::set_var(PLAYBACK_ENV, &playback);
-
     // The test owns the store: one connection for the download and the
     // assertions both, because the file takes one writer at a time.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
-    let summary = fetch(FetchOptions {
+    let download = fetch(FetchOptions {
         full_sync: true,
         refresh_window_days: 0,
         sleep_between: Duration::ZERO,
         ..FetchOptions::new(db.clone(), crate::tng_now())
-    })
-    .await;
+    });
+    let summary = playback::scope(&playback, download).await;
     db.commit_all("test").await.unwrap();
     db.close().await;
     let summary = summary.unwrap();

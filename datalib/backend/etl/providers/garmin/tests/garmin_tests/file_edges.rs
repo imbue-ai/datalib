@@ -11,7 +11,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl::stop::StopFlag;
 
-use crate::prune_gate::{bytes, status, Account, PLAYBACK, TODAY};
+use crate::prune_gate::{bytes, status, Account, TODAY};
 use crate::retry_and_stop::StopAt;
 
 const FIT_13: &str = "/download-service/files/activity/17010413001";
@@ -45,7 +45,6 @@ const NOT_YET_REPAIRED: &str =
 /// every run would only get the same bytes back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn each_activitys_fit_edge_points_at_its_own_file() {
-    let _serial = PLAYBACK.lock().await;
     let a = Account::tng();
     let s = a.run().await;
     assert_eq!(s.activity_files, 2, "{}", s.line());
@@ -80,7 +79,6 @@ async fn each_activitys_fit_edge_points_at_its_own_file() {
 /// waits until the walk is on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_repair_waits_for_the_walk_that_would_refetch() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     a.run().await;
     a.exec(SHARE_THE_RIDES_FIT).await;
@@ -126,7 +124,6 @@ fn list_only_the_14th(a: &mut Account) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_fit_behind_the_listing_window_is_fetched_again() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     a.answer_bytes(FIT_13, status(500, "upstream fell over"));
     let s1 = a.run().await;
@@ -163,7 +160,6 @@ const WELLNESS_DAYS_HELD_SQL: &str = "SELECT COUNT(*) FROM garmin_wellness_files
 /// every bundle of a batch once shared one ref.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_wellness_day_is_fetched_again_and_a_day_with_no_bundle_is_held() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     a.api.wellness_files = Some(true);
     for day in 1..=15 {
@@ -218,7 +214,6 @@ async fn a_failed_wellness_day_is_fetched_again_and_a_day_with_no_bundle_is_held
 /// stored and, being stored, never asked for again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_wellness_bundle_fetched_before_its_day_was_over_is_fetched_again() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     a.api.wellness_files = Some(true);
     a.api.refresh_days = Some(0);
@@ -254,7 +249,6 @@ async fn a_wellness_bundle_fetched_before_its_day_was_over_is_fetched_again() {
 /// than the refresh window never got one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn files_turned_on_later_are_fetched_for_activities_behind_the_listing_window() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     a.api.activity_files = Some(false);
     let s1 = a.run().await;
@@ -272,7 +266,6 @@ async fn files_turned_on_later_are_fetched_for_activities_behind_the_listing_win
 /// listing as it reads, so the file is not asked for run after run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_activity_with_no_file_is_asked_once() {
-    let _serial = PLAYBACK.lock().await;
     let a = Account::tng();
     a.answer_bytes(FIT_13, status(404, ""));
     let s1 = a.run().await;
@@ -299,7 +292,6 @@ async fn an_activity_with_no_file_is_asked_once() {
 /// warning on the record, not a failure of the run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreadable_fit_is_fetched_again_only_when_its_activity_changes() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     a.answer_bytes(FIT_13, bytes(b"not a zip, captain"));
     let s1 = a.run().await;
@@ -338,7 +330,6 @@ async fn an_unreadable_fit_is_fetched_again_only_when_its_activity_changes() {
 /// stored as it now reads, so the file was never asked for again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreadable_fit_whose_activity_changed_in_a_stopped_run_is_fetched_by_the_next() {
-    let _serial = PLAYBACK.lock().await;
     let mut a = Account::tng();
     a.answer_bytes(FIT_13, bytes(b"not a zip, captain"));
     let s1 = a.run().await;

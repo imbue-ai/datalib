@@ -54,7 +54,6 @@ rust_test(
     compile_data = glob(["tests/fixtures/carddav_tng*/*.vcf"]),
     crate_root = "tests/contacts_tests/main.rs",
     edition = "2021",
-    env = {"RUST_TEST_THREADS": "1"},
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         ":datalib_etl_contacts",

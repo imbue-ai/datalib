@@ -8,6 +8,7 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_notion::ingest::official::BASE;
 use datalib_etl_notion::ingest::{fetch, FetchOptions, RawDb};
 use datalib_etl_web::interrupt::{self, How};
+use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use serde_json::json;
 use tempfile::tempdir;
@@ -45,9 +46,8 @@ async fn a_failed_comments_listing_survives_the_page_being_written_again() {
         fast,
         stop.clone(),
     );
-    std::env::set_var(datalib_etl_web::http::PLAYBACK_ENV, &tape);
     let db = RawDb::open(&store).await.unwrap();
-    let ran = interrupt::run(
+    let cut = interrupt::run(
         Some(2),
         How::Stop,
         stop.clone(),
@@ -62,8 +62,8 @@ async fn a_failed_comments_listing_survives_the_page_being_written_again() {
                 ..FetchOptions::new(db.clone())
             }),
         ),
-    )
-    .await;
+    );
+    let ran = playback::scope(&tape, cut).await;
     assert_eq!(ran.requests, 2, "the page, and the cut at its comments");
     ran.finished
         .unwrap()
