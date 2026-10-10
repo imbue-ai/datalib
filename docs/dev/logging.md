@@ -115,7 +115,7 @@ has the server's, since the bundle is embedded in the binary.
 | Rust in a built-in step (`datalib-step`) | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
 | Rust in an applet (`datalib-applet`) | the same `tracing` call | a JSON envelope on the applet's stderr, which the gateway logs again as the server's line at the envelope's level: `target:datalib_http::applets`, with `applet` naming it and the applet's own target and fields in `applet_target` and `applet_fields`. The row's `filename` / `line_number` are the gateway's; the applet's are inside `applet_fields` ([`applets.md`](applets.md)) |
 | a custom step, any language | print a line on stderr (or a non-event line on stdout) | an `info` row with `stream` set; the last lines before a non-zero exit also become the step's error |
-| the server, per request | nothing — [`http/src/request_log.rs`](../../datalib/backend/http/src/request_log.rs) does it | `target:http.request`: method, path, query, status, `ms`, `bytes`, the `page` that asked, and the `card` and `card_type` when a card asked (`ui/src/cards/cardScope.ts`; `ui.card_open` says what source that card ran); `debug` for a live refetch that succeeded (below), `info` otherwise |
+| the server, per request | nothing — [`http/src/request_log.rs`](../../datalib/backend/http/src/request_log.rs) does it | `target:http.request`: method, path and query (with what a person typed taken out: § "What a line may carry"), status, `ms`, `bytes`, the `page` that asked, and the `card` and `card_type` when a card asked (`ui/src/cards/cardScope.ts`; `ui.card_open` says what source that card ran); `debug` for a live refetch that succeeded (below), `info` otherwise |
 | the UI | `track("name", { …fields }, { level, msg })` from [`ui/src/telemetry.ts`](../../datalib/ui/src/telemetry.ts) | `target:ui.name` under the page's own process, with the page's clock; batched, `keepalive`, never throws |
 
 Adding a UI event is one word in the `PageEventName` union and the
@@ -162,8 +162,46 @@ on screen.
   `metric` event, not a sentence with a number in it. The Manage
   screen's queue and ETA (in its Status column) and the sync dashboard's charts come from
   `metric_samples`.
-- **A secret.** The request log drops `?token=`; a line you write must
-  not carry a credential either.
+
+## What a line may carry
+
+Logs get pasted into public issues and handed whole to an agent
+diagnosing a failed sync, so a line must make sense to a stranger and
+tell them nothing about the person or their data.
+
+- **Never a secret**: a token, a password, a cookie, an API key.
+- **Never private data**: what a record says (message text, a subject
+  or title, a person's name, an email address, a phone number, a street
+  address), a URL a record holds, the name of a file or folder in a
+  person's mirror, an account's name or email, and anything a person
+  typed, such as a search.
+- **Fine**: ids (a uuid, an upstream row id), counts, sizes, timings,
+  step ids, source ids, table and column names, error kinds, and paths
+  to datalib's own stores.
+
+So a line about a record names it by id, and what it says goes through
+`problems` (above). An error chain is the easy way to break this: an
+`anyhow` context or an upstream error that quotes the value it could
+not parse carries that value into the line.
+
+Two things are taken out where lines enter the store, because they are
+cheap to spot and nobody should have to remember them:
+
+- **The request log keeps what was asked, not what was typed.** A
+  query string keeps its keys and only the values of the keys in
+  `KEPT_VALUES` (`http/src/request_log.rs`) — counts, cursors, ids,
+  column names — so `q=<redacted>&limit=50`. A path the app routes
+  itself keeps only its cards' names, `GET /gridView`, because the
+  card's arguments are where a grid's search lives. `?token=` is
+  dropped whole.
+- **The home directory is `~`** in every line's message and fields and
+  in a step's error, so a path names no user (`runs/src/redact.rs`).
+
+Neither reads what a line means: a subject in a `warn!` field stays a
+subject. `//datalib/backend/http:request_log_test` sends a search
+through the server and fails if what was typed reaches the store. The
+log lines known to break the rule are listed in
+[`audits/2026-10-10_log_privacy.md`](audits/2026-10-10_log_privacy.md).
 
 ## Reading it
 
