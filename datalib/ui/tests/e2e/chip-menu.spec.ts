@@ -159,7 +159,9 @@ test("a double-click opens the person's card, led by the document's source", asy
 
   const card = page.locator(".person");
   await expect(card.locator(".person-name")).not.toHaveText("", { timeout: 10_000 });
-  await expect(card.locator(".person-about")).toContainText("not linked to a contact");
+  await expect(card.locator(".person-about")).toContainText(/not linked to a contact/i);
+  // The heading is the person's chip, grey: no contacts app, so not linked.
+  await expect(card.locator(".person-name a.chip")).toHaveClass(/handle-unresolved/);
   // Slack's record of its own author, from the document's source.
   const first = card.locator(".person-section").first();
   await expect(first).toHaveClass(/person-seen-here/);
