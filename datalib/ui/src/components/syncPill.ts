@@ -8,7 +8,8 @@ export type SyncingGroup = {
   name: string;
   /// A source, as against the search index every source's sync reaches.
   source: boolean;
-  /// "1,204 to go · 3 min left", or "" when the steps report neither.
+  /// "3 min left", or "" when no step has an estimate. A group's queue
+  /// is blank: its steps count different things.
   progress: string;
   requestIds: string[];
 };
@@ -20,12 +21,7 @@ export function syncingGroups(rows: ManageRow[]): SyncingGroup[] {
       id: r.id,
       name: r.name.label,
       source: r.type !== null,
-      progress: [
-        quantityText(r.queue) && `${quantityText(r.queue)} to go`,
-        quantityText(r.eta) && `${quantityText(r.eta)} left`,
-      ]
-        .filter(Boolean)
-        .join(" · "),
+      progress: quantityText(r.eta) && `${quantityText(r.eta)} left`,
       requestIds: r.stop_request_ids,
     }))
     .sort((a, b) => Number(b.source) - Number(a.source));

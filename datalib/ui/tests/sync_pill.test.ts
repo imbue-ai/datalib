@@ -23,7 +23,6 @@ describe("syncingGroups", () => {
       row({
         id: "starfleet_mail",
         name: { id: "starfleet_mail", label: "Starfleet mail" },
-        queue: { value: 1204, unit: "count" },
         eta: { value: 180, unit: "seconds" },
         stop_request_ids: ["r1"],
       }),
@@ -31,7 +30,7 @@ describe("syncingGroups", () => {
     ]);
     expect(groups.map((g) => g.id)).toEqual(["starfleet_mail", "unified_index"]);
     expect(groups[0].name).toBe("Starfleet mail");
-    expect(groups[0].progress).toBe(`${(1204).toLocaleString()} to go · 3 min left`);
+    expect(groups[0].progress).toBe("3 min left");
     expect(groups[1].progress).toBe("");
     expect(groups[1].requestIds).toEqual(["r1", "r2"]);
   });

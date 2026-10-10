@@ -99,8 +99,8 @@ that work is done (<i>3m left</i>) at the pace work has come off the queue over 
 is no pace to go by: <i>stalled</i> (nothing has moved for a minute),
 <i>measuring</i> (nothing has come off yet), <i>growing</i>, <i>flat</i>. A queue a
 step reads in passes climbs as work arrives and falls to nothing when a pass ends,
-so its ETA holds steady through the climb rather than reading it as growth. A group sums its steps' queues and
-waits on its slowest step; a stall anywhere under it shows. Hover either for how it
+so its ETA holds steady through the climb rather than reading it as growth. A group shows no queue, since its steps
+count different things, and waits on its slowest step; a stall anywhere under it shows. Hover either for how it
 was reached. The <b>chart button</b> in a row's Actions — or <b>Show sync dashboard</b> on its
 menu — opens the group's
 <b>sync dashboard</b>: its row and each step's,

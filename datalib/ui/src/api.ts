@@ -1148,7 +1148,8 @@ export type ManageRow = {
   dropped: Diagnostic | null;
   status: StatusView;
   status_from: string | null;
-  /// Work the step says is ahead of it; a group's is the sum.
+  /// Work the step says is ahead of it; blank on a group, whose steps
+  /// count different things.
   queue: Quantity;
   /// When that queue empties at its recent pace; a group's is its
   /// slowest step's, or a stall anywhere.

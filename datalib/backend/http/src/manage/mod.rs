@@ -112,7 +112,7 @@ pub fn columns() -> Vec<ColumnSpec> {
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
             .describe("Browse this row's data, sync it \u{2014} or stop the sync in progress \u{2014} and open its sync dashboard."),
         ColumnSpec::new("status", "Status", ColumnType::Status)
-            .describe("What it is doing now, or did last, and when it got there. While it has work queued: how much the step says is still ahead of it (a group's is the sum of its steps'), then when that is done at the pace work has come off the queue over the last two minutes (or since the step started; a group waits on its slowest step) \u{2014} or a word when there is no pace to go by: stalled, measuring, growing, flat. Hover any part for why; double-click for the log."),
+            .describe("What it is doing now, or did last, and when it got there. While it has work queued: how much the step says is still ahead of it (a group shows none, since its steps count different things), then when that is done at the pace work has come off the queue over the last two minutes (or since the step started; a group waits on its slowest step) \u{2014} or a word when there is no pace to go by: stalled, measuring, growing, flat. Hover any part for why; double-click for the log."),
         ColumnSpec::new("items", "Items", ColumnType::Timeseries)
             .describe("How many things this source holds \u{2014} messages, readings, events \u{2014} whole store, as of its last render, with the last few days of syncs behind it. Hover for how many documents they sit in. Blank means it has never counted."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp)

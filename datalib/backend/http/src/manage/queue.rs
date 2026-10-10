@@ -3,8 +3,8 @@
 //! off the queue lately. The pace is what came *off*, not how the queue
 //! changed: a queue the runner keeps for a consumer climbs seal by seal
 //! and falls to nothing when a pass ends, and its net change reads as
-//! growing at every peak. A group sums its steps' queues and waits on
-//! the slowest of them.
+//! growing at every peak. A group waits on the slowest of its steps and
+//! has no queue of its own: its steps count different things.
 
 use std::collections::BTreeMap;
 
@@ -353,30 +353,11 @@ fn eta(
 }
 
 /// A group's cells from its steps', each with the label it goes by.
-/// The queue is the sum. The ETA waits on the slowest step, and a stall
-/// anywhere outranks every estimate: a stuck step is the one thing the
-/// group's figure must not hide.
+/// There is no queue: one step counts files, the next documents, and a
+/// sum of the two means nothing. The ETA waits on the slowest step, and a
+/// stall anywhere outranks every estimate: a stuck step is the one thing
+/// the group's figure must not hide.
 pub fn group_cells(children: &[(&str, &Cells)]) -> Cells {
-    let with_queue: Vec<(&str, i64)> = children
-        .iter()
-        .filter_map(|(l, c)| c.queue.value.map(|v| (*l, v)))
-        .collect();
-    let queue = if with_queue.is_empty() {
-        blank("count")
-    } else {
-        Quantity {
-            value: Some(with_queue.iter().map(|(_, v)| v).sum()),
-            unit: "count".into(),
-            note: None,
-            detail: Some(
-                with_queue
-                    .iter()
-                    .map(|(l, v)| format!("{l}: {}", grouped(*v)))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
-        }
-    };
     let said = |(l, c): &(&str, &Cells)| {
         c.eta
             .detail
@@ -408,7 +389,10 @@ pub fn group_cells(children: &[(&str, &Cells)]) -> Cells {
     } else {
         blank("seconds")
     };
-    Cells { queue, eta }
+    Cells {
+        queue: blank("count"),
+        eta,
+    }
 }
 
 #[cfg(test)]
@@ -651,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn a_group_sums_queues_and_waits_on_its_slowest_step() {
+    fn a_group_has_no_queue_and_waits_on_its_slowest_step() {
         let fast = step_cells(
             Some(&progress(&[("queued", 10)], Some((60, 60.0)))),
             Activity::Running,
@@ -661,7 +645,7 @@ mod tests {
             Activity::Running,
         );
         let g = group_cells(&[("Ingest", &fast), ("Render", &slow)]);
-        assert_eq!(g.queue.value, Some(110));
+        assert_eq!(g.queue, blank("count"));
         assert_eq!(g.eta.value, slow.eta.value);
         assert!(g.eta.detail.unwrap().starts_with("Render: "));
 
