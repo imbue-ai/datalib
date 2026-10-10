@@ -807,7 +807,7 @@ mod jid_names_tests {
             has_contacts: true,
             ..JidNames::default()
         };
-        let riker = "17015550102@s.whatsapp.net".to_string();
+        let riker = "17015550101@s.whatsapp.net".to_string();
         names.phone_jid.insert("8@lid".into(), riker.clone());
         names.book.insert(
             riker.clone(),
@@ -827,7 +827,7 @@ mod jid_names_tests {
             .book
             .insert("8@lid".into(), vec![serde_json::json!({"wa_name": "Bill"})]);
         let c = names.contact("8@lid", "wa").expect("through the linked id");
-        assert_eq!(c.key, "tel:+17015550102");
+        assert_eq!(c.key, "tel:+17015550101");
         assert_eq!(
             c.names,
             [
@@ -839,7 +839,7 @@ mod jid_names_tests {
             "every distinct name once, the address book's first, from both jids"
         );
         assert_eq!(c.handles.len(), 1);
-        assert_eq!(c.handles[0].handle, Handle::tel("+17015550102"));
+        assert_eq!(c.handles[0].handle, Handle::tel("+17015550101"));
         assert_eq!(c.org.as_deref(), Some("Starfleet"));
         assert_eq!(c.title.as_deref(), Some("First Officer"));
         assert_eq!(names.contact(&riker, "wa").map(|c| c.key), Some(c.key));
@@ -877,22 +877,22 @@ mod jid_names_tests {
         let mut names = JidNames::default();
         names.phone_jid.insert(
             "1@lid".to_string(),
-            "17015550101@s.whatsapp.net".to_string(),
+            "17015550102@s.whatsapp.net".to_string(),
         );
         names.phone_jid.insert(
             "2@lid".to_string(),
-            "17015550102@s.whatsapp.net".to_string(),
+            "17015550101@s.whatsapp.net".to_string(),
         );
         names
             .display_name
             .insert("2@lid".to_string(), "Will Riker".to_string());
         let inputs = Inputs::default();
-        assert_eq!(names.label("1@lid", &inputs), "+17015550101");
+        assert_eq!(names.label("1@lid", &inputs), "+17015550102");
         assert_eq!(names.label("2@lid", &inputs), "Will Riker");
         assert_eq!(names.label("3@lid", &inputs), "3@lid");
         assert_eq!(
-            names.label("17015550105@s.whatsapp.net", &inputs),
-            "+17015550105"
+            names.label("17015550104@s.whatsapp.net", &inputs),
+            "+17015550104"
         );
         assert_eq!(names.label("bridge-crew@g.us", &inputs), "bridge-crew@g.us");
     }
@@ -908,20 +908,20 @@ mod jid_names_tests {
             ..JidNames::default()
         };
         let phone = |n: u8| format!("170155501{n:02}@s.whatsapp.net");
-        names.phone_jid.insert("7@lid".into(), phone(3));
-        names.phone_jid.insert("9@lid".into(), phone(5));
+        names.phone_jid.insert("7@lid".into(), phone(2));
+        names.phone_jid.insert("9@lid".into(), phone(4));
         names
             .display_name
             .insert("9@lid".into(), "Worf, Son of Mogh".into());
-        names.book_name.insert(phone(3), "Data".into());
-        names.book_name.insert(phone(5), "Worf".into());
-        names.own_name.insert(phone(4), "Geordi La Forge".into());
-        names.own_name.insert(phone(3), "Commander Data".into());
+        names.book_name.insert(phone(2), "Data".into());
+        names.book_name.insert(phone(4), "Worf".into());
+        names.own_name.insert(phone(3), "Geordi La Forge".into());
+        names.own_name.insert(phone(2), "Commander Data".into());
         let inputs = Inputs::default();
         assert_eq!(names.label("7@lid", &inputs), "Data", "through the phone");
         assert_eq!(names.label("9@lid", &inputs), "Worf", "book over lid name");
-        assert_eq!(names.label(&phone(4), &inputs), "Geordi La Forge");
-        assert_eq!(names.label(&phone(6), &inputs), "+17015550106");
+        assert_eq!(names.label(&phone(3), &inputs), "Geordi La Forge");
+        assert_eq!(names.label(&phone(5), &inputs), "+17015550105");
         let declared: Vec<String> = inputs
             .declared()
             .into_iter()
@@ -929,7 +929,7 @@ mod jid_names_tests {
             .map(|i| i.id)
             .collect();
         assert!(
-            declared.contains(&phone(6)),
+            declared.contains(&phone(5)),
             "a jid with no contact is still declared, so one added later re-renders: {declared:?}"
         );
     }
