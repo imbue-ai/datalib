@@ -41,6 +41,31 @@ pub fn forgettable(root: &Path, libraries_dir: &Path) -> bool {
     root.parent() != Some(libraries_dir) || !is_data_root(root)
 }
 
+/// Whether the screen offers to delete `root`. Only a library in the
+/// libraries folder: the app made that folder, and such a row has no
+/// Forget, so nothing else takes it off the list. A library elsewhere
+/// sits among a person's own folders and is theirs to delete.
+pub fn deletable(root: &Path, libraries_dir: &Path) -> bool {
+    root.parent() == Some(libraries_dir) && is_data_root(root)
+}
+
+/// The claims a process working on a library holds for its life, relative
+/// to the library: the app server's and the runner's
+/// (`datalib/backend/dag/README.md`, "Locks").
+const HELD_WHILE_OPEN: [&str; 2] = ["system/lock", "system/runner-lock"];
+
+/// Whether some process has `root` open: a server or a sync run started
+/// outside this window. A lock file that cannot be asked counts as held,
+/// since the answer decides whether the library is deleted.
+pub fn in_use(root: &Path) -> bool {
+    HELD_WHILE_OPEN
+        .iter()
+        .any(|rel| match std::fs::File::open(root.join(rel)) {
+            Ok(file) => file.try_lock().is_err(),
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        })
+}
+
 // TODO(after 2026-12-09): remove the move of libraries out of the
 // Documents folder (`libraries_in_documents`, `move_from_documents`,
 // `drop_own_data_root`, `replace_recent`, the launcher's
@@ -475,6 +500,56 @@ mod tests {
         assert!(forgettable(&dir.join("Deleted"), &dir));
     }
 
+    /// Delete is offered for exactly the libraries Forget is not: the ones
+    /// in the libraries folder. One elsewhere is never deleted from here.
+    #[test]
+    fn only_a_library_in_the_libraries_folder_can_be_deleted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = libraries_dir(&tmp.path().join("home"));
+        let default = dir.join(DEFAULT_NAME);
+        let nested = dir.join("nested").join("lib");
+        let elsewhere = tmp.path().join("elsewhere");
+        make_root(&default);
+        make_root(&nested);
+        make_root(&elsewhere);
+        std::fs::create_dir_all(dir.join("not a library")).unwrap();
+
+        assert!(deletable(&default, &dir));
+        assert!(!deletable(&elsewhere, &dir));
+        assert!(!deletable(&nested, &dir));
+        assert!(!deletable(&dir.join("not a library"), &dir));
+        assert!(!deletable(&dir.join("Deleted"), &dir));
+        assert!(!deletable(&dir, &dir));
+        for root in [&default, &nested, &elsewhere] {
+            assert_ne!(deletable(root, &dir), forgettable(root, &dir));
+        }
+    }
+
+    /// A library a server or a runner holds is in use for as long as the
+    /// claim is held, and a lock file left behind by one that exited is
+    /// not a claim.
+    #[test]
+    fn a_library_is_in_use_while_either_claim_is_held() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("lib");
+        make_root(&root);
+        assert!(!in_use(&root), "no lock files at all");
+
+        std::fs::create_dir_all(root.join("system")).unwrap();
+        for rel in HELD_WHILE_OPEN {
+            std::fs::write(root.join(rel), "held by pid 1").unwrap();
+        }
+        assert!(!in_use(&root), "lock files nobody holds");
+
+        for rel in HELD_WHILE_OPEN {
+            let holder = std::fs::File::open(root.join(rel)).unwrap();
+            holder.lock().unwrap();
+            assert!(in_use(&root), "{rel} held");
+            drop(holder);
+            assert!(!in_use(&root), "{rel} let go");
+        }
+    }
+
     /// Only a library on the recent list moves. Each keeps its name, and
     /// the recent list keeps its order and names the new places.
     #[test]
@@ -612,12 +687,18 @@ mod tests {
     }
 
     #[test]
-    fn the_first_library_is_suggested_as_default_and_the_next_has_no_suggestion() {
+    fn default_is_suggested_while_no_library_has_that_name() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = libraries_dir(&tmp.path().join("home"));
         assert_eq!(suggested_name(&dir), DEFAULT_NAME);
         make_root(&dir.join(DEFAULT_NAME));
         assert_eq!(suggested_name(&dir), "");
+        std::fs::remove_dir_all(dir.join(DEFAULT_NAME)).unwrap();
+        assert_eq!(
+            suggested_name(&dir),
+            DEFAULT_NAME,
+            "deleted, so offered again"
+        );
     }
 
     #[test]

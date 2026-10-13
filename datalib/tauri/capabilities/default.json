@@ -16,6 +16,7 @@
     "allow-launcher-open",
     "allow-launcher-pick",
     "allow-launcher-forget",
+    "allow-launcher-delete",
     "allow-launcher-open-folder",
     "allow-launcher-move-from-documents",
     "core:window:allow-start-dragging",

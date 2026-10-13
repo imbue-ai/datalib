@@ -93,6 +93,7 @@ fn main() {
             "launcher_open",
             "launcher_pick",
             "launcher_forget",
+            "launcher_delete",
             "launcher_open_folder",
             "launcher_move_from_documents",
             "library_menu",
