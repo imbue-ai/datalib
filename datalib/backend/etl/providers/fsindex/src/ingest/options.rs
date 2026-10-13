@@ -113,14 +113,14 @@ pub fn load_at(dir: &Path) -> Result<Option<FsindexYaml>> {
         }
     };
     let parsed: FsindexYaml =
-        serde_yaml::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
+        serde_saphyr::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
     Ok(Some(parsed))
 }
 
 /// In one rename, so a scan never reads half a breadcrumb.
 pub fn write_breadcrumb(dir: &Path, yaml: &FsindexYaml) -> Result<()> {
     let path = dir.join(BREADCRUMB_FILENAME);
-    let text = serde_yaml::to_string(yaml)
+    let text = serde_saphyr::to_string(yaml)
         .with_context(|| format!("serialize breadcrumb for {}", dir.display()))?;
     datalib_runtime::atomic::write(&path, text.as_bytes())
         .with_context(|| format!("write {}", path.display()))
@@ -147,4 +147,48 @@ pub fn options_fingerprint(effective: &EffectiveOptions) -> String {
     buf.push(b'\n');
     let h = blake3::hash(&buf);
     h.to_hex().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A breadcrumb already on a person's disk was written by
+    /// `serde_yaml`, in this layout; it has to keep loading, and a
+    /// rewrite must not lose a field of it.
+    #[test]
+    fn a_breadcrumb_written_by_serde_yaml_loads_and_survives_a_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let written_by_serde_yaml = "\
+ignore:
+- '*.tmp'
+- holodeck/**
+stamp_me_with_uuid: true
+identity:
+  uuid: 00000000-0000-8009-9b3f-148e4244d924
+  stamped_at: 2364-10-02T15:06:29+00:00
+  stamper_version: 1
+  originally_at: /home/picard/logs
+";
+        fs::write(dir.path().join(BREADCRUMB_FILENAME), written_by_serde_yaml).unwrap();
+
+        let check = |yaml: &FsindexYaml| {
+            assert_eq!(yaml.ignore, ["*.tmp", "holodeck/**"]);
+            assert_eq!(yaml.stamp_me_with_uuid, Some(true));
+            let identity = yaml.identity.as_ref().expect("identity");
+            assert_eq!(identity.uuid, "00000000-0000-8009-9b3f-148e4244d924");
+            assert_eq!(identity.stamped_at, "2364-10-02T15:06:29+00:00");
+            assert_eq!(identity.stamper_version, 1);
+            assert_eq!(identity.originally_at.as_deref(), Some("/home/picard/logs"));
+        };
+        let loaded = load_at(dir.path()).unwrap().expect("a breadcrumb");
+        check(&loaded);
+
+        write_breadcrumb(dir.path(), &loaded).unwrap();
+        check(
+            &load_at(dir.path())
+                .unwrap()
+                .expect("the rewritten breadcrumb"),
+        );
+    }
 }

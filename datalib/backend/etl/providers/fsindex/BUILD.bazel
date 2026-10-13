@@ -41,7 +41,7 @@ rust_library(
         "@datalib_crates//:futures",
         "@datalib_crates//:ignore",
         "@datalib_crates//:serde",
-        "@datalib_crates//:serde_yaml",
+        "@datalib_crates//:serde-saphyr",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
