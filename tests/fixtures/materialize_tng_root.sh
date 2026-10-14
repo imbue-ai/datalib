@@ -158,10 +158,10 @@ ln -sfn "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd_aggregator/qmd/models"
 # Drop the TNG-themed scan tree into the root as `fsindex_scan/`. It's a plain
 # directory the `fsindex` (Unison-style) scanner can index; nothing renders it
 # (fsindex is extract-only), so it just sits in the root alongside the
-# per-stanza markdown trees. Anchor off the checked-in `.fsindex.yaml`
+# per-stanza markdown trees. Anchor off the checked-in `.fsindex.toml`
 # breadcrumb and copy its containing dir, dereferencing the runfiles symlinks
 # (`cp -RL`) so the materialized tree is real files, like a user's directory.
-FSINDEX_BREADCRUMB="$(rlocation _main/datalib/backend/etl/providers/fsindex/tests/fixtures/fsindex_tng/.fsindex.yaml)"
+FSINDEX_BREADCRUMB="$(rlocation _main/datalib/backend/etl/providers/fsindex/tests/fixtures/fsindex_tng/.fsindex.toml)"
 if [[ -f "$FSINDEX_BREADCRUMB" ]]; then
   cp -RL "$(dirname "$FSINDEX_BREADCRUMB")" "$OUT_ROOT/fsindex_scan"
 else

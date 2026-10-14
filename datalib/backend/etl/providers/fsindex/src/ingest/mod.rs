@@ -27,7 +27,7 @@ use datalib_etl_files::fswalk::StampKind;
 pub use db::RawDb;
 
 use metrics::WalkerCounters;
-use options::{EffectiveOptions, FsindexYaml, Identity, OptionsCascade};
+use options::{EffectiveOptions, FsindexOptions, Identity, OptionsCascade};
 use schema_raw::{DirRow, FileRow, ScanMetaRow};
 use walker::ScanRow;
 
@@ -232,7 +232,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
 
     // Stamping is a post-write enrichment pass, never a separate scan
     // engine. The stream has already written every row; here we walk
-    // the directory rows and, for any dir whose `.fsindex.yaml` cascade
+    // the directory rows and, for any dir whose `.fsindex.toml` cascade
     // opts in, drop a UUID breadcrumb and UPDATE its `identity_uuid` —
     // all in the same pre-commit working tree, so it lands in the one
     // scan commit the orchestrator makes.
@@ -604,7 +604,7 @@ fn one_per_entry(errors: &mut Vec<walker::WalkerError>) {
 
 /// Post-write stamping pass. The scan has already streamed every row
 /// into `files` and `dirs`; here we walk `dirs` and, for any one
-/// whose `.fsindex.yaml` cascade enables `stamp_me_with_uuid`, ensure
+/// whose `.fsindex.toml` cascade enables `stamp_me_with_uuid`, ensure
 /// it carries a UUID breadcrumb and `UPDATE` its `identity_uuid`. A
 /// folder whose breadcrumb will not read or write is an error of its
 /// own and the rest are still stamped.
@@ -624,14 +624,14 @@ async fn stamp_directories(
         if !cascade.effective().stamp_me_with_uuid {
             continue;
         }
-        let mut yaml = match options::load_at(&dir) {
+        let mut dir_options = match options::load_at(&dir) {
             Ok(y) => y.unwrap_or_default(),
             Err(e) => {
                 errors.push(stamp_error(&id, e));
                 continue;
             }
         };
-        let uuid = match &yaml.identity {
+        let uuid = match &dir_options.identity {
             Some(identity) => identity.uuid.clone(),
             None => {
                 let uuid = new_uuid();
@@ -640,13 +640,13 @@ async fn stamp_directories(
                     .strip_prefix(root)
                     .ok()
                     .map(|p| p.to_string_lossy().into_owned());
-                yaml.identity = Some(Identity {
+                dir_options.identity = Some(Identity {
                     uuid: uuid.clone(),
                     stamped_at,
                     stamper_version: 1,
                     originally_at,
                 });
-                if let Err(e) = options::write_breadcrumb(&dir, &yaml) {
+                if let Err(e) = options::write_breadcrumb(&dir, &dir_options) {
                     errors.push(stamp_error(&id, e));
                     continue;
                 }
@@ -727,7 +727,7 @@ fn build_dir_cascade(root: &std::path::Path, dir: &std::path::Path) -> OptionsCa
 
 // Keep types referenced even if not used at the module surface.
 const _: Option<EffectiveOptions> = None;
-const _: Option<FsindexYaml> = None;
+const _: Option<FsindexOptions> = None;
 
 #[cfg(test)]
 mod growth_tests {

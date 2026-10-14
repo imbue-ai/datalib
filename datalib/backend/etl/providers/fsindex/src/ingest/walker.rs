@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 
 use super::hash::{hash_file, hash_symlink_target, hash_tree, Blake3, TreeChild};
 use super::metrics::WalkerCounters;
-use super::options::{self, EffectiveOptions, FsindexYaml, OptionsCascade, BREADCRUMB_FILENAME};
+use super::options::{self, EffectiveOptions, FsindexOptions, OptionsCascade, OPTIONS_FILENAME};
 use datalib_etl_files::fingerprint_cache::{CachedTree, EntryKind, Fingerprint};
 use datalib_etl_files::fswalk::{self, StampCursor, StampKind};
 
@@ -147,7 +147,7 @@ struct Dfs<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> {
     prev: &'a CachedTree,
     default_stamp_kind: StampKind,
     counters: &'a WalkerCounters,
-    config_cache: HashMap<PathBuf, Option<FsindexYaml>>,
+    config_cache: HashMap<PathBuf, Option<FsindexOptions>>,
     cascade_cache: HashMap<PathBuf, OptionsCascade>,
     buf: Vec<ScanResult>,
     errors: Vec<WalkerError>,
@@ -490,7 +490,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         for entry in std::fs::read_dir(dir_path)? {
             let entry = entry?;
             let name_os = entry.file_name();
-            if name_os == BREADCRUMB_FILENAME {
+            if name_os == OPTIONS_FILENAME {
                 continue;
             }
             let rel_of = |name: &str| {
@@ -520,7 +520,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
 fn cascade_for_dir(
     root: &Path,
     dir: &Path,
-    config_cache: &mut HashMap<PathBuf, Option<FsindexYaml>>,
+    config_cache: &mut HashMap<PathBuf, Option<FsindexOptions>>,
     cascade_cache: &mut HashMap<PathBuf, OptionsCascade>,
     errors: &mut Vec<WalkerError>,
 ) -> OptionsCascade {
@@ -535,7 +535,7 @@ fn cascade_for_dir(
             cascade = cached.clone();
             continue;
         }
-        let yaml = config_cache
+        let options = config_cache
             .entry(d.clone())
             .or_insert_with(|| match options::load_at(&d) {
                 Ok(y) => y,
@@ -544,14 +544,14 @@ fn cascade_for_dir(
                         table: "dirs",
                         id: rel_id(root, &d),
                         message: format!(
-                            "{BREADCRUMB_FILENAME} did not parse, so it was not applied: {err:#}"
+                            "{OPTIONS_FILENAME} did not parse, so it was not applied: {err:#}"
                         ),
                         holds: false,
                     });
                     None
                 }
             });
-        if let Some(y) = yaml {
+        if let Some(y) = options {
             cascade.push(d.clone(), y.clone());
         }
         cascade_cache.insert(d.clone(), cascade.clone());
@@ -635,7 +635,7 @@ fn ancestor_chain(root: &Path, entry: &Path) -> Vec<PathBuf> {
 /// `**`, anchored `/`, negation with `!`, comments, character
 /// classes — are correctly handled. Patterns are interpreted as
 /// rooted at the scan root regardless of which cascade level
-/// wrote them; that means a pattern in a nested `.fsindex.yaml`
+/// wrote them; that means a pattern in a nested `.fsindex.toml`
 /// applies globally rather than being anchored to its own
 /// directory, which is a deliberate simplification of gitignore
 /// semantics for fsindex's cascaded-config model.
@@ -843,7 +843,7 @@ mod tests {
     // ║  KNOWN BUG — PINNED, NOT YET FIXED. DO NOT READ AS CORRECT.     ║
     // ║                                                                ║
     // ║  Loosening a cascade `ignore` rule by editing an EXISTING       ║
-    // ║  `.fsindex.yaml` does not change that directory's mtime, so the ║
+    // ║  `.fsindex.toml` does not change that directory's mtime, so the ║
     // ║  readdir-skip fast path reuses the cached child list — which    ║
     // ║  never contained the previously-ignored entry. The newly-      ║
     // ║  unignored file is therefore SILENTLY NOT INDEXED until the     ║
@@ -858,7 +858,7 @@ mod tests {
     fn loosening_ignore_misses_newly_unignored_file_known_bug() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        write(&root.join(".fsindex.yaml"), b"ignore:\n  - '*.secret'\n");
+        write(&root.join(".fsindex.toml"), b"ignore = ['*.secret']\n");
         write(&root.join("keep.txt"), b"keep");
         write(&root.join("hidden.secret"), b"shhh");
 
@@ -874,7 +874,7 @@ mod tests {
 
         // Loosen the rule by rewriting the EXISTING breadcrumb. This does
         // not change root's mtime, so the rescan takes the skip path.
-        write(&root.join(".fsindex.yaml"), b"ignore: []\n");
+        write(&root.join(".fsindex.toml"), b"ignore = []\n");
         let (rows2, c2) = walk(root, &prev);
         assert!(
             c2.dirs_readdir_skipped.load(Ordering::Relaxed) >= 1,
@@ -892,7 +892,7 @@ mod tests {
 
         // For contrast, the newly-*ignored* direction is handled correctly:
         // every enumerated child is re-tested against the current ignore set.
-        write(&root.join(".fsindex.yaml"), b"ignore:\n  - 'keep.txt'\n");
+        write(&root.join(".fsindex.toml"), b"ignore = ['keep.txt']\n");
         let (rows3, _c3) = walk(root, &prev);
         assert!(
             !has(&rows3, "keep.txt"),

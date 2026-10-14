@@ -97,8 +97,6 @@ runfiles = "0.2"
 # compile-time path at run time, which a Bazel-built binary cannot.
 rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }
 serde = { version = "1.0", features = ["derive"] }
-# Only fsindex's per-directory `.fsindex.yaml`; the config is TOML.
-serde-saphyr = "1.3"
 serde_json = "1.0"
 sha2 = "0.11"
 shlex = "1"
