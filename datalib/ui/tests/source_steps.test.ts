@@ -3,8 +3,8 @@
 // A source is a `[[groups]]` entry with an ingest step and a render step
 // filed under it; the group carries the name and the type, and each
 // step's id is composed from its group and its function. The wizard
-// writes and rewrites all three as one unit (`buildSource`,
-// `replaceSteps`).
+// writes all three as one unit (`buildSource`) and edits them key by
+// key (`patchSource`).
 import { describe, expect, it } from "vitest";
 import {
   insertEntries,
@@ -23,8 +23,8 @@ import {
   paramsObject,
   producerOf,
   removeSteps,
+  patchSource,
   renameGroup,
-  replaceSteps,
   seedFieldValues,
   sourceStepsOf,
   stepIdFor,
@@ -530,8 +530,7 @@ describe("paramsAreRepresentable", () => {
     expect(paramsAreRepresentable(step, SLACK)).toEqual({ ok: true });
   });
 
-  // A hand-written knob the form can't show would be dropped on save,
-  // so the grid disables Edit instead of losing it silently.
+  // The form names a hand-written knob it can't show, and saving keeps it.
   it("names the params it cannot model", () => {
     const [step] = listSteps(`[[steps]]
 group = "slack"
@@ -547,7 +546,7 @@ download_params = { maximum_sequential_failed_requests = 3 }
   });
 });
 
-describe("removeSteps / replaceSteps", () => {
+describe("removeSteps / patchSource", () => {
   it("removes one step and leaves its group, its sibling and the rest", () => {
     const fetch = listSteps(PAIR).find((s) => s.id === "slack/ingest")!;
     const after = removeSteps(PAIR, [fetch]);
@@ -576,15 +575,10 @@ describe("removeSteps / replaceSteps", () => {
     expect(listGroups(after).map((g) => g.id)).toEqual(["unified_index"]);
   });
 
-  it("replaces one step without touching its sibling or its group", () => {
-    const fetch = listSteps(PAIR).find((s) => s.id === "slack/ingest")!;
-    const body = buildStep({
-      entry: SLACK,
-      group: "slack",
-      phase: "download",
-      values: { "api.channels": ["random"] },
-    });
-    const after = replaceSteps(PAIR, [fetch], body);
+  it("edits one step without touching its sibling or its group", () => {
+    const values = { ...seedFieldValues(SLACK, sourceStepsOf("slack", listSteps(PAIR))) };
+    values["api.channels"] = ["random"];
+    const after = patchSource(PAIR, { entry: SLACK, group: "slack", values });
     expect(after).toContain('channels = ["random"]');
     expect(after).not.toContain('channels = ["general"]');
     expect(after).toContain('name = "Work Slack"');
@@ -601,19 +595,12 @@ describe("removeSteps / replaceSteps", () => {
     ]);
   });
 
-  // The edit path: both steps cut against the text as parsed, then one
-  // append. Cutting one, appending, then cutting the other would use
-  // offsets into text the first cut had already shifted.
-  it("replaces a source's pair in one pass, leaving exactly one of each", () => {
-    const { ingest, render } = sourceStepsOf("slack", listSteps(PAIR));
-    const out = buildSource({
+  it("edits a source's pair, leaving exactly one of each", () => {
+    const after = patchSource(PAIR, {
       entry: SLACK,
       group: "slack",
-      name: "Work Slack",
       values: { "api.channels": ["random"] },
-      withGroup: false,
     });
-    const after = replaceSteps(PAIR, [ingest!, render!], out.stepsBody);
     expect(after.match(/function = "ingest"/g)).toHaveLength(1);
     expect(after.match(/function = "render_markdown"/g)).toHaveLength(1);
     expect(after).toContain('channels = ["random"]');
@@ -639,16 +626,9 @@ describe("removeSteps / replaceSteps", () => {
       /\n\[\[steps\]\]\ngroup = "slack"\nfunction = "render_markdown"\ninputs = \["slack\/ingest"\]\n/,
       "\n",
     );
-    const { ingest, render } = sourceStepsOf("slack", listSteps(fetchOnly));
+    const { render } = sourceStepsOf("slack", listSteps(fetchOnly));
     expect(render).toBeUndefined();
-    const out = buildSource({
-      entry: SLACK,
-      group: "slack",
-      name: "",
-      values: {},
-      withGroup: false,
-    });
-    const after = replaceSteps(fetchOnly, [ingest!], out.stepsBody);
+    const after = patchSource(fetchOnly, { entry: SLACK, group: "slack", values: {} });
     expect(
       listSteps(after)
         .map((s) => s.id)
@@ -1274,15 +1254,11 @@ command = "datalib-applet unified_index"
   /// An edit rewrites a source where it stands: the table does not
   /// reshuffle because someone changed a channel list.
   it("rewrites an edited source in place", () => {
-    const { ingest, render } = sourceStepsOf("slack", listSteps(FLOWING));
-    const out = buildSource({
+    const after = patchSource(FLOWING, {
       entry: SLACK,
       group: "slack",
-      name: "",
       values: { "api.channels": ["random"] },
-      withGroup: false,
     });
-    const after = replaceSteps(FLOWING, [ingest!, render!], out.stepsBody);
     expect(listSteps(after).map((s) => s.id)).toEqual(listSteps(FLOWING).map((s) => s.id));
     expect(after).toContain('channels = ["random"]');
     expect(after).not.toContain('channels = ["general"]');

@@ -44,11 +44,14 @@ import {
   fieldIsActive,
   fieldsFor,
   layoutOf,
+  listSteps,
   paramsObject,
+  patchSource,
   seedFieldValues,
   slugify,
   stepIdFor,
   suggestId,
+  untouchedSettings,
   type ConfiguredGroup,
   type FieldValues,
   type Layout,
@@ -117,6 +120,8 @@ const props = defineProps<{
     /// Which of its own qmd steps this source has today — the config's
     /// way of saying how free-text search reaches it.
     qmdIndexing: QmdIndexing;
+    /// The whole config as it was when the form opened.
+    text: string;
   } | null;
 }>();
 
@@ -133,6 +138,9 @@ const emit = defineEmits<{
       /// The group's description as typed, written the same two ways.
       description: string;
       entry: CatalogEntry;
+      /// The form's values, for the caller to patch an edited source's
+      /// steps with (`patchSource`).
+      values: FieldValues;
       /// The `[[groups]]` block, when this dialog is creating a source.
       /// Null when editing: the group already exists.
       groupBody: string | null;
@@ -475,7 +483,38 @@ const missingRequired = computed(() => {
   return missing;
 });
 
-const canSubmit = computed(() => !idError.value && missingRequired.value.length === 0);
+/// An edited source's config as saving would leave it, or why it cannot
+/// be saved. Null while creating.
+const patched = computed<{ text: string } | { error: string } | null>(() => {
+  if (!props.editing || !chosen.value) return null;
+  try {
+    return {
+      text: patchSource(props.editing.text, {
+        entry: chosen.value,
+        group: groupId.value,
+        values: values.value,
+        renders: renders.value,
+      }),
+    };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+});
+const patchError = computed(() =>
+  patched.value && "error" in patched.value ? patched.value.error : null,
+);
+
+/// What this source's entries hold that the form has no field for, which
+/// saving keeps as it is.
+const untouched = computed(() =>
+  props.editing && chosen.value
+    ? untouchedSettings(props.editing.text, props.editing.group.id, chosen.value)
+    : [],
+);
+
+const canSubmit = computed(
+  () => !idError.value && !patchError.value && missingRequired.value.length === 0,
+);
 
 /// What this dialog writes: the group while creating, and the source's
 /// steps either way.
@@ -493,11 +532,21 @@ const source = computed(() =>
     : null,
 );
 
-const preview = computed(() =>
-  source.value
+/// The TOML to review: what creating adds, or an edited source's steps as
+/// saving leaves them, untouched keys and comments included.
+const preview = computed(() => {
+  if (patched.value && "text" in patched.value) {
+    const text = patched.value.text;
+    return listSteps(text)
+      .filter((s) => s.kind === "step" && s.group === groupId.value)
+      .filter((s) => s.phase === "ingest" || s.phase === "render")
+      .map((s) => text.slice(s.start, s.end).trim())
+      .join("\n\n");
+  }
+  return source.value
     ? `${source.value.groupBody ? `${source.value.groupBody}\n\n` : ""}${source.value.stepsBody}`
-    : "",
-);
+    : "";
+});
 
 function parseList(text: string): string[] {
   return text
@@ -1227,6 +1276,7 @@ function submit() {
     name: name.value.trim(),
     description: description.value.trim(),
     entry: chosen.value,
+    values: values.value,
     groupBody: source.value.groupBody,
     stepsBody: source.value.stepsBody,
     renderId: source.value.renderId,
@@ -1248,6 +1298,13 @@ function submit() {
       @click="keepHelpSelectable"
     >
       <header class="wiz-head dialog-head" :class="{ 'wiz-chosen': stage === 'configure' }">
+        <button
+          v-if="mode === 'create' && stage === 'configure'"
+          class="btn ghost wiz-back"
+          @click="stage = 'pick'"
+        >
+          ‹ Back
+        </button>
         <img
           v-if="stage === 'configure' && chosen && iconUrl(chosen.icon)"
           :src="iconUrl(chosen.icon)!"
@@ -1264,13 +1321,6 @@ function submit() {
           }}
         </h2>
         <span v-if="isEdit && chosen" class="wiz-kind">{{ chosen.label }}</span>
-        <button
-          v-if="mode === 'create' && stage === 'configure'"
-          class="btn ghost"
-          @click="stage = 'pick'"
-        >
-          Change
-        </button>
         <button class="wiz-x dialog-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
 
@@ -1345,6 +1395,18 @@ function submit() {
             >, but {{ chosen.label }} renders nothing.
           </template>
           Saving removes it, and takes it out of the index steps’ inputs.
+        </p>
+        <p v-if="untouched.length" class="wiz-cred">
+          This form has no field for
+          <template v-for="(u, i) in untouched" :key="u.step"
+            ><template v-if="i > 0">; </template
+            ><template v-for="(k, j) in u.keys" :key="k"
+              ><template v-if="j > 0">, </template><code>{{ k }}</code></template
+            >
+            on <code>{{ u.step }}</code></template
+          >. Saving keeps
+          {{ untouched.length === 1 && untouched[0].keys.length === 1 ? "it" : "them" }}
+          as written.
         </p>
 
         <label class="wiz-field wiz-row">
@@ -2082,7 +2144,13 @@ function submit() {
               </label>
 
               <details class="wiz-review">
-                <summary>Review the TOML this writes</summary>
+                <summary>
+                  {{
+                    isEdit
+                      ? "Review this source’s steps as saving leaves them"
+                      : "Review the TOML this writes"
+                  }}
+                </summary>
                 <pre>{{ preview }}</pre>
               </details>
             </template>
@@ -2093,6 +2161,7 @@ function submit() {
         <p v-if="idError && (mode !== 'create' || !advancedOpen)" class="wiz-error wiz-id-error">
           {{ idError }}
         </p>
+        <p v-if="patchError" class="wiz-error">{{ patchError }}</p>
       </div>
 
       <footer class="wiz-foot dialog-foot">
@@ -2422,6 +2491,10 @@ function submit() {
 
 .wiz-kind {
   color: var(--datalib-muted);
+}
+
+.wiz-back {
+  margin-left: -6px;
 }
 
 /* The form: a heading in the left column, its controls in the right,
