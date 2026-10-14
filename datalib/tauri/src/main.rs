@@ -316,10 +316,24 @@ async fn launcher_delete(app: AppHandle, path: String) -> Result<bool, String> {
     if let Some(refusal) = in_use() {
         return Err(refusal);
     }
-    trash::delete(&root).map_err(|e| format!("Could not move {name} to the Trash: {e}"))?;
+    move_to_trash(&root).map_err(|e| format!("Could not move {name} to the Trash: {e}"))?;
     let home = home_dir(&app).ok_or("No home directory.")?;
     launcher::forget_recent(&launcher::recents_file(&home), &root).map_err(|e| e.to_string())?;
     Ok(true)
+}
+
+// The `trash` crate's macOS default scripts Finder, which makes macOS ask
+// for permission to control Finder. NSFileManager needs none; Finder may
+// then not offer "Put Back", but the folder can be dragged out of the Trash.
+fn move_to_trash(path: &Path) -> Result<(), trash::Error> {
+    #[allow(unused_mut)]
+    let mut ctx = trash::TrashContext::default();
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        ctx.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    ctx.delete(path)
 }
 
 /// Open a library's folder in Finder (or the platform's file manager):
