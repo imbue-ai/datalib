@@ -240,6 +240,36 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   expect(after.match(/group = "fetch-only"\nfunction = "ingest"/g)).toHaveLength(1);
 });
 
+test("editing a source keeps what the form has no field for", async ({ page }) => {
+  const editor = page.locator(".m2-editor");
+  await pickClaude(page);
+  await nameField(page).fill("Hand Tuned");
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText("Added Hand Tuned.")).toBeVisible();
+
+  // A key and a comment written by hand, which no field of the form owns.
+  await expect(editor).toHaveValue(/group = "hand-tuned"/);
+  const text = await editor.inputValue();
+  const tuned = text.replace(
+    'group = "hand-tuned"\nfunction = "ingest"\n',
+    'group = "hand-tuned"\nfunction = "ingest"\n# pinned by hand\ncode_version = "7"\n',
+  );
+  expect(tuned).not.toBe(text);
+  await editor.fill(tuned);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Saved the config.")).toBeVisible();
+
+  await expandGroup(page, "hand-tuned");
+  await pickRowMenu(page, row(page, "hand-tuned/ingest"), "Edit settings…", wizard(page));
+  await expect(wizard(page)).toContainText("This form has no field for code_version");
+  await nameField(page).fill("Hand Tuned Too");
+  await wizard(page).getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Saved Hand Tuned Too.")).toBeVisible();
+
+  await expect(editor).toHaveValue(/name = "Hand Tuned Too"/);
+  await expect(editor).toHaveValue(/# pinned by hand\ncode_version = "7"\n/);
+});
+
 test("clearing Rendering removes the render step and its index edge", async ({ page }) => {
   const editor = page.locator(".m2-editor");
   await pickClaude(page);
