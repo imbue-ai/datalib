@@ -9,7 +9,10 @@ use std::sync::Arc;
 use datalib_core::app_store::AppStore;
 use datalib_core::repo::DynAppRepo;
 
-use crate::{auth::ApiToken, supervisor, usage, AppState};
+use crate::{
+    auth::{ApiToken, TrustedProxy},
+    supervisor, usage, AppState,
+};
 
 /// Open the data root (creating it if absent) and assemble the served
 /// [`AppState`]: the stores it owns, `<root>/config.toml`, and the
@@ -17,13 +20,16 @@ use crate::{auth::ApiToken, supervisor, usage, AppState};
 /// ambient tokio runtime — so this must be called from within one.
 /// `binary_dir` goes first on every step's `PATH`, ahead of the config's
 /// own `binary_dir`; `now`, when given, stands in for the clock in every
-/// sync the loop runs (`--now`). Presentation concerns (browser opening, the
-/// `--url-file` handshake) live in the binary's main, not here.
+/// sync the loop runs (`--now`); `trusted_proxy` is the reverse proxy whose
+/// identity header stands in for the token (`crate::auth`). Presentation
+/// concerns (browser opening, the `--url-file` handshake) live in the
+/// binary's main, not here.
 pub async fn build_state(
     root: PathBuf,
     binary_dir: Option<PathBuf>,
     now: Option<String>,
     api_token: ApiToken,
+    trusted_proxy: Option<TrustedProxy>,
 ) -> anyhow::Result<AppState> {
     datalib_core::layout::create_data_root(&root)
         .map_err(|e| anyhow::anyhow!("create data root {}: {e}", root.display()))?;
@@ -58,6 +64,7 @@ pub async fn build_state(
                 None,
             )),
             api_token,
+            trusted_proxy,
             usage: Arc::new(usage::UsageMonitor::new()),
             newer_root,
             shutting_down: Default::default(),
@@ -141,6 +148,7 @@ pub async fn build_state(
         root_tx,
         applets,
         api_token,
+        trusted_proxy,
         usage: monitor,
         newer_root: Vec::new(),
         shutting_down: Default::default(),
@@ -192,7 +200,7 @@ mod tests {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("boot-test-token", root.path());
-        let state = build_state(root.path().to_path_buf(), None, None, token)
+        let state = build_state(root.path().to_path_buf(), None, None, token, None)
             .await
             .unwrap();
         let p = layout::feedback_db(root.path());
@@ -215,7 +223,7 @@ mod tests {
         let token = ApiToken::from_value("boot-test-token", root.path());
         // A first boot writes the stores; a "newer release" then marks one.
         drop(
-            build_state(root.path().to_path_buf(), None, None, token.clone())
+            build_state(root.path().to_path_buf(), None, None, token.clone(), None)
                 .await
                 .unwrap(),
         );
@@ -229,7 +237,7 @@ mod tests {
             pool.close().await;
         }
 
-        let state = build_state(root.path().to_path_buf(), None, None, token.clone())
+        let state = build_state(root.path().to_path_buf(), None, None, token.clone(), None)
             .await
             .expect("boots to show the gate");
         assert_eq!(state.newer_root.len(), 1);
@@ -281,7 +289,7 @@ mod tests {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("no-index-token", root.path());
-        build_state(root.path().to_path_buf(), None, None, token)
+        build_state(root.path().to_path_buf(), None, None, token, None)
             .await
             .unwrap();
         assert!(
@@ -299,7 +307,7 @@ mod tests {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("split-test-token", root.path());
-        build_state(root.path().to_path_buf(), None, None, token)
+        build_state(root.path().to_path_buf(), None, None, token, None)
             .await
             .unwrap();
 
@@ -316,7 +324,7 @@ mod tests {
     async fn build_state_publishes_the_api_token() {
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("published-token", root.path());
-        let state = build_state(root.path().to_path_buf(), None, None, token)
+        let state = build_state(root.path().to_path_buf(), None, None, token, None)
             .await
             .unwrap();
         let path = state.api_token.token_file();
