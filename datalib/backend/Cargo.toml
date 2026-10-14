@@ -98,8 +98,6 @@ runfiles = "0.2"
 rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# Only fsindex's per-directory `.fsindex.yaml`; the config is TOML.
-serde_yaml = "0.9"
 sha2 = "0.11"
 shlex = "1"
 similar = "2"
