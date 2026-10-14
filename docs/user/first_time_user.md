@@ -486,6 +486,16 @@ A fresh token is minted every time the server starts, so re-read that
 file rather than saving a copy. `DATALIB_TOKEN=<value>` pins one if you
 need it stable across restarts.
 
+The token is for a server a browser reaches directly. Behind a reverse
+proxy that signs every requester in itself, strips and stamps an identity
+header, and frames the app in a page of its own (Imbue Studio's
+workspace forwarder), set `DATALIB_TRUSTED_PROXY=imbue`: a request the
+proxy marks as the owner's then needs no token, one it marks as a
+visitor's is refused, and the page's `frame-ancestors` is left to the
+proxy. The token keeps working for scripts on the same host. Never set
+it for a server a browser can reach without such a proxy — that header
+is then just text any page can send.
+
 ## 6. Re-syncing
 
 Re-run the sync (**Sync everything** in the app, or `datalib-dag config.toml`)

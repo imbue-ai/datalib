@@ -18,6 +18,7 @@ async fn server(root: &Path) -> AppState {
         None,
         None,
         ApiToken::from_value(TOKEN, root),
+        None,
     )
     .await
     .expect("the server boots")

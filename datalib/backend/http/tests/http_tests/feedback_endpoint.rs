@@ -55,6 +55,7 @@ async fn post_feedback_inserts_row() {
             None,
         )),
         api_token,
+        trusted_proxy: None,
     };
     let app = router(app_state.clone());
 

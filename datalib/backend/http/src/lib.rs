@@ -53,7 +53,7 @@ pub mod ui_state;
 pub mod usage;
 pub mod watch;
 
-pub use auth::ApiToken;
+pub use auth::{ApiToken, TrustedProxy};
 pub use boot::build_state;
 
 #[derive(Clone)]
@@ -81,6 +81,11 @@ pub struct AppState {
     /// startup and published to `<root>/system/api-token`; see
     /// [`crate::auth`] for the scheme and why it exists.
     pub api_token: ApiToken,
+    /// The reverse proxy whose identity header stands in for the token,
+    /// and whose page frames the app. `None` for a server reached
+    /// directly, which is every desktop and `datalib-http` from a
+    /// terminal.
+    pub trusted_proxy: Option<TrustedProxy>,
     /// Bytes on disk, over time. A background task folds what it finds in
     /// here so `GET /api/pipeline/storage` reads a snapshot rather than
     /// walking the disk per open tab. See [`crate::usage`].
@@ -183,7 +188,10 @@ pub fn user_bin_dir() -> Option<PathBuf> {
 
 pub fn router(state: AppState) -> Router {
     // Cloned out before `state` is moved into `with_state` below.
-    let api_token = state.api_token.clone();
+    let gate = auth::Gate {
+        token: state.api_token.clone(),
+        trusted_proxy: state.trusted_proxy,
+    };
     Router::new()
         .route("/api/health", get(health))
         .route("/api/accounts", get(accounts))
@@ -286,7 +294,7 @@ pub fn router(state: AppState) -> Router {
         // the token gate in front a cross-origin page cannot get a usable
         // response anyway, and nothing in-tree needs cross-origin access.
         .layer(axum::middleware::from_fn_with_state(
-            api_token,
+            gate,
             auth::require_token,
         ))
         // Outside the token gate, so a refused request is logged too.

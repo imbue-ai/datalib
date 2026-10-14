@@ -4,13 +4,34 @@
 //! not.
 
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{header, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
 
+use crate::auth::TrustedProxy;
+use crate::AppState;
+
 #[derive(RustEmbed)]
 #[folder = "$DATALIB_UI_DIST"]
 struct UiAssets;
+
+macro_rules! app_csp_directives {
+    () => {
+        "default-src 'self'; \
+         script-src 'self' 'unsafe-eval'; \
+         style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data: blob:; \
+         media-src 'self' data: blob:; \
+         font-src 'self' data:; \
+         connect-src 'self' ipc: http://ipc.localhost; \
+         frame-src 'self'; \
+         worker-src 'self' blob:; \
+         object-src 'none'; \
+         base-uri 'none'; \
+         form-action 'self'"
+    };
+}
 
 /// The app page's Content-Security-Policy: the second layer behind
 /// DOMPurify. A message body that gets past the sanitizer still cannot
@@ -40,19 +61,24 @@ struct UiAssets;
 /// - `frame-src 'self'`: the DACTAL card and the plot pages are
 ///   same-origin iframes — which is why every document this origin
 ///   serves as data gets a sandbox policy of its own ([`DocumentKind`]).
-pub const APP_CSP: &str = "default-src 'self'; \
-    script-src 'self' 'unsafe-eval'; \
-    style-src 'self' 'unsafe-inline'; \
-    img-src 'self' data: blob:; \
-    media-src 'self' data: blob:; \
-    font-src 'self' data:; \
-    connect-src 'self' ipc: http://ipc.localhost; \
-    frame-src 'self'; \
-    worker-src 'self' blob:; \
-    object-src 'none'; \
-    base-uri 'none'; \
-    form-action 'self'; \
-    frame-ancestors 'none'";
+/// - `frame-ancestors 'none'`: no page may frame the app, so no page can
+///   lay an invisible copy of it under its own buttons. A page on
+///   another port of the same host would otherwise carry the session,
+///   since `SameSite` ignores the port.
+pub const APP_CSP: &str = concat!(app_csp_directives!(), "; frame-ancestors 'none'");
+
+/// [`APP_CSP`] without `frame-ancestors`, for a server behind a
+/// [`TrustedProxy`]: the proxy appends a `frame-ancestors` of its own,
+/// naming the host application that frames the app, and two policies
+/// intersect — `'none'` here would blank that frame.
+pub const APP_CSP_FRAMED: &str = app_csp_directives!();
+
+pub fn app_csp(trusted_proxy: Option<TrustedProxy>) -> &'static str {
+    match trusted_proxy {
+        None => APP_CSP,
+        Some(_) => APP_CSP_FRAMED,
+    }
+}
 
 /// What a document this origin serves as *data* — not the app — may do.
 /// Every policy starts with `sandbox`, which puts the document in an
@@ -164,13 +190,14 @@ pub fn is_scriptable_document(content_type: &str) -> bool {
 /// sends no cookie with a module load.
 pub const PUBLIC_PREFIX: &str = "dactal/";
 
-pub async fn serve_ui(uri: Uri) -> Response {
+pub async fn serve_ui(State(state): State<AppState>, uri: Uri) -> Response {
+    let trusted_proxy = state.trusted_proxy;
     let path = uri.path().trim_start_matches('/');
     if path.is_empty() {
-        return serve_index();
+        return serve_index(trusted_proxy);
     }
     match UiAssets::get(path) {
-        Some(content) => asset_response(path, content),
+        Some(content) => asset_response(path, content, trusted_proxy),
         // A public path names a file or nothing: the SPA fallback would
         // hand the app shell to a caller with no session.
         None if path.starts_with(PUBLIC_PREFIX) => StatusCode::NOT_FOUND.into_response(),
@@ -179,13 +206,13 @@ pub async fn serve_ui(uri: Uri) -> Response {
             (StatusCode::NOT_FOUND, format!("no endpoint /{path}")).into_response()
         }
         // SPA fallback — let the client router handle unknown routes.
-        None => serve_index(),
+        None => serve_index(trusted_proxy),
     }
 }
 
-fn serve_index() -> Response {
+fn serve_index(trusted_proxy: Option<TrustedProxy>) -> Response {
     match UiAssets::get("index.html") {
-        Some(c) => asset_response("index.html", c),
+        Some(c) => asset_response("index.html", c, trusted_proxy),
         // Built without a UI bundle present. Surface a clear error
         // rather than a confusing 404 — the right fix is to populate
         // DATALIB_UI_DIST and rebuild.
@@ -197,7 +224,11 @@ fn serve_index() -> Response {
     }
 }
 
-fn asset_response(path: &str, content: rust_embed::EmbeddedFile) -> Response {
+fn asset_response(
+    path: &str,
+    content: rust_embed::EmbeddedFile,
+    trusted_proxy: Option<TrustedProxy>,
+) -> Response {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
     let mut resp = Response::new(Body::from(content.data));
     let headers = resp.headers_mut();
@@ -226,7 +257,7 @@ fn asset_response(path: &str, content: rust_embed::EmbeddedFile) -> Response {
     if path == "index.html" {
         headers.insert(
             header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(APP_CSP),
+            HeaderValue::from_static(app_csp(trusted_proxy)),
         );
     }
     if path.starts_with(PUBLIC_PREFIX) {
