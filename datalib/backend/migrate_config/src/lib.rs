@@ -14,13 +14,16 @@
 //! params — and, after it, `qmd_steps.rs`: the `qmd_index` fan-in becomes
 //! `qmd_aggregator`, downstream of each source's own qmd steps; then
 //! `document_index.rs`: the `unified_index` group, its steps and its
-//! applet become `unified_document_index`. Those last two rewrites are
-//! also the ones `datalib-http` makes by itself (`upgrade_qmd_steps`,
-//! `upgrade_document_index`).
+//! applet become `unified_document_index`; then `time_series_steps.rs`:
+//! a source with time series gets its `render_time_series` step and the
+//! config its time-series index. Those last three rewrites are also the
+//! ones `datalib-http` makes by itself (`upgrade_qmd_steps`,
+//! `upgrade_document_index`, `upgrade_time_series_steps`).
 
 pub mod convert;
 pub mod document_index;
 pub mod qmd_steps;
+pub mod time_series_steps;
 
 use std::path::{Path, PathBuf};
 
@@ -47,16 +50,26 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if document_index::is_retired(text)? {
         return Ok(LegacyFormat::UnifiedIndex);
     }
+    if time_series_steps::is_retired(text)? {
+        return Ok(LegacyFormat::NoTimeSeries);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
 pub fn convert(text: &str) -> Result<String> {
     let out = match detect(text)? {
-        LegacyFormat::QmdIndex | LegacyFormat::UnifiedIndex => text.to_string(),
+        LegacyFormat::QmdIndex | LegacyFormat::UnifiedIndex | LegacyFormat::NoTimeSeries => {
+            text.to_string()
+        }
         _ => convert::rewrite(text)?,
     };
     let out = qmd_steps::rewrite(&out)?;
     let out = document_index::rewrite(&out)?;
+    let out = if time_series_steps::is_retired(&out)? {
+        time_series_steps::rewrite(&out)?
+    } else {
+        out
+    };
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -97,6 +110,17 @@ pub fn upgrade_document_index(text: &str) -> Result<Option<String>> {
             None => e.to_string(),
         }
     })?;
+    Ok(Some(out))
+}
+
+/// Give a config's time-series sources their `render_time_series` steps
+/// and add the time-series index, when it has none (`time_series_steps.rs`).
+pub fn upgrade_time_series_steps(text: &str) -> Result<Option<String>> {
+    if !time_series_steps::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = time_series_steps::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
     Ok(Some(out))
 }
 

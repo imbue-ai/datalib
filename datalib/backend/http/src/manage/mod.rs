@@ -73,8 +73,9 @@ impl Phase {
     fn of_function(function: Option<&str>) -> Self {
         match function {
             Some("ingest") => Phase::Ingest,
-            Some("render_markdown") => Phase::Render,
+            Some("render_markdown") | Some("render_time_series") => Phase::Render,
             Some("grid_index")
+            | Some("time_series_index")
             | Some("qmd_aggregator")
             | Some("keyword_index")
             | Some("embed")
@@ -501,6 +502,7 @@ fn default_name(id: &str) -> String {
         "unified_document_index/qmd_aggregator" => "Document Index (QMD)",
         "unified_document_index/embedding_map" => "Document Index (map)",
         "unified_document_index" => "Document Index (Applet)",
+        "unified_time_series_index/time_series_index" => "Time Series Index",
         other => other,
     }
     .to_string()
@@ -530,6 +532,8 @@ fn child_label(step: &WrittenStep) -> String {
     match step.function.as_deref() {
         Some("ingest") => "Ingest",
         Some("render_markdown") => "Render markdown",
+        Some("render_time_series") => "Render time series",
+        Some("time_series_index") => "Time series index",
         Some("grid_index") => "Grid index",
         Some("qmd_aggregator") => "QMD aggregator",
         Some("keyword_index") => "Keyword index",

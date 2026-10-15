@@ -23,7 +23,8 @@ pub fn index_rel() -> String {
     )
 }
 
-/// Every time series a source's raw store holds, read at its head.
+/// Every time series a source's raw store holds, read at its head. An arm
+/// here is a type [`SourceType::renders_time_series`] says yes for.
 fn read(source_type: SourceType, raw: &Path, source_id: &str) -> Result<Vec<TimeSeries>> {
     match source_type {
         SourceType::Garmin => {
@@ -152,4 +153,88 @@ async fn seal(
         version: head,
         rows: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use strum::VariantArray;
+
+    use super::*;
+
+    /// The index step reads each source's store where its render step
+    /// writes it, seals, and reports the head it sealed; a source named in
+    /// `inputs` that has rendered nothing yet is no error.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_index_step_stacks_the_stores_its_inputs_name() {
+        use datalib_time_series_schema::{Point, TimeKind, TimeSeries};
+
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let weight = TimeSeries {
+            time_series_id: "w".into(),
+            source_id: "riker".into(),
+            entity: "account".into(),
+            metric: "weight".into(),
+            label: "Weight".into(),
+            unit: "kg".into(),
+            time_kind: TimeKind::Instant,
+            points: vec![Point::value(1, 80.0)],
+        };
+        let store = store::open(
+            &datalib_etl::layout::render_time_series_db(root, "riker"),
+            StoreKind::TimeSeries,
+        )
+        .await
+        .unwrap();
+        datalib_etl_time_series::apply(&store, &[weight], &BTreeSet::from(["riker"]))
+            .await
+            .unwrap();
+        doltlite_raw::commit_run(&store, "test").await.unwrap();
+        store.close().await;
+
+        let env = StepEnv {
+            step: index_rel(),
+            group: datalib_core::layout::UNIFIED_TIME_SERIES_INDEX_DIR.into(),
+            group_type: None,
+            source_group: None,
+            source_group_type: None,
+            function: crate::function::Function::TimeSeriesIndex,
+            inputs: vec![
+                "riker/render_time_series".into(),
+                "troi/render_time_series".into(),
+            ],
+        };
+        let claims = run_index(&env, root, &Emitter::new("test".into()))
+            .await
+            .unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].path, index_rel());
+
+        let index =
+            doltlite_raw::open_reader(&datalib_core::layout::time_series_index_db(root), None)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(index.pin().commit(), claims[0].version);
+        let rows = store::rows(index.pool()).await.unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.metric.as_str()).collect::<Vec<_>>(),
+            ["weight"]
+        );
+        index.close().await;
+    }
+
+    /// The config side adds `render_time_series` steps for the types its
+    /// own list names; this binary must agree on which those are.
+    #[test]
+    fn the_config_and_this_binary_agree_on_which_types_have_time_series() {
+        for &t in SourceType::VARIANTS {
+            assert_eq!(
+                t.renders_time_series(),
+                datalib_dag::config::TIME_SERIES_SOURCE_TYPES.contains(&t.as_str()),
+                "{}",
+                t.as_str()
+            );
+        }
+    }
 }

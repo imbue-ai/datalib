@@ -23,6 +23,14 @@ isn't one, and a record that "fails to parse" is a record **render**
 could not deserialize — which matters because the fix is always a
 re-render and never a re-fetch.
 
+A source whose data is numbers over time renders a second format too:
+its `render_time_series` step writes time series, not documents, into a
+store of its own, which the `time_series_index` stacks. That path shares
+none of this doc's machinery (no markdown, no `grid_rows`, no render
+cursor); its writer is `datalib/backend/etl/time_series` and its design
+is [`plans/time_series.md`](plans/time_series.md). Everything below is
+about documents.
+
 §2, §3's U-rules and §5 describe the tree as it is. §3's P-rules and
 §4's rules are partly aspiration: each says where the tree stands, and
 the retrofit plan is

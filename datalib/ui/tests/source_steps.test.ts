@@ -31,6 +31,7 @@ import {
   readersOf,
   removedWith,
   setQmdSteps,
+  setTimeSeriesStep,
   qmdIndexingOf,
   unwireFromFanIns,
   wireIntoFanIns,
@@ -1474,5 +1475,57 @@ command = "datalib-applet slack_view"
     expect(moveAgainstDataFlow(CONFIG, "claude", "slack")).toBeNull();
     expect(moveAgainstDataFlow(CONFIG, "claude", null)).toBeNull();
     expect(moveAgainstDataFlow(CONFIG, "slack", "unified_document_index")).toBeNull();
+  });
+});
+
+describe("a source's time-series step", () => {
+  const WATCH = `${PAIR}
+# ── garmin ──
+[[groups]]
+id = "riker"
+type = "garmin"
+
+[[steps]]
+group = "riker"
+function = "ingest"
+`;
+  const inputsOf = (text: string, id: string) => listSteps(text).find((s) => s.id === id)?.inputs;
+
+  /// A time-series source added without its step and a place in the
+  /// index renders documents happily and never reaches the time-series
+  /// index, with nothing on screen to say why.
+  it("adds the step, the time-series index and the edge between them, once", () => {
+    const added = setTimeSeriesStep(WATCH, "riker", "garmin");
+    expect(inputsOf(added, "riker/render_time_series")).toEqual(["riker/ingest"]);
+    expect(inputsOf(added, "unified_time_series_index/time_series_index")).toEqual([
+      "riker/render_time_series",
+    ]);
+    expect(listGroups(added).map((g) => g.id)).toContain("unified_time_series_index");
+    expect(setTimeSeriesStep(added, "riker", "garmin")).toBe(added);
+    expect(added).toContain("── slack");
+  });
+
+  it("joins an index that is already there", () => {
+    const one = setTimeSeriesStep(WATCH, "riker", "garmin");
+    const two = setTimeSeriesStep(
+      `${one}\n[[groups]]\nid = "troi"\ntype = "garmin"\n\n[[steps]]\ngroup = "troi"\nfunction = "ingest"\n`,
+      "troi",
+      "garmin",
+    );
+    expect(inputsOf(two, "unified_time_series_index/time_series_index")).toEqual([
+      "riker/render_time_series",
+      "troi/render_time_series",
+    ]);
+    expect(listGroups(two).filter((g) => g.id === "unified_time_series_index")).toHaveLength(1);
+  });
+
+  it("leaves a source with no time series alone", () => {
+    expect(setTimeSeriesStep(PAIR, "slack", "slack")).toBe(PAIR);
+  });
+
+  it("is unwired from the time-series index when the source goes", () => {
+    const added = setTimeSeriesStep(WATCH, "riker", "garmin");
+    const gone = unwireFromFanIns(added, "riker/render_time_series");
+    expect(inputsOf(gone, "unified_time_series_index/time_series_index")).toEqual([]);
   });
 });

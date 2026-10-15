@@ -29,6 +29,25 @@ rather than guessed at.
 The FIT files and the minute-by-minute series (heart rate, stress,
 Body Battery, respiration, steps) are mirrored but not drawn.
 
+## Time series
+
+The `render_time_series` step writes the same data as time series into
+`<data_root>/<group>/render_time_series/time_series.doltlite_db`
+(`src/render/time_series.rs`), one per metric of the account (entity
+`account`):
+
+- **Each daily field in `FIELDS`**, by calendar day (`TimeKind::Day`).
+  Values are stored in one unit per quantity: every duration in seconds
+  (sleep, HRV, intensity minutes), distance in metres, and the rest in
+  the unit the field names (bpm, kcal, %). A text field (HRV status,
+  readiness level) is a point with text and no value.
+- **Weight, body fat and BMI**, from the weigh-ins, by instant
+  (`TimeKind::Instant`, the weigh-in's GMT stamp). Two weigh-ins at one
+  instant keep the later.
+
+A time series with no points is not written. Its id is minted from the
+source id and the metric key, so it is the same on every render.
+
 ## Incrementality
 
 Every document is in one bucket, keyed by the overview's uuid, which

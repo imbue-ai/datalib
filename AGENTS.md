@@ -197,6 +197,9 @@ datalib/
                    document-index load, `RenderCtx`. Everything that knows
                    `datalib_schema` sits here or above.
     etl/timeseries_render/ what the time-series render crates share.
+    etl/time_series/ `datalib_etl_time_series`: the time-series store
+                   both its writers share — a source's
+                   `render_time_series` and the `time_series_index`.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
                    (config schema) per provider. Twelve of the
                    file-backed ones scan a local tree through
@@ -231,6 +234,8 @@ datalib/
                    `data-handle`. No first-party deps.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
+    time_series_schema/ a time series, its two tables and `TimeKind`.
+                   Only the shape.
     contacts/      the contacts app's store under `datalib_curated/`;
                    the `datalib_contacts` applet is its one writer.
     unified_document_index/ the grid index, the qmd index, the query language over
@@ -284,7 +289,11 @@ source's pair: it retires the collection of any source it does not name
 and reports on the whole, and removing it turns search off.
 `embedding_map` reads the aggregator and lays the embeddings out on a
 plane for the map card (`datalib/backend/embedding_map/README.md`).
-All of it is queried by the `unified_document_index` applet; `datalib-http`
+A source whose data is also time series (Garmin) has a
+`render_time_series` step beside its `render_markdown`, and
+`time_series_index` under `unified_time_series_index` stacks every such
+store into one (`docs/dev/plans/time_series.md`). The document index is
+queried by the `unified_document_index` applet; `datalib-http`
 reads only the stores' commit logs (`history/`), never their rows. A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
@@ -686,6 +695,7 @@ upstream (block types, MIME types), free-form display text
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
 | which of datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
 | what namespace a handle is in | `HandleKind` | `handle/src/lib.rs` (`datalib_handle`) |
+| what a time-series point's `t` counts | `TimeKind` | `time_series_schema/src/lib.rs` (`datalib_time_series_schema`) |
 | a contact is a person or a group; how one is reached | `ContactKind`, `Medium` | `contact_schema/src/lib.rs` (`datalib_contact_schema`) |
 | how a handle was linked | `LinkedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
 | what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |
