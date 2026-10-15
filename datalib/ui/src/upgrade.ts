@@ -33,14 +33,6 @@ export function rerenderSources(upgrade: Upgrade): string[] {
   return [...new Set(upgrade.rerender.map(stepSource))];
 }
 
-/// The sources with a step the launch could not migrate, each once, with
-/// the first reason.
-export function failedSources(upgrade: Upgrade): { source: string; error: string }[] {
-  return sourceRows(upgrade)
-    .filter((r) => r.state === "failed")
-    .map((r) => ({ source: r.source, error: r.error ?? "" }));
-}
-
 /// The toolbar's upgrade pill: amber while the pass runs, red once it is
 /// over with a source it could not update (until dismissed), else none.
 export type UpgradePill = { tone: "updating" | "failed"; label: string };

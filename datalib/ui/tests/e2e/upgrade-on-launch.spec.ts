@@ -90,10 +90,11 @@ test("after the pass, a yes re-runs what asked for it, as the upgrade", async ({
 
   const dialog = page.getByRole("dialog", { name: "Your rendered documents are out of date" });
   await expect(dialog).toBeVisible();
-  const sources = dialog.locator("ul.sources:not(.failed) li");
+  const sources = dialog.locator("ul.sources li");
   await expect(sources).toHaveText(["enterprise-mail", "ten-forward", "Search index"]);
-  await expect(dialog.locator("ul.failed li")).toContainText("holodeck-slack");
-  await expect(dialog.locator("ul.failed li")).toContainText("no rung carries it");
+  // The source the pass could not update is the pill's to report, once.
+  await expect(dialog).not.toContainText("holodeck-slack");
+  await expect(page.getByRole("button", { name: "1 source could not be updated" })).toBeVisible();
 
   await dialog.getByRole("button", { name: "Re-render now" }).click();
   await expect(dialog).toHaveCount(0);
