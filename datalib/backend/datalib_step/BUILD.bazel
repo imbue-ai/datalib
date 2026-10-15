@@ -19,6 +19,8 @@ rust_binary(
     deps = [
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/etl/time_series:datalib_etl_time_series",
+        "//datalib/backend/time_series_schema:datalib_time_series_schema",
         "//datalib/backend/embedding_map:datalib_embedding_map",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/web:datalib_etl_web",

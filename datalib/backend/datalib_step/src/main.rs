@@ -28,6 +28,7 @@ mod reset;
 mod source;
 mod source_type;
 mod synth;
+mod time_series;
 mod topo_sort_config;
 
 #[cfg(test)]
@@ -504,6 +505,18 @@ async fn run_function(
         Function::EmbeddingMap => {
             writes_the_index_tree(&env, &embedding_map::out_rel())?;
             embedding_map::run(data_root, now, emitter).await
+        }
+        Function::RenderTimeSeries => time_series::run_render(&env, data_root, emitter).await,
+        Function::TimeSeriesIndex => {
+            anyhow::ensure!(
+                env.step == time_series::index_rel(),
+                "`time_series_index` writes {:?} and nothing else, but this step's id is {:?}: \
+                 declare it under the `{}` group",
+                time_series::index_rel(),
+                env.step,
+                datalib_core::layout::UNIFIED_TIME_SERIES_INDEX_DIR
+            );
+            time_series::run_index(&env, data_root, emitter).await
         }
     }
 }

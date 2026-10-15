@@ -16,6 +16,16 @@ pub const UNIFIED_INDEX_DIR: &str = "unified_index";
 /// to [`UNIFIED_INDEX_DIR`]. Named after the step's function, like every
 /// tree a step writes.
 pub const GRID_DIR: &str = "grid_index";
+/// The top-level tree holding the time-series index, beside the
+/// document indexes. Owned by the `time_series_index` step that writes
+/// it and the time-series applet that reads it.
+pub const UNIFIED_TIME_SERIES_INDEX_DIR: &str = "unified_time_series_index";
+/// The `time_series_index` step's tree, relative to
+/// [`UNIFIED_TIME_SERIES_INDEX_DIR`]. Named after the step's function.
+pub const TIME_SERIES_INDEX_DIR: &str = "time_series_index";
+/// A time-series store's file, in a source's `render_time_series` tree
+/// and in [`TIME_SERIES_INDEX_DIR`] alike.
+pub const TIME_SERIES_DB: &str = "time_series.doltlite_db";
 /// The top-level tree of the apps whose state a person curates, one
 /// directory per app (`datalib_contacts/`). Nothing can rebuild it, and no
 /// reset or removal of a source touches it.
@@ -114,6 +124,19 @@ pub fn grid_index_db(data_root: &Path) -> PathBuf {
 /// applet beside its grid commit.
 pub fn search_terms_db(data_root: &Path) -> PathBuf {
     grid_index_dir(data_root).join(SEARCH_TERMS_DB)
+}
+
+pub fn unified_time_series_index_dir(data_root: &Path) -> PathBuf {
+    data_root.join(UNIFIED_TIME_SERIES_INDEX_DIR)
+}
+
+/// `data_root/unified_time_series_index/time_series_index/time_series.doltlite_db`:
+/// every source's time series. Resolved from `data_root` alone by the
+/// step that writes it and the applet that reads it.
+pub fn time_series_index_db(data_root: &Path) -> PathBuf {
+    unified_time_series_index_dir(data_root)
+        .join(TIME_SERIES_INDEX_DIR)
+        .join(TIME_SERIES_DB)
 }
 
 pub fn qmd_dir(data_root: &Path) -> PathBuf {

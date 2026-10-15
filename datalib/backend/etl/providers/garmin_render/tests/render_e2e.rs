@@ -258,3 +258,50 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     };
     assert_eq!(texts(&again), texts(&emitted));
 }
+
+/// The TNG account's time series land in a time-series store, and a
+/// second render of an unchanged raw store writes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn time_series_are_stored_then_left_alone_when_nothing_moved() {
+    use datalib_etl_garmin_render::render::time_series;
+    use datalib_time_series_schema::TimeKind;
+
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let raw = root.join(SOURCE).join("ingest");
+    ingest(&raw, &root.join("playback")).await;
+
+    let (head, all) = time_series::read(&raw, SOURCE, None).unwrap();
+    assert!(head.is_some());
+    let parsed = parse(&raw, RawRange::cold()).unwrap();
+    let weight = all.iter().find(|s| s.metric == "weight").unwrap();
+    assert_eq!(weight.time_kind, TimeKind::Instant);
+    assert_eq!(weight.points.len(), parsed.weigh_ins.len());
+    let resting = all.iter().find(|s| s.metric == "resting_hr").unwrap();
+    assert_eq!(
+        (resting.time_kind, resting.unit.as_str()),
+        (TimeKind::Day, "bpm")
+    );
+    assert!(!resting.points.is_empty());
+    let ids: std::collections::BTreeSet<&str> =
+        all.iter().map(|s| s.time_series_id.as_str()).collect();
+    assert_eq!(ids.len(), all.len());
+
+    let store = datalib_etl_time_series::store::open(
+        &datalib_etl::layout::render_time_series_db(root, SOURCE),
+        datalib_etl::doltlite_raw::StoreKind::TimeSeries,
+    )
+    .await
+    .unwrap();
+    let scope = std::collections::BTreeSet::from([SOURCE]);
+    let first = datalib_etl_time_series::apply(&store, &all, &scope)
+        .await
+        .unwrap();
+    assert_eq!(first.written, all.len());
+    let (_, again) = time_series::read(&raw, SOURCE, None).unwrap();
+    let second = datalib_etl_time_series::apply(&store, &again, &scope)
+        .await
+        .unwrap();
+    assert_eq!((second.written, second.unchanged), (0, all.len()));
+    store.close().await;
+}

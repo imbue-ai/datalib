@@ -43,6 +43,11 @@ pub enum StoreKind {
     Raw,
     /// A source's render store (`<group>/render_markdown`).
     Render,
+    /// A source's time series (`<group>/render_time_series`).
+    TimeSeries,
+    /// Every source's time series, stacked
+    /// (`unified_time_series_index/time_series_index`).
+    TimeSeriesIndex,
     /// The grid index (`unified_index/grid_index`).
     GridIndex,
     Feedback,
