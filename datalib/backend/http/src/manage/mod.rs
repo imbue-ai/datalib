@@ -1168,6 +1168,15 @@ impl RowCtx<'_> {
                 "Open every contact in the contacts app.",
                 None,
             ),
+            // So are the time-series index's: Browse opens the Time series
+            // card (`timeSeriesView()`).
+            Entry::Applet(a) if a.id == datalib_dag::config::TIME_SERIES_INDEX_GROUP => {
+                browse_action(
+                    "Browse time series",
+                    "Open every time series your sources keep, on one chart.",
+                    None,
+                )
+            }
             _ => browse_action(
                 "Browse this data",
                 "Open this source\u{2019}s rows in the grid.",

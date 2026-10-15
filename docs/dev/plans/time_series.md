@@ -1,9 +1,11 @@
 # Time series as a second destination format
 
-**Status: proposal, written 2026-10-15. Nothing in it is built yet,
-except the measurement in `hack/doltlite_time_series_cost/`.** The
-rename of the unified index (§"Names") is the first PR; the rest
-follows in the order of §"Order of work".
+**Status: written 2026-10-15. Built the same day on one branch: the
+rename (§"Names"), the stores and steps with Garmin as the first
+source, the applet, and the Time series card (the canvas's B and C:
+a list and one chart, one axis per unit). Not built: YoLink and
+AirVisual as time series, charts inside documents, and retiring
+`plots/` (§"Order of work", item 5).**
 
 ## The problem
 

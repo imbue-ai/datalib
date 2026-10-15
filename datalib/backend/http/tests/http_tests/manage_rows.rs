@@ -855,14 +855,17 @@ async fn item_counts_and_their_history_reach_the_rows_from_the_run_store() {
     }
 }
 
-/// The contacts app's rows are its own, so its row's Browse is on (the UI
-/// opens its table); any other applet serves endpoints and has none.
+/// The contacts app's rows are its own, and so are the time-series
+/// index's, so their rows' Browse is on (the UI opens their views); any
+/// other applet serves endpoints and has none.
 #[tokio::test]
-async fn the_contacts_app_can_be_browsed_and_another_applet_cannot() {
+async fn the_contacts_and_time_series_apps_can_be_browsed_and_another_applet_cannot() {
     let tmp = tempfile::tempdir().unwrap();
     let config = format!(
         "{CONFIG}\n[[applets]]\nid = \"datalib_contacts\"\ngroup = \"unified_document_index\"\n\
-         command = \"datalib-applet datalib_contacts\"\n"
+         command = \"datalib-applet datalib_contacts\"\n\
+         [[applets]]\nid = \"unified_time_series_index\"\ngroup = \"unified_document_index\"\n\
+         command = \"datalib-applet unified_time_series_index\"\n"
     );
     write_root(tmp.path(), &config, None).await;
     let rows = by_key(&get_rows(tmp.path()).await);
@@ -878,5 +881,8 @@ async fn the_contacts_app_can_be_browsed_and_another_applet_cannot() {
     let contacts = browse("datalib_contacts");
     assert_eq!(contacts["enabled"], true, "{contacts}");
     assert_eq!(contacts["label"], "Browse your contacts");
+    let time_series = browse("unified_time_series_index");
+    assert_eq!(time_series["enabled"], true, "{time_series}");
+    assert_eq!(time_series["label"], "Browse time series");
     assert_eq!(browse("unified_document_index")["enabled"], false);
 }

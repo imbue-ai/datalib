@@ -151,6 +151,10 @@ pub enum RootEvent {
     /// commit, not the file: the applet reads at HEAD, so a write that
     /// has not committed is not something a reader can fetch yet.
     IndexChanged,
+    /// The time-series index
+    /// (`unified_time_series_index/time_series_index/time_series.doltlite_db`)
+    /// has a new HEAD: the time series, or their points, moved.
+    TimeSeriesIndexChanged,
     /// The launch's migrate pass moved: `/api/config`'s `upgrade` is new.
     UpgradeChanged,
     /// Nothing changed; the stream is open. See [`HEARTBEAT`].
@@ -190,6 +194,7 @@ enum Moved {
     RunStore,
     Frontend,
     GridIndex,
+    TimeSeriesIndex,
     /// A store under `datalib_curated/`, or that tree appearing.
     Curated,
     /// The watch's own marker: it delivers.
@@ -228,6 +233,11 @@ fn classify(root: &Path, path: &Path) -> Option<Moved> {
         && name.starts_with(datalib_core::layout::GRID_DB)
     {
         return Some(Moved::GridIndex);
+    }
+    if path.parent() == Some(time_series_index_dir(root).as_path())
+        && name.starts_with(datalib_core::layout::TIME_SERIES_DB)
+    {
+        return Some(Moved::TimeSeriesIndex);
     }
     let curated = datalib_core::layout::curated_dir(root);
     if path == curated || (path.starts_with(&curated) && name.contains(STORE_SUFFIX)) {
@@ -274,6 +284,8 @@ struct Seen {
     runs: BTreeMap<StorePart, i64>,
     /// The grid index's HEAD as of the last burst.
     index_head: Option<String>,
+    /// The time-series index's HEAD as of the last burst.
+    time_series_head: Option<String>,
     /// Each curated store's `main` as of the last burst.
     curated_heads: BTreeMap<PathBuf, String>,
     /// The last log line read for its chain.
@@ -285,6 +297,7 @@ impl Seen {
         Seen {
             runs: datalib_runs::versions(root).await,
             index_head: index_head(root).await.unwrap_or(None),
+            time_series_head: time_series_head(root).await.unwrap_or(None),
             curated_heads: curated_heads(root).await,
             log_seq: datalib_runs::last_log_seq(root).await,
         }
@@ -419,11 +432,24 @@ fn merge_chain(a: Option<u32>, b: Option<u32>) -> Option<u32> {
 /// at a file that is gone. A read-only open beside the live `grid_index`
 /// writer is measured safe by `doltlite_two_process_test`.
 async fn index_head(root: &Path) -> anyhow::Result<Option<String>> {
-    let path = datalib_core::layout::grid_index_db(root);
+    store_head(&datalib_core::layout::grid_index_db(root)).await
+}
+
+async fn time_series_head(root: &Path) -> anyhow::Result<Option<String>> {
+    store_head(&datalib_core::layout::time_series_index_db(root)).await
+}
+
+/// The directory the time-series index's store is in.
+fn time_series_index_dir(root: &Path) -> PathBuf {
+    datalib_core::layout::unified_time_series_index_dir(root)
+        .join(datalib_core::layout::TIME_SERIES_INDEX_DIR)
+}
+
+async fn store_head(path: &Path) -> anyhow::Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
-    let pool = datalib_pin::open_reader(&path).await?;
+    let pool = datalib_pin::open_reader(path).await?;
     let head = datalib_pin::head(&pool).await;
     pool.close().await;
     Ok(head?.map(|pin| pin.commit().to_string()))
@@ -517,6 +543,16 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
                 }
                 Ok(_) => {}
                 Err(e) => tracing::debug!("watch: the grid index's head is unreadable now: {e:#}"),
+            },
+            Moved::TimeSeriesIndex => match time_series_head(root).await {
+                Ok(head) if head != seen.time_series_head => {
+                    seen.time_series_head = head;
+                    out.insert(RootEvent::TimeSeriesIndexChanged);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!("watch: the time-series index's head is unreadable now: {e:#}")
+                }
             },
             Moved::Curated => {
                 if curated_moved(curated_heads(root).await, &mut seen.curated_heads) {
@@ -665,6 +701,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
     // applet, and a root that has never synced has none. Watched once it
     // exists — see the debounce loop below.
     let grid_index = datalib_core::layout::grid_index_dir(&root);
+    let time_series_index = time_series_index_dir(&root);
     // Likewise `datalib_curated/`, which exists once an app made it; its
     // own watcher is recursive, since each app keeps a directory of its
     // own, and holds a handful of files.
@@ -682,6 +719,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
     let mut make_watcher: Option<MakeWatcher> = None;
     let mut watcher = None;
     let mut index_watcher = None;
+    let mut time_series_watcher = None;
     let mut curated_watcher = None;
     match ears {
         Ears::Fed => {
@@ -721,6 +759,8 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
                 }
             }
             index_watcher = watch_dir(&grid_index, RecursiveMode::NonRecursive, &*make);
+            time_series_watcher =
+                watch_dir(&time_series_index, RecursiveMode::NonRecursive, &*make);
             curated_watcher = watch_dir(&curated, RecursiveMode::Recursive, &*make);
             watcher = Some(w);
             make_watcher = Some(make);
@@ -798,6 +838,10 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
             if let (None, Some(make)) = (&index_watcher, &make_watcher) {
                 index_watcher = watch_dir(&grid_index, RecursiveMode::NonRecursive, &**make);
             }
+            if let (None, Some(make)) = (&time_series_watcher, &make_watcher) {
+                time_series_watcher =
+                    watch_dir(&time_series_index, RecursiveMode::NonRecursive, &**make);
+            }
             if let (None, Some(make)) = (&curated_watcher, &make_watcher) {
                 curated_watcher = watch_dir(&curated, RecursiveMode::Recursive, &**make);
             }
@@ -857,6 +901,7 @@ fn moved_by(root: &Path, ev: &notify::Event) -> Vec<Moved> {
             Moved::RunStore,
             Moved::Frontend,
             Moved::GridIndex,
+            Moved::TimeSeriesIndex,
             Moved::Curated,
         ];
     }
@@ -949,6 +994,13 @@ mod tests {
                 &root.join("unified_document_index/grid_index/db.doltlite_db")
             ),
             Some(Moved::GridIndex)
+        );
+        assert_eq!(
+            classify(
+                root,
+                &root.join("unified_time_series_index/time_series_index/time_series.doltlite_db")
+            ),
+            Some(Moved::TimeSeriesIndex)
         );
     }
 
@@ -1179,6 +1231,7 @@ mod tests {
                 Moved::RunStore,
                 Moved::Frontend,
                 Moved::GridIndex,
+                Moved::TimeSeriesIndex,
                 Moved::Curated
             ])
         );
@@ -1391,6 +1444,31 @@ mod tests {
             hash.expect("doltlite linked");
         }
         writer.close().await;
+    }
+
+    /// A commit to the time-series index is reported as its own event,
+    /// so the time-series card refetches and the grid does not.
+    #[tokio::test]
+    async fn the_time_series_index_reports_its_commits() {
+        let td = tempfile::tempdir().unwrap();
+        let db = datalib_core::layout::time_series_index_db(td.path());
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let (mut rx, feed) = watching(td.path()).await;
+        write_index(&db, 1, true).await;
+        feed.moved(&db);
+        until(&mut rx, RootEvent::TimeSeriesIndexChanged).await;
+        barrier(td.path(), &feed, &mut rx).await;
+        write_index(&db, 2, false).await;
+        feed.moved(&db);
+        let got = barrier(td.path(), &feed, &mut rx).await;
+        assert!(
+            !got.contains(&RootEvent::TimeSeriesIndexChanged),
+            "a write not yet committed was reported: {got:?}"
+        );
+        assert!(!got.contains(&RootEvent::IndexChanged), "{got:?}");
+        write_index(&db, 3, true).await;
+        feed.moved(&db);
+        until(&mut rx, RootEvent::TimeSeriesIndexChanged).await;
     }
 
     /// The grid index reports when its HEAD moves and not when its file

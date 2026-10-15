@@ -25,6 +25,7 @@ import {
 } from "./dashboardSections";
 import { personView } from "./personView";
 import { contactsView } from "./contactsView";
+import { timeSeriesView } from "./timeSeriesView";
 
 // The names in scope when card source is evaluated (cardSource.ts).
 export const viewLibs: ViewLibs = {
@@ -53,4 +54,5 @@ export const viewLibs: ViewLibs = {
   syncDashboardView,
   personView,
   contactsView,
+  timeSeriesView,
 };
