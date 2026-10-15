@@ -357,7 +357,7 @@ mod tests {
             spec("email/raw", &[]),
             spec("email/rendered_md", &["email/raw"]),
             spec(
-                "unified_index/grid",
+                "unified_document_index/grid",
                 &["slack/rendered_md", "email/rendered_md"],
             ),
         ])
@@ -368,7 +368,7 @@ mod tests {
             BTreeSet::from([idx_in(&g, "slack/raw")])
         );
         assert_eq!(
-            g.deps[idx_in(&g, "unified_index/grid")],
+            g.deps[idx_in(&g, "unified_document_index/grid")],
             BTreeSet::from([
                 idx_in(&g, "slack/rendered_md"),
                 idx_in(&g, "email/rendered_md")
@@ -382,7 +382,9 @@ mod tests {
         // Dependencies come before dependents.
         let pos: HashMap<usize, usize> = g.topo.iter().enumerate().map(|(p, &i)| (i, p)).collect();
         assert!(pos[&idx_in(&g, "slack/raw")] < pos[&idx_in(&g, "slack/rendered_md")]);
-        assert!(pos[&idx_in(&g, "slack/rendered_md")] < pos[&idx_in(&g, "unified_index/grid")]);
+        assert!(
+            pos[&idx_in(&g, "slack/rendered_md")] < pos[&idx_in(&g, "unified_document_index/grid")]
+        );
     }
 
     /// The fringe is what `--sync` may target: steps with no declared

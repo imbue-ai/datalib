@@ -1,6 +1,6 @@
 // The two card sources GridCard.ce.vue draws.
 //
-// `searchView()` is the Search card: one query over the unified index,
+// `searchView()` is the Search card: one query over the unified document index,
 // shown as a list with a preview or as a table. It opens on the view
 // picked last unless `view` names one. A search given a `name` keeps
 // it; one without names itself after the live query; no `q` opens on
@@ -55,7 +55,7 @@ export function searchView(opts?: SearchOpts): CardRender {
 export function gridView(opts?: GridOpts): CardRender {
   if (!opts?.url) {
     throw new Error(
-      'gridView needs the url of the table to show, as in gridView({ url: "/applet/unified_index/problems" }). The search is searchView().',
+      'gridView needs the url of the table to show, as in gridView({ url: "/applet/unified_document_index/problems" }). The search is searchView().',
     );
   }
   return vueCard(

@@ -122,6 +122,8 @@ pub enum Retired {
     TypesAndMethodTables,
     /// A `qmd_index` fan-in, from before `qmd_aggregator` (`qmd_steps.rs`).
     QmdIndex,
+    /// The index group named `unified_index` (`document_index.rs`).
+    UnifiedIndex,
 }
 
 /// Which retired shape this config is in, or `None` when it is already

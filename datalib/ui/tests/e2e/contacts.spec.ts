@@ -40,7 +40,7 @@ type Row = {
 async function openMessageBy(page: Page, request: APIRequestContext, handle: string) {
   const q = `author_handle:"${handle}"`;
   const resp = await request.get(
-    `/applet/unified_index/search?q=${encodeURIComponent(q)}&limit=50`,
+    `/applet/unified_document_index/search?q=${encodeURIComponent(q)}&limit=50`,
   );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
@@ -148,7 +148,9 @@ test("a contact picked with @ finds everything that reached its handles", async 
   const { contact_id: id } = (await made.json()) as { contact_id: string };
 
   const total = async (q: string) => {
-    const r = await request.get(`/applet/unified_index/search?q=${encodeURIComponent(q)}&limit=1`);
+    const r = await request.get(
+      `/applet/unified_document_index/search?q=${encodeURIComponent(q)}&limit=1`,
+    );
     expect(r.ok()).toBeTruthy();
     const body = (await r.json()) as { total: number; refused?: string[] };
     expect(body.refused ?? []).toEqual([]);

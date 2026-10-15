@@ -142,7 +142,7 @@ describe("isSameOrigin", () => {
   const origin = "http://127.0.0.1:8731";
   it("is true for relative and same-origin absolute URLs only", () => {
     expect(isSameOrigin("/api/dag", origin)).toBe(true);
-    expect(isSameOrigin("applet/unified_index/rows?q=x", origin)).toBe(true);
+    expect(isSameOrigin("applet/unified_document_index/rows?q=x", origin)).toBe(true);
     expect(isSameOrigin(`${origin}/api/health`, origin)).toBe(true);
     expect(isSameOrigin("https://example.com/x", origin)).toBe(false);
     expect(isSameOrigin("http://127.0.0.1:9999/api/health", origin)).toBe(false);

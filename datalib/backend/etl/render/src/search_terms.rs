@@ -1,5 +1,5 @@
 //! The grid's search terms file,
-//! `unified_index/grid_index/search_terms.sqlite`: every term each
+//! `unified_document_index/grid_index/search_terms.sqlite`: every term each
 //! `grid_rows` row answers to (`datalib_schema::search_terms`), kept in step
 //! with the grid index after each `grid_index` pass. It is a pure
 //! function of `grid_rows` and `supplied_search_terms` at one commit: the

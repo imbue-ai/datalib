@@ -7,7 +7,7 @@ so the pipeline operates at the layer of DB + qmd files; the genrule is
 the Bazel-distribution boundary that wants archives.
 
 Layout: `data_root` holds one dir per source stanza (`<stanza>/render_markdown/…`)
-plus the reserved `system/` and `unified_index/` dirs. We tar every stanza's
+plus the reserved `system/` and `unified_document_index/` dirs. We tar every stanza's
 `render_markdown` subtree, each entry prefixed with `qmd/<stanza>/render_markdown/<rel>`,
 so callers can extract with `--strip-components=1` to land
 `<stanza>/render_markdown/…` at a root data directory.
@@ -83,9 +83,9 @@ def main() -> int:
     # Every top-level dir that is not owned by the app itself is a source
     # stanza with a `render_markdown/` subtree. Tar them all, rooted at
     # `qmd/<stanza>/...`. `system/` is the server's own state and
-    # `unified_index/` is the index the steps write, so neither is a
+    # `unified_document_index/` is the index the steps write, so neither is a
     # stanza even though both sit at the same level.
-    not_stanzas = {"system", "unified_index"}
+    not_stanzas = {"system", "unified_document_index"}
     rendered_dirs = sorted(
         d
         for d in src_root.glob("*/render_markdown")

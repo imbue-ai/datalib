@@ -1,5 +1,5 @@
 //! The column-type vocabulary. A table's producer — `GET /api/manage/rows`,
-//! the `unified_index` applet's search — declares a [`ColumnSpec`] per
+//! the `unified_document_index` applet's search — declares a [`ColumnSpec`] per
 //! column, and the one typed viewer in the UI draws each cell by its
 //! type rather than by comparing field names. The value shapes below
 //! are what a cell of each type holds on the wire. Add a member when a

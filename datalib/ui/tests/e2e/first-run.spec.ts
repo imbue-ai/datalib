@@ -18,7 +18,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
   // by an earlier run.
   const before = await request.get(`${EMPTY_URL}/api/config`);
   expect((await before.json()).exists).toBe(false);
-  const search = await request.get(`${EMPTY_URL}/applet/unified_index/search?q=&limit=1`);
+  const search = await request.get(`${EMPTY_URL}/applet/unified_document_index/search?q=&limit=1`);
   expect(search.status()).toBe(502);
   expect(await search.text()).toContain("no applet");
 
@@ -62,7 +62,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
   const after = await (await request.get(`${EMPTY_URL}/api/config`)).json();
   expect(after.exists).toBe(true);
   expect(after.parsed_ok).toBe(true);
-  expect(after.text).toContain('id = "unified_index"');
+  expect(after.text).toContain('id = "unified_document_index"');
 
   // The gate is gone, so the search box is back…
   await expect(page.getByRole("searchbox", { name: "Search your data" })).toBeVisible();

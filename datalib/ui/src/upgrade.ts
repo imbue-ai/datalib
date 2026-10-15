@@ -7,7 +7,7 @@ import type { MigrateState, Upgrade } from "@/api";
 /// or the search index for the index's own steps.
 export function stepSource(step: string): string {
   const group = step.split("/")[0];
-  return group === "unified_index" ? "Search index" : group;
+  return group === "unified_document_index" ? "Search index" : group;
 }
 
 const WORST: MigrateState[] = ["failed", "running", "waiting", "done"];

@@ -109,7 +109,7 @@ the container or from any other one with the folder mounted:
 <!-- doc-test: run demo-sql -->
 ```sh
 docker exec datalib-demo datalib-doltlite -readonly \
-  /opt/datalib/demo/unified_index/grid_index/db.doltlite_db \
+  /opt/datalib/demo/unified_document_index/grid_index/db.doltlite_db \
   "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
 ```
 
@@ -160,15 +160,15 @@ inputs = ["gmail/ingest"]
 outlink_format = "gmail"
 
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["gmail/render_markdown"]
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = ["gmail/keyword_index", "gmail/embed"]
 
@@ -183,9 +183,9 @@ function = "embed"
 inputs = ["gmail/keyword_index"]
 
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
 EOF
 ```
 
@@ -224,7 +224,7 @@ describes. Query it without the server running at all:
 <!-- doc-test: run own-sql -->
 ```sh
 docker run --rm -v "$DATA_ROOT:/data" "$IMG" datalib-doltlite -readonly \
-  /data/unified_index/grid_index/db.doltlite_db \
+  /data/unified_document_index/grid_index/db.doltlite_db \
   "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
 ```
 

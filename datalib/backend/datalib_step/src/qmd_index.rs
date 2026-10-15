@@ -1,7 +1,7 @@
 //! The qmd index, one collection per source, in one file
-//! (`unified_index/qmd_aggregator/qmd/index.sqlite`): each source's
+//! (`unified_document_index/qmd_aggregator/qmd/index.sqlite`): each source's
 //! `keyword_index` and `embed` fill its own collection, and
-//! `unified_index/qmd_aggregator`, which reads all of them, keeps the
+//! `unified_document_index/qmd_aggregator`, which reads all of them, keeps the
 //! collection set to the sources it reads and reports on the whole.
 //!
 //! One collection per source, so a search scoped to one source is a
@@ -25,7 +25,7 @@ use crate::source::StepEnv;
 pub fn aggregator_rel() -> String {
     format!(
         "{}/{}",
-        datalib_core::layout::UNIFIED_INDEX_DIR,
+        datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR,
         crate::function::Function::QmdAggregator.as_str()
     )
 }
@@ -186,7 +186,7 @@ fn provision_embed_model(index: &Index, root: &Path, models_dir: Option<PathBuf>
     index.link_models(&models_dir)
 }
 
-/// `unified_index/qmd_aggregator`: leave the index's collections exactly
+/// `unified_document_index/qmd_aggregator`: leave the index's collections exactly
 /// the sources whose qmd steps it reads, retiring any other with its
 /// documents, and report what each holds.
 pub async fn run_aggregator(
@@ -218,9 +218,11 @@ pub async fn run_aggregator(
     progress.set_message(&index_summary(&collections));
     // The index rebuilds from the render_markdown trees, so cache-aware
     // backups (`restic --exclude-caches` etc.) may skip it. Tag the
-    // whole `unified_index/` tree for the same reason the grid step
+    // whole `unified_document_index/` tree for the same reason the grid step
     // does — one tag covers both indexes however they are ordered.
-    datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(data_root));
+    datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_document_index_dir(
+        data_root,
+    ));
     Ok(claim_reads(env))
 }
 

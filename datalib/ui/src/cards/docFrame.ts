@@ -18,7 +18,7 @@
 // (`DocumentKind::Plot`, http/src/embed.rs). The sanitizer lets only a
 // renderer's `plots/*.html` through, and this frame may frame nothing
 // but the asset route.
-import { UNIFIED_INDEX } from "@/api";
+import { UNIFIED_DOCUMENT_INDEX } from "@/api";
 import themeCss from "@/theme.css?inline";
 import hljsCss from "highlight.js/styles/github-dark.css?inline";
 import bodyCss from "./documentBody.css?inline";
@@ -31,7 +31,7 @@ export function docFrameCsp(origin: string): string {
   return (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; " +
     "img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; " +
-    `frame-src ${origin}${UNIFIED_INDEX}/asset/; base-uri 'none'; form-action 'none'`
+    `frame-src ${origin}${UNIFIED_DOCUMENT_INDEX}/asset/; base-uri 'none'; form-action 'none'`
   );
 }
 

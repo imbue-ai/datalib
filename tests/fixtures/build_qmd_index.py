@@ -14,12 +14,12 @@ The OUTPUT is an *overlay* on top of `qmd.tar`: it shares the same `qmd/`
 staging prefix so the two tars layer cleanly. Extracting both with
 `tar -x --strip-components=1` into a directory yields a complete root data
 directory — markdown trees under `<root>/<stanza>/render_markdown/...` plus the
-qmd index at `<root>/unified_index/qmd_aggregator/qmd/index.sqlite`.
+qmd index at `<root>/unified_document_index/qmd_aggregator/qmd/index.sqlite`.
 
 Why a script:
   1. The ingested fixture is a tar (`qmd_md.tar`) — we have to extract it to
      a real directory before qmd can walk it.
-  2. The library writes the index under `<root>/unified_index/qmd_aggregator/qmd/`,
+  2. The library writes the index under `<root>/unified_document_index/qmd_aggregator/qmd/`,
      so we pull that tree back out as a tar overlay.
   3. Node and the qmd package are Bazel inputs, handed to the library as
      paths, so nothing here touches a registry or a host Node.
@@ -117,16 +117,18 @@ def main() -> int:
 
     # The one index file, under the qmd index's directory (see
     # runtime::qmd).
-    produced = work / "unified_index" / "qmd_aggregator" / "qmd" / "index.sqlite"
+    produced = (
+        work / "unified_document_index" / "qmd_aggregator" / "qmd" / "index.sqlite"
+    )
     if not produced.exists():
         sys.stderr.write(f"build_qmd_index did not produce {produced}\n")
         return 1
 
     # Emit an overlay tar that layers onto qmd.tar: every entry is prefixed
     # with the `qmd/` staging dir so callers strip one component and land the
-    # index at `<root>/unified_index/qmd_aggregator/qmd/index.sqlite`. Skip the
+    # index at `<root>/unified_document_index/qmd_aggregator/qmd/index.sqlite`. Skip the
     # `models` symlink — it points at a shared cache outside the data root.
-    overlay_root = work / "unified_index" / "qmd_aggregator"
+    overlay_root = work / "unified_document_index" / "qmd_aggregator"
     models_link = overlay_root / "qmd" / "models"
 
     def is_under(p: Path, parent: Path) -> bool:
@@ -144,10 +146,10 @@ def main() -> int:
         and not is_under(p, models_link)
     )
     with tarfile.open(out_tar_path, "w") as tf:
-        # Include the `qmd/unified_index/qmd_aggregator/` directory entry itself
+        # Include the `qmd/unified_document_index/qmd_aggregator/` directory entry itself
         # for completeness.
         ti = tf.gettarinfo(
-            str(overlay_root), arcname="qmd/unified_index/qmd_aggregator"
+            str(overlay_root), arcname="qmd/unified_document_index/qmd_aggregator"
         )
         ti.mtime = 0
         ti.uid = 0
@@ -156,7 +158,7 @@ def main() -> int:
         ti.gname = ""
         tf.addfile(ti)
         for p in entries:
-            arcname = "qmd/unified_index/qmd_aggregator/" + str(
+            arcname = "qmd/unified_document_index/qmd_aggregator/" + str(
                 p.relative_to(overlay_root)
             )
             ti = tf.gettarinfo(str(p), arcname=arcname)

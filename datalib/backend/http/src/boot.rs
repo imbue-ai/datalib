@@ -56,7 +56,7 @@ pub async fn build_state(
             app: Arc::new(NewerRootRepo(newer_root.clone())),
             sync: supervisor::SyncControl::new(root.clone()),
             root_tx,
-            // No entries: nothing starts, and the unified_index applet
+            // No entries: nothing starts, and the unified_document_index applet
             // never opens the index this build must not read as its own.
             applets: Arc::new(crate::applets::AppletRegistry::build(
                 Vec::new(),
@@ -91,6 +91,7 @@ pub async fn build_state(
     // Before the loop, so its first read is of the current shape.
     let data_root = (*root).clone();
     tokio::task::spawn_blocking(move || crate::config_upgrade::upgrade(&data_root)).await?;
+    crate::config_upgrade::move_index_dir(&root).await;
     crate::config_upgrade::watch((*root).clone(), root_tx.subscribe());
 
     let sync = supervisor::SyncControl::new(root.clone());
@@ -293,9 +294,9 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            !layout::unified_index_dir(root.path()).exists(),
+            !layout::unified_document_index_dir(root.path()).exists(),
             "booting the server created {}, which belongs to the applet",
-            layout::unified_index_dir(root.path()).display()
+            layout::unified_document_index_dir(root.path()).display()
         );
     }
 
@@ -312,7 +313,7 @@ mod tests {
             .unwrap();
 
         let feedback = layout::feedback_db(root.path());
-        let derived = layout::unified_index_dir(root.path());
+        let derived = layout::unified_document_index_dir(root.path());
         assert!(!feedback.starts_with(&derived), "{}", feedback.display());
     }
 

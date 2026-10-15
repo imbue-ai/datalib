@@ -18,7 +18,7 @@ const tabOf = (route: Route) => new URL(route.request().url()).searchParams.get(
 async function hold(page: Page, tabs: Tab[]): Promise<() => void> {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => (release = resolve));
-  await page.route("**/applet/unified_index/search?**", async (route) => {
+  await page.route("**/applet/unified_document_index/search?**", async (route) => {
     if (tabs.includes(tabOf(route) as Tab)) await gate;
     await route.fallback();
   });
@@ -54,7 +54,7 @@ test("the first tab with rows opens, and the others say when they are ready", as
 });
 
 test("when the fields find nothing, the first qmd tab with rows opens", async ({ page }) => {
-  await page.route("**/applet/unified_index/search?**", async (route) => {
+  await page.route("**/applet/unified_document_index/search?**", async (route) => {
     if (tabOf(route) !== "fields") return route.fallback();
     const response = await route.fetch();
     const body = (await response.json()) as { rows: unknown[]; total: number };

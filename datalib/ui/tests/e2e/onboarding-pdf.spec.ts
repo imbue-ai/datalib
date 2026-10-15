@@ -46,7 +46,7 @@ const SIGNAL_BACKUP_DIR = process.env.DATALIB_TEST_E2E_SIGNAL_BACKUP_DIR;
 
 /// The three rows a sync of `pdfs/ingest` drives: the source, its render
 /// sibling, and the fan-in that makes the documents searchable.
-const SYNCED_ROWS = ["pdfs/ingest", "pdfs/render_markdown", "unified_index/grid_index"];
+const SYNCED_ROWS = ["pdfs/ingest", "pdfs/render_markdown", "unified_document_index/grid_index"];
 
 /// The "Size" column as a number, read back off the label drawn over the
 /// sparkline — the number a person actually sees. `null` for a row with
@@ -131,14 +131,14 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The scaffold's one group, and the System group every root has,
     // are the table's whole content; the scaffold's four entries are
     // under it.
-    await expect(nameCell(page, "group:unified_index")).toContainText("Unified Index");
+    await expect(nameCell(page, "group:unified_document_index")).toContainText("Document Index");
     await expect(page.locator(TABLE_ROWS)).toHaveCount(2);
     await expect(nameCell(page, "system")).toContainText("System");
-    await expandGroup(page, "unified_index");
+    await expandGroup(page, "unified_document_index");
     for (const id of [
-      "unified_index/grid_index",
-      "unified_index/qmd_aggregator",
-      "unified_index",
+      "unified_document_index/grid_index",
+      "unified_document_index/qmd_aggregator",
+      "unified_document_index",
       "datalib_contacts",
     ]) {
       await expect(row(page, id)).toHaveCount(1);
@@ -146,8 +146,10 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The two index steps are labelled by their function, not by the
     // generic "Index" the label map falls through to when a key is
     // stale — which is what happened when the functions were renamed.
-    await expect(nameCell(page, "unified_index/grid_index")).toContainText("Grid index");
-    await expect(nameCell(page, "unified_index/qmd_aggregator")).toContainText("QMD aggregator");
+    await expect(nameCell(page, "unified_document_index/grid_index")).toContainText("Grid index");
+    await expect(nameCell(page, "unified_document_index/qmd_aggregator")).toContainText(
+      "QMD aggregator",
+    );
 
     // The qmd aggregator, removed before the source is added: without it
     // the wizard writes no qmd steps, whose embedding is real work this
@@ -155,11 +157,11 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // run it.
     const remove = await rowMenuEntry(
       page,
-      row(page, "unified_index/qmd_aggregator"),
+      row(page, "unified_document_index/qmd_aggregator"),
       /^Remove from config$/,
     ).open();
     await remove.click();
-    await expect(row(page, "unified_index/qmd_aggregator")).toHaveCount(0);
+    await expect(row(page, "unified_document_index/qmd_aggregator")).toHaveCount(0);
 
     // ── 4-6. the wizard ──────────────────────────────────────────────
     await page.getByRole("button", { name: "Add source" }).click();
@@ -222,7 +224,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const firstDone = await settleRows(page, SYNCED_ROWS, firstRun);
     expect(firstDone["pdfs/ingest"]).toBe("Succeeded");
     expect(firstDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
-    expect(firstDone["unified_index/grid_index"]).toMatch(/^(Succeeded|Up to date)$/);
+    expect(firstDone["unified_document_index/grid_index"]).toMatch(/^(Succeeded|Up to date)$/);
 
     // ── 9. the two columns that report it ────────────────────────────
     const cell = row(page, "pdfs/ingest").locator(LAST_UPDATE_AT);
@@ -277,7 +279,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const secondDone = await settleRows(page, SYNCED_ROWS, secondRun);
     expect(secondDone["pdfs/ingest"]).toBe("Succeeded");
     expect(secondDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
-    expect(secondDone["unified_index/grid_index"]).toMatch(/^(Succeeded|Up to date)$/);
+    expect(secondDone["unified_document_index/grid_index"]).toMatch(/^(Succeeded|Up to date)$/);
 
     // A document more on disk.
     await expect

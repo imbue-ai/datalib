@@ -11,13 +11,13 @@ const firstUuid = (page: Page) =>
   ) as Promise<string | null>;
 
 test("a pasted uuid finds its row from the terms, first", async ({ page, request }) => {
-  const all = await request.get("/applet/unified_index/search?q=&limit=50");
+  const all = await request.get("/applet/unified_document_index/search?q=&limit=50");
   expect(all.ok()).toBeTruthy();
   const { rows } = (await all.json()) as { rows: { uuid: string }[] };
   const uuid = rows.find((r) => /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(r.uuid))?.uuid;
   expect(uuid, "the fixture has a row with a uuid").toBeDefined();
 
-  const found = await request.get(`/applet/unified_index/search?q=${uuid}&limit=10`);
+  const found = await request.get(`/applet/unified_document_index/search?q=${uuid}&limit=10`);
   const answer = (await found.json()) as {
     rows: { uuid: string; snippet: string; score: number | null }[];
     query_echo: { qmd_error?: string | null };

@@ -142,7 +142,7 @@ export type ViewLibs = {
   }) => CardRender;
   documentView: (markdownUuid?: string | null, sectionUuid?: string | null) => CardRender;
   // Parameter-less gallery stand-in for documentView: lists every
-  // rendered document (the unified_index applet's /docs) and, on
+  // rendered document (the unified_document_index applet's /docs) and, on
   // pick, replaces this card
   // with `documentView("<uuid>")` via host.setSource.
   documentPickerView: () => CardRender;

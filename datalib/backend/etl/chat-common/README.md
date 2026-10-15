@@ -275,6 +275,6 @@ An `<iframe>` survives the sanitizer only when it frames
 `plots/<name>.html`, and the frame's policy allows frames from the asset
 route alone. The server runs such a page's scripts with no
 network (`DocumentKind::Plot` in `http/src/embed.rs`). It knows the page
-is a plot because the `unified_index` applet names it so. Every other
+is a plot because the `unified_document_index` applet names it so. Every other
 document beside a markdown, such as an `.html` attachment in `blobs/`,
 runs no script at all.

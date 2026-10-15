@@ -183,7 +183,7 @@ fn with_photo_url(
     let mut out = contact.clone();
     out.photo_url = photo_rel
         .filter(|_| drawable)
-        .map(|rel| format!("/applet/unified_index/asset/{doc_uuid}/{rel}"));
+        .map(|rel| format!("/applet/unified_document_index/asset/{doc_uuid}/{rel}"));
     out
 }
 
@@ -902,7 +902,7 @@ mod tests {
             urls,
             [
                 Some(
-                    "/applet/unified_index/asset/11111111-1111-1111-1111-111111111111\
+                    "/applet/unified_document_index/asset/11111111-1111-1111-1111-111111111111\
                      /blobs/11111111-1111-1111-1111-111111111111.png"
                         .to_string()
                 ),

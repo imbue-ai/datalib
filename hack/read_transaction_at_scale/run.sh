@@ -21,7 +21,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(git rev-parse --show-toplevel)"
 
-STORE="${1:-$HOME/datalib/stay_alive_1/unified_index/grid_index/db.doltlite_db}"
+STORE="${1:-$HOME/datalib/stay_alive_1/unified_document_index/grid_index/db.doltlite_db}"
 SEALS="${SEALS:-40}"
 ROWS="${ROWS:-1000}"
 HOLD_MS="${HOLD_MS:-200}"

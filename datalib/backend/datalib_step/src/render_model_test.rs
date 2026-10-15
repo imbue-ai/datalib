@@ -736,7 +736,7 @@ impl World {
         let raw_dir = data_root.join(SOURCE).join("raw");
         std::fs::create_dir_all(&raw_dir).unwrap();
         let raw_db = doltlite_raw::db_path_for(&raw_dir);
-        let db = data_root.join("unified_index/grid/db.doltlite_db");
+        let db = data_root.join("unified_document_index/grid/db.doltlite_db");
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         let index = SqlitePoolOptions::new()
             .max_connections(1)
