@@ -234,6 +234,10 @@ pub struct ManageResponse {
     pub run: Option<DagRunInfo>,
     pub storage: RootStorage,
     pub rows: Vec<ManageRow>,
+    /// Why no sync can be opened from this screen right now, when one
+    /// cannot: the launch is updating the stores for this build. Every
+    /// row's Sync says the same.
+    pub sync_paused: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,6 +296,7 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
                 run: record.run,
                 storage: root_storage,
                 rows: Vec::new(),
+                sync_paused: None,
             }
         }
     };
@@ -299,6 +304,11 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
     let applet_errors = s.applets.frontend_view().applet_errors;
 
     let raw_stores = raw_stores(&storage.outputs);
+    let sync_paused = s
+        .sync
+        .upgrade()
+        .migrating
+        .then_some(buttons::SYNC_PAUSED_FOR_UPGRADE);
     let rows = Snapshot {
         written: &written,
         diagnostics: &diagnostics,
@@ -307,6 +317,7 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
         outputs: &storage.outputs,
         raw_stores: &raw_stores,
         applet_errors: &applet_errors,
+        sync_paused,
     }
     .rows();
     ManageResponse {
@@ -317,6 +328,7 @@ async fn manage_rows(s: &AppState) -> ManageResponse {
         run: record.run,
         storage: root_storage,
         rows,
+        sync_paused: sync_paused.map(str::to_string),
     }
 }
 
@@ -433,6 +445,8 @@ struct Snapshot<'a> {
     /// Each tree holding a raw store, by step id, to the store's path.
     raw_stores: &'a HashMap<String, String>,
     applet_errors: &'a std::collections::BTreeMap<String, String>,
+    /// Why every Sync is disabled, over whatever each row would offer.
+    sync_paused: Option<&'static str>,
 }
 
 /// A step or applet as written, in the one shape the group rules read.
@@ -902,6 +916,10 @@ impl RowCtx<'_> {
         if step.is_some_and(|s| s.state == Some(StateKind::Running)) {
             return (stop_button("Stopping the sync".into(), true), Vec::new());
         }
+        let offer = match self.snap.sync_paused {
+            Some(why) => Err(why.to_string()),
+            None => offer,
+        };
         let (hint, blocked) = match offer {
             Ok(hint) => (Some(hint), None),
             Err(why) => (None, Some(why)),

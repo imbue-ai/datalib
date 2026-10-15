@@ -51,7 +51,8 @@ async function awaitHealthy(servers: Server[], token: string): Promise<void> {
     try {
       for (;;) {
         // Listening is not enough: the first boot of a build asks every
-        // step to migrate before it syncs, behind a blocking screen.
+        // step to migrate before it syncs, and a spec that syncs would
+        // find its Sync disabled until then.
         const ok = await ctx
           .get(`/api/config`, { headers: { authorization: `Bearer ${token}` } })
           .then(async (res) => res.ok() && (await res.json()).upgrade?.settled === true)

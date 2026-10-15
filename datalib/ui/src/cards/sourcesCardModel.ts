@@ -295,7 +295,7 @@ export function useSourcesCard(ctx: CardCtx) {
     return all.map((r) => decorate(r, groups));
   });
 
-  const syncAll = computed(() => syncAllButton(rows.value));
+  const syncAll = computed(() => syncAllButton(rows.value, manage.value?.sync_paused ?? null));
 
   function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
     const browsing = withBrowse(r, groups, canReveal);

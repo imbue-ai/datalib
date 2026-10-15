@@ -1,4 +1,4 @@
-// What the launch's upgrade screens say about a step
+// What the launch's upgrade indicator and dialog say about a step
 // (docs/dev/plans/upgrade_on_launch.md).
 
 import type { MigrateState, Upgrade } from "@/api";
@@ -39,4 +39,22 @@ export function failedSources(upgrade: Upgrade): { source: string; error: string
   return sourceRows(upgrade)
     .filter((r) => r.state === "failed")
     .map((r) => ({ source: r.source, error: r.error ?? "" }));
+}
+
+/// The toolbar's upgrade pill: amber while the pass runs, red once it is
+/// over with a source it could not update (until dismissed), else none.
+export type UpgradePill = { tone: "updating" | "failed"; label: string };
+
+export function upgradePill(upgrade: Upgrade, dismissed: boolean): UpgradePill | null {
+  const rows = sourceRows(upgrade);
+  if (upgrade.migrating) {
+    const done = rows.filter((r) => r.state === "done" || r.state === "failed").length;
+    return { tone: "updating", label: `Updating data · ${done} of ${rows.length}` };
+  }
+  const failed = rows.filter((r) => r.state === "failed").length;
+  if (failed === 0 || dismissed) return null;
+  return {
+    tone: "failed",
+    label: `${failed} ${failed === 1 ? "source" : "sources"} could not be updated`,
+  };
 }
