@@ -10,6 +10,7 @@ use datalib_flock::FileLock;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
+use crate::redact::Redactor;
 use crate::{is_terminal, runs_path, LiveState, Retention, INDEXES, SCHEMA_VERSION};
 use app_schema::runs::{
     LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, StepRunRow, StorePart,
@@ -1059,6 +1060,7 @@ type FlushAck = tokio::sync::oneshot::Sender<()>;
 struct Writer {
     process_id: String,
     pending: Shared,
+    redact: Redactor,
     flushes: Mutex<Option<mpsc::Sender<FlushAck>>>,
     handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -1099,12 +1101,14 @@ impl Writer {
         Some(Self {
             process_id,
             pending,
+            redact: Redactor::from_env(),
             flushes: Mutex::new(Some(tx)),
             handle: Mutex::new(Some(handle)),
         })
     }
 
     fn log(&self, row: LogRow) {
+        let row = self.redact.log(row);
         self.pending.lock().expect("run store mutex").logs.push(row);
     }
 
@@ -1181,6 +1185,7 @@ impl RunWriter {
     }
 
     pub fn step(&self, next: StepRunRow) {
+        let next = self.0.redact.step(next);
         let mut p = self.0.pending.lock().expect("run store mutex");
         // A terminal state latches: a tick that was already in flight
         // when the step finished must not resurrect it as running.

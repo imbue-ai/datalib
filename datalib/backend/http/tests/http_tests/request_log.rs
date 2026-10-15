@@ -1,8 +1,9 @@
 //! Every request the app makes leaves a line in the server's log —
 //! `system/runs/runs.sqlite`, read back through `GET /api/log` — except the
 //! reads of the log itself, which would otherwise wake the log panel
-//! into refetching forever. One test, because the subscriber it
-//! installs is the process's only one.
+//! into refetching forever; and what a person typed into a search never
+//! reaches it. One test, because the subscriber it installs is the
+//! process's only one.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -13,6 +14,8 @@ use tower::ServiceExt;
 use crate::support::{state, TEST_TOKEN};
 
 const CARD: &str = "0192f6a0-0000-7000-8000-000000000000";
+/// Stands for what a person typed into the search bar.
+const TYPED: &str = "tasha-yar-qx7t3";
 const CAUSE: &str = datalib_http::loop_guard::CAUSE_HEADER;
 
 async fn send(root: &Path, uri: &str, with_token: bool) -> (StatusCode, Vec<u8>) {
@@ -96,9 +99,34 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
     // writer is still up, so a line for it would be flushed with the rest.
     let (status, _) = send(root, "/api/log", true).await;
     assert_eq!(status, StatusCode::OK);
+    // A search, the search bar's value suggestions, and a reload of the
+    // page with that search open: no applet answers here, which costs
+    // the line nothing.
+    for uri in [
+        format!("/applet/unified_index/search?q={TYPED}&limit=50&sort=created_at:desc"),
+        format!("/applet/unified_index/search/values?key=author&typed={TYPED}&q=kind%3Aemail"),
+        format!("/gridView(%7Bq%3A%22{TYPED}%22%7D)::{TYPED}"),
+    ] {
+        send(root, &uri, true).await;
+    }
+    // A path under the home directory, as any line might carry one.
+    let home = std::env::var("HOME").expect("HOME is set");
+    tracing::info!(path = %format!("{home}/notes/x.md"), "read a file");
 
     // The writer flushes on an interval; dropping it is the final flush.
     drop(log);
+
+    let store = std::fs::read(datalib_runs::runs_path(root)).unwrap();
+    assert!(
+        !store.windows(TYPED.len()).any(|w| w == TYPED.as_bytes()),
+        "what was typed into the search reached the log store"
+    );
+    let all: Vec<serde_json::Value> = {
+        let (_, body) = send(root, "/api/log", true).await;
+        serde_json::from_slice(&body).unwrap()
+    };
+    let read_a_file = all.iter().find(|l| l["msg"] == "read a file").unwrap();
+    assert_eq!(fields(read_a_file)["path"], "~/notes/x.md");
 
     let lines = request_lines(root).await;
     let paths: Vec<&str> = lines
@@ -117,7 +145,10 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
             "/api/config",
             "/modules/not-a-hash",
             "/api/health",
-            "/api/config"
+            "/api/config",
+            "/applet/unified_index/search",
+            "/applet/unified_index/search/values",
+            "/gridView",
         ],
         "{lines:#?}"
     );
@@ -136,7 +167,7 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
         .starts_with("GET /api/health 200 "));
 
     let with_query = fields(&lines[1]);
-    assert_eq!(with_query["query"], "x=1");
+    assert_eq!(with_query["query"], "x=<redacted>");
     assert_eq!(with_query["card"], CARD);
     assert_eq!(with_query["card_type"], "gridView");
 
@@ -148,4 +179,13 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
 
     assert_eq!(lines[4]["level"], "debug", "{:#?}", lines[4]);
     assert_eq!(lines[5]["level"], "info", "{:#?}", lines[5]);
+
+    assert_eq!(
+        fields(&lines[6])["query"],
+        "q=<redacted>&limit=50&sort=created_at:desc"
+    );
+    assert_eq!(
+        fields(&lines[7])["query"],
+        "key=author&typed=<redacted>&q=<redacted>"
+    );
 }

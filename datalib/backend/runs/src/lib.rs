@@ -6,6 +6,7 @@
 //! reader over them, and the tracing layer that feeds a writer.
 
 pub mod query;
+mod redact;
 pub mod store;
 pub mod tracing_layer;
 
