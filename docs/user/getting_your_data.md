@@ -410,7 +410,10 @@ nothing else; `addressbooks` narrows it to the address books you name.
 `type = "garmin"` — Garmin Connect's API through latchkey (`api`). Mirrors per-day health metrics (sleep, heart
 rate, stress, body battery, HRV, SpO₂, …), weigh-ins, activities with
 their original FIT files, devices, records, gear, badges, workouts and
-goals; the weigh-ins render as one page with an interactive plot.
+goals. The weigh-ins, each family of daily metrics (sleep, heart rate
+and HRV, stress and Body Battery, steps, respiration and SpO₂,
+training) and the daily log render as pages with interactive plots;
+each activity, day, personal record and badge is a row in the grid.
 
 latchkey reaches Garmin through its Garmin plugin, which the Add a
 source dialog installs into `~/.latchkey/plugins/garmin` the first time

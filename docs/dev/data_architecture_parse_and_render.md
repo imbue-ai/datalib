@@ -308,7 +308,10 @@ Examples where schema and data handling should be unified:
      table; the sensor page, the plot and the rows (one `Sensor
      Timeseries` row for the page plus a `Sensor Device` row per
      device, `timeseries_render/src/page.rs`) are shared in
-     `timeseries_render`.
+     `timeseries_render`. Garmin uses the plot and text helpers but
+     writes its own documents: the weight page, a page per family of
+     daily metrics, a daily log, one page per activity, and its
+     records (`garmin_render/TRANSLATE.md`).
 
 A new provider that fits a family should at minimum project to the
 family's `GridRow` shape rather than inventing a new `kind` taxonomy.
