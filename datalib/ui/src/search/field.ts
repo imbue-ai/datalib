@@ -491,10 +491,20 @@ const chipOption = {
   render: (c: ChipCompletion): Node | null => (c.chip ? chipDom(c.chip, c.shown ?? c.label) : null),
 };
 
+/// The fields whose Tab came while the suggestions for what was just typed
+/// were still on their way: `takeWhenReady` takes the first of them once
+/// they arrive, never one from the list they replace.
+const tabHeld = new WeakSet<EditorView>();
+
 /// Tab takes the chosen suggestion, or the first when none is chosen; with
 /// no menu open it moves focus as Tab always does.
 function takeSuggestion(view: EditorView): boolean {
-  if (completionStatus(view.state) !== "active") return false;
+  const status = completionStatus(view.state);
+  if (status === "pending") {
+    tabHeld.add(view);
+    return true;
+  }
+  if (status !== "active") return false;
   if (selectedCompletionIndex(view.state) === null) {
     view.dispatch({ effects: setSelectedCompletion(0) });
   }
@@ -502,6 +512,21 @@ function takeSuggestion(view: EditorView): boolean {
   acceptCompletion(view);
   return true;
 }
+
+/// A held Tab is taken when the suggestions arrive, and dropped when the
+/// text moves first or nothing is offered.
+const takeWhenReady = EditorView.updateListener.of((u) => {
+  if (!tabHeld.has(u.view)) return;
+  if (u.docChanged) {
+    tabHeld.delete(u.view);
+    return;
+  }
+  const status = completionStatus(u.state);
+  if (status === "pending") return;
+  tabHeld.delete(u.view);
+  // A view cannot dispatch while it is still applying an update.
+  if (status === "active") setTimeout(() => takeSuggestion(u.view), 0);
+});
 
 /// One line: a newline pasted or typed becomes a space.
 const oneLine = EditorState.transactionFilter.of((tr) => {
@@ -610,6 +635,7 @@ export function fieldExtensions(hooks: FieldHooks): Extension[] {
     EditorView.focusChangeEffect.of((_state, focusing) => (focusing ? null : showMenu.of(null))),
     history(),
     oneLine,
+    takeWhenReady,
     theme,
     autocompletion({
       override: [completions(hooks.base)],
