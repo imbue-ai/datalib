@@ -87,7 +87,7 @@ export function useDashboard(ctx: CardCtx, opts: { recent: boolean }) {
     return { tone: "ok" as Tone, text: `Synced ${formatRelative(run.finished_at, now.value)}` };
   });
 
-  const syncAll = computed(() => syncAllButton(sources.value));
+  const syncAll = computed(() => syncAllButton(sources.value, manage.value?.sync_paused ?? null));
 
   async function syncEverything() {
     const b = syncAll.value;

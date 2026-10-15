@@ -1200,6 +1200,9 @@ export type ManageResponse = {
     measured_at_utc: string | null;
   };
   rows: ManageRow[];
+  /// Why no sync can be opened right now: the launch is updating the
+  /// stores for this version. Every row's Sync says the same.
+  sync_paused: string | null;
 };
 
 /// The Manage screen's rows, joined server-side. `refresh` walks the

@@ -1,6 +1,7 @@
 // What a launch on an upgraded root shows (docs/dev/plans/upgrade_on_launch.md):
-// a blocking screen while every step is asked to migrate, then the offer to
-// re-render. The server's side — which steps are asked, the pass before
+// the app as usual with a pill in the toolbar while every step is asked to
+// migrate, then the offer to re-render, and the pill again for a source
+// the pass could not update. The server's side — which steps are asked, the pass before
 // any sync, what the offer lists — is the Rust tests'; here `/api/config`'s
 // `upgrade` is set to each state in turn and the re-render request is
 // caught before it reaches the shared root.
@@ -55,20 +56,27 @@ const MIGRATED: Upgrade = {
   ],
 };
 
-test("the migrate pass blocks the app and says how each source is going", async ({ page }) => {
+test("the migrate pass leaves the app usable and says in the toolbar how each source is going", async ({
+  page,
+}) => {
   await launchWith(page, MIGRATING);
+  // Nothing is in the way of searching while it runs.
+  await expect(page.getByRole("searchbox", { name: "Search your data" })).toBeVisible();
+  // One count per source, however many steps it has; a source is done
+  // when every step of it is.
+  const pill = page.getByRole("button", { name: "Updating data · 1 of 3" });
+  await expect(pill).toBeVisible();
+  await pill.click();
+  const menu = page.getByRole("dialog", { name: "Updating data · 1 of 3" });
   await expect(
-    page.getByRole("heading", { name: "Updating your data for this version of datalib" }),
+    menu.getByRole("heading", { name: "Updating your data for this version" }),
   ).toBeVisible();
-  const rows = page.locator(".upgrading .stores li");
-  // One row per source, however many steps it has.
+  const rows = menu.locator(".upgrade-list li");
   await expect(rows).toHaveCount(3);
   await expect(rows.nth(0)).toContainText("enterprise-mail");
   await expect(rows.nth(0)).toContainText("Done");
   await expect(rows.nth(1)).toContainText("Updating");
   await expect(rows.nth(2)).toContainText("Waiting");
-  // Nothing behind it can be used while it runs.
-  await expect(page.getByRole("searchbox", { name: "Search your data" })).toHaveCount(0);
 });
 
 test("after the pass, a yes re-runs what asked for it, as the upgrade", async ({ page }) => {
@@ -82,10 +90,11 @@ test("after the pass, a yes re-runs what asked for it, as the upgrade", async ({
 
   const dialog = page.getByRole("dialog", { name: "Your rendered documents are out of date" });
   await expect(dialog).toBeVisible();
-  const sources = dialog.locator("ul.sources:not(.failed) li");
+  const sources = dialog.locator("ul.sources li");
   await expect(sources).toHaveText(["enterprise-mail", "ten-forward", "Search index"]);
-  await expect(dialog.locator("ul.failed li")).toContainText("holodeck-slack");
-  await expect(dialog.locator("ul.failed li")).toContainText("no rung carries it");
+  // The source the pass could not update is the pill's to report, once.
+  await expect(dialog).not.toContainText("holodeck-slack");
+  await expect(page.getByRole("button", { name: "1 source could not be updated" })).toBeVisible();
 
   await dialog.getByRole("button", { name: "Re-render now" }).click();
   await expect(dialog).toHaveCount(0);
@@ -111,15 +120,31 @@ test("not now leaves the steps alone until the next launch", async ({ page }) =>
   await expect(dialog).toBeVisible();
 });
 
-test("a step the pass could not ask opens no dialog on its own", async ({ page }) => {
+test("a step the pass could not ask turns the pill red, not a dialog, until dismissed", async ({
+  page,
+}) => {
   await launchWith(page, {
     migrating: false,
     settled: true,
-    steps: [{ step: "enterprise-mail/ingest", state: "failed", error: "no datalib-step" }],
+    steps: [
+      { step: "enterprise-mail/ingest", state: "failed", error: "no datalib-step" },
+      { step: "holodeck-slack/ingest", state: "done", error: null },
+    ],
     rerender: [],
   });
   await expect(page.getByRole("searchbox", { name: "Search your data" })).toBeVisible();
   await expect(
     page.getByRole("dialog", { name: "Your rendered documents are out of date" }),
   ).toHaveCount(0);
+
+  const pill = page.getByRole("button", { name: "1 source could not be updated" });
+  await pill.click();
+  const menu = page.getByRole("dialog", { name: "1 source could not be updated" });
+  await expect(menu).toContainText("1 of 2 sources are up to date");
+  // Only what failed is listed, with its reason.
+  await expect(menu.locator(".upgrade-list li")).toHaveCount(1);
+  await expect(menu.locator(".upgrade-list li")).toContainText("enterprise-mail");
+  await expect(menu.locator(".upgrade-list li")).toContainText("no datalib-step");
+  await menu.getByRole("button", { name: "Dismiss" }).click();
+  await expect(pill).toHaveCount(0);
 });

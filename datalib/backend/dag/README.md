@@ -266,8 +266,13 @@ succeeds (rule 5), and `round::rerun_offer` lists it for the app, which
 asks whether to re-render now and opens one request rooted at the list
 if so. A sync that does not reach such a step leaves it alone; the grid
 index reads a render store in another shape as the index had it, with a
-warning. A step that fails to answer costs that source only. The app
-shows a blocking screen while the pass runs.
+warning. A step that fails to answer costs that source only. The pass
+writes only raw stores, each in place, so the app stays usable while it
+runs: a pill where the sync indicator sits says how each source is
+going, and every Sync on the Sources card is disabled
+(`ManageResponse::sync_paused`); a request opened another way waits for
+the pass. After it, the pill stays red for a source the pass could not
+update until it is dismissed.
 `datalib/backend/datalib_step/raw_shapes/` holds the raw shape every
 release left, and a test migrates each one
 ([`raw_shapes/README.md`](../datalib_step/raw_shapes/README.md)).
