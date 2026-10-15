@@ -1,8 +1,13 @@
-//! Turn a Garmin raw store into one markdown page plus its weight plot.
+//! Turn a Garmin raw store into its documents: the overview with the
+//! weight plot, a page per family of daily metrics, the daily log, one
+//! page per activity, and the account's records and badges. Every one
+//! is in the bucket keyed by the overview's uuid, since each run reads
+//! the store whole and emits them all.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
@@ -10,20 +15,29 @@ use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_render::title::Title;
-use datalib_etl_timeseries_render::page::write_page;
 use datalib_etl_timeseries_render::text::{iso, short_ts};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
-use super::parse::ParsedGarmin;
+use super::activities;
+use super::daily::{self, Days, Family};
+use super::parse::{Activity, ParsedGarmin};
 use super::plot::weight_html;
+use super::records;
+use super::stamps::day_start_iso;
 use super::RENDER_VERSION;
 
 const ID_NAMESPACE: IdNamespace = IdNamespace::Garmin;
 const KIND_PAGE: &str = "weight";
 const KIND_DEVICE: &str = "device";
+const KIND_METRIC_PAGE: &str = "metric_page";
+const KIND_DAILY_LOG: &str = "daily_log";
+const KIND_DAY: &str = "day";
+const KIND_ACTIVITY: &str = "activity";
+const KIND_LISTINGS: &str = "listings";
+const KIND_ITEM: &str = "item";
 
 /// The page's `markdown_uuid`: one page per source and no Garmin-side
 /// object behind it, so its key is the source id. No stamp: the page's
@@ -38,6 +52,63 @@ pub fn device_uuid(source_id: &str, device_id: &str) -> String {
     entity_id_str(ID_NAMESPACE, source_id, None, KIND_DEVICE, device_id, None)
 }
 
+pub fn metric_page_uuid(source_id: &str, family: Family) -> String {
+    entity_id_str(
+        ID_NAMESPACE,
+        source_id,
+        None,
+        KIND_METRIC_PAGE,
+        family.slug(),
+        None,
+    )
+}
+
+pub fn daily_log_uuid(source_id: &str) -> String {
+    entity_id_str(
+        ID_NAMESPACE,
+        source_id,
+        None,
+        KIND_DAILY_LOG,
+        source_id,
+        None,
+    )
+}
+
+/// A day's row, keyed on its calendar date. No stamp: the offset its
+/// `created_at` needs can arrive after the day does.
+pub fn day_uuid(source_id: &str, date: &str) -> String {
+    entity_id_str(ID_NAMESPACE, source_id, None, KIND_DAY, date, None)
+}
+
+/// An activity's page, keyed on Garmin's `activityId` and stamped with
+/// its start.
+pub fn activity_uuid(source_id: &str, activity_id: &str, start_ms: Option<i64>) -> String {
+    entity_id_str(
+        ID_NAMESPACE,
+        source_id,
+        None,
+        KIND_ACTIVITY,
+        activity_id,
+        start_ms,
+    )
+}
+
+pub fn listings_uuid(source_id: &str) -> String {
+    entity_id_str(
+        ID_NAMESPACE,
+        source_id,
+        None,
+        KIND_LISTINGS,
+        source_id,
+        None,
+    )
+}
+
+/// A listing row, keyed on its `garmin_items` id (`<kind>#<id>`).
+pub fn item_uuid(source_id: &str, item_id: &str) -> String {
+    entity_id_str(ID_NAMESPACE, source_id, None, KIND_ITEM, item_id, None)
+}
+
 /// How many of the newest weigh-ins the table shows. The plot has all
 /// of them; the table is for reading the recent ones off.
 const TABLE_ROWS: usize = 30;
@@ -47,6 +118,90 @@ pub struct RenderSummary {
     pub weigh_ins: usize,
     pub devices: usize,
     pub plots: usize,
+    pub metric_pages: usize,
+    pub days: usize,
+    pub activities: usize,
+    pub items: usize,
+}
+
+/// Where documents are written, and the one bucket they all go in.
+struct Out<'a> {
+    root: &'a Path,
+    source_id: &'a str,
+    dir: PathBuf,
+    bucket: String,
+    on_doc: &'a mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+}
+
+impl Out<'_> {
+    fn emit(
+        &mut self,
+        rel: &str,
+        m_uuid: &str,
+        body: String,
+        build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
+    ) -> Result<()> {
+        let md_path = self.dir.join(rel);
+        if let Some(parent) = md_path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
+        }
+        fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
+        let md_rel = md_path
+            .strip_prefix(self.root)
+            .unwrap_or(&md_path)
+            .to_string_lossy()
+            .into_owned();
+        let mut problems: Vec<ProblemRow> = Vec::new();
+        let rows = build_rows(&md_rel, &mut problems);
+        (self.on_doc)(RenderedMarkdown {
+            markdown_uuid: m_uuid.to_string(),
+            source_id: self.source_id.to_string(),
+            // Not the raw HEAD: it moves on every ingest, and a row whose
+            // content did not change may carry nothing per-run.
+            upstream_cursor: None,
+            bucket_key: Some(self.bucket.clone()),
+            md_path,
+            render_version: RENDER_VERSION,
+            rows,
+            sections: Vec::new(),
+            search_terms: Vec::new(),
+            edges: Vec::new(),
+            contacts: Vec::new(),
+            problems,
+        })
+        .with_context(|| format!("on_doc_complete {m_uuid}"))
+    }
+}
+
+/// Front matter and the title: what every document opens with.
+fn head(m_uuid: &str, source_id: &str, title: &str, created_at: Option<&str>) -> String {
+    let mut out = String::with_capacity(8 * 1024);
+    out.push_str("---\n");
+    let _ = writeln!(out, "markdown_uuid: {m_uuid}");
+    let _ = writeln!(out, "source_id: {source_id}");
+    out.push_str("provider: garmin\n");
+    let _ = writeln!(out, "title: {}", yaml_scalar(title));
+    if let Some(ts) = created_at {
+        let _ = writeln!(out, "created_at: {}", yaml_scalar(ts));
+    }
+    out.push_str("---\n\n");
+    out.push_str(
+        &Title {
+            suffix: None,
+            text: title,
+            markdown_uuid: Some(m_uuid),
+            source_url: None,
+        }
+        .render(),
+    );
+    out
+}
+
+fn section_open(out: &mut String, uuid: &str) {
+    let _ = writeln!(
+        out,
+        "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--garmin\">\n"
+    );
 }
 
 /// The raw store's HEAD moves on every ingest (the bookkeeping stamps
@@ -63,7 +218,12 @@ pub fn render_all(
     let page_dir = datalib_etl::layout::render_markdown_root(root, source_id);
     let plots_dir = page_dir.join("plots");
     fs::create_dir_all(&plots_dir).with_context(|| format!("mkdir -p {}", plots_dir.display()))?;
-    progress.set_length(Some(2));
+    let families: Vec<Family> = Family::ALL
+        .into_iter()
+        .filter(|f| daily::has_any(&parsed.days, *f))
+        .collect();
+    let docs = 2 + families.len() + 1 + parsed.activities.len() + 1;
+    progress.set_length(Some(docs as u64));
 
     let mut summary = RenderSummary {
         weigh_ins: parsed.weigh_ins.len(),
@@ -88,16 +248,40 @@ pub fn render_all(
     progress.inc(1);
 
     let m_uuid = document_uuid(source_id);
-    let body = render_markdown(parsed, source_id, &m_uuid, plot_file);
-    write_page(
+    let mut out = Out {
         root,
         source_id,
-        &m_uuid,
-        body,
-        RENDER_VERSION,
-        |md_rel, problems| build_grid_rows(parsed, source_id, &m_uuid, md_rel, problems),
-        on_doc_complete,
-    )?;
+        dir: page_dir,
+        bucket: m_uuid.clone(),
+        on_doc: on_doc_complete,
+    };
+    let body = render_markdown(parsed, source_id, &m_uuid, plot_file);
+    out.emit("index.md", &m_uuid, body, |md_rel, problems| {
+        build_grid_rows(parsed, source_id, &m_uuid, md_rel, problems)
+    })?;
+    progress.inc(1);
+
+    let who = who(parsed, source_id);
+    for family in families {
+        if render_family(&mut out, &plots_dir, parsed, &who, family)? {
+            summary.plots += 1;
+        }
+        summary.metric_pages += 1;
+        progress.inc(1);
+    }
+    summary.days = render_daily_log(&mut out, parsed, &who)?;
+    progress.inc(1);
+    let device_names: HashMap<&str, &str> = parsed
+        .devices
+        .iter()
+        .map(|d| (d.id.as_str(), d.name.as_str()))
+        .collect();
+    for a in &parsed.activities {
+        render_activity(&mut out, parsed, a, &device_names)?;
+        summary.activities += 1;
+        progress.inc(1);
+    }
+    summary.items = render_listings(&mut out, parsed, &who)?;
     progress.inc(1);
     if parsed.head.is_none() {
         tracing::warn!(
@@ -109,37 +293,329 @@ pub fn render_all(
     Ok(summary)
 }
 
+/// The account holder's name, else the source's id: what every title
+/// after a dash says.
+fn who(parsed: &ParsedGarmin, source_id: &str) -> String {
+    parsed
+        .full_name
+        .as_deref()
+        .or(parsed.display_name.as_deref())
+        .unwrap_or(source_id)
+        .to_string()
+}
+
+fn day_iso(days: &Days, date: &str) -> Option<String> {
+    day_start_iso(date, days.get(date)?.offset_secs?)
+}
+
+/// One family's page and its plot; `true` when a plot was written.
+fn render_family(
+    out: &mut Out<'_>,
+    plots_dir: &Path,
+    parsed: &ParsedGarmin,
+    who: &str,
+    family: Family,
+) -> Result<bool> {
+    let source_id = out.source_id;
+    let days = &parsed.days;
+    let with_data: Vec<&String> = days
+        .iter()
+        .filter(|(_, d)| daily::family_line(family, d).is_some())
+        .map(|(date, _)| date)
+        .collect();
+    let (Some(first), Some(last)) = (with_data.first(), with_data.last()) else {
+        return Ok(false);
+    };
+    let latest = daily::family_line(family, &days[*last]).unwrap_or_default();
+    let title = format!("{} — {who}", family.title());
+    let m_uuid = metric_page_uuid(source_id, family);
+    let created_at = day_iso(days, first);
+    let modified_at = day_iso(days, last);
+
+    let subtitle = format!("{} days · {first} — {last}", with_data.len());
+    let plot = daily::family_plot_html(family, &subtitle, days)?;
+    let mut body = head(&m_uuid, source_id, &title, created_at.as_deref());
+    let _ = writeln!(body, "**{last}:** {latest}\n");
+    if let Some((html, panels)) = &plot {
+        let file = format!("{}.html", family.slug());
+        let path = plots_dir.join(&file);
+        fs::write(&path, html).with_context(|| format!("write {}", path.display()))?;
+        let _ = writeln!(
+            body,
+            "<iframe src=\"plots/{file}\" title=\"{}\" width=\"100%\" height=\"{}\" \
+             loading=\"lazy\" sandbox=\"allow-scripts allow-downloads\" \
+             style=\"border:1px solid rgba(128,128,128,.35);border-radius:6px\">\
+             </iframe>\n",
+            family.title(),
+            140 + 240 * panels
+        );
+        let _ = writeln!(body, "[Open the plot on its own](plots/{file})\n");
+    }
+    let _ = writeln!(
+        body,
+        "### Latest {} days\n",
+        daily::TABLE_DAYS.min(with_data.len())
+    );
+    daily::family_table(&mut body, family, days);
+
+    let text = format!(
+        "{title}\n{last}: {latest}\n{} days since {first}",
+        with_data.len()
+    );
+    out.emit(
+        &format!("{}.md", family.slug()),
+        &m_uuid,
+        body,
+        |md_rel, problems| {
+            GridRow::builder()
+                .uuid(m_uuid.clone())
+                .provider(Provider::Garmin)
+                .kind("Garmin Metrics")
+                .source_label("Garmin")
+                .is_document(true)
+                .item_count(Some(with_data.len() as i64))
+                .created_at(created_at.clone())
+                .modified_at(modified_at.clone())
+                .author(parsed.full_name.clone())
+                .conversation_name(Some(title.clone()))
+                .conversation_uuid(m_uuid.clone())
+                .entire_chat(format!("/chat/{m_uuid}"))
+                .body(text)
+                .qmd_path(Some(md_rel.to_string()))
+                .markdown_uuid(Some(m_uuid.clone()))
+                .upstream_id(Some(family.slug().to_string()))
+                .upstream_entity_kind(Some(KIND_METRIC_PAGE.to_string()))
+                .build_or_record(source_id, &m_uuid, RENDER_VERSION, problems)
+                .into_iter()
+                .collect()
+        },
+    )?;
+    Ok(plot.is_some())
+}
+
+/// One section and one grid row per day with any value, newest first.
+/// Returns how many days.
+fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Result<usize> {
+    let source_id = out.source_id;
+    let days = &parsed.days;
+    let title = format!("Daily log — {who}");
+    let m_uuid = daily_log_uuid(source_id);
+    let first = days.keys().next().cloned();
+    let last = days.keys().next_back().cloned();
+    let mut body = head(
+        &m_uuid,
+        source_id,
+        &title,
+        first.as_deref().and_then(|d| day_iso(days, d)).as_deref(),
+    );
+    if days.is_empty() {
+        body.push_str("*(no per-day metrics mirrored yet)*\n\n");
+    }
+    let mut lines: Vec<(&String, Vec<(Family, String)>)> = Vec::new();
+    for (date, day) in days.iter().rev() {
+        let by_family: Vec<(Family, String)> = Family::ALL
+            .into_iter()
+            .filter_map(|f| daily::family_line(f, day).map(|l| (f, l)))
+            .collect();
+        section_open(&mut body, &day_uuid(source_id, date));
+        let _ = writeln!(body, "### {date}\n");
+        for (family, line) in &by_family {
+            let _ = writeln!(body, "- **{}:** {line}", family.title());
+        }
+        body.push_str("\n</div>\n\n");
+        lines.push((date, by_family));
+    }
+    let count = lines.len();
+    out.emit("days.md", &m_uuid, body, |md_rel, problems| {
+        let mut rows: Vec<GridRow> = GridRow::builder()
+            .uuid(m_uuid.clone())
+            .provider(Provider::Garmin)
+            .kind("Garmin Daily Log")
+            .source_label("Garmin")
+            .is_document(true)
+            .item_count(Some(count as i64))
+            .created_at(first.as_deref().and_then(|d| day_iso(days, d)))
+            .modified_at(last.as_deref().and_then(|d| day_iso(days, d)))
+            .author(parsed.full_name.clone())
+            .conversation_name(Some(title.clone()))
+            .conversation_uuid(m_uuid.clone())
+            .entire_chat(format!("/chat/{m_uuid}"))
+            .body(format!("{title}\n{count} days"))
+            .qmd_path(Some(md_rel.to_string()))
+            .markdown_uuid(Some(m_uuid.clone()))
+            .upstream_id(Some(source_id.to_string()))
+            .upstream_entity_kind(Some(KIND_DAILY_LOG.to_string()))
+            .build_or_record(source_id, &m_uuid, RENDER_VERSION, problems)
+            .into_iter()
+            .collect();
+        for (idx, (date, by_family)) in lines.iter().enumerate() {
+            let mut text: Vec<&str> = Vec::new();
+            let lead = daily::headline(&days[*date]);
+            text.extend(lead.as_deref());
+            text.extend(by_family.iter().map(|(_, l)| l.as_str()));
+            rows.extend(
+                GridRow::builder()
+                    .uuid(day_uuid(source_id, date))
+                    .provider(Provider::Garmin)
+                    .kind("Garmin Day")
+                    .source_label("Garmin")
+                    .created_at(day_iso(days, date))
+                    .author(parsed.full_name.clone())
+                    .conversation_name(Some(title.clone()))
+                    .conversation_uuid(m_uuid.clone())
+                    .message_index(Some(idx as i64))
+                    .entire_chat(format!("/chat/{m_uuid}"))
+                    .body(format!("{date}\n{}", text.join("\n")))
+                    .qmd_path(Some(md_rel.to_string()))
+                    .upstream_id(Some((*date).clone()))
+                    .upstream_entity_kind(Some(KIND_DAY.to_string()))
+                    .markdown_uuid(Some(m_uuid.clone()))
+                    .build_or_record(source_id, &m_uuid, RENDER_VERSION, problems),
+            );
+        }
+        rows
+    })?;
+    Ok(count)
+}
+
+fn render_activity(
+    out: &mut Out<'_>,
+    parsed: &ParsedGarmin,
+    a: &Activity,
+    device_names: &HashMap<&str, &str>,
+) -> Result<()> {
+    let source_id = out.source_id;
+    let m_uuid = activity_uuid(source_id, &a.id, a.start_gmt_ms());
+    let name = a.name();
+    let created_at = a.start_iso();
+    let device = a
+        .device_id()
+        .and_then(|id| device_names.get(id.as_str()).map(|n| n.to_string()));
+    let mut body = head(&m_uuid, source_id, &name, created_at.as_deref());
+    activities::body(&mut body, a, device.as_deref());
+    out.emit(
+        &format!("activities/{m_uuid}.md"),
+        &m_uuid,
+        body,
+        |md_rel, problems| {
+            GridRow::builder()
+                .uuid(m_uuid.clone())
+                .provider(Provider::Garmin)
+                .kind("Garmin Activity")
+                .source_label("Garmin")
+                .is_document(true)
+                .item_count(Some(1))
+                .created_at(created_at.clone())
+                .author(parsed.full_name.clone())
+                .channel(Some(a.type_label()))
+                .conversation_name(Some(name.clone()))
+                .conversation_uuid(m_uuid.clone())
+                .entire_chat(format!("/chat/{m_uuid}"))
+                .body(activities::row_text(a))
+                .qmd_path(Some(md_rel.to_string()))
+                .markdown_uuid(Some(m_uuid.clone()))
+                .upstream_id(Some(a.id.clone()))
+                .upstream_entity_kind(Some(KIND_ACTIVITY.to_string()))
+                .build_or_record(source_id, &m_uuid, RENDER_VERSION, problems)
+                .into_iter()
+                .collect()
+        },
+    )
+}
+
+/// Personal records, badges, gear, workouts and goals on one page, a
+/// section and a row each. Returns how many.
+fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Result<usize> {
+    let source_id = out.source_id;
+    let title = format!("Records and badges — {who}");
+    let m_uuid = listings_uuid(source_id);
+    let names: HashMap<&str, String> = parsed
+        .activities
+        .iter()
+        .map(|a| (a.id.as_str(), a.name()))
+        .collect();
+    let activity_name = |id: &str| names.get(id).cloned();
+    let mut body = head(&m_uuid, source_id, &title, None);
+    let mut lines = Vec::new();
+    for (kind, heading, row_kind) in records::KINDS {
+        let items: Vec<_> = parsed.items.iter().filter(|i| i.kind == *kind).collect();
+        if items.is_empty() {
+            continue;
+        }
+        let _ = writeln!(body, "## {heading}\n");
+        for item in items {
+            let (name, said) = item.line(activity_name);
+            section_open(&mut body, &item_uuid(source_id, &item.id));
+            let _ = write!(body, "**{}**", escape_md_inline(&name));
+            if !said.is_empty() {
+                let _ = write!(body, " · {}", escape_md_inline(&said));
+            }
+            body.push('\n');
+            body.push_str("\n</div>\n\n");
+            lines.push((item, *row_kind, name, said));
+        }
+    }
+    if lines.is_empty() {
+        body.push_str("*(no records, badges, gear, workouts or goals mirrored yet)*\n\n");
+    }
+    let count = lines.len();
+    out.emit("records.md", &m_uuid, body, |md_rel, problems| {
+        let mut rows: Vec<GridRow> = GridRow::builder()
+            .uuid(m_uuid.clone())
+            .provider(Provider::Garmin)
+            .kind("Garmin Records")
+            .source_label("Garmin")
+            .is_document(true)
+            .item_count(Some(count as i64))
+            .author(parsed.full_name.clone())
+            .conversation_name(Some(title.clone()))
+            .conversation_uuid(m_uuid.clone())
+            .entire_chat(format!("/chat/{m_uuid}"))
+            .body(format!("{title}\n{count} entries"))
+            .qmd_path(Some(md_rel.to_string()))
+            .markdown_uuid(Some(m_uuid.clone()))
+            .upstream_id(Some(source_id.to_string()))
+            .upstream_entity_kind(Some(KIND_LISTINGS.to_string()))
+            .build_or_record(source_id, &m_uuid, RENDER_VERSION, problems)
+            .into_iter()
+            .collect();
+        for (idx, (item, row_kind, name, said)) in lines.iter().enumerate() {
+            rows.extend(
+                GridRow::builder()
+                    .uuid(item_uuid(source_id, &item.id))
+                    .provider(Provider::Garmin)
+                    .kind(*row_kind)
+                    .source_label("Garmin")
+                    .created_at(item.created_at())
+                    .author(parsed.full_name.clone())
+                    .conversation_name(Some(title.clone()))
+                    .conversation_uuid(m_uuid.clone())
+                    .message_index(Some(idx as i64))
+                    .entire_chat(format!("/chat/{m_uuid}"))
+                    .body(format!("{name}\n{said}"))
+                    .qmd_path(Some(md_rel.to_string()))
+                    .upstream_id(Some(item.id.clone()))
+                    .upstream_entity_kind(Some(KIND_ITEM.to_string()))
+                    .markdown_uuid(Some(m_uuid.clone()))
+                    .build_or_record(source_id, &m_uuid, RENDER_VERSION, problems),
+            );
+        }
+        rows
+    })?;
+    Ok(count)
+}
+
 fn render_markdown(
     parsed: &ParsedGarmin,
     source_id: &str,
     m_uuid: &str,
     plot_file: Option<&str>,
 ) -> String {
-    let mut out = String::with_capacity(8 * 1024);
     let title = page_title(parsed, source_id);
     let created_at = parsed
         .latest_weigh_in()
         .and_then(|w| iso(w.timestamp_gmt_ms));
-
-    out.push_str("---\n");
-    let _ = writeln!(out, "markdown_uuid: {m_uuid}");
-    let _ = writeln!(out, "source_id: {source_id}");
-    out.push_str("provider: garmin\n");
-    let _ = writeln!(out, "title: {}", yaml_scalar(&title));
-    if let Some(ts) = &created_at {
-        let _ = writeln!(out, "created_at: {}", yaml_scalar(ts));
-    }
-    out.push_str("---\n\n");
-    out.push_str(
-        &Title {
-            suffix: None,
-            text: &title,
-            markdown_uuid: Some(m_uuid),
-            source_url: None,
-        }
-        .render(),
-    );
-
+    let mut out = head(m_uuid, source_id, &title, created_at.as_deref());
     render_weight_section(&mut out, parsed, plot_file);
     render_device_section(&mut out, parsed, source_id);
     render_store_section(&mut out, parsed);
@@ -209,10 +685,7 @@ fn render_device_section(out: &mut String, parsed: &ParsedGarmin, source_id: &st
     }
     for d in &parsed.devices {
         let uuid = device_uuid(source_id, &d.id);
-        let _ = writeln!(
-            out,
-            "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--garmin\">\n"
-        );
+        section_open(out, &uuid);
         let _ = writeln!(out, "### {}\n", escape_md_inline(&d.name));
         let _ = writeln!(
             out,
@@ -233,12 +706,12 @@ fn render_store_section(out: &mut String, parsed: &ParsedGarmin) {
     out.push_str("## Store\n\n");
     out.push_str("| | |\n| --- | --- |\n");
     let _ = writeln!(out, "| Weigh-ins | {} |", parsed.weigh_ins.len());
-    let _ = writeln!(out, "| Activities | {} |", parsed.activities);
+    let _ = writeln!(out, "| Activities | {} |", parsed.activities.len());
     let _ = writeln!(out, "| Activity FIT files | {} |", parsed.activity_files);
     let _ = writeln!(
         out,
         "| Account listings (records, gear, badges, workouts, goals) | {} |",
-        parsed.items
+        parsed.items.len()
     );
     out.push('\n');
     if !parsed.metrics.is_empty() {
@@ -327,14 +800,7 @@ fn build_grid_rows(
 }
 
 fn page_title(parsed: &ParsedGarmin, source_id: &str) -> String {
-    match parsed
-        .full_name
-        .as_deref()
-        .or(parsed.display_name.as_deref())
-    {
-        Some(name) => format!("Garmin — {name}"),
-        None => format!("Garmin — {source_id}"),
-    }
+    format!("Garmin — {}", who(parsed, source_id))
 }
 
 /// Garmin writes device stamps as `2026-09-14T05:12:44.0` with no
@@ -373,9 +839,10 @@ mod tests {
                 last_sync: None,
             }],
             metrics: Vec::new(),
-            activities: 0,
+            activities: Vec::new(),
             activity_files: 0,
-            items: 0,
+            items: Vec::new(),
+            days: Default::default(),
         };
         let mut out = String::new();
         render_device_section(&mut out, &parsed, "garmin");

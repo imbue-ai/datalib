@@ -336,6 +336,9 @@ Two nullable measurements. What each one measures is decided per
 | any chat-common message row | the body's UTF-8 length | 1; — for a tool call, a tool result or a system note |
 | any chat-common reaction row | — | — |
 | a sensor or Garmin page | — | its readings: rows of the raw store, or for Garmin every day of a metric with data, every weigh-in and every activity |
+| garmin.Garmin Metrics, garmin.Garmin Daily Log | — | the days with a value on the page |
+| garmin.Garmin Records | — | its entries |
+| garmin.Garmin Activity | — | 1 |
 | a GitHub PR, a GitLab MR, a Notion comment thread | — | itself and its comments; each comment row 1 |
 | a calendar event, a contact, a Notion page, a Perseus book or chapter | — | 1 |
 

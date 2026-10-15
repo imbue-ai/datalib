@@ -1010,9 +1010,10 @@ since = "2024-01-01"       # earliest day to mirror; default a year back. Quote 
 # activity_files = true    # each activity's original FIT file, into the blob store
 # wellness_files = false   # each day's wellness FIT bundle (one zip per day)
 
-# One page: the weigh-in history as an interactive plot and a table,
-# plus the account's devices. The rest of the store is mirrored but not
-# rendered yet.
+# The weigh-ins and devices, a page per family of daily metrics, a
+# daily log with a row per day, a page per activity, and the personal
+# records, badges, gear, workouts and goals. The FIT files and the
+# minute-by-minute series are mirrored but not drawn.
 [[steps]]
 group = "garmin"
 function = "render_markdown"

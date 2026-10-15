@@ -246,7 +246,8 @@ churns has not been measured on an account with a watch.
   endpoints, and no per-activity splits, weather or zone breakdowns
   beyond what the detail record carries. Each is one more entry in
   `DAILY_METRICS` or `ITEM_KINDS` when somebody wants it.
-- Only the weigh-ins and devices are rendered; see
+- The FIT files and the minute-by-minute series are mirrored but not
+  rendered; what is, is in
   [`../garmin_render/TRANSLATE.md`](../garmin_render/TRANSLATE.md).
 - `garmin.cn` accounts are reachable (`login --domain garmin.cn`, and
   the token records its domain) but untested.

@@ -1,4 +1,4 @@
-//! Read what the weight page needs out of the Garmin raw store.
+//! Read what the pages need out of the Garmin raw store.
 
 use std::path::Path;
 
@@ -9,6 +9,8 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl_garmin::ingest::db_path_for;
+
+use super::daily::{pick_readiness, DayValue, Days, Extract, Show, FIELDS};
 
 /// One weigh-in, ascending by `timestamp_gmt` in [`ParsedGarmin::weigh_ins`].
 #[derive(Debug, Clone)]
@@ -37,6 +39,25 @@ pub struct MetricCount {
     pub days_with_data: i64,
 }
 
+/// One activity: the listing's record, the detail's (JSON `null` when
+/// Garmin had none), and whether its original FIT file is in the CAS.
+#[derive(Debug, Clone)]
+pub struct Activity {
+    pub id: String,
+    pub listing: Value,
+    pub detail: Value,
+    pub fit_held: bool,
+}
+
+/// One row of an account listing (`garmin_items`).
+#[derive(Debug, Clone)]
+pub struct Item {
+    pub id: String,
+    pub kind: String,
+    pub upstream_id: String,
+    pub payload: Value,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ParsedGarmin {
     /// The commit everything was read at; `None` when nothing is
@@ -47,9 +68,11 @@ pub struct ParsedGarmin {
     pub weigh_ins: Vec<WeighIn>,
     pub devices: Vec<Device>,
     pub metrics: Vec<MetricCount>,
-    pub activities: i64,
+    /// Oldest first.
+    pub activities: Vec<Activity>,
     pub activity_files: i64,
-    pub items: i64,
+    pub items: Vec<Item>,
+    pub days: Days,
 }
 
 /// The tables the page reads, whole: any row of any of them moving
@@ -61,6 +84,7 @@ pub fn inputs() -> Vec<Input> {
         "garmin_devices",
         "garmin_daily",
         "garmin_activities",
+        "garmin_activity_details",
         "garmin_activity_files",
         "garmin_items",
     ]
@@ -101,13 +125,14 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
     let weigh_ins = load_weigh_ins(pool).await?;
     let devices = load_devices(pool).await?;
     let metrics = load_metric_counts(pool).await?;
-    let activities = scalar(pool, "SELECT COUNT(*) FROM garmin_activities").await?;
+    let activities = load_activities(pool).await?;
     let activity_files = scalar(
         pool,
         "SELECT COUNT(*) FROM garmin_activity_files WHERE blake3 IS NOT NULL",
     )
     .await?;
-    let items = scalar(pool, "SELECT COUNT(*) FROM garmin_items").await?;
+    let items = load_items(pool).await?;
+    let days = load_days(pool).await?;
     Ok(ParsedGarmin {
         head: Some(pin.commit().to_string()),
         display_name,
@@ -118,6 +143,7 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
         activities,
         activity_files,
         items,
+        days,
     })
 }
 
@@ -222,6 +248,145 @@ async fn load_metric_counts(pool: &SqlitePool) -> Result<Vec<MetricCount>> {
         .collect())
 }
 
+async fn load_activities(pool: &SqlitePool) -> Result<Vec<Activity>> {
+    let rows = sqlx::query(
+        "SELECT a.id, json(a.payload) AS listing, json(d.payload) AS detail, \
+                EXISTS(SELECT 1 FROM garmin_activity_files f \
+                        WHERE f.activity_id = a.id AND f.blake3 IS NOT NULL) AS fit \
+           FROM garmin_activities a LEFT JOIN garmin_activity_details d ON d.id = a.id \
+          ORDER BY a.start_time_gmt, a.id",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load garmin_activities")?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Activity {
+            id: r.get("id"),
+            listing: json_column(&r, "listing"),
+            detail: json_column(&r, "detail"),
+            fit_held: r.get::<i64, _>("fit") != 0,
+        })
+        .collect())
+}
+
+async fn load_items(pool: &SqlitePool) -> Result<Vec<Item>> {
+    let rows = sqlx::query(
+        "SELECT id, kind, upstream_id, json(payload) AS payload \
+           FROM garmin_items ORDER BY kind, id",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load garmin_items")?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Item {
+            id: r.get("id"),
+            kind: r.get("kind"),
+            upstream_id: r.get("upstream_id"),
+            payload: json_column(&r, "payload"),
+        })
+        .collect())
+}
+
+fn json_column(r: &sqlx::sqlite::SqliteRow, name: &str) -> Value {
+    r.try_get::<Option<String>, _>(name)
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(Value::Null)
+}
+
+/// Every value in [`FIELDS`], by day. A path is extracted in SQL, so a
+/// day's minute-by-minute arrays are never read into memory.
+async fn load_days(pool: &SqlitePool) -> Result<Days> {
+    let mut days = Days::new();
+    let mut put = |date: String, key: &'static str, v: DayValue| {
+        days.entry(date).or_default().values.insert(key, v);
+    };
+    let mut readiness: Option<Vec<(String, Value)>> = None;
+    for f in FIELDS {
+        match f.extract {
+            Extract::Path(path) if f.show == Show::Text => {
+                let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+                    "SELECT calendar_date, CAST(json_extract(json(payload), ?) AS TEXT) \
+                       FROM garmin_daily WHERE metric = ?",
+                )
+                .bind(path)
+                .bind(f.metric)
+                .fetch_all(pool)
+                .await
+                .with_context(|| format!("load garmin_daily {} {path}", f.metric))?;
+                for (date, v) in rows {
+                    if let Some(v) = v.filter(|v| !v.is_empty()) {
+                        put(date, f.key, DayValue::Text(v));
+                    }
+                }
+            }
+            Extract::Path(path) => {
+                let rows: Vec<(String, Option<f64>)> = sqlx::query_as(
+                    "SELECT calendar_date, CAST(json_extract(json(payload), ?) AS REAL) \
+                       FROM garmin_daily WHERE metric = ?",
+                )
+                .bind(path)
+                .bind(f.metric)
+                .fetch_all(pool)
+                .await
+                .with_context(|| format!("load garmin_daily {} {path}", f.metric))?;
+                for (date, v) in rows {
+                    if let Some(v) = v {
+                        put(date, f.key, DayValue::Num(v));
+                    }
+                }
+            }
+            Extract::Readiness(key) => {
+                if readiness.is_none() {
+                    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+                        "SELECT calendar_date, json(payload) FROM garmin_daily \
+                          WHERE metric = 'training_readiness'",
+                    )
+                    .fetch_all(pool)
+                    .await
+                    .context("load garmin_daily training_readiness")?;
+                    readiness = Some(
+                        rows.into_iter()
+                            .filter_map(|(d, p)| Some((d, serde_json::from_str(&p?).ok()?)))
+                            .collect(),
+                    );
+                }
+                for (date, payload) in readiness.iter().flatten() {
+                    match pick_readiness(payload, key) {
+                        Some(Value::Number(n)) => {
+                            if let Some(x) = n.as_f64() {
+                                put(date.clone(), f.key, DayValue::Num(x));
+                            }
+                        }
+                        Some(Value::String(s)) => {
+                            put(date.clone(), f.key, DayValue::Text(s.clone()))
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    let stamps: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT calendar_date, \
+                json_extract(json(payload), '$.wellnessStartTimeGmt'), \
+                json_extract(json(payload), '$.wellnessStartTimeLocal') \
+           FROM garmin_daily WHERE metric = 'daily_summary'",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load garmin_daily offsets")?;
+    for (date, gmt, local) in stamps {
+        if let (Some(day), Some(gmt), Some(local)) = (days.get_mut(&date), gmt, local) {
+            day.offset_secs = super::stamps::offset_secs(&gmt, &local);
+        }
+    }
+    Ok(days)
+}
+
 impl ParsedGarmin {
     pub fn latest_weigh_in(&self) -> Option<&WeighIn> {
         self.weigh_ins.last()
@@ -232,6 +397,6 @@ impl ParsedGarmin {
     /// with nothing is a row, but not a measurement.
     pub fn measurements(&self) -> i64 {
         let days: i64 = self.metrics.iter().map(|m| m.days_with_data).sum();
-        days + self.weigh_ins.len() as i64 + self.activities
+        days + self.weigh_ins.len() as i64 + self.activities.len() as i64
     }
 }
