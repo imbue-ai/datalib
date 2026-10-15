@@ -51,8 +51,8 @@ impl Severity {
 /// separate namespaces: a group id is one path segment, a step id is
 /// `<group>/<function>` or a verbatim path, and an applet writes no
 /// artifacts at all — so none is ever checked against another. (The
-/// scaffold relies on this: its `unified_index` group, its
-/// `unified_index` applet and its `unified_index/grid` step coexist.)
+/// scaffold relies on this: its `unified_document_index` group, its
+/// `unified_document_index` applet and its `unified_document_index/grid` step coexist.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryKind {

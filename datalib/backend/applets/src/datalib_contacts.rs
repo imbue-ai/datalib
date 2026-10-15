@@ -61,7 +61,7 @@ pub fn serve(port: u16) -> Result<()> {
         let gate = Arc::new(crate::gate::Gate::from_env(bound.port())?);
         let app = routes(store).layer(middleware::from_fn_with_state(
             gate,
-            crate::unified_index::require_gateway,
+            crate::unified_document_index::require_gateway,
         ));
         tracing::info!(address = %bound, "listening");
         crate::announce_port(bound.port());
@@ -218,8 +218,9 @@ fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
             let contact_ref = Identity {
                 id: chip.map_or_else(|| name.to_string(), Handle::to_uri),
                 label: name.to_string(),
-                icon: chip
-                    .map(|h| crate::unified_index::columns::handle_mark(h.kind()).to_string()),
+                icon: chip.map(|h| {
+                    crate::unified_document_index::columns::handle_mark(h.kind()).to_string()
+                }),
                 detail: chip.map(|h| h.describe(name)),
                 entity: None,
             };

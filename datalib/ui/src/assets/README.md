@@ -40,7 +40,7 @@ and dark backgrounds and fails one that doesn't show up on either.
   [Material Design Icons](https://pictogrammers.com/library/mdi/)
   (Apache-2.0) in a mid grey that reads on both themes. Apple publishes
   no vector app icons, and the rest are not products. `search` marks the
-  unified index group, and `system` the System group.
+  unified document index group, and `system` the System group.
 - **Our own:**
   - `claude_code.svg` and `codex.svg`: a terminal glyph in Claude's
     colour and in OpenAI's, so a list that shows Claude Code beside Claude,

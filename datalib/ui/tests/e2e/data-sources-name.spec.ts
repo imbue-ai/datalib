@@ -38,9 +38,9 @@ const embedToggle = (page: Page) => toggle(page, "Embed it for search by meaning
 /// The `inputs` one fan-in declares, read out of the config text.
 function fanInInputs(config: string, fn: string): string[] {
   const table = new RegExp(
-    `\\[\\[steps\\]\\]\\ngroup = "unified_index"\\nfunction = "${fn}"\\ninputs = \\[([^\\]]*)\\]`,
+    `\\[\\[steps\\]\\]\\ngroup = "unified_document_index"\\nfunction = "${fn}"\\ninputs = \\[([^\\]]*)\\]`,
   ).exec(config);
-  if (!table) throw new Error(`no unified_index/${fn} step in the config`);
+  if (!table) throw new Error(`no unified_document_index/${fn} step in the config`);
   return table[1]
     .split(",")
     .map((t) => t.trim().replace(/^"|"$/g, ""))

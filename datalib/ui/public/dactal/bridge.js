@@ -1,5 +1,5 @@
 // Bridge: Datalib `grid_rows` (the denormalized union table served by
-// `/applet/unified_index/search`) -> DACTAL datasets, and the one channel
+// `/applet/unified_document_index/search`) -> DACTAL datasets, and the one channel
 // this page has to the outside world.
 //
 // The page runs in a sandboxed iframe with an opaque origin: no cookie,

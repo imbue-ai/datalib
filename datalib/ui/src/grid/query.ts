@@ -2,7 +2,7 @@
 // wire: how a value is quoted into a `key:value` token, how a token is
 // added to a query, and the two right-click entries that add one. The
 // grammar itself is `datalib_query` on the backend; the unified grid's
-// search sends it to `/applet/unified_index`, the run log's to `/api/log`.
+// search sends it to `/applet/unified_document_index`, the run log's to `/api/log`.
 /// `value` as one token: bare when it can be, double-quoted otherwise.
 /// Mirrors `datalib_query::quote` (`\"` and `\\` escape inside quotes).
 export function quoteValue(v: string): string {

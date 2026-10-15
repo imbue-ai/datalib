@@ -177,7 +177,7 @@ inside the same second can agree by luck:
 
 **The table contents are the property worth relying on, and they hold.**
 Dump them (`.mode json`, `SELECT * … ORDER BY 1`) and two independent
-runs agree byte for byte. `//datalib/backend/unified_index:fixture_db_snapshot_test`
+runs agree byte for byte. `//datalib/backend/unified_document_index:fixture_db_snapshot_test`
 is an insta snapshot of exactly that, which is why it can exist at all.
 
 The **file** cannot be byte-stable, and no amount of `--now` pinning will

@@ -7,16 +7,16 @@
 #
 # Produces, under <out-root>:
 #   <stanza>/render_markdown/...       Conversation markdown trees (from qmd.tar).
-#   unified_index/grid_index/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
-#   unified_index/qmd_aggregator/qmd/index.sqlite QMD index (from qmd-index.tar).
-#   unified_index/qmd_models/          the qmd GGUFs this target carries,
+#   unified_document_index/grid_index/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
+#   unified_document_index/qmd_aggregator/qmd/index.sqlite QMD index (from qmd-index.tar).
+#   unified_document_index/qmd_models/          the qmd GGUFs this target carries,
 #                                      linked in from bazel outputs (all
 #                                      three, or the embedding model alone
 #                                      — see the two targets in BUILD.bazel).
-#   unified_index/qmd_aggregator/qmd/models -> ../../qmd_models
+#   unified_document_index/qmd_aggregator/qmd/models -> ../../qmd_models
 #   config.toml                        { data_root }, every source as a
 #                                      render-only group, the two fan-ins,
-#                                      and the `unified_index` applet the
+#                                      and the `unified_document_index` applet the
 #                                      grid is served by.
 #
 # Usage: materialize_tng_root.sh <out-root>
@@ -63,19 +63,19 @@ mkdir -p "$OUT_ROOT"
 # Both archives are rooted at `qmd/` (the genrule's staging dir name);
 # strip that one component so the per-stanza markdown trees land at
 # `<root>/<stanza>/render_markdown/...` and the index at
-# `<root>/unified_index/qmd_aggregator/qmd/`, where the backend's scanners look.
+# `<root>/unified_document_index/qmd_aggregator/qmd/`, where the backend's scanners look.
 tar -xf "$QMD_TAR"       -C "$OUT_ROOT" --strip-components=1
 tar -xf "$QMD_INDEX_TAR" -C "$OUT_ROOT" --strip-components=1
 
 # Drop the doltlite file into the `grid_index` step's tree; the backend
-# opens it directly via `<data_root>/unified_index/grid_index/db.doltlite_db`.
-mkdir -p "$OUT_ROOT/unified_index/grid_index"
-cp "$DB_FILE" "$OUT_ROOT/unified_index/grid_index/db.doltlite_db"
-chmod u+w "$OUT_ROOT/unified_index/grid_index/db.doltlite_db"
-cp "$TERMS_FILE" "$OUT_ROOT/unified_index/grid_index/search_terms.sqlite"
-chmod u+w "$OUT_ROOT/unified_index/grid_index/search_terms.sqlite"
+# opens it directly via `<data_root>/unified_document_index/grid_index/db.doltlite_db`.
+mkdir -p "$OUT_ROOT/unified_document_index/grid_index"
+cp "$DB_FILE" "$OUT_ROOT/unified_document_index/grid_index/db.doltlite_db"
+chmod u+w "$OUT_ROOT/unified_document_index/grid_index/db.doltlite_db"
+cp "$TERMS_FILE" "$OUT_ROOT/unified_document_index/grid_index/search_terms.sqlite"
+chmod u+w "$OUT_ROOT/unified_document_index/grid_index/search_terms.sqlite"
 
-# The grid is served by the `unified_index` applet, so the config has to
+# The grid is served by the `unified_document_index` applet, so the config has to
 # declare it or the app comes up with no search. An absolute command
 # rather than a bare name: this root is materialized into a temp dir with
 # no `binary_dir` and nothing installed on PATH.
@@ -88,7 +88,7 @@ chmod u+w "$OUT_ROOT/unified_index/grid_index/search_terms.sqlite"
 # //datalib:dev_tng` path, which resolves through the source tree.
 #
 # The groups come from the pipeline that rendered the trees
-# (`config_body.toml`): every source, and the `unified_index` group, for
+# (`config_body.toml`): every source, and the `unified_document_index` group, for
 # the same reason a real root declares them — a group is one row on the
 # Manage screen, the storage endpoint measures one tree per *declared*
 # group and step, and Browse needs a row to start from. Each source is
@@ -102,9 +102,9 @@ chmod u+w "$OUT_ROOT/unified_index/grid_index/search_terms.sqlite"
   cat <<EOF
 
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "'$APPLET_BIN' unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "'$APPLET_BIN' unified_document_index"
 EOF
 } > "$OUT_ROOT/config.toml"
 
@@ -128,13 +128,13 @@ EOF
 #     into every root. Same assumption the applet `command` above already
 #     makes — a runfiles path outlives the run that wrote it, up to a
 #     `bazel clean`.
-#   * `unified_index/qmd_aggregator/qmd/models` has to be a SYMLINK, not the directory
+#   * `unified_document_index/qmd_aggregator/qmd/models` has to be a SYMLINK, not the directory
 #     itself. A later sync against this root calls
 #     `qmd_indexer::ensure_models_symlink`, which errors out when it
 #     finds a real directory at that path. So the real directory is a
 #     sibling and the expected path points at it.
-MODELS_DIR="$OUT_ROOT/unified_index/qmd_models"
-mkdir -p "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd_aggregator/qmd"
+MODELS_DIR="$OUT_ROOT/unified_document_index/qmd_models"
+mkdir -p "$MODELS_DIR" "$OUT_ROOT/unified_document_index/qmd_aggregator/qmd"
 EMBED_MODEL="_main/third-party/qmd_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
 src="$(rlocation "$EMBED_MODEL")" || src=""
 if [[ -z "$src" || ! -s "$src" ]]; then
@@ -153,7 +153,7 @@ for entry in \
   fi
   ln -sfn "$src" "$MODELS_DIR/$(basename "$entry")"
 done
-ln -sfn "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd_aggregator/qmd/models"
+ln -sfn "$MODELS_DIR" "$OUT_ROOT/unified_document_index/qmd_aggregator/qmd/models"
 
 # Drop the TNG-themed scan tree into the root as `fsindex_scan/`. It's a plain
 # directory the `fsindex` (Unison-style) scanner can index; nothing renders it

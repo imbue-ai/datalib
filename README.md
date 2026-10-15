@@ -232,7 +232,7 @@ A mirror you can't leave is just another silo, so the exits are plain:
   SQLite file for any tool that wants one:
 
   ```sh
-  datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db .dump | sqlite3 grid.sqlite
+  datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db .dump | sqlite3 grid.sqlite
   ```
 
   Or browse a store in a GUI: a build of DB Browser for SQLite patched to

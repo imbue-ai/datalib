@@ -26,7 +26,7 @@
 // attachment above all — is what a sender sent, and framed it would sit
 // inside the app's own chrome.
 import DOMPurify from "dompurify";
-import { UNIFIED_INDEX } from "../api";
+import { UNIFIED_DOCUMENT_INDEX } from "../api";
 import {
   blockAttribute,
   hostOf,
@@ -57,7 +57,7 @@ export type Sanitized = {
   remote: RemoteRef[];
 };
 
-const ASSET_PREFIX = `${UNIFIED_INDEX}/asset/`;
+const ASSET_PREFIX = `${UNIFIED_DOCUMENT_INDEX}/asset/`;
 
 /** `plots/<name>.html`, relative or under one markdown's asset route.
  *  A browser reads `%2e%2e` as `..` and `\` as `/`, so the name is

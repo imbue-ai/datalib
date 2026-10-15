@@ -144,7 +144,7 @@ pub enum RootEvent {
     /// A component appeared, changed or vanished under
     /// `system/frontend/`.
     FrontendChanged,
-    /// The grid index (`unified_index/grid_index/db.doltlite_db`) has a
+    /// The grid index (`unified_document_index/grid_index/db.doltlite_db`) has a
     /// new HEAD. Under streaming that happens many times per sync -- a
     /// `grid_index` pass per checkpoint -- and it is how rows reach the
     /// grid while the download that produced them is still running. The
@@ -661,7 +661,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
     let system = std::fs::canonicalize(&system).unwrap_or(system);
     let frontend = std::fs::canonicalize(&frontend).unwrap_or(frontend);
     let runs = std::fs::canonicalize(&runs).unwrap_or(runs);
-    // Not created here: `unified_index/` belongs to the steps and the
+    // Not created here: `unified_document_index/` belongs to the steps and the
     // applet, and a root that has never synced has none. Watched once it
     // exists — see the debounce loop below.
     let grid_index = datalib_core::layout::grid_index_dir(&root);
@@ -939,12 +939,15 @@ mod tests {
         assert_eq!(
             classify(
                 root,
-                &root.join("unified_index/grid_index/db.doltlite_db.lock")
+                &root.join("unified_document_index/grid_index/db.doltlite_db.lock")
             ),
             None
         );
         assert_eq!(
-            classify(root, &root.join("unified_index/grid_index/db.doltlite_db")),
+            classify(
+                root,
+                &root.join("unified_document_index/grid_index/db.doltlite_db")
+            ),
             Some(Moved::GridIndex)
         );
     }

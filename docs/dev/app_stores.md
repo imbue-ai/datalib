@@ -4,15 +4,15 @@
 <data_root>/<group>/ingest/entities.doltlite_db   per-source entities + sync bookkeeping
 <data_root>/<group>/ingest/blobs.sqlite           content-addressed blobs (plain SQLite)
 <data_root>/<group>/render_markdown/…             the rendered tree + its render store
-<data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems /
+<data_root>/unified_document_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems /
                                                   source_contacts (who each handle is, per source)
-<data_root>/unified_index/grid_index/search_terms.sqlite every id, handle, title, label and name each
+<data_root>/unified_document_index/grid_index/search_terms.sqlite every id, handle, title, label and name each
                                                   grid row answers to, full-text indexed, and the
                                                   names each handle went by (plain SQLite;
                                                   `grid_index` rewrites it after each pass,
                                                   `etl/render/src/search_terms.rs`)
-<data_root>/unified_index/qmd_aggregator/           the qmd index (plain SQLite inside)
-<data_root>/unified_index/embedding_map/embedding_map.json
+<data_root>/unified_document_index/qmd_aggregator/           the qmd index (plain SQLite inside)
+<data_root>/unified_document_index/embedding_map/embedding_map.json
                                                   every embedded document's place on
                                                   the map card; replaced whole by
                                                   each run, deleted by a reset
@@ -90,7 +90,7 @@ two stores; `render_markdown` owns its render store; `grid_index` owns
 the index; `datalib-http` owns feedback, usage and remote media;
 the applet only reads, each request inside one read transaction on a
 read-only connection, which holds one commit (`DoltRepo::pinned` in
-`unified_index/src/dolt_repo.rs`;
+`unified_document_index/src/dolt_repo.rs`;
 [`doltlite.md`](doltlite.md#three-ways-to-read-one-commit)) — so a
 `grid_index` pass in flight is never served. `runs.sqlite` is the exception because it is not doltlite: plain
 SQLite in rollback-journal mode, written by whoever runs the loop (its

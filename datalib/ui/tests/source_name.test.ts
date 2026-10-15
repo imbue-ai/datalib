@@ -80,40 +80,40 @@ describe("names on the other kinds of entry", () => {
   const OTHER = `data_root = "/tmp/data"
 
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 name = "Search index"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = []
 
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
 `;
 
   it("lets a written name beat the shared step's default label", () => {
     const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
-    expect(byId.get("unified_index/grid_index")?.kind).toBe("step");
-    expect(byId.get("unified_index/grid_index")?.name).toBe("Search index");
+    expect(byId.get("unified_document_index/grid_index")?.kind).toBe("step");
+    expect(byId.get("unified_document_index/grid_index")?.name).toBe("Search index");
   });
 
   it("gives an unnamed shared step its default label", () => {
     const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
-    expect(byId.get("unified_index/qmd_aggregator")?.name).toBe("Unified Index (QMD)");
+    expect(byId.get("unified_document_index/qmd_aggregator")?.name).toBe("Document Index (QMD)");
   });
 
   it("labels the applet too, which has no config key to name it", () => {
     const applet = listSteps(OTHER).find((e) => e.kind === "applet");
-    expect(applet?.id).toBe("unified_index");
-    expect(applet?.name).toBe("Unified Index (Applet)");
+    expect(applet?.id).toBe("unified_document_index");
+    expect(applet?.name).toBe("Document Index (Applet)");
   });
 
   it("still shows an entry the defaults don't know by its id", () => {
@@ -214,9 +214,11 @@ describe("deriving an id from a name", () => {
   });
 
   it("suffixes a reserved id too", () => {
-    // `system` and `unified_index` are directories the pipeline owns;
+    // `system` and `unified_document_index` are directories the pipeline owns;
     // the loader would refuse them, so never propose one.
     expect(suggestId(new Set(), "system", "slack")).toBe("system-2");
-    expect(suggestId(new Set(), "unified_index", "slack")).toBe("unified_index-2");
+    expect(suggestId(new Set(), "unified_document_index", "slack")).toBe(
+      "unified_document_index-2",
+    );
   });
 });

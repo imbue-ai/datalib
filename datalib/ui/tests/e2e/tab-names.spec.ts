@@ -23,7 +23,9 @@ async function renameFromMenu(page: Page) {
 test("a card's requests name the card and its type", async ({ page }) => {
   // The search itself: the field's `/search/keys` asks for the page, not
   // for a card.
-  const search = page.waitForRequest((r) => r.url().includes("/applet/unified_index/search?"));
+  const search = page.waitForRequest((r) =>
+    r.url().includes("/applet/unified_document_index/search?"),
+  );
   await page.goto(GRID);
   const headers = (await search).headers();
   expect(headers["x-datalib-card"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab]/);

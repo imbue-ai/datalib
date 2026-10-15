@@ -273,6 +273,12 @@ going, and every Sync on the Sources card is disabled
 (`ManageResponse::sync_paused`); a request opened another way waits for
 the pass. After it, the pill stays red for a source the pass could not
 update until it is dismissed.
+Before any of that, the http server brings the document index from
+before its rename forward (`http/src/config_upgrade.rs`): it moves
+`<root>/unified_index/` to `<root>/unified_document_index/` and the
+record's rows for those steps to their new ids
+(`Store::rename_group_steps`); `docs/dev/config_model.md` §"The
+retired shapes" has the config side.
 `datalib/backend/datalib_step/raw_shapes/` holds the raw shape every
 release left, and a test migrates each one
 ([`raw_shapes/README.md`](../datalib_step/raw_shapes/README.md)).

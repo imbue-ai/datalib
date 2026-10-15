@@ -101,7 +101,7 @@ mod tests {
         );
         assert_eq!(
             Function::EmbeddingMap.as_str(),
-            datalib_unified_index::embedding_map::DIR
+            datalib_unified_document_index::embedding_map::DIR
         );
     }
 }

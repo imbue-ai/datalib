@@ -120,10 +120,10 @@ function phaseOfFunction(fn: string | null): StepPhase {
 /// that lives here rather than in anyone's config file. A `name =` someone did
 /// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
-  "unified_index/grid_index": "Unified Index (table)",
-  "unified_index/qmd_aggregator": "Unified Index (QMD)",
-  "unified_index/embedding_map": "Unified Index (map)",
-  unified_index: "Unified Index (Applet)",
+  "unified_document_index/grid_index": "Document Index (table)",
+  "unified_document_index/qmd_aggregator": "Document Index (QMD)",
+  "unified_document_index/embedding_map": "Document Index (map)",
+  unified_document_index: "Document Index (Applet)",
   datalib_contacts: "Contacts (Applet)",
 };
 
@@ -306,7 +306,7 @@ export function listSteps(text: string): ConfiguredStep[] {
   return [...steps, ...applets];
 }
 
-/// `datalib-applet unified_index` → `unified_index`. Null for anything
+/// `datalib-applet unified_document_index` → `unified_document_index`. Null for anything
 /// else, which is legitimate — an applet may be any executable.
 function appletType(command: string): string | null {
   const words = command.trim().split(/\s+/);
@@ -969,12 +969,12 @@ const STEP_TABLE = /(\[\[steps\]\])([\s\S]*?)(?=\n[ \t]*\[|$)/g;
 
 const INPUTS_OPEN = /^[ \t]*inputs[ \t]*=[ \t]*\[/m;
 
-/// Is this step body a fan-in — filed under the `unified_index` group,
-/// or, for a custom step, writing an `unified_index/…` id — and, when
+/// Is this step body a fan-in — filed under the `unified_document_index` group,
+/// or, for a custom step, writing an `unified_document_index/…` id — and, when
 /// `only` names some, one of those?
 function isFanIn(body: string, only?: FanInFunction[]): boolean {
-  const verbatim = /id\s*=\s*"unified_index\/([^"]*)"/.exec(body);
-  if (!verbatim && !/group\s*=\s*"unified_index"/.test(body)) return false;
+  const verbatim = /id\s*=\s*"unified_document_index\/([^"]*)"/.exec(body);
+  if (!verbatim && !/group\s*=\s*"unified_document_index"/.test(body)) return false;
   if (!only) return true;
   const fn = /function\s*=\s*"([^"]*)"/.exec(body)?.[1] ?? verbatim?.[1];
   return only.includes(fn as FanInFunction);
@@ -1023,9 +1023,9 @@ export function unwireFromFanIns(text: string, stepId: string, only?: FanInFunct
 /// grouped step says so with `group` + `function`; a custom step filed
 /// outside any group says it in the id it writes.
 export function fanInFunctionOf(step: ConfiguredStep): string | null {
-  if (step.group === "unified_index") return step.function;
+  if (step.group === "unified_document_index") return step.function;
   const [group, fn] = step.id.split("/");
-  return step.group === null && group === "unified_index" ? (fn ?? null) : null;
+  return step.group === null && group === "unified_document_index" ? (fn ?? null) : null;
 }
 
 /// A source's own qmd steps, as `[[steps]]` blocks: its keyword index,
@@ -1118,7 +1118,7 @@ export function readersOf(ids: string[], all: ConfiguredStep[]): ConfiguredStep[
 }
 
 /// The group every source feeds.
-const INDEX_GROUP = "unified_index";
+const INDEX_GROUP = "unified_document_index";
 
 /// Add entries — a source, a comparison, a source's qmd steps — where the
 /// file keeps reading in the order data flows: each step below the steps
@@ -1431,11 +1431,17 @@ export function slugify(name: string): string {
   return ascii.slice(0, 40).replace(/-+$/, "");
 }
 
-/// The reserved top-level directories, mirroring
-/// `dag::config::RESERVED_STANZA_NAMES`. An id landing on one of these
+/// The ids a source may not take, mirroring `dag::config::RESERVED_DIRS`
+/// and `dag::config::RESERVED_STANZA_NAMES`. An id landing on one of these
 /// is suffixed like any other collision rather than rejected, so the
 /// wizard never proposes a name the loader would refuse.
-const RESERVED_IDS = new Set(["system", "unified_index"]);
+const RESERVED_IDS = new Set([
+  "system",
+  "datalib_curated",
+  "unified_index",
+  "unified_document_index",
+  "unified_time_series_index",
+]);
 
 /// Propose an id for a new entry: `base` if it is free, else
 /// `base-2`, `base-3`, …

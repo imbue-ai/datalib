@@ -333,7 +333,7 @@ export const pipelineRow = (page: Page, id: string) =>
   page.locator(`${TABLE_ROWS}[data-key="${id}"]`);
 
 /// A group's row. Keyed `group:<id>` because an applet may share the
-/// group's id (`unified_index` does) and both are rows.
+/// group's id (`unified_document_index` does) and both are rows.
 export const groupRow = (page: Page, id: string) => pipelineRow(page, `group:${id}`);
 
 /// Open a tree row so the rows under it exist. Idempotent, and the

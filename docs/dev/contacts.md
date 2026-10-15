@@ -187,7 +187,7 @@ union has the kind); nothing finds the rest:
 |---|---|
 | `handle/src/lib.rs` | the `HandleKind` variant and its constructor; an arm each in `rebuild`, `to_uri` and `describe`; a branch in `from_uri` unless the URI is `datalib:handle/…`; a row in `every_kind_round_trips_through_its_uri` |
 | `contact_schema/src/lib.rs` | `Medium::of_kind` |
-| `applets/src/unified_index/columns.rs` | `handle_mark`, the mark the grid's Author chip shows |
+| `applets/src/unified_document_index/columns.rs` | `handle_mark`, the mark the grid's Author chip shows |
 | `ui/src/cards/chipLinks.js` | `KINDS`, `handleFromUri`, `uriFromHandle`, and a row in `tests/chip_links.test.ts` |
 | `ui/src/cards/contacts.ts` | the `HandleKind` union, `handleKind`, `KIND_ICON`, and `copyText` if `describe` is not `label (handle)` |
 | `ui/src/cards/sanitize.ts` | `ALLOWED_URI_REGEXP`, if the URI's scheme is a new one |
@@ -293,11 +293,11 @@ and the index hold them in two tables: `source_contacts`
 the index's copy is indexed by handle). `grid_index` loads them the way
 it loads `grid_rows`.
 
-**`POST /people` on the `unified_index` applet** takes `{"handles":
+**`POST /people` on the `unified_document_index` applet** takes `{"handles":
 […]}` and answers `{"people": {<handle>: [NormalizedContact, …]}}`: for
 each handle, every source contact holding it, one per source and key
 (the rows from each document summed), ranked by
-`unified_index/src/people.rs`: a source about people first, then the
+`unified_document_index/src/people.rs`: a source about people first, then the
 chat where the person wrote the most. A handle no source mentions is
 absent. This works with no contacts app at all.
 
@@ -311,7 +311,7 @@ origin, never another host's, since the app fetches nothing remote
 unasked, and only for an image a browser draws: png, jpeg, gif or
 webp (`contact_schema::DRAWABLE_PHOTO_TYPES`, the one list, which the
 contacts app's photo rule shares). contact-common fills it with
-`/applet/unified_index/asset/<markdown_uuid>/blobs/<file>`, which the
+`/applet/unified_document_index/asset/<markdown_uuid>/blobs/<file>`, which the
 index's asset route serves; a photo of another type keeps its file
 beside the page and gets no URL. The contacts app fills it with
 `/applet/datalib_contacts/photo/<contact_id>` for a photo a person put
@@ -393,7 +393,7 @@ The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`; the gateway passes the
 data root in the environment. A new root's starter config
 (`scaffold_toml` in `datalib-http`) writes it, filed under
-`unified_index`; a config written before that has to add it by hand.
+`unified_document_index`; a config written before that has to add it by hand.
 
 ### Fields, and editing a contact through a draft
 
@@ -540,7 +540,7 @@ supplies an `about` search term for each handle the card holds and each
 name it gives, and nobody wrote the card. So `with:riker` finds his card
 beside everything he took part in.
 
-[`search_by_example_tests.rs`](../../datalib/backend/applets/src/unified_index/search_by_example_tests.rs)
+[`search_by_example_tests.rs`](../../datalib/backend/applets/src/unified_document_index/search_by_example_tests.rs)
 shows each of these rules on a small cast: how its rows are filed, and
 which queries do and do not find them.
 
@@ -594,7 +594,7 @@ chip in the UI is separate and always uses the latest answer.
   against the current rules, the photo rules.
 - `chat-common`: `people.rs` (the baseline, recipients, reactors, the
   provider merge); `render.rs` (the header and recipients line).
-- `unified_index`: `people.rs` ranking; the applet's `/people` against
+- `unified_document_index`: `people.rs` ranking; the applet's `/people` against
   the fixture index.
 - `tests/fixtures/ingested_tng_test.py`: the end-to-end guard, from the
   TNG fixture through the index: Picard known by one address from

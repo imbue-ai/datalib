@@ -48,7 +48,7 @@ pub enum StoreKind {
     /// Every source's time series, stacked
     /// (`unified_time_series_index/time_series_index`).
     TimeSeriesIndex,
-    /// The grid index (`unified_index/grid_index`).
+    /// The grid index (`unified_document_index/grid_index`).
     GridIndex,
     Feedback,
     /// `system/disk_stats.sqlite`: bytes under each tree of the root, and

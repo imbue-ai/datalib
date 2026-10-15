@@ -31,7 +31,7 @@ function isRemoteHost(url: string): boolean {
 
 /// Opens the fixture's Risa marketing email; returns its markdown uuid.
 async function openMarketingEmail(page: Page): Promise<string> {
-  const resp = await page.request.get("/applet/unified_index/search?q=&limit=1000");
+  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=1000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
     rows: { uuid: string; kind: string; conversation_name: string; markdown_uuid: string }[];

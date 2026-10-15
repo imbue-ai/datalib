@@ -71,7 +71,7 @@ filegroup(
             # directory the `fsindex` (Unison-style) scanner can index. It's not
             # rendered (fsindex is extract-only), so it just sits in the root.
             "//datalib/backend/etl/providers/fsindex:tng_fixture",
-            # The generated config declares the `unified_index` applet, and
+            # The generated config declares the `unified_document_index` applet, and
             # the gateway spawns it by the command written there. Naming the
             # binary's runfiles path keeps that resolvable without a
             # `binary_dir` or a PATH assumption.
@@ -262,11 +262,11 @@ genrule(
             "$(execpath //datalib/backend/http:datalib_http_bin)",
         ]),
         # Copy the grid index store out of the workspace.
-        # It lives under the `unified_index/` tree the index steps own
+        # It lives under the `unified_document_index/` tree the index steps own
         # (see core::layout).
-        "cp $(RULEDIR)/sync_workspace/unified_index/grid_index/db.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
+        "cp $(RULEDIR)/sync_workspace/unified_document_index/grid_index/db.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
         # And the terms file the same step writes beside it.
-        "cp $(RULEDIR)/sync_workspace/unified_index/grid_index/search_terms.sqlite $(execpath ingested/backend_search_terms.sqlite)",
+        "cp $(RULEDIR)/sync_workspace/unified_document_index/grid_index/search_terms.sqlite $(execpath ingested/backend_search_terms.sqlite)",
         # The sources as render-only groups, for materialize_tng_root.sh
         # to splice into the root's config.toml.
         "cp $(RULEDIR)/sync_workspace/config_body.toml $(execpath ingested/config_body.toml)",
@@ -409,7 +409,7 @@ py_test(
 # Output `qmd-index.tar` mirrors qmd.tar's layout: paths rooted at `qmd/`,
 # so extracting both archives into the same directory (e.g. with
 # `tar -x --strip-components=1`) yields a complete root data directory —
-# markdown tree plus `unified_index/qmd_aggregator/qmd/index.sqlite`.
+# markdown tree plus `unified_document_index/qmd_aggregator/qmd/index.sqlite`.
 #
 # Caveats:
 #   * Needs NO host `node`, no npm registry access, and no network at

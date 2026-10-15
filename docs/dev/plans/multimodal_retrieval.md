@@ -393,7 +393,7 @@ contentless (`content=''`, with `contentless_delete=1`), and store chunk
 `(markdown_uuid, byte_offset, byte_len)` rather than chunk text. Snippets
 are computed in Rust by reading the canonical `.md` for the ~20 rows that
 survive fusion — which is exactly what
-[`db.rs::snippet`](../../../datalib/backend/unified_index/src/db.rs) already
+[`db.rs::snippet`](../../../datalib/backend/unified_document_index/src/db.rs) already
 does for the grid today (240-char window centred on the first match).
 *Removes copies 4 and 5: 12.85 MB in the measured corpus.*
 
@@ -411,7 +411,7 @@ plausibly the best value-per-line item in the document. Mail text and
 
 **D3 — attachments live in the CAS only.** Stop materializing
 `<page_dir>/blobs/`. The `asset` endpoint
-([`applets/src/unified_index/mod.rs:585`](../../../datalib/backend/applets/src/unified_index/mod.rs))
+([`applets/src/unified_index/mod.rs:585`](../../../datalib/backend/applets/src/unified_document_index/mod.rs))
 already resolves `markdown_uuid` + a relative path and already has a
 path-traversal guard; point its resolution at a CAS `blake3` instead of a
 sibling file. Cross-document dedup comes free.
@@ -429,13 +429,13 @@ this is the largest single line.*
 this already exist: the renderer emits
 `<div id="m-{uuid}" data-section-uuid="{uuid}">` wrappers delimiting
 exactly these spans, and
-[`qmd/mapping.rs:194`](../../../datalib/backend/unified_index/src/qmd/mapping.rs)
+[`qmd/mapping.rs:194`](../../../datalib/backend/unified_document_index/src/qmd/mapping.rs)
 already reads the `.md` back off disk to resolve a hit line to a section
 uuid. *Removes copy 3: 6.34 MB.*
 
 > **This is the risky one, and it should be staged last.** The grid's
 > free-text filter is `LOWER(text) LIKE ?` with a `%needle%` bind
-> ([`db.rs:184`](../../../datalib/backend/unified_index/src/db.rs)) — a full
+> ([`db.rs:184`](../../../datalib/backend/unified_document_index/src/db.rs)) — a full
 > scan over `grid_rows.text`. Spans cannot serve that, so the grid's
 > free-text path must move onto the retrieval layer's FTS. That is a
 > better query, not a worse one, but it couples the grid to a component

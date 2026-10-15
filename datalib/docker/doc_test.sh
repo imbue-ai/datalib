@@ -82,7 +82,7 @@ wait_healthy() {
 rows() {
     local q="$1" i out
     for i in $(seq 1 30); do
-        if out="$(api "/applet/unified_index/search?q=${q}&limit=200" 2>/dev/null | python3 -c '
+        if out="$(api "/applet/unified_document_index/search?q=${q}&limit=200" 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 print(d["total"], " ".join(sorted({r["source"] for r in d["rows"]})))
@@ -129,7 +129,7 @@ doc_test_after() {
             assert_rows "Picard" 1
             ;;
         demo-index)
-            docker exec datalib-demo test -s /opt/datalib/demo/unified_index/qmd_aggregator/qmd/index.sqlite
+            docker exec datalib-demo test -s /opt/datalib/demo/unified_document_index/qmd_aggregator/qmd/index.sqlite
             assert_rows "warp%20core" 1
             ;;
         demo-sql|own-sql)
@@ -139,8 +139,8 @@ doc_test_after() {
             # that is how the page's reader will look at their data
             # root. A container that leaves it unreadable (root-owned
             # 0700, the umask leak of #469) fails here and nowhere else.
-            for f in unified_index/grid_index/db.doltlite_db \
-                     unified_index/qmd_aggregator/qmd/index.sqlite; do
+            for f in unified_document_index/grid_index/db.doltlite_db \
+                     unified_document_index/qmd_aggregator/qmd/index.sqlite; do
                 if ! test -s "$DATA_ROOT/$f"; then
                     echo "doc_test: $DATA_ROOT/$f is missing or empty as seen from the host" >&2
                     ls -laR "$DATA_ROOT" >&2 || true
