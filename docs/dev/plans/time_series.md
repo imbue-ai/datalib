@@ -99,7 +99,7 @@ have the same two tables.
 | `entity` | text | What was measured: a device, an account, a sensor |
 | `metric` | text | The provider's metric key, such as `resting_hr` |
 | `label` | text | What a chart legend shows |
-| `unit` | text | The unit values are stored in (SI, §"Units") |
+| `unit` | text | The unit values are stored in (§"Units and time") |
 | `time_kind` | text (enum `TimeKind`) | `instant` or `day` |
 | `points_hash` | text | blake3 over the points, in order; what incrementality compares |
 | `point_count`, `first_t`, `last_t` | integer | For listing without reading points |
@@ -150,13 +150,15 @@ The render can still skip the whole run when no input table moved, as
 
 ## Units and time
 
-- **Units are converted to SI at render time**, so two sources'
-  temperatures can share an axis without the UI knowing either source.
-  Display units (°C or °F, kg or lb) are the UI's choice. YoLink's and
-  AirVisual's metric tables already carry the conversion
-  (`MetricSpec::si_unit` and `to_si`,
-  `datalib/backend/etl/timeseries_render/src/units.rs:34`); Garmin's
-  `FIELDS` table in `garmin_render/src/render/daily.rs` gains the same.
+- **One unit per quantity, chosen at render time.** Every source
+  stores a quantity in the same unit, so two sources' temperatures can
+  share an axis without the UI knowing either source: temperature in
+  °C, volume in L, mass in kg, distance in m, every duration in s.
+  These are the units YoLink's and AirVisual's metric tables already
+  convert to (`MetricSpec::si_unit` and `to_si`,
+  `datalib/backend/etl/timeseries_render/src/units.rs:34`). A rate or a
+  score keeps its own unit (bpm, %, µg/m³). Display units (°F, lb,
+  hours) are the UI's choice.
 - **Two time kinds.** `instant` is a moment (a sensor reading);
   `day` is a calendar day in the person's local sense (a Garmin daily
   total), which must not be stored as midnight UTC. An interval (a
