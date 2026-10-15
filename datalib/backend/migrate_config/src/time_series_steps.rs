@@ -1,8 +1,9 @@
 //! A config from before time series: its sources of a type that renders
 //! them (`datalib_dag::config::TIME_SERIES_SOURCE_TYPES`) have no
 //! `render_time_series` step, and there is no time-series index. The
-//! rewrite adds both, appended after everything the file holds, so every
-//! comment and entry stays where it was.
+//! rewrite adds the steps, the index group with its `time_series_index`
+//! and the applet that serves it, appended after everything the file
+//! holds, so every comment and entry stays where it was.
 //!
 //! It applies only to a config with no `unified_time_series_index` group.
 //! Once that group is there the time-series steps are the person's: a
@@ -91,9 +92,11 @@ pub fn rewrite(text: &str) -> Result<String> {
     out.push_str(&format!(
         "\n\n# ── the time-series index: every source's time series, stacked ──\n\
          [[groups]]\nid = {group}\nname = \"Time Series Index\"\n\n\
-         [[steps]]\ngroup = {group}\nfunction = {}\ninputs = [{}]\n",
+         [[steps]]\ngroup = {group}\nfunction = {}\ninputs = [{}]\n\n\
+         [[applets]]\ngroup = {group}\nid = {group}\ncommand = {}\n",
         quote(INDEX),
         inputs.join(", "),
+        quote(&format!("datalib-applet {TIME_SERIES_INDEX_GROUP}")),
         group = quote(TIME_SERIES_INDEX_GROUP),
     ));
     Ok(out)
@@ -149,6 +152,9 @@ path = "/deck8/troi.mbox"
         );
         assert!(!ids.iter().any(|i| i.starts_with("troi-mail/render_time")));
         assert!(after.contains(r#"inputs = ["riker/render_time_series"]"#));
+        let check = datalib_dag::config::check_text(&after);
+        let applets: Vec<&str> = check.cfg.applets.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(applets, ["unified_time_series_index"]);
         assert!(!is_retired(&after).unwrap());
     }
 

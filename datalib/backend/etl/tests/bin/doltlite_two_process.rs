@@ -976,6 +976,11 @@ async fn rev_probe(args: &Args) -> Result<Value> {
     Ok(Value::Object(out))
 }
 
+/// The shape of the time-series applet's reads (`datalib_etl_time_series::read`):
+/// a range over a key, and the same range bucketed with aggregates.
+const AGGREGATE_READ: &str = "SELECT substr(id, 1, 1) AS b, MIN(id), MAX(id), COUNT(*), \
+     AVG(length(body)) FROM entities WHERE id BETWEEN '' AND 'zzzz' GROUP BY b ORDER BY b";
+
 /// The reader that needs no branch: look up `main`'s tip on a read-only
 /// connection, open `<db>@<tip>` read-only and detached, read it for
 /// `--hold-ms`, close, and go again. Each window's samples carry the tip it
@@ -1019,6 +1024,11 @@ async fn rev_read(args: &Args) -> Result<Value> {
                     "txn": txn, "at_ms": now_ms(), "count": count, "head": tip,
                 })),
                 Err(e) => errors.push(format!("sample in window {txn}: {e:#}")),
+            }
+            if args.flag("aggregate") {
+                if let Err(e) = sqlx::query(AGGREGATE_READ).fetch_all(&pool).await {
+                    errors.push(format!("aggregate in window {txn}: {e:#}"));
+                }
             }
             tokio::time::sleep(interval).await;
         }

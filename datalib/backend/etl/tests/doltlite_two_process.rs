@@ -791,8 +791,14 @@ fn branch_readers_beside_a_writer_that_pauses_after_each_seal() {
 /// `<file>@<tip>` read-only (a detached snapshot), reads, closes, and goes
 /// again, beside the `commit_run` writer. Before doltlite 0.50.13 that open
 /// failed for a file named `*.doltlite_db` (dolthub/doltlite#3231).
-#[allow(clippy::disallowed_macros)]
 fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms: u64) {
+    detached_readers_reading(readers, commits, txn_ms, false);
+}
+
+/// [`detached_readers_beside_a_sealing_writer`], each reader also running
+/// an aggregate over a range when `aggregate` says so.
+#[allow(clippy::disallowed_macros)]
+fn detached_readers_reading(readers: usize, commits: u64, txn_ms: u64, aggregate: bool) {
     let t = Scratch::new();
     let ready: Vec<String> = (0..readers)
         .map(|i| t.path(&format!("reader-{i}-ready")))
@@ -819,21 +825,27 @@ fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms
         &t.path("writer.json"),
     ]);
     let seed = t.await_file("pin", &mut writer);
+    let (db, until) = (t.db(), t.path("writer.json"));
     let mut children: Vec<Child> = (0..readers)
         .map(|i| {
-            t.spawn(&[
+            let out = t.path(&format!("reader-{i}.json"));
+            let mut argv = vec![
                 "rev-read",
                 "--db",
-                &t.db(),
+                &db,
                 "--until",
-                &t.path("writer.json"),
+                &until,
                 "--hold-ms",
                 "20",
                 "--ready-out",
                 &ready[i],
                 "--out",
-                &t.path(&format!("reader-{i}.json")),
-            ])
+                &out,
+            ];
+            if aggregate {
+                argv.push("--aggregate");
+            }
+            t.spawn(&argv)
         })
         .collect();
     t.wait("writer", &mut writer);
@@ -900,6 +912,13 @@ fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms
 #[test]
 fn detached_readers_are_snapshots_while_the_writer_seals() {
     detached_readers_beside_a_sealing_writer(3, 500, 0);
+}
+
+/// The time-series applet's reads: a range over a key and the same range
+/// bucketed with aggregates, on a detached open beside a sealing writer.
+#[test]
+fn detached_readers_aggregating_a_range_never_make_the_writers_commit_fail() {
+    detached_readers_reading(3, 500, 0, true);
 }
 
 /// A detached open takes no write lock, so a writer holding its batch open

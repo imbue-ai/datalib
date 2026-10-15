@@ -407,8 +407,14 @@ writes the indexes, and by `datalib-applet`, which serves them.
 ## Reference implementation
 
 `datalib/backend/applets` — `datalib-applet`, one subcommand per
-applet (`slack`, `unified_document_index` and `datalib_contacts`), the same shape
-as `datalib-step`. `datalib_contacts` is the one that writes: it is the
+applet (`slack`, `unified_document_index`, `unified_time_series_index` and
+`datalib_contacts`), the same shape as `datalib-step`.
+`unified_time_series_index` serves the time-series index read-only:
+`GET /time_series` lists the time series (`?source_id=`, `?q=`),
+`GET /time_series/<id>` is one, and `POST /points` with
+`{ids, from, to, budget}` answers each one's points in the range, or,
+past `budget` points, that many buckets of min, max and mean
+(`etl/time_series/src/read.rs`). `datalib_contacts` is the one that writes: it is the
 only writer of the contacts store under `datalib_curated/`
 (`app_stores.md`), and like `unified_document_index` it contributes endpoints
 only, which the document view calls; one of them,

@@ -14,6 +14,7 @@ rust_library(
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time_series_schema:datalib_time_series_schema",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
     ],

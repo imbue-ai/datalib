@@ -1501,6 +1501,9 @@ function = "ingest"
       "riker/render_time_series",
     ]);
     expect(listGroups(added).map((g) => g.id)).toContain("unified_time_series_index");
+    expect(
+      listSteps(added).some((s) => s.kind === "applet" && s.id === "unified_time_series_index"),
+    ).toBe(true);
     expect(setTimeSeriesStep(added, "riker", "garmin")).toBe(added);
     expect(added).toContain("── slack");
   });

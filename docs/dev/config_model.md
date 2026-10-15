@@ -409,8 +409,9 @@ drop an entry the original ran. `datalib-http` makes them in this order
 3. The time-series steps (`upgrade_time_series_steps`,
    `time_series_steps.rs`): a config with no `unified_time_series_index`
    group and a source whose type has time series gets each such source's
-   `render_time_series` step and the index group with its
-   `time_series_index`, appended at the end of the file. Once the group
+   `render_time_series` step, the index group with its
+   `time_series_index`, and the `unified_time_series_index` applet that
+   serves it, appended at the end of the file. Once the group
    is there the time-series steps are the person's, and a step they took
    out is not put back.
 

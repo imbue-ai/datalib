@@ -128,6 +128,7 @@ const DEFAULT_NAMES: Record<string, string> = {
   "unified_document_index/embedding_map": "Document Index (map)",
   unified_document_index: "Document Index (Applet)",
   "unified_time_series_index/time_series_index": "Time Series Index",
+  unified_time_series_index: "Time Series Index (Applet)",
   datalib_contacts: "Contacts (Applet)",
 };
 
@@ -1048,8 +1049,8 @@ export const TIME_SERIES_TYPES = ["garmin"];
 const TIME_SERIES_GROUP = "unified_time_series_index";
 
 /// Give a source of a time-series type its `render_time_series` step and
-/// a place in the time-series index's inputs, adding the index when the
-/// config has none. A source of any other type is left as it is.
+/// a place in the time-series index's inputs, adding the index and the
+/// applet that serves it when the config has none. A source of any other type is left as it is.
 export function setTimeSeriesStep(text: string, group: string, type: string): string {
   if (!TIME_SERIES_TYPES.includes(type)) return text;
   const id = `${group}/render_time_series`;
@@ -1064,7 +1065,9 @@ export function setTimeSeriesStep(text: string, group: string, type: string): st
     next =
       `${next.replace(/\s*$/, "")}\n\n[[groups]]\nid = ${quote(TIME_SERIES_GROUP)}\n` +
       `name = "Time Series Index"\n\n[[steps]]\ngroup = ${quote(TIME_SERIES_GROUP)}\n` +
-      `function = "time_series_index"\ninputs = []\n`;
+      `function = "time_series_index"\ninputs = []\n\n[[applets]]\n` +
+      `group = ${quote(TIME_SERIES_GROUP)}\nid = ${quote(TIME_SERIES_GROUP)}\n` +
+      `command = ${quote(`datalib-applet ${TIME_SERIES_GROUP}`)}\n`;
   }
   return wireIntoFanIns(next, id, "time_series_index");
 }

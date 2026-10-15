@@ -6,6 +6,7 @@
 
 pub mod index;
 pub mod plan;
+pub mod read;
 pub mod store;
 
 use std::collections::BTreeSet;

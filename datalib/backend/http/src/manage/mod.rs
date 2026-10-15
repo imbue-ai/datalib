@@ -503,6 +503,7 @@ fn default_name(id: &str) -> String {
         "unified_document_index/embedding_map" => "Document Index (map)",
         "unified_document_index" => "Document Index (Applet)",
         "unified_time_series_index/time_series_index" => "Time Series Index",
+        "unified_time_series_index" => "Time Series Index (Applet)",
         other => other,
     }
     .to_string()
