@@ -17,6 +17,7 @@ export type Listed = {
   time_series_id: string;
   source_id: string;
   about_uuid: string | null;
+  about_name: string | null;
   name: string;
   human_name: string;
   unit: string;
@@ -145,21 +146,47 @@ export function refusal(picked: Listed[], candidate: Listed): string | null {
   return `The chart already has two axes (${named}); take one off to add ${unitText(candidate)}.`;
 }
 
+/// The time series about one document (an activity), listed together.
+export type About = { uuid: string; name: string; items: Listed[] };
+
 /// The time series that answer every word of `filter` in their human
-/// name, name or source, grouped by source in source order.
-export function grouped(all: Listed[], filter: string): { source: string; items: Listed[] }[] {
+/// name, name, source or what they are about, grouped by source in
+/// source order. Within a source, the ones about the source as a whole
+/// come first, then one group per document, newest first.
+export function grouped(
+  all: Listed[],
+  filter: string,
+): { source: string; items: Listed[]; abouts: About[] }[] {
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
-  const out = new Map<string, Listed[]>();
+  const out = new Map<string, { items: Listed[]; abouts: Map<string, About> }>();
   for (const s of all) {
-    const hay = `${s.human_name} ${s.name} ${s.source_id}`.toLowerCase();
+    const hay = `${s.human_name} ${s.name} ${s.source_id} ${s.about_name ?? ""}`.toLowerCase();
     if (!words.every((w) => hay.includes(w))) continue;
-    const list = out.get(s.source_id) ?? [];
-    list.push(s);
-    out.set(s.source_id, list);
+    const group = out.get(s.source_id) ?? {
+      items: [] as Listed[],
+      abouts: new Map<string, About>(),
+    };
+    out.set(s.source_id, group);
+    if (s.about_uuid === null) {
+      group.items.push(s);
+      continue;
+    }
+    const about = group.abouts.get(s.about_uuid) ?? {
+      uuid: s.about_uuid,
+      name: s.about_name ?? s.about_uuid,
+      items: [],
+    };
+    about.items.push(s);
+    group.abouts.set(s.about_uuid, about);
   }
+  const newest = (a: About) => Math.max(...a.items.map((s) => toMs(s.time_kind, s.last_t ?? 0)));
   return [...out.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([source, items]) => ({ source, items }));
+    .map(([source, g]) => ({
+      source,
+      items: g.items,
+      abouts: [...g.abouts.values()].sort((a, b) => newest(b) - newest(a)),
+    }));
 }
 
 export type XY = { x: number; y: number };
@@ -234,6 +261,16 @@ export function formatTime(ms: number, kind: TimeKind, spanMs: number): string {
   }
   const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   return spanMs >= 2 * DAY_MS ? day : `${day} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/// A label on the time axis: as [`formatTime`] for the first, but only
+/// the time of day after it when the span is under two days, since
+/// every tick is then on the first one's date or the next.
+export function formatTimeTick(ms: number, kind: TimeKind, spanMs: number, first: boolean): string {
+  if (first || kind === "day" || spanMs >= 2 * DAY_MS) return formatTime(ms, kind, spanMs);
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /// A value as a tooltip writes it, in its display unit.

@@ -5,6 +5,7 @@
 
 pub mod activities;
 pub mod daily;
+pub mod fit;
 pub mod parse;
 pub mod plot;
 pub mod records;

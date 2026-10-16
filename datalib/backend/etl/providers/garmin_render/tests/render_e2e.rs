@@ -259,8 +259,10 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     assert_eq!(texts(&again), texts(&emitted));
 }
 
-/// The TNG account's time series land in a time-series store, and a
-/// second render of an unchanged raw store writes no row and no chunk.
+/// The TNG account's time series land in a time-series store, the
+/// run's FIT file's among them and the ride's, which is no FIT, named
+/// as unreadable; a second render of an unchanged raw store writes no
+/// row and no chunk.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn time_series_are_stored_then_left_alone_when_nothing_moved() {
     use datalib_etl_garmin_render::render::time_series;
@@ -271,8 +273,28 @@ async fn time_series_are_stored_then_left_alone_when_nothing_moved() {
     let raw = root.join(SOURCE).join("ingest");
     ingest(&raw, &root.join("playback")).await;
 
-    let (head, all) = time_series::read(&raw, SOURCE, None).unwrap();
-    assert!(head.is_some());
+    let read = time_series::read(&raw, SOURCE, None).unwrap();
+    assert!(read.head.is_some());
+    let unreadable: Vec<&str> = read.unreadable.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(unreadable, ["17010414002"]);
+    let all = read.time_series;
+    let run: Vec<&datalib_time_series_schema::TimeSeries> =
+        all.iter().filter(|s| s.about_uuid.is_some()).collect();
+    let names: Vec<&str> = run.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "heart_rate",
+            "cadence",
+            "distance",
+            "enhanced_speed",
+            "enhanced_altitude"
+        ]
+    );
+    assert!(run
+        .iter()
+        .all(|s| s.points.len() == datalib_etl_garmin::synthesize::SYNTHETIC_FIT_SECONDS as usize));
+    assert!(run[0].about_name.as_deref().unwrap().contains("2369-04-13"));
     let parsed = parse(&raw, RawRange::cold()).unwrap();
     let weight = all.iter().find(|s| s.name == "weight").unwrap();
     assert_eq!(weight.time_kind, TimeKind::Instant);
@@ -298,7 +320,7 @@ async fn time_series_are_stored_then_left_alone_when_nothing_moved() {
         .unwrap();
     assert_eq!(first.written, all.len());
     assert_eq!(first.chunks_written, all.len());
-    let (_, again) = time_series::read(&raw, SOURCE, None).unwrap();
+    let again = time_series::read(&raw, SOURCE, None).unwrap().time_series;
     let second = datalib_etl_time_series::apply(&store, &again, SOURCE)
         .await
         .unwrap();

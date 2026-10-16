@@ -22,6 +22,8 @@ pub struct TimeSeriesRow {
     pub time_series_id: String,
     #[col(sql = "VARCHAR(96)")]
     pub about_uuid: Option<String>,
+    #[col(sql = "TEXT")]
+    pub about_name: Option<String>,
     #[col(sql = "VARCHAR(128)")]
     pub name: String,
     #[col(sql = "TEXT")]

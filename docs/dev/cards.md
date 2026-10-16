@@ -622,7 +622,8 @@ programs against:
 - `timeSeriesView()` — every time series in the time-series index
   (`cards/TimeSeriesCard.ce.vue`, rules in `cards/timeSeries.ts`), from
   the `unified_time_series_index` applet. A list grouped by source picks
-  them; each pick is drawn on one chart, one axis per quantity and two
+  them, the time series about one document (an activity's) folded
+  under its name, newest first; each pick is drawn on one chart, one axis per quantity and two
   at most. Values of one quantity are converted to one unit through the
   factors the applet reads from their UCUM codes: a duration in hours or
   minutes and a distance in km as suits its size, anything else in the

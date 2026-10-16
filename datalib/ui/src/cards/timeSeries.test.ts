@@ -9,6 +9,7 @@ import {
   extent,
   formatTick,
   formatTime,
+  formatTimeTick,
   grouped,
   lineOf,
   nearest,
@@ -27,6 +28,7 @@ function listed(over: Partial<Listed>): Listed {
     time_series_id: "id",
     source_id: "riker",
     about_uuid: null,
+    about_name: null,
     name: "resting_hr",
     human_name: "Resting HR",
     unit: "{beats}/min",
@@ -127,6 +129,26 @@ describe("the list", () => {
     ]);
     expect(grouped(all, "yolink temp")[0]?.items[0]?.human_name).toBe("Bedroom temperature");
   });
+
+  it("lists a document's time series together, the newest document first", () => {
+    const run = (uuid: string, name: string, last: number) =>
+      listed({ about_uuid: uuid, about_name: name, time_kind: "instant", last_t: last });
+    const all = [
+      listed({ human_name: "Resting HR" }),
+      { ...run("a", "Morning run · 2369-04-13", 100), human_name: "Heart rate" },
+      { ...run("b", "Ride · 2369-04-14", 900), human_name: "Heart rate" },
+      { ...run("a", "Morning run · 2369-04-13", 100), human_name: "Speed" },
+    ];
+    const [g] = grouped(all, "");
+    expect(g!.items.map((s) => s.human_name)).toEqual(["Resting HR"]);
+    expect(g!.abouts.map((a) => [a.name, a.items.length])).toEqual([
+      ["Ride · 2369-04-14", 1],
+      ["Morning run · 2369-04-13", 2],
+    ]);
+    expect(grouped(all, "morning speed")[0]!.abouts[0]!.items.map((s) => s.human_name)).toEqual([
+      "Speed",
+    ]);
+  });
 });
 
 describe("ranges", () => {
@@ -156,6 +178,10 @@ describe("lines", () => {
     };
     expect(lineOf(raw)).toEqual([{ x: toMs("day", 145_835), y: 48 }]);
     expect(formatTime(toMs("day", 145_835), "day", 0)).toBe("2369-04-14");
+    const noon = new Date(2026, 8, 3, 12, 5).getTime();
+    expect(formatTimeTick(noon, "instant", 3_600_000, true)).toBe("2026-09-03 12:05");
+    expect(formatTimeTick(noon, "instant", 3_600_000, false)).toBe("12:05");
+    expect(formatTimeTick(noon, "instant", 30 * 86_400_000, false)).toBe("2026-09-03");
     expect(bandOf(raw)).toBeNull();
     const bucketed: Answered = {
       ...listed({ ...minutes, time_kind: "instant" }),

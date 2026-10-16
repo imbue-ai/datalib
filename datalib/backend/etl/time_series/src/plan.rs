@@ -87,6 +87,7 @@ mod tests {
             ts_key,
             time_series_id: id.into(),
             about_uuid: None,
+            about_name: None,
             name: id.into(),
             human_name: id.into(),
             unit: "1".into(),

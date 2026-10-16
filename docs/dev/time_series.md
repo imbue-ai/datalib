@@ -1,7 +1,7 @@
 # Time series
 
-A source whose data is numbers over time (Garmin's daily metrics and
-weigh-ins) renders it twice: as documents, by `render_markdown`, and as
+A source whose data is numbers over time (Garmin's daily metrics,
+weigh-ins and each activity's per-second samples) renders it twice: as documents, by `render_markdown`, and as
 time series, by `render_time_series`. This doc covers the time-series
 path: the stores, how points are encoded, units, the index and the
 applet. What is planned but not built is in
@@ -44,6 +44,7 @@ Two tables (`datalib/backend/time_series_schema/src/`).
 | `source_id`, `ts_key` | The primary key. `ts_key` is local to the source's store and keys its chunks |
 | `time_series_id` | Stable across renders: minted by the provider from the source id and `name` (`docs/dev/entity_ids.md`) |
 | `about_uuid` | The document the time series belongs to (an activity), or null for one about the source as a whole |
+| `about_name` | What a list calls that document, such as `Morning run · 2369-04-14`; the card groups a document's time series under it |
 | `name` | The provider's key for what is measured, such as `resting_hr`; unique within the source and `about_uuid` |
 | `human_name` | What a chart legend shows, such as `Resting HR` |
 | `unit` | A UCUM code (§"Units") |
