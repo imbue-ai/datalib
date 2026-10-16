@@ -5,11 +5,9 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use anyhow::Result;
 use datalib_etl_render::html::escape_md_inline;
-use datalib_etl_timeseries_render::plot::{figure_config, figure_page};
 use datalib_etl_timeseries_render::text::thousands;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
@@ -314,93 +312,10 @@ pub fn family_table(out: &mut String, family: Family, days: &Days) {
     out.push('\n');
 }
 
-fn plotted(f: &Field, v: f64) -> f64 {
-    match f.show {
-        Duration => v / 3600.0,
-        Kilometres => v / 1000.0,
-        _ => v,
-    }
-}
-
-/// The family's numeric values over time, one stacked panel per unit
-/// so a score and a duration never share an axis.
-pub fn family_plot_html(
-    family: Family,
-    subtitle: &str,
-    days: &Days,
-) -> Result<Option<(String, usize)>> {
-    let mut panels: Vec<(&'static str, Vec<Value>)> = Vec::new();
-    for f in fields_of(family).filter(|f| f.show != Text) {
-        let (x, y): (Vec<&str>, Vec<f64>) = days
-            .iter()
-            .filter_map(|(date, d)| match d.values.get(f.key) {
-                Some(DayValue::Num(v)) => Some((date.as_str(), plotted(f, *v))),
-                _ => None,
-            })
-            .unzip();
-        if x.is_empty() {
-            continue;
-        }
-        let unit = if f.show == Duration { "h" } else { f.unit };
-        let panel = match panels.iter().position(|(u, _)| *u == unit) {
-            Some(i) => i,
-            None => {
-                panels.push((unit, Vec::new()));
-                panels.len() - 1
-            }
-        };
-        let axis = if panel == 0 {
-            "y".to_string()
-        } else {
-            format!("y{}", panel + 1)
-        };
-        panels[panel].1.push(json!({
-            "type": "scatter",
-            "mode": "lines+markers",
-            "name": f.label,
-            "x": x,
-            "y": y,
-            "yaxis": axis,
-            "marker": {"size": 4},
-            "line": {"width": 1.5},
-            "hovertemplate": format!("%{{x|%Y-%m-%d}} · %{{y:.1f}} {unit}<extra>{}</extra>", f.label),
-        }));
-    }
-    if panels.is_empty() {
-        return Ok(None);
-    }
-    let n = panels.len();
-    let gap = 0.08;
-    let height = (1.0 - gap * (n as f64 - 1.0)) / n as f64;
-    let mut layout = json!({
-        "title": {"text": format!("{}<br><sub>{subtitle}</sub>", family.title())},
-        "xaxis": {"type": "date", "anchor": format!("y{}", if n == 1 { String::new() } else { n.to_string() }), "automargin": true},
-        "hovermode": "closest",
-        "legend": {"orientation": "h", "y": -0.12, "x": 0},
-        "margin": {"l": 60, "r": 30, "t": 70, "b": 60},
-    });
-    for (i, (unit, _)) in panels.iter().enumerate() {
-        let top = 1.0 - i as f64 * (height + gap);
-        let name = if i == 0 {
-            "yaxis".to_string()
-        } else {
-            format!("yaxis{}", i + 1)
-        };
-        layout[name] = json!({
-            "title": {"text": unit},
-            "domain": [(top - height).max(0.0), top],
-            "anchor": "x",
-            "automargin": true,
-        });
-    }
-    let data: Vec<Value> = panels.into_iter().flat_map(|(_, traces)| traces).collect();
-    let spec = json!({"data": data, "layout": layout, "config": figure_config(family.slug())});
-    Ok(Some((figure_page(family.title(), &spec)?, n)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn day(values: &[(&'static str, DayValue)]) -> Day {
         Day {
@@ -467,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn a_family_page_plots_one_panel_per_unit_and_tables_only_its_columns() {
+    fn a_family_page_charts_one_quantity_each_and_tables_only_its_columns() {
         let mut days = Days::new();
         days.insert(
             "2369-04-13".into(),
@@ -477,14 +392,16 @@ mod tests {
                 ("steps", DayValue::Num(9120.0)),
             ]),
         );
-        let (html, panels) = family_plot_html(Family::Sleep, "sub", &days)
-            .unwrap()
-            .unwrap();
-        assert_eq!(panels, 2, "a score and a duration");
-        assert!(html.contains(r#""yaxis":"y2""#), "{html}");
-        assert!(family_plot_html(Family::Breathing, "sub", &days)
-            .unwrap()
-            .is_none());
+        use crate::render::time_series::{family_charts, time_series_id};
+        assert_eq!(
+            family_charts("g", Family::Sleep, &days),
+            [
+                vec![time_series_id("g", "sleep_score")],
+                vec![time_series_id("g", "sleep_total")],
+            ],
+            "a score and a duration, each its own chart"
+        );
+        assert!(family_charts("g", Family::Breathing, &days).is_empty());
 
         let mut out = String::new();
         family_table(&mut out, Family::Sleep, &days);

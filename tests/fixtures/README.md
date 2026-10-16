@@ -108,10 +108,9 @@ Aim: at least one example of every shape we've seen in real backups.
 | Activity type `edited-block-value` (before/after) | `ac710001-...0002`             |
 | Notion `updated` stream (version bump) | `notion_block/updated/events.jsonl` (root page title changed v10→v11) |
 | Render-only source (no download step) | `yolink` — raw store seeded by `yolink-make-fixture` |
-| Timeseries render (one page of plots) | `yolink/render_markdown/index.md` + `plots/*.html` |
-| Non-SI unit converted at render | `sickbay_plasma_fridge` reports `temperature_f`; plots in °C |
-| Two metrics of one quantity on split axes | `deck_12_water_main` — per-sample litres left, totalizer right |
-| Relative `<iframe src>` in a rendered body | yolink plot embeds (rewritten to `/api/asset/…` by the UI) |
+| Timeseries render (one page of charts) | `yolink/render_markdown/index.md`, its `data-time-series` elements |
+| Non-SI unit converted where it is drawn | `sickbay_plasma_fridge` reports `temperature_f`, stored as `[degF]` and charted beside °C |
+| Two metrics of one quantity on two charts | `deck_12_water_main` — per-sample consumption, and the totalizer on a chart of its own |
 
 ## Star Trek: TNG dramatis personae
 

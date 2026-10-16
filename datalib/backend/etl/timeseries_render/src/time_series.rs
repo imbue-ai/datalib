@@ -35,6 +35,22 @@ pub fn time_series_id(
     )
 }
 
+/// Where a document wants a chart of `ids`: the document view draws one
+/// there from the time-series store (`docs/dev/time_series.md`
+/// §"Charts in documents"). An id is minted hex and dashes; anything
+/// else is left out rather than written into an attribute.
+pub fn time_series_chart(ids: &[String]) -> String {
+    let ids: Vec<&str> = ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .collect();
+    format!(
+        "<div class=\"time-series-chart\" data-time-series=\"{}\"></div>",
+        ids.join(" ")
+    )
+}
+
 /// One time series per series in `series`. A metric the profile's table
 /// does not name is an error, as it is for the page.
 pub fn time_series(
@@ -74,4 +90,22 @@ pub fn time_series(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_chart_names_its_ids_and_nothing_that_could_leave_the_attribute() {
+        let ids = vec![
+            "0190-ab".to_string(),
+            "x\" onload=\"y".to_string(),
+            "c3".into(),
+        ];
+        assert_eq!(
+            time_series_chart(&ids),
+            "<div class=\"time-series-chart\" data-time-series=\"0190-ab c3\"></div>"
+        );
+    }
 }

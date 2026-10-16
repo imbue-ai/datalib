@@ -11,9 +11,9 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobCas;
 use datalib_etl_render::inputs::RawRange;
 use datalib_id::{composite_key, entity_id_str, IdNamespace};
-use datalib_time_series_schema::{day_number, Points, TimeKind, TimeSeries};
+use datalib_time_series_schema::{day_number, Points, TimeKind, TimeSeries, Unit};
 
-use super::daily::{DayValue, Field, Show, FIELDS};
+use super::daily::{DayValue, Days, Family, Field, Show, FIELDS};
 use super::fit::{self, Scale, RECORD_FIELDS};
 use datalib_etl_garmin::ingest::db_path_for;
 
@@ -58,6 +58,49 @@ pub struct Read {
     /// An activity whose FIT file is held but could not be read, and
     /// why. Its time series are left out; the rest are not.
     pub unreadable: Vec<(String, String)>,
+}
+
+/// The charts a family's page draws: one per quantity among its number
+/// fields that hold a value, in field order, each the time series ids
+/// of the fields in that quantity.
+pub fn family_charts(source_id: &str, family: Family, days: &Days) -> Vec<Vec<String>> {
+    let mut charts: Vec<(String, Vec<String>)> = Vec::new();
+    for f in FIELDS
+        .iter()
+        .filter(|f| f.family == family && f.show != Show::Text)
+    {
+        let held = days
+            .values()
+            .any(|d| matches!(d.values.get(f.key), Some(DayValue::Num(_))));
+        let Some(unit) = unit_of(f).filter(|_| held) else {
+            continue;
+        };
+        let quantity = Unit::parse(unit).map(|u| u.quantity()).unwrap_or_default();
+        let id = time_series_id(source_id, f.key);
+        match charts.iter_mut().find(|(q, _)| *q == quantity) {
+            Some((_, ids)) => ids.push(id),
+            None => charts.push((quantity, vec![id])),
+        }
+    }
+    charts.into_iter().map(|(_, ids)| ids).collect()
+}
+
+/// The weigh-ins' chart: weight, and body fat on the second axis.
+pub fn weight_chart(source_id: &str) -> Vec<String> {
+    ["weight", "body_fat"]
+        .into_iter()
+        .map(|name| time_series_id(source_id, name))
+        .collect()
+}
+
+/// An activity's chart: heart rate, and speed on the second axis. A
+/// file holds `speed` or `enhanced_speed`, not both; the chart draws
+/// whichever time series the index has.
+pub fn activity_chart(source_id: &str, activity_id: &str) -> Vec<String> {
+    ["heart_rate", "enhanced_speed", "speed"]
+        .into_iter()
+        .map(|name| activity_time_series_id(source_id, activity_id, name))
+        .collect()
 }
 
 /// The raw store's time series at `pin` (else its head), the FIT files'

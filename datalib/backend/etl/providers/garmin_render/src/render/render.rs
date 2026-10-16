@@ -24,10 +24,11 @@ use datalib_schema::providers::Provider;
 use super::activities;
 use super::daily::{self, Days, Family};
 use super::parse::{Activity, ParsedGarmin};
-use super::plot::weight_html;
 use super::records;
 use super::stamps::day_start_iso;
+use super::time_series;
 use super::RENDER_VERSION;
+use datalib_etl_timeseries_render::time_series::time_series_chart;
 
 const ID_NAMESPACE: IdNamespace = IdNamespace::Garmin;
 const KIND_PAGE: &str = "weight";
@@ -216,8 +217,15 @@ pub fn render_all(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let page_dir = datalib_etl::layout::render_markdown_root(root, source_id);
-    let plots_dir = page_dir.join("plots");
-    fs::create_dir_all(&plots_dir).with_context(|| format!("mkdir -p {}", plots_dir.display()))?;
+    fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
+    // Where an earlier build wrote its Plotly pages; a chart is now drawn
+    // from the time-series store.
+    match fs::remove_dir_all(page_dir.join("plots")) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).context("remove the retired plots/");
+        }
+        _ => {}
+    }
     let families: Vec<Family> = Family::ALL
         .into_iter()
         .filter(|f| daily::has_any(&parsed.days, *f))
@@ -230,21 +238,9 @@ pub fn render_all(
         devices: parsed.devices.len(),
         ..Default::default()
     };
-    let plot_file = if parsed.weigh_ins.is_empty() {
-        None
-    } else {
-        let subtitle = format!(
-            "{} weigh-ins · {} — {}",
-            parsed.weigh_ins.len(),
-            short_ts(parsed.weigh_ins[0].timestamp_gmt_ms),
-            short_ts(parsed.weigh_ins[parsed.weigh_ins.len() - 1].timestamp_gmt_ms),
-        );
-        let html = weight_html("Weight", &subtitle, &parsed.weigh_ins)?;
-        let path = plots_dir.join("weight.html");
-        fs::write(&path, html).with_context(|| format!("write {}", path.display()))?;
+    if !parsed.weigh_ins.is_empty() {
         summary.plots = 1;
-        Some("weight.html")
-    };
+    }
     progress.inc(1);
 
     let m_uuid = document_uuid(source_id);
@@ -255,7 +251,7 @@ pub fn render_all(
         bucket: m_uuid.clone(),
         on_doc: on_doc_complete,
     };
-    let body = render_markdown(parsed, source_id, &m_uuid, plot_file);
+    let body = render_markdown(parsed, source_id, &m_uuid);
     out.emit("index.md", &m_uuid, body, |md_rel, problems| {
         build_grid_rows(parsed, source_id, &m_uuid, md_rel, problems)
     })?;
@@ -263,7 +259,7 @@ pub fn render_all(
 
     let who = who(parsed, source_id);
     for family in families {
-        if render_family(&mut out, &plots_dir, parsed, &who, family)? {
+        if render_family(&mut out, parsed, &who, family)? {
             summary.plots += 1;
         }
         summary.metric_pages += 1;
@@ -308,10 +304,9 @@ fn day_iso(days: &Days, date: &str) -> Option<String> {
     day_start_iso(date, days.get(date)?.offset_secs?)
 }
 
-/// One family's page and its plot; `true` when a plot was written.
+/// One family's page and its charts; `true` when it has one.
 fn render_family(
     out: &mut Out<'_>,
-    plots_dir: &Path,
     parsed: &ParsedGarmin,
     who: &str,
     family: Family,
@@ -332,24 +327,11 @@ fn render_family(
     let created_at = day_iso(days, first);
     let modified_at = day_iso(days, last);
 
-    let subtitle = format!("{} days · {first} — {last}", with_data.len());
-    let plot = daily::family_plot_html(family, &subtitle, days)?;
+    let charts = time_series::family_charts(source_id, family, days);
     let mut body = head(&m_uuid, source_id, &title, created_at.as_deref());
     let _ = writeln!(body, "**{last}:** {latest}\n");
-    if let Some((html, panels)) = &plot {
-        let file = format!("{}.html", family.slug());
-        let path = plots_dir.join(&file);
-        fs::write(&path, html).with_context(|| format!("write {}", path.display()))?;
-        let _ = writeln!(
-            body,
-            "<iframe src=\"plots/{file}\" title=\"{}\" width=\"100%\" height=\"{}\" \
-             loading=\"lazy\" sandbox=\"allow-scripts allow-downloads\" \
-             style=\"border:1px solid rgba(128,128,128,.35);border-radius:6px\">\
-             </iframe>\n",
-            family.title(),
-            140 + 240 * panels
-        );
-        let _ = writeln!(body, "[Open the plot on its own](plots/{file})\n");
+    for ids in &charts {
+        let _ = writeln!(body, "{}\n", time_series_chart(ids));
     }
     let _ = writeln!(
         body,
@@ -390,7 +372,7 @@ fn render_family(
                 .collect()
         },
     )?;
-    Ok(plot.is_some())
+    Ok(!charts.is_empty())
 }
 
 /// One section and one grid row per day with any value, newest first.
@@ -492,6 +474,10 @@ fn render_activity(
         .device_id()
         .and_then(|id| device_names.get(id.as_str()).map(|n| n.to_string()));
     let mut body = head(&m_uuid, source_id, &name, created_at.as_deref());
+    if a.fit_blake3.is_some() {
+        let ids = time_series::activity_chart(source_id, &a.id);
+        let _ = writeln!(body, "{}\n", time_series_chart(&ids));
+    }
     activities::body(&mut body, a, device.as_deref());
     out.emit(
         &format!("activities/{m_uuid}.md"),
@@ -605,24 +591,19 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
     Ok(count)
 }
 
-fn render_markdown(
-    parsed: &ParsedGarmin,
-    source_id: &str,
-    m_uuid: &str,
-    plot_file: Option<&str>,
-) -> String {
+fn render_markdown(parsed: &ParsedGarmin, source_id: &str, m_uuid: &str) -> String {
     let title = page_title(parsed, source_id);
     let created_at = parsed
         .latest_weigh_in()
         .and_then(|w| iso(w.timestamp_gmt_ms));
     let mut out = head(m_uuid, source_id, &title, created_at.as_deref());
-    render_weight_section(&mut out, parsed, plot_file);
+    render_weight_section(&mut out, parsed, source_id);
     render_device_section(&mut out, parsed, source_id);
     render_store_section(&mut out, parsed);
     out
 }
 
-fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, plot_file: Option<&str>) {
+fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, source_id: &str) {
     out.push_str("## Weight\n\n");
     let Some(latest) = parsed.latest_weigh_in() else {
         out.push_str("*(no weigh-ins mirrored yet)*\n\n");
@@ -641,19 +622,11 @@ fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, plot_file: Opt
             None => String::new(),
         }
     );
-    if let Some(file) = plot_file {
-        // Relative `src`, so the page works opened straight off disk and
-        // under a static file server; the UI rewrites it to the asset
-        // route when it renders the body.
-        let _ = writeln!(
-            out,
-            "<iframe src=\"plots/{file}\" title=\"Weight\" width=\"100%\" height=\"520\" \
-             loading=\"lazy\" sandbox=\"allow-scripts allow-downloads\" \
-             style=\"border:1px solid rgba(128,128,128,.35);border-radius:6px\">\
-             </iframe>\n"
-        );
-        let _ = writeln!(out, "[Open the weight plot on its own](plots/{file})\n");
-    }
+    let _ = writeln!(
+        out,
+        "{}\n",
+        time_series_chart(&time_series::weight_chart(source_id))
+    );
     let _ = writeln!(
         out,
         "### Latest {} weigh-ins\n",
@@ -846,7 +819,7 @@ mod tests {
         };
         let mut out = String::new();
         render_device_section(&mut out, &parsed, "garmin");
-        render_weight_section(&mut out, &parsed, None);
+        render_weight_section(&mut out, &parsed, "garmin");
         assert!(!out.contains("<script>") && !out.contains("<b>"), "{out}");
         assert!(
             out.contains("### &lt;script&gt;x&lt;/script&gt; &amp; co\n"),

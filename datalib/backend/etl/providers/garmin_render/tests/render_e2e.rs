@@ -1,5 +1,5 @@
 //! Ingest the TNG account through playback, render it, and check every
-//! document: the overview's weight plot, table and device rows, the
+//! document: the overview's weight chart, table and device rows, the
 //! metric pages, the daily log, the activities and the records — and
 //! that an unchanged store renders the same rows the second time.
 
@@ -14,6 +14,7 @@ use datalib_etl_garmin_render::render::parse::parse;
 use datalib_etl_garmin_render::render::render::{
     activity_uuid, daily_log_uuid, document_uuid, listings_uuid, render_all,
 };
+use datalib_etl_garmin_render::render::time_series;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_web::playback;
@@ -136,7 +137,16 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     let md = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
     assert!(md.contains(">Garmin — Jean-Luc Picard</h1>"), "{md}");
     assert!(md.contains("**77.6 kg**"), "{md}");
-    assert!(md.contains("<iframe src=\"plots/weight.html\""), "{md}");
+    let chart =
+        |ids: Vec<String>| datalib_etl_timeseries_render::time_series::time_series_chart(&ids);
+    assert!(
+        md.contains(&chart(time_series::weight_chart(SOURCE))),
+        "{md}"
+    );
+    assert!(
+        !page_dir.join("plots").exists(),
+        "charts are drawn from the time-series store, not written as pages"
+    );
     assert!(
         md.contains("| 2369-04-14"),
         "table row for the latest weigh-in:\n{md}"
@@ -150,28 +160,35 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
         "commit messages must not reach the page:\n{md}"
     );
 
-    let plot = std::fs::read_to_string(page_dir.join("plots/weight.html")).unwrap();
-    assert!(plot.contains("77.6"), "{plot}");
-    assert!(
-        plot.contains("12600168300000"),
-        "epoch ms inlined for the date axis"
-    );
-    assert!(
-        plot.contains("Body fat"),
-        "body fat from the payload draws on y2"
-    );
-
     let sleep = std::fs::read_to_string(page_dir.join("sleep.md")).unwrap();
     assert!(
         sleep.contains("**2369-04-14:** Sleep score 84 · Asleep 7 h 20 min"),
         "{sleep}"
     );
-    assert!(
-        sleep.contains("<iframe src=\"plots/sleep.html\""),
-        "{sleep}"
-    );
+    for name in ["sleep_score", "sleep_total"] {
+        assert!(
+            sleep.contains(&format!(
+                "data-time-series=\"{}",
+                time_series::time_series_id(SOURCE, name)
+            )),
+            "a chart of its own for {name}:\n{sleep}"
+        );
+    }
     assert!(sleep.contains("| 2369-04-14 | 84 | 7:20 |"), "{sleep}");
-    assert!(page_dir.join("plots/sleep.html").exists());
+
+    let activity_pages: Vec<String> = std::fs::read_dir(page_dir.join("activities"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect();
+    let run_chart = chart(time_series::activity_chart(SOURCE, "17010413001"));
+    assert_eq!(
+        activity_pages
+            .iter()
+            .filter(|p| p.contains(&run_chart))
+            .count(),
+        1,
+        "the run, whose FIT file is held, charts its heart rate and speed"
+    );
 
     let log = emitted
         .iter()
@@ -265,7 +282,6 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
 /// row and no chunk.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn time_series_are_stored_then_left_alone_when_nothing_moved() {
-    use datalib_etl_garmin_render::render::time_series;
     use datalib_time_series_schema::TimeKind;
 
     let td = tempfile::tempdir().unwrap();

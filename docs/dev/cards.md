@@ -634,7 +634,9 @@ programs against:
   minimum to its maximum. Hovering reads every line at that time. The
   picks and the range are the card's state; it reads again on the root's
   `time_series_index_changed` frame. The time-series applet's row on the
-  Manage screen opens it with Browse, and the card gallery lists it.
+  Manage screen opens it with Browse, and the card gallery lists it. Its
+  chart (`TimeSeriesChart.vue`) also draws the charts inside documents
+  (`docs/dev/time_series.md` §"Charts in documents").
 - `configView()` — `config.toml` itself, edited directly, saved through
   the backend's loader. Reloads on the root's `config_changed` frame
   and, a beat sooner, on the `config.written` bus topic a card publishes
