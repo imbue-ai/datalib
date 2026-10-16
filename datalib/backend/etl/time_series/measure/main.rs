@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw::{self, StoreKind};
-use datalib_etl_time_series::chunk::{self, Compression};
+use datalib_etl_time_series::chunk::{self, Compression, Floats};
 use datalib_etl_time_series::store;
 use datalib_time_series_schema::{Points, TimeSeriesChunkRow};
 use serde::Deserialize;
@@ -90,18 +90,26 @@ async fn main() -> Result<()> {
     println!("| points a chunk | as | deflate | blob B/value | lat/long B/value | rest B/value | on disk B/value | decode ns/value |");
     println!("|---|---|---|---|---|---|---|---|");
     for size in [256, 1_024, 4_096] {
-        for (as_what, floats) in [("integers", false), ("floats", true)] {
+        for (as_what, as_floats, floats) in [
+            ("integers", false, Floats::Raw),
+            ("floats, raw", true, Floats::Raw),
+            ("floats, XOR", true, Floats::Xor),
+            ("floats, binary", true, Floats::Binary),
+            ("floats, smaller", true, Floats::Smaller),
+        ] {
             for compression in [Compression::Never, Compression::WhenSmaller] {
                 let (mut total, mut deg) = (0usize, 0usize);
                 let mut chunks = Vec::new();
                 for (key, s) in all.iter().enumerate() {
-                    let p = if floats { s.floats() } else { s.integers() };
+                    let p = if as_floats { s.floats() } else { s.integers() };
                     if let Some(problem) = p.problem() {
                         anyhow::bail!("field {}: {problem}", s.field);
                     }
                     for mut c in chunk::cut(key as i64 + 1, &p, size) {
                         let part = chunk::decode(c.encoding, &c.points)?;
-                        c.points = chunk::encode(&part, compression);
+                        let e = chunk::encode_with(&part, compression, floats);
+                        c.encoding = e.encoding;
+                        c.points = e.blob;
                         total += c.points.len();
                         if s.semicircles {
                             deg += c.points.len();
@@ -116,7 +124,8 @@ async fn main() -> Result<()> {
                 }
                 let ns = start.elapsed().as_nanos() as f64 / decoded as f64;
                 let disk = if compression == Compression::WhenSmaller {
-                    let d = on_disk(&chunks, &scratch.join(format!("{size}-{as_what}"))).await?;
+                    let dir = format!("{size}-{}", as_what.replace([',', ' '], ""));
+                    let d = on_disk(&chunks, &scratch.join(dir)).await?;
                     format!("{:.2}", d as f64 / values as f64)
                 } else {
                     "".into()

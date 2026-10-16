@@ -11,8 +11,10 @@ use std::io::{Read, Write};
 /// Points per chunk (`datalib/backend/etl/time_series/measure/`).
 pub const CHUNK_POINTS: usize = 1024;
 
-/// The layout [`encode`] writes. A reader refuses any other.
-pub const ENCODING: i64 = 1;
+/// The layouts this build reads. Encoding 2 is encoding 1 with XOR
+/// floats and binary-scaled floats added; a writer records the lowest one its blob needs, so an
+/// older build refuses only the chunks it cannot read.
+pub const ENCODINGS: [i64; 2] = [1, 2];
 
 /// A count a blob may claim before a reader calls it corrupt.
 const MAX_POINTS: u64 = 1 << 24;
@@ -30,6 +32,10 @@ const INTEGER: u8 = 0;
 const DECIMAL: u8 = 1;
 const RAW_FLOAT: u8 = 2;
 const TEXT: u8 = 3;
+/// Encoding 2 and later.
+const XOR_FLOAT: u8 = 4;
+/// Encoding 2 and later.
+const BINARY: u8 = 5;
 
 /// `points` cut into chunk rows under `ts_key`.
 pub fn cut(ts_key: i64, points: &Points, size: usize) -> Vec<TimeSeriesChunkRow> {
@@ -56,6 +62,7 @@ fn chunk_row(ts_key: i64, part: &Points) -> TimeSeriesChunkRow {
             Some(numbers.iter().sum()),
         )
     };
+    let encoded = encode(part, Compression::WhenSmaller);
     TimeSeriesChunkRow {
         ts_key,
         first_t: part.t[0],
@@ -64,8 +71,8 @@ fn chunk_row(ts_key: i64, part: &Points) -> TimeSeriesChunkRow {
         min,
         max,
         sum,
-        encoding: ENCODING,
-        points: encode(part, Compression::WhenSmaller),
+        encoding: encoded.encoding,
+        points: encoded.blob,
     }
 }
 
@@ -76,13 +83,83 @@ pub enum Compression {
     WhenSmaller,
 }
 
+/// How floats with no short decimal form are laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Floats {
+    /// 8 bytes each.
+    Raw,
+    /// Each one's bits XORed with the one before's, the zeros at either
+    /// end left out, as Gorilla does.
+    Xor,
+    /// Integers over a power of two, divided by their common factor,
+    /// where every value is one: degrees from a FIT file's semicircles
+    /// are integers over 2^29. Raw where they are not.
+    Binary,
+    /// Whichever makes the smallest blob.
+    Smaller,
+}
+
+/// What [`values`] writes for floats with no short decimal form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FloatLayout {
+    Raw,
+    Xor,
+    Binary,
+}
+
+/// A blob and the encoding it is in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Encoded {
+    pub encoding: i64,
+    pub blob: Vec<u8>,
+}
+
 /// The blob for `points`: a byte saying whether the rest is deflated,
 /// then the count, the times and the values.
-pub fn encode(points: &Points, compression: Compression) -> Vec<u8> {
+pub fn encode(points: &Points, compression: Compression) -> Encoded {
+    encode_with(points, compression, Floats::Smaller)
+}
+
+pub fn encode_with(points: &Points, compression: Compression, floats: Floats) -> Encoded {
+    use FloatLayout::{Binary, Raw, Xor};
+    let layouts: &[FloatLayout] = match (&points.values, floats) {
+        (Values::Float(v), _) if as_decimals(v).is_some() => &[Raw],
+        (Values::Float(_), Floats::Xor) => &[Xor],
+        (Values::Float(_), Floats::Binary) => &[Binary, Raw],
+        (Values::Float(_), Floats::Smaller) => &[Raw, Xor, Binary],
+        _ => &[Raw],
+    };
+    let mut encoded = layouts
+        .iter()
+        .filter_map(|&layout| encode_layout(points, compression, layout));
+    let picked = if floats == Floats::Smaller {
+        encoded.min_by_key(|e| e.blob.len())
+    } else {
+        encoded.next()
+    };
+    picked.expect("every list of layouts ends in one that holds any values")
+}
+
+/// `points` with floats in `layout`; `None` when the layout cannot hold
+/// them.
+fn encode_layout(
+    points: &Points,
+    compression: Compression,
+    layout: FloatLayout,
+) -> Option<Encoded> {
     let mut body = Vec::new();
     varint(points.len() as u64, &mut body);
     times(&points.t, &mut body);
-    values(&points.values, &mut body);
+    if !values(&points.values, layout, &mut body) {
+        return None;
+    }
+    Some(Encoded {
+        encoding: if layout == FloatLayout::Raw { 1 } else { 2 },
+        blob: compress(body, compression),
+    })
+}
+
+fn compress(body: Vec<u8>, compression: Compression) -> Vec<u8> {
     if compression == Compression::WhenSmaller {
         let mut z = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
         // Writing to a Vec cannot fail.
@@ -105,7 +182,7 @@ pub fn encode(points: &Points, compression: Compression) -> Vec<u8> {
 
 pub fn decode(encoding: i64, blob: &[u8]) -> Result<Points> {
     ensure!(
-        encoding == ENCODING,
+        ENCODINGS.contains(&encoding),
         "a chunk in encoding {encoding}, which this build cannot read"
     );
     let (&flag, rest) = blob.split_first().context("an empty chunk")?;
@@ -122,7 +199,11 @@ pub fn decode(encoding: i64, blob: &[u8]) -> Result<Points> {
         }
         other => bail!("a chunk with compression byte {other}"),
     };
-    let mut r = Reader { s: body, i: 0 };
+    let mut r = Reader {
+        s: body,
+        i: 0,
+        encoding,
+    };
     let n = r.varint()?;
     ensure!(n <= MAX_POINTS, "a chunk claiming {n} points");
     let n = n as usize;
@@ -201,7 +282,10 @@ fn deltas(v: &[i64], out: &mut Vec<u8>) {
     pack(&changes, out);
 }
 
-fn values(values: &Values, out: &mut Vec<u8>) {
+/// Write `values`; `false` when `layout` cannot hold them, which only a
+/// binary layout of floats that are no integers over a power of two
+/// cannot.
+fn values(values: &Values, layout: FloatLayout, out: &mut Vec<u8>) -> bool {
     match values {
         Values::Integer(v) => {
             out.push(INTEGER);
@@ -211,6 +295,19 @@ fn values(values: &Values, out: &mut Vec<u8>) {
             Some((e, scaled)) => {
                 out.push(DECIMAL);
                 out.push(e);
+                deltas(&scaled, out);
+            }
+            None if layout == FloatLayout::Xor => {
+                out.push(XOR_FLOAT);
+                xor_floats(v, out);
+            }
+            None if layout == FloatLayout::Binary => {
+                let Some((e, factor, scaled)) = as_binary(v) else {
+                    return false;
+                };
+                out.push(BINARY);
+                out.push(e);
+                varint(factor, out);
                 deltas(&scaled, out);
             }
             None => {
@@ -241,6 +338,120 @@ fn values(values: &Values, out: &mut Vec<u8>) {
             pack(&codes, out);
         }
     }
+    true
+}
+
+/// Bits, least significant first.
+#[derive(Default)]
+struct BitWriter {
+    out: Vec<u8>,
+    acc: u128,
+    bits: u32,
+}
+
+impl BitWriter {
+    fn put(&mut self, value: u64, n: u32) {
+        if n == 0 {
+            return;
+        }
+        let masked = if n == 64 {
+            value
+        } else {
+            value & ((1 << n) - 1)
+        };
+        self.acc |= u128::from(masked) << self.bits;
+        self.bits += n;
+        while self.bits >= 8 {
+            self.out.push(self.acc as u8);
+            self.acc >>= 8;
+            self.bits -= 8;
+        }
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        if self.bits > 0 {
+            self.out.push(self.acc as u8);
+        }
+        self.out
+    }
+}
+
+/// The first value's 64 bits; then for each next one, its bits XORed
+/// with the one before's: `0` when they are equal, else `1`, then `0`
+/// and the XOR's meaningful bits when they fit the window the last
+/// change used, or `1`, the count of leading zeros in 5 bits, the count
+/// of meaningful bits in 6 (64 written as 0) and those bits.
+fn xor_floats(v: &[f64], out: &mut Vec<u8>) {
+    let Some(first) = v.first() else { return };
+    let mut w = BitWriter::default();
+    let mut prev = first.to_bits();
+    w.put(prev, 64);
+    let mut window: Option<(u32, u32)> = None;
+    for x in &v[1..] {
+        let bits = x.to_bits();
+        let xor = bits ^ prev;
+        prev = bits;
+        if xor == 0 {
+            w.put(0, 1);
+            continue;
+        }
+        w.put(1, 1);
+        let lead = xor.leading_zeros().min(31);
+        let trail = xor.trailing_zeros();
+        match window {
+            Some((l, t)) if lead >= l && trail >= t => {
+                w.put(0, 1);
+                w.put(xor >> t, 64 - l - t);
+            }
+            _ => {
+                let len = 64 - lead - trail;
+                w.put(1, 1);
+                w.put(u64::from(lead), 5);
+                w.put(u64::from(len % 64), 6);
+                w.put(xor >> trail, len);
+                window = Some((lead, trail));
+            }
+        }
+    }
+    out.extend(w.finish());
+}
+
+/// The fewest binary places `e` for which every value times 2^e is an
+/// integer below 2^53, those integers' greatest common factor, and the
+/// integers divided by it; `None` when no `e` up to 64 does, or a value
+/// is not finite or is -0.0. Most floats are such an integer at some
+/// `e`; the layout pays only where the integers stay small, which
+/// [`Floats::Smaller`] measures by encoding.
+fn as_binary(v: &[f64]) -> Option<(u8, u64, Vec<i64>)> {
+    const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    let e = v.iter().try_fold(0u8, |e, &x| {
+        if !x.is_finite() || x.to_bits() == (-0.0f64).to_bits() {
+            return None;
+        }
+        (e..=64).find(|&k| {
+            let n = x * 2f64.powi(k.into());
+            n.fract() == 0.0 && n.abs() < EXACT
+        })
+    })?;
+    let scale = 2f64.powi(e.into());
+    let ints: Vec<i64> = v.iter().map(|&x| (x * scale) as i64).collect();
+    let factor = ints
+        .iter()
+        .fold(0u64, |g, &n| gcd(g, n.unsigned_abs()))
+        .max(1);
+    let scaled: Vec<i64> = ints.iter().map(|&n| n / factor as i64).collect();
+    let back = |q: i64| ((q * factor as i64) as f64 / scale).to_bits();
+    v.iter()
+        .zip(&scaled)
+        .all(|(x, &q)| back(q) == x.to_bits())
+        .then_some((e, factor, scaled))
+}
+
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }
 
 /// The fewest decimals `e` for which every value is an integer over
@@ -268,6 +479,7 @@ fn as_decimals(v: &[f64]) -> Option<(u8, Vec<i64>)> {
 struct Reader<'a> {
     s: &'a [u8],
     i: usize,
+    encoding: i64,
 }
 
 impl Reader<'_> {
@@ -346,6 +558,41 @@ impl Reader<'_> {
         Ok(t)
     }
 
+    fn xor_floats(&mut self, n: usize) -> Result<Vec<f64>> {
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let mut r = BitReader {
+            s: &self.s[self.i..],
+            bit: 0,
+        };
+        let mut prev = r.get(64)?;
+        let mut out = Vec::with_capacity(n);
+        out.push(f64::from_bits(prev));
+        let mut window: Option<(u32, u32)> = None;
+        for _ in 1..n {
+            if r.get(1)? == 1 {
+                let (lead, trail) = if r.get(1)? == 0 {
+                    window.context("an XOR float reusing a window before any")?
+                } else {
+                    let lead = r.get(5)? as u32;
+                    let len = match r.get(6)? as u32 {
+                        0 => 64,
+                        len => len,
+                    };
+                    ensure!(lead + len <= 64, "an XOR float window past 64 bits");
+                    let w = (lead, 64 - lead - len);
+                    window = Some(w);
+                    w
+                };
+                prev ^= r.get(64 - lead - trail)? << trail;
+            }
+            out.push(f64::from_bits(prev));
+        }
+        self.i += r.bit.div_ceil(8);
+        Ok(out)
+    }
+
     fn deltas(&mut self, n: usize) -> Result<Vec<i64>> {
         if n == 0 {
             return Ok(Vec::new());
@@ -381,6 +628,27 @@ impl Reader<'_> {
                     .map(|b| f64::from_le_bytes(*b))
                     .collect(),
             ),
+            XOR_FLOAT => {
+                ensure!(self.encoding >= 2, "XOR floats in an encoding-1 chunk");
+                Values::Float(self.xor_floats(n)?)
+            }
+            BINARY => {
+                ensure!(self.encoding >= 2, "binary floats in an encoding-1 chunk");
+                let e = self.byte()?;
+                ensure!(e <= 64, "a chunk scaled past 64 binary places");
+                let factor = i64::try_from(self.varint()?).context("a chunk's factor too large")?;
+                let scale = 2f64.powi(e.into());
+                let values = self
+                    .deltas(n)?
+                    .into_iter()
+                    .map(|q| {
+                        q.checked_mul(factor)
+                            .map(|x| x as f64 / scale)
+                            .context("a chunk's value past 64 bits")
+                    })
+                    .collect::<Result<_>>()?;
+                Values::Float(values)
+            }
             TEXT => {
                 let size = self.varint()?;
                 ensure!(size <= MAX_POINTS, "a chunk claiming {size} distinct texts");
@@ -407,16 +675,121 @@ impl Reader<'_> {
     }
 }
 
+struct BitReader<'a> {
+    s: &'a [u8],
+    bit: usize,
+}
+
+impl BitReader<'_> {
+    fn get(&mut self, n: u32) -> Result<u64> {
+        let mut out = 0u64;
+        for k in 0..n {
+            let byte = *self
+                .s
+                .get(self.bit / 8)
+                .context("a chunk that ends early")?;
+            out |= u64::from((byte >> (self.bit % 8)) & 1) << k;
+            self.bit += 1;
+        }
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const EVERY_WAY: [(Compression, Floats); 8] = [
+        (Compression::Never, Floats::Raw),
+        (Compression::Never, Floats::Xor),
+        (Compression::Never, Floats::Binary),
+        (Compression::Never, Floats::Smaller),
+        (Compression::WhenSmaller, Floats::Raw),
+        (Compression::WhenSmaller, Floats::Xor),
+        (Compression::WhenSmaller, Floats::Binary),
+        (Compression::WhenSmaller, Floats::Smaller),
+    ];
+
     fn round_trip(p: &Points) -> Vec<u8> {
-        for c in [Compression::Never, Compression::WhenSmaller] {
-            let blob = encode(p, c);
-            assert_eq!(&decode(ENCODING, &blob).unwrap(), p, "{c:?}");
+        for (c, f) in EVERY_WAY {
+            let e = encode_with(p, c, f);
+            assert_eq!(&decode(e.encoding, &e.blob).unwrap(), p, "{c:?} {f:?}");
         }
-        encode(p, Compression::Never)
+        encode_with(p, Compression::Never, Floats::Raw).blob
+    }
+
+    /// Degrees along a walk: no short decimal form, close to the one
+    /// before.
+    fn wandering(n: i64) -> Points {
+        Points::floats(
+            (0..n).map(|i| (i, 51.5 + (i as f64 * 0.731).sin() * 1e-4 + i as f64 * 3e-6)),
+        )
+    }
+
+    /// XOR floats are written only where they make the smaller blob, and
+    /// a chunk is labelled encoding 2 only when it holds them.
+    #[test]
+    fn xor_floats_are_chosen_when_smaller_and_labelled_so() {
+        let walk = wandering(1_000);
+        let raw = encode_with(&walk, Compression::Never, Floats::Raw);
+        let best = encode(&walk, Compression::Never);
+        assert_eq!(raw.encoding, 1);
+        assert_eq!(best.encoding, 2);
+        assert!(
+            best.blob.len() < raw.blob.len(),
+            "{} vs {}",
+            best.blob.len(),
+            raw.blob.len()
+        );
+        let decimals = encode(&Points::floats([(1, 0.5), (2, 0.25)]), Compression::Never);
+        assert_eq!(decimals.encoding, 1);
+        let constant = encode(
+            &Points::floats((0..100).map(|i| (i, std::f64::consts::PI))),
+            Compression::Never,
+        );
+        assert_eq!(
+            decode(constant.encoding, &constant.blob).unwrap().len(),
+            100
+        );
+        round_trip(&walk);
+        round_trip(&Points::floats([
+            (1, f64::MAX),
+            (2, f64::MIN_POSITIVE),
+            (3, -0.0),
+            (4, 1e-300),
+        ]));
+    }
+
+    /// Degrees from semicircles are integers over 2^29 with a factor of
+    /// 45 in common, so they cost what the semicircles would.
+    #[test]
+    fn degrees_from_semicircles_cost_what_the_semicircles_cost() {
+        let semis: Vec<(i64, i64)> = (0..1_000)
+            .map(|i| (i, 614_000_000 + (i * 37) % 900))
+            .collect();
+        let degrees = Points::floats(
+            semis
+                .iter()
+                .map(|&(t, s)| (t, s as f64 * (180.0 / 2_147_483_648.0))),
+        );
+        let ints = round_trip(&Points::integers(semis.clone()));
+        round_trip(&degrees);
+        let e = encode(&degrees, Compression::Never);
+        assert_eq!(e.encoding, 2);
+        assert!(
+            e.blob.len() <= ints.len() + 3,
+            "{} vs {}",
+            e.blob.len(),
+            ints.len()
+        );
+        assert_eq!(as_binary(&[0.5, 1.5]), Some((1, 1, vec![1, 3])));
+        assert_eq!(
+            as_binary(&[0.1]),
+            Some((55, 3_602_879_701_896_397, vec![1])),
+            "0.1 is exactly that integer over 2^55"
+        );
+        assert_eq!(as_binary(&[1e-30]), None, "past 64 binary places");
+        assert_eq!(as_binary(&[-0.0]), None);
     }
 
     #[test]
@@ -451,11 +824,19 @@ mod tests {
     #[test]
     fn a_nan_keeps_its_bits() {
         let nan = f64::from_bits(0x7ff8_0000_0000_0001);
-        let blob = encode(&Points::floats([(1, nan)]), Compression::Never);
-        let Values::Float(v) = decode(ENCODING, &blob).unwrap().values else {
-            panic!()
-        };
-        assert_eq!(v[0].to_bits(), nan.to_bits());
+        let other = f64::from_bits(0xfff8_0000_0000_0007);
+        for (c, f) in EVERY_WAY {
+            let e = encode_with(&Points::floats([(1, nan), (2, other), (3, nan)]), c, f);
+            let Values::Float(v) = decode(e.encoding, &e.blob).unwrap().values else {
+                panic!()
+            };
+            let bits: Vec<u64> = v.iter().map(|x| x.to_bits()).collect();
+            assert_eq!(
+                bits,
+                [nan.to_bits(), other.to_bits(), nan.to_bits()],
+                "{c:?} {f:?}"
+            );
+        }
     }
 
     /// Evenly spaced times and a constant value cost their first entry
@@ -502,17 +883,28 @@ mod tests {
 
     #[test]
     fn a_corrupt_chunk_is_an_error_not_a_panic() {
-        let good = encode(
+        let good = encode_with(
             &Points::texts((0..50).map(|i| (i, format!("s{}", i % 3)))),
             Compression::Never,
-        );
+            Floats::Raw,
+        )
+        .blob;
         for len in 0..good.len() {
-            assert!(decode(ENCODING, &good[..len]).is_err(), "cut at {len}");
+            assert!(decode(1, &good[..len]).is_err(), "cut at {len}");
         }
-        assert!(decode(2, &good).is_err());
-        assert!(decode(ENCODING, &[9, 0]).is_err());
+        let xor = encode_with(&wandering(50), Compression::Never, Floats::Xor);
+        assert_eq!(xor.encoding, 2);
+        for len in 0..xor.blob.len() {
+            assert!(decode(2, &xor.blob[..len]).is_err(), "XOR cut at {len}");
+        }
+        assert!(
+            decode(1, &xor.blob).is_err(),
+            "an encoding-1 chunk cannot hold XOR floats"
+        );
+        assert!(decode(3, &xor.blob).is_err());
+        assert!(decode(1, &[9, 0]).is_err());
         let mut lying = vec![PLAIN];
         varint(u64::MAX, &mut lying);
-        assert!(decode(ENCODING, &lying).is_err());
+        assert!(decode(1, &lying).is_err());
     }
 }
