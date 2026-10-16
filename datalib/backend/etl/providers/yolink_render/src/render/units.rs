@@ -64,6 +64,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "°C",
+        unit: "Cel",
         to_si: identity,
     },
     MetricSpec {
@@ -72,6 +73,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "°C",
+        unit: "[degF]",
         to_si: fahrenheit_to_celsius,
     },
     MetricSpec {
@@ -80,6 +82,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "%RH",
+        unit: "%",
         to_si: identity,
     },
     MetricSpec {
@@ -88,6 +91,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("consumption"),
         si_unit: "L",
+        unit: "[gal_us]",
         to_si: gallons_to_litres,
     },
     MetricSpec {
@@ -96,6 +100,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("consumption"),
         si_unit: "L",
+        unit: "L",
         to_si: identity,
     },
     MetricSpec {
@@ -104,6 +109,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Right,
         series_suffix: Some("meter total"),
         si_unit: "L",
+        unit: "[gal_us]",
         to_si: gallons_to_litres,
     },
     MetricSpec {
@@ -112,6 +118,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Right,
         series_suffix: Some("meter total"),
         si_unit: "L",
+        unit: "L",
         to_si: identity,
     },
 ];

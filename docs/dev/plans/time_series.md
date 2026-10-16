@@ -8,9 +8,9 @@ became UCUM codes. What is built is described in
 [`../time_series.md`](../time_series.md), which replaces this plan's
 sections on the stores, units and serving; §"Names" and §"Config" are
 kept as the record of what was decided. Not
-built: YoLink and AirVisual as time series, charts inside documents
-and retiring `plots/` (§"Order of work", item 5). Time series from
-Garmin's FIT files (item 6) are built.**
+built: charts inside documents and retiring `plots/` (§"Order of
+work", item 5). YoLink and AirVisual as time series (item 5) and time
+series from Garmin's FIT files (item 6) are built.**
 
 ## The problem
 

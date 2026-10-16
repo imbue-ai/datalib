@@ -8,6 +8,7 @@ pub mod parse;
 // an accident — see the same allow in the perseus provider.
 #[allow(clippy::module_inception)]
 pub mod render;
+pub mod time_series;
 pub mod units;
 
 /// Bump when the rendered markdown layout, the plot HTML, or the grid

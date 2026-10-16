@@ -291,7 +291,7 @@ source's pair: it retires the collection of any source it does not name
 and reports on the whole, and removing it turns search off.
 `embedding_map` reads the aggregator and lays the embeddings out on a
 plane for the map card (`datalib/backend/embedding_map/README.md`).
-A source whose data is also time series (Garmin) has a
+A source whose data is also time series (Garmin, YoLink, AirVisual) has a
 `render_time_series` step beside its `render_markdown`, and
 `time_series_index` under `unified_time_series_index` indexes every
 such store without copying its points (`docs/dev/time_series.md`). The document index is

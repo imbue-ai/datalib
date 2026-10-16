@@ -119,6 +119,7 @@ const ATOMS: &[Atom] = &[
     atom("[ft_i]", "ft", false, 0.3048, LENGTH),
     atom("[yd_i]", "yd", false, 0.9144, LENGTH),
     atom("[mi_i]", "mi", false, 1_609.344, LENGTH),
+    atom("[gal_us]", "gal", false, 3.785_411_784e-3, [3, 0, 0, 0, 0, 0, 0]),
 ];
 
 /// Longest first, so `da` is tried before `d`.

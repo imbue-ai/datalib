@@ -40,6 +40,14 @@ fn read(
             let read = datalib_etl_garmin_render::render::time_series::read(raw, source_id, None)?;
             Ok((read.time_series, read.unreadable))
         }
+        SourceType::Yolink => Ok((
+            datalib_etl_yolink_render::render::time_series::read(raw, source_id)?,
+            Vec::new(),
+        )),
+        SourceType::Airvisual => Ok((
+            datalib_etl_airvisual_render::render::time_series::read(raw, source_id)?,
+            Vec::new(),
+        )),
         other => anyhow::bail!(
             "a `{}` source renders no time series; take its `render_time_series` step out \
              of the config",

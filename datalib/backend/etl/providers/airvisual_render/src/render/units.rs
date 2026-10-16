@@ -74,6 +74,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("PM1"),
         si_unit: "µg/m³",
+        unit: "ug/m3",
         to_si: identity,
     },
     MetricSpec {
@@ -82,6 +83,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("PM2.5"),
         si_unit: "µg/m³",
+        unit: "ug/m3",
         to_si: identity,
     },
     MetricSpec {
@@ -90,6 +92,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("PM10"),
         si_unit: "µg/m³",
+        unit: "ug/m3",
         to_si: identity,
     },
     MetricSpec {
@@ -98,6 +101,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("US"),
         si_unit: "AQI",
+        unit: "{AQI}",
         to_si: identity,
     },
     MetricSpec {
@@ -106,6 +110,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("CN"),
         si_unit: "AQI",
+        unit: "{AQI}",
         to_si: identity,
     },
     MetricSpec {
@@ -114,6 +119,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("outdoor US"),
         si_unit: "AQI",
+        unit: "{AQI}",
         to_si: identity,
     },
     MetricSpec {
@@ -122,6 +128,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: Some("outdoor CN"),
         si_unit: "AQI",
+        unit: "{AQI}",
         to_si: identity,
     },
     MetricSpec {
@@ -130,6 +137,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "ppm",
+        unit: "[ppm]",
         to_si: identity,
     },
     MetricSpec {
@@ -138,6 +146,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "°C",
+        unit: "Cel",
         to_si: identity,
     },
     MetricSpec {
@@ -146,6 +155,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "%RH",
+        unit: "%",
         to_si: identity,
     },
     MetricSpec {
@@ -154,6 +164,7 @@ pub const METRICS: &[MetricSpec] = &[
         axis: Axis::Left,
         series_suffix: None,
         si_unit: "ppb",
+        unit: "[ppb]",
         to_si: identity,
     },
 ];

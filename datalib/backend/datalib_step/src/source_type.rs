@@ -124,7 +124,10 @@ impl SourceType {
     /// Whether this type's data is also time series, which its
     /// `render_time_series` step writes (`crate::time_series`).
     pub const fn renders_time_series(self) -> bool {
-        matches!(self, SourceType::Garmin)
+        matches!(
+            self,
+            SourceType::Garmin | SourceType::Yolink | SourceType::Airvisual
+        )
     }
 
     /// The raw table whose rows are this source's items, for a type
