@@ -23,7 +23,9 @@ async function openADocumentWithAChip(
   // an email's author is an email address.
   source = "slack",
 ) {
-  const resp = await request.get(`/applet/unified_index/search?q=source_id%3A${source}&limit=200`);
+  const resp = await request.get(
+    `/applet/unified_document_index/search?q=source_id%3A${source}&limit=200`,
+  );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
   const message = rows.find(

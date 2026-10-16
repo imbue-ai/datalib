@@ -143,10 +143,10 @@ function = "render_markdown"
 inputs = ["pdfs/ingest"]
 
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = [
   "claude-export/render_markdown",
@@ -159,9 +159,9 @@ inputs = [
 ]
 
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
 
 # Each source's keyword (BM25) part of the qmd index. Cheap enough to
 # build with the image, so free-text search works the moment the demo
@@ -205,7 +205,7 @@ inputs = ["pdfs/render_markdown"]
 # === BUILD-TIME CUT === (the Dockerfile drops everything below this line
 # for the build-time run; keep the aggregator and the embed steps last)
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = [
   "claude-export/keyword_index",

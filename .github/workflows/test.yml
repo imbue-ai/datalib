@@ -80,8 +80,9 @@ concurrency:
   group: test-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Two bazel jobs, deliberately (`deny` is a third, a one-minute lockfile
-# scan with no bazel in it). `bazel-test` and `musl-dist` share nothing at
+# Three bazel jobs gate a merge, deliberately (`deny` is a fourth job, a
+# one-minute lockfile scan with no bazel in it; `e2e` has its reason
+# above its definition). `bazel-test` and `musl-dist` share nothing at
 # execution time — different configurations, disjoint action sets — so
 # running them in sequence just parked the musl build (~80s, of which
 # ~45s is a second analysis phase) at the end of the critical path.
@@ -89,11 +90,11 @@ concurrency:
 #
 # The costs are a second container pull and a second analysis phase, and
 # both are compute rather than wall clock: the jobs run concurrently on
-# separate runners. Neither is a `needs:` of the other, and both are
+# separate runners. No job is a `needs:` of another, and all three are
 # merge gates, so a musl regression doesn't mask a test failure.
 #
 # Their common setup — the BuildBuddy key — lives in
-# `.github/actions/prepare-bazel` so the two jobs cannot drift apart.
+# `.github/actions/prepare-bazel` so the jobs cannot drift apart.
 #
 # --------------------------------------------------------------------
 # Both jobs pass `--nostamp --jobs=16`. Why:
@@ -268,6 +269,144 @@ jobs:
       # the suppression is removed and real failures gate merges again.
       - name: bazel test //...
         run: |
+          # Everything but `//datalib/ui:e2e_test`, which the `e2e` job
+          # below runs. The two patterns are complements — `//...` less
+          # one label, and that label — so a new test lands in this job
+          # without anyone choosing.
+          #
+          # `--test_env=PLAYWRIGHT_BROWSERS_PATH` stays although only the
+          # e2e suite reads it: `--test_env` is in every test's action
+          # key, and the `e2e` and `warm-contributor-cache` jobs pass
+          # it, so dropping it here would make every test in this job
+          # miss the entries those write.
+          #
+          # Remote execution is opt-in per dispatch (see the workflow
+          # inputs). `inputs.remote_execution` is empty on push and
+          # pull_request, so those take the local branch.
+          #
+          # `--jobs` is set by `--config=remote` (80, the free tier's
+          # core ceiling). A command-line `--jobs` beats an rc file, so
+          # the local branch is the only one that may pass it.
+          if [[ "${{ inputs.remote_execution }}" == "true" ]]; then
+              mode=(--config=remote)
+          else
+              mode=(--jobs=16)
+          fi
+          bazel test -c opt --config=release --config=ci --nostamp ${PR_TESTS} "${mode[@]}" \
+            --build_metadata=ROLE=CI \
+            --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
+            -- //... -//datalib/ui:e2e_test
+
+      # No crate compiled twice: a Rust binary in a genrule's `tools` is
+      # built again for the exec configuration, with everything under it,
+      # and nothing else fails when that happens — CI just gets slower.
+      # Analysis only, and the test step above has already done it with
+      # these flags.
+      - name: No crate built a second time for a tool
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          bazel aquery -c opt --config=release --config=ci --nostamp ${PR_TESTS} \
+            --output=jsonproto 'mnemonic("Rustc", deps(//...))' > aquery.json
+          python3 tools/check_tool_crates.py aquery.json
+
+      # The fixture pipeline's full output, when the run is red. The test
+      # log keeps each pipeline run's last 40 lines of stderr, to stay
+      # under the 1 MB bazel prints (docs/dev/ci.md § Reading a run);
+      # every line of every run is in its `outputs.zip`.
+      - name: Keep the ingested_tng_test outputs
+        if: failure()
+        run: |
+          set -euo pipefail
+          flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
+          zip="$(bazel info bazel-testlogs "${flags[@]}")/tests/fixtures/ingested_tng_test/test.outputs/outputs.zip"
+          if [[ -f "${zip}" ]]; then
+            mkdir -p ingested-tng && cp -L "${zip}" ingested-tng/outputs.zip
+          else
+            echo "no ingested_tng_test outputs at ${zip} — it did not run here, or passed"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure() && hashFiles('ingested-tng/outputs.zip') != ''
+        with:
+          name: ingested-tng-outputs
+          path: ingested-tng/outputs.zip
+          retention-days: 7
+
+      # Make the build downloadable: every shipped binary under its
+      # public name (`//datalib/backend:bin` does the rename), in a
+      # tarball laid out like the release's. Nearly free — the test
+      # step above already built all of them in this exact mode — and
+      # it is how to get a current Linux build of a PR without cutting
+      # a tag, e.g. to build the docker image locally against binaries
+      # newer than the last release (docs/dev/docker.md). Three days
+      # covers a review.
+      - name: Stage the build as a tarball
+        if: success()
+        run: |
+          set -euo pipefail
+          flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
+          if [[ "${{ inputs.remote_execution }}" == "true" ]]; then
+              mode=(--config=remote)
+          else
+              mode=(--jobs=16)
+          fi
+          # `--config=ci` builds without the bytes; the tarball needs them.
+          bazel build "${flags[@]}" "${mode[@]}" --build_metadata=ROLE=CI \
+            --remote_download_toplevel //datalib/backend:bin
+          bindir="$(bazel info bazel-bin "${flags[@]}")/datalib/backend/bin"
+          version="$(sed -n -E 's/^version = "([^"]+)"$/\1/p' datalib/backend/Cargo.toml)"
+          stage="datalib-${version}-x86_64-unknown-linux-gnu"
+          mkdir -p "artifact/${stage}"
+          cp -L "${bindir}"/* "artifact/${stage}/"
+          chmod +x "artifact/${stage}"/*
+          tar -C artifact -czf "artifact/datalib-x86_64-unknown-linux-gnu.tar.gz" "${stage}"
+          ls -la artifact
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: success()
+        with:
+          name: datalib-x86_64-unknown-linux-gnu
+          path: artifact/datalib-x86_64-unknown-linux-gnu.tar.gz
+          retention-days: 3
+
+  # The Playwright suite, on a runner of its own. It is tagged `cpu:4`
+  # (datalib/ui/BUILD.bazel), the whole runner, so inside `bazel-test`
+  # every other test waited behind it; here the two run side by side.
+  # It builds what the suite runs — the backend binaries, the fixture
+  # root, the UI bundle — and nothing else. On a run where those are
+  # not cached yet both jobs compile them: neither waits for the other.
+  e2e:
+    name: bazel test //datalib/ui:e2e_test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      PR_TESTS: ${{ github.event_name != 'push' && '--config=pr-tests' || '' }}
+
+    # Same shell, image, checkout depth and cache as `bazel-test` above,
+    # for the reasons documented there.
+    defaults:
+      run:
+        shell: bash
+
+    container:
+      image: ghcr.io/imbue-ai/datalib_devcontainer:${{ inputs.devcontainer_tag || 'latest' }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/prepare-bazel
+        with:
+          buildbuddy-api-key: ${{ github.event_name == 'push' && secrets.BUILD_BUDDY_RELEASE_API_KEY || secrets.BUILD_BUDDY_API_KEY }}
+          buildbuddy-config: ${{ github.event_name == 'push' && 'buildbuddy-release' || 'buildbuddy' }}
+
+      - name: bazel test //datalib/ui:e2e_test
+        run: |
           # `//datalib/ui:e2e_test` (Playwright) IS in this gate. The image
           # bakes both browsers with their OS libraries (the
           # `playwright install --with-deps chromium webkit` layer in
@@ -349,13 +488,6 @@ jobs:
           # what aimed the genrule and the e2e materializer at the
           # image's cache, GitHub having forced HOME=/github/home for
           # container steps. Nothing reads that variable now.
-          # Remote execution is opt-in per dispatch (see the workflow
-          # inputs). `inputs.remote_execution` is empty on push and
-          # pull_request, so those take the local branch.
-          #
-          # `--jobs` is set by `--config=remote` (80, the free tier's
-          # core ceiling). A command-line `--jobs` beats an rc file, so
-          # the local branch is the only one that may pass it.
           if [[ "${{ inputs.remote_execution }}" == "true" ]]; then
               mode=(--config=remote)
           else
@@ -364,20 +496,7 @@ jobs:
           bazel test -c opt --config=release --config=ci --nostamp ${PR_TESTS} "${mode[@]}" \
             --build_metadata=ROLE=CI \
             --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
-            //...
-
-      # No crate compiled twice: a Rust binary in a genrule's `tools` is
-      # built again for the exec configuration, with everything under it,
-      # and nothing else fails when that happens — CI just gets slower.
-      # Analysis only, and the test step above has already done it with
-      # these flags.
-      - name: No crate built a second time for a tool
-        if: ${{ !cancelled() }}
-        run: |
-          set -euo pipefail
-          bazel aquery -c opt --config=release --config=ci --nostamp ${PR_TESTS} \
-            --output=jsonproto 'mnemonic("Rustc", deps(//...))' > aquery.json
-          python3 tools/check_tool_crates.py aquery.json
+            //datalib/ui:e2e_test
 
       # The e2e suite's Playwright report, when the run is red: a trace
       # per failed test, scrubbable action by action with the DOM before
@@ -431,65 +550,6 @@ jobs:
           name: e2e-test-log
           path: e2e-report/test.log
           retention-days: 14
-
-      # The fixture pipeline's full output, when the run is red. The test
-      # log keeps each pipeline run's last 40 lines of stderr, to stay
-      # under the 1 MB bazel prints (docs/dev/ci.md § Reading a run);
-      # every line of every run is in its `outputs.zip`.
-      - name: Keep the ingested_tng_test outputs
-        if: failure()
-        run: |
-          set -euo pipefail
-          flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
-          zip="$(bazel info bazel-testlogs "${flags[@]}")/tests/fixtures/ingested_tng_test/test.outputs/outputs.zip"
-          if [[ -f "${zip}" ]]; then
-            mkdir -p ingested-tng && cp -L "${zip}" ingested-tng/outputs.zip
-          else
-            echo "no ingested_tng_test outputs at ${zip} — it did not run here, or passed"
-          fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: failure() && hashFiles('ingested-tng/outputs.zip') != ''
-        with:
-          name: ingested-tng-outputs
-          path: ingested-tng/outputs.zip
-          retention-days: 7
-
-      # Make the build downloadable: every shipped binary under its
-      # public name (`//datalib/backend:bin` does the rename), in a
-      # tarball laid out like the release's. Nearly free — the test
-      # step above already built all of them in this exact mode — and
-      # it is how to get a current Linux build of a PR without cutting
-      # a tag, e.g. to build the docker image locally against binaries
-      # newer than the last release (docs/dev/docker.md). Three days
-      # covers a review.
-      - name: Stage the build as a tarball
-        if: success()
-        run: |
-          set -euo pipefail
-          flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
-          if [[ "${{ inputs.remote_execution }}" == "true" ]]; then
-              mode=(--config=remote)
-          else
-              mode=(--jobs=16)
-          fi
-          # `--config=ci` builds without the bytes; the tarball needs them.
-          bazel build "${flags[@]}" "${mode[@]}" --build_metadata=ROLE=CI \
-            --remote_download_toplevel //datalib/backend:bin
-          bindir="$(bazel info bazel-bin "${flags[@]}")/datalib/backend/bin"
-          version="$(sed -n -E 's/^version = "([^"]+)"$/\1/p' datalib/backend/Cargo.toml)"
-          stage="datalib-${version}-x86_64-unknown-linux-gnu"
-          mkdir -p "artifact/${stage}"
-          cp -L "${bindir}"/* "artifact/${stage}/"
-          chmod +x "artifact/${stage}"/*
-          tar -C artifact -czf "artifact/datalib-x86_64-unknown-linux-gnu.tar.gz" "${stage}"
-          ls -la artifact
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: success()
-        with:
-          name: datalib-x86_64-unknown-linux-gnu
-          path: artifact/datalib-x86_64-unknown-linux-gnu.tar.gz
-          retention-days: 3
 
   # Fill the *contributor* cache with main's tree, after the merge.
   #

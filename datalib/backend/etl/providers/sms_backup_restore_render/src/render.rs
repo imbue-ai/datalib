@@ -10,8 +10,8 @@ use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
-    UpstreamRef,
+    AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, Recipient, RecipientRole, UpstreamRef,
 };
 use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -34,7 +34,9 @@ use datalib_schema::providers::Provider;
 ///     among them.
 /// v5: an incoming message's author carries the sender's `tel:` handle.
 /// v6: a `+1` number without ten digits after the 1 has no handle.
-pub const RENDER_VERSION: u32 = 6;
+/// v7: a call carries the other side's `tel:` handle, and a text the
+///     account sent names whom it went to, so both reach `with:`.
+pub const RENDER_VERSION: u32 = 7;
 
 /// Projection for [`BlobBundle::load_many`] over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
@@ -317,9 +319,11 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 .unwrap_or("Unknown");
             let call_type = v.get("call_type").and_then(Value::as_str).unwrap_or("call");
             let duration = v.get("duration").and_then(Value::as_i64).unwrap_or(0);
+            let number = v.get("number").and_then(Value::as_str).unwrap_or("");
             NormalizedChatItem {
                 message_uuid,
-                author_handle: None,
+                author_handle: Handle::tel(number),
+                author_kind: AuthorKind::Named,
                 author_display: display.to_string(),
                 date_ms,
                 text: None,
@@ -380,6 +384,11 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
             NormalizedChatItem {
                 message_uuid,
                 author_handle,
+                author_kind: if is_me {
+                    AuthorKind::Account
+                } else {
+                    AuthorKind::Named
+                },
                 author_display,
                 date_ms,
                 text,
@@ -400,12 +409,39 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 // Only an explicit `read="0"` on a message someone else
                 // sent: an older store's rows carry no `read` at all.
                 unread: !is_me && v.get("read").and_then(Value::as_bool) == Some(false),
-                recipients: Vec::new(),
+                recipients: if is_me {
+                    sent_to(v, display)
+                } else {
+                    Vec::new()
+                },
                 mentions: Vec::new(),
                 problems: Vec::new(),
             }
         }
     }
+}
+
+/// Whom a text the account sent went to: the thread's other side, by
+/// number. Drawn on no message, since the conversation already says who.
+fn sent_to(v: &Value, display: &str) -> Vec<Recipient> {
+    let address = v.get("address").and_then(Value::as_str).unwrap_or("");
+    let numbers: Vec<&str> = address
+        .split('~')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .collect();
+    // A group MMS joins its numbers with `~`, and its contact name is
+    // theirs together, so each number shows as itself.
+    let shown = |number: &str| if numbers.len() == 1 { display } else { number }.to_string();
+    numbers
+        .iter()
+        .map(|number| Recipient {
+            role: RecipientRole::To,
+            display: shown(number),
+            handle: Handle::tel(number),
+            drawn: false,
+        })
+        .collect()
 }
 
 fn call_note(call_type: &str, duration_s: i64, display: &str) -> String {
@@ -568,6 +604,88 @@ mod tests {
         assert_eq!(handle_of("group"), None);
     }
 
+    /// A call log names the other side's number as a `tel:` handle, so
+    /// `with:` them finds it as it finds their texts. A number without
+    /// its country code names nobody.
+    #[test]
+    fn a_call_carries_the_other_sides_number() {
+        let call = |id: &str, number: &str| {
+            json!({"id":id,"kind":"call","conversation_key":number,"conversation_display":"Deanna Troi",
+                   "date":12600217800000i64,"call_type":"outgoing","number":number,"duration":240})
+        };
+        let calls = vec![
+            call("intl", "+1 (202) 555-0103"),
+            call("local", "2025550103"),
+        ];
+        let chats = build_chats("sms", &[], &with_ids(&calls));
+        let handle_of = |id: &str| {
+            chats
+                .iter()
+                .flat_map(|c| &c.buckets)
+                .flat_map(|b| &b.items)
+                .find(|i| i.source_ref.as_ref().unwrap().native_id == id)
+                .unwrap()
+                .author_handle
+                .as_ref()
+                .map(|h| h.as_str().to_string())
+        };
+        assert_eq!(handle_of("intl").as_deref(), Some("tel:+12025550103"));
+        assert_eq!(handle_of("local"), None);
+    }
+
+    /// A text the account sent is addressed to the thread's other side,
+    /// so a thread only the account wrote in still names them. The
+    /// conversation already says who, so no To line is drawn.
+    #[test]
+    fn a_sent_text_is_addressed_to_the_threads_other_side() {
+        let row = |id: &str, kind: &str, address: &str, is_me: bool| {
+            json!({"id":id,"kind":kind,"conversation_key":address,"conversation_display":"Geordi La Forge",
+                   "date":12600270000000i64,"is_me":is_me,"address":address,"body":id,"attachments":[]})
+        };
+        let messages = vec![
+            row("sent", "sms", "+1 (202) 555-0104", true),
+            row("received", "sms", "+12025550104", false),
+            row("local", "sms", "2025550104", true),
+            row("group", "mms", "+12025550104~+12025550105", true),
+        ];
+        let chats = build_chats("sms", &with_ids(&messages), &[]);
+        let recipients_of = |id: &str| -> Vec<(String, Option<String>, bool)> {
+            chats
+                .iter()
+                .flat_map(|c| &c.buckets)
+                .flat_map(|b| &b.items)
+                .find(|i| i.source_ref.as_ref().unwrap().native_id == id)
+                .unwrap()
+                .recipients
+                .iter()
+                .map(|r| {
+                    assert_eq!(r.role, RecipientRole::To);
+                    (
+                        r.display.clone(),
+                        r.handle.as_ref().map(|h| h.as_str().to_string()),
+                        r.drawn,
+                    )
+                })
+                .collect()
+        };
+        let to = |display: &str, handle: Option<&str>| {
+            (display.to_string(), handle.map(str::to_string), false)
+        };
+        assert_eq!(
+            recipients_of("sent"),
+            [to("Geordi La Forge", Some("tel:+12025550104"))]
+        );
+        assert_eq!(recipients_of("received"), []);
+        assert_eq!(recipients_of("local"), [to("Geordi La Forge", None)]);
+        assert_eq!(
+            recipients_of("group"),
+            [
+                to("+12025550104", Some("tel:+12025550104")),
+                to("+12025550105", Some("tel:+12025550105")),
+            ]
+        );
+    }
+
     #[test]
     fn merges_calls_and_texts_into_one_conversation() {
         let messages = vec![
@@ -591,6 +709,11 @@ mod tests {
             .find(|i| i.source_ref.as_ref().unwrap().native_id == "m2")
             .unwrap();
         assert_eq!(me.author_display, "Me");
+        assert_eq!(
+            me.author_kind,
+            AuthorKind::Account,
+            "a stand-in, not a name"
+        );
     }
 
     #[test]

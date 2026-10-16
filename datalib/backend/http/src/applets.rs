@@ -482,7 +482,7 @@ impl AppletRegistry {
             // they used to produce the same message: the applet really
             // isn't configured, or the config could not be read at all
             // — which yields an empty list and so reports every applet
-            // as missing. Saying "no applet \"unified_index\"" when the
+            // as missing. Saying "no applet \"unified_document_index\"" when the
             // truth is "your config.toml has a syntax error" sends
             // people looking in exactly the wrong place.
             None => {

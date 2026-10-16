@@ -70,9 +70,8 @@ pub fn build(
         inputs.read(MapsPhotoRow::TABLE, &row.id);
         let mut problems = Vec::new();
         let date_ms = feeds::stamp_ms(row, &mut problems);
-        let item = feeds::item(
+        let item = feeds::own_item(
             ids::feed_item(source_id, ids::KIND_MAPS_PHOTO, &row.id, date_ms),
-            feeds::ME,
             date_ms,
             "Google Maps Photo",
             problems,
@@ -103,9 +102,8 @@ fn place_item(
 ) -> NormalizedChatItem {
     let mut problems = Vec::new();
     let date_ms = feeds::stamp_ms(row, &mut problems);
-    let mut item = feeds::item(
+    let mut item = feeds::own_item(
         ids::feed_item(source_id, kind, &row.id, date_ms),
-        feeds::ME,
         date_ms,
         kind_label,
         problems,

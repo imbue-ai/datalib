@@ -24,7 +24,7 @@ use datalib_etl_calendar_common::types::{
 };
 use datalib_etl_calendar_common::{CalendarRenderProfile, EventTime};
 use datalib_etl_chat_common::render::ENTITY_KIND_CONVERSATION;
-use datalib_etl_chat_common::types::{OrphanReactions, Recipient, RecipientRole};
+use datalib_etl_chat_common::types::{AuthorKind, OrphanReactions, Recipient, RecipientRole};
 use datalib_etl_chat_common::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction, RecordStampPrecision, RenderProfile, TextFormat,
@@ -213,6 +213,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
     let item = |uuid: &str, author: String, text: Option<String>| NormalizedChatItem {
         message_uuid: uuid.to_string(),
         author_handle: None,
+        author_kind: AuthorKind::Named,
         author_display: author,
         date_ms: Some(12_602_794_200_000),
         text,
@@ -234,6 +235,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
     let reaction = |uuid: &str, emoji: String, who: String| NormalizedReaction {
         reaction_uuid: uuid.to_string(),
         reactor_handle: None,
+        reactor_kind: AuthorKind::Named,
         reactor_display: who,
         emoji,
         date_ms: Some(12_602_794_200_000),
@@ -258,6 +260,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         role: RecipientRole::To,
         display: f.hostile("recipient"),
         handle: None,
+        drawn: true,
     }];
     said.reactions = vec![reaction(
         "r1",

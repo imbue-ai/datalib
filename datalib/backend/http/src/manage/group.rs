@@ -9,7 +9,7 @@
 use super::status::{compare_stamps, StatusView};
 
 /// The grid's row id for a group. An applet may share its group's id —
-/// the `unified_index` applet sits under the `unified_index` group — so
+/// the `unified_document_index` applet sits under the `unified_document_index` group — so
 /// a group row needs a key no entry can have.
 pub fn group_row_key(group_id: &str) -> String {
     format!("group:{group_id}")
@@ -207,11 +207,14 @@ mod tests {
     }
     use ChildKind::{Applet, Step};
 
-    /// The scaffold files the `unified_index` applet under the
-    /// `unified_index` group; both are rows, and the grid keys rows by id.
+    /// The scaffold files the `unified_document_index` applet under the
+    /// `unified_document_index` group; both are rows, and the grid keys rows by id.
     #[test]
     fn group_row_key_cannot_collide_with_an_applet_that_shares_the_groups_id() {
-        assert_ne!(group_row_key("unified_index"), "unified_index");
+        assert_ne!(
+            group_row_key("unified_document_index"),
+            "unified_document_index"
+        );
     }
 
     #[test]

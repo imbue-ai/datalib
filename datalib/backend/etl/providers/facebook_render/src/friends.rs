@@ -73,6 +73,7 @@ pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<ContactD
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl_chat_common::types::AuthorKind;
     use serde_json::json;
 
     #[test]
@@ -80,6 +81,7 @@ mod tests {
         let owner = Owner {
             source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
+            name_kind: AuthorKind::Named,
             handle: datalib_handle::Handle::facebook_name("Jean-Luc Picard"),
             account: Some("picard@enterprise.starfleet".to_string()),
             inputs: Vec::new(),

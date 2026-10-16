@@ -398,7 +398,7 @@ impl IndexedMarkdownStore {
     /// Drop one document: its rows here, and the `.md` file itself.
     ///
     /// The file matters as much as the rows. `md_path` is what
-    /// `/applet/unified_index/chat/{uuid}` serves and what qmd indexed, so a
+    /// `/applet/unified_document_index/chat/{uuid}` serves and what qmd indexed, so a
     /// document deleted from the store but left on disk stays searchable and
     /// still resolves — a deletion the user can still read. The unlink
     /// follows the rows; inside a batch that later rolls back it leaves

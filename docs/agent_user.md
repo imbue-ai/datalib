@@ -24,13 +24,13 @@ Everything lives under one **data root** directory. A sync is a DAG of
 steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
 `<group>/ingest` step (bring the raw data in) and a
 `<group>/render_markdown` step (raw → markdown + a per-source index
-database), `grid_index` under the `unified_index` group (the SQL
+database), `grid_index` under the `unified_document_index` group (the SQL
 index), and, for a searched source, `<group>/keyword_index` and
 `<group>/embed`, which fill that source's collection of the search
-index. `unified_index/qmd_aggregator` runs after every source's pair
+index. `unified_document_index/qmd_aggregator` runs after every source's pair
 and keeps the search index to the sources it names. A step's function
 is the directory it writes (the qmd steps are the exception: they all
-write the one index file under `unified_index/qmd_aggregator/`):
+write the one index file under `unified_document_index/qmd_aggregator/`):
 
 ```
 <data_root>/
@@ -40,7 +40,7 @@ write the one index file under `unified_index/qmd_aggregator/`):
 │   └── blobs.sqlite                #   attachment bytes by blake3 (plain SQLite)
 ├── <group>/render_markdown/        # per-source markdown tree
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
-├── unified_index/                  # derived; carries a CACHEDIR.TAG
+├── unified_document_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
 │   ├── grid_index/search_terms.sqlite     # each row's ids, people, labels and names, full-text (plain SQLite)
 │   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
@@ -53,7 +53,7 @@ write the one index file under `unified_index/qmd_aggregator/`):
     └── disk_stats.sqlite           # bytes on disk and free space, over time (plain SQLite)
 ```
 
-The split is by writer: `unified_index/` is produced by the pipeline
+The split is by writer: `unified_document_index/` is produced by the pipeline
 and fully derived, `system/` is the server's own state. Canonical
 definition — the constants both sides read — is
 [`datalib/backend/runtime/src/layout.rs`](../datalib/backend/runtime/src/layout.rs).
@@ -247,7 +247,7 @@ is not null` lists the steps that failed. Every table and column is in
 Pick the surface that fits the question:
 
 - **SQL over everything** — the `grid_rows` union table in
-  `unified_index/grid_index/db.doltlite_db`: one row per
+  `unified_document_index/grid_index/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
   `created_at`, `modified_at`, `touched_at`, `author`, `channel`, `conversation_uuid`,
   `preview` (the first 240 characters of the row's text; the whole text
@@ -265,7 +265,7 @@ Pick the surface that fits the question:
   and a transaction it holds open stalls the sync:
 
   ```sh
-  datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db \
+  datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db \
     "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
   ```
 
@@ -274,7 +274,7 @@ Pick the surface that fits the question:
   tables, schemas and indexes, for any tool that speaks only SQLite.
 
   ```sh
-  datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db .dump \
+  datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db .dump \
     | sqlite3 grid.sqlite
   ```
 
@@ -289,18 +289,18 @@ Pick the surface that fits the question:
   [`docs/dev/doltlite.md`](dev/doltlite.md).
 - **Markdown** — `<group>/render_markdown/` holds human-readable QMD
   markdown per conversation/document. Read files directly, or serve
-  them via `GET /applet/unified_index/chat/{markdown_uuid}`. The raw per-source
+  them via `GET /applet/unified_document_index/chat/{markdown_uuid}`. The raw per-source
   doltlite stores under `<group>/ingest/` keep full wire fidelity when the
   rendered form isn't enough.
 - **Semantic search** — the qmd index:
 
   ```sh
   rt=$(echo ~/.cache/datalib/runtime/*/)   # the fetched runtime; /opt/datalib/runtime in the image
-  INDEX_PATH=<data_root>/unified_index/qmd_aggregator/qmd/index.sqlite \
+  INDEX_PATH=<data_root>/unified_document_index/qmd_aggregator/qmd/index.sqlite \
       "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "that thing about the boat"
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
-  `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:
+  `GET /applet/unified_document_index/search?q=…` (Gmail-flavored query language:
   `field:value`, `-field:value`, quoted values, `field:*` for the rows
   with any value there and `-field:*` for the rows with none; fields
   are `source_id:`, `kind:`, `channel:`, `account:`, `project:`, `convo:`,
@@ -331,7 +331,7 @@ Pick the surface that fits the question:
   source, or within one under `source_id:`); with no `tab`, the free text goes to
   qmd's hybrid query, identifiers aside. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
-  columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`
+  columns in turn. `GET /applet/unified_document_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists
   one group), `GET /api/log?q=…` (the
   runner's log lines in the same grammar — keys `run:`, `process:`,
@@ -341,8 +341,8 @@ Pick the surface that fits the question:
   narrow it to a run, a process or a step's attempt; the newest `limit=`
   lines, oldest first, with `before_seq=` paging back and `after_seq=`
   tailing),
-  `GET /applet/unified_index/docs`, `GET /applet/unified_index/chat/{uuid}`,
-  `GET /applet/unified_index/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
+  `GET /applet/unified_document_index/docs`, `GET /applet/unified_document_index/chat/{uuid}`,
+  `GET /applet/unified_document_index/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.
 
   Every route needs the server's per-process API token — loopback does

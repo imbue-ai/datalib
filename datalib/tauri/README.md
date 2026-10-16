@@ -93,7 +93,17 @@ folder in Finder (`launcher_open_folder`, for a library only). A
 library outside the libraries folder, or one whose folder is gone, can be
 forgotten, with an × left of the icon: it leaves the recent list and its folder is
 left as it is. One in the libraries folder is always listed while it is
-there, so it has no Forget.
+there, so it has no Forget; it has a Delete in the same place, a trash
+can (`launcher_delete`). Delete asks first, in a native dialog the shell
+raises so the page cannot skip it, then moves the library's folder to
+the Trash and takes it off the recent list. On macOS it trashes through
+`NSFileManager` rather than by scripting Finder, so it needs no
+permission to control Finder; the cost is that Finder may not offer
+"Put Back" for it. It is refused while a
+server or a sync run holds the library (`launcher::in_use` asks the
+library's `system/lock` and `system/runner-lock`). A library outside
+the libraries folder is never deleted from this screen. Once `Default`
+is deleted, "New library" offers that name again.
 
 Libraries used to go in `~/Documents/Datalib`. While the recent list
 names a library there, each such library's row carries a "Legacy

@@ -282,7 +282,7 @@ is read. Beside those:
 Counting them over a real export says what to build next:
 
 ```sh
-datalib-doltlite -readonly <root>/unified_index/grid_index/db.doltlite_db \
+datalib-doltlite -readonly <root>/unified_document_index/grid_index/db.doltlite_db \
   "SELECT severity, field, sample, count(*) FROM problems
    WHERE source_id = '<the source id>' GROUP BY 1,2,3 ORDER BY 4 DESC"
 ```

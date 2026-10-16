@@ -73,7 +73,7 @@ async function figureJson(frame: import("@playwright/test").Frame) {
 }
 
 test("the yolink page's plot iframes resolve to backend asset URLs", async ({ page, request }) => {
-  const resp = await request.get("/applet/unified_index/search?q=&limit=2000");
+  const resp = await request.get("/applet/unified_document_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
   // Every time-series source renders a `Sensor Timeseries` page (the
@@ -91,7 +91,7 @@ test("the yolink page's plot iframes resolve to backend asset URLs", async ({ pa
   // Inside the document's own frame, which frames the plot pages.
   const plotIframe = (quantity: string) =>
     docBody(page).locator(
-      `iframe[src="/applet/unified_index/asset/${mdUuid}/plots/${quantity}.html"]`,
+      `iframe[src="/applet/unified_document_index/asset/${mdUuid}/plots/${quantity}.html"]`,
     );
   for (const quantity of ["temperature", "humidity", "volume"]) {
     // The first one waits for the document itself to load.

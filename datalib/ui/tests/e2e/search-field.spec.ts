@@ -126,3 +126,19 @@ test("a name picked for from: is quoted, to be matched whole", async ({ page }) 
   await field(page).press("Tab");
   await expect(field(page)).toHaveAttribute("data-query", 'from:"wtriker" ');
 });
+
+/// A Tab pressed while the values for what was just typed are still on
+/// their way, as on a loaded machine, waits for them and takes the first,
+/// rather than doing nothing and moving focus away.
+test("a Tab while the values are on their way takes the first of them", async ({ page }) => {
+  await page.route(/\/values\?.*typed=slac(&|$)/, async (route) => {
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+  await page.goto(GRID);
+  await typeInto(field(page), "source_id:");
+  await expect(menu(page).locator('a.chip[data-entity="datalib:group/slack"]')).toBeVisible();
+  await field(page).pressSequentially("slac");
+  await field(page).press("Tab");
+  await expect(field(page)).toHaveAttribute("data-query", "source_id:slack ");
+});

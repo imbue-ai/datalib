@@ -311,6 +311,19 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
                 .collect(),
         }
     });
+    // Every row's Sync is disabled while the pass runs and enabled after:
+    // a change to the rows as much as to `upgrade`.
+    let rows_changed = || {
+        if let Some(tx) = &cfg.announce {
+            let _ = tx.send(
+                crate::watch::RootEvent::TableChanged {
+                    table: crate::watch::Table::ManageRows,
+                }
+                .into(),
+            );
+        }
+    };
+    rows_changed();
     cfg.control.busy.store(true, Ordering::SeqCst);
     let run_id = datalib_dag::scheduler::new_run_id();
     let now = now(cfg);
@@ -364,6 +377,7 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
     }
     cfg.control.busy.store(false, Ordering::SeqCst);
     set(&|u| u.migrating = false);
+    rows_changed();
 }
 
 /// The lock, once whoever holds it lets go. Until then a `datalib-dag`

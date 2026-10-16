@@ -54,7 +54,7 @@ test("the sandboxed frame gets its rows from the host and nothing else", async (
     // answers.
     let apiReached = false;
     try {
-      const r = await fetch("/applet/unified_index/search?q=&limit=1");
+      const r = await fetch("/applet/unified_document_index/search?q=&limit=1");
       apiReached = r.ok;
     } catch {
       apiReached = false;

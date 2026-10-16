@@ -1,6 +1,7 @@
-//! Ingest the TNG account through playback, render it, and check the
-//! page: the weight plot, the table, the device rows, and that an
-//! unchanged store renders the same rows the second time.
+//! Ingest the TNG account through playback, render it, and check every
+//! document: the overview's weight plot, table and device rows, the
+//! metric pages, the daily log, the activities and the records — and
+//! that an unchanged store renders the same rows the second time.
 
 use std::path::{Path, PathBuf};
 
@@ -10,7 +11,9 @@ use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::GarminApi;
 use datalib_etl_garmin_render::render::parse::parse;
-use datalib_etl_garmin_render::render::render::{document_uuid, render_all};
+use datalib_etl_garmin_render::render::render::{
+    activity_uuid, daily_log_uuid, document_uuid, listings_uuid, render_all,
+};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_web::playback;
@@ -71,7 +74,7 @@ fn render_once(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn renders_the_weight_page_then_skips_an_unchanged_store() {
+async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path();
     let raw = root.join(SOURCE).join("ingest");
@@ -79,7 +82,39 @@ async fn renders_the_weight_page_then_skips_an_unchanged_store() {
     ingest(&raw, &root.join("playback")).await;
 
     let (emitted, cursor) = render_once(&raw, root, None);
-    assert_eq!(emitted.len(), 1, "the whole store is one page");
+    let titles: Vec<&str> = emitted
+        .iter()
+        .map(|d| d.rows.iter().find(|r| r.is_document).unwrap())
+        .map(|r| r.conversation_name.as_deref().unwrap())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "Garmin — Jean-Luc Picard",
+            "Sleep — Jean-Luc Picard",
+            "Heart rate and HRV — Jean-Luc Picard",
+            "Stress and Body Battery — Jean-Luc Picard",
+            "Steps and activity — Jean-Luc Picard",
+            "Daily log — Jean-Luc Picard",
+            "Holodeck run: Dixon Hill",
+            "Cycling: Deck 12 to Engineering",
+            "Records and badges — Jean-Luc Picard",
+        ],
+        "the TNG account has no respiration, SpO2 or training data, so those pages are left out"
+    );
+    for d in &emitted {
+        assert_eq!(
+            d.bucket_key.as_deref(),
+            Some(document_uuid(SOURCE).as_str()),
+            "every document is in the one bucket"
+        );
+        let doc_rows: Vec<_> = d.rows.iter().filter(|r| r.is_document).collect();
+        assert_eq!(doc_rows.len(), 1);
+        assert!(
+            doc_rows[0].item_count.is_some(),
+            "the render store refuses a document row with no count"
+        );
+    }
     let doc = &emitted[0];
     assert_eq!(doc.markdown_uuid, document_uuid(SOURCE));
     assert_eq!(doc.rows.len(), 2, "1 page row + 1 device row");
@@ -126,21 +161,100 @@ async fn renders_the_weight_page_then_skips_an_unchanged_store() {
         "body fat from the payload draws on y2"
     );
 
+    let sleep = std::fs::read_to_string(page_dir.join("sleep.md")).unwrap();
+    assert!(
+        sleep.contains("**2369-04-14:** Sleep score 84 · Asleep 7 h 20 min"),
+        "{sleep}"
+    );
+    assert!(
+        sleep.contains("<iframe src=\"plots/sleep.html\""),
+        "{sleep}"
+    );
+    assert!(sleep.contains("| 2369-04-14 | 84 | 7:20 |"), "{sleep}");
+    assert!(page_dir.join("plots/sleep.html").exists());
+
+    let log = emitted
+        .iter()
+        .find(|d| d.markdown_uuid == daily_log_uuid(SOURCE))
+        .unwrap();
+    let days: Vec<&str> = log
+        .rows
+        .iter()
+        .filter(|r| r.kind == "Garmin Day")
+        .map(|r| r.upstream_id.as_deref().unwrap())
+        .collect();
+    assert_eq!(days, ["2369-04-14", "2369-04-13"], "newest first");
+    let day = log.rows.iter().find(|r| r.kind == "Garmin Day").unwrap();
+    assert!(
+        day.preview.starts_with(
+            "2369-04-14 Asleep 7 h 20 min · Sleep score 84 · Resting HR 48 bpm · \
+             HRV last night 61 ms · Steps 14,872 · Avg stress 29"
+        ),
+        "the headline leads, so the cut-short preview shows it: {}",
+        day.preview
+    );
+
+    let run = emitted
+        .iter()
+        .find(|d| {
+            d.rows
+                .iter()
+                .any(|r| r.upstream_id.as_deref() == Some("17010413001"))
+        })
+        .unwrap();
+    let run_row = &run.rows[0];
+    assert_eq!(run_row.kind, "Garmin Activity");
+    assert_eq!(run_row.channel.as_deref(), Some("Running"));
+    assert_eq!(
+        run_row.created_at.as_deref(),
+        Some("2369-04-13T06:30:00+00:00")
+    );
+    assert!(
+        run_row.preview.contains("Distance 8.05 km"),
+        "{}",
+        run_row.preview
+    );
+    assert_eq!(
+        run.markdown_uuid,
+        activity_uuid(SOURCE, "17010413001", Some(12600081000000))
+    );
+    let run_md = std::fs::read_to_string(&run.md_path).unwrap();
+    assert!(run_md.contains("| Pace | 5:00 /km |"), "{run_md}");
+    assert!(run_md.contains("| Device | Forerunner 265 |"), "{run_md}");
+
+    let records = emitted
+        .iter()
+        .find(|d| d.markdown_uuid == listings_uuid(SOURCE))
+        .unwrap();
+    let kinds: Vec<&str> = records.rows.iter().map(|r| r.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "Garmin Records",
+            "Garmin Record",
+            "Garmin Badge",
+            "Garmin Gear",
+            "Garmin Workout"
+        ]
+    );
+    let pr = &records.rows[1];
+    assert!(
+        pr.preview
+            .contains("Fastest 5 km 21:30 · Running · in Holodeck run: Dixon Hill"),
+        "{}",
+        pr.preview
+    );
+
     // Unchanged store, read at the same commit: identical rows, so the
     // render store records no change.
     let cursor = cursor.expect("a successful render pins the commit it consumed");
     let (again, cursor_2) = render_once(&raw, root, Some(&cursor));
     assert_eq!(cursor_2.as_deref(), Some(cursor.as_str()));
-    assert_eq!(again.len(), 1);
-    let texts = |d: &RenderedMarkdown| {
-        d.rows
-            .iter()
+    let texts = |docs: &[RenderedMarkdown]| {
+        docs.iter()
+            .flat_map(|d| d.rows.iter())
             .map(|r| (r.uuid.clone(), r.preview.clone()))
             .collect::<Vec<_>>()
     };
-    assert_eq!(texts(&again[0]), texts(doc));
-    assert_eq!(
-        again[0].bucket_key.as_deref(),
-        Some(document_uuid(SOURCE).as_str())
-    );
+    assert_eq!(texts(&again), texts(&emitted));
 }

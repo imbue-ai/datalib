@@ -12,8 +12,8 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, Recipient,
-    RecipientRole, UpstreamRef,
+    own_stamp_ms, AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    Recipient, RecipientRole, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
@@ -465,6 +465,7 @@ fn build_chat(
         items.push(NormalizedChatItem {
             message_uuid: email_id.uuid.clone(),
             author_handle: parsed_eml.from_handle.clone(),
+            author_kind: AuthorKind::Named,
             author_display: if parsed_eml.from_display.is_empty() {
                 "(unknown sender)".to_string()
             } else {
@@ -689,6 +690,7 @@ impl ParsedEml {
                         role,
                         display: display.to_string(),
                         handle: Handle::email(address),
+                        drawn: true,
                     })
                 })
         })

@@ -3,14 +3,14 @@ load("//tools:insta.bzl", "insta_update")
 
 # TNG-themed synthetic directory tree used as a scan root by the fsindex
 # e2e test and dropped into the dev/e2e data root (as `fsindex_scan/`) by
-# `//tests/fixtures:materialize_tng_root`. The leading-dot `.fsindex.yaml`
+# `//tests/fixtures:materialize_tng_root`. The leading-dot `.fsindex.toml`
 # breadcrumb is matched explicitly — the default glob skips dotfiles.
 filegroup(
     name = "tng_fixture",
     srcs = glob(
         [
             "tests/fixtures/fsindex_tng/**/*",
-            "tests/fixtures/fsindex_tng/**/.fsindex.yaml",
+            "tests/fixtures/fsindex_tng/**/.fsindex.toml",
         ],
         allow_empty = False,
     ),
@@ -41,9 +41,9 @@ rust_library(
         "@datalib_crates//:futures",
         "@datalib_crates//:ignore",
         "@datalib_crates//:serde",
-        "@datalib_crates//:serde_yaml",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:toml",
         "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
     ],

@@ -329,8 +329,8 @@ EXPECTED_PROVIDERS = frozenset(
         # the render step ran over that store — see
         # run_sync_pipeline.py's PRESEEDED_RAW.
         "yolink",
-        # Ingested through playback like the chat providers; the weight
-        # page and the device row are what land in the grid.
+        # Ingested through playback like the chat providers; its pages,
+        # days, activities and records are what land in the grid.
         "garmin",
     }
 )
@@ -440,7 +440,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
     @property
     def _index_db(self) -> Path:
         """The grid index the `grid_index` fan-in step writes."""
-        return self.workspace / "unified_index" / "grid_index" / "db.doltlite_db"
+        return (
+            self.workspace / "unified_document_index" / "grid_index" / "db.doltlite_db"
+        )
 
     @property
     def _signal_entities_db(self) -> Path:
@@ -634,7 +636,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Rows whose `qmd_path` disagrees with their markdown's path.
 
         The two columns name the same file and must name it the same
-        way: `GridIndex` (unified_index/src/qmd/mapping.rs) keys grid
+        way: `GridIndex` (unified_document_index/src/qmd/mapping.rs) keys grid
         rows by `norm_path(qmd_path)` and looks each qmd hit up by the
         hit's own data-root-relative path — the same spelling
         `apply_one` stores in `markdowns.md_path`. A provider that
@@ -823,7 +825,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
         Each source's render step writes
         `<source>/render_markdown/indexed_markdown.doltlite_db` holding the
-        same rows that stack into the unified index — same derived DDL,
+        same rows that stack into the unified document index — same derived DDL,
         same writer (`grid_index::apply_one`). Asserted from the outside
         with the doltlite CLI, so a store that exists but is empty, or
         holds a shape the CLI cannot read, fails here rather than
@@ -1192,7 +1194,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._query(
                 self._index_db,
                 "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url') "
-                "  = '/applet/unified_index/asset/' || c.markdown_uuid || '/blobs/' "
+                "  = '/applet/unified_document_index/asset/' || c.markdown_uuid || '/blobs/' "
                 "    || c.markdown_uuid || '.jpg', 'none') "
                 "FROM source_contacts c JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
                 "WHERE m.source_id = 'tng_contacts' "
@@ -1445,7 +1447,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # ── the per-source render stores ────────────────────────
         # Each source's render step writes its rows into
         # `<source>/render_markdown/indexed_markdown.doltlite_db` — the same
-        # rows, same derived DDL and same writer as the unified index,
+        # rows, same derived DDL and same writer as the unified document index,
         # so "what stacks into the index" needs no second projection to
         # keep in step.
         #
@@ -1913,7 +1915,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # The fan-in reads the sources its inputs name, as the runner
         # would hand them over; here, the one source under test.
         self._run_step(
-            "unified_index", "grid_index", inputs=("claude-api/render_markdown",)
+            "unified_document_index",
+            "grid_index",
+            inputs=("claude-api/render_markdown",),
         )
 
         self.assertEqual(
@@ -1938,7 +1942,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self.assertFalse(
                 f.is_file(),
                 f"{f} outlived the conversation it renders. The grid no "
-                "longer lists it, but /applet/unified_index/chat/{uuid} "
+                "longer lists it, but /applet/unified_document_index/chat/{uuid} "
                 "still resolves and qmd still finds it — a deletion the "
                 "user can read",
             )
@@ -1994,7 +1998,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self._run_step("github", "render_markdown", "github", inputs=("github/ingest",))
         self._run_step(
-            "unified_index", "grid_index", inputs=("github/render_markdown",)
+            "unified_document_index", "grid_index", inputs=("github/render_markdown",)
         )
 
         github_docs_after = set(

@@ -19,7 +19,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 async function openADocument(page: Page): Promise<void> {
-  const resp = await page.request.get("/applet/unified_index/search?q=&limit=2000");
+  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
     rows: { markdown_uuid: string | null; provider: string }[];

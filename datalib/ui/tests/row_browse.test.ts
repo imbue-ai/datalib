@@ -8,6 +8,6 @@ import { appletBrowseSource } from "../src/cards/cardSources";
 describe("appletBrowseSource", () => {
   it("opens the contacts app's table, and nothing for another applet", () => {
     expect(appletBrowseSource("datalib_contacts")).toBe("contactsView()");
-    expect(appletBrowseSource("unified_index")).toBeNull();
+    expect(appletBrowseSource("unified_document_index")).toBeNull();
   });
 });

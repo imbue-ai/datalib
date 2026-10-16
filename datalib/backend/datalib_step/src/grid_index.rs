@@ -1,5 +1,5 @@
 //! The `grid_index` function: every source's render store, stacked into
-//! the unified grid table at `unified_index/grid_index`.
+//! the unified grid table at `unified_document_index/grid_index`.
 
 use std::path::Path;
 
@@ -11,12 +11,12 @@ use datalib_schema::problems::{Severity, METRIC};
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
 
-/// The one tree this step writes, `unified_index/grid_index`, as the
+/// The one tree this step writes, `unified_document_index/grid_index`, as the
 /// applet that reads it resolves it from the data root.
 pub fn out_rel() -> String {
     format!(
         "{}/{}",
-        datalib_core::layout::UNIFIED_INDEX_DIR,
+        datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR,
         datalib_core::layout::GRID_DIR
     )
 }
@@ -31,16 +31,16 @@ pub async fn run(
     let db_path = datalib_core::layout::grid_index_db(data_root);
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
-        // Tag the whole `unified_index/` tree, not just this step's own
+        // Tag the whole `unified_document_index/` tree, not just this step's own
         // directory: every index under it is rebuilt from the sidecar
         // trees, so cache-aware backups (`restic --exclude-caches` etc.)
         // may skip all of it. Tagging the parent also means the tag is
         // right before the qmd step has ever run. Nothing precious lives
         // here — feedback and the loop's record are under `system/`, which is
         // never tagged.
-        datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(
-            data_root,
-        ));
+        datalib_core::layout::mark_derived_cache(
+            &datalib_core::layout::unified_document_index_dir(data_root),
+        );
     }
     let pool = open_index(&db_path).await?;
 
@@ -151,7 +151,7 @@ pub async fn run(
 mod tests {
     use super::*;
 
-    /// The step marks the whole `unified_index/` tree as derived cache, and
+    /// The step marks the whole `unified_document_index/` tree as derived cache, and
     /// leaves `system/` alone.
     #[tokio::test]
     async fn grid_index_marks_the_index_tree_as_derived_cache() {
@@ -159,8 +159,8 @@ mod tests {
         let data_root = td.path();
 
         let env = StepEnv {
-            step: "unified_index/grid_index".into(),
-            group: "unified_index".into(),
+            step: "unified_document_index/grid_index".into(),
+            group: "unified_document_index".into(),
             group_type: None,
             source_group: None,
             source_group_type: None,
@@ -178,12 +178,14 @@ mod tests {
         .expect("grid_index over an empty data root should succeed");
 
         assert!(
-            data_root.join("unified_index/CACHEDIR.TAG").is_file(),
-            "unified_index/ must be tagged, so one tag covers both index trees"
+            data_root
+                .join("unified_document_index/CACHEDIR.TAG")
+                .is_file(),
+            "unified_document_index/ must be tagged, so one tag covers both index trees"
         );
         assert!(
             !data_root
-                .join("unified_index/grid_index/CACHEDIR.TAG")
+                .join("unified_document_index/grid_index/CACHEDIR.TAG")
                 .exists(),
             "the per-index tag was replaced by the one on the parent"
         );

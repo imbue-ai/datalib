@@ -25,7 +25,7 @@ test("the page title names the tab shown", async ({ page }) => {
 });
 
 test("a /chat/<uuid> link is the document alone", async ({ page, request }) => {
-  const resp = await request.get("/applet/unified_index/search?q=&limit=20");
+  const resp = await request.get("/applet/unified_document_index/search?q=&limit=20");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: { markdown_uuid: string | null }[] };
   const md = rows.find((r) => r.markdown_uuid)?.markdown_uuid;

@@ -155,7 +155,7 @@ The two instances:
 | | `people` (`contacts.ts`) | `entities` (`entities.ts`) |
 |---|---|---|
 | keyed by | handle (`email:…`) | entity URI (`datalib:group/…`) |
-| asks | the unified index's `POST /people` and the contacts app's `POST /resolve` | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads) |
+| asks | the unified document index's `POST /people` and the contacts app's `POST /resolve` | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads) |
 | answer | each source's record of the person, and the contact a person made | label, icon token, detail, status |
 | goes stale when | a person edits a contact (create, link, unlink, no longer works): in this page the call forgets the handles it changed; from anywhere else — another window, an agent — the contacts app's commit reaches every page as a `curated` frame, on which `people` and `contactsById` revalidate (`movesPeople`), as on a resync | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
 

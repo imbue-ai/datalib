@@ -530,13 +530,14 @@ fn one_item_chat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl_chat_common::types::ItemKind;
+    use datalib_etl_chat_common::types::{AuthorKind, ItemKind};
     use serde_json::json;
 
     fn owner() -> Owner {
         Owner {
             source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
+            name_kind: AuthorKind::Named,
             handle: datalib_handle::Handle::facebook_name("Jean-Luc Picard"),
             account: Some("picard@enterprise.starfleet".to_string()),
             inputs: Vec::new(),
@@ -597,6 +598,10 @@ mod tests {
         assert_eq!(nobody.name, "Me");
         let chats = build_posts(&rows, &nobody);
         assert_eq!(chats[0].buckets[0].items[0].author_handle, None);
+        assert_eq!(
+            chats[0].buckets[0].items[0].author_kind,
+            AuthorKind::Account
+        );
     }
 
     /// What the person wrote and the place's name are text: escaped on

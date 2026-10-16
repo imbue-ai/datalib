@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Search-grid card: a search bar + a slickgrid over a table the
-// unified_index applet pages — its /search results by default, or another
+// unified_document_index applet pages — its /search results by default, or another
 // endpoint that pages the same way (/problems) — a page at a time
 // (grid/pagedWindow.ts). The server orders the rows: a header click asks
 // it again in the new order. What a row is named by, the document it
@@ -166,7 +166,7 @@ const props = defineProps<{
   // The card's name, from the card source (`gridView({name: "Slack
   // documents"})`). Without one the card is named for its live query.
   name?: string;
-  // The table the card pages (`gridView({url: "/applet/unified_index/problems"})`);
+  // The table the card pages (`gridView({url: "/applet/unified_document_index/problems"})`);
   // the search when absent (`searchView()`). Its groups are at `${url}/groups`.
   url?: string;
   // What the empty search bar suggests typing.

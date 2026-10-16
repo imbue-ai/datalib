@@ -2,7 +2,7 @@
 # `[[groups]]` entry with a `type` plus its two steps (`ingest` and
 # `render_markdown`, each written as `group` + `function` and with no
 # `command`, since a built-in step is `datalib-step`), and the two
-# shared index steps under the `unified_index` group, which every
+# shared index steps under the `unified_document_index` group, which every
 # source's rendered markdown feeds. A step's id is `<group>/<function>`,
 # composed rather than written; `inputs` name steps by that id. See
 # configs/dag_example.toml for a walkthrough of the format and
@@ -17,15 +17,15 @@ data_root = "~/datalib"
 # source's rendered markdown, and the qmd aggregator, which runs after
 # every source's own search steps.
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = ["gmail-takeout/keyword_index", "gmail-takeout/embed", "slack/keyword_index", "slack/embed", "claude-api/keyword_index", "claude-api/embed"]
 
@@ -141,11 +141,11 @@ group = "claude-api"
 function = "embed"
 inputs = ["claude-api/keyword_index"]
 
-# The app's own surface: `unified_index` serves the grid, the document
+# The app's own surface: `unified_document_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is
 # an applet rather than a built-in so the backend does not have to know
 # what a grid row is.
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"

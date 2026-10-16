@@ -4,7 +4,7 @@ The grid in `datalib/ui` shows one row per displayable thing in the
 mirror: a conversation, a message, a content block, a PR, a page, a
 storage measurement. Every source's render writes a denormalized
 projection of its records into one table, **`grid_rows`**, and the
-`unified_index` applet reads it with one query and no per-provider
+`unified_document_index` applet reads it with one query and no per-provider
 branches.
 
 The index holds one more table the grid does not read: `problems`,
@@ -20,7 +20,7 @@ declared on `ProblemRow` — see
    (`channel`, `source_url`, …), one struct moves; the DDL, the column
    list and the search keys are derived from it.
 2. **One query path.** Adding a provider adds rows, not a query: the
-   query, filter and sort code in `datalib/backend/unified_index/`
+   query, filter and sort code in `datalib/backend/unified_document_index/`
    stays put.
 3. **No joins at query time.** A message row already carries its
    conversation's name, account and project, so the grid renders
@@ -64,7 +64,7 @@ source's own render store,
 `<root>/<source_id>/render_markdown/indexed_markdown.doltlite_db`. The
 `grid_index` step (`build_grid_index` in
 `datalib/backend/etl/render/src/grid_index.rs`) stacks those stores
-into the unified index: it asks each one for the `dolt_diff` between
+into the unified document index: it asks each one for the `dolt_diff` between
 the commit the index last consumed (`source_cursors`) and that store's
 HEAD, applies each changed document's row set, and copies the
 corresponding `markdowns` row across. Each source is one transaction
@@ -74,8 +74,8 @@ pass keeps every source it finished.
 ## Consumer side
 
 The applet's search lists the matching uuids in order
-(`ordered_uuids` in `datalib/backend/unified_index/src/dolt_repo.rs`,
-over the `WHERE` that `build_where` in `unified_index/src/db.rs` makes
+(`ordered_uuids` in `datalib/backend/unified_document_index/src/dolt_repo.rs`,
+over the `WHERE` that `build_where` in `unified_document_index/src/db.rs` makes
 from the query's structured terms), then reads the rows for one page
 (`rows_by_uuids`, `search_row_from`) into `SearchRow`s with `preview`
 as the Contents cell. The order is newest first: `touched_at_utc`
@@ -87,7 +87,7 @@ The keys the search bar takes are declared on `GridRow`'s own columns
 qmd)` on the struct), and the derive turns them into a `SearchTable`
 (`datalib_query::table`) that the `WHERE`, the order and the grouping
 are all built from. The grid's own column ids (`source_ref`, `snippet`)
-map onto `grid_rows` columns in `unified_index/src/grid_columns.rs`.
+map onto `grid_rows` columns in `unified_document_index/src/grid_columns.rs`.
 
 Every read happens inside one read transaction on a read-only
 connection (`DoltRepo::pinned`), so a request sees one commit and the
@@ -117,19 +117,19 @@ rather than an error.
 2. Fill it where rows are built: the shared layers named under
    "Producer side", and the render crates that build rows themselves
    (notion, pdf, perseus, garmin; pdf writes the struct literally).
-3. Update `unified_index/src/dolt_repo.rs` — both the
+3. Update `unified_document_index/src/dolt_repo.rs` — both the
    `SEARCH_ROW_COLUMNS` list and `search_row_from`, which name columns
-   by `GridRowColumn` — and `SearchRow` in `unified_index/src/search.rs`
+   by `GridRowColumn` — and `SearchRow` in `unified_document_index/src/search.rs`
    if the column should reach the API.
 4. If it should be a grid column, add it to the `SearchRow` type in
    `datalib/ui/src/api.ts` and declare it in `columns()` in
-   `datalib/backend/applets/src/unified_index/columns.rs`, with its type
+   `datalib/backend/applets/src/unified_document_index/columns.rs`, with its type
    from `datalib_columns`. The applet declares the columns and the grid
    draws them by type (`cards/typedColumns.ts`, over the renderers in
    `cards/cellRenderers.ts`); a width or a hover the type cannot know
    goes in `GridCard`'s `columnOverrides`. Map its id to the
    `grid_rows` column it sorts and filters by in `GridColumn::backing`
-   (`unified_index/src/grid_columns.rs`), and give that column `search`
+   (`unified_document_index/src/grid_columns.rs`), and give that column `search`
    on its `#[col]` so Keep only, Exclude and dropping it on the search
    bar work; `every_filter_key_is_served_by_an_index` then asks for an
    index or a place in its `SCANS` list.
@@ -311,7 +311,7 @@ root, never the display name the config may also give it.
 
 For a given `markdown_uuid`, `grid_rows.qmd_path` must be byte-equal to
 that markdown's `markdowns.md_path` — the applet's qmd mapping
-(`GridIndex` in `unified_index/src/qmd/mapping.rs`) keys rows by this
+(`GridIndex` in `unified_document_index/src/qmd/mapping.rs`) keys rows by this
 path to resolve search hits, and a row whose path doesn't match what
 qmd reports is silently dropped from free-text results.
 `//tests/fixtures:ingested_tng_test` asserts it across providers.
@@ -336,6 +336,9 @@ Two nullable measurements. What each one measures is decided per
 | any chat-common message row | the body's UTF-8 length | 1; — for a tool call, a tool result or a system note |
 | any chat-common reaction row | — | — |
 | a sensor or Garmin page | — | its readings: rows of the raw store, or for Garmin every day of a metric with data, every weigh-in and every activity |
+| garmin.Garmin Metrics, garmin.Garmin Daily Log | — | the days with a value on the page |
+| garmin.Garmin Records | — | its entries |
+| garmin.Garmin Activity | — | 1 |
 | a GitHub PR, a GitLab MR, a Notion comment thread | — | itself and its comments; each comment row 1 |
 | a calendar event, a contact, a Notion page, a Perseus book or chapter | — | 1 |
 

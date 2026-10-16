@@ -7,7 +7,7 @@ import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
 import FirstRunView from "@/views/FirstRunView.vue";
 import ConfigErrorView from "@/views/ConfigErrorView.vue";
 import NewerRootView from "@/views/NewerRootView.vue";
-import UpgradingView from "@/views/UpgradingView.vue";
+import UpgradeIndicator from "@/components/UpgradeIndicator.vue";
 import RerenderDialog from "@/components/RerenderDialog.vue";
 import { fetchConfig, openRequest, type ConfigResponse } from "@/api";
 import { newestAnswer, subscribeLive } from "@/live";
@@ -28,13 +28,12 @@ const underTitleBar = desktop && /Mac/.test(navigator.platform);
 const config = ref<ConfigResponse | null>(null);
 const checked = ref(false);
 
-const gate = computed<"first-run" | "newer-root" | "upgrading" | "config-error" | null>(() => {
+const gate = computed<"first-run" | "newer-root" | "config-error" | null>(() => {
   const c = config.value;
   if (!c) return null;
   // A refused root comes first: with no store open, "no config" and
   // "not ready" are both consequences of it, not states of their own.
   if (c.newer_root) return "newer-root";
-  if (c.upgrade.migrating) return "upgrading";
   if (!c.exists) return "first-run";
   return c.app_ready ? null : "config-error";
 });
@@ -117,7 +116,10 @@ onUnmounted(() => stop?.());
         <LibraryCrumb :config-path="config?.path ?? null" />
       </div>
       <template v-if="!gate">
-        <div class="datalib-toolbar-sync" data-tauri-drag-region><SyncProgressChrome /></div>
+        <div class="datalib-toolbar-sync" data-tauri-drag-region>
+          <UpgradeIndicator v-if="config" :upgrade="config.upgrade" />
+          <SyncProgressChrome />
+        </div>
         <div class="datalib-toolbar-search"><CommandBox /></div>
       </template>
     </nav>
@@ -131,7 +133,6 @@ onUnmounted(() => stop?.());
         @initialized="onInitialized"
       />
       <NewerRootView v-else-if="gate === 'newer-root' && config" :config="config" />
-      <UpgradingView v-else-if="gate === 'upgrading' && config" :config="config" />
       <ConfigErrorView
         v-else-if="gate === 'config-error' && config"
         :config="config"
@@ -209,6 +210,7 @@ onUnmounted(() => stop?.());
 .datalib-toolbar-sync {
   flex: 0 0 auto;
   display: flex;
+  gap: 8px;
 }
 .datalib-toolbar-search {
   flex: 0 1000 440px;

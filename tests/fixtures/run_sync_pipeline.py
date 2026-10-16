@@ -521,10 +521,10 @@ params = {params}
         )
         blocks.append(
             f"""[[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = [{rendered_list}]"""
         )
@@ -536,16 +536,16 @@ inputs = [{rendered_list}]"""
         # be browsable.
         root_blocks.append(
             f"""[[groups]]
-id = "unified_index"
-name = "Unified Index"
+id = "unified_document_index"
+name = "Document Index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = [{rendered_list}]
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = [{qmd_list}]"""
         )

@@ -16,7 +16,9 @@ export type SyncAllButton = {
   stops: string[];
 };
 
-export function syncAllButton(rows: SyncAllRow[]): SyncAllButton {
+/// `paused` is why no sync can be opened right now (the server's
+/// `sync_paused`), or null.
+export function syncAllButton(rows: SyncAllRow[], paused: string | null = null): SyncAllButton {
   if (rows.length === 0) {
     return {
       glyph: "sync",
@@ -28,7 +30,7 @@ export function syncAllButton(rows: SyncAllRow[]): SyncAllButton {
   const stops = [...new Set(rows.flatMap((r) => r.stop_request_ids))];
   const stopButtons = rows.flatMap((r) => r.actions.filter((a) => a.id === "stop"));
   if (stopButtons.length === 0) {
-    return { glyph: "sync", label: "Sync everything", blocked: null, stops: [] };
+    return { glyph: "sync", label: "Sync everything", blocked: paused, stops: [] };
   }
   if (!stopButtons.some((a) => a.enabled)) {
     return {

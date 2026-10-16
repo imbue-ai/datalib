@@ -21,7 +21,7 @@
 # `datalib-step`, which reads the function and the group's `type` from
 # the environment. A step's id is composed as `<group>/<function>` and
 # never written; it is what another step's `inputs` name. Two shared
-# fan-in steps under the `unified_index` group index every source: one
+# fan-in steps under the `unified_document_index` group index every source: one
 # reads its rendered markdown, the other its own qmd search steps.
 #
 # TOML shape: each entry is a `[[groups]]`, `[[steps]]` or `[[applets]]`
@@ -74,15 +74,15 @@ data_root = "~/datalib"  # Base dir; everything is written under here. `~` is ex
 # every source's `keyword_index` and `embed` and keeps the search index
 # to the sources it names.
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "fastmail-contacts/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "google-calendar/render_markdown", "fastmail-calendar/render_markdown", "icloud-calendar/render_markdown", "ics-calendar/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "apple-messages/render_markdown"]
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = ["claude-api/keyword_index", "claude-api/embed", "claude-export/keyword_index", "claude-export/embed", "claude-code/keyword_index", "claude-code/embed", "codex/keyword_index", "codex/embed", "chatgpt/keyword_index", "chatgpt/embed", "slack/keyword_index", "slack/embed", "github/keyword_index", "github/embed", "gitlab/keyword_index", "gitlab/embed", "notion/keyword_index", "notion/embed", "fastmail/keyword_index", "fastmail/embed", "gmail/keyword_index", "gmail/embed", "gmail-takeout/keyword_index", "gmail-takeout/embed", "fastmail-contacts/keyword_index", "fastmail-contacts/embed", "icloud-contacts/keyword_index", "icloud-contacts/embed", "vcard-contacts/keyword_index", "vcard-contacts/embed", "google-calendar/keyword_index", "google-calendar/embed", "fastmail-calendar/keyword_index", "fastmail-calendar/embed", "icloud-calendar/keyword_index", "icloud-calendar/embed", "ics-calendar/keyword_index", "ics-calendar/embed", "beeper/keyword_index", "beeper/embed", "perseus/keyword_index", "perseus/embed", "yolink/keyword_index", "yolink/embed", "garmin/keyword_index", "garmin/embed", "ship-air/keyword_index", "ship-air/embed", "signal/keyword_index", "signal/embed", "whatsapp/keyword_index", "whatsapp/embed", "facebook/keyword_index", "facebook/embed", "linkedin/keyword_index", "linkedin/embed", "google-takeout/keyword_index", "google-takeout/embed", "sms-backup-restore/keyword_index", "sms-backup-restore/embed", "pdfs/keyword_index", "pdfs/embed", "apple-messages/keyword_index", "apple-messages/embed"]
 
@@ -1010,9 +1010,10 @@ since = "2024-01-01"       # earliest day to mirror; default a year back. Quote 
 # activity_files = true    # each activity's original FIT file, into the blob store
 # wellness_files = false   # each day's wellness FIT bundle (one zip per day)
 
-# One page: the weigh-in history as an interactive plot and a table,
-# plus the account's devices. The rest of the store is mirrored but not
-# rendered yet.
+# The weigh-ins and devices, a page per family of daily metrics, a
+# daily log with a row per day, a page per activity, and the personal
+# records, badges, gear, workouts and goals. The FIT files and the
+# minute-by-minute series are mirrored but not drawn.
 [[steps]]
 group = "garmin"
 function = "render_markdown"
@@ -1311,7 +1312,7 @@ inputs = ["sms-backup-restore/keyword_index"]
 # every source gets, which is what puts fsindex in the grid at all.
 #
 # `stamp` is off by default so the scan stays read-only against its input.
-# Set it to true to let the scanner write `.fsindex.yaml` UUID breadcrumbs
+# Set it to true to let the scanner write `.fsindex.toml` UUID breadcrumbs
 # into directories that opt in via `stamp_me_with_uuid`.
 [[groups]]
 id = "fsindex-home"
@@ -1640,11 +1641,11 @@ group = "apple-messages"
 function = "embed"
 inputs = ["apple-messages/keyword_index"]
 
-# The app's own surface: `unified_index` serves the grid, the document
+# The app's own surface: `unified_document_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is
 # an applet rather than a built-in so the backend does not have to know
 # what a grid row is.
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"

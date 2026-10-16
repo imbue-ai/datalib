@@ -50,8 +50,8 @@ impl SourceRender for GarminRender {
             ctx.consumed(head);
         }
         Ok(format!(
-            "weigh_ins={} devices={} plots={}",
-            s.weigh_ins, s.devices, s.plots
+            "weigh_ins={} devices={} plots={} metric_pages={} days={} activities={} items={}",
+            s.weigh_ins, s.devices, s.plots, s.metric_pages, s.days, s.activities, s.items
         ))
     }
 }

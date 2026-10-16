@@ -22,13 +22,13 @@ const CHECK = "✅";
 const CROSS = "❌";
 
 test("the applet reports the fixture's documents indexed and embedded", async ({ request }) => {
-  const search = await request.get("/applet/unified_index/search?q=&limit=200");
+  const search = await request.get("/applet/unified_document_index/search?q=&limit=200");
   expect(search.ok(), `search API: HTTP ${search.status()}`).toBeTruthy();
   const rows = ((await search.json()) as { rows: { markdown_uuid: string | null }[] }).rows;
   const uuids = [...new Set(rows.map((r) => r.markdown_uuid).filter(Boolean))];
   expect(uuids.length, "fixture rows must carry markdown_uuids").toBeGreaterThan(0);
 
-  const resp = await request.post("/applet/unified_index/qmd_state", {
+  const resp = await request.post("/applet/unified_document_index/qmd_state", {
     data: { markdown_uuids: uuids },
   });
   expect(resp.ok(), `qmd_state: HTTP ${resp.status()}`).toBeTruthy();
@@ -151,7 +151,7 @@ test.describe("the search coverage line", () => {
       summary: { documents: number; embedded: number };
     }) => void,
   ) {
-    await page.route("**/applet/unified_index/qmd_state", async (route) => {
+    await page.route("**/applet/unified_document_index/qmd_state", async (route) => {
       const response = await route.fetch();
       const state = await response.json();
       rewrite(state);
@@ -171,7 +171,7 @@ test.describe("the search coverage line", () => {
     // Free text is answered as the applet does with no index, from the
     // unfiltered search's answer: asking the fixture's real qmd would
     // make this wait on a ranking it throws away.
-    await page.route("**/applet/unified_index/search?**", async (route) => {
+    await page.route("**/applet/unified_document_index/search?**", async (route) => {
       const url = new URL(route.request().url());
       const q = url.searchParams.get("q") ?? "";
       if (q === "") return route.fallback();
