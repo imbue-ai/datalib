@@ -230,6 +230,8 @@ pub struct TimeSeries {
     /// The document this time series belongs to, when it belongs to one
     /// (an activity); `None` for one about the source as a whole.
     pub about_uuid: Option<String>,
+    /// What a list calls that document: `Morning Run · 2026-08-19`.
+    pub about_name: Option<String>,
     /// The provider's key for what is measured, unique within the
     /// source and `about_uuid`: `resting_hr`.
     pub name: String,
@@ -250,6 +252,7 @@ impl TimeSeries {
             ts_key,
             time_series_id: self.time_series_id.clone(),
             about_uuid: self.about_uuid.clone(),
+            about_name: self.about_name.clone(),
             name: self.name.clone(),
             human_name: self.human_name.clone(),
             unit: self.unit.clone(),
@@ -334,6 +337,7 @@ mod tests {
             time_series_id: "id".into(),
             source_id: "riker".into(),
             about_uuid: None,
+            about_name: None,
             name: "resting_hr".into(),
             human_name: "Resting HR".into(),
             unit: "/min".into(),

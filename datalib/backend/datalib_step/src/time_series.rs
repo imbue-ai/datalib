@@ -8,6 +8,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw::{self, StoreKind};
 use datalib_etl_time_series::{index, store, Summary};
+use datalib_schema::problems::{Severity, METRIC};
 use datalib_time_series_schema::TimeSeries;
 
 use crate::events::{Emitter, OutputClaim};
@@ -23,12 +24,21 @@ pub fn index_rel() -> String {
     )
 }
 
-/// Every time series a source's raw store holds, read at its head. An arm
-/// here is a type [`SourceType::renders_time_series`] says yes for.
-fn read(source_type: SourceType, raw: &Path, source_id: &str) -> Result<Vec<TimeSeries>> {
+/// A record that could not be read, and why.
+type Unreadable = (String, String);
+
+/// Every time series a source's raw store holds, read at its head, and
+/// each record that could not be read. An arm here is a type
+/// [`SourceType::renders_time_series`] says yes for.
+fn read(
+    source_type: SourceType,
+    raw: &Path,
+    source_id: &str,
+) -> Result<(Vec<TimeSeries>, Vec<Unreadable>)> {
     match source_type {
         SourceType::Garmin => {
-            Ok(datalib_etl_garmin_render::render::time_series::read(raw, source_id, None)?.1)
+            let read = datalib_etl_garmin_render::render::time_series::read(raw, source_id, None)?;
+            Ok((read.time_series, read.unreadable))
         }
         other => anyhow::bail!(
             "a `{}` source renders no time series; take its `render_time_series` step out \
@@ -46,7 +56,16 @@ pub async fn run_render(
     let source_type = SourceType::parse(env.source_type()?)
         .with_context(|| format!("unknown source type {:?}", env.group_type))?;
     let raw = data_root.join(env.raw_store_rel());
-    let wanted = read(source_type, &raw, &env.group)?;
+    let (wanted, unreadable) = read(source_type, &raw, &env.group)?;
+    // A file that could not be read costs its own time series and
+    // nothing else; the Manage row counts it as a warning.
+    for (record, why) in &unreadable {
+        tracing::warn!(record = %record, error = %why, "a source file held no readable time series");
+    }
+    let progress = emitter.progress();
+    for (severity, n) in [(Severity::Error, 0), (Severity::Warning, unreadable.len())] {
+        progress.metric(METRIC, &[severity.metric_label()], n as i64);
+    }
     let db = datalib_etl::layout::render_time_series_db(data_root, &env.group);
     let pool = store::open(&db, StoreKind::TimeSeries).await?;
     let written = datalib_etl_time_series::apply(&pool, &wanted, &env.group).await;
@@ -200,6 +219,7 @@ mod tests {
             time_series_id: "w".into(),
             source_id: "riker".into(),
             about_uuid: None,
+            about_name: None,
             name: "weight".into(),
             human_name: "Weight".into(),
             unit: "kg".into(),

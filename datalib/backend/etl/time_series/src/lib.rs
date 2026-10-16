@@ -118,6 +118,7 @@ mod tests {
             time_series_id: format!("{source}/{id}"),
             source_id: source.into(),
             about_uuid: None,
+            about_name: None,
             name: id.into(),
             human_name: id.into(),
             unit: "kg".into(),

@@ -62,8 +62,8 @@ pub fn schema_hash(kind: StoreKind) -> String {
     doltlite_raw::recorded_shape(ddl(kind))
 }
 
-const ROW_COLUMNS: &str = "source_id, ts_key, time_series_id, about_uuid, name, human_name, \
-     unit, value_type, time_kind, point_count, first_t, last_t";
+const ROW_COLUMNS: &str = "source_id, ts_key, time_series_id, about_uuid, about_name, name, \
+     human_name, unit, value_type, time_kind, point_count, first_t, last_t";
 
 /// Every time series a store holds, without its points.
 pub async fn rows(pool: &SqlitePool) -> Result<Vec<TimeSeriesRow>> {
@@ -84,6 +84,7 @@ fn row_of(r: &sqlx::sqlite::SqliteRow) -> Result<TimeSeriesRow> {
         ts_key: r.try_get("ts_key")?,
         time_series_id: r.try_get("time_series_id")?,
         about_uuid: r.try_get("about_uuid")?,
+        about_name: r.try_get("about_name")?,
         name: r.try_get("name")?,
         human_name: r.try_get("human_name")?,
         unit: r.try_get("unit")?,
@@ -102,7 +103,7 @@ fn row_of(r: &sqlx::sqlite::SqliteRow) -> Result<TimeSeriesRow> {
 pub async fn write_row(conn: &mut SqliteConnection, row: &TimeSeriesRow) -> Result<()> {
     let sql = format!(
         "INSERT OR REPLACE INTO time_series ({ROW_COLUMNS}) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     );
     // Safe: the column list is a constant and every value is bound.
     sqlx::query(sqlx::AssertSqlSafe(sql))
@@ -110,6 +111,7 @@ pub async fn write_row(conn: &mut SqliteConnection, row: &TimeSeriesRow) -> Resu
         .bind(row.ts_key)
         .bind(&row.time_series_id)
         .bind(&row.about_uuid)
+        .bind(&row.about_name)
         .bind(&row.name)
         .bind(&row.human_name)
         .bind(&row.unit)

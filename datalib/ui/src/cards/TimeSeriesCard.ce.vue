@@ -16,6 +16,7 @@ import {
   extent,
   formatTick,
   formatTime,
+  formatTimeTick,
   formatValue,
   fromMs,
   grouped,
@@ -280,7 +281,7 @@ const xTicks = computed(() => {
     const ms = s.fromMs + ((s.toMs - s.fromMs) * i) / n;
     return {
       x: px(ms),
-      label: formatTime(ms, kind, s.toMs - s.fromMs),
+      label: formatTimeTick(ms, kind, s.toMs - s.fromMs, i === 0),
       anchor: i === 0 ? "start" : i === n ? "end" : "middle",
     };
   });
@@ -380,7 +381,9 @@ onBeforeUnmount(() => {
           Nothing matches “{{ filter }}”.
         </div>
         <section v-for="g in groups" :key="g.source" class="ts-group">
-          <h3 class="ts-source">{{ g.source }} · {{ g.items.length }}</h3>
+          <h3 class="ts-source">
+            {{ g.source }} · {{ g.items.length + g.abouts.reduce((n, a) => n + a.items.length, 0) }}
+          </h3>
           <label
             v-for="s in g.items"
             :key="s.time_series_id"
@@ -399,6 +402,36 @@ onBeforeUnmount(() => {
             <span class="ts-label">{{ s.human_name }}</span>
             <span class="ts-meta">{{ unitText(s) }} · {{ s.point_count }}</span>
           </label>
+          <details
+            v-for="a in g.abouts"
+            :key="a.uuid"
+            class="ts-about"
+            :open="filter.trim() !== '' || a.items.some((s) => ids.includes(s.time_series_id))"
+          >
+            <summary class="ts-about-name">{{ a.name }} · {{ a.items.length }}</summary>
+            <label
+              v-for="s in a.items"
+              :key="s.time_series_id"
+              class="ts-item ts-nested"
+              :class="{ 'ts-picked': ids.includes(s.time_series_id) }"
+            >
+              <input
+                type="checkbox"
+                :checked="ids.includes(s.time_series_id)"
+                @change="toggle(s)"
+              />
+              <span
+                class="ts-swatch"
+                :style="{
+                  background: ids.includes(s.time_series_id)
+                    ? colorOf(s.time_series_id)
+                    : 'transparent',
+                }"
+              ></span>
+              <span class="ts-label">{{ s.human_name }}</span>
+              <span class="ts-meta">{{ unitText(s) }} · {{ s.point_count }}</span>
+            </label>
+          </details>
         </section>
       </div>
     </div>
@@ -413,7 +446,7 @@ onBeforeUnmount(() => {
             :style="{ borderColor: colorOf(p.time_series_id) }"
           >
             <span class="ts-swatch" :style="{ background: colorOf(p.time_series_id) }"></span>
-            {{ p.human_name }} · {{ p.source_id }}
+            {{ p.human_name }} · {{ p.about_name ?? p.source_id }}
             <span class="ts-axis-name">{{
               quantities.length > 1 ? (quantities.indexOf(p.quantity) === 0 ? "left" : "right") : ""
             }}</span>
@@ -575,6 +608,17 @@ onBeforeUnmount(() => {
 }
 .ts-picked {
   background: var(--datalib-selected);
+}
+.ts-about-name {
+  padding: 0.25rem 0.75rem;
+  cursor: pointer;
+  color: var(--datalib-muted);
+}
+.ts-about-name:hover {
+  background: var(--datalib-hover);
+}
+.ts-nested {
+  padding-left: 1.75rem;
 }
 .ts-label {
   flex: 1 1 auto;

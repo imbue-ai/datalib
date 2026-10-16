@@ -46,7 +46,8 @@ pub struct Activity {
     pub id: String,
     pub listing: Value,
     pub detail: Value,
-    pub fit_held: bool,
+    /// The FIT file's key in the blob store, when one is held.
+    pub fit_blake3: Option<String>,
 }
 
 /// One row of an account listing (`garmin_items`).
@@ -251,8 +252,9 @@ async fn load_metric_counts(pool: &SqlitePool) -> Result<Vec<MetricCount>> {
 async fn load_activities(pool: &SqlitePool) -> Result<Vec<Activity>> {
     let rows = sqlx::query(
         "SELECT a.id, json(a.payload) AS listing, json(d.payload) AS detail, \
-                EXISTS(SELECT 1 FROM garmin_activity_files f \
-                        WHERE f.activity_id = a.id AND f.blake3 IS NOT NULL) AS fit \
+                (SELECT f.blake3 FROM garmin_activity_files f \
+                  WHERE f.activity_id = a.id AND f.blake3 IS NOT NULL \
+                  ORDER BY f.id LIMIT 1) AS fit \
            FROM garmin_activities a LEFT JOIN garmin_activity_details d ON d.id = a.id \
           ORDER BY a.start_time_gmt, a.id",
     )
@@ -265,7 +267,7 @@ async fn load_activities(pool: &SqlitePool) -> Result<Vec<Activity>> {
             id: r.get("id"),
             listing: json_column(&r, "listing"),
             detail: json_column(&r, "detail"),
-            fit_held: r.get::<i64, _>("fit") != 0,
+            fit_blake3: r.get("fit"),
         })
         .collect())
 }

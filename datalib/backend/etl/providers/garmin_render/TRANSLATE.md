@@ -26,8 +26,9 @@ one. A personal record whose `typeId` is not in the table in
 `src/render/records.rs` is shown as `Record type N` with its raw value
 rather than guessed at.
 
-The FIT files and the minute-by-minute series (heart rate, stress,
-Body Battery, respiration, steps) are mirrored but not drawn.
+The minute-by-minute series (heart rate, stress, Body Battery,
+respiration, steps) are mirrored but not drawn. The activities' FIT
+files are read into time series (§"Time series"), not into the pages.
 
 ## Time series
 
@@ -48,10 +49,22 @@ The `render_time_series` step writes the same data as time series into
 - **Weight, body fat and BMI**, from the weigh-ins, by instant
   (`TimeKind::Instant`, the weigh-in's GMT stamp), in `kg`, `%` and
   `kg/m2`. Two weigh-ins at one instant keep the later.
+- **Each activity's FIT file**, one time series per `record` field in
+  `fit::RECORD_FIELDS` that the file holds (heart rate, cadence,
+  distance, speed, altitude, position, power, running dynamics), by
+  instant. `about_uuid` is the activity's page and `about_name` its
+  name and date. `src/render/fit.rs` decodes the file as raw integers,
+  and a scaled field becomes `(raw - offset * scale) / scale`, which
+  keeps its decimals. `speed` and `altitude` are left out when the
+  file has `enhanced_speed` and `enhanced_altitude`, which carry the
+  same readings. A file that is held but cannot be read costs that
+  activity's time series and counts as a warning on the step's Manage
+  row.
 
 A time series with no points is not written. Its id is minted from the
-source id, the word `account` and the field's key, so it is the same
-on every render.
+source id, the word `account` and the field's key, or for an
+activity's, the word `activity`, the activity id and the field's name,
+so it is the same on every render.
 
 ## Incrementality
 

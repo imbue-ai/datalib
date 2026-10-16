@@ -104,6 +104,7 @@ struct Listed {
     time_series_id: String,
     source_id: String,
     about_uuid: Option<String>,
+    about_name: Option<String>,
     name: String,
     human_name: String,
     /// The UCUM code.
@@ -134,6 +135,7 @@ impl From<&TimeSeriesRow> for Listed {
             time_series_id: r.time_series_id.clone(),
             source_id: r.source_id.clone(),
             about_uuid: r.about_uuid.clone(),
+            about_name: r.about_name.clone(),
             name: r.name.clone(),
             human_name: r.human_name.clone(),
             unit: r.unit.clone(),
@@ -153,8 +155,8 @@ impl From<&TimeSeriesRow> for Listed {
 #[derive(Deserialize, Default)]
 struct ListQuery {
     source_id: Option<String>,
-    /// Words every one of which the human name or the name holds,
-    /// ignoring case.
+    /// Words every one of which the human name, the name or the name of
+    /// what it is about holds, ignoring case.
     q: Option<String>,
 }
 
@@ -162,7 +164,8 @@ fn matches(r: &TimeSeriesRow, query: &ListQuery) -> bool {
     if query.source_id.as_ref().is_some_and(|s| *s != r.source_id) {
         return false;
     }
-    let hay = format!("{} {}", r.human_name, r.name).to_lowercase();
+    let about = r.about_name.as_deref().unwrap_or("");
+    let hay = format!("{} {} {about}", r.human_name, r.name).to_lowercase();
     query
         .q
         .as_deref()
@@ -381,6 +384,7 @@ mod tests {
             time_series_id: "bridge-temp".into(),
             source_id: "yolink".into(),
             about_uuid: None,
+            about_name: None,
             name: "temperature".into(),
             human_name: "Bridge temperature".into(),
             unit: "Cel".into(),
@@ -490,6 +494,7 @@ mod tests {
             ts_key: 1,
             time_series_id: "id".into(),
             about_uuid: None,
+            about_name: None,
             name: "resting_hr".into(),
             human_name: human_name.into(),
             unit: "{beats}/min".into(),

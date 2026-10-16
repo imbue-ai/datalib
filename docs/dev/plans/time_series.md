@@ -8,9 +8,9 @@ became UCUM codes. What is built is described in
 [`../time_series.md`](../time_series.md), which replaces this plan's
 sections on the stores, units and serving; §"Names" and §"Config" are
 kept as the record of what was decided. Not
-built: YoLink and AirVisual as time series, charts inside documents,
-retiring `plots/` (§"Order of work", item 5), and time series from
-FIT files.**
+built: YoLink and AirVisual as time series, charts inside documents
+and retiring `plots/` (§"Order of work", item 5). Time series from
+Garmin's FIT files (item 6) are built.**
 
 ## The problem
 
@@ -146,7 +146,7 @@ Each item is one PR, and each leaves the tree working.
    with `about_uuid` naming the activity's document, decoded from the
    FIT files Garmin's ingest already keeps.
 
-Items 1 to 4 are built.
+Items 1 to 4 and 6 are built.
 
 ## Open questions
 
