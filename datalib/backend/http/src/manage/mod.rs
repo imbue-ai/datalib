@@ -133,7 +133,7 @@ pub struct ManageRow {
     /// keyed on.
     pub id: String,
     /// The grid's row id. The entry id for a step or an applet; for a
-    /// group, `group:<id>`, because the `unified_index` applet shares
+    /// group, `group:<id>`, because the `unified_document_index` applet shares
     /// its group's id and both are rows.
     pub key: String,
     /// Where the row sits in the tree: `[key]` at the top level, or
@@ -497,17 +497,17 @@ impl Child for Entry<'_> {
 /// the name in the grid.
 fn default_name(id: &str) -> String {
     match id {
-        "unified_index/grid_index" => "Unified Index (table)",
-        "unified_index/qmd_aggregator" => "Unified Index (QMD)",
-        "unified_index/embedding_map" => "Unified Index (map)",
-        "unified_index" => "Unified Index (Applet)",
+        "unified_document_index/grid_index" => "Document Index (table)",
+        "unified_document_index/qmd_aggregator" => "Document Index (QMD)",
+        "unified_document_index/embedding_map" => "Document Index (map)",
+        "unified_document_index" => "Document Index (Applet)",
         other => other,
     }
     .to_string()
 }
 
 /// A group's Name cell leads with its source's mark, the type's label
-/// on hover. A group that mirrors nothing — the unified index — is the
+/// on hover. A group that mirrors nothing — the unified document index — is the
 /// search over every source, and is marked as that.
 fn group_name(g: &WrittenGroup, r#type: Option<&Identity>) -> Identity {
     let (icon, detail) = match r#type {

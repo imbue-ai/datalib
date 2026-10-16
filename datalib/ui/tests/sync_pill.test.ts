@@ -18,7 +18,7 @@ function row(over: Partial<ManageRow> & { id: string }): ManageRow {
 describe("syncingGroups", () => {
   it("lists the groups a request has work left in, sources first", () => {
     const groups = syncingGroups([
-      row({ id: "unified_index", type: null, stop_request_ids: ["r1", "r2"] }),
+      row({ id: "unified_document_index", type: null, stop_request_ids: ["r1", "r2"] }),
       row({ id: "bridge_log", stop_request_ids: [] }),
       row({
         id: "starfleet_mail",
@@ -28,7 +28,7 @@ describe("syncingGroups", () => {
       }),
       row({ id: "starfleet_mail/ingest", kind: "step", stop_request_ids: ["r1"] }),
     ]);
-    expect(groups.map((g) => g.id)).toEqual(["starfleet_mail", "unified_index"]);
+    expect(groups.map((g) => g.id)).toEqual(["starfleet_mail", "unified_document_index"]);
     expect(groups[0].name).toBe("Starfleet mail");
     expect(groups[0].progress).toBe("3 min left");
     expect(groups[1].progress).toBe("");
@@ -40,8 +40,8 @@ describe("pillLabel", () => {
   const source = (id: string) => syncingGroups([row({ id, stop_request_ids: ["r"] })])[0];
   const index = syncingGroups([
     row({
-      id: "unified_index",
-      name: { id: "unified_index", label: "Unified Index" },
+      id: "unified_document_index",
+      name: { id: "unified_document_index", label: "Document Index" },
       type: null,
       stop_request_ids: ["r"],
     }),
@@ -53,7 +53,7 @@ describe("pillLabel", () => {
   });
 
   it("names the index when it is all that is left", () => {
-    expect(pillLabel([index])).toBe("Syncing Unified Index");
+    expect(pillLabel([index])).toBe("Syncing Document Index");
   });
 
   it("says only that something syncs before the rows are known", () => {

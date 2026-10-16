@@ -63,17 +63,17 @@ function = "render_markdown"
 inputs = ["slack/ingest"]
 
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["slack/render_markdown"]
 
 [[applets]]
-id = "unified_index"
-group = "unified_index"
-command = "datalib-applet unified_index"
+id = "unified_document_index"
+group = "unified_document_index"
+command = "datalib-applet unified_document_index"
 "#;
 
 async fn write_root(root: &Path, config: &str, state_json: Option<&str>) {
@@ -259,7 +259,10 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
             .iter()
             .any(|a| a["id"] == "dashboard")
     };
-    assert!(!has_dashboard(&rows["unified_index"]), "the applet");
+    assert!(
+        !has_dashboard(&rows["unified_document_index"]),
+        "the applet"
+    );
     // A render that has never run is out of date: Sync reruns it alone,
     // and says which source to sync for fresh data.
     assert_eq!(
@@ -273,11 +276,11 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         .contains("sync slack/ingest"));
 
     // The applet shares its group's id; the group's key keeps them apart.
-    let applet = &rows["unified_index"];
+    let applet = &rows["unified_document_index"];
     assert_eq!(applet["kind"], "applet");
     assert_eq!(
         applet["path"],
-        serde_json::json!(["group:unified_index", "unified_index"])
+        serde_json::json!(["group:unified_document_index", "unified_document_index"])
     );
     // Its health is the supervisor's word, not the runner's: up, or —
     // here, with no `datalib-applet` on the PATH — failed to start.
@@ -286,18 +289,18 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert!(label == "Up" || label == "Failed to start", "{applet}");
     assert_eq!(applet["status"]["at"], serde_json::Value::Null);
     assert_eq!(applet["last_synced"], serde_json::Value::Null);
-    assert_eq!(applet["name"]["label"], "Unified Index (Applet)");
+    assert_eq!(applet["name"]["label"], "Document Index (Applet)");
     assert_eq!(applet["name"]["icon"], "applet");
-    assert_eq!(applet["type"]["label"], "unified_index");
+    assert_eq!(applet["type"]["label"], "unified_document_index");
     // The group reads a failed applet as its own failure, else its
     // last step, which has never run.
-    let index = &rows["group:unified_index"];
+    let index = &rows["group:unified_document_index"];
     if label == "Up" {
         assert_eq!(index["status"]["key"], "never_run");
-        assert_eq!(index["status_from"], "unified_index/grid_index");
+        assert_eq!(index["status_from"], "unified_document_index/grid_index");
     } else {
         assert_eq!(index["status"]["key"], "failed");
-        assert_eq!(index["status_from"], "unified_index");
+        assert_eq!(index["status_from"], "unified_document_index");
     }
     // The index group browses as the projection over every source.
     assert_eq!(index["actions"][0]["label"], "Browse every source");
@@ -436,8 +439,16 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
         w.metric(metric("slack/render_markdown", "severity=warning", 5));
         w.metric(metric("slack/ingest", "severity=error", 0));
         w.metric(metric("slack/ingest", "severity=warning", 1));
-        w.metric(metric("unified_index/grid_index", "severity=error", 0));
-        w.metric(metric("unified_index/grid_index", "severity=warning", 0));
+        w.metric(metric(
+            "unified_document_index/grid_index",
+            "severity=error",
+            0,
+        ));
+        w.metric(metric(
+            "unified_document_index/grid_index",
+            "severity=warning",
+            0,
+        ));
     }
 
     let rows = by_key(&get_rows(tmp.path()).await);
@@ -472,11 +483,11 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
         "the group sums its steps"
     );
     assert_eq!(
-        chips("unified_index/grid_index"),
+        chips("unified_document_index/grid_index"),
         vec![],
         "counted none: nothing drawn"
     );
-    assert_eq!(chips("group:unified_index"), vec![]);
+    assert_eq!(chips("group:unified_document_index"), vec![]);
 }
 
 /// The dashboard reads one run for a group: each step that took part
@@ -543,7 +554,11 @@ async fn a_groups_dashboard_charts_the_run_its_steps_took_part_in() {
     assert_eq!(steps[1]["in_run"], false);
 
     // A group none of whose steps ever ran has no run to show.
-    let idx = rows_of_at(tmp.path(), "/api/manage/groups/unified_index/dashboard").await;
+    let idx = rows_of_at(
+        tmp.path(),
+        "/api/manage/groups/unified_document_index/dashboard",
+    )
+    .await;
     assert_eq!(idx["run"], serde_json::Value::Null);
 }
 
@@ -719,7 +734,7 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
         .unwrap()
         .starts_with("Not in the pipeline"));
     // The fan-in that read it is blocked by it, and says so.
-    let index = &rows["unified_index/grid_index"];
+    let index = &rows["unified_document_index/grid_index"];
     assert_eq!(index["status"]["key"], "config_blocked");
     // The group itself still loads and still runs from its ingest step.
     let slack = &rows["group:slack"];
@@ -827,7 +842,11 @@ async fn item_counts_and_their_history_reach_the_rows_from_the_run_store() {
         rows["group:slack"]["items"], *render,
         "the group shows its render step's"
     );
-    for key in ["slack/ingest", "unified_index/grid_index", "system"] {
+    for key in [
+        "slack/ingest",
+        "unified_document_index/grid_index",
+        "system",
+    ] {
         assert_eq!(
             rows[key]["items"]["value"],
             serde_json::Value::Null,
@@ -842,7 +861,7 @@ async fn item_counts_and_their_history_reach_the_rows_from_the_run_store() {
 async fn the_contacts_app_can_be_browsed_and_another_applet_cannot() {
     let tmp = tempfile::tempdir().unwrap();
     let config = format!(
-        "{CONFIG}\n[[applets]]\nid = \"datalib_contacts\"\ngroup = \"unified_index\"\n\
+        "{CONFIG}\n[[applets]]\nid = \"datalib_contacts\"\ngroup = \"unified_document_index\"\n\
          command = \"datalib-applet datalib_contacts\"\n"
     );
     write_root(tmp.path(), &config, None).await;
@@ -859,5 +878,5 @@ async fn the_contacts_app_can_be_browsed_and_another_applet_cannot() {
     let contacts = browse("datalib_contacts");
     assert_eq!(contacts["enabled"], true, "{contacts}");
     assert_eq!(contacts["label"], "Browse your contacts");
-    assert_eq!(browse("unified_index")["enabled"], false);
+    assert_eq!(browse("unified_document_index")["enabled"], false);
 }

@@ -26,7 +26,7 @@ then whatever in the tree leaned on it.
 
 Every store the pipeline writes — the raw stores under
 `<data_root>/<group>/ingest/`, each source's render store, and the grid
-index (`<data_root>/unified_index/grid_index/db.doltlite_db`) — is a
+index (`<data_root>/unified_document_index/grid_index/db.doltlite_db`) — is a
 [doltlite](https://github.com/dolthub/doltlite) database: SQLite with
 content-addressed prolly-tree storage and a `git`-shaped commit history
 exposed through SQL. The bazel build statically links doltlite into our
@@ -67,7 +67,7 @@ a fact about the on-disk format, not about lock-in — the shell above
 dumps any store to ordinary SQL, which stock SQLite loads:
 
 ```sh
-datalib-doltlite -readonly unified_index/grid_index/db.doltlite_db .dump \
+datalib-doltlite -readonly unified_document_index/grid_index/db.doltlite_db .dump \
   | sqlite3 grid.sqlite
 ```
 

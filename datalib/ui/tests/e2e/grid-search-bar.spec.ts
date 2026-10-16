@@ -16,7 +16,7 @@ import {
 } from "./grid-helpers";
 
 async function searchUuids(request: APIRequestContext, params: string): Promise<string[]> {
-  const r = await request.get(`/applet/unified_index/search?${params}`);
+  const r = await request.get(`/applet/unified_document_index/search?${params}`);
   expect(r.ok()).toBe(true);
   return ((await r.json()) as { rows: { uuid: string }[] }).rows.map((row) => row.uuid);
 }
@@ -52,7 +52,7 @@ test("a column dropped on the search bar keeps the rows with a value in it", asy
 }) => {
   // Counted off every row, not asked of the term under test.
   const all = (
-    (await (await request.get("/applet/unified_index/search?q=&limit=100000")).json()) as {
+    (await (await request.get("/applet/unified_document_index/search?q=&limit=100000")).json()) as {
       rows: { author: string; author_handle: string | null }[];
     }
   ).rows;
@@ -114,7 +114,7 @@ test("a cell's right-click keeps only its value, in any column", async ({ page }
 test("a page landing while the menu is open leaves it open", async ({ page }) => {
   const held: Route[] = [];
   let holding = true;
-  await page.route("**/applet/unified_index/search?**", (r) => {
+  await page.route("**/applet/unified_document_index/search?**", (r) => {
     const offset = Number(new URL(r.request().url()).searchParams.get("offset") ?? 0);
     if (holding && offset > 0) held.push(r);
     else void r.continue();

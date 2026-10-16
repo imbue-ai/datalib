@@ -1,4 +1,4 @@
-// How far the unified index has consumed each source's render store.
+// How far the unified document index has consumed each source's render store.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

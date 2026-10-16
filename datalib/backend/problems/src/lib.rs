@@ -1,6 +1,6 @@
 //! The `problems` table: one row per thing a step could not fully do to
 //! one record, kept in the store the step owns and copied downstream
-//! with the data until it reaches the unified index and the screen.
+//! with the data until it reaches the unified document index and the screen.
 //! Every closed vocabulary here is an enum: the row binds them as text
 //! and a reader parses them back, never comparing the column to a
 //! literal. The design — ids, severity, the copy rule, what reads the

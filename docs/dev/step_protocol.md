@@ -622,6 +622,6 @@ providers; beeper/signal `period`, perseus `alignment_pairs`, email
 commits there, and emits versions where it has them (the grid index claims its dolt commit hash). Use it as the
 reference implementation.
 
-The index functions' ids are fixed at `unified_index/<function>`, and
+The index functions' ids are fixed at `unified_document_index/<function>`, and
 the qmd steps share one index file; the rules are in
 [`config_model.md`](config_model.md) § "Naming rules".

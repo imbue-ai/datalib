@@ -118,7 +118,7 @@ rust_binary(
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/time:datalib_time",
-        "//datalib/backend/unified_index:datalib_unified_index",
+        "//datalib/backend/unified_document_index:datalib_unified_document_index",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:clap",

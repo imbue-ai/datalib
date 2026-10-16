@@ -483,7 +483,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_grid_index_in_another_shape_asks_for_a_rerun() {
         let root = tempfile::tempdir().unwrap();
-        let env = env_of("unified_index/grid_index", Function::GridIndex);
+        let env = env_of("unified_document_index/grid_index", Function::GridIndex);
         let ask = || async {
             let emitter = Emitter::new(env.step.clone());
             run(&env, root.path(), &emitter).await.unwrap();

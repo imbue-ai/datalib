@@ -106,7 +106,7 @@ export default (args) => (root, ctx) => {
 - **Offer help.** `ctx.setHelp("<p>…</p>")` puts a "?" on the card
   that opens what this card shows and how to work it.
 - **Data** comes from the backend HTTP API (same origin): e.g.
-  `GET /applet/unified_index/search?q=…`, `GET /applet/unified_index/chat/{markdown_uuid}`. Fetch with
+  `GET /applet/unified_document_index/search?q=…`, `GET /applet/unified_document_index/chat/{markdown_uuid}`. Fetch with
   relative paths — and *don't* add an auth header in component code. The
   browser holds the token as an HttpOnly session cookie it sends
   automatically; the token is deliberately not reachable from page JS.

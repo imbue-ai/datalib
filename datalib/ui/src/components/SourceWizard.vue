@@ -442,7 +442,7 @@ function onPickKeydown(e: KeyboardEvent) {
 /// The id is a single path segment: the steps written under it are
 /// `<id>/ingest` and `<id>/render_markdown`, and the loader composes
 /// those itself.
-const RESERVED = new Set(["system", "unified_index"]);
+const RESERVED = new Set(["system", "unified_document_index"]);
 const groupId = computed(() => id.value.trim());
 
 /// The example the Name help gives. The id would be the tempting thing

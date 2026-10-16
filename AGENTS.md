@@ -194,7 +194,7 @@ datalib/
                    stops, HTTP playback, DAV, the owed-record
                    bookkeeping. Only those sources link it.
     etl/render/    `datalib_etl_render`: the render store, the
-                   unified-index load, `RenderCtx`. Everything that knows
+                   document-index load, `RenderCtx`. Everything that knows
                    `datalib_schema` sits here or above.
     etl/timeseries_render/ what the time-series render crates share.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
@@ -233,7 +233,7 @@ datalib/
                    them. Only the shape; contact-common renders it.
     contacts/      the contacts app's store under `datalib_curated/`;
                    the `datalib_contacts` applet is its one writer.
-    unified_index/ the grid index, the qmd index, the query language over
+    unified_document_index/ the grid index, the qmd index, the query language over
                    them. Linked by datalib-step and datalib-applet —
                    never by datalib-http or datalib-dag.
     applets/       `datalib-applet`: the applet host.
@@ -268,14 +268,14 @@ separate crates").
 
 `datalib-dag <config.toml>` runs a DAG of subprocess steps. A `[[groups]]`
 entry is one thing on the Manage screen (a source is a group with a
-`type`; the unified index is a group without one); a `[[steps]]` entry is
+`type`; the unified document index is a group without one); a `[[steps]]` entry is
 `group` + `function`, its id composed as `<group>/<function>` — the one
 tree it writes; `inputs` name steps by that id and are the edges; an
 `[[applets]]` entry is a server the gateway spawns. A built-in step has
 no `command` and runs `datalib-step`.
 
 Each source has an `ingest` step and (most) a `render_markdown` step, and
-`grid_index` under `unified_index` reads every render tree its `inputs`
+`grid_index` under `unified_document_index` reads every render tree its `inputs`
 name into the SQL index the grid reads. A searched source fills its own
 collection of the qmd index (free-text search) with two more steps of
 its own, `keyword_index` and then `embed`, so the slow embedding can be
@@ -284,7 +284,7 @@ source's pair: it retires the collection of any source it does not name
 and reports on the whole, and removing it turns search off.
 `embedding_map` reads the aggregator and lays the embeddings out on a
 plane for the map card (`datalib/backend/embedding_map/README.md`).
-All of it is queried by the `unified_index` applet; `datalib-http`
+All of it is queried by the `unified_document_index` applet; `datalib-http`
 reads only the stores' commit logs (`history/`), never their rows. A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
@@ -332,7 +332,7 @@ it should not have.
 
 The grid is one denormalized table, `grid_rows` (the `GridRow` struct in
 `datalib/backend/schema/src/grid_rows.rs`), which `grid_index` fills
-from every source's render store and the `unified_index` applet reads
+from every source's render store and the `unified_document_index` applet reads
 with one SELECT — no per-provider branches in the query path.
 `docs/dev/grid_rows.md` has the checklist for adding a column.
 
@@ -680,7 +680,7 @@ upstream (block types, MIME types), free-form display text
 | what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `problems/src/lib.rs` (`datalib_problems`) |
 | a configured entry upstream does not have; a listing or phase a run could not do | `ProblemReason`, `RunProblemKind` | `etl/src/download_problems.rs` |
 | how a diff group's row differs between two renders | `DiffStatus` | `schema/src/diff_status.rs` |
-| which answer to free text a search asks for | `SearchTab` | `applets/src/unified_index/tabs.rs` |
+| which answer to free text a search asks for | `SearchTab` | `applets/src/unified_document_index/tabs.rs` |
 | what a term is to its grid row | `SearchTermKind` | `schema/src/search_terms.rs` (`datalib_schema`) |
 | a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |

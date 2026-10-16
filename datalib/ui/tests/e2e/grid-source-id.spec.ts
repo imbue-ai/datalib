@@ -1,4 +1,4 @@
-// The unified index grid's "Source" column, and the `source_id:`
+// The unified document index grid's "Source" column, and the `source_id:`
 // filter behind it.
 //
 // The column answers which *configured source* a row came from, led by
@@ -70,7 +70,7 @@ test("the Source column shows the configured name, and source_id: filters by id"
   // paints only the rows in view, and which those are is the sort's
   // business, not this test's.
   const slackRow = (await (
-    await request.get("/applet/unified_index/search?q=source_id:slack&limit=1")
+    await request.get("/applet/unified_document_index/search?q=source_id:slack&limit=1")
   ).json()) as { rows: { uuid: string }[] };
   expect(slackRow.rows.length, "the fixture has slack rows").toBe(1);
   await openGrid(page);

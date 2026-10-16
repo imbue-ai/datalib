@@ -128,18 +128,18 @@ function severityLabel(d: Diagnostic): string {
         <h2>This config file can’t be read</h2>
         <p>
           <code class="root">{{ config.path }}</code> is not valid TOML, so nothing in it could be
-          loaded — not your data sources, and not the <code>unified_index</code> applet that serves
-          the table, search and document views. That is why the rest of the app is hidden: it has
-          nothing to show until this file parses.
+          loaded — not your data sources, and not the <code>unified_document_index</code> applet
+          that serves the table, search and document views. That is why the rest of the app is
+          hidden: it has nothing to show until this file parses.
         </p>
       </template>
       <template v-else>
-        <h2>This config declares no Unified Index</h2>
+        <h2>This config declares no Document Index</h2>
         <p>
           <code class="root">{{ config.path }}</code> loaded, but it has no usable
-          <code>unified_index</code> applet. That applet is what serves the table, search and the
-          document view, so every screen in the app would answer
-          <code>no applet "unified_index"</code> without it.
+          <code>unified_document_index</code> applet. That applet is what serves the table, search
+          and the document view, so every screen in the app would answer
+          <code>no applet "unified_document_index"</code> without it.
         </p>
       </template>
 

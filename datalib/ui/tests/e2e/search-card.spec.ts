@@ -64,7 +64,9 @@ test("a new search opens on the view picked last", async ({ page }) => {
 test("gridView is the grid over a table it is given, and says so when given none", async ({
   page,
 }) => {
-  await page.goto(`/${encodeURIComponent('gridView({"url":"/applet/unified_index/problems"})')}`);
+  await page.goto(
+    `/${encodeURIComponent('gridView({"url":"/applet/unified_document_index/problems"})')}`,
+  );
   await expect(shownCards(page).locator(".grid-wrap")).toHaveAttribute("data-shown-query", "");
   await expect(shownCards(page).getByRole("tablist", { name: "View" })).toHaveCount(0);
 

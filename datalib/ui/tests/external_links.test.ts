@@ -34,7 +34,7 @@ describe("isExternalHref", () => {
       "/#/chat/abc-123",
       "#/chat/abc-123",
       "/chat/abc-123",
-      "/applet/unified_index/asset/md-1/blobs/x.png",
+      "/applet/unified_document_index/asset/md-1/blobs/x.png",
       `${APP}/#/grid`,
     ]) {
       expect(isExternalHref(href, BASE, APP), href).toBe(false);

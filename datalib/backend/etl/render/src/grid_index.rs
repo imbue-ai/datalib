@@ -3,7 +3,7 @@
 //!
 //! Two entry points, which are the same write path from two sides.
 //! [`apply_one`] writes one rendered document; [`build_grid_index`] stacks
-//! every source's store into the unified index, which is the `grid_index` DAG
+//! every source's store into the unified document index, which is the `grid_index` DAG
 //! step's whole job.
 //!
 //! Writes are delete-then-insert, so a re-render replaces a document's rows
@@ -2386,7 +2386,7 @@ mod source_cursor_tests {
     use datalib_schema::providers::Provider;
 
     async fn index_pool(root: &Path) -> SqlitePool {
-        let db = root.join("unified_index/grid/db.doltlite_db");
+        let db = root.join("unified_document_index/grid/db.doltlite_db");
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         let pool = SqlitePoolOptions::new()
             .max_connections(1)

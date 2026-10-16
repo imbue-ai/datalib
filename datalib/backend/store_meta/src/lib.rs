@@ -43,7 +43,7 @@ pub enum StoreKind {
     Raw,
     /// A source's render store (`<group>/render_markdown`).
     Render,
-    /// The grid index (`unified_index/grid_index`).
+    /// The grid index (`unified_document_index/grid_index`).
     GridIndex,
     Feedback,
     /// `system/disk_stats.sqlite`: bytes under each tree of the root, and

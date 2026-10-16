@@ -20,7 +20,7 @@ setup("warm the qmd daemon", async ({ request }) => {
   // text, which is exactly what routes through qmd. `grey earl` rather
   // than `earl grey`: see the header — only qmd matches the reversed
   // pair, so the row count is itself a routing assertion.
-  const query = "/applet/unified_index/search?q=grey%20earl&limit=1";
+  const query = "/applet/unified_document_index/search?q=grey%20earl&limit=1";
 
   // Two phases, because the two things being waited on have completely
   // different lifetimes and deserve different budgets.

@@ -74,7 +74,7 @@ test("a broken entry costs that entry, and nothing else", async ({ page, request
 
   // The applet the whole app runs on is untouched — the assertion that
   // would have failed before #209, and the one that matters most.
-  const search = await request.get("/applet/unified_index/search?q=&limit=1");
+  const search = await request.get("/applet/unified_document_index/search?q=&limit=1");
   expect(search.status()).toBe(200);
 
   await page.goto("/data_sources");
@@ -184,7 +184,7 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   ).toBeVisible();
 });
 
-test("a config with no unified_index applet blocks too", async ({ page, request }) => {
+test("a config with no unified_document_index applet blocks too", async ({ page, request }) => {
   await page.goto("/data_sources");
   await expect(toolbar(page)).toBeVisible();
 
@@ -197,7 +197,7 @@ test("a config with no unified_index applet blocks too", async ({ page, request 
 
   await expect(gate(page)).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "This config declares no Unified Index" }),
+    page.getByRole("heading", { name: "This config declares no Document Index" }),
   ).toBeVisible();
   await expect(toolbar(page)).toHaveCount(0);
 

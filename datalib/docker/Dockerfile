@@ -31,7 +31,7 @@
 #                                  may be RO for `datalib-dag`).
 #   /data                          the user's data root: config.toml, one
 #                                  directory per source, the indexes under
-#                                  unified_index/, the server's state
+#                                  unified_document_index/, the server's state
 #                                  under system/.
 #   /import                        (convention, not required) whatever
 #                                  local export a file-backed source
@@ -123,7 +123,7 @@ RUN set -eux; \
     done; \
     # The doltlite shell, for poking at a store by hand:
     #   docker exec -it … doltlite -readonly \
-    #       /data/unified_index/grid_index/db.doltlite_db "SELECT * FROM dolt_log();"
+    #       /data/unified_document_index/grid_index/db.doltlite_db "SELECT * FROM dolt_log();"
     # The tarball's copy links the same amalgamation the pipeline writes
     # with, so the shell and the stores in /data cannot disagree about
     # the format. The bare `doltlite` name stays as a symlink: it is
@@ -194,8 +194,8 @@ RUN set -eux; \
     datalib-dag /opt/datalib/demo/config.toml --now 2369-04-15T00:00:00+00:00; \
     mv /opt/datalib/demo/config.full.toml /opt/datalib/demo/config.toml; \
     datalib-dag --check /opt/datalib/demo/config.toml; \
-    test -s /opt/datalib/demo/unified_index/qmd_aggregator/qmd/index.sqlite; \
-    datalib-doltlite -readonly /opt/datalib/demo/unified_index/grid_index/db.doltlite_db \
+    test -s /opt/datalib/demo/unified_document_index/qmd_aggregator/qmd/index.sqlite; \
+    datalib-doltlite -readonly /opt/datalib/demo/unified_document_index/grid_index/db.doltlite_db \
         "SELECT provider, count(*) FROM grid_rows GROUP BY 1;" \
         | tee /dev/stderr | grep -q .
 

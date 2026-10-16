@@ -93,7 +93,7 @@ pub async fn read_at(store: &Path) -> Result<Option<Meta>> {
 
 /// Every store under a data root: each `*.doltlite_db` up to three
 /// levels down (`system/`, `<group>/ingest/`, `<group>/render_markdown/`,
-/// `unified_index/grid_index/`), and the two plain-SQLite stores that
+/// `unified_document_index/grid_index/`), and the two plain-SQLite stores that
 /// carry a meta row: the run store and disk stats. A walk rather than a
 /// list of the layout's names, so a store this crate has not heard of is
 /// inspected too.
@@ -197,8 +197,8 @@ mod tests {
             "slack/ingest/blobs.sqlite",
             "slack/render_markdown/indexed_markdown.doltlite_db",
             "slack/render_markdown/a/b/c.md",
-            "unified_index/grid_index/db.doltlite_db",
-            "unified_index/qmd_aggregator/qmd/index.sqlite",
+            "unified_document_index/grid_index/db.doltlite_db",
+            "unified_document_index/qmd_aggregator/qmd/index.sqlite",
             "config.toml",
         ];
         for f in files {
@@ -218,7 +218,7 @@ mod tests {
                 "system/disk_stats.sqlite",
                 "system/feedback.doltlite_db",
                 "system/runs/runs.sqlite",
-                "unified_index/grid_index/db.doltlite_db",
+                "unified_document_index/grid_index/db.doltlite_db",
             ]
         );
     }
