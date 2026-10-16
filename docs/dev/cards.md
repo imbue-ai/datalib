@@ -496,13 +496,13 @@ programs against:
 - `gridView(opts: { url, q?, columns?, name?, placeholder? })` — the
   general-purpose grid: a search bar + a SlickGrid over `url`, any
   table that pages, sorts and groups the way the search does (the
-  Manage screen's problems cell opens `/applet/unified_index/problems`
+  Manage screen's problems cell opens `/applet/unified_document_index/problems`
   this way). `url` is required; without one the card says so and names
   `searchView()` for the search. Each answer says which field names a
   row, which document a row opens and whether qmd ranks its free text
   (`RowsSpec`). Persists `q`/`sel`/`cols` state.
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
-  (`/applet/unified_index/chat/{markdownUuid}`), highlighting and scrolling to
+  (`/applet/unified_document_index/chat/{markdownUuid}`), highlighting and scrolling to
   `sectionUuid`. A different selection is a different card: the grid
   opens a fresh card rather than mutating an existing one. Shows
   doc-level outgoing edges and decorates span-level edge sources
@@ -511,7 +511,7 @@ programs against:
   no script (`cards/docFrame.ts`). Its links, clicks and selection
   reach the card as events, and the frame scrolls itself.
 - `documentPickerView()` — parameter-less gallery stand-in for
-  `documentView`: lists every rendered document (`/applet/unified_index/docs`) and
+  `documentView`: lists every rendered document (`/applet/unified_document_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
 - `aliasView()` — the component library: every custom component in the
   frontend store, by qualified name; a click opens it with its stored
@@ -699,6 +699,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `timeseries` | `{value, unit, samples, detail, window_secs}` | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table |
 | `identity` | `{id, label, icon, detail, entity}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset. An id that is a person's handle as a URI (`mailto:…`), or an `entity` naming a group or step (`datalib:group/slack`), draws as a chip instead, see below |
 | `status` | `{key, label, at, last_success_at, detail}` | a glyph for the key (a spinner while running), when it got there, the reason on hover |
+| `identities` | `[identity, …]` | each drawn as `identity` draws one, side by side: their labels cut in the middle so each gets an even share of the cell (a short one leaves its room to the long ones), and those that would fall below a few characters folded into a "+N" whose tooltip names them (`chipFit.ts`). One plain identity alone reads as `identity` does |
 | `chips` | `[{kind, text, title}]` | a row of chips |
 | `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
 | `markdown_uuid` | a uuid or `{id, label}` | the title; click opens the document |
@@ -717,9 +718,9 @@ does not, so they are joined where they are live, and one link made in
 a document redraws every grid showing it. How, and what a chip does on
 click: [`chips.md`](chips.md) §"In a grid".
 
-`GET /api/manage/rows` and the `unified_index` applet's `/search` are
+`GET /api/manage/rows` and the `unified_document_index` applet's `/search` are
 the two producers. The applet resolves the search grid's Source
-identity itself, from `config.toml` (`applets/src/unified_index/columns.rs`)
+identity itself, from `config.toml` (`applets/src/unified_document_index/columns.rs`)
 — the group's name, led by the configured source's own mark, as the
 Manage screen's Name cell is — which is
 what keeps renaming a source free of a re-index. The cell styles live

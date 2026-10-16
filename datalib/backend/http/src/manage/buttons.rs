@@ -11,6 +11,11 @@ pub type SyncOffer = Result<String, String>;
 
 const DOWNSTREAM: &str = "then rebuild everything downstream";
 
+/// Every Sync's disabled hover while the launch's migrate pass runs. A
+/// request opened anyway waits for the pass; the app does not offer one.
+pub const SYNC_PAUSED_FOR_UPGRADE: &str =
+    "Sync is paused while datalib updates your data for this version.";
+
 /// A source step always runs when synced. Any other step runs only if it
 /// is out of date, on what its inputs already hold, so Sync on one the
 /// loop has recorded as up to date would do nothing and is disabled.

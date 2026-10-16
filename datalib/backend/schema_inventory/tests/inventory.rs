@@ -187,7 +187,7 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
         ),
         // The shared render/index and app stores, from `PortableTable`.
         (
-            "unified_index/grid",
+            "unified_document_index/grid",
             portable(&[
                 datalib_schema::grid_rows::DDL,
                 datalib_schema::markdowns::DDL,

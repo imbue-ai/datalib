@@ -1676,8 +1676,8 @@ export const CATALOG: CatalogEntry[] = [
         label: "Write UUID breadcrumbs into the tree",
         default: false,
         help:
-          "Off keeps the scan read-only. On writes a UUID into the .fsindex.yaml of any " +
-          "directory that set stamp_me_with_uuid: true, so it keeps one identity across moves " +
+          "Off keeps the scan read-only. On writes a UUID into the .fsindex.toml of any " +
+          "directory that set stamp_me_with_uuid = true, so it keeps one identity across moves " +
           "and renames.",
       },
     ],

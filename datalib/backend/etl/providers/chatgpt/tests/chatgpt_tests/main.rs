@@ -10,3 +10,4 @@ mod live;
 mod playback_roundtrip;
 mod run_problems;
 mod upgrade;
+mod volatile_metadata;

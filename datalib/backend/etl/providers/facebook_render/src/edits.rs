@@ -74,25 +74,32 @@ impl History {
     /// What the versions not shown — the one that is the text now —
     /// could not have read: theirs to carry on the target's own item.
     pub fn unshown_problems(&self, now: &str) -> Vec<Problem> {
+        let now = words(now);
         self.versions
             .iter()
-            .filter(|v| v.text.trim() == now.trim())
+            .filter(|v| words(&v.text) == now)
             .flat_map(|v| v.problems.iter().cloned())
             .collect()
     }
 
     /// The versions to show beside the target's text: every one whose
-    /// text is not the text it has now.
-    pub fn earlier<'a>(&'a self, now: &'a str) -> impl Iterator<Item = &'a Version> + 'a {
-        self.versions
-            .iter()
-            .filter(move |v| v.text.trim() != now.trim())
+    /// words are not the words it has now.
+    pub fn earlier<'a>(&'a self, now: &str) -> impl Iterator<Item = &'a Version> + 'a {
+        let now = words(now);
+        self.versions.iter().filter(move |v| words(&v.text) != now)
     }
+}
+
+/// Text as a reader sees it. The export writes a mention with its markup
+/// in one file and without it in another; the words are the same.
+fn words(text: &str) -> String {
+    strip_mentions(text).trim().to_string()
 }
 
 /// Every edit record, grouped into one history per thing edited and
 /// tied to its target where one is alike enough.
 pub fn histories(versions: Vec<Version>, targets: &[Target<'_>]) -> Vec<History> {
+    let target_words: Vec<String> = targets.iter().map(|t| words(t.text)).collect();
     let mut groups: BTreeMap<String, Vec<Version>> = BTreeMap::new();
     for v in versions {
         let key = v
@@ -107,7 +114,7 @@ pub fn histories(versions: Vec<Version>, targets: &[Target<'_>]) -> Vec<History>
             versions.sort_by_key(|v| v.date_ms);
             let target = versions
                 .iter()
-                .filter_map(|v| best_target(v, targets))
+                .filter_map(|v| best_target(v, targets, &target_words))
                 .max_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(i, _)| i);
             History { target, versions }
@@ -142,7 +149,12 @@ pub fn version_items(
         .collect()
 }
 
-fn best_target(v: &Version, targets: &[Target<'_>]) -> Option<(usize, f32)> {
+fn best_target(
+    v: &Version,
+    targets: &[Target<'_>],
+    target_words: &[String],
+) -> Option<(usize, f32)> {
+    let version_words = words(&v.text);
     targets
         .iter()
         .enumerate()
@@ -150,7 +162,7 @@ fn best_target(v: &Version, targets: &[Target<'_>]) -> Option<(usize, f32)> {
             (Some(made), Some(saved)) => made <= saved,
             _ => true,
         })
-        .map(|(i, t)| (i, ratio(t.text, &v.text)))
+        .map(|(i, _)| (i, ratio(&target_words[i], &version_words)))
         .filter(|(_, r)| *r >= MIN_RATIO)
         .max_by(|a, b| a.1.total_cmp(&b.1))
 }

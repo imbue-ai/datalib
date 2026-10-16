@@ -1,7 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # The render half of the framework: the per-source render store, the
-# unified-index load, and the render run context.
+# document-index load, and the render run context.
 #
 # This is the crate that knows `datalib_schema`. Keeping it out of
 # `//datalib/backend/etl` is the point — a downloader links that and

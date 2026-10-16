@@ -16,7 +16,7 @@ initial DACTAL query. Both reach the page in the host's `dactal:init`
 message, never in its URL.
 
 It is **data-agnostic**: there is no per-provider code. The page takes
-whatever `/applet/unified_index/search` returns — fetched by the host card,
+whatever `/applet/unified_document_index/search` returns — fetched by the host card,
 handed over by message — and converts it to DACTAL datasets on the fly
 (`bridge.js`), so it works over any corpus — Slack, GitHub, Notion,
 Perseus, all of it.
@@ -147,11 +147,11 @@ fallback, which serves the main app instead.
 
 1. **Client-side, in-memory — no query pushdown.** DACTAL loads the working set
    into browser memory and queries it locally; it does not translate to SQL/qmd.
-   You pull a bounded slice via `/applet/unified_index/search`, then explore it. It does **not**
+   You pull a bounded slice via `/applet/unified_document_index/search`, then explore it. It does **not**
    scale to the full corpus — frame it as a power-tool over a working set, not a
    replacement for the main grid.
 2. **No ingestion.** DACTAL's loaders + IndexedDB store compete with the ETL
-   pipeline; we use none of it and treat DACTAL as read-only over `/applet/unified_index/search`.
+   pipeline; we use none of it and treat DACTAL as read-only over `/applet/unified_document_index/search`.
 3. **Two query languages coexist** — Datalib's Gmail-style search vs.
    DACTAL's `.`/`:`/`/`/`#`. A learning curve; scoped as an optional view.
 4. **Drill-down stays inside DACTAL** — clicking a row re-runs a DACTAL query, it

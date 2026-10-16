@@ -12,7 +12,7 @@ describe("refetchesOn", () => {
   /// refetched on the `log` frame its own request line caused.
   it("never refetches on a log frame", () => {
     for (const url of [
-      "/applet/unified_index/problems?q=",
+      "/applet/unified_document_index/problems?q=",
       "/api/manage/rows",
       "/api/remote_media/allow",
     ]) {
@@ -21,7 +21,7 @@ describe("refetchesOn", () => {
   });
 
   it("refetches a Problems card when the index commits", () => {
-    const url = "/applet/unified_index/problems?q=source_id%3Agmail";
+    const url = "/applet/unified_document_index/problems?q=source_id%3Agmail";
     expect(refetchesOn(url, index)).toBe(true);
     expect(refetchesOn(url, rows)).toBe(false);
   });

@@ -57,6 +57,21 @@ impl NormalizedAttachment {
     }
 }
 
+/// Whom an item's author label, or a reaction's reactor label, names. A
+/// provider shows a stand-in where it has no person to show; a stand-in
+/// is drawn like a name but is not one, so it is never a participant.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub enum AuthorKind {
+    /// Whoever the label names: a person, an assistant, a tool.
+    #[default]
+    Named,
+    /// The account itself, under a stand-in such as "Me" or "User".
+    Account,
+    /// Nobody the source names: a stand-in such as "Unknown", or a
+    /// heading where a page's sections have no author.
+    Unknown,
+}
+
 /// One reaction (emoji + reactor) on an item.
 #[derive(Debug, Clone, Serialize)]
 pub struct NormalizedReaction {
@@ -71,6 +86,8 @@ pub struct NormalizedReaction {
     pub reactor_handle: Option<datalib_handle::Handle>,
     /// Human-readable label for the reactor ("Me" / "Will Riker" / …).
     pub reactor_display: String,
+    /// Whether `reactor_display` names the reactor or stands in for them.
+    pub reactor_kind: AuthorKind,
     /// The emoji or short string (`🫡`, `🔥`, …).
     pub emoji: String,
     /// Unix milliseconds when the reaction was sent, or `None` when
@@ -83,6 +100,14 @@ pub struct NormalizedReaction {
     pub source_ref: Option<UpstreamRef>,
 }
 
+/// Someone a chat with no title of its own is named after.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NamedPerson {
+    /// As the source showed them in the chat's name.
+    pub shown: String,
+    pub handle: Option<datalib_handle::Handle>,
+}
+
 /// Someone an item was addressed to.
 #[derive(Debug, Clone, Serialize)]
 pub struct Recipient {
@@ -90,6 +115,10 @@ pub struct Recipient {
     /// As the source showed them: a display name, else the address.
     pub display: String,
     pub handle: Option<datalib_handle::Handle>,
+    /// Whether the message's recipients line names them. False where the
+    /// conversation already says who (an SMS thread's other side), so
+    /// every message would repeat it; searched and counted either way.
+    pub drawn: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -120,7 +149,8 @@ pub struct NormalizedChatItem {
     /// anchor (`id="m-{uuid}"`) and the message-level grid_row PK.
     pub message_uuid: String,
     /// Who it was addressed to, where the source says: an email's To, Cc
-    /// and Bcc. Empty for a chat, whose members are the conversation's.
+    /// and Bcc, the number a text was sent to. Empty for a chat, whose
+    /// members are the conversation's.
     pub recipients: Vec<Recipient>,
     /// Who the text names where the source marks a name up as a person
     /// (Slack's `<@U…>`, a Signal mention), never a name or address
@@ -135,6 +165,9 @@ pub struct NormalizedChatItem {
     /// Pre-resolved author label ("Me", "Will Riker", "+12025550123"). The
     /// provider owns the outgoing/incoming rule and any name lookup.
     pub author_display: String,
+    /// Whether `author_display` names the author or stands in for the
+    /// account or for an author the source does not name.
+    pub author_kind: AuthorKind,
     /// Unix milliseconds for the item's effective timestamp, or `None`
     /// when this item has no timestamp at all.
     pub date_ms: Option<i64>,
@@ -364,6 +397,12 @@ pub struct NormalizedChat {
     pub path_prefix: Option<String>,
     /// Buckets sorted by period_key.
     pub buckets: Vec<NormalizedDoc>,
+    /// Who `display` names, when the chat has no title of its own and is
+    /// called by its people instead: a direct message's other party, a
+    /// group's members. Empty for a chat with a title. Each document's own
+    /// row carries them as `subject` terms, and the grid's Subject cell
+    /// draws them as chips in place of the name.
+    pub named_after: Vec<NamedPerson>,
     /// The provider's own account of people in this chat: what only its
     /// raw tables know, such as a Slack profile's title and email. Each
     /// document carries the ones whose handles its authors wrote under,

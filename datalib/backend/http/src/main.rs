@@ -1,7 +1,7 @@
 //! `datalib-http` — single-binary search backend.
 
 use clap::Parser;
-use datalib_http::{router, ApiToken};
+use datalib_http::{router, ApiToken, TrustedProxy};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -108,6 +108,14 @@ async fn main() -> anyhow::Result<()> {
     // carries it: the browser (and the Tauri webview) authenticate by
     // loading `<url>?token=…` once, then ride the session cookie.
     let api_token = ApiToken::mint(&root)?;
+    let trusted_proxy = TrustedProxy::from_env()?;
+    if let Some(proxy) = trusted_proxy {
+        tracing::info!(
+            "behind the {} proxy: its identity header stands in for the token, \
+             and the app page may be framed",
+            proxy.as_str()
+        );
+    }
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     let base_url = format!("http://{}", listener.local_addr()?);
@@ -158,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
         datalib_http::binaries::resolve_binary_dir(),
         args.now.clone(),
         api_token,
+        trusted_proxy,
     )
     .await?;
 

@@ -215,11 +215,13 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
             ? " -stage:fetch"
             : "";
     const q =
-      sourceId === "unified_index" ? "scope_key:render_store" : `source_id:${sourceId}${stage}`;
+      sourceId === "unified_document_index"
+        ? "scope_key:render_store"
+        : `source_id:${sourceId}${stage}`;
     const source =
       row.kind === "group" ? row : h.rows().find((r) => r.kind === "group" && r.id === sourceId);
     const name =
-      sourceId === "unified_index"
+      sourceId === "unified_document_index"
         ? "Problems: the index"
         : `Problems: ${source?.name.label ?? sourceId}`;
     const opts = {

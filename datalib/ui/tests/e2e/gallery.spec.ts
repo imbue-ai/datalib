@@ -6,7 +6,7 @@ import { cardOf, cardTitle, GRID, shownCards } from "./grid-helpers";
 // card — a list of parameter-less components — and picking an entry
 // REPLACES that card via host.setSource. Components that need arguments
 // hide behind a picker: the gallery's "Document" entry opens
-// documentPickerView (a /applet/unified_index/docs listing), which in
+// documentPickerView (a /applet/unified_document_index/docs listing), which in
 // turn replaces itself with `documentView("<uuid>")` on pick.
 
 test.describe("new-card gallery (outside edit mode)", () => {

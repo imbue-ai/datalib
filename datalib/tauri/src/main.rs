@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
 use tauri::webview::{NewWindowFeatures, NewWindowResponse, PageLoadEvent};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, Wry};
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_window_state::StateFlags;
 
@@ -123,6 +123,7 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
                     "path": l.path.to_string_lossy(),
                     "shown_path": elsewhere.then(|| launcher::tilde(&l.path, &home)),
                     "forgettable": launcher::forgettable(&l.path, &dir),
+                    "deletable": launcher::deletable(&l.path, &dir),
                     "found": l.found,
                     "legacy": legacy.contains(&l.path),
                     "summary": launcher::summary(&l.path),
@@ -275,6 +276,64 @@ fn launcher_forget(app: AppHandle, path: String) -> Result<(), String> {
     let home = home_dir(&app).ok_or("No home directory.")?;
     launcher::forget_recent(&launcher::recents_file(&home), Path::new(&path))
         .map_err(|e| e.to_string())
+}
+
+/// Move a library in the libraries folder to the Trash, and take it off
+/// the recent list. The question is asked here rather than by the page,
+/// so nothing the page does skips it. False when the answer was no.
+#[tauri::command]
+async fn launcher_delete(app: AppHandle, path: String) -> Result<bool, String> {
+    let root = PathBuf::from(path);
+    if !launcher::deletable(&root, &libraries_dir(&app)) {
+        return Err("Only a library in the Datalib folder can be deleted from here.".into());
+    }
+    let name = launcher::display_name(&root);
+    let in_use = || {
+        launcher::in_use(&root).then(|| {
+            format!("{name} is open in another Datalib window or a sync is running on it. Close it first.")
+        })
+    };
+    if let Some(refusal) = in_use() {
+        return Err(refusal);
+    }
+    let confirmed = app
+        .dialog()
+        .message(
+            "The library's folder, with everything it has downloaded, moves to the Trash. \
+             Data that a service has since deleted cannot be downloaded again.",
+        )
+        .title(format!("Delete the library “{name}”?"))
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Move to Trash".into(),
+            "Cancel".into(),
+        ))
+        .blocking_show();
+    if !confirmed {
+        return Ok(false);
+    }
+    // The dialog can stay up for any length of time.
+    if let Some(refusal) = in_use() {
+        return Err(refusal);
+    }
+    move_to_trash(&root).map_err(|e| format!("Could not move {name} to the Trash: {e}"))?;
+    let home = home_dir(&app).ok_or("No home directory.")?;
+    launcher::forget_recent(&launcher::recents_file(&home), &root).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+// The `trash` crate's macOS default scripts Finder, which makes macOS ask
+// for permission to control Finder. NSFileManager needs none; Finder may
+// then not offer "Put Back", but the folder can be dragged out of the Trash.
+fn move_to_trash(path: &Path) -> Result<(), trash::Error> {
+    #[allow(unused_mut)]
+    let mut ctx = trash::TrashContext::default();
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        ctx.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    ctx.delete(path)
 }
 
 /// Open a library's folder in Finder (or the platform's file manager):
@@ -502,6 +561,7 @@ fn main() {
             launcher_open,
             launcher_pick,
             launcher_forget,
+            launcher_delete,
             launcher_open_folder,
             launcher_move_from_documents,
             library_menu,

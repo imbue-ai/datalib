@@ -45,7 +45,12 @@ async fn init_turns_an_empty_root_into_a_working_library() {
     let (status, cfg) = call(&app, "GET", "/api/config").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(cfg["exists"], false);
-    let (status, err) = call(&app, "GET", "/applet/unified_index/search?q=&limit=1").await;
+    let (status, err) = call(
+        &app,
+        "GET",
+        "/applet/unified_document_index/search?q=&limit=1",
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert!(
         err["error"].as_str().unwrap().contains("no applet"),
@@ -75,11 +80,16 @@ async fn init_turns_an_empty_root_into_a_working_library() {
     // that installed one. Either outcome is a pass; what must be gone
     // is "no applet", the answer that sent people looking for a
     // missing feature instead of an unconfigured root.
-    let (status, err) = call(&app, "GET", "/applet/unified_index/search?q=&limit=1").await;
+    let (status, err) = call(
+        &app,
+        "GET",
+        "/applet/unified_document_index/search?q=&limit=1",
+    )
+    .await;
     if status == StatusCode::BAD_GATEWAY {
         let msg = err["error"].as_str().unwrap();
         assert!(!msg.contains("no applet"), "still unconfigured: {msg}");
-        assert!(msg.contains("unified_index"), "{msg}");
+        assert!(msg.contains("unified_document_index"), "{msg}");
     }
 }
 
@@ -151,7 +161,7 @@ fn write_starter_config_writes_once_and_keeps_an_existing_config() {
 
     assert!(datalib_http::write_starter_config(&root).unwrap());
     let written = std::fs::read_to_string(root.join("config.toml")).unwrap();
-    assert!(written.contains("unified_index"), "{written}");
+    assert!(written.contains("unified_document_index"), "{written}");
     assert_owner_only(&root.join("config.toml"));
 
     std::fs::write(root.join("config.toml"), "steps = []\n").unwrap();

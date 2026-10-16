@@ -82,9 +82,9 @@ impl Env {
 #[tokio::test]
 async fn a_bad_options_file_costs_its_folder_only() {
     let env = Env::new().await;
-    env.write(".fsindex.yaml", "stamp_me_with_uuid: true\n");
+    env.write(".fsindex.toml", "stamp_me_with_uuid = true\n");
     env.write("bridge/viewscreen.txt", "on screen");
-    env.write("engineering/.fsindex.yaml", "ignore: [unclosed\n");
+    env.write("engineering/.fsindex.toml", "ignore = [unclosed\n");
     env.write("engineering/warp_core.txt", "dilithium");
 
     let s = env.scan(true).await;
@@ -97,7 +97,7 @@ async fn a_bad_options_file_costs_its_folder_only() {
             .unwrap();
     assert_eq!(stamped, ["", "bridge"]);
 
-    env.write("engineering/.fsindex.yaml", "ignore: []\n");
+    env.write("engineering/.fsindex.toml", "ignore = []\n");
     let s = env.scan(true).await;
     assert_eq!(s.errors, 0, "{s:?}");
     assert_eq!(env.problem_keys().await, Vec::<String>::new());

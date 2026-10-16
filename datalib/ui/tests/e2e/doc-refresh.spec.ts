@@ -41,7 +41,7 @@ async function stubStream(page: Page): Promise<() => void> {
 test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }));
 
 test("an index commit clears a problem the open document no longer has", async ({ page }) => {
-  const resp = await page.request.get("/applet/unified_index/search?q=&limit=1000");
+  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=1000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
     rows: { uuid: string; markdown_uuid: string | null; message_index: number | null }[];
@@ -51,12 +51,15 @@ test("an index commit clears a problem the open document no longer has", async (
 
   const commit = await stubStream(page);
   let stale = true;
-  await page.route(`**/applet/unified_index/chat/${pick!.markdown_uuid}`, async (route) => {
-    const response = await route.fetch();
-    const body = (await response.json()) as { problems?: unknown[] };
-    if (stale) body.problems = [PROBLEM, ...(body.problems ?? [])];
-    await route.fulfill({ response, json: body });
-  });
+  await page.route(
+    `**/applet/unified_document_index/chat/${pick!.markdown_uuid}`,
+    async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as { problems?: unknown[] };
+      if (stale) body.problems = [PROBLEM, ...(body.problems ?? [])];
+      await route.fulfill({ response, json: body });
+    },
+  );
 
   await page.goto(EVERY_ROW);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });

@@ -12,7 +12,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, NormalizedReaction, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
@@ -182,6 +182,10 @@ fn build_chats(
             Some(c) => c.display(labels.users, self_user_id),
             None => format!("#{}", root.channel_id),
         };
+        let named_after = channels
+            .get(&root.channel_id)
+            .map(|c| c.named_after(labels.users, self_user_id, &root.team_id))
+            .unwrap_or_default();
         let thread = ids::thread(source_id, &root.team_id, &root.channel_id, &root.ts);
         let thread_uuid = thread.uuid.clone();
 
@@ -211,6 +215,7 @@ fn build_chats(
         let title = format!("{cname}: {}", thread_title(&root.text, labels));
 
         chats.push(NormalizedChat {
+            named_after,
             path_prefix: None,
             id: thread_uuid.clone(),
             chat_uuid: thread_uuid.clone(),
@@ -300,6 +305,7 @@ fn build_item(
             .user_id
             .as_deref()
             .and_then(|u| Handle::slack(&m.team_id, u)),
+        author_kind: AuthorKind::Named,
         author_display,
         date_ms,
         text: (!body.trim().is_empty()).then_some(body),
@@ -439,6 +445,8 @@ fn build_reactions(
             out.push(NormalizedReaction {
                 reaction_uuid: id.uuid.clone(),
                 reactor_handle: None,
+                // A count, not a person.
+                reactor_kind: AuthorKind::Unknown,
                 reactor_display: format!("{count}"),
                 emoji,
                 date_ms,
@@ -450,6 +458,7 @@ fn build_reactions(
                 out.push(NormalizedReaction {
                     reaction_uuid: id.uuid.clone(),
                     reactor_handle: Handle::slack(&m.team_id, u),
+                    reactor_kind: AuthorKind::Named,
                     reactor_display: user_labels.get(u).cloned().unwrap_or_else(|| u.to_string()),
                     emoji: emoji.clone(),
                     date_ms,

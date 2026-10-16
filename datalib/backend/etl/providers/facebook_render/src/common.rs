@@ -6,7 +6,7 @@ use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::BulkUpsertable as _;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChatItem, UpstreamRef,
+    AuthorKind, ItemKind, NormalizedAttachment, NormalizedChatItem, UpstreamRef,
 };
 use datalib_etl_facebook::ingest::schema_raw::MediaBlobRow;
 use datalib_etl_render::inputs::Inputs;
@@ -27,7 +27,12 @@ use serde_json::Value;
 ///     a problem row for every field render leaves unread.
 /// v7: a post's and a comment's earlier versions, from the edit files.
 /// v8: group posts in the posts feed, group comments in the comments feed.
-pub const RENDER_VERSION: u32 = 9;
+/// v9: a friend's page is led by their chip; the owner is a chip on
+///     their posts, albums, comments, reactions and edits.
+/// v10: a life event's edits are its versions; a friend's Contents
+///     leaves out their `name/` handle; a post on another page repeating
+///     its own stamp is no problem.
+pub const RENDER_VERSION: u32 = 10;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
@@ -158,7 +163,7 @@ pub fn media_caption(media: &Value, album_name: Option<&str>) -> Option<String> 
 /// text one.
 pub fn chat_item(
     item_id: Identity,
-    (author_display, author_handle): (String, Option<Handle>),
+    (author_display, author_handle, author_kind): (String, Option<Handle>, AuthorKind),
     date_ms: Option<i64>,
     text: Option<String>,
     attachments: Vec<NormalizedAttachment>,
@@ -166,6 +171,7 @@ pub fn chat_item(
     NormalizedChatItem {
         message_uuid: item_id.uuid,
         author_handle,
+        author_kind,
         author_display,
         date_ms,
         text,
@@ -294,7 +300,8 @@ pub fn unread_labels(record: &Value, read: &[&str]) -> Vec<Problem> {
                 .or_else(|| lv.get("title"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            (!read.contains(&label) && !is_empty_entry(lv)).then(|| {
+            let unread = !read.contains(&label) && !is_empty_entry(lv) && !is_own_stamp(record, lv);
+            unread.then(|| {
                 Problem::field(
                     format!("label_values:{label}"),
                     Reason::UncoveredType,
@@ -305,6 +312,16 @@ pub fn unread_labels(record: &Value, read: &[&str]) -> Vec<Problem> {
             })
         })
         .collect()
+}
+
+/// A label-less `{timestamp_value}` that is the record's own
+/// `timestamp`, which render reads already: a post on another page
+/// carries one.
+fn is_own_stamp(record: &Value, lv: &Value) -> bool {
+    let stamp = lv.get("timestamp_value").and_then(Value::as_i64);
+    lv.as_object().is_some_and(|m| m.len() == 1)
+        && stamp.is_some()
+        && stamp == record.get("timestamp").and_then(Value::as_i64)
 }
 
 /// A `label_values` entry with no value: every key but its `label` or
@@ -448,6 +465,21 @@ mod tests {
             .filter_map(|p| p.field)
             .collect();
         assert_eq!(fields, ["label_values:Mood"]);
+    }
+
+    /// A post on another page repeats its own `timestamp` as a label-less
+    /// `timestamp_value`; that is read already. Another stamp is not.
+    #[test]
+    fn a_label_less_stamp_that_is_the_records_own_is_read() {
+        let r = json!({"timestamp": 7, "label_values": [
+            {"timestamp_value": 7},
+            {"timestamp_value": 8},
+        ]});
+        let paths: Vec<String> = unread_labels(&r, &[])
+            .into_iter()
+            .filter_map(|p| p.path)
+            .collect();
+        assert_eq!(paths, ["/label_values/1"]);
     }
 
     #[test]

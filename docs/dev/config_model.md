@@ -28,22 +28,22 @@ function = "render_markdown"
 inputs = ["work-slack/ingest"]
 
 [[groups]]
-id = "unified_index"       # no type: it mirrors nothing
+id = "unified_document_index"       # no type: it mirrors nothing
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["work-slack/render_markdown"]
 
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
 ```
 
 **A group** is one thing on the Manage screen: an `id`, an optional
 `name`, an optional `type`, an optional `description`. A source is a
-group with a `type`; the unified index is a group without one. `name`
+group with a `type`; the unified document index is a group without one. `name`
 and `description` are display text — never forwarded to a step, never
 fingerprinted — so editing either re-runs nothing.
 
@@ -102,11 +102,11 @@ same id and definition would read as up to date and write nothing.
   `qmd_aggregator`, `embedding_map` (`datalib_step/src/function.rs`,
   tested against the layout constants the render and index crates use).
   `grid_index`, `qmd_aggregator` and `embedding_map` write
-  `unified_index/<function>` and nothing else, because the applet that
+  `unified_document_index/<function>` and nothing else, because the applet that
   reads them finds them from the data root alone.
 - The qmd steps are the exception to "a step writes its own tree": a
   source's `keyword_index` and `embed`, and `qmd_aggregator`, all write
-  the one qmd index file in `unified_index/qmd_aggregator`, the
+  the one qmd index file in `unified_document_index/qmd_aggregator`, the
   aggregator's tree, each source's steps to its own collection. The
   runner cannot see that file as shared, so they hold one-slot locks
   instead (below).
@@ -234,7 +234,7 @@ fingerprint, so changing it re-runs the group.
   `gmail_api` or a top-level `fetch_photos`, likewise naming the tool;
 - an `ingest` step whose params hold none of its type's methods;
 - `grid_index`, `qmd_aggregator` or `embedding_map` under any group but
-  `unified_index`.
+  `unified_document_index`.
 
 A render reads its raw store from its first input; one that declares
 none reads its own group's `ingest` tree and logs a warning. A store
@@ -338,7 +338,7 @@ removed and unwired, and the dialog says so before Save.
 The screen lists groups, and the steps under each, in file order, and a
 header click's sort is undone by a third click. So the writers keep the
 file in the order data flows (`insertEntries`): a new source goes after
-the last one and above the `unified_index` group, its qmd steps right
+the last one and above the `unified_document_index` group, its qmd steps right
 after its render, and each step below the steps it reads. A file already
 out of that order where no place fits gets the new entries at the end.
 The runner itself reads only `inputs`.
@@ -376,7 +376,28 @@ retired type words become the current ones, and `sync` /
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. The one rewrite made without asking is the
-qmd steps', a text edit that keeps comments and leaves the file in
-data-flow order: `datalib-http` makes it through `upgrade_qmd_steps`,
-which refuses a result that would drop an entry the original ran.
+well enough to name the tool. Two rewrites are made without asking,
+both text edits that keep comments, and each refuses a result that would
+drop an entry the original ran. `datalib-http` makes them in this order
+(`http/src/config_upgrade.rs`):
+
+1. The qmd steps' (`upgrade_qmd_steps`, `qmd_steps.rs`), which also
+   leaves the file in data-flow order.
+2. The document index's name (`upgrade_document_index`,
+   `document_index.rs`): the untyped `unified_index` group, every step
+   filed under it or writing under it, every `inputs` entry naming one,
+   and the applet's `group`, `id` and `datalib-applet unified_index`
+   subcommand become `unified_document_index`. At boot the server then
+   moves `<root>/unified_index/` to `<root>/unified_document_index/` with
+   one rename, so the grid store and the qmd embeddings are kept, and
+   carries the loop's per-step rows in `system/supervisor.sqlite` (a step
+   turned off, its last success, its tree's version) to the new ids. If
+   both trees exist it leaves both and logs an error naming them.
+   `datalib-applet unified_index` still runs, and the gateway still
+   answers `/applet/unified_index/…`, for a config or a card script
+   written before the rename.
+
+A source may not take `unified_index`, `unified_document_index` or
+`unified_time_series_index` as its id
+(`datalib_dag::config::RESERVED_STANZA_NAMES`); only an index group,
+which has no `type`, may.

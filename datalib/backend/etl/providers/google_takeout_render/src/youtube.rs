@@ -22,9 +22,8 @@ pub fn build_history(source_id: &str, rows: &[Row]) -> Vec<NormalizedChat> {
             inputs.read(YoutubeWatchRow::TABLE, &row.id);
             let mut problems = Vec::new();
             let date_ms = feeds::stamp_ms(row, &mut problems);
-            let mut item = feeds::item(
+            let mut item = feeds::own_item(
                 ids::feed_item(source_id, ids::KIND_YOUTUBE_WATCH, &row.id, date_ms),
-                feeds::ME,
                 date_ms,
                 "YouTube Watch",
                 problems,
@@ -58,9 +57,8 @@ pub fn build_subscriptions(source_id: &str, rows: &[Row]) -> Vec<NormalizedChat>
         .iter()
         .map(|row| {
             inputs.read(YoutubeSubscriptionRow::TABLE, &row.id);
-            let mut item = feeds::item(
+            let mut item = feeds::own_item(
                 ids::feed_item(source_id, ids::KIND_YOUTUBE_SUBSCRIPTION, &row.id, None),
-                feeds::ME,
                 None,
                 "YouTube Subscription",
                 Vec::new(),

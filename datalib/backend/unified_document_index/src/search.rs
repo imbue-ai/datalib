@@ -1,0 +1,160 @@
+//! Row shape returned by `db::grid_rows`. QMDs are write-only output;
+//! search runs against the `grid_rows` projection in Dolt.
+
+use serde::Serialize;
+
+/// Someone a conversation is named after: their handle, else the name
+/// shown; the name this conversation knows a handle by; and how many of
+/// its messages they wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubjectPerson {
+    pub value: String,
+    pub name: Option<String>,
+    pub items: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct SearchRow {
+    /// Stable per-row identifier; equals the `uuid` column of `grid_rows`.
+    pub uuid: String,
+    pub conversation_uuid: String,
+    /// FK into the `markdowns` table — addresses the rendered `.md`
+    /// this row lives inside. The UI passes this to
+    /// `/api/chat/{markdown_uuid}` when the user clicks the row.
+    pub markdown_uuid: Option<String>,
+    pub message_index: Option<usize>,
+    /// The Contents cell: the row's `preview`, or for a free-text hit the
+    /// words qmd matched.
+    pub snippet: String,
+    pub sender: String,
+    /// Null when the row has no source-side timestamp (e.g. contacts
+    /// without a `REV:` field, or any row whose underlying entity isn't
+    /// event-shaped). See data_architecture_ingestion.md §"Entities
+    /// without a time-shape".
+    pub created_at: Option<String>,
+    /// When the thing last changed, where the source says; null for a
+    /// row not known to have changed since `created_at`.
+    pub modified_at: Option<String>,
+    /// When it last changed at its source: `modified_at`, else
+    /// `created_at`, unless the provider knows better. What the grid's
+    /// newest-first order sorts on.
+    pub touched_at: Option<String>,
+    /// True on the row that is a whole rendered document, false on a
+    /// row inside one. `is:document` in the search bar.
+    pub is_document: bool,
+    pub conversation_name: String,
+    pub project: String,
+    pub account: String,
+    /// Owning Anthropic org UUID (stable, opaque). Empty for non-Anthropic
+    /// rows. UI shows `org_name` as the cell value and uses `org_uuid` as
+    /// the filter key.
+    pub org_uuid: String,
+    /// Human-readable org name corresponding to `org_uuid`. Empty when
+    /// the upstream payload didn't carry one.
+    pub org_name: String,
+    pub entire_chat: String,
+    /// The provider's human label ("Slack", "Claude") — a property of
+    /// the source *type*, not of the configured source. Two Slack
+    /// workspaces both say "Slack" here; `source_id` is what tells them
+    /// apart.
+    pub source: String,
+    /// The `grid_rows.provider` tag behind `source` (`slack`, `claude`).
+    pub provider: String,
+    /// `source_id`, resolved for the grid's Source column: the group's
+    /// name rather than its id, led by the configured source's own mark
+    /// (Gmail, not Mail). Filled by the applet, which reads the config;
+    /// absent from a repo's raw answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ref: Option<datalib_columns::Identity>,
+    /// The **id** of the configured source this row came from: the
+    /// first path segment of the row's `qmd_path`, which is the group's
+    /// directory under the data root (`slack/render_markdown/…` →
+    /// `slack`). Empty when the row carries no `qmd_path`.
+    ///
+    /// Never the group's display name. The grid's "Source" column shows
+    /// the name, resolved client-side from the config; this is what it
+    /// resolves *from*, and what a `source_id:` filter matches.
+    pub source_id: String,
+    pub kind: String,
+    /// The author as the source showed them.
+    pub author: String,
+    /// The author's handle where the source has one; what the Author
+    /// cell resolves. Beside `author` rather than instead of it, as
+    /// `source_ref` sits beside `source`.
+    pub author_handle: Option<String>,
+    /// The Author cell: the handle as a URI for its id, `author` for its
+    /// label, the handle kind's mark. Resolved by the applet from the two
+    /// fields above; never read from the index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_ref: Option<datalib_columns::Identity>,
+    /// On a contact's own row, who it is about; `None` elsewhere.
+    pub contact: Option<String>,
+    /// A contact's first email address and phone number, as written.
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    /// Every handle the index holds for the contact a contact's own row
+    /// is about (`source_contact_handles`), in handle order; what the
+    /// Contact cell falls back on when neither the address nor the
+    /// number makes one. Read beside the row; empty on any other row.
+    #[serde(skip)]
+    pub contact_handles: Vec<String>,
+    /// The Contact cell: `contact` for its label, and where the contact
+    /// has an address or a number that makes a handle, that handle as a
+    /// URI for its id. Resolved by the applet; never read from the index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_ref: Option<datalib_columns::Identity>,
+    /// Who the row's conversation is named after, when it has no title
+    /// of its own (`subject` terms on its document's row), the most
+    /// active first. Read beside the row; empty on any other row.
+    #[serde(skip)]
+    pub subject_people: Vec<SubjectPerson>,
+    /// The Subject cell: on a contact's own row, its Contact chip; in a
+    /// conversation named by its people, a chip for each; elsewhere the
+    /// conversation's name. Resolved by the applet; never read from the
+    /// index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subject_ref: Vec<datalib_columns::Identity>,
+    /// What a `from:` term names this row's author by: the handle where
+    /// there is one, else the name shown. What the Author cell's Keep
+    /// only writes. Resolved by the applet; never read from the index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_term: Option<String>,
+    /// Slack channel display name for Slack rows; empty otherwise.
+    pub channel: String,
+    /// Public URL for the row's source artifact (Slack permalink,
+    /// LinkedIn post, …); empty when the producer set none. The grid's
+    /// "Open source" action follows it.
+    pub source_url: String,
+    /// For Notion rows: the page-level UUID the row belongs to. Empty
+    /// otherwise. Used by right-click "Filter by Notion Page".
+    pub notion_page_uuid: String,
+    /// The upstream's own id for this entity, verbatim from the
+    /// `upstream_id` grid_rows column. Empty when the producer
+    /// didn't set one (a provider not yet ported onto `datalib_id`).
+    pub upstream_id: String,
+    /// What sort of upstream thing the row is, in the provider's own
+    /// vocabulary (`"conversation"`, `"tool_use"`, `"pr"`). Empty when
+    /// the producer didn't set one. Disambiguates
+    /// `upstream_id` — a bare `12345` is ambiguous between a
+    /// GitHub review and a review comment.
+    pub upstream_entity_kind: String,
+    /// Bytes on disk for the thing this row describes — a measured
+    /// file or store, a sized artifact. `None` for a row that has no
+    /// meaningful size, which is most of them.
+    pub byte_size: Option<i64>,
+    /// How many things this row counts — rows in a measured table,
+    /// pages in a PDF. `None` for a row that is a single thing.
+    pub item_count: Option<i64>,
+    /// How the row differs between the two commits its diff group
+    /// compares (`datalib_schema::diff_status::DiffStatus`). `None` on
+    /// every real source's rows — the one thing that says a row is
+    /// from a diff tree.
+    pub diff_status: Option<String>,
+    /// For a modified row, the columns that differ, `|`-joined.
+    pub diff_changed_columns: Option<String>,
+    /// QMD-routed rank score for this row, when the search went through qmd.
+    /// `None` for a query of structured terms alone. Surfaced to the UI as
+    /// a sortable "Score" column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+}

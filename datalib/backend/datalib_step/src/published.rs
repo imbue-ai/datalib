@@ -92,7 +92,10 @@ mod tests {
         assert_eq!(claimed[0].path, "mail/ingest");
         assert_eq!(Some(claimed[0].version.clone()), sealed);
 
-        let qmd = env("unified_index/qmd_aggregator", Function::QmdAggregator);
+        let qmd = env(
+            "unified_document_index/qmd_aggregator",
+            Function::QmdAggregator,
+        );
         assert!(
             claims(&qmd, root.path()).await.is_empty(),
             "no store of its own"

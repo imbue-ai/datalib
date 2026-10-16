@@ -4,7 +4,7 @@
 // Read from endpoints other cards already use (the manage rows and the
 // search), so it adds no backend of its own.
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import { UNIFIED_INDEX, type ManageResponse, type ManageRow, type SearchRow } from "@/api";
+import { UNIFIED_DOCUMENT_INDEX, type ManageResponse, type ManageRow, type SearchRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { changed, subscribeLive } from "@/live";
 import { formatRelative } from "@/config/timeFormat";
@@ -87,7 +87,7 @@ export function useDashboard(ctx: CardCtx, opts: { recent: boolean }) {
     return { tone: "ok" as Tone, text: `Synced ${formatRelative(run.finished_at, now.value)}` };
   });
 
-  const syncAll = computed(() => syncAllButton(sources.value));
+  const syncAll = computed(() => syncAllButton(sources.value, manage.value?.sync_paused ?? null));
 
   async function syncEverything() {
     const b = syncAll.value;
@@ -122,9 +122,9 @@ export function useDashboard(ctx: CardCtx, opts: { recent: boolean }) {
   }
 
   function openProblems(row: ManageRow) {
-    const everything = row.id === "unified_index";
+    const everything = row.id === "unified_document_index";
     const q = {
-      url: `${UNIFIED_INDEX}/problems`,
+      url: `${UNIFIED_DOCUMENT_INDEX}/problems`,
       q: everything ? "" : `source_id:${row.id}`,
       name: everything ? "Problems" : `Problems: ${row.name.label}`,
     };

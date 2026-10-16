@@ -65,8 +65,8 @@ async function initialize() {
             index
           </li>
           <li>
-            declares the <code>Unified Index</code> applet, which is what actually serves the table,
-            search and document views
+            declares the <code>Document Index</code> applet, which is what actually serves the
+            table, search and document views
           </li>
           <li>
             adds <strong>no data sources</strong>: nothing is downloaded, no account is contacted,

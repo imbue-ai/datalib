@@ -7,7 +7,7 @@
 // (`GET /api/manage/rows`, `rowActions.ts`); the series are
 // `GET /api/manage/groups/{id}/dashboard`.
 import { computed, onMounted, onUnmounted, ref, watch, type Directive } from "vue";
-import { UNIFIED_INDEX, type Dashboard, type ManageResponse, type ManageRow } from "@/api";
+import { UNIFIED_DOCUMENT_INDEX, type Dashboard, type ManageResponse, type ManageRow } from "@/api";
 import { useApi } from "./cardApi";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
 import { isDesktopApp, revealActionLabel } from "@/desktop";
@@ -270,7 +270,7 @@ onUnmounted(() => {
           "
           class="sd-name"
           title="Double-click the counts for the problems"
-          @dblclick="actions.openProblems(groupRow, `${UNIFIED_INDEX}/problems`)"
+          @dblclick="actions.openProblems(groupRow, `${UNIFIED_DOCUMENT_INDEX}/problems`)"
         />
         <span v-cell="renderStatus(groupRow.status)" class="sd-status" />
       </header>

@@ -79,7 +79,7 @@ database per source, at
     them. chat-common adds one per author handle with no provider code;
     contact-common adds a card's own. Like edges they belong to the
     document, and the index answers "who is this handle" from them
-    (`unified_index`'s `POST /people`).
+    (`unified_document_index`'s `POST /people`).
   - `supplied_search_terms` — what its rows answer to in search beyond
     their own columns: an email's To, Cc and Bcc by handle, the people
     a message mentions, and an email's labels.
@@ -308,7 +308,10 @@ Examples where schema and data handling should be unified:
      table; the sensor page, the plot and the rows (one `Sensor
      Timeseries` row for the page plus a `Sensor Device` row per
      device, `timeseries_render/src/page.rs`) are shared in
-     `timeseries_render`.
+     `timeseries_render`. Garmin uses the plot and text helpers but
+     writes its own documents: the weight page, a page per family of
+     daily metrics, a daily log, one page per activity, and its
+     records (`garmin_render/TRANSLATE.md`).
 
 A new provider that fits a family should at minimum project to the
 family's `GridRow` shape rather than inventing a new `kind` taxonomy.
@@ -490,7 +493,7 @@ in principle and not built. The sink is the `problems` table
 starts in the source's raw store, everything else in its render
 store, and the render store carries the raw store's rows forward so
 one store holds the source's whole list. From there it is copied into
-the unified index, counted on the Manage row and shown on the
+the unified document index, counted on the Manage row and shown on the
 document. How it is wired at each stage:
 
 | stage | how a problem gets in | swept by |
@@ -796,7 +799,7 @@ problem, so one bucket that will not build neither fails the step nor
 makes every later run a full walk.
 
 The `.md` file matters as much as the rows: `md_path` is what
-`/applet/unified_index/chat/{uuid}` serves and what qmd indexed, so a
+`/applet/unified_document_index/chat/{uuid}` serves and what qmd indexed, so a
 document deleted from the store but left on disk is a deletion the user
 can still read. A document that comes back at a different path loses
 the file at its old one (`put_document`). `grid_index` needs no part in

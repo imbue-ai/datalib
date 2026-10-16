@@ -248,6 +248,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             out_dir: &out_dir,
             name: "linkedin",
             account: account.label.as_deref(),
+            owner: account.handle.as_ref(),
             account_inputs: &account.inputs,
             range: RawRange::cold(),
         };

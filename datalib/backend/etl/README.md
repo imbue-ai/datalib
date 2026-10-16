@@ -119,10 +119,15 @@ re-download, which defeats incremental render.
 Declare them per-provider as `VolatilePath`s next to the table definition;
 `split_volatile` moves them into the sidecar's `volatile_payload`, and
 `overlay` reconstructs the wire object exactly. A path is object keys,
-plus `*` (`EVERY_ELEMENT`) to reach into each element of an array:
+plus `*` (`EVERY_ELEMENT`) to reach into each element of an array or
+each value of an object:
 `["blocks", "*", "block_id"]` takes the id Slack mints on every read out
 of each block, and the sidecar keeps them in order
 (`{"blocks": [{"block_id": …}, {}, …]}`, `{}` for a block without one).
+Under an object the sidecar is keyed like the object and names only the
+values that had the field: ChatGPT's
+`["mapping", "*", "message", "metadata", "model_switcher_deny"]` keeps
+`{"mapping": {"<node id>": {"message": …}}}`.
 
 Writing the sidecar replaces it. When two endpoints return one record
 with different volatile fields, as Slack's history and replies copies of

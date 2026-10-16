@@ -223,7 +223,7 @@ export function encodeState(st: MapState): string {
 
 /// The step that runs after every source's `embed`, and so the one the
 /// map reads.
-export const QMD_AGGREGATOR_STEP = "unified_index/qmd_aggregator";
+export const QMD_AGGREGATOR_STEP = "unified_document_index/qmd_aggregator";
 
 /// The TOML stanza that declares the step, for a config that lacks it:
 /// it reads every source's embeddings, so it runs after the aggregator —
@@ -234,7 +234,7 @@ export function stepStanza(hasAggregator: boolean): string {
 # qmd's document embeddings laid out on a plane, for the map card. Each
 # run starts from the last map; resetting the step lays one out afresh.
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "embedding_map"
 inputs = [${inputs}]
 `;

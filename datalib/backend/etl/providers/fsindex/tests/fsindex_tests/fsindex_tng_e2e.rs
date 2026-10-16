@@ -95,7 +95,7 @@ async fn scans_tng_tree() {
     assert_eq!(summary.stamped_directories, 0, "no_stamp=true");
     // root (D) + bridge (D) + holodeck (D) = 3 dirs;
     // captains_log, crew_manifest, bridge/viewscreen, holodeck/program_picard
-    // = 4 files. helm.tmp is ignored; .fsindex.yaml is metadata, not a row.
+    // = 4 files. helm.tmp is ignored; .fsindex.toml is metadata, not a row.
     assert_eq!(summary.dirs, 3, "root + bridge + holodeck");
     assert_eq!(summary.files_hashed, 4);
     assert_eq!(summary.symlinks, 0);
@@ -132,7 +132,7 @@ async fn scans_tng_tree() {
         "'*.tmp' files must be ignored"
     );
     assert!(
-        !ids.iter().any(|id| id.ends_with(".fsindex.yaml")),
-        ".fsindex.yaml is scanner metadata, never a content row"
+        !ids.iter().any(|id| id.ends_with(".fsindex.toml")),
+        ".fsindex.toml is scanner metadata, never a content row"
     );
 }

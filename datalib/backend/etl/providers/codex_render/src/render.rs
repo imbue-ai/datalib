@@ -13,7 +13,9 @@ use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
-use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
+use datalib_etl_chat_common::types::{
+    AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+};
 use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
@@ -263,6 +265,7 @@ fn build_chat(
     };
     let id = ids::thread(source_id, tid);
     NormalizedChat {
+        named_after: Vec::new(),
         path_prefix: None,
         id: tid.to_string(),
         chat_uuid: id.uuid.clone(),
@@ -322,10 +325,10 @@ fn response_item(
                 is_typed_message(p)
                     .unwrap_or_else(|| typed.contains(text.trim()) || !looks_injected(&text))
             };
-            let (author, label, aside) = match str_of(p, "role") {
-                Some("assistant") => (model, "LLM Response", false),
-                Some("user") if typed_here() => ("User", "User Input", false),
-                _ => ("Codex", "Harness Message", true),
+            let (author, author_kind, label, aside) = match str_of(p, "role") {
+                Some("assistant") => (model, AuthorKind::Named, "LLM Response", false),
+                Some("user") if typed_here() => ("User", AuthorKind::Account, "User Input", false),
+                _ => ("Codex", AuthorKind::Named, "Harness Message", true),
             };
             // An injected blob — a permissions primer, a whole AGENTS.md —
             // is cut like a tool output: the store keeps it, the page
@@ -333,14 +336,17 @@ fn response_item(
             if aside {
                 text = clamp(&text, max_bytes);
             }
-            Some(item(
-                ids::record(source_id, tid, line_no, ms),
-                author.to_string(),
-                ms,
-                text,
-                label,
-                aside,
-            ))
+            Some(NormalizedChatItem {
+                author_kind,
+                ..item(
+                    ids::record(source_id, tid, line_no, ms),
+                    author.to_string(),
+                    ms,
+                    text,
+                    label,
+                    aside,
+                )
+            })
         }
         "reasoning" => {
             let thought = reasoning_text(p);

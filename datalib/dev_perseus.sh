@@ -41,7 +41,7 @@ echo "Perseus data root: $ROOT" >&2
 
 # Render-only DAG config: no download step, so the render step reads
 # the TEI XMLs directly from `input_path`. We build the qmd index here
-# even though we won't use the search bar, because the `unified_index`
+# even though we won't use the search bar, because the `unified_document_index`
 # applet serves the grid off both indexes and paying for it once is
 # easier than special-casing it out.
 #
@@ -73,23 +73,23 @@ function = "embed"
 inputs = ["perseus/keyword_index"]
 
 [[groups]]
-id = "unified_index"
+id = "unified_document_index"
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "grid_index"
 inputs = ["perseus/render_markdown"]
 
 [[steps]]
-group = "unified_index"
+group = "unified_document_index"
 function = "qmd_aggregator"
 inputs = ["perseus/keyword_index", "perseus/embed"]
 
 # Serves the grid, the document view and the document picker.
 [[applets]]
-group = "unified_index"
-id = "unified_index"
-command = "datalib-applet unified_index"
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
 EOF
 
 # Mirror the model-cache symlink that materialize_tng_root.sh sets up,

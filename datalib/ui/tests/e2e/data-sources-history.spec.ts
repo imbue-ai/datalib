@@ -21,7 +21,7 @@ const ROWS = TABLE_ROWS;
 test("a group's commit history opens from the context menu as a card", async ({ page }) => {
   await page.goto("/data_sources");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-  const row = groupRow(page, "unified_index");
+  const row = groupRow(page, "unified_document_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
 
   await row.click({ button: "right" });
@@ -29,7 +29,7 @@ test("a group's commit history opens from the context menu as a card", async ({ 
 
   const card = shownCards(page).filter({ has: page.locator(".hc") });
   await expect(card).toBeVisible({ timeout: 10_000 });
-  await expect(card.locator(".ct-card-title")).toHaveText("History · Unified Index");
+  await expect(card.locator(".ct-card-title")).toHaveText("History · Document Index");
   // Not a source, so nothing here to compare.
   await expect(card.getByText(/right-click to compare/)).toHaveCount(0);
 
@@ -78,10 +78,10 @@ test("a group's commit history opens from the context menu as a card", async ({ 
 test("an applet row leaves out what an applet cannot do", async ({ page }) => {
   await page.goto("/data_sources");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-  await expandGroup(page, "unified_index");
+  await expandGroup(page, "unified_document_index");
   // The applet shares its group's id; its row is keyed by the bare id.
-  await expect(nameCell(page, "unified_index").locator('[title="Applet"]')).toBeVisible();
-  const appletRow = pipelineRow(page, "unified_index");
+  await expect(nameCell(page, "unified_document_index").locator('[title="Applet"]')).toBeVisible();
+  const appletRow = pipelineRow(page, "unified_document_index");
 
   await appletRow.click({ button: "right" });
   // The menu is open — an entry every row has is showing — so the

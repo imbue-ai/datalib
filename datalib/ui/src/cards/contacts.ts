@@ -1,6 +1,6 @@
 // Who a handle in a document is. A renderer writes a person as a chip
 // link, `[Name](mailto:…)`, which `chipLinks.js` marks as it renders
-// (`a.chip[data-handle]`); this asks the index (`unified_index`'s
+// (`a.chip[data-handle]`); this asks the index (`unified_document_index`'s
 // `/people`: each source's record of the person) and the contacts app
 // (`datalib_contacts`: the contact a person made, ranked first) and
 // draws the link as a chip. The contacts app is an app of its own
@@ -14,7 +14,7 @@ import { filterToken } from "@/grid/query";
 import { uriFromHandle } from "./chipLinks";
 import { Resolver } from "./resolver";
 import { pushToast } from "@/toasts";
-import { UNIFIED_INDEX } from "@/api";
+import { UNIFIED_DOCUMENT_INDEX } from "@/api";
 import { changed, subscribeLive, type RootEvent } from "@/live";
 
 export const CONTACTS_APPLET = "/applet/datalib_contacts";
@@ -54,7 +54,7 @@ export type Who = { mine: NormalizedContact | null; sourceContacts: NormalizedCo
 
 // ── Pure rules ─────────────────────────────────────────────────────────
 
-export type HandleKind = "email" | "tel" | "slack" | "signal_aci" | "facebook";
+export type HandleKind = "email" | "tel" | "slack" | "signal_aci" | "facebook" | "linkedin";
 
 export function handleKind(handle: string): HandleKind | null {
   const kind = handle.slice(0, handle.indexOf(":"));
@@ -62,7 +62,8 @@ export function handleKind(handle: string): HandleKind | null {
     kind === "tel" ||
     kind === "slack" ||
     kind === "signal_aci" ||
-    kind === "facebook"
+    kind === "facebook" ||
+    kind === "linkedin"
     ? kind
     : null;
 }
@@ -77,6 +78,7 @@ const KIND_ICON: Record<HandleKind, string> = {
   slack: "slack",
   signal_aci: "signal",
   facebook: "facebook",
+  linkedin: "linkedin",
 };
 
 export function handleIcon(handle: string): string | null {
@@ -363,7 +365,7 @@ export async function resolveHandles(
 /** Every source's record of whoever holds each handle, ranked; a handle
  *  no source mentions is absent. */
 export async function peopleFor(handles: string[]): Promise<Record<string, NormalizedContact[]>> {
-  const r = await fetch(`${UNIFIED_INDEX}/people`, {
+  const r = await fetch(`${UNIFIED_DOCUMENT_INDEX}/people`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ handles }),

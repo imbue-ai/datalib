@@ -14,11 +14,13 @@ use tower::ServiceExt;
 const TOKEN: &str = "upgrade-on-launch-test-token";
 
 /// Stands in for `datalib-step` on the binary path: logs how it was
-/// invoked, and as `b`'s render answers that it needs to run again.
+/// invoked, and as `b`'s render answers that it needs to run again. While
+/// a `hold` file is in the root, a migrate waits for it to go.
 const FAKE_STEP: &str = r#"#!/bin/sh
 case " $* " in *" --migrate "*) mode=migrate ;; *) mode=sync ;; esac
 echo "$mode $DATALIB_DAG_STEP" >> "$DATALIB_DAG_DATA_ROOT/invoked"
 if [ "$mode" = migrate ]; then
+    while [ -e "$DATALIB_DAG_DATA_ROOT/hold" ]; do sleep 0.05; done
     if [ "$DATALIB_DAG_STEP" = b/render_markdown ]; then
         echo '{"event":"outcome","needs_rerun":true,"outputs":[]}'
     fi
@@ -61,6 +63,7 @@ async fn boot(root: &Path, bin: &Path) -> AppState {
         Some(bin.to_path_buf()),
         None,
         ApiToken::from_value(TOKEN, root),
+        None,
     )
     .await
     .expect("the server boots")
@@ -92,8 +95,12 @@ async fn until_invoked(root: &Path, line: &str) {
 }
 
 async fn config(state: &AppState) -> serde_json::Value {
+    get(state, "/api/config").await
+}
+
+async fn get(state: &AppState, uri: &str) -> serde_json::Value {
     let req = Request::builder()
-        .uri("/api/config")
+        .uri(uri)
         .header("x-datalib-token", TOKEN)
         .body(Body::empty())
         .unwrap();
@@ -176,5 +183,62 @@ async fn a_launch_asks_every_step_once_per_build_before_any_sync() {
         config(&state).await["upgrade"]["steps"],
         serde_json::json!([])
     );
+    state.sync.shutdown(Duration::from_secs(10)).await;
+}
+
+/// While the pass runs the app stays open, so every Sync on the Sources
+/// card must say it is paused rather than queue a sync that cannot
+/// start; once the pass is over they are offered again.
+#[tokio::test]
+async fn every_sync_is_paused_while_the_pass_runs_and_offered_after() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let bin = bin_dir_with_fake_step(td.path());
+    std::fs::write(root.join("config.toml"), source("a")).unwrap();
+    std::fs::write(root.join("hold"), "").unwrap();
+
+    let state = boot(&root, &bin).await;
+    until_invoked(&root, "migrate a/ingest").await;
+    assert_eq!(config(&state).await["upgrade"]["migrating"], true);
+    let rows = get(&state, "/api/manage/rows").await;
+    let paused = rows["sync_paused"]
+        .as_str()
+        .expect("paused while migrating");
+    let syncs: Vec<&serde_json::Value> = rows["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["id"].as_str().is_some_and(|id| id.starts_with('a')))
+        .flat_map(|r| r["actions"].as_array().unwrap())
+        .filter(|a| a["id"] == "sync")
+        .collect();
+    assert!(!syncs.is_empty(), "{rows}");
+    for sync in &syncs {
+        assert_eq!(sync["enabled"], false, "{sync}");
+        assert_eq!(sync["disabled_reason"], paused, "{sync}");
+    }
+
+    std::fs::remove_file(root.join("hold")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while config(&state).await["upgrade"]["migrating"] != false {
+        assert!(Instant::now() < deadline, "the pass never ended");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let rows = get(&state, "/api/manage/rows").await;
+    assert_eq!(rows["sync_paused"], serde_json::Value::Null, "{rows}");
+    let group = rows["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "a")
+        .unwrap();
+    let sync = group["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "sync")
+        .unwrap();
+    assert_eq!(sync["enabled"], true, "{sync}");
     state.sync.shutdown(Duration::from_secs(10)).await;
 }

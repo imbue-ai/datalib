@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-const STEP: &str = "unified_index/embedding_map";
+const STEP: &str = "unified_document_index/embedding_map";
 
 fn materialize(root: &Path) {
     let tar = std::env::var_os("QMD_INDEX_TAR").expect("QMD_INDEX_TAR");
@@ -28,9 +28,12 @@ fn run(root: &Path, reset: bool) -> Value {
     let bin = std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN");
     let mut cmd = Command::new(bin);
     cmd.env("DATALIB_DAG_STEP", STEP)
-        .env("DATALIB_DAG_GROUP", "unified_index")
+        .env("DATALIB_DAG_GROUP", "unified_document_index")
         .env("DATALIB_DAG_FUNCTION", "embedding_map")
-        .env("DATALIB_DAG_INPUTS", r#"["unified_index/qmd_aggregator"]"#)
+        .env(
+            "DATALIB_DAG_INPUTS",
+            r#"["unified_document_index/qmd_aggregator"]"#,
+        )
         .env("DATALIB_DAG_DATA_ROOT", root)
         .env("DATALIB_DAG_NOW", "2026-09-25T00:00:00+00:00")
         .stdin(Stdio::null());
@@ -53,7 +56,7 @@ fn run(root: &Path, reset: bool) -> Value {
 }
 
 fn map(root: &Path) -> Option<Value> {
-    let path = root.join("unified_index/embedding_map/embedding_map.json");
+    let path = root.join("unified_document_index/embedding_map/embedding_map.json");
     std::fs::read(path)
         .ok()
         .map(|b| serde_json::from_slice(&b).expect("the map parses"))

@@ -21,7 +21,7 @@ fn write(path: &Path, contents: &[u8]) {
 }
 
 fn make_initial_tree(root: &Path) {
-    write(&root.join(".fsindex.yaml"), b"ignore:\n  - '*.tmp'\n");
+    write(&root.join(".fsindex.toml"), b"ignore = ['*.tmp']\n");
     write(&root.join("hello.txt"), b"hello world\n");
     write(&root.join("empty.txt"), b"");
     write(&root.join("subdir/nested.txt"), b"nested");
@@ -158,7 +158,7 @@ async fn initial_scan_and_incremental_rescan() {
         summary_a.stamped_directories, 0,
         "no_stamp=true, no breadcrumbs written"
     );
-    // `junk.tmp` is ignored; `.fsindex.yaml` is scanner metadata, not
+    // `junk.tmp` is ignored; `.fsindex.toml` is scanner metadata, not
     // a content row. So `dirs` should hold root and subdir, and `files`
     //   hello.txt (F), empty.txt (F), hello.link (L),
     //   subdir/nested.txt (F), subdir/another.txt (F)
@@ -263,12 +263,12 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
         .await
         .unwrap();
 
-    // `subdir` opts into stamping via its own `.fsindex.yaml`; the rest
+    // `subdir` opts into stamping via its own `.fsindex.toml`; the rest
     // of the tree does not.
     write(&root.join("hello.txt"), b"hello world\n");
     write(
-        &root.join("subdir/.fsindex.yaml"),
-        b"stamp_me_with_uuid: true\n",
+        &root.join("subdir/.fsindex.toml"),
+        b"stamp_me_with_uuid = true\n",
     );
     write(&root.join("subdir/nested.txt"), b"nested");
 
@@ -282,13 +282,13 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     );
 
     // The breadcrumb file now carries an identity block...
-    let breadcrumb = fs::read_to_string(root.join("subdir/.fsindex.yaml")).unwrap();
+    let breadcrumb = fs::read_to_string(root.join("subdir/.fsindex.toml")).unwrap();
     assert!(
-        breadcrumb.contains("identity:") && breadcrumb.contains("uuid:"),
+        breadcrumb.contains("[identity]") && breadcrumb.contains("uuid ="),
         "breadcrumb missing identity block:\n{breadcrumb}",
     );
     assert!(
-        breadcrumb.contains("stamp_me_with_uuid:"),
+        breadcrumb.contains("stamp_me_with_uuid = true"),
         "breadcrumb must preserve the user's stamp_me_with_uuid key:\n{breadcrumb}",
     );
 
@@ -450,7 +450,7 @@ async fn deleted_paths_leave_the_cache_but_filtered_ones_stay() {
 
     // One file really goes; the other is merely filtered out.
     std::fs::remove_file(root.join("doomed.bin")).unwrap();
-    std::fs::write(root.join(".fsindex.yaml"), "ignore:\n  - \"*.tmp\"\n").unwrap();
+    std::fs::write(root.join(".fsindex.toml"), "ignore = [\"*.tmp\"]\n").unwrap();
     ingest::fetch(fetch_opts(&db, &root, cache.clone()))
         .await
         .unwrap();
@@ -469,7 +469,7 @@ async fn deleted_paths_leave_the_cache_but_filtered_ones_stay() {
     );
 
     // And the filtered file is still cheap when a later scan wants it.
-    std::fs::remove_file(root.join(".fsindex.yaml")).unwrap();
+    std::fs::remove_file(root.join(".fsindex.toml")).unwrap();
     let after = ingest::fetch(fetch_opts(&db, &root, cache.clone()))
         .await
         .unwrap();
