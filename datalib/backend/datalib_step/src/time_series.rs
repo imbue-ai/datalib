@@ -1,8 +1,8 @@
 //! The two time-series functions: a source's `render_time_series` and
-//! the `time_series_index` that stacks every source's. The store and the
-//! passes are `datalib_etl_time_series`; this is the step around them.
+//! the `time_series_index` that indexes every source's. The stores and
+//! the passes are `datalib_etl_time_series`; this is the step around
+//! them.
 
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -49,8 +49,7 @@ pub async fn run_render(
     let wanted = read(source_type, &raw, &env.group)?;
     let db = datalib_etl::layout::render_time_series_db(data_root, &env.group);
     let pool = store::open(&db, StoreKind::TimeSeries).await?;
-    let written =
-        datalib_etl_time_series::apply(&pool, &wanted, &BTreeSet::from([env.group.as_str()])).await;
+    let written = datalib_etl_time_series::apply(&pool, &wanted, &env.group).await;
     let claim = seal(pool, written, "render_time_series", emitter).await?;
     Ok(vec![OutputClaim {
         path: env.step.clone(),
@@ -64,9 +63,16 @@ pub async fn run_index(
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
     let sources = crate::qmd_index::groups_from_inputs(&env.inputs);
-    let mut readers = Vec::with_capacity(sources.len());
+    let mut stores = Vec::with_capacity(sources.len());
     for source in &sources {
         let db = datalib_etl::layout::render_time_series_db(data_root, source);
+        let rel = db
+            .strip_prefix(data_root)
+            .unwrap_or(&db)
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
         let reader = if db.exists() {
             doltlite_raw::open_reader(&db, None)
                 .await
@@ -74,14 +80,22 @@ pub async fn run_index(
         } else {
             None
         };
-        readers.push(reader);
+        let commit = reader.as_ref().map(|r| r.pin().commit().to_string());
+        stores.push((rel, reader, commit));
     }
     let inputs: Vec<index::Source<'_>> = sources
         .iter()
-        .zip(&readers)
-        .map(|(source_id, reader)| index::Source {
+        .zip(&stores)
+        .map(|(source_id, (rel, reader, commit))| index::Source {
             source_id,
-            store: reader.as_ref().map(|r| r.pool()),
+            store: rel,
+            read: reader
+                .as_ref()
+                .zip(commit.as_deref())
+                .map(|(r, c)| index::Read {
+                    pool: r.pool(),
+                    commit_hash: c,
+                }),
         })
         .collect();
     let pool = store::open(
@@ -90,8 +104,10 @@ pub async fn run_index(
     )
     .await?;
     let written = index::index(&pool, &inputs).await;
-    for reader in readers.into_iter().flatten() {
-        reader.close().await;
+    for (_, reader, _) in stores {
+        if let Some(reader) = reader {
+            reader.close().await;
+        }
     }
     let claim = seal(pool, written, "time_series_index", emitter).await?;
     Ok(vec![OutputClaim {
@@ -119,8 +135,12 @@ async fn seal(
         doltlite_raw::commit_run(
             &pool,
             &format!(
-                "{what}: {} written, {} with new points, {} removed, {} unchanged",
-                written.written, written.points_replaced, written.removed, written.unchanged
+                "{what}: {} written, {} removed, {} unchanged; {} chunks written, {} removed",
+                written.written,
+                written.removed,
+                written.unchanged,
+                written.chunks_written,
+                written.chunks_removed
             ),
         )
         .await?;
@@ -131,20 +151,25 @@ async fn seal(
     let head = sealed?.context("the time-series store has no commit after its seal")?;
     tracing::info!(
         written = written.written,
-        points_replaced = written.points_replaced,
         removed = written.removed,
         unchanged = written.unchanged,
+        chunks_written = written.chunks_written,
+        chunks_removed = written.chunks_removed,
         "the time series are current"
     );
     let progress = emitter.progress();
     for (name, n) in [
         ("last_pass_time_series_written", written.written),
-        (
-            "last_pass_time_series_points_replaced",
-            written.points_replaced,
-        ),
         ("last_pass_time_series_removed", written.removed),
         ("last_pass_time_series_unchanged", written.unchanged),
+        (
+            "last_pass_time_series_chunks_written",
+            written.chunks_written,
+        ),
+        (
+            "last_pass_time_series_chunks_removed",
+            written.chunks_removed,
+        ),
     ] {
         progress.metric(name, &[], n as i64);
     }
@@ -162,34 +187,32 @@ mod tests {
     use super::*;
 
     /// The index step reads each source's store where its render step
-    /// writes it, seals, and reports the head it sealed; a source named in
-    /// `inputs` that has rendered nothing yet is no error.
+    /// writes it, records the store's path and the commit it read, seals,
+    /// and reports the head it sealed; a source named in `inputs` that
+    /// has rendered nothing yet is no error.
     #[tokio::test(flavor = "multi_thread")]
-    async fn the_index_step_stacks_the_stores_its_inputs_name() {
-        use datalib_time_series_schema::{Point, TimeKind, TimeSeries};
+    async fn the_index_step_records_where_each_sources_points_are() {
+        use datalib_time_series_schema::{Points, TimeKind, TimeSeries};
 
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let weight = TimeSeries {
             time_series_id: "w".into(),
             source_id: "riker".into(),
-            entity: "account".into(),
-            metric: "weight".into(),
-            label: "Weight".into(),
+            about_uuid: None,
+            name: "weight".into(),
+            human_name: "Weight".into(),
             unit: "kg".into(),
             time_kind: TimeKind::Instant,
-            points: vec![Point::value(1, 80.0)],
+            points: Points::floats([(1, 80.0)]),
         };
-        let store = store::open(
-            &datalib_etl::layout::render_time_series_db(root, "riker"),
-            StoreKind::TimeSeries,
-        )
-        .await
-        .unwrap();
-        datalib_etl_time_series::apply(&store, &[weight], &BTreeSet::from(["riker"]))
+        let db = datalib_etl::layout::render_time_series_db(root, "riker");
+        let store = store::open(&db, StoreKind::TimeSeries).await.unwrap();
+        datalib_etl_time_series::apply(&store, &[weight], "riker")
             .await
             .unwrap();
         doltlite_raw::commit_run(&store, "test").await.unwrap();
+        let riker_head = doltlite_raw::head_commit(&store).await.unwrap().unwrap();
         store.close().await;
 
         let env = StepEnv {
@@ -218,9 +241,13 @@ mod tests {
         assert_eq!(index.pin().commit(), claims[0].version);
         let rows = store::rows(index.pool()).await.unwrap();
         assert_eq!(
-            rows.iter().map(|r| r.metric.as_str()).collect::<Vec<_>>(),
+            rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
             ["weight"]
         );
+        let sources = store::sources(index.pool()).await.unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].commit_hash, riker_head);
+        assert_eq!(root.join(&sources[0].store), db);
         index.close().await;
     }
 

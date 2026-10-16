@@ -622,9 +622,12 @@ programs against:
 - `timeSeriesView()` — every time series in the time-series index
   (`cards/TimeSeriesCard.ce.vue`, rules in `cards/timeSeries.ts`), from
   the `unified_time_series_index` applet. A list grouped by source picks
-  them; each pick is drawn on one chart, one axis per unit and two units
-  at most, a duration in hours or minutes and a distance in km as suits
-  its size. The range buttons end at the newest point picked, and the
+  them; each pick is drawn on one chart, one axis per quantity and two
+  at most. Values of one quantity are converted to one unit through the
+  factors the applet reads from their UCUM codes: a duration in hours or
+  minutes and a distance in km as suits its size, anything else in the
+  unit of the first time series on the axis. A time series of text is
+  listed but not drawn. The range buttons end at the newest point picked, and the
   points are asked for at about one per pixel: past that the applet
   answers buckets, drawn as each bucket's mean with a band from its
   minimum to its maximum. Hovering reads every line at that time. The

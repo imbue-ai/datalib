@@ -34,7 +34,12 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
         }
         Function::RenderTimeSeries | Function::TimeSeriesIndex => {
             let store = crate::published::time_series_store(env, data_root);
-            let shape = datalib_etl_time_series::store::schema_hash();
+            let kind = if env.function == Function::TimeSeriesIndex {
+                datalib_etl::doltlite_raw::StoreKind::TimeSeriesIndex
+            } else {
+                datalib_etl::doltlite_raw::StoreKind::TimeSeries
+            };
+            let shape = datalib_etl_time_series::store::schema_hash(kind);
             ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
             Ok(Vec::new())
         }

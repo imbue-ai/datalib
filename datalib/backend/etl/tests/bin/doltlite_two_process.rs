@@ -976,15 +976,16 @@ async fn rev_probe(args: &Args) -> Result<Value> {
     Ok(Value::Object(out))
 }
 
-/// The shape of the time-series applet's reads (`datalib_etl_time_series::read`):
-/// a range over a key, and the same range bucketed with aggregates.
-const AGGREGATE_READ: &str = "SELECT substr(id, 1, 1) AS b, MIN(id), MAX(id), COUNT(*), \
-     AVG(length(body)) FROM entities WHERE id BETWEEN '' AND 'zzzz' GROUP BY b ORDER BY b";
+/// The shape of the time-series applet's read (`store::chunks`): the rows
+/// of a range over the key, blobs and all, in key order.
+const RANGE_READ: &str = "SELECT id, body FROM entities WHERE id BETWEEN ? AND ? ORDER BY id";
 
 /// The reader that needs no branch: look up `main`'s tip on a read-only
 /// connection, open `<db>@<tip>` read-only and detached, read it for
 /// `--hold-ms`, close, and go again. Each window's samples carry the tip it
-/// opened at.
+/// opened at. With `--at-first`, every window opens the first tip it saw,
+/// as the time-series applet opens the commit an index recorded while
+/// the store's writer goes on sealing newer ones.
 async fn rev_read(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let until = args.path("until")?;
@@ -995,10 +996,18 @@ async fn rev_read(args: &Args) -> Result<Value> {
     let mut opens: Vec<Value> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     let mut txn = 0u64;
+    let mut first: Option<String> = None;
     while !until.exists() {
         let started = Instant::now();
-        let tip = match main_tip(&db).await {
-            Ok(tip) => tip,
+        let looked_up = match &first {
+            Some(tip) if args.flag("at-first") => Ok(tip.clone()),
+            _ => main_tip(&db).await,
+        };
+        let tip = match looked_up {
+            Ok(tip) => {
+                first.get_or_insert_with(|| tip.clone());
+                tip
+            }
             Err(e) => {
                 errors.push(format!("window {txn}: read main's tip: {e:#}"));
                 txn += 1;
@@ -1025,9 +1034,14 @@ async fn rev_read(args: &Args) -> Result<Value> {
                 })),
                 Err(e) => errors.push(format!("sample in window {txn}: {e:#}")),
             }
-            if args.flag("aggregate") {
-                if let Err(e) = sqlx::query(AGGREGATE_READ).fetch_all(&pool).await {
-                    errors.push(format!("aggregate in window {txn}: {e:#}"));
+            if args.flag("range") {
+                if let Err(e) = sqlx::query(RANGE_READ)
+                    .bind("")
+                    .bind("zzzz")
+                    .fetch_all(&pool)
+                    .await
+                {
+                    errors.push(format!("range in window {txn}: {e:#}"));
                 }
             }
             tokio::time::sleep(interval).await;

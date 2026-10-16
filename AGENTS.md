@@ -45,6 +45,7 @@ merge conflict waiting to happen.
 - [`docs/dev/latchkey.md`](docs/dev/latchkey.md) — how a web source signs in: the three kinds of latchkey service, who names an account, the keychain, the gateway. Read before touching a sign-in.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column.
+- [`docs/dev/time_series.md`](docs/dev/time_series.md) — numbers over time: a source's time-series store, the chunk encoding, UCUM units, the index that points at the stores. **Start here** for anything about time series.
 - [`docs/dev/contacts.md`](docs/dev/contacts.md) — who a handle is: handles, each source's record of a person (`NormalizedContact`), the contacts app, and the chips that draw them. **Start here** for anything about a person; read before adding a handle kind.
 - [`docs/dev/edges.md`](docs/dev/edges.md), [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — cross-document edges; the one rule for minting a uuid (read before any `*_uuid` recipe).
 - [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — what the engine does (branches, locks, reads, diffs, plans, write cost, gc), inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
@@ -197,9 +198,9 @@ datalib/
                    document-index load, `RenderCtx`. Everything that knows
                    `datalib_schema` sits here or above.
     etl/timeseries_render/ what the time-series render crates share.
-    etl/time_series/ `datalib_etl_time_series`: the time-series store
-                   both its writers share — a source's
-                   `render_time_series` and the `time_series_index`.
+    etl/time_series/ `datalib_etl_time_series`: the time-series stores
+                   and their writers — a source's `render_time_series`
+                   and the `time_series_index` — and the applet's reads.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
                    (config schema) per provider. Twelve of the
                    file-backed ones scan a local tree through
@@ -234,7 +235,8 @@ datalib/
                    `data-handle`. No first-party deps.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
-    time_series_schema/ a time series, its two tables and `TimeKind`.
+    time_series_schema/ a time series, its tables, `TimeKind`,
+                   `ValueType` and `Unit` (UCUM codes).
                    Only the shape.
     contacts/      the contacts app's store under `datalib_curated/`;
                    the `datalib_contacts` applet is its one writer.
@@ -291,8 +293,8 @@ and reports on the whole, and removing it turns search off.
 plane for the map card (`datalib/backend/embedding_map/README.md`).
 A source whose data is also time series (Garmin) has a
 `render_time_series` step beside its `render_markdown`, and
-`time_series_index` under `unified_time_series_index` stacks every such
-store into one (`docs/dev/plans/time_series.md`). The document index is
+`time_series_index` under `unified_time_series_index` indexes every
+such store without copying its points (`docs/dev/time_series.md`). The document index is
 queried by the `unified_document_index` applet; `datalib-http`
 reads only the stores' commit logs (`history/`), never their rows. A render
 store is readable at every commit: the documents between two checkpoints
@@ -696,6 +698,7 @@ upstream (block types, MIME types), free-form display text
 | which of datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
 | what namespace a handle is in | `HandleKind` | `handle/src/lib.rs` (`datalib_handle`) |
 | what a time-series point's `t` counts | `TimeKind` | `time_series_schema/src/lib.rs` (`datalib_time_series_schema`) |
+| what every value of a time series is | `ValueType` | `time_series_schema/src/lib.rs` (`datalib_time_series_schema`) |
 | a contact is a person or a group; how one is reached | `ContactKind`, `Medium` | `contact_schema/src/lib.rs` (`datalib_contact_schema`) |
 | how a handle was linked | `LinkedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
 | what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |

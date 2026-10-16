@@ -110,7 +110,7 @@ same id and definition would read as up to date and write nothing.
   `dag/src/config.rs`: `garmin`) has a `render_time_series` step beside
   its `render_markdown`, reading its ingest, and the
   `time_series_index` names every such step in its `inputs`.
-  `docs/dev/plans/time_series.md` is the design.
+  `docs/dev/time_series.md` is the design.
 - The qmd steps are the exception to "a step writes its own tree": a
   source's `keyword_index` and `embed`, and `qmd_aggregator`, all write
   the one qmd index file in `unified_document_index/qmd_aggregator`, the

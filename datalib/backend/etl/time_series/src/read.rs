@@ -1,12 +1,19 @@
-//! What a reader asks a time-series store for: one time series' points
-//! in a range, whole or, past a point budget, as buckets of min, max and
-//! mean. The time-series applet serves these.
+//! What a reader asks a source's time-series store for: one time
+//! series' points in a range, whole or, past a point budget, as buckets
+//! of min, max and mean. A chunk that lies inside one bucket is counted
+//! from its summary without being decoded. The time-series applet
+//! serves these.
 
-use anyhow::{Context, Result};
+use std::collections::{BTreeMap, HashMap};
+
+use anyhow::Result;
+use datalib_time_series_schema::{Points, TimeSeriesChunkRow, Values};
 use serde::Serialize;
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 
-/// The points in a range, as they are stored.
+use crate::{chunk, store};
+
+/// A point as a reader gets it: a number in `value`, or a text.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RawPoint {
     pub t: i64,
@@ -15,7 +22,7 @@ pub struct RawPoint {
 }
 
 /// The points of one bucket, summarised: `t` is the first point's.
-/// A bucket of text-only points has no numbers.
+/// A bucket of text has no numbers.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Bucket {
     pub t: i64,
@@ -27,7 +34,7 @@ pub struct Bucket {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Points {
+pub enum Answer {
     Raw { points: Vec<RawPoint> },
     Buckets { width: i64, buckets: Vec<Bucket> },
 }
@@ -40,88 +47,158 @@ pub fn bucket_width(from: i64, to: i64, budget: i64) -> i64 {
     span / budget + i64::from(span % budget != 0)
 }
 
-pub async fn count(pool: &SqlitePool, ts_key: i64, from: i64, to: i64) -> Result<i64> {
-    sqlx::query_scalar(
-        "SELECT COUNT(*) FROM time_series_points WHERE ts_key = ? AND t BETWEEN ? AND ?",
-    )
-    .bind(ts_key)
-    .bind(from)
-    .bind(to)
-    .fetch_one(pool)
-    .await
-    .context("count a time series' points")
+/// Every point of `chunks`, in order.
+pub fn decoded(chunks: &[TimeSeriesChunkRow]) -> Result<Points> {
+    let mut out: Option<Points> = None;
+    for c in chunks {
+        let p = chunk::decode(c.encoding, &c.points)?;
+        match &mut out {
+            None => out = Some(p),
+            Some(all) => append(all, p)?,
+        }
+    }
+    Ok(out.unwrap_or(Points {
+        t: Vec::new(),
+        values: Values::Float(Vec::new()),
+    }))
 }
 
-/// `ts_key`'s points in `[from, to]`: every one when there are at most
-/// `budget`, else `budget` buckets or fewer.
+fn append(all: &mut Points, more: Points) -> Result<()> {
+    match (&mut all.values, more.values) {
+        (Values::Integer(a), Values::Integer(b)) => a.extend(b),
+        (Values::Float(a), Values::Float(b)) => a.extend(b),
+        (Values::Text(a), Values::Text(b)) => a.extend(b),
+        (a, b) => anyhow::bail!(
+            "a time series with {} chunks and {} chunks",
+            a.value_type().as_str(),
+            b.value_type().as_str()
+        ),
+    }
+    all.t.extend(more.t);
+    Ok(())
+}
+
+#[derive(Default)]
+struct Acc {
+    t: i64,
+    min: Option<f64>,
+    max: Option<f64>,
+    sum: f64,
+    numbers: i64,
+    count: i64,
+}
+
+impl Acc {
+    fn add(&mut self, t: i64, n: i64, min: Option<f64>, max: Option<f64>, sum: Option<f64>) {
+        if self.count == 0 || t < self.t {
+            self.t = t;
+        }
+        self.count += n;
+        if let (Some(lo), Some(hi), Some(s)) = (min, max, sum) {
+            self.min = Some(self.min.map_or(lo, |m| m.min(lo)));
+            self.max = Some(self.max.map_or(hi, |m| m.max(hi)));
+            self.sum += s;
+            self.numbers += n;
+        }
+    }
+
+    fn bucket(&self) -> Bucket {
+        Bucket {
+            t: self.t,
+            min: self.min,
+            max: self.max,
+            mean: (self.numbers > 0).then(|| self.sum / self.numbers as f64),
+            count: self.count,
+        }
+    }
+}
+
+/// The answer for `[from, to]` from `chunks`, the time series' chunks
+/// that overlap it: every point when there are at most `budget`, else
+/// `budget` buckets or fewer.
+pub fn answer(chunks: &[TimeSeriesChunkRow], from: i64, to: i64, budget: i64) -> Result<Answer> {
+    let chunks: Vec<&TimeSeriesChunkRow> = chunks
+        .iter()
+        .filter(|c| c.first_t <= to && c.last_t >= from)
+        .collect();
+    let inside = |c: &TimeSeriesChunkRow| c.first_t >= from && c.last_t <= to;
+    let in_range = |t: i64| (from..=to).contains(&t);
+    let mut decoded: HashMap<usize, Points> = HashMap::new();
+    let mut count = 0;
+    for (i, c) in chunks.iter().enumerate() {
+        if inside(c) {
+            count += c.n;
+        } else {
+            let p = chunk::decode(c.encoding, &c.points)?;
+            count += p.t.iter().filter(|&&t| in_range(t)).count() as i64;
+            decoded.insert(i, p);
+        }
+    }
+
+    if count <= budget.max(0) {
+        let mut points = Vec::with_capacity(count as usize);
+        for (i, c) in chunks.iter().enumerate() {
+            let p = match decoded.remove(&i) {
+                Some(p) => p,
+                None => chunk::decode(c.encoding, &c.points)?,
+            };
+            for (j, &t) in p.t.iter().enumerate() {
+                if in_range(t) {
+                    points.push(RawPoint {
+                        t,
+                        value: p.values.number(j),
+                        text: p.values.text(j).map(str::to_string),
+                    });
+                }
+            }
+        }
+        return Ok(Answer::Raw { points });
+    }
+
+    let width = bucket_width(from, to, budget);
+    let bucket_of = |t: i64| ((i128::from(t) - i128::from(from)) / i128::from(width)) as i64;
+    let mut buckets: BTreeMap<i64, Acc> = BTreeMap::new();
+    for (i, c) in chunks.iter().enumerate() {
+        if inside(c) && bucket_of(c.first_t) == bucket_of(c.last_t) {
+            buckets
+                .entry(bucket_of(c.first_t))
+                .or_default()
+                .add(c.first_t, c.n, c.min, c.max, c.sum);
+            continue;
+        }
+        let p = match decoded.remove(&i) {
+            Some(p) => p,
+            None => chunk::decode(c.encoding, &c.points)?,
+        };
+        for (j, &t) in p.t.iter().enumerate() {
+            if in_range(t) {
+                let v = p.values.number(j);
+                buckets.entry(bucket_of(t)).or_default().add(t, 1, v, v, v);
+            }
+        }
+    }
+    Ok(Answer::Buckets {
+        width,
+        buckets: buckets.values().map(Acc::bucket).collect(),
+    })
+}
+
+/// [`answer`] for `ts_key` in the store `pool` reads.
 pub async fn points(
     pool: &SqlitePool,
     ts_key: i64,
     from: i64,
     to: i64,
     budget: i64,
-) -> Result<Points> {
-    if count(pool, ts_key, from, to).await? <= budget {
-        let rows = sqlx::query(
-            "SELECT t, value, text FROM time_series_points \
-             WHERE ts_key = ? AND t BETWEEN ? AND ? ORDER BY t",
-        )
-        .bind(ts_key)
-        .bind(from)
-        .bind(to)
-        .fetch_all(pool)
-        .await
-        .context("read a time series' points")?;
-        let points = rows
-            .iter()
-            .map(|r| {
-                Ok(RawPoint {
-                    t: r.try_get("t")?,
-                    value: r.try_get("value")?,
-                    text: r.try_get("text")?,
-                })
-            })
-            .collect::<Result<_>>()?;
-        return Ok(Points::Raw { points });
-    }
-    let width = bucket_width(from, to, budget);
-    let rows = sqlx::query(
-        "SELECT MIN(t) AS t, MIN(value) AS min, MAX(value) AS max, AVG(value) AS mean, \
-                COUNT(*) AS count \
-         FROM time_series_points WHERE ts_key = ? AND t BETWEEN ? AND ? \
-         GROUP BY (t - ?) / ? ORDER BY 1",
-    )
-    .bind(ts_key)
-    .bind(from)
-    .bind(to)
-    .bind(from)
-    .bind(width)
-    .fetch_all(pool)
-    .await
-    .context("bucket a time series' points")?;
-    let buckets = rows
-        .iter()
-        .map(|r| {
-            Ok(Bucket {
-                t: r.try_get("t")?,
-                min: r.try_get("min")?,
-                max: r.try_get("max")?,
-                mean: r.try_get("mean")?,
-                count: r.try_get("count")?,
-            })
-        })
-        .collect::<Result<_>>()?;
-    Ok(Points::Buckets { width, buckets })
+) -> Result<Answer> {
+    let chunks = store::chunks(pool, ts_key, from, to).await?;
+    answer(&chunks, from, to, budget)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
-    use datalib_time_series_schema::{Point, TimeKind, TimeSeries};
-
     use super::*;
-    use crate::{apply, store};
+    use crate::chunk::cut;
 
     #[test]
     fn a_width_never_makes_more_buckets_than_the_budget() {
@@ -135,52 +212,63 @@ mod tests {
         assert_eq!(bucket_width(0, 9, 0), 10);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_range_past_the_budget_comes_back_as_buckets() {
-        let dir = tempfile::tempdir().unwrap();
-        let pool = store::open(
-            &dir.path().join(store::DB),
-            datalib_etl::doltlite_raw::StoreKind::TimeSeries,
-        )
-        .await
-        .unwrap();
-        let s = TimeSeries {
-            time_series_id: "temp".into(),
-            source_id: "yolink".into(),
-            entity: "bridge".into(),
-            metric: "temperature".into(),
-            label: "Temperature".into(),
-            unit: "°C".into(),
-            time_kind: TimeKind::Instant,
-            points: (0..100).map(|i| Point::value(i, i as f64)).collect(),
+    /// A bucket made from a chunk's summary must equal the one made from
+    /// its points, so the answer cannot depend on where chunks were cut.
+    #[test]
+    fn buckets_are_the_same_however_the_points_were_chunked() {
+        let p = Points::floats((0..1_000).map(|i| (i, ((i * 37) % 101) as f64)));
+        let whole = answer(&cut(1, &p, 5_000), 0, 999, 10).unwrap();
+        for size in [1, 7, 100, 250] {
+            assert_eq!(
+                answer(&cut(1, &p, size), 0, 999, 10).unwrap(),
+                whole,
+                "{size}"
+            );
+        }
+        let Answer::Buckets { width, buckets } = whole else {
+            panic!("a thousand points over a budget of ten are bucketed")
         };
-        apply(&pool, std::slice::from_ref(&s), &BTreeSet::from(["yolink"]))
-            .await
-            .unwrap();
-        let key = store::rows(&pool).await.unwrap()[0].ts_key;
+        assert_eq!((width, buckets.len()), (100, 10));
+        assert_eq!(buckets[1].t, 100);
+        assert_eq!(buckets[1].count, 100);
+    }
 
-        let Points::Raw { points } = super::points(&pool, key, 10, 19, 50).await.unwrap() else {
+    #[test]
+    fn a_range_within_the_budget_comes_back_whole_and_trimmed_to_the_range() {
+        let p = Points::integers((0..100).map(|i| (i, i * 2)));
+        let Answer::Raw { points } = answer(&cut(1, &p, 30), 10, 19, 50).unwrap() else {
             panic!("ten points under a budget of fifty come back whole")
         };
         assert_eq!(points.len(), 10);
-        assert_eq!(points[0].t, 10);
-
-        let Points::Buckets { width, buckets } =
-            super::points(&pool, key, 0, 99, 10).await.unwrap()
-        else {
-            panic!("a hundred points over a budget of ten are bucketed")
-        };
-        assert_eq!((width, buckets.len()), (10, 10));
         assert_eq!(
-            buckets[1],
-            Bucket {
+            points[0],
+            RawPoint {
                 t: 10,
-                min: Some(10.0),
-                max: Some(19.0),
-                mean: Some(14.5),
+                value: Some(20.0),
+                text: None
+            }
+        );
+    }
+
+    #[test]
+    fn text_comes_back_as_text_and_its_buckets_only_count() {
+        let p = Points::texts((0..20).map(|i| (i, format!("s{}", i % 2))));
+        let Answer::Raw { points } = answer(&cut(1, &p, 8), 0, 1, 10).unwrap() else {
+            panic!()
+        };
+        assert_eq!(points[1].text.as_deref(), Some("s1"));
+        let Answer::Buckets { buckets, .. } = answer(&cut(1, &p, 8), 0, 19, 2).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            buckets[0],
+            Bucket {
+                t: 0,
+                min: None,
+                max: None,
+                mean: None,
                 count: 10
             }
         );
-        pool.close().await;
     }
 }

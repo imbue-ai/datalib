@@ -1,21 +1,30 @@
 // The rules behind the Time series card (TimeSeriesCard.ce.vue), pure:
 // what the applet answers, which time series share an axis, what unit a
 // value is shown in, and where on the chart a point lands. The applet is
-// `unified_time_series_index` (docs/dev/applets.md).
+// `unified_time_series_index` (docs/dev/applets.md); units are UCUM codes
+// it has already read (docs/dev/time_series.md).
 
 export const TIME_SERIES_APPLET = "/applet/unified_time_series_index";
 
 export type TimeKind = "instant" | "day";
+export type ValueType = "integer" | "float" | "text";
 
 /// One time series as `GET /time_series` lists it. `t` is unix
 /// milliseconds for an `instant` and days since 1970-01-01 for a `day`.
+/// A value times `unit_factor` plus `unit_offset` is in the SI unit of
+/// its `quantity`; two time series of one quantity share an axis.
 export type Listed = {
   time_series_id: string;
   source_id: string;
-  entity: string;
-  metric: string;
-  label: string;
+  about_uuid: string | null;
+  name: string;
+  human_name: string;
   unit: string;
+  unit_label: string;
+  quantity: string;
+  unit_factor: number;
+  unit_offset: number;
+  value_type: ValueType;
   time_kind: TimeKind;
   point_count: number;
   first_t: number | null;
@@ -72,45 +81,77 @@ export function newestMs(picked: Listed[]): number | null {
   return all.length ? Math.max(...all) : null;
 }
 
-/// The words the stored unit is shown in, and what a stored value is
-/// multiplied by to get there. Durations are stored in seconds and
-/// distances in metres; a chart of sleep reads in hours.
-export function displayUnit(unit: string, maxAbs: number): { label: string; factor: number } {
-  if (unit === "s") {
+/// How an axis shows a value: `label` is the unit it is shown in, and a
+/// value in SI units times `factor` plus `offset` is the number shown.
+export type Shown = { label: string; factor: number; offset?: number };
+
+const shown = (v: number, unit: Shown) => v * unit.factor + (unit.offset ?? 0);
+
+const DAY_S = 86_400;
+/// UCUM's `a`, the Julian year.
+const YEAR_S = 365.25 * DAY_S;
+
+/// The unit an axis of `quantity` is shown in, given its largest value
+/// in SI units: a duration or a distance in whatever suits its size (a
+/// chart of sleep reads in hours, an age in years), anything else in the unit of `first`,
+/// the first time series on the axis.
+export function displayUnit(quantity: string, first: Listed, maxAbs: number): Shown {
+  if (quantity === "T1") {
+    if (maxAbs >= 2 * YEAR_S) return { label: "yr", factor: 1 / YEAR_S };
+    if (maxAbs >= 2 * DAY_S) return { label: "d", factor: 1 / DAY_S };
     if (maxAbs >= 2 * 3600) return { label: "h", factor: 1 / 3600 };
     if (maxAbs >= 120) return { label: "min", factor: 1 / 60 };
     if (maxAbs < 1) return { label: "ms", factor: 1000 };
     return { label: "s", factor: 1 };
   }
-  if (unit === "m" && maxAbs >= 2000) return { label: "km", factor: 1 / 1000 };
-  return { label: unit, factor: 1 };
+  if (quantity === "L1") {
+    return maxAbs >= 2000 ? { label: "km", factor: 1 / 1000 } : { label: "m", factor: 1 };
+  }
+  return {
+    label: first.unit_label,
+    factor: 1 / first.unit_factor,
+    offset: first.unit_offset === 0 ? 0 : -first.unit_offset / first.unit_factor,
+  };
 }
 
-/// One axis per unit, the first picked on the left: two at most, since a
-/// third scale on one chart is one nobody can read.
-export const MAX_UNITS = 2;
+/// One axis per quantity, the first picked on the left: two at most,
+/// since a third scale on one chart is one nobody can read.
+export const MAX_AXES = 2;
 
-export function unitsOf(picked: Listed[]): string[] {
+export function quantitiesOf(picked: Listed[]): string[] {
   const out: string[] = [];
-  for (const p of picked) if (!out.includes(p.unit)) out.push(p.unit);
+  for (const p of picked) if (!out.includes(p.quantity)) out.push(p.quantity);
   return out;
+}
+
+/// What the list says a time series is in.
+export function unitText(s: Listed): string {
+  if (s.value_type === "text") return "text";
+  if (s.quantity === "T1") return "duration";
+  if (s.quantity === "L1") return "distance";
+  return s.unit_label || "no unit";
 }
 
 /// Why `candidate` cannot join `picked`, or null when it can.
 export function refusal(picked: Listed[], candidate: Listed): string | null {
-  const units = unitsOf(picked);
-  if (units.includes(candidate.unit) || units.length < MAX_UNITS) return null;
-  const shown = units.map((u) => u || "no unit").join(" and ");
-  return `The chart already has two units (${shown}); take one off to add ${candidate.unit || "a unit-less time series"}.`;
+  if (candidate.value_type === "text") {
+    return `${candidate.human_name} is text, which the chart cannot draw yet.`;
+  }
+  const quantities = quantitiesOf(picked);
+  if (quantities.includes(candidate.quantity) || quantities.length < MAX_AXES) return null;
+  const named = quantities
+    .map((q) => unitText(picked.find((p) => p.quantity === q)!))
+    .join(" and ");
+  return `The chart already has two axes (${named}); take one off to add ${unitText(candidate)}.`;
 }
 
-/// The time series that answer every word of `filter` in their label,
-/// metric, entity or source, grouped by source in source order.
+/// The time series that answer every word of `filter` in their human
+/// name, name or source, grouped by source in source order.
 export function grouped(all: Listed[], filter: string): { source: string; items: Listed[] }[] {
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
   const out = new Map<string, Listed[]>();
   for (const s of all) {
-    const hay = `${s.label} ${s.metric} ${s.entity} ${s.source_id}`.toLowerCase();
+    const hay = `${s.human_name} ${s.name} ${s.source_id}`.toLowerCase();
     if (!words.every((w) => hay.includes(w))) continue;
     const list = out.get(s.source_id) ?? [];
     list.push(s);
@@ -124,25 +165,29 @@ export function grouped(all: Listed[], filter: string): { source: string; items:
 export type XY = { x: number; y: number };
 export type Band = { x: number; lo: number; hi: number };
 
-/// A time series' line, in milliseconds and stored units: every point
-/// with a value, or every bucket's mean.
+const si = (a: Listed, v: number) => v * a.unit_factor + a.unit_offset;
+
+/// A time series' line, in milliseconds and SI units: every point with a
+/// value, or every bucket's mean.
 export function lineOf(a: Answered): XY[] {
   if (a.kind === "raw") {
     return a.points.flatMap((p) =>
-      p.value === null ? [] : [{ x: toMs(a.time_kind, p.t), y: p.value }],
+      p.value === null ? [] : [{ x: toMs(a.time_kind, p.t), y: si(a, p.value) }],
     );
   }
   return a.buckets.flatMap((b) =>
-    b.mean === null ? [] : [{ x: toMs(a.time_kind, b.t), y: b.mean }],
+    b.mean === null ? [] : [{ x: toMs(a.time_kind, b.t), y: si(a, b.mean) }],
   );
 }
 
-/// The spread a bucketed answer hides, min to max per bucket; null when
-/// the answer has every point.
+/// The spread a bucketed answer hides, min to max per bucket, in SI
+/// units; null when the answer has every point.
 export function bandOf(a: Answered): Band[] | null {
   if (a.kind === "raw") return null;
   return a.buckets.flatMap((b) =>
-    b.min === null || b.max === null ? [] : [{ x: toMs(a.time_kind, b.t), lo: b.min, hi: b.max }],
+    b.min === null || b.max === null
+      ? []
+      : [{ x: toMs(a.time_kind, b.t), lo: si(a, b.min), hi: si(a, b.max) }],
   );
 }
 
@@ -192,17 +237,24 @@ export function formatTime(ms: number, kind: TimeKind, spanMs: number): string {
 }
 
 /// A value as a tooltip writes it, in its display unit.
-export function formatValue(v: number, unit: { label: string; factor: number }): string {
-  const shown = v * unit.factor;
-  const abs = Math.abs(shown);
-  const text = abs >= 100 ? shown.toFixed(0) : abs >= 10 ? shown.toFixed(1) : shown.toFixed(2);
+export function formatValue(v: number, unit: Shown): string {
+  const n = shown(v, unit);
+  const abs = Math.abs(n);
+  const text = abs >= 100 ? n.toFixed(0) : abs >= 10 ? n.toFixed(1) : n.toFixed(2);
   return unit.label ? `${text} ${unit.label}` : text;
 }
 
 /// A tick on a value axis, in its display unit, with no trailing zeros:
 /// ticks are round numbers already.
-export function formatTick(v: number, unit: { factor: number }): string {
-  return String(Number((v * unit.factor).toPrecision(6)));
+export function formatTick(v: number, unit: Shown): string {
+  return String(Number(shown(v, unit).toPrecision(6)));
+}
+
+/// Round ticks in the display unit for an axis spanning `[lo, hi]` in SI
+/// units, returned in SI units.
+export function axisTicks(lo: number, hi: number, unit: Shown): number[] {
+  const offset = unit.offset ?? 0;
+  return niceTicks(shown(lo, unit), shown(hi, unit)).map((t) => (t - offset) / unit.factor);
 }
 
 /// The point of `line` nearest `x`, by time, when one is within

@@ -260,7 +260,7 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
 }
 
 /// The TNG account's time series land in a time-series store, and a
-/// second render of an unchanged raw store writes nothing.
+/// second render of an unchanged raw store writes no row and no chunk.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn time_series_are_stored_then_left_alone_when_nothing_moved() {
     use datalib_etl_garmin_render::render::time_series;
@@ -274,13 +274,13 @@ async fn time_series_are_stored_then_left_alone_when_nothing_moved() {
     let (head, all) = time_series::read(&raw, SOURCE, None).unwrap();
     assert!(head.is_some());
     let parsed = parse(&raw, RawRange::cold()).unwrap();
-    let weight = all.iter().find(|s| s.metric == "weight").unwrap();
+    let weight = all.iter().find(|s| s.name == "weight").unwrap();
     assert_eq!(weight.time_kind, TimeKind::Instant);
     assert_eq!(weight.points.len(), parsed.weigh_ins.len());
-    let resting = all.iter().find(|s| s.metric == "resting_hr").unwrap();
+    let resting = all.iter().find(|s| s.name == "resting_hr").unwrap();
     assert_eq!(
         (resting.time_kind, resting.unit.as_str()),
-        (TimeKind::Day, "bpm")
+        (TimeKind::Day, "{beats}/min")
     );
     assert!(!resting.points.is_empty());
     let ids: std::collections::BTreeSet<&str> =
@@ -293,15 +293,18 @@ async fn time_series_are_stored_then_left_alone_when_nothing_moved() {
     )
     .await
     .unwrap();
-    let scope = std::collections::BTreeSet::from([SOURCE]);
-    let first = datalib_etl_time_series::apply(&store, &all, &scope)
+    let first = datalib_etl_time_series::apply(&store, &all, SOURCE)
         .await
         .unwrap();
     assert_eq!(first.written, all.len());
+    assert_eq!(first.chunks_written, all.len());
     let (_, again) = time_series::read(&raw, SOURCE, None).unwrap();
-    let second = datalib_etl_time_series::apply(&store, &again, &scope)
+    let second = datalib_etl_time_series::apply(&store, &again, SOURCE)
         .await
         .unwrap();
-    assert_eq!((second.written, second.unchanged), (0, all.len()));
+    assert_eq!(
+        (second.written, second.unchanged, second.chunks_written),
+        (0, all.len(), 0)
+    );
     store.close().await;
 }

@@ -90,7 +90,7 @@ pub fn rewrite(text: &str) -> Result<String> {
         .map(|s| quote(&format!("{s}/{RENDER}")))
         .collect();
     out.push_str(&format!(
-        "\n\n# ── the time-series index: every source's time series, stacked ──\n\
+        "\n\n# ── the time-series index: every source's time series, in one list ──\n\
          [[groups]]\nid = {group}\nname = \"Time Series Index\"\n\n\
          [[steps]]\ngroup = {group}\nfunction = {}\ninputs = [{}]\n\n\
          [[applets]]\ngroup = {group}\nid = {group}\ncommand = {}\n",

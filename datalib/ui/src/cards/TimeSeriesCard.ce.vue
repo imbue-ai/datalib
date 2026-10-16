@@ -1,13 +1,14 @@
 <script setup lang="ts">
 // `timeSeriesView()`: every time series in the time-series index, picked
-// from a list and drawn together on one chart, one axis per unit and two
-// units at most. Read from the `unified_time_series_index` applet; the
+// from a list and drawn together on one chart, one axis per quantity and
+// two axes at most. Read from the `unified_time_series_index` applet; the
 // rules are timeSeries.ts.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { subscribeLive } from "@/live";
 import {
   RANGES,
   TIME_SERIES_APPLET,
+  axisTicks,
   bandOf,
   decodeState,
   displayUnit,
@@ -21,14 +22,15 @@ import {
   lineOf,
   nearest,
   newestMs,
-  niceTicks,
+  quantitiesOf,
   rangeBounds,
   refusal,
   toMs,
-  unitsOf,
+  unitText,
   type Answered,
   type Listed,
   type RangeKey,
+  type Shown,
   type TimeKind,
 } from "./timeSeries";
 import type { CardCtx } from "./types";
@@ -38,9 +40,10 @@ props.ctx.setTitle("Time series");
 props.ctx.setHelp(`
 <p>Every time series your sources keep — a Garmin metric by day, a
 sensor's readings — from the time-series index. Tick time series in the
-list to draw them on one chart. Time series in the same unit share an
-axis; a second unit gets the right-hand axis, and a chart holds two
-units at most.</p>
+list to draw them on one chart. Time series of one quantity share an
+axis, converted to one unit — minutes and hours, kilograms and pounds; a
+second quantity gets the right-hand axis, and a chart holds two at
+most. A time series of text is listed but not drawn yet.</p>
 <p>Past a few hundred points a line shows each stretch's mean, with the
 shaded band from its lowest to its highest value; a shorter range shows
 every point. Hover the chart to read each line's value at that time.</p>
@@ -70,10 +73,6 @@ const picked = computed(() =>
   }),
 );
 const groups = computed(() => grouped(all.value, filter.value));
-/// A stored unit as the list names it: seconds and metres are shown
-/// as whatever suits their size, so the list names the quantity.
-const unitWord = (unit: string) =>
-  unit === "s" ? "duration" : unit === "m" ? "distance" : unit || "no unit";
 const colorOf = (id: string) => COLORS[Math.max(0, ids.value.indexOf(id)) % COLORS.length]!;
 
 function persist() {
@@ -161,12 +160,25 @@ async function loadPoints() {
         });
         const text = await r.text();
         if (!r.ok) throw new Error(`points → ${r.status}: ${text}`);
-        return (JSON.parse(text) as { time_series: Answered[] }).time_series;
+        return JSON.parse(text) as {
+          time_series: Answered[];
+          unreadable: { time_series_id: string; error: string }[];
+        };
       }),
     );
     if (mine !== pointsAsked) return;
-    answered.value = new Map(answers.flat().map((a) => [a.time_series_id, a]));
-    error.value = null;
+    answered.value = new Map(
+      answers.flatMap((a) => a.time_series).map((a) => [a.time_series_id, a]),
+    );
+    const unreadable = answers.flatMap((a) => a.unreadable ?? []);
+    error.value = unreadable.length
+      ? unreadable
+          .map(
+            (u) =>
+              `${byId.value.get(u.time_series_id)?.human_name ?? u.time_series_id}: ${u.error}`,
+          )
+          .join("\n")
+      : null;
   } catch (e) {
     if (mine === pointsAsked) error.value = (e as Error).message;
   }
@@ -182,38 +194,38 @@ watch([ids, range, () => Math.round(size.value.w / 50), all], schedulePoints);
 // ── Geometry ───────────────────────────────────────────────────────
 
 const M = { top: 12, bottom: 28, left: 56 };
-const units = computed(() => unitsOf(picked.value));
-const marginRight = computed(() => (units.value.length > 1 ? 56 : 16));
+const quantities = computed(() => quantitiesOf(picked.value));
+const marginRight = computed(() => (quantities.value.length > 1 ? 56 : 16));
 const plotW = computed(() => Math.max(10, size.value.w - M.left - marginRight.value));
 const plotH = computed(() => Math.max(10, size.value.h - M.top - M.bottom));
 
+/// One value axis, in SI units: `lo`, `hi` and `ticks` are SI values,
+/// and `shown` turns one into what the axis prints.
 type Axis = {
-  unit: string;
+  quantity: string;
   lo: number;
   hi: number;
-  shown: { label: string; factor: number };
+  shown: Shown;
   ticks: number[];
 };
 
 const axes = computed<Axis[]>(() =>
-  units.value.flatMap((unit) => {
-    const values = picked.value
-      .filter((p) => p.unit === unit)
-      .flatMap((p) => {
-        const a = answered.value.get(p.time_series_id);
-        if (!a) return [];
-        const band = bandOf(a) ?? [];
-        return [...lineOf(a).map((pt) => pt.y), ...band.flatMap((b) => [b.lo, b.hi])];
-      });
+  quantities.value.flatMap((quantity) => {
+    const on = picked.value.filter((p) => p.quantity === quantity);
+    const values = on.flatMap((p) => {
+      const a = answered.value.get(p.time_series_id);
+      if (!a) return [];
+      const band = bandOf(a) ?? [];
+      return [...lineOf(a).map((pt) => pt.y), ...band.flatMap((b) => [b.lo, b.hi])];
+    });
     const e = extent(values);
     if (!e) return [];
-    const shown = displayUnit(unit, Math.max(Math.abs(e[0]), Math.abs(e[1])));
-    const ticks = niceTicks(e[0] * shown.factor, e[1] * shown.factor).map((t) => t / shown.factor);
-    return [{ unit, lo: e[0], hi: e[1], shown, ticks }];
+    const shown = displayUnit(quantity, on[0]!, Math.max(Math.abs(e[0]), Math.abs(e[1])));
+    return [{ quantity, lo: e[0], hi: e[1], shown, ticks: axisTicks(e[0], e[1], shown) }];
   }),
 );
 
-const axisOf = (unit: string) => axes.value.find((a) => a.unit === unit) ?? null;
+const axisOf = (quantity: string) => axes.value.find((a) => a.quantity === quantity) ?? null;
 
 function px(ms: number): number {
   const s = span.value;
@@ -227,7 +239,7 @@ function py(v: number, axis: Axis): number {
 const drawn = computed(() =>
   picked.value.flatMap((p) => {
     const a = answered.value.get(p.time_series_id);
-    const axis = axisOf(p.unit);
+    const axis = axisOf(p.quantity);
     if (!a || !axis) return [];
     const line = lineOf(a);
     const band = bandOf(a);
@@ -298,7 +310,7 @@ const hover = computed(() => {
       ? [
           {
             color: d.color,
-            label: d.listed.label,
+            label: d.listed.human_name,
             value: formatValue(p.y, d.axis.shown),
             x: p.x,
             kind: d.listed.time_kind,
@@ -384,8 +396,8 @@ onBeforeUnmount(() => {
                   : 'transparent',
               }"
             ></span>
-            <span class="ts-label">{{ s.label }}</span>
-            <span class="ts-meta">{{ unitWord(s.unit) }} · {{ s.point_count }}</span>
+            <span class="ts-label">{{ s.human_name }}</span>
+            <span class="ts-meta">{{ unitText(s) }} · {{ s.point_count }}</span>
           </label>
         </section>
       </div>
@@ -401,14 +413,14 @@ onBeforeUnmount(() => {
             :style="{ borderColor: colorOf(p.time_series_id) }"
           >
             <span class="ts-swatch" :style="{ background: colorOf(p.time_series_id) }"></span>
-            {{ p.label }} · {{ p.source_id }}
+            {{ p.human_name }} · {{ p.source_id }}
             <span class="ts-axis-name">{{
-              units.length > 1 ? (units.indexOf(p.unit) === 0 ? "left" : "right") : ""
+              quantities.length > 1 ? (quantities.indexOf(p.quantity) === 0 ? "left" : "right") : ""
             }}</span>
             <button
               type="button"
               class="ts-x"
-              :aria-label="`Take ${p.label} off the chart`"
+              :aria-label="`Take ${p.human_name} off the chart`"
               @click="toggle(p)"
             >
               ×
@@ -436,7 +448,7 @@ onBeforeUnmount(() => {
           :width="size.w"
           :height="size.h"
           role="img"
-          :aria-label="picked.map((p) => p.label).join(', ')"
+          :aria-label="picked.map((p) => p.human_name).join(', ')"
         >
           <g v-if="axes[0]">
             <g v-for="t in axes[0].ticks" :key="`l${t}`">
@@ -657,6 +669,7 @@ onBeforeUnmount(() => {
 }
 .ts-error {
   color: var(--datalib-error-fg);
+  white-space: pre-line;
 }
 /* A narrow card stacks the list over the chart. */
 @container (max-width: 34rem) {

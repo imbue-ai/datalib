@@ -339,8 +339,9 @@ reads through `dolt_at_` modules,
 `dolt_diff_summary`, `dolt_diff_stat`, `dolt_status`, a `COUNT(*)` per
 table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
 `dolt_branches`, a read-only open of `<file>@<hash>` with a
-`COUNT(*)`, a `_datalib_meta` read and a range bucketed with `GROUP BY`
-and aggregates on it (the time-series applet's reads), and, on that open or on
+`COUNT(*)`, a `_datalib_meta` read and the rows of a key range with
+their blobs, at a commit the writer has since moved past (the
+time-series applet's read), and, on that open or on
 the held read transaction's connection to `main`, an `ATTACH` of a
 plain SQLite file read-only with an FTS5 `MATCH` on it and a join from
 it to the store's tables — and that list is the allowlist. The plain

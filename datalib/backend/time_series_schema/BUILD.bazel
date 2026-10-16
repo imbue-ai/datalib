@@ -1,13 +1,15 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# A time series and the two tables that store one: the shape every
-# time-series store and the time-series index share. Bazel-only.
+# A time series, its units and the tables that store one: the shape
+# every time-series store and the time-series index share. Bazel-only.
 rust_library(
     name = "datalib_time_series_schema",
     srcs = [
+        "src/chunks.rs",
         "src/lib.rs",
-        "src/points.rs",
+        "src/sources.rs",
         "src/series.rs",
+        "src/unit.rs",
     ],
     crate_name = "datalib_time_series_schema",
     edition = "2021",
@@ -16,9 +18,10 @@ rust_library(
     ],
     visibility = ["//datalib:__subpackages__"],
     deps = [
-        "@datalib_crates//:blake3",
+        "//datalib/backend/table:datalib_table",
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
     ],
 )

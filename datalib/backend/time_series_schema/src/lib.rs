@@ -1,15 +1,19 @@
-//! A time series: one metric of one entity from one source, as values
-//! over time. The shape a source's `render_time_series` step writes, the
-//! `time_series_index` step stacks and the time-series applet serves.
-//! `docs/dev/plans/time_series.md` is the design.
+//! A time series: one named quantity from one source, as values over
+//! time. The shape a source's `render_time_series` step writes, the
+//! `time_series_index` step indexes and the time-series applet serves.
+//! `docs/dev/time_series.md` is the design.
 
-pub mod points;
+pub mod chunks;
 pub mod series;
+pub mod sources;
+pub mod unit;
 
 use serde::{Deserialize, Serialize};
 
-pub use points::TimeSeriesPointRow;
+pub use chunks::TimeSeriesChunkRow;
 pub use series::TimeSeriesRow;
+pub use sources::TimeSeriesSourceRow;
+pub use unit::Unit;
 
 /// What a point's `t` counts.
 #[derive(
@@ -46,6 +50,39 @@ impl TimeKind {
     }
 }
 
+/// What every value of one time series is.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ValueType {
+    Integer,
+    Float,
+    /// A reading that is not a number: a sleep stage, a door state.
+    Text,
+}
+
+impl ValueType {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
 /// `t` for a [`TimeKind::Day`] point: days since 1970-01-01 of a
 /// `YYYY-MM-DD` date. `None` for anything else.
 pub fn day_number(date: &str) -> Option<i64> {
@@ -56,112 +93,195 @@ pub fn day_number(date: &str) -> Option<i64> {
     )
 }
 
-/// One reading. A point with neither a value nor a text is kept: it says
-/// the source reported the moment and nothing in it.
+/// The values of a run of points, all of one type.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Point {
-    pub t: i64,
-    pub value: Option<f64>,
-    /// A reading that is not a number: a sleep stage, a door state.
-    pub text: Option<String>,
+pub enum Values {
+    Integer(Vec<i64>),
+    Float(Vec<f64>),
+    Text(Vec<String>),
 }
 
-impl Point {
-    pub fn value(t: i64, value: f64) -> Self {
-        Self {
-            t,
-            value: Some(value),
-            text: None,
+impl Values {
+    pub fn value_type(&self) -> ValueType {
+        match self {
+            Values::Integer(_) => ValueType::Integer,
+            Values::Float(_) => ValueType::Float,
+            Values::Text(_) => ValueType::Text,
         }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Values::Integer(v) => v.len(),
+            Values::Float(v) => v.len(),
+            Values::Text(v) => v.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn empty(value_type: ValueType) -> Self {
+        match value_type {
+            ValueType::Integer => Values::Integer(Vec::new()),
+            ValueType::Float => Values::Float(Vec::new()),
+            ValueType::Text => Values::Text(Vec::new()),
+        }
+    }
+
+    /// The values in `range`, as their own run.
+    pub fn slice(&self, range: std::ops::Range<usize>) -> Self {
+        match self {
+            Values::Integer(v) => Values::Integer(v[range].to_vec()),
+            Values::Float(v) => Values::Float(v[range].to_vec()),
+            Values::Text(v) => Values::Text(v[range].to_vec()),
+        }
+    }
+
+    /// The `i`th value as a number; `None` for text.
+    pub fn number(&self, i: usize) -> Option<f64> {
+        match self {
+            Values::Integer(v) => Some(v[i] as f64),
+            Values::Float(v) => Some(v[i]),
+            Values::Text(_) => None,
+        }
+    }
+
+    pub fn text(&self, i: usize) -> Option<&str> {
+        match self {
+            Values::Text(v) => Some(&v[i]),
+            _ => None,
+        }
+    }
+}
+
+/// A run of points: `t` strictly ascending, one value per `t`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Points {
+    pub t: Vec<i64>,
+    pub values: Values,
+}
+
+impl Points {
+    pub fn integers(points: impl IntoIterator<Item = (i64, i64)>) -> Self {
+        let (t, v) = points.into_iter().unzip();
+        Points {
+            t,
+            values: Values::Integer(v),
+        }
+    }
+
+    pub fn floats(points: impl IntoIterator<Item = (i64, f64)>) -> Self {
+        let (t, v) = points.into_iter().unzip();
+        Points {
+            t,
+            values: Values::Float(v),
+        }
+    }
+
+    pub fn texts(points: impl IntoIterator<Item = (i64, String)>) -> Self {
+        let (t, v) = points.into_iter().unzip();
+        Points {
+            t,
+            values: Values::Text(v),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.t.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.t.is_empty()
+    }
+
+    pub fn slice(&self, range: std::ops::Range<usize>) -> Self {
+        Points {
+            t: self.t[range.clone()].to_vec(),
+            values: self.values.slice(range),
+        }
+    }
+
+    /// Why these points cannot be stored, if they cannot: a store keys a
+    /// point by its `t`, and a chunk is cut by position.
+    pub fn problem(&self) -> Option<String> {
+        if self.t.len() != self.values.len() {
+            return Some(format!(
+                "{} times but {} values",
+                self.t.len(),
+                self.values.len()
+            ));
+        }
+        self.t
+            .windows(2)
+            .find(|w| w[0] >= w[1])
+            .map(|w| format!("t {} is followed by {}, not by a later t", w[0], w[1]))
     }
 }
 
 /// A time series as a render builds it, before any store keys it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimeSeries {
-    /// Minted by the provider from source id, entity and metric
-    /// (`docs/dev/entity_ids.md`), so it is the same in every store and
-    /// on every render.
+    /// Minted by the provider from its source id and `name`
+    /// (`docs/dev/entity_ids.md`), so it is the same on every render.
     pub time_series_id: String,
     pub source_id: String,
-    /// What was measured: a device, an account, a sensor.
-    pub entity: String,
-    /// The provider's metric key.
-    pub metric: String,
-    /// What a chart legend shows.
-    pub label: String,
-    /// The SI unit `value` is in; empty for a count or a score.
+    /// The document this time series belongs to, when it belongs to one
+    /// (an activity); `None` for one about the source as a whole.
+    pub about_uuid: Option<String>,
+    /// The provider's key for what is measured, unique within the
+    /// source and `about_uuid`: `resting_hr`.
+    pub name: String,
+    /// What a chart legend shows: `Resting HR`.
+    pub human_name: String,
+    /// A UCUM code ([`Unit`]); `1` for a pure number.
     pub unit: String,
     pub time_kind: TimeKind,
-    /// Ascending by `t`, one point per `t`.
-    pub points: Vec<Point>,
+    pub points: Points,
 }
 
 impl TimeSeries {
-    /// blake3 over the points in order: what a writer compares to decide
-    /// whether a stored time series' points need replacing.
-    pub fn points_hash(&self) -> String {
-        points_hash(&self.points)
-    }
-
     /// The row for this time series under `ts_key`, a key local to the
-    /// store it goes in.
+    /// source's store.
     pub fn row(&self, ts_key: i64) -> TimeSeriesRow {
         TimeSeriesRow {
+            source_id: self.source_id.clone(),
             ts_key,
             time_series_id: self.time_series_id.clone(),
-            source_id: self.source_id.clone(),
-            entity: self.entity.clone(),
-            metric: self.metric.clone(),
-            label: self.label.clone(),
+            about_uuid: self.about_uuid.clone(),
+            name: self.name.clone(),
+            human_name: self.human_name.clone(),
             unit: self.unit.clone(),
+            value_type: self.points.values.value_type(),
             time_kind: self.time_kind,
-            points_hash: self.points_hash(),
             point_count: self.points.len() as i64,
-            first_t: self.points.first().map(|p| p.t),
-            last_t: self.points.last().map(|p| p.t),
+            first_t: self.points.t.first().copied(),
+            last_t: self.points.t.last().copied(),
         }
     }
-
-    pub fn point_rows(&self, ts_key: i64) -> impl Iterator<Item = TimeSeriesPointRow> + '_ {
-        self.points.iter().map(move |p| TimeSeriesPointRow {
-            ts_key,
-            t: p.t,
-            value: p.value,
-            text: p.text.clone(),
-        })
-    }
 }
 
-pub fn points_hash(points: &[Point]) -> String {
-    let mut h = blake3::Hasher::new();
-    for p in points {
-        h.update(&p.t.to_le_bytes());
-        match p.value {
-            Some(v) => h.update(&[1]).update(&v.to_bits().to_le_bytes()),
-            None => h.update(&[0]),
-        };
-        match &p.text {
-            Some(s) => h
-                .update(&[1])
-                .update(&(s.len() as u64).to_le_bytes())
-                .update(s.as_bytes()),
-            None => h.update(&[0]),
-        };
-    }
-    h.finalize().to_hex().to_string()
-}
-
-/// Every table a time-series store holds, in creation order.
-pub fn ddl() -> Vec<&'static str> {
+/// Every table a source's time-series store holds, in creation order.
+pub fn store_ddl() -> Vec<&'static str> {
     series::DDL
         .iter()
-        .chain(points::DDL.iter())
+        .chain(chunks::DDL.iter())
         .map(|(_, sql)| *sql)
         .collect()
 }
 
-/// The lookups by id, kept out of [`ddl`] so they change no store's shape.
+/// Every table the time-series index holds: the rows, and where each
+/// source's points are. No points.
+pub fn index_ddl() -> Vec<&'static str> {
+    series::DDL
+        .iter()
+        .chain(sources::DDL.iter())
+        .map(|(_, sql)| *sql)
+        .collect()
+}
+
+/// The lookups by id, kept out of the DDL so they change no store's shape.
 pub fn indexes() -> Vec<&'static str> {
     series::INDEXES.iter().map(|(_, sql)| *sql).collect()
 }
@@ -179,55 +299,12 @@ mod tests {
             assert_eq!(TimeKind::parse(k.as_str()), Some(k));
         }
         assert_eq!(TimeKind::parse("interval"), None);
-    }
-
-    fn series(points: Vec<Point>) -> TimeSeries {
-        TimeSeries {
-            time_series_id: "id".into(),
-            source_id: "garmin".into(),
-            entity: "riker".into(),
-            metric: "resting_hr".into(),
-            label: "Resting heart rate".into(),
-            unit: "1/s".into(),
-            time_kind: TimeKind::Day,
-            points,
+        for &k in ValueType::VARIANTS {
+            let json = serde_json::to_string(&k).unwrap();
+            assert_eq!(json, format!("\"{}\"", k.as_str()));
+            assert_eq!(ValueType::parse(k.as_str()), Some(k));
         }
-    }
-
-    /// The hash is what decides whether a writer replaces a time series'
-    /// points, so every part of a point has to move it, and a value
-    /// must not hash like a text that happens to share its bytes.
-    #[test]
-    fn every_part_of_a_point_moves_the_hash() {
-        let base = series(vec![Point::value(1, 0.8), Point::value(2, 0.9)]).points_hash();
-        let variants = [
-            vec![Point::value(1, 0.8), Point::value(3, 0.9)],
-            vec![Point::value(1, 0.8), Point::value(2, 0.95)],
-            vec![Point::value(1, 0.8)],
-            vec![
-                Point::value(1, 0.8),
-                Point {
-                    t: 2,
-                    value: Some(0.9),
-                    text: Some("rem".into()),
-                },
-            ],
-            vec![
-                Point::value(1, 0.8),
-                Point {
-                    t: 2,
-                    value: None,
-                    text: None,
-                },
-            ],
-        ];
-        for v in variants {
-            assert_ne!(series(v.clone()).points_hash(), base, "{v:?}");
-        }
-        assert_eq!(
-            series(vec![Point::value(1, 0.8), Point::value(2, 0.9)]).points_hash(),
-            base
-        );
+        assert_eq!(ValueType::parse("bool"), None);
     }
 
     #[test]
@@ -238,13 +315,39 @@ mod tests {
     }
 
     #[test]
+    fn points_must_ascend_and_match_their_values() {
+        assert_eq!(Points::floats([(1, 0.5), (2, 0.6)]).problem(), None);
+        assert!(Points::floats([(2, 0.5), (2, 0.6)])
+            .problem()
+            .unwrap()
+            .contains("t 2 is followed by 2"));
+        let short = Points {
+            t: vec![1, 2],
+            values: Values::Integer(vec![1]),
+        };
+        assert!(short.problem().is_some());
+    }
+
+    #[test]
     fn a_row_summarises_its_points() {
-        let s = series(vec![Point::value(5, 1.0), Point::value(9, 2.0)]);
+        let s = TimeSeries {
+            time_series_id: "id".into(),
+            source_id: "riker".into(),
+            about_uuid: None,
+            name: "resting_hr".into(),
+            human_name: "Resting HR".into(),
+            unit: "/min".into(),
+            time_kind: TimeKind::Day,
+            points: Points::integers([(5, 48), (9, 50)]),
+        };
         let row = s.row(7);
         assert_eq!((row.ts_key, row.point_count), (7, 2));
         assert_eq!((row.first_t, row.last_t), (Some(5), Some(9)));
-        assert_eq!(row.points_hash, s.points_hash());
-        assert!(s.point_rows(7).all(|p| p.ts_key == 7));
-        assert_eq!(series(vec![]).row(1).first_t, None);
+        assert_eq!(row.value_type, ValueType::Integer);
+        let empty = TimeSeries {
+            points: Points::floats([]),
+            ..s
+        };
+        assert_eq!(empty.row(1).first_t, None);
     }
 }

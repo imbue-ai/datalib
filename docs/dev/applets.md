@@ -414,7 +414,9 @@ applet (`slack`, `unified_document_index`, `unified_time_series_index` and
 `GET /time_series/<id>` is one, and `POST /points` with
 `{ids, from, to, budget}` answers each one's points in the range, or,
 past `budget` points, that many buckets of min, max and mean
-(`etl/time_series/src/read.rs`). `datalib_contacts` is the one that writes: it is the
+(`etl/time_series/src/read.rs`). It reads the points from each
+source's own store, at the commit the index recorded for it
+(`docs/dev/time_series.md` §"The index"). `datalib_contacts` is the one that writes: it is the
 only writer of the contacts store under `datalib_curated/`
 (`app_stores.md`), and like `unified_document_index` it contributes endpoints
 only, which the document view calls; one of them,

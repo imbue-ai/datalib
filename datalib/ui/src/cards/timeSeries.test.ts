@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   bandOf,
+  axisTicks,
   decodeState,
   displayUnit,
   encodeState,
@@ -16,6 +17,7 @@ import {
   rangeBounds,
   refusal,
   toMs,
+  unitText,
   type Answered,
   type Listed,
 } from "./timeSeries";
@@ -24,10 +26,15 @@ function listed(over: Partial<Listed>): Listed {
   return {
     time_series_id: "id",
     source_id: "riker",
-    entity: "account",
-    metric: "resting_hr",
-    label: "Resting HR",
-    unit: "bpm",
+    about_uuid: null,
+    name: "resting_hr",
+    human_name: "Resting HR",
+    unit: "{beats}/min",
+    unit_label: "beats/min",
+    quantity: "T-1{beats}",
+    unit_factor: 1 / 60,
+    unit_offset: 0,
+    value_type: "float",
     time_kind: "day",
     point_count: 1,
     first_t: 0,
@@ -36,43 +43,89 @@ function listed(over: Partial<Listed>): Listed {
   };
 }
 
+const celsius = {
+  unit: "Cel",
+  unit_label: "°C",
+  quantity: "Θ1",
+  unit_factor: 1,
+  unit_offset: 273.15,
+};
+const minutes = { unit: "min", unit_label: "min", quantity: "T1", unit_factor: 60, unit_offset: 0 };
+
 describe("the axes", () => {
-  /// A third unit would need a third scale nobody can read beside two.
-  it("take two units and refuse a third, naming the two", () => {
-    const hr = listed({ unit: "bpm" });
-    const temp = listed({ unit: "°C", source_id: "yolink", label: "Bedroom" });
+  /// A third quantity would need a third scale nobody can read beside two.
+  it("take two quantities and refuse a third, naming the two", () => {
+    const hr = listed({});
+    const temp = listed({ ...celsius, source_id: "yolink", human_name: "Bedroom" });
     expect(refusal([], hr)).toBeNull();
     expect(refusal([hr], temp)).toBeNull();
-    expect(refusal([hr, temp], listed({ unit: "bpm", metric: "max_hr" }))).toBeNull();
-    expect(refusal([hr, temp], listed({ unit: "kg" }))).toMatch(/bpm and °C/);
+    expect(refusal([hr, temp], listed({ name: "max_hr" }))).toBeNull();
+    const weight = listed({ unit: "kg", unit_label: "kg", quantity: "M1", unit_factor: 1 });
+    expect(refusal([hr, temp], weight)).toMatch(/beats\/min and °C/);
+  });
+
+  it("refuse a time series of text, which has no line", () => {
+    expect(refusal([], listed({ value_type: "text", human_name: "HRV status" }))).toMatch(
+      /HRV status is text/,
+    );
   });
 });
 
 describe("display units", () => {
-  it("show long durations in hours, short ones in minutes, and long distances in km", () => {
-    expect(displayUnit("s", 26_400)).toEqual({ label: "h", factor: 1 / 3600 });
-    expect(displayUnit("s", 1_800)).toEqual({ label: "min", factor: 1 / 60 });
-    expect(displayUnit("s", 0.045)).toEqual({ label: "ms", factor: 1000 });
-    expect(displayUnit("m", 4_200)).toEqual({ label: "km", factor: 1 / 1000 });
-    expect(displayUnit("bpm", 48)).toEqual({ label: "bpm", factor: 1 });
+  it("show a duration or a distance by its size, and anything else in the first unit", () => {
+    const any = listed({});
+    expect(displayUnit("T1", any, 40 * 31_557_600)).toEqual({
+      label: "yr",
+      factor: 1 / 31_557_600,
+    });
+    expect(displayUnit("T1", any, 3 * 86_400)).toEqual({ label: "d", factor: 1 / 86_400 });
+    expect(displayUnit("T1", any, 26_400)).toEqual({ label: "h", factor: 1 / 3600 });
+    expect(displayUnit("T1", any, 1_800)).toEqual({ label: "min", factor: 1 / 60 });
+    expect(displayUnit("T1", any, 0.045)).toEqual({ label: "ms", factor: 1000 });
+    expect(displayUnit("L1", any, 4_200)).toEqual({ label: "km", factor: 1 / 1000 });
+    expect(displayUnit("T-1{beats}", any, 0.8)).toEqual({
+      label: "beats/min",
+      factor: 60,
+      offset: 0,
+    });
+  });
+
+  /// An axis is kept in SI units, so a temperature is in kelvin until it
+  /// is printed, and its ticks must still fall on round °C.
+  it("print a temperature in its own scale, on round ticks", () => {
+    const shown = displayUnit("Θ1", listed(celsius), 300);
+    expect(formatTick(293.15, shown)).toBe("20");
+    expect(axisTicks(273.15, 303.15, shown).map((t) => formatTick(t, shown))).toEqual([
+      "0",
+      "10",
+      "20",
+      "30",
+    ]);
+  });
+
+  it("name what a time series is in", () => {
+    expect(unitText(listed({}))).toBe("beats/min");
+    expect(unitText(listed(minutes))).toBe("duration");
+    expect(unitText(listed({ value_type: "text" }))).toBe("text");
+    expect(unitText(listed({ unit_label: "", quantity: "{score}" }))).toBe("no unit");
   });
 });
 
 describe("the list", () => {
   it("keeps what answers every word, grouped by source", () => {
     const all = [
-      listed({ label: "Resting HR", metric: "resting_hr" }),
-      listed({ label: "Weight", metric: "weight" }),
-      listed({ source_id: "yolink", label: "Bedroom temperature", metric: "temperature" }),
+      listed({ human_name: "Resting HR", name: "resting_hr" }),
+      listed({ human_name: "Weight", name: "weight" }),
+      listed({ source_id: "yolink", human_name: "Bedroom temperature", name: "temperature" }),
     ];
     expect(grouped(all, "").map((g) => [g.source, g.items.length])).toEqual([
       ["riker", 2],
       ["yolink", 1],
     ]);
-    expect(grouped(all, "RESTING hr").map((g) => g.items.map((i) => i.label))).toEqual([
+    expect(grouped(all, "RESTING hr").map((g) => g.items.map((i) => i.human_name))).toEqual([
       ["Resting HR"],
     ]);
-    expect(grouped(all, "yolink temp")[0]?.items[0]?.label).toBe("Bedroom temperature");
+    expect(grouped(all, "yolink temp")[0]?.items[0]?.human_name).toBe("Bedroom temperature");
   });
 });
 
@@ -92,9 +145,9 @@ describe("ranges", () => {
 describe("lines", () => {
   /// A day is a calendar day, not an instant: it lands on midnight UTC and
   /// reads back as the same date wherever the viewer is.
-  it("put a day on its date and a bucket on its mean, with the band beside it", () => {
+  it("put a day on its date and a bucket on its mean, with the band beside it, in SI units", () => {
     const raw: Answered = {
-      ...listed({}),
+      ...listed({ unit_factor: 1 }),
       kind: "raw",
       points: [
         { t: 145_835, value: 48, text: null },
@@ -105,13 +158,13 @@ describe("lines", () => {
     expect(formatTime(toMs("day", 145_835), "day", 0)).toBe("2369-04-14");
     expect(bandOf(raw)).toBeNull();
     const bucketed: Answered = {
-      ...listed({ time_kind: "instant" }),
+      ...listed({ ...minutes, time_kind: "instant" }),
       kind: "buckets",
       width: 10,
       buckets: [{ t: 0, min: 1, max: 3, mean: 2, count: 10 }],
     };
-    expect(lineOf(bucketed)).toEqual([{ x: 0, y: 2 }]);
-    expect(bandOf(bucketed)).toEqual([{ x: 0, lo: 1, hi: 3 }]);
+    expect(lineOf(bucketed)).toEqual([{ x: 0, y: 120 }]);
+    expect(bandOf(bucketed)).toEqual([{ x: 0, lo: 60, hi: 180 }]);
   });
 });
 
@@ -136,9 +189,9 @@ describe("scales", () => {
     expect(hi).toBeGreaterThan(52);
     expect(extent([5, 5])).toEqual([4.75, 5.25]);
     expect(extent([])).toBeNull();
-    expect(formatTick(50, { factor: 1 })).toBe("50");
-    expect(formatTick(28_800, { factor: 1 / 3600 })).toBe("8");
-    expect(formatTick(0.1 + 0.2, { factor: 1 })).toBe("0.3");
+    expect(formatTick(50, { label: "", factor: 1 })).toBe("50");
+    expect(formatTick(28_800, { label: "h", factor: 1 / 3600 })).toBe("8");
+    expect(formatTick(0.1 + 0.2, { label: "", factor: 1 })).toBe("0.3");
   });
 });
 

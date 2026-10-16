@@ -792,13 +792,19 @@ fn branch_readers_beside_a_writer_that_pauses_after_each_seal() {
 /// again, beside the `commit_run` writer. Before doltlite 0.50.13 that open
 /// failed for a file named `*.doltlite_db` (dolthub/doltlite#3231).
 fn detached_readers_beside_a_sealing_writer(readers: usize, commits: u64, txn_ms: u64) {
-    detached_readers_reading(readers, commits, txn_ms, false);
+    detached_readers_reading(readers, commits, txn_ms, &[]);
 }
 
-/// [`detached_readers_beside_a_sealing_writer`], each reader also running
-/// an aggregate over a range when `aggregate` says so.
+/// [`detached_readers_beside_a_sealing_writer`] with `flags` passed to
+/// each `rev-read`; the readers' reports, or none when this doltlite has
+/// no commits to read.
 #[allow(clippy::disallowed_macros)]
-fn detached_readers_reading(readers: usize, commits: u64, txn_ms: u64, aggregate: bool) {
+fn detached_readers_reading(
+    readers: usize,
+    commits: u64,
+    txn_ms: u64,
+    flags: &[&'static str],
+) -> Vec<Value> {
     let t = Scratch::new();
     let ready: Vec<String> = (0..readers)
         .map(|i| t.path(&format!("reader-{i}-ready")))
@@ -842,9 +848,7 @@ fn detached_readers_reading(readers: usize, commits: u64, txn_ms: u64, aggregate
                 "--out",
                 &out,
             ];
-            if aggregate {
-                argv.push("--aggregate");
-            }
+            argv.extend(flags);
             t.spawn(&argv)
         })
         .collect();
@@ -854,7 +858,7 @@ fn detached_readers_reading(readers: usize, commits: u64, txn_ms: u64, aggregate
     }
     let writer = t.report("writer.json");
     if writer["dolt"] == Value::Bool(false) {
-        return;
+        return Vec::new();
     }
     let reports: Vec<Value> = (0..readers)
         .map(|i| t.report(&format!("reader-{i}.json")))
@@ -907,6 +911,7 @@ fn detached_readers_reading(readers: usize, commits: u64, txn_ms: u64, aggregate
         assert_each_transaction_read_one_commit(r);
         assert_committed_throughout(&writer, r);
     }
+    reports
 }
 
 #[test]
@@ -914,11 +919,22 @@ fn detached_readers_are_snapshots_while_the_writer_seals() {
     detached_readers_beside_a_sealing_writer(3, 500, 0);
 }
 
-/// The time-series applet's reads: a range over a key and the same range
-/// bucketed with aggregates, on a detached open beside a sealing writer.
+/// The time-series applet's read: the rows of a key range, blobs and
+/// all, on a detached open of a commit the writer has since moved past,
+/// as the applet opens the commit the index recorded.
 #[test]
-fn detached_readers_aggregating_a_range_never_make_the_writers_commit_fail() {
-    detached_readers_reading(3, 500, 0, true);
+fn detached_readers_of_an_older_commit_read_ranges_while_the_writer_seals() {
+    for r in detached_readers_reading(3, 500, 0, &["--range", "--at-first"]) {
+        let heads: std::collections::BTreeSet<&str> = samples(&r)
+            .iter()
+            .filter_map(|s| s["head"].as_str())
+            .collect();
+        assert_eq!(
+            heads.len(),
+            1,
+            "every window opened the first commit it saw"
+        );
+    }
 }
 
 /// A detached open takes no write lock, so a writer holding its batch open
