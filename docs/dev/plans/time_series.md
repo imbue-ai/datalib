@@ -1,9 +1,16 @@
 # Time series as a second destination format
 
-**Status: proposal, written 2026-10-15. Nothing in it is built yet,
-except the measurement in `hack/doltlite_time_series_cost/`.** The
-rename of the unified index (§"Names") is the first PR; the rest
-follows in the order of §"Order of work".
+**Status: written 2026-10-15. Built: the rename (§"Names"), the
+stores and steps with Garmin as the first source, the applet and the
+Time series card. On 2026-10-16 the stores changed from one row per
+point to encoded chunks, the index stopped copying points, and units
+became UCUM codes. What is built is described in
+[`../time_series.md`](../time_series.md), which replaces this plan's
+sections on the stores, units and serving; §"Names" and §"Config" are
+kept as the record of what was decided. Not
+built: YoLink and AirVisual as time series, charts inside documents,
+retiring `plots/` (§"Order of work", item 5), and time series from
+FIT files.**
 
 ## The problem
 
@@ -83,101 +90,16 @@ roots forward (AGENTS.md §"Keep a forward path for existing data"):
 - **Applet URL.** `/applet/unified_index/…` stays as an alias, since
   card scripts people wrote call it.
 
-## The stores
+## The stores, units and serving
 
-A per-source time-series store (`<source>/render_time_series/time_series.doltlite_db`)
-and the index (`unified_time_series_index/time_series_index/time_series.doltlite_db`)
-have the same two tables.
-
-**`time_series`**: one row per time series.
-
-| Column | Type | Meaning |
-| --- | --- | --- |
-| `ts_key` | integer, primary key | Local to the store; what points are keyed by |
-| `time_series_id` | text, unique | Stable across renders and stores: a uuid from source id, entity and metric, by `docs/dev/entity_ids.md` |
-| `source_id` | text | The group id |
-| `entity` | text | What was measured: a device, an account, a sensor |
-| `metric` | text | The provider's metric key, such as `resting_hr` |
-| `label` | text | What a chart legend shows |
-| `unit` | text | The unit values are stored in (§"Units and time") |
-| `time_kind` | text (enum `TimeKind`) | `instant` or `day` |
-| `points_hash` | text | blake3 over the points, in order; what incrementality compares |
-| `point_count`, `first_t`, `last_t` | integer | For listing without reading points |
-
-**`time_series_points`**: one row per reading.
-
-| Column | Type | Meaning |
-| --- | --- | --- |
-| `ts_key` | integer | Part of the primary key |
-| `t` | integer | Unix milliseconds for `instant`; days since 1970-01-01 for `day`. Part of the primary key |
-| `value` | real, nullable | The reading |
-| `text` | text, nullable | A reading that is not a number: a sleep stage, a door state |
-
-**Why an integer key.** Measured (`hack/doltlite_time_series_cost/`):
-with a 36-character string key a point costs about 115 bytes on disk;
-with an integer key about 48, and loads and replaces take half the
-time. The integer is local to its store, so the index assigns its own
-and maps by `time_series_id`.
-
-## Incrementality
-
-The measurement settles it:
-
-- Replacing a time series (delete its points, insert them again) in one
-  transaction writes only the pages whose points changed: the same
-  bytes as appending only the new points.
-- But it costs time in proportion to the points replaced: about a
-  second per million, 11 s for 20M points with integer keys.
-
-So both writers replace **only the time series whose `points_hash`
-changed**:
-
-1. `render_time_series` reads the raw store, builds each time series in
-   memory, and hashes its points. A time series whose hash matches the
-   stored row is not written. One whose hash differs is replaced whole.
-   One no longer produced is deleted. One transaction, sealed with
-   `commit_run` like every writer.
-2. `time_series_index` reads each input store at one commit, compares
-   `points_hash` per `time_series_id` against its own rows, and
-   replaces only the ones that differ. It drops the time series of a
-   source that is no longer an input.
-
-A sync that adds a day of points to 1,000 time series then costs
-about the same as appending them: well under a second at 20M points.
-
-The render can still skip the whole run when no input table moved, as
-`skip_if_current` does for documents today.
-
-## Units and time
-
-- **One unit per quantity, chosen at render time.** Every source
-  stores a quantity in the same unit, so two sources' temperatures can
-  share an axis without the UI knowing either source: temperature in
-  °C, volume in L, mass in kg, distance in m, every duration in s.
-  These are the units YoLink's and AirVisual's metric tables already
-  convert to (`MetricSpec::si_unit` and `to_si`,
-  `datalib/backend/etl/timeseries_render/src/units.rs:34`). A rate or a
-  score keeps its own unit (bpm, %, µg/m³). Display units (°F, lb,
-  hours) are the UI's choice.
-- **Two time kinds.** `instant` is a moment (a sensor reading);
-  `day` is a calendar day in the person's local sense (a Garmin daily
-  total), which must not be stored as midnight UTC. An interval (a
-  sleep session, an activity) is not a time series; it stays a
-  document.
-
-## Serving
-
-The `unified_time_series_index` applet opens the index read-only and
-pinned, by the rules in AGENTS.md §"Doltlite". Its routes:
-
-| Route | Does |
-| --- | --- |
-| `GET /time_series?q=&source_id=` | List time series: id, source, entity, metric, label, unit, kind, count, first and last `t` |
-| `GET /time_series/{id}` | One time series' row |
-| `POST /points` | `{ids, from, to, budget}` → per id, the points in range; when more than `budget`, downsampled into `budget` buckets of min, max and mean |
-
-Downsampling runs in SQL (`GROUP BY` a bucket of `t`). Measured: 15 ms
-for one time series of 20k points.
+Built, and described in [`../time_series.md`](../time_series.md). The
+first version kept one row per point and replaced a time series whole
+when a hash of its points moved. Measured
+(`hack/doltlite_time_series_cost/`): a point cost about 48 bytes on
+disk with an integer key, and replacing cost about a second per
+million points. Encoded chunks cost under one byte a value
+(`datalib/backend/etl/time_series/measure/README.md`), and a write
+replaces only the chunks whose bytes changed.
 
 ## Drawing
 
@@ -185,8 +107,8 @@ for one time series of 20k points.
   from `POST /points`, re-asking at a new budget on zoom. Units are
   converted for display here.
 - **A time-series card** lists every time series (from
-  `GET /time_series`), filterable by source and metric, and draws the
-  ones picked, overlaid when they share a unit.
+  `GET /time_series`), filterable by source and name, and draws the
+  ones picked, overlaid when they measure the same quantity. Built.
 - **In a document.** A render writes
   `<div data-time-series="<id> <id>"></div>` where it wants a chart,
   and the document viewer draws it with the chart component. The
@@ -220,6 +142,11 @@ Each item is one PR, and each leaves the tree working.
    time-series card.
 5. **YoLink and AirVisual**, documents drawing through
    `data-time-series`, and `plots/` retired.
+6. **Time series from FIT files**: one per record field per activity,
+   with `about_uuid` naming the activity's document, decoded from the
+   FIT files Garmin's ingest already keeps.
+
+Items 1 to 4 are built.
 
 ## Open questions
 

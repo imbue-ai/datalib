@@ -26,6 +26,7 @@ export type RootEvent = (
   | { kind: "table_changed"; table: LiveTable }
   | { kind: "frontend_changed" }
   | { kind: "index_changed" }
+  | { kind: "time_series_index_changed" }
   | { kind: "upgrade_changed" }
   | { kind: "heartbeat" }
 ) & { chain?: number };

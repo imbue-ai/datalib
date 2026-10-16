@@ -121,6 +121,12 @@ impl SourceType {
         )
     }
 
+    /// Whether this type's data is also time series, which its
+    /// `render_time_series` step writes (`crate::time_series`).
+    pub const fn renders_time_series(self) -> bool {
+        matches!(self, SourceType::Garmin)
+    }
+
     /// The raw table whose rows are this source's items, for a type
     /// that renders no documents to count them in. The storage report
     /// already counts every table, so the number costs nothing. `None`

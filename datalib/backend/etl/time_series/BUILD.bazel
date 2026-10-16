@@ -1,0 +1,50 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+# The time-series stores: a source's, with its points in chunks, and the
+# index, which points at them; their writers and the applet's reads.
+rust_library(
+    name = "datalib_etl_time_series",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_time_series",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
+        "//datalib/backend/time_series_schema:datalib_time_series_schema",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:flate2",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_test(
+    name = "time_series_unittests",
+    size = "small",
+    crate = ":datalib_etl_time_series",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# What the chunk encoding costs on real activity data, at several chunk
+# sizes: measure/README.md.
+rust_binary(
+    name = "measure_chunks",
+    srcs = ["measure/main.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_etl_time_series",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/time_series_schema:datalib_time_series_schema",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+    ],
+)

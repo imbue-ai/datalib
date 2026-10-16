@@ -216,4 +216,8 @@ export type ViewLibs = {
   // Every contact in the contacts app, read straight from it; Browse on
   // the app's row opens it. See cards/ContactsCard.ce.vue.
   contactsView: () => CardRender;
+  // Every time series in the time-series index, picked from a list and
+  // drawn on one chart, one axis per unit. Browse on the time-series
+  // applet's row opens it. See cards/TimeSeriesCard.ce.vue.
+  timeSeriesView: () => CardRender;
 };

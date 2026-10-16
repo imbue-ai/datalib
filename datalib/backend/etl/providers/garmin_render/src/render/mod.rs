@@ -9,6 +9,7 @@ pub mod parse;
 pub mod plot;
 pub mod records;
 pub mod stamps;
+pub mod time_series;
 // `render/render.rs` inside `render/` is the repo-wide stage layout.
 #[allow(clippy::module_inception)]
 pub mod render;

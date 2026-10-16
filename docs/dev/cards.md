@@ -619,6 +619,21 @@ programs against:
   everything with them. The contacts app's row on the Manage screen
   opens it with Browse (`appletBrowseSource`), and the card gallery
   lists it.
+- `timeSeriesView()` — every time series in the time-series index
+  (`cards/TimeSeriesCard.ce.vue`, rules in `cards/timeSeries.ts`), from
+  the `unified_time_series_index` applet. A list grouped by source picks
+  them; each pick is drawn on one chart, one axis per quantity and two
+  at most. Values of one quantity are converted to one unit through the
+  factors the applet reads from their UCUM codes: a duration in hours or
+  minutes and a distance in km as suits its size, anything else in the
+  unit of the first time series on the axis. A time series of text is
+  listed but not drawn. The range buttons end at the newest point picked, and the
+  points are asked for at about one per pixel: past that the applet
+  answers buckets, drawn as each bucket's mean with a band from its
+  minimum to its maximum. Hovering reads every line at that time. The
+  picks and the range are the card's state; it reads again on the root's
+  `time_series_index_changed` frame. The time-series applet's row on the
+  Manage screen opens it with Browse, and the card gallery lists it.
 - `configView()` — `config.toml` itself, edited directly, saved through
   the backend's loader. Reloads on the root's `config_changed` frame
   and, a beat sooner, on the `config.written` bus topic a card publishes
