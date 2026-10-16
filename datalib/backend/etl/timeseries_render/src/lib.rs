@@ -9,4 +9,5 @@ pub mod page;
 pub mod plot;
 pub mod series;
 pub mod text;
+pub mod time_series;
 pub mod units;

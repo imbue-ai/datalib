@@ -1044,7 +1044,7 @@ export function fanInFunctionOf(step: ConfiguredStep): string | null {
 
 /// The source types whose data is also time series. Mirrors
 /// `datalib_dag::config::TIME_SERIES_SOURCE_TYPES`; hand-kept in step with it.
-export const TIME_SERIES_TYPES = ["garmin"];
+export const TIME_SERIES_TYPES = ["garmin", "yolink", "airvisual"];
 
 const TIME_SERIES_GROUP = "unified_time_series_index";
 

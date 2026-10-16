@@ -107,7 +107,7 @@ same id and definition would read as up to date and write nothing.
   and nothing else, because the applet that reads each finds it from the
   data root alone.
 - A source whose type has time series (`TIME_SERIES_SOURCE_TYPES` in
-  `dag/src/config.rs`: `garmin`) has a `render_time_series` step beside
+  `dag/src/config.rs`: `garmin`, `yolink`, `airvisual`) has a `render_time_series` step beside
   its `render_markdown`, reading its ingest, and the
   `time_series_index` names every such step in its `inputs`.
   `docs/dev/time_series.md` is the design.

@@ -272,3 +272,45 @@ async fn an_empty_store_renders_a_page_without_plots() {
         .exists());
     db.close().await;
 }
+
+/// The same store read as time series: one per device and measured
+/// column, a blank cell leaving no point, named by the device's name.
+#[tokio::test(flavor = "multi_thread")]
+async fn samples_are_time_series_per_device_and_column() {
+    let td = tempfile::tempdir().unwrap();
+    let raw_path = td.path().join(STANZA).join("raw");
+    std::fs::create_dir_all(&raw_path).unwrap();
+    let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
+    seed(
+        db.pool(),
+        &[
+            (
+                "4133WV2JB9Z",
+                1_788_220_836_000,
+                Some(1.0),
+                Some(425.0),
+                None,
+            ),
+            ("4133WV2JB9Z", 1_788_221_736_000, None, Some(430.0), None),
+        ],
+        &[("4133WV2JB9Z", "Kitchen")],
+    )
+    .await;
+    db.close().await;
+
+    let all = datalib_etl_airvisual_render::render::time_series::read(&raw_path, STANZA).unwrap();
+    let got: Vec<(&str, &str, usize)> = all
+        .iter()
+        .map(|s| (s.name.as_str(), s.unit.as_str(), s.points.len()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("4133WV2JB9Z/co2_ppm", "[ppm]", 2),
+            ("4133WV2JB9Z/pm25_ugm3", "ug/m3", 1),
+        ]
+    );
+    assert!(all
+        .iter()
+        .all(|s| s.about_name.as_deref() == Some("Kitchen")));
+}

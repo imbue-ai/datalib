@@ -44,6 +44,9 @@ pub struct MetricSpec {
     /// Unit the plotted (converted) value is in. Distinct from
     /// [`Quantity::left_unit`], which is an axis label.
     pub si_unit: &'static str,
+    /// The unit the raw store holds the value in, as a UCUM code: what
+    /// its time series is stored in, unconverted.
+    pub unit: &'static str,
     /// Stored value → plotted value.
     pub to_si: fn(f64) -> f64,
 }
@@ -63,13 +66,17 @@ pub fn series_label(device: &str, spec: &MetricSpec) -> String {
     }
 }
 
-/// The two checks every provider's metric table owes: no metric twice,
-/// and no metric pointing at a quantity its `QUANTITIES` does not list
-/// or at a right axis its quantity does not declare. Call from a test.
+/// The checks every provider's metric table owes: no metric twice, a
+/// unit that is UCUM, and no metric pointing at a quantity its
+/// `QUANTITIES` does not list or at a right axis its quantity does not
+/// declare. Call from a test.
 pub fn check_table(table: &[MetricSpec], quantities: &[Quantity]) {
     let mut seen = std::collections::HashSet::new();
     for m in table {
         assert!(seen.insert(m.metric), "duplicate metric row {}", m.metric);
+        if let Err(e) = datalib_time_series_schema::Unit::parse(m.unit) {
+            panic!("{}: {e}", m.metric);
+        }
         assert!(
             quantities.contains(&m.quantity),
             "{} points at a quantity missing from QUANTITIES",

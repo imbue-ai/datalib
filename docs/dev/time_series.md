@@ -1,11 +1,22 @@
 # Time series
 
-A source whose data is numbers over time (Garmin's daily metrics,
-weigh-ins and each activity's per-second samples) renders it twice: as documents, by `render_markdown`, and as
+A source whose data is numbers over time renders it twice: as documents, by `render_markdown`, and as
 time series, by `render_time_series`. This doc covers the time-series
 path: the stores, how points are encoded, units, the index and the
 applet. What is planned but not built is in
 [`plans/time_series.md`](plans/time_series.md).
+
+Three sources do:
+
+- **Garmin:** its daily metrics, its weigh-ins and each activity's
+  per-second samples from the activity's FIT file
+  (`datalib/backend/etl/providers/garmin_render/TRANSLATE.md`).
+- **YoLink** and **AirVisual:** one time series per device and metric,
+  in the unit the raw store holds it, about the device's row on the
+  source's page. Both go through
+  `datalib/backend/etl/timeseries_render/src/time_series.rs`, which
+  takes each metric's UCUM unit from the provider's metric table
+  (`MetricSpec::unit`).
 
 ## The path
 

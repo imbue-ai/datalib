@@ -287,3 +287,45 @@ async fn an_empty_store_renders_a_page_without_plots() {
         "an empty quantity must not produce an empty plot file"
     );
 }
+
+/// The same store read as time series: one per device and metric, in
+/// the unit the device reported, about the device's row on the page.
+#[tokio::test(flavor = "multi_thread")]
+async fn readings_are_time_series_per_device_and_metric() {
+    let td = tempfile::tempdir().unwrap();
+    let raw_path = td.path().join(STANZA).join("raw");
+    std::fs::create_dir_all(&raw_path).unwrap();
+    let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
+    seed(
+        db.pool(),
+        &[
+            ("main_fridge", "temperature_f", 1_781_481_609_000, 37.4),
+            ("main_fridge", "temperature_f", 1_781_481_669_000, 37.6),
+            ("water_valve", "water_meter_gal", 1_781_481_609_000, 100.0),
+        ],
+        &[
+            ("main_fridge", "temperature_humidity"),
+            ("water_valve", "watermeter"),
+        ],
+    )
+    .await;
+    db.close().await;
+
+    let all = datalib_etl_yolink_render::render::time_series::read(&raw_path, STANZA).unwrap();
+    let got: Vec<(&str, &str, usize)> = all
+        .iter()
+        .map(|s| (s.name.as_str(), s.unit.as_str(), s.points.len()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("main_fridge/temperature_f", "[degF]", 2),
+            ("water_valve/water_meter_gal", "[gal_us]", 1),
+        ]
+    );
+    assert!(datalib_etl_yolink_render::render::time_series::read(
+        &td.path().join("nowhere"),
+        STANZA
+    )
+    .is_err());
+}
