@@ -73,6 +73,33 @@ where
     result
 }
 
+tokio::task_local! {
+    static GIVE_UP: Arc<Mutex<Option<String>>>;
+}
+
+/// Run `fut`, and say what the first download inside it that gave up
+/// said. It is a scope rather than an error because the store is
+/// committed only on `Ok`: what a run that gave up did get must still
+/// be published.
+pub async fn noting_give_up<F: Future>(fut: F) -> (F::Output, Option<String>) {
+    let note = Arc::new(Mutex::new(None));
+    let out = GIVE_UP.scope(note.clone(), fut).await;
+    let said = note.lock().unwrap().take();
+    (out, said)
+}
+
+/// The error a step ends with when a download gave up with work left.
+#[derive(Debug)]
+pub struct GaveUp(pub String);
+
+impl std::fmt::Display for GaveUp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the download gave up before it was done: {}", self.0)
+    }
+}
+
+impl std::error::Error for GaveUp {}
+
 /// Whether the body has returned `Ok`: the one thing a write in the
 /// middle of a run cannot know, and what the sweep of listing and phase
 /// rows waits for.
@@ -178,6 +205,18 @@ impl RunProblems {
     /// run's, where a complete run's replace them.
     pub fn cut_short(&self) {
         self.changed().cut_short = true;
+    }
+
+    /// The run gave up with work still owed. It is cut short, and the
+    /// step running it ends `incomplete` once the store is committed
+    /// ([`noting_give_up`]). A run that covers less on purpose, such as
+    /// one page, is only [`Self::cut_short`].
+    pub fn gave_up(&self, said: impl Into<String>) {
+        self.cut_short();
+        let said = said.into();
+        let _ = GIVE_UP.try_with(|g| {
+            g.lock().unwrap().get_or_insert(said);
+        });
     }
 
     /// The configured entries upstream does not have, once every one has

@@ -281,9 +281,10 @@ into it and keep going, the way the Slack provider does.
   request, or fifty failures in a row) — the fetch stops rather than
   walking on to fail every remaining id one attempt at a time. So does
   a refused credential (401, or a 403 that is not a rate limit) or
-  `dailyLimitExceeded`. What was fetched is written, the run records one
-  `phase:messages.get` row and succeeds, and the next run fetches what
-  is still owed. Only with nothing mirrored at all does the run fail.
+  `dailyLimitExceeded`. What was fetched is committed, the run records
+  one `phase:messages.get` row, the step ends `incomplete`, and the next
+  run fetches what is still owed. Only with nothing mirrored at all does
+  the run fail outright.
 
 A 100k-message mailbox is still ~6 hours of backfill; the run is
 expected to take that long. `message_budget` stops a run early with a

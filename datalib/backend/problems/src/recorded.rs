@@ -100,7 +100,7 @@ pub fn log_recorded() {
             };
         }
         match c.severity {
-            Severity::Error => line!(error, "records were lost; each is a problems row"),
+            Severity::Error => line!(error, "records are missing; each is a problems row"),
             Severity::Warning => line!(
                 warn,
                 "records were degraded or left out; each is a problems row"

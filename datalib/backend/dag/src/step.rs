@@ -491,6 +491,10 @@ pub enum FailureKind {
     Data,
     /// The run was cancelled from outside.
     Cancelled,
+    /// The step gave up with work still owed: what it got is committed
+    /// and its dependents read it, and the rest waits for the next run.
+    /// Not retried, since the step's own retries are what ran out.
+    Incomplete,
 }
 
 impl FailureKind {
@@ -545,3 +549,21 @@ impl std::fmt::Display for StepError {
 }
 
 impl std::error::Error for StepError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strum::VariantArray;
+
+    /// A step writes the kind on its outcome line through serde and the
+    /// runner reports it through `as_str`; a new kind spelled two ways
+    /// would read back as unknown.
+    #[test]
+    fn failure_kind_as_str_matches_the_serde_spelling() {
+        for &v in FailureKind::VARIANTS {
+            let serde = serde_json::to_value(v).unwrap();
+            assert_eq!(serde.as_str(), Some(v.as_str()), "{v:?}");
+            assert_eq!(FailureKind::parse(v.as_str()), Some(v));
+        }
+    }
+}

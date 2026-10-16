@@ -69,14 +69,16 @@ pub async fn run(
         }
         Ok::<_, anyhow::Error>(())
     };
-    datalib_obs::diagnostics::scope(
-        diagnostics.clone(),
-        datalib_etl_web::retry::scope(
-            guard,
-            datalib_etl::download_metrics::scope(metrics.clone(), body),
-        ),
-    )
-    .await?;
+    let (ran, gave_up) =
+        datalib_etl::run_problems::noting_give_up(datalib_obs::diagnostics::scope(
+            diagnostics.clone(),
+            datalib_etl_web::retry::scope(
+                guard,
+                datalib_etl::download_metrics::scope(metrics.clone(), body),
+            ),
+        ))
+        .await;
+    ran?;
 
     // What the download could not fetch, counted the way every render
     // step counts its own: the Manage row's errors and warnings. Whole
@@ -99,6 +101,12 @@ pub async fn run(
             error = %format!("{e:#}"),
             "could not count the raw store's problems; the Manage row shows none"
         ),
+    }
+
+    // What it got is committed; failing now is how the Manage row says
+    // the rest is not, and the outcome still reports the version.
+    if let Some(said) = gave_up {
+        return Err(datalib_etl::run_problems::GaveUp(said).into());
     }
 
     // Never fail the step here: the download itself has completed and
