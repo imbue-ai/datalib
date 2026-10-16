@@ -69,8 +69,8 @@ series writes only the chunks whose bytes changed.
 
 ## The chunk encoding
 
-`datalib/backend/etl/time_series/src/chunk.rs`, encoding 1. A blob is
-one byte saying whether the rest is deflated, then:
+`datalib/backend/etl/time_series/src/chunk.rs`. A blob is one byte
+saying whether the rest is deflated, then:
 
 1. **The count**, as a varint.
 2. **The times:** the first `t` and the first gap as zigzag varints,
@@ -83,23 +83,36 @@ one byte saying whether the rest is deflated, then:
      for which every value times 10^e is an integer that reads back to
      the same bits. Those integers are then stored as integers are, so
      a reading with two decimals costs what an integer costs.
-   - **Other floats:** 8 bytes each, little-endian. NaN, infinities
-     and -0.0 come here too, so they read back bit for bit.
+   - **Other floats**, in whichever of three layouts makes the smallest
+     blob:
+     - **Raw:** 8 bytes each, little-endian.
+     - **Binary-scaled:** the fewest binary places `e` for which every
+       value times 2^e is an integer, those integers' greatest common
+       factor, then the integers divided by it, stored as integers are.
+       A latitude from a FIT file is semicircles times 45/2^29, so this
+       stores the semicircles.
+     - **XOR:** the first value's 64 bits, then each value's bits XORed
+       with the one before's, without the zeros at either end, as
+       Gorilla does.
    - **Text:** a dictionary of the distinct texts in order of first
      appearance, then each point's index into it, bit-packed.
 
 "Bit-packed" means one byte giving the narrowest bit width that holds
 every number in the run, then the numbers at that width, least
 significant bit first. The body is deflated when that makes it smaller.
-Every layout reads back exactly what was written; the tests in
-`chunk.rs` check that, and check that a cut-off or corrupt blob is an
-error rather than a panic.
+Every layout reads back exactly what was written, NaN, infinities and
+-0.0 included; the tests in `chunk.rs` check that, and check that a
+cut-off or corrupt blob is an error rather than a panic.
+
+A chunk's `encoding` is the oldest layout version that can read it.
+Encoding 1 has every layout above but the binary-scaled and XOR
+floats; encoding 2 adds those two. A build that reads only encoding 1
+refuses the chunks that use them and reads the rest.
 
 Measured on one person's 13 Garmin activities, 257,694 values at one a
-second, the store takes 0.93 bytes a value on disk, against 5.32 for
-the FIT files themselves. Latitude and longitude are the costly part:
-in degrees they have no short decimal form. The measurement, the other
-chunk sizes tried, and how to run it are in
+second, the store takes 0.75 bytes a value on disk, against 5.32 for
+the FIT files themselves. The measurement, the other chunk sizes and
+layouts tried, and how to run it are in
 `datalib/backend/etl/time_series/measure/README.md`.
 
 A render computing a float should take an offset off before dividing.
